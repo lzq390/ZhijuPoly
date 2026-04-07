@@ -1,0 +1,60 @@
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_from_root(value: str) -> str:
+    path = Path(value)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return str(path.resolve())
+
+
+class Settings:
+    def __init__(
+        self,
+        sqlite_db_path: str | None = None,
+        csv_source_path: str | None = None,
+        allowed_origins: str | None = None,
+        model_enabled: bool | None = None,
+    ) -> None:
+        raw_sqlite_db_path = sqlite_db_path or os.getenv("SQLITE_DB_PATH", "backend/data/polyprop.db")
+        raw_csv_source_path = csv_source_path or os.getenv("CSV_SOURCE_PATH", "database/data1.csv")
+        raw_allowed_origins = allowed_origins or os.getenv(
+            "ALLOWED_ORIGINS",
+            "http://localhost:5173,http://localhost:3000",
+        )
+        raw_model_enabled = model_enabled
+        if raw_model_enabled is None:
+            raw_model_enabled = os.getenv("MODEL_ENABLED", "false").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
+        self.sqlite_db_path = _resolve_from_root(raw_sqlite_db_path)
+        self.csv_source_path = _resolve_from_root(raw_csv_source_path)
+        self.allowed_origins = raw_allowed_origins
+        self.model_enabled = bool(raw_model_enabled)
+
+    @property
+    def sqlite_db_file(self) -> Path:
+        return Path(self.sqlite_db_path)
+
+    @property
+    def csv_source_file(self) -> Path:
+        return Path(self.csv_source_path)
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        return [item.strip() for item in self.allowed_origins.split(",") if item.strip()]
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()

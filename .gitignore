@@ -1,0 +1,15 @@
+.codex
+
+# Python cache and test artifacts
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Local environment files
+.env
+backend/.env
+
+# Generated SQLite databases
+*.db
+*.sqlite
+*.sqlite3
