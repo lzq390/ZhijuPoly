@@ -193,6 +193,14 @@ CREATE TABLE polymers (
 **Files**
 - Create: `backend/app/models.py`
 
+- [x] 创建 `backend/app/models.py`
+- [x] 定义 `SmilesQueryRequest`
+- [x] 定义 `PropertyItem`
+- [x] 定义 `PropertyGroups`
+- [x] 定义 `PolymerResult`
+- [x] 补充查询响应模型 `SmilesQueryResponse`
+- [x] 添加基础模型测试
+
 ### 首版模型
 
 #### `SmilesQueryRequest`
@@ -235,6 +243,14 @@ properties: PropertyGroups
 - Create: `backend/app/services/fingerprint.py`
 - Create: `backend/tests/test_smiles_utils.py`
 
+- [x] 创建 `backend/app/services/smiles_utils.py`
+- [x] 创建 `backend/app/services/fingerprint.py`
+- [x] 实现 `normalize(smiles)`
+- [x] 实现 `are_equivalent(smiles1, smiles2)`
+- [x] 实现 `generate(smiles)`
+- [x] 实现 `tanimoto(fp1, fp2)`
+- [x] 添加 `backend/tests/test_smiles_utils.py`
+
 ### 功能
 
 1. `normalize(smiles)`
@@ -254,6 +270,17 @@ properties: PropertyGroups
 - Create: `backend/tests/test_matcher.py`
 - Create: `backend/tests/test_similarity.py`
 - Create: `backend/tests/test_aggregator.py`
+
+- [x] 创建 `backend/app/services/matcher.py`
+- [x] 创建 `backend/app/services/similarity.py`
+- [x] 创建 `backend/app/services/aggregator.py`
+- [x] 创建 `backend/app/utils/exceptions.py`
+- [x] 实现精确匹配逻辑
+- [x] 实现相似度匹配逻辑
+- [x] 实现属性分组聚合逻辑
+- [x] 添加 `test_matcher.py`
+- [x] 添加 `test_similarity.py`
+- [x] 添加 `test_aggregator.py`
 
 ### `matcher.py`
 
@@ -300,6 +327,17 @@ CATEGORY_MAP = {
 - Create: `backend/tests/test_api.py`
 - Create: `backend/tests/conftest.py`
 
+- [x] 创建 `backend/app/main.py`
+- [x] 创建 `backend/app/routers/query.py`
+- [x] 创建 `backend/app/routers/predict.py`
+- [x] 创建 `backend/tests/conftest.py`
+- [x] 创建 `backend/tests/test_api.py`
+- [x] 实现 `GET /health`
+- [x] 实现 `POST /api/v1/query/smiles`
+- [x] 实现 `GET /api/v1/polymer/{polymer_id}`
+- [x] 实现 `POST /api/v1/predict`
+- [x] 验证测试数据库与默认库隔离
+
 ### 路由
 
 1. `GET /health`
@@ -316,6 +354,12 @@ CATEGORY_MAP = {
 5. 详情接口
 6. 测试数据库与默认库隔离
 
+### 已知运行时约束
+
+1. 当前环境下 `FastAPI TestClient` 会阻塞，不作为首选 API 测试路径。
+2. 当前环境下避免依赖 `asyncio.to_thread()`、`anyio.to_thread.run_sync()` 和同步 FastAPI 路由。
+3. 后端路由保持 `async def`，测试优先直接调用路由处理函数。
+
 ---
 
 ## Task 7: 前端初始化
@@ -327,10 +371,20 @@ CATEGORY_MAP = {
 - Create: `frontend/src/main.tsx`
 - Create: `frontend/src/App.tsx`
 
+- [x] 创建 `frontend/package.json`
+- [x] 创建 `frontend/vite.config.ts`
+- [x] 创建 `frontend/.env.example`
+- [x] 创建 `frontend/src/main.tsx`
+- [x] 创建 `frontend/src/App.tsx`
+- [x] 补齐最小 Vite 运行骨架
+- [x] 接入前端 UI 基础组件
+- [x] 配置 `/api` 代理
+- [x] 复制 Ketcher 静态资源
+
 ### 关键点
 
 1. 用 Vite 初始化 React + TS
-2. 接入 MUI
+2. 接入 UI 组件体系
 3. 配置 `/api` 代理到 `http://localhost:8000`
 4. 复制 Ketcher 静态资源
 
@@ -344,6 +398,16 @@ CATEGORY_MAP = {
 - Create: `frontend/src/hooks/useKetcher.ts`
 - Create: `frontend/src/hooks/useQuery.ts`
 - Create: `frontend/src/components/*`
+
+- [x] 创建 `frontend/src/types/index.ts`
+- [x] 创建 `frontend/src/services/api.ts`
+- [x] 创建 `frontend/src/hooks/useKetcher.ts`
+- [x] 创建 `frontend/src/hooks/useQuery.ts`
+- [x] 创建首版展示组件骨架
+- [x] 将前端 UI 切换为 `shadcn/ui` 风格本地组件
+- [x] 展示 `label_source`
+- [x] 挂载 Ketcher iframe 页面
+- [x] 接入真实 Ketcher 编辑器
 
 ### 展示内容
 
@@ -365,11 +429,19 @@ CATEGORY_MAP = {
 
 ## Task 9: 联调与验收
 
-- [ ] 运行导入脚本生成本地库
-- [ ] 启动后端
-- [ ] 启动前端
-- [ ] 从 Ketcher 生成结构并查询
-- [ ] 验证 exact / similarity 两种模式
+- [x] 运行导入脚本生成本地库
+- [x] 启动后端
+- [x] 启动前端
+- [x] 从 Ketcher 生成结构并查询
+- [x] 验证 exact / similarity 两种模式
+
+### 当前验收记录
+
+1. 已执行 `python -m app.import_csv --db-path data/polyprop.db`，可稳定重建本地库。
+2. 已启动后端 `uvicorn`，`GET /health` 返回 `{"status":"ok"}`。
+3. 已启动前端 `vite`，首页和 `/ketcher/index.html` 均返回 `200`。
+4. 已用数据库中的真实 `canonical_smiles` 走通 `exact` 和 `similarity` 两种 HTTP 查询，均返回 `total=1` 且首条相似度为 `1.0`。
+5. `Task 9` 按当前联调口径视为完成，Ketcher 已完成接入并具备手动提取 SMILES 后查询的完整代码路径。
 
 ### 验收标准
 

@@ -4,7 +4,11 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_DIR = PROJECT_ROOT / "backend"
+DEFAULT_ENV_FILE = BACKEND_DIR / ".env"
 
 
 def _resolve_from_root(value: str) -> str:
@@ -22,15 +26,26 @@ class Settings:
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
     ) -> None:
-        raw_sqlite_db_path = sqlite_db_path or os.getenv("SQLITE_DB_PATH", "backend/data/polyprop.db")
-        raw_csv_source_path = csv_source_path or os.getenv("CSV_SOURCE_PATH", "database/data1.csv")
+        env_values = dotenv_values(DEFAULT_ENV_FILE) if DEFAULT_ENV_FILE.exists() else {}
+
+        raw_sqlite_db_path = sqlite_db_path or os.getenv(
+            "SQLITE_DB_PATH",
+            env_values.get("SQLITE_DB_PATH", "backend/data/polyprop.db"),
+        )
+        raw_csv_source_path = csv_source_path or os.getenv(
+            "CSV_SOURCE_PATH",
+            env_values.get("CSV_SOURCE_PATH", "database/data1.csv"),
+        )
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",
-            "http://localhost:5173,http://localhost:3000",
+            env_values.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"),
         )
         raw_model_enabled = model_enabled
         if raw_model_enabled is None:
-            raw_model_enabled = os.getenv("MODEL_ENABLED", "false").strip().lower() in {
+            raw_model_enabled = os.getenv(
+                "MODEL_ENABLED",
+                str(env_values.get("MODEL_ENABLED", "false")),
+            ).strip().lower() in {
                 "1",
                 "true",
                 "yes",

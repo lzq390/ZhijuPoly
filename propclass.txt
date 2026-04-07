@@ -1,0 +1,124 @@
+property_name
+Glass transition temperature
+Electric conductivity
+Volume resistivity
+Melting temperature
+Thermal decomposition temperature
+Thermal decomposition weight loss
+Co2 Permeability Barrer
+O2 Permeability Barrer
+H2 Permeability Barrer
+Gas diffusion coefficient d
+Gas permeability coefficient p
+Density
+Specific volume
+Refractive index
+Thermal conductivity
+Dielectric constant
+Dielectric loss factor
+Surface tension
+Heat of fusion
+Intrinsic viscosity eta
+Cohesive energy density
+Solubility parameter
+Contact angle
+bandgap (chain)
+Dielectric loss tangent
+Softening temperature
+Lc phase transition temperature
+Specific heat capacity cp
+Fiber tensile elongation at break
+Fiber tensile modulus
+Fiber tensile stress strength at break
+Elongation at break
+Tensile modulus
+Tensile stress strength at break
+Isothermal weight loss temperature
+Isothermal weight loss time
+bandgap (bulk)
+Heat of fusion mol conversion
+Dynamic mechanical properties storage modulus
+Flexural modulus
+Flexural stress strength at break
+Oxygen index
+Water absorption
+crystallization tendency
+Dynamic mechanical properties loss modulus
+Dynamic mechanical properties loss tangent
+Gas solubility coefficient s
+Radius of gyration
+Second virial coefficient
+Elongation at yield
+Tensile stress strength at yield
+Thermal diffusivity
+electron affinity
+ionization energy
+Crystallization temperature
+Deflection temperature under load hdt
+Compressive stress strength at break
+Shore hardness
+Heat of crystallization
+Dynamic shear properties loss tangent
+Dynamic flexural properties loss tanget
+Hansen parameter delta-d: dispersion component
+Hansen parameter delta-h: hydrogen bonding
+Hansen parameter delta p polar
+Water vapor transmission
+Diffusion coefficient
+Dynamic shear properties storage modulus
+Dynamic flexural properties storage modulus
+Dynamic flexural properties loss modulus
+Compressive modulus
+Vicat softening temperature
+Dynamic viscosity loss tangent
+Dynamic shear properties loss modulus
+Shear modulus
+Shear stress strength at break
+Shear stress strength at yield
+Compressive stress strength at yield
+Flexural creep strain
+Tensile creep compliance
+Tensile creep recovery
+Tensile creep rupture time
+Tensile creep strain
+Charpy impact
+Izod impact
+Crystallization kinetics r
+Crystallization kinetics half time of crystallization
+Brittleness temperature
+Surface resistivity
+Interfacial tension
+Sedimentation coefficient
+Bulk modulus
+Compressibility
+G value
+Pvt relation pressure
+Pvt relation specific volume
+Pvt relation temperature
+Radiation resistance
+Crystallization kinetics k
+Crystallization kinetics n
+Dynamic compressive properties loss tangent
+Specific heat capacity cv
+Flexural stress strength at yield
+Dynamic compressive properties storage modulus
+Tensile creep modulus
+Tensile creep rupture strength
+Dynamic compressive properties loss modulus
+bandgap
+Compressive Strength Mpa
+Flexural Strength Mpa
+Hardness Mpa
+Impact Strength Kj Per M2
+Tensile Strength Mpa
+Youngs Modulus Mpa
+Swelling Degree Percentage
+Water Uptake Percentage
+Water Contact Angle
+Strength
+Transmittance (400nm)
+CTE
+Lower Critical Solution Temperature K
+Upper Critical Solution Temperature K
+Ion Exchange Capacity Meq Per G
+Methanol Permeability Cm2 Per S

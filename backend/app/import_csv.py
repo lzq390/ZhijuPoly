@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,47 @@ from app.database import rebuild_schema, sqlite_connection
 RDLogger.DisableLog("rdApp.error")
 
 
+CANONICAL_UNIT_MAP = {
+    "%": "%",
+    "(J/cm^3)^1/2": "(J/cm^3)^1/2",
+    "1/(GPa)": "1/GPa",
+    "1/(Ω·cm)": "1/(Ω·cm)",
+    "GPa": "GPa",
+    "MPa": "MPa",
+    "Mrad": "Mrad",
+    "W/(m·K)": "W/(m·K)",
+    "cal/(g·°C)": "cal/(g·°C)",
+    "cal/cm^3": "cal/cm^3",
+    "cal/g": "cal/g",
+    "cm^2/s": "cm^2/s",
+    "cm^3(STP)/(cm^3·Pa)": "cm^3(STP)/(cm^3·Pa)",
+    "cm^3(STP)cm/(cm^2·s·Pa)": "cm^3(STP)·cm/(cm^2·s·Pa)",
+    "cm^3/g": "cm^3/g",
+    "cm^3·mol/g^2": "cm^3·mol/g^2",
+    "dl/g": "dL/g",
+    "events/100 eV": "events/100 eV",
+    "g/cm^3": "g/cm^3",
+    "g/denier": "g/denier",
+    "g·mil/(cm^2·24 h)": "g·mil/(cm^2·24 h)",
+    "h": "h",
+    "kJ/m": "kJ/m",
+    "kJ/m^2": "kJ/m^2",
+    "kcal/g": "kcal/g",
+    "kcal/mol": "kcal/mol",
+    "mN/m": "mN/m",
+    "m^2/s": "m^2/s",
+    "nm": "nm",
+    "nm/s": "nm/s",
+    "s": "s",
+    "wt%": "wt%",
+    "yr": "yr",
+    "°": "°",
+    "°C": "°C",
+    "Ω": "Ω",
+    "Ω·cm": "Ω·cm",
+}
+
+
 @dataclass(slots=True)
 class ImportStats:
     polymer_count: int
@@ -24,6 +66,9 @@ class ImportStats:
 
 
 def canonicalize_smiles(smiles: str) -> tuple[str | None, int]:
+    if not smiles.strip():
+        return None, 0
+
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None, 0
@@ -35,6 +80,46 @@ def parse_float_or_none(value: str) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def normalize_property_unit(value: str) -> str | None:
+    unit = value.strip()
+    if not unit:
+        return None
+
+    lowered = unit.lower()
+    direct_map = {
+        "c": "°C",
+        "deg c": "°C",
+        "degree c": "°C",
+        "degrees c": "°C",
+        "℃": "°C",
+        "°c": "°C",
+        "degree": "°",
+        "hour": "h",
+        "second": "s",
+        "year": "yr",
+        "events/100ev": "events/100 eV",
+    }
+    if lowered in direct_map:
+        return direct_map[lowered]
+
+    normalized = unit.replace("*C)", "*°C)").replace("/C", "/°C")
+    normalized = normalized.replace("*", "·")
+    normalized = re.sub(r"(?i)\bohm\b", "Ω", normalized)
+    normalized = re.sub(r"(\d)(h|s|yr)\b", r"\1 \2", normalized)
+
+    exponent_replacements = {
+        "cm2": "cm^2",
+        "cm3": "cm^3",
+        "m2": "m^2",
+        "g2": "g^2",
+    }
+    for source, target in exponent_replacements.items():
+        normalized = re.sub(rf"(?<!\^){re.escape(source)}", target, normalized)
+
+    normalized = normalized.replace("(J/cm^3)1/2", "(J/cm^3)^1/2")
+    return CANONICAL_UNIT_MAP.get(normalized, normalized)
 
 
 def import_csv_to_sqlite(csv_path: str | Path, db_path: str | Path) -> ImportStats:
@@ -92,7 +177,7 @@ def import_csv_to_sqlite(csv_path: str | Path, db_path: str | Path) -> ImportSta
                         (row.get("property_name") or "").strip(),
                         (row.get("property_value") or "").strip(),
                         parse_float_or_none((row.get("property_value") or "").strip()),
-                        ((row.get("property_unit") or "").strip() or None),
+                        normalize_property_unit(row.get("property_unit") or ""),
                         ((row.get("label_source") or "").strip() or None),
                     ),
                 )
