@@ -13,3 +13,11 @@ backend/.env
 *.db
 *.sqlite
 *.sqlite3
+
+# Frontend generated artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
