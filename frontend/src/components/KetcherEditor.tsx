@@ -1,21 +1,21 @@
-import { LoaderCircle, RefreshCcw } from "lucide-react";
+import { LoaderCircle, RefreshCcw, Sigma } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "./ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Textarea } from "./ui/textarea";
 
 type KetcherEditorProps = {
   smiles: string;
-  onChange: (value: string) => void;
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
   onReadyChange: (ready: boolean) => void;
+  onChange: (value: string) => void;
 };
 
 export function KetcherEditor({
   smiles,
-  onChange,
   iframeRef,
-  onReadyChange
+  onReadyChange,
+  onChange
 }: KetcherEditorProps) {
   const iframeKey = useMemo(() => "polyprop-ketcher-frame", []);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -66,33 +66,51 @@ export function KetcherEditor({
   }
 
   return (
-    <Card className="bg-card">
-      <CardHeader>
-        <CardTitle>Structure Editor</CardTitle>
+    <Card className="overflow-hidden rounded-[28px] border-slate-200/90">
+      <CardHeader className="min-h-[124px] gap-4 border-b border-slate-200/80 bg-[linear-gradient(180deg,#f9fbfd_0%,#f4f8fc_100%)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <CardTitle className="text-xl">Structure Editor</CardTitle>
+            <CardDescription>使用 Ketcher 编辑当前目标结构，并作为查询主输入。</CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={syncSmilesFromKetcher}
+            disabled={isSyncing}
+            className="min-w-[212px] self-start"
+          >
+            {isSyncing ? (
+              <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCcw className="mr-2 h-4 w-4" />
+            )}
+            Pull SMILES From Ketcher
+          </Button>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="overflow-hidden rounded-lg border border-input bg-white">
+
+      <CardContent className="space-y-5 pt-6">
+        <div className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
           <iframe
             key={iframeKey}
             title="Ketcher Editor"
             src="/ketcher/index.html"
             ref={iframeRef}
-            className="h-[520px] w-full border-0"
+            className="h-[560px] w-full border-0"
           />
         </div>
-        <div className="flex flex-wrap gap-3">
-          <Button type="button" onClick={syncSmilesFromKetcher} disabled={isSyncing}>
-            {isSyncing ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-            Pull SMILES From Ketcher
-          </Button>
-        </div>
-        <div className="space-y-2">
-          <div className="text-sm font-medium">SMILES Fallback</div>
+
+        <div className="rounded-[22px] border border-slate-200 bg-slate-50/70 p-4">
+          <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-900">
+            <Sigma className="h-4 w-4 text-blue-600" />
+            SMILES fallback
+          </div>
           <Textarea
             value={smiles}
             onChange={(event) => onChange(event.target.value)}
-            placeholder="当前用作 Ketcher 的回退输入与调试入口，例如: CCO 或 *CC*"
-            className="min-h-[140px]"
+            placeholder="例如: *CC*、CCO 或其他用于匹配查询的 SMILES"
+            className="min-h-[128px] rounded-[18px] border-slate-200 bg-white px-4 py-3"
           />
         </div>
       </CardContent>

@@ -6,31 +6,32 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: "#f4efe8",
-        foreground: "#1f2937",
-        card: "#fffdf8",
-        cardForeground: "#111827",
-        primary: "#0f766e",
-        primaryForeground: "#f8fafc",
-        secondary: "#c2410c",
-        secondaryForeground: "#fff7ed",
-        muted: "#efe6d9",
-        mutedForeground: "#6b7280",
-        border: "rgba(15, 23, 42, 0.08)",
-        input: "rgba(15, 23, 42, 0.12)",
-        accent: "#fff6e8",
-        accentForeground: "#7c2d12",
-        destructive: "#b91c1c",
+        background: "#f3f6fb",
+        foreground: "#0f172a",
+        card: "#ffffff",
+        cardForeground: "#0f172a",
+        primary: "#2563eb",
+        primaryForeground: "#eff6ff",
+        secondary: "#dbeafe",
+        secondaryForeground: "#1d4ed8",
+        muted: "#eef2f7",
+        mutedForeground: "#64748b",
+        border: "rgba(148, 163, 184, 0.24)",
+        input: "rgba(148, 163, 184, 0.32)",
+        accent: "#f8fafc",
+        accentForeground: "#334155",
+        destructive: "#dc2626",
         destructiveForeground: "#fef2f2",
-        ring: "#0f766e"
+        ring: "#2563eb"
       },
       borderRadius: {
-        lg: "1rem",
-        md: "0.75rem",
-        sm: "0.5rem"
+        lg: "1.25rem",
+        md: "0.875rem",
+        sm: "0.625rem"
       },
       boxShadow: {
-        soft: "0 20px 45px rgba(15, 23, 42, 0.08)"
+        soft: "0 20px 45px rgba(15, 23, 42, 0.06)",
+        panel: "0 10px 30px rgba(15, 23, 42, 0.04)"
       }
     }
   },

@@ -4,13 +4,17 @@
 
 @layer base {
   :root {
-    color: #1f2937;
-    background: #f4efe8;
-    font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+    color: #0f172a;
+    background: #f3f6fb;
+    font-family: "IBM Plex Sans", "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
   }
 
   * {
     @apply border-border;
+  }
+
+  html {
+    @apply bg-background;
   }
 
   body {
@@ -22,5 +26,9 @@
   select,
   textarea {
     font: inherit;
+  }
+
+  ::selection {
+    background: rgba(37, 99, 235, 0.16);
   }
 }
