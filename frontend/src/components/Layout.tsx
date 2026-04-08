@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
 type LayoutProps = {
   children: ReactNode;
@@ -12,9 +12,6 @@ export function Layout({ children }: LayoutProps) {
         <Card className="border-white/60 bg-card/90 backdrop-blur">
           <CardHeader>
             <CardTitle className="text-4xl md:text-5xl">PolyProp</CardTitle>
-            <CardDescription>
-              输入结构式后，按精确匹配或相似度匹配检索聚合物属性。
-            </CardDescription>
           </CardHeader>
           <CardContent>{children}</CardContent>
         </Card>

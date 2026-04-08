@@ -1,4 +1,5 @@
 import type { SmilesQueryRequest } from "../types";
+import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
@@ -9,20 +10,22 @@ type QueryPanelProps = {
   onChange: (request: SmilesQueryRequest) => void;
   onSubmit: () => void;
   disabled?: boolean;
+  className?: string;
 };
 
 export function QueryPanel({
   request,
   onChange,
   onSubmit,
-  disabled = false
+  disabled = false,
+  className
 }: QueryPanelProps) {
   return (
-    <Card className="bg-accent">
+    <Card className={cn("flex h-full flex-col bg-accent", className)}>
       <CardHeader>
         <CardTitle>Query Controls</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="flex flex-1 flex-col space-y-4">
         <div className="space-y-2">
           <label className="text-sm font-medium">Match Mode</label>
           <Select
@@ -64,7 +67,7 @@ export function QueryPanel({
             }
           />
         </div>
-        <Button className="w-full" size="lg" onClick={onSubmit} disabled={disabled}>
+        <Button className="mt-auto w-full" size="lg" onClick={onSubmit} disabled={disabled}>
           Run Query
         </Button>
       </CardContent>

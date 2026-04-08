@@ -1,7 +1,7 @@
 import { LoaderCircle, RefreshCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "./ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Textarea } from "./ui/textarea";
 
 type KetcherEditorProps = {
@@ -69,9 +69,6 @@ export function KetcherEditor({
     <Card className="bg-card">
       <CardHeader>
         <CardTitle>Structure Editor</CardTitle>
-        <CardDescription>
-          已挂载 Ketcher 静态页面。当前支持从编辑器主动提取 SMILES，并保留文本框作为回退输入路径。
-        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="overflow-hidden rounded-lg border border-input bg-white">

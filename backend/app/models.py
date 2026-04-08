@@ -61,3 +61,17 @@ class SmilesQueryResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     total: int = Field(ge=0)
     results: list[PolymerResult] = Field(default_factory=list)
+
+
+class Structure3DRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str = Field(min_length=1)
+
+
+class Structure3DResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    molblock: str
+    capped_smiles: str
+    format: Literal["mol"]

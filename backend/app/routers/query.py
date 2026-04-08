@@ -4,10 +4,17 @@ from time import perf_counter
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.models import PolymerResult, SmilesQueryRequest, SmilesQueryResponse
+from app.models import (
+    PolymerResult,
+    SmilesQueryRequest,
+    SmilesQueryResponse,
+    Structure3DRequest,
+    Structure3DResponse,
+)
 from app.services.aggregator import load_polymer_result, load_polymer_results
 from app.services.matcher import exact_match
 from app.services.similarity import similarity_search
+from app.services.structure_3d import generate_3d_molblock
 from app.utils.exceptions import InvalidSmilesError
 
 
@@ -77,3 +84,17 @@ async def get_polymer_detail(polymer_id: int, request: Request) -> PolymerResult
             raise HTTPException(status_code=404, detail="polymer not found")
 
         return load_polymer_result(connection, polymer_row)
+
+
+@router.post("/structure/3d", response_model=Structure3DResponse)
+async def generate_structure_3d(request_body: Structure3DRequest) -> Structure3DResponse:
+    try:
+        molblock, capped_smiles = generate_3d_molblock(request_body.smiles)
+    except InvalidSmilesError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return Structure3DResponse(
+        molblock=molblock,
+        capped_smiles=capped_smiles,
+        format="mol",
+    )

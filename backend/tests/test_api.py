@@ -9,9 +9,9 @@ from starlette.requests import Request
 
 from app.config import PROJECT_ROOT
 from app.main import health
-from app.models import SmilesQueryRequest
+from app.models import SmilesQueryRequest, Structure3DRequest
 from app.routers.predict import predict
-from app.routers.query import get_polymer_detail, query_smiles
+from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles
 
 
 def make_request(app: FastAPI) -> Request:
@@ -119,3 +119,40 @@ def test_api_uses_temporary_database(test_app: FastAPI) -> None:
 
     assert db_path.exists()
     assert db_path != PROJECT_ROOT / "backend" / "data" / "polyprop.db"
+
+
+@pytest.mark.asyncio
+async def test_generate_structure_3d_caps_polymer_ends() -> None:
+    response = await generate_structure_3d(Structure3DRequest(smiles="*CC*"))
+
+    assert response.format == "mol"
+    assert "V2000" in response.molblock
+    assert " C " in response.molblock or " H " in response.molblock
+    assert "[H]" in response.capped_smiles
+
+
+@pytest.mark.asyncio
+async def test_generate_structure_3d_rejects_invalid_smiles() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await generate_structure_3d(Structure3DRequest(smiles="not-a-smiles"))
+
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("smiles", ["*=C*", "*#C*", "*1CC1*"])
+async def test_generate_structure_3d_rejects_invalid_capped_topology(smiles: str) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await generate_structure_3d(Structure3DRequest(smiles=smiles))
+
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_generate_structure_3d_handles_complex_polymer_structure() -> None:
+    smiles = "*/C=C\\C(=O)c1cccc(c1)C(=O)/C=C\\Nc1ccc(cc1)Cc1ccc(cc1)N*"
+    response = await generate_structure_3d(Structure3DRequest(smiles=smiles))
+
+    assert response.format == "mol"
+    assert "V2000" in response.molblock
+    assert "[H]" in response.capped_smiles

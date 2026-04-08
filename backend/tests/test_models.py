@@ -3,7 +3,15 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.models import PolymerResult, PropertyGroups, PropertyItem, SmilesQueryRequest, SmilesQueryResponse
+from app.models import (
+    PolymerResult,
+    PropertyGroups,
+    PropertyItem,
+    SmilesQueryRequest,
+    SmilesQueryResponse,
+    Structure3DRequest,
+    Structure3DResponse,
+)
 
 
 def test_smiles_query_request_defaults() -> None:
@@ -66,3 +74,11 @@ def test_query_response_serializes_polymer_results() -> None:
     assert payload["match_type"] == "exact"
     assert payload["total"] == 1
     assert payload["results"][0]["properties"]["electrical"][0]["property_name"] == "Electric conductivity"
+
+
+def test_structure_3d_models_validate() -> None:
+    request = Structure3DRequest(smiles=" *CC* ")
+    response = Structure3DResponse(molblock="mol", capped_smiles="[H]CC[H]", format="mol")
+
+    assert request.smiles == "*CC*"
+    assert response.format == "mol"
