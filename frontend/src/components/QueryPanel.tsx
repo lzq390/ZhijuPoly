@@ -50,7 +50,7 @@ export function QueryPanel({
   const isSimilarity = request.match_mode === "similarity";
 
   return (
-    <Card className={cn("overflow-hidden rounded-[28px] border-slate-200/90", className)}>
+    <Card className={cn("flex flex-col overflow-hidden rounded-[28px] border-slate-200/90", className)}>
       <CardHeader className="min-h-[96px] gap-3 border-b border-slate-200/80 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)]">
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-2">
@@ -63,8 +63,9 @@ export function QueryPanel({
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-3.5 pt-4">
-        <div className="grid auto-rows-fr gap-3 sm:grid-cols-3">
+      <CardContent className="flex flex-1 flex-col gap-3.5 pt-4">
+        <div className="flex flex-1 items-center">
+          <div className="grid w-full auto-rows-fr gap-3 sm:grid-cols-3">
           <ParamCard
             title="Match Mode"
             meta={
@@ -124,9 +125,10 @@ export function QueryPanel({
               className="h-11 rounded-xl border-slate-200 bg-white"
             />
           </ParamCard>
+          </div>
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-slate-200 pt-3.5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-auto flex flex-col gap-3 border-t border-slate-200 pt-3.5 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-sm leading-6 text-mutedForeground">同步结构后，使用当前参数提交一次完整查询。</div>
           <Button className="min-w-[192px]" size="lg" onClick={onSubmit} disabled={disabled}>
             <Search className="mr-2 h-4 w-4" />
