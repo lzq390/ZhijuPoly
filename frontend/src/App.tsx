@@ -9,11 +9,11 @@ import {
 } from "lucide-react";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { Layout } from "./components/Layout";
+import { OverviewCard } from "./components/OverviewCard";
 import { QueryPanel } from "./components/QueryPanel";
 import { ResultsDisplay } from "./components/ResultsDisplay";
 import { StructurePreview3D } from "./components/StructurePreview3D";
 import { Badge } from "./components/ui/badge";
-import { Card } from "./components/ui/card";
 import { useKetcher } from "./hooks/useKetcher";
 import { useQuery } from "./hooks/useQuery";
 
@@ -39,62 +39,6 @@ const workflowSteps = [
     description: "浏览属性分组"
   }
 ];
-
-type OverviewCardProps = {
-  title: string;
-  value: string;
-  detail: string;
-  icon?: React.ReactNode;
-  dark?: boolean;
-  tags?: string[];
-};
-
-function OverviewCard({ title, value, detail, icon, dark = false, tags = [] }: OverviewCardProps) {
-  return (
-    <Card
-      className={
-        dark
-          ? "flex min-h-[140px] flex-col rounded-[24px] border-slate-200/80 bg-[linear-gradient(180deg,#0f172a_0%,#132238_100%)] p-5 text-slate-50 shadow-soft"
-          : "flex min-h-[140px] flex-col rounded-[24px] border-slate-200/80 bg-white p-5"
-      }
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div
-          className={
-            dark
-              ? "text-xs font-medium uppercase tracking-[0.16em] text-slate-400"
-              : "text-xs font-medium uppercase tracking-[0.16em] text-mutedForeground"
-          }
-        >
-          {title}
-        </div>
-        {icon}
-      </div>
-      <div className={dark ? "mt-4 text-3xl font-semibold" : "mt-4 text-3xl font-semibold text-slate-950"}>
-        {value}
-      </div>
-      {tags.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-2 text-xs">
-          {tags.map((tag) => (
-            <span
-              key={tag}
-              className={
-                dark
-                  ? "rounded-full bg-white/10 px-3 py-1 text-slate-200"
-                  : "rounded-full bg-slate-100 px-3 py-1 text-mutedForeground"
-              }
-            >
-              {tag}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <div className={dark ? "mt-2 flex-1 text-sm leading-6 text-slate-300" : "mt-2 flex-1 text-sm leading-6 text-mutedForeground"}>
-        {detail}
-      </div>
-    </Card>
-  );
-}
 
 export default function App() {
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
@@ -196,7 +140,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.22fr)_minmax(0,0.92fr)]">
+        <div className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,1.22fr)_minmax(0,0.92fr)]">
           <div className="min-w-0">
             <KetcherEditor
               smiles={smiles}
@@ -209,9 +153,10 @@ export default function App() {
             />
           </div>
 
-          <div className="grid min-w-0 auto-rows-max gap-6">
+          <div className="flex min-w-0 flex-col gap-6">
             <StructurePreview3D smiles={smiles} />
             <QueryPanel
+              className="flex-1"
               request={{ ...request, smiles }}
               onChange={setRequest}
               onSubmit={() => submit({ ...request, smiles })}

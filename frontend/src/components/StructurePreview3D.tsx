@@ -5,6 +5,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 
 const D3MOL_SRC = "/vendor/3Dmol-min.js";
 const structureCache = new Map<string, { molblock: string; capped_smiles: string }>();
+const CACHE_MAX = 50;
+
+function setCacheEntry(key: string, value: { molblock: string; capped_smiles: string }) {
+  if (structureCache.size >= CACHE_MAX) {
+    structureCache.delete(structureCache.keys().next().value!);
+  }
+  structureCache.set(key, value);
+}
 
 function loadScriptOnce(src: string, id: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -72,7 +80,7 @@ export function StructurePreview3D({ smiles }: StructurePreview3DProps) {
         let payload = structureCache.get(source);
         if (!payload) {
           payload = await fetchStructure3D(source);
-          structureCache.set(source, payload);
+          setCacheEntry(source, payload);
         }
 
         if (cancelled || !viewerRef.current) {

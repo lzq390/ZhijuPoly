@@ -1,6 +1,7 @@
 import { Braces, Fingerprint, Layers3 } from "lucide-react";
 import type { PolymerResult } from "../types";
 import { PropertyGroupCard } from "./PropertyGroupCard";
+import { SummaryMetric } from "./SummaryMetric";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
@@ -43,31 +44,25 @@ export function PolymerCard({ result }: PolymerCardProps) {
         </div>
 
         <div className="grid auto-rows-fr gap-3 lg:grid-cols-3">
-          <div className="flex min-h-[116px] flex-col rounded-[18px] border border-slate-200 bg-white p-4">
-            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-mutedForeground">
-              <Braces className="h-4 w-4 text-blue-600" />
-              Matched SMILES
-            </div>
-            <div className="mt-3 flex-1 font-mono text-[13px] leading-6 text-slate-700">{result.smiles}</div>
-          </div>
-          <div className="flex min-h-[116px] flex-col rounded-[18px] border border-slate-200 bg-white p-4">
-            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-mutedForeground">
-              <Fingerprint className="h-4 w-4 text-blue-600" />
-              Similarity
-            </div>
-            <div className="mt-3 flex-1 text-lg font-semibold text-slate-950">
-              {result.similarity_score !== null ? result.similarity_score.toFixed(3) : "Exact"}
-            </div>
-          </div>
-          <div className="flex min-h-[116px] flex-col rounded-[18px] border border-slate-200 bg-white p-4">
-            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-mutedForeground">
-              <Layers3 className="h-4 w-4 text-blue-600" />
-              Property Coverage
-            </div>
-            <div className="mt-3 flex-1 text-lg font-semibold text-slate-950">
-              {propertyCount} 项属性 / {populatedGroups} 个分组
-            </div>
-          </div>
+          <SummaryMetric
+            className="min-h-[116px] rounded-[18px]"
+            icon={<Braces className="h-4 w-4 text-blue-600" />}
+            label="Matched SMILES"
+            value={result.smiles}
+            mono
+          />
+          <SummaryMetric
+            className="min-h-[116px] rounded-[18px]"
+            icon={<Fingerprint className="h-4 w-4 text-blue-600" />}
+            label="Similarity"
+            value={result.similarity_score !== null ? result.similarity_score.toFixed(3) : "Exact"}
+          />
+          <SummaryMetric
+            className="min-h-[116px] rounded-[18px]"
+            icon={<Layers3 className="h-4 w-4 text-blue-600" />}
+            label="Property Coverage"
+            value={`${propertyCount} 项属性 / ${populatedGroups} 个分组`}
+          />
         </div>
       </CardHeader>
 

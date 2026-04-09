@@ -1,5 +1,5 @@
 import { LoaderCircle, RefreshCcw, Sigma } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Textarea } from "./ui/textarea";
@@ -17,7 +17,6 @@ export function KetcherEditor({
   onReadyChange,
   onChange
 }: KetcherEditorProps) {
-  const iframeKey = useMemo(() => "polyprop-ketcher-frame", []);
   const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
@@ -93,7 +92,7 @@ export function KetcherEditor({
       <CardContent className="space-y-5 pt-6">
         <div className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
           <iframe
-            key={iframeKey}
+            key="polyprop-ketcher-frame"
             title="Ketcher Editor"
             src="/ketcher/index.html"
             ref={iframeRef}

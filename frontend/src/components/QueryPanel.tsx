@@ -64,7 +64,7 @@ export function QueryPanel({
       </CardHeader>
 
       <CardContent className="space-y-3.5 pt-4">
-        <div className="grid auto-rows-fr gap-3 sm:grid-cols-2">
+        <div className="grid auto-rows-fr gap-3 sm:grid-cols-3">
           <ParamCard
             title="Match Mode"
             meta={
@@ -123,17 +123,6 @@ export function QueryPanel({
               }
               className="h-11 rounded-xl border-slate-200 bg-white"
             />
-          </ParamCard>
-
-          <ParamCard
-            title="当前执行配置"
-            footer="确认当前参数后即可直接运行查询。"
-          >
-            <div className="flex flex-wrap gap-2 text-xs text-mutedForeground">
-              <span className="rounded-full bg-white px-3 py-1">Mode {isSimilarity ? "Similarity" : "Exact"}</span>
-              <span className="rounded-full bg-white px-3 py-1">Threshold {request.similarity_threshold}</span>
-              <span className="rounded-full bg-white px-3 py-1">Top K {request.top_k}</span>
-            </div>
           </ParamCard>
         </div>
 
