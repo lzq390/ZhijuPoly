@@ -29,31 +29,19 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
     try:
         with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
             if request_body.match_mode == "exact":
-                matched_rows = exact_match(connection, request_body.smiles)
-                similarity_scores = {
-                    int(row["polymer_id"]): 1.0 for row in matched_rows
-                }
-                results = load_polymer_results(
-                    connection,
-                    matched_rows,
-                    similarity_scores=similarity_scores,
-                )
+                polymer_rows = exact_match(connection, request_body.smiles)
+                scores = {int(row["polymer_id"]): 1.0 for row in polymer_rows}
             else:
-                matched_rows_with_scores = similarity_search(
+                rows_with_scores = similarity_search(
                     connection,
                     request_body.smiles,
                     similarity_threshold=request_body.similarity_threshold,
                     top_k=request_body.top_k,
                 )
-                polymer_rows = [row for row, _ in matched_rows_with_scores]
-                similarity_scores = {
-                    int(row["polymer_id"]): score for row, score in matched_rows_with_scores
-                }
-                results = load_polymer_results(
-                    connection,
-                    polymer_rows,
-                    similarity_scores=similarity_scores,
-                )
+                polymer_rows = [row for row, _ in rows_with_scores]
+                scores = {int(row["polymer_id"]): score for row, score in rows_with_scores}
+
+            results = load_polymer_results(connection, polymer_rows, similarity_scores=scores)
     except InvalidSmilesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

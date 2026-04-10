@@ -200,12 +200,8 @@ def main() -> None:
 
     stats = import_csv_to_sqlite(csv_path=args.csv_path, db_path=args.db_path)
     print(
-        "Imported polymers={polymers} properties={properties} parse_ok={parse_ok} parse_fail={parse_fail}".format(
-            polymers=stats.polymer_count,
-            properties=stats.property_count,
-            parse_ok=stats.parse_ok_count,
-            parse_fail=stats.parse_fail_count,
-        )
+        f"Imported polymers={stats.polymer_count} properties={stats.property_count}"
+        f" parse_ok={stats.parse_ok_count} parse_fail={stats.parse_fail_count}"
     )
 
 

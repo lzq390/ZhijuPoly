@@ -65,12 +65,15 @@ export function KetcherEditor({
   }
 
   return (
-    <Card className="overflow-hidden rounded-[28px] border-slate-200/90">
-      <CardHeader className="min-h-[124px] gap-4 border-b border-slate-200/80 bg-[linear-gradient(180deg,#f9fbfd_0%,#f4f8fc_100%)]">
+    <Card className="overflow-hidden rounded-[30px] border-white/70">
+      <CardHeader className="mesh-surface min-h-[136px] gap-4 border-b border-white/70">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
-            <CardTitle className="text-xl">Structure Editor</CardTitle>
-            <CardDescription>使用 Ketcher 编辑当前目标结构，并作为查询主输入。</CardDescription>
+            <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
+              Molecular Canvas
+            </div>
+            <CardTitle className="text-[1.4rem] tracking-tight">Structure Editor</CardTitle>
+            <CardDescription>将结构编辑器作为主舞台，SMILES 同步和文本回退作为旁路输入。</CardDescription>
           </div>
           <Button
             type="button"
@@ -90,7 +93,7 @@ export function KetcherEditor({
       </CardHeader>
 
       <CardContent className="space-y-5 pt-6">
-        <div className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+        <div className="overflow-hidden rounded-[24px] border border-white/80 bg-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
           <iframe
             key="polyprop-ketcher-frame"
             title="Ketcher Editor"
@@ -100,9 +103,9 @@ export function KetcherEditor({
           />
         </div>
 
-        <div className="rounded-[22px] border border-slate-200 bg-slate-50/70 p-4">
+        <div className="rounded-[24px] border border-white/70 bg-[linear-gradient(180deg,rgba(248,251,252,0.98)_0%,rgba(239,246,247,0.88)_100%)] p-4">
           <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-900">
-            <Sigma className="h-4 w-4 text-blue-600" />
+            <Sigma className="h-4 w-4 text-teal-600" />
             SMILES fallback
           </div>
           <Textarea

@@ -120,27 +120,31 @@ export function StructurePreview3D({ smiles }: StructurePreview3DProps) {
   }, [smiles]);
 
   return (
-    <Card className="overflow-hidden rounded-[28px] border-slate-200/90">
-      <CardHeader className="min-h-[96px] gap-3 border-b border-slate-200/80 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)]">
+    <Card className="overflow-hidden rounded-[30px] border-white/70">
+      <CardHeader className="min-h-[112px] gap-3 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(244,248,249,0.86)_100%)]">
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-2">
-            <CardTitle className="text-xl">3D Structure</CardTitle>
+            <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-sky-700/80">
+              Spatial Preview
+            </div>
+            <CardTitle className="text-[1.35rem] tracking-tight">3D Structure</CardTitle>
             <CardDescription>
               在运行查询前快速核对结构构型，作为视觉辅助检查面板。
             </CardDescription>
           </div>
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_12px_30px_rgba(8,17,31,0.18)]">
             <Orbit className="h-4 w-4" />
           </div>
         </div>
       </CardHeader>
       <CardContent className="pt-4">
-        <div className="relative h-[262px] overflow-hidden rounded-[22px] border border-slate-200 bg-[radial-gradient(circle_at_top,rgba(96,165,250,0.16),transparent_42%),linear-gradient(180deg,#fbfdff_0%,#f2f7fc_100%)]">
+        <div className="relative h-[280px] overflow-hidden rounded-[24px] border border-white/80 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.2),transparent_42%),radial-gradient(circle_at_80%_20%,rgba(20,184,166,0.12),transparent_26%),linear-gradient(180deg,#fbfdff_0%,#edf5f8_100%)]">
+          <div className="pointer-events-none absolute left-1/2 top-6 h-24 w-24 -translate-x-1/2 rounded-full bg-white/60 blur-2xl" />
           <div ref={viewerRef} className="absolute inset-0" />
           {isLoading ? (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
-                <Sparkles className="h-4 w-4 text-blue-600" />
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/90 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm backdrop-blur">
+                <Sparkles className="h-4 w-4 text-teal-600" />
                 正在生成 3D 结构...
               </div>
             </div>

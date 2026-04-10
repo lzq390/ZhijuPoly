@@ -2,15 +2,11 @@ import type { SmilesQueryRequest, SmilesQueryResponse } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
-export async function querySmiles(
-  payload: SmilesQueryRequest
-): Promise<SmilesQueryResponse> {
-  const response = await fetch(`${API_BASE_URL}/query/smiles`, {
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
@@ -20,32 +16,15 @@ export async function querySmiles(
     throw new Error(message);
   }
 
-  return (await response.json()) as SmilesQueryResponse;
+  return (await response.json()) as T;
 }
 
-export async function fetchStructure3D(smiles: string): Promise<{
-  molblock: string;
-  capped_smiles: string;
-  format: "mol";
-}> {
-  const response = await fetch(`${API_BASE_URL}/structure/3d`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ smiles })
-  });
+export function querySmiles(payload: SmilesQueryRequest): Promise<SmilesQueryResponse> {
+  return postJSON("/query/smiles", payload);
+}
 
-  if (!response.ok) {
-    const data = await response.json().catch(() => null);
-    const message =
-      typeof data?.detail === "string" ? data.detail : `Request failed with status ${response.status}`;
-    throw new Error(message);
-  }
-
-  return (await response.json()) as {
-    molblock: string;
-    capped_smiles: string;
-    format: "mol";
-  };
+export function fetchStructure3D(
+  smiles: string
+): Promise<{ molblock: string; capped_smiles: string; format: "mol" }> {
+  return postJSON("/structure/3d", { smiles });
 }

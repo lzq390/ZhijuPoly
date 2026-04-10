@@ -29,8 +29,6 @@ def similarity_search(
     scored_rows: list[tuple[sqlite3.Row, float]] = []
     for row in polymer_rows:
         source_smiles = row["canonical_smiles"] or row["smiles"]
-        if not source_smiles or not source_smiles.strip():
-            continue
 
         try:
             candidate_fp = generate(source_smiles)

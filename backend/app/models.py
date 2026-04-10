@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SmilesQueryRequest(BaseModel):
@@ -13,12 +13,6 @@ class SmilesQueryRequest(BaseModel):
     similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
     top_k: int = Field(default=10, ge=1, le=100)
 
-    @field_validator("smiles")
-    @classmethod
-    def validate_smiles(cls, value: str) -> str:
-        if not value:
-            raise ValueError("smiles must not be empty")
-        return value
 
 
 class PropertyItem(BaseModel):
