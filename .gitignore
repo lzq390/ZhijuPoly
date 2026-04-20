@@ -1,4 +1,5 @@
 .codex
+.superpowers/
 
 # Python cache and test artifacts
 __pycache__/
