@@ -78,6 +78,14 @@ POST /api/v1/predict
 MODEL_DIR: Path  # 默认：项目根目录 / "model"
 ```
 
+`predictor.py` 通过 `get_settings().MODEL_DIR` 获取模型目录，与现有 `SQLITE_DB_PATH` 的解析方式一致。
+
+### 依赖项
+
+`backend/requirements.txt` 需新增（如未包含）：
+- `joblib` — 模型反序列化
+- `scikit-learn` — RF 模型运行时依赖
+
 ---
 
 ## 前端设计
@@ -108,11 +116,29 @@ MODEL_DIR: Path  # 默认：项目根目录 / "model"
 - 结果以卡片网格展示（2 列），每张卡片：属性中文名 + 预测值（2 位小数）+ 单位
 - 加载中显示骨架屏；出错显示错误提示；未预测时显示空状态引导文案
 
+### ResultsDisplay 新增 Props
+
+```typescript
+type ResultsDisplayProps = {
+  // 原有 props 不变
+  data: SmilesQueryResponse | null;
+  error: string | null;
+  isLoading: boolean;
+  request: SmilesQueryRequest;
+  // 新增
+  predictData: PredictResponse | null;
+  isPredicting: boolean;
+  predictError: string | null;
+  activeTab: "query" | "predict";          // 由 App.tsx 控制
+  onTabChange: (tab: "query" | "predict") => void;
+};
+```
+
 ### ResultsDisplay Tab 行为
 
 - 「检索结果」Tab：现有内容不变
 - 「预测结果」Tab：渲染 `PredictionResults`
-- 预测完成后自动切换到「预测结果」Tab
+- **自动切换由 `App.tsx` 控制**：`usePredict` 返回数据后，`App.tsx` 将 `activeTab` 置为 `"predict"`，传给 `ResultsDisplay`
 
 ### App 状态新增
 
