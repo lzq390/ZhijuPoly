@@ -1,10 +1,28 @@
 export type MatchMode = "exact" | "similarity";
+export type WorkspaceMode = "query" | "predict";
+export type ResultsTab = "query" | "predict";
 
 export type SmilesQueryRequest = {
   smiles: string;
   match_mode: MatchMode;
   similarity_threshold: number;
   top_k: number;
+};
+
+export type PredictableProperty =
+  | "Glass transition temperature"
+  | "Melting temperature"
+  | "Thermal decomposition temperature"
+  | "Thermal decomposition weight loss"
+  | "Elongation at break"
+  | "Tensile stress strength at break"
+  | "O2 Permeability Barrer"
+  | "Co2 Permeability Barrer"
+  | "H2 Permeability Barrer";
+
+export type PredictRequest = {
+  smiles: string;
+  properties: PredictableProperty[];
 };
 
 export type PropertyItem = {
@@ -39,4 +57,36 @@ export type SmilesQueryResponse = {
   query_time_ms: number;
   total: number;
   results: PolymerResult[];
+};
+
+export type PredictResponse = {
+  predictions: Partial<Record<PredictableProperty, number>>;
+  query_time_ms: number;
+};
+
+export const PREDICTABLE_PROPERTIES: readonly PredictableProperty[] = [
+  "Glass transition temperature",
+  "Melting temperature",
+  "Thermal decomposition temperature",
+  "Thermal decomposition weight loss",
+  "Elongation at break",
+  "Tensile stress strength at break",
+  "O2 Permeability Barrer",
+  "Co2 Permeability Barrer",
+  "H2 Permeability Barrer"
+] as const;
+
+export const PREDICT_PROPERTY_META: Record<
+  PredictableProperty,
+  { label: string; unit: string }
+> = {
+  "Glass transition temperature": { label: "玻璃化转变温度", unit: "K" },
+  "Melting temperature": { label: "熔融温度", unit: "K" },
+  "Thermal decomposition temperature": { label: "热分解温度", unit: "K" },
+  "Thermal decomposition weight loss": { label: "热分解失重率", unit: "%" },
+  "Elongation at break": { label: "断裂伸长率", unit: "%" },
+  "Tensile stress strength at break": { label: "断裂拉伸强度", unit: "MPa" },
+  "O2 Permeability Barrer": { label: "O₂ 渗透性", unit: "Barrer" },
+  "Co2 Permeability Barrer": { label: "CO₂ 渗透性", unit: "Barrer" },
+  "H2 Permeability Barrer": { label: "H₂ 渗透性", unit: "Barrer" }
 };

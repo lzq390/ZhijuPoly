@@ -1,4 +1,5 @@
-import { ArrowRight, Atom, Database, Microscope } from "lucide-react";
+import { useState } from "react";
+import { ArrowRight, Atom, Database, Microscope, Sparkles } from "lucide-react";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { Layout } from "./components/Layout";
 import { QueryPanel } from "./components/QueryPanel";
@@ -6,14 +7,75 @@ import { ResultsDisplay } from "./components/ResultsDisplay";
 import { StructurePreview3D } from "./components/StructurePreview3D";
 import { Badge } from "./components/ui/badge";
 import { useKetcher } from "./hooks/useKetcher";
+import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
+import {
+  type PredictableProperty,
+  type ResultsTab,
+  type WorkspaceMode
+} from "./types";
 
 export default function App() {
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
-  const canRun = !isLoading && smiles.trim().length > 0;
-  const resultCount = data?.total ?? 0;
-  const activeMode = request.match_mode === "similarity" ? "Similarity retrieval" : "Exact retrieval";
+  const predict = usePredict();
+  const [panelMode, setPanelMode] = useState<WorkspaceMode>("query");
+  const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>("query");
+  const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>([]);
+
+  const canQuery = !isLoading && smiles.trim().length > 0;
+  const canPredict = !predict.isLoading && smiles.trim().length > 0 && selectedProperties.length > 0;
+
+  const activeMode =
+    panelMode === "predict"
+      ? "Property prediction"
+      : request.match_mode === "similarity"
+        ? "Similarity retrieval"
+        : "Exact retrieval";
+
+  const resultCount =
+    activeResultsTab === "predict" ? Object.keys(predict.data?.predictions ?? {}).length : data?.total ?? 0;
+  const resultTiming =
+    activeResultsTab === "predict" ? predict.data?.query_time_ms : data?.query_time_ms;
+
+  async function handleQuerySubmit() {
+    setActiveResultsTab("query");
+    await submit({ ...request, smiles });
+  }
+
+  async function handlePredictSubmit() {
+    setActiveResultsTab("predict");
+    try {
+      await predict.submit({
+        smiles,
+        properties: selectedProperties
+      });
+    } catch {
+      // Error state is already captured by the hook and shown in the results panel.
+    }
+  }
+
+  const resultPanelTitle = activeResultsTab === "predict" ? "预测结果面板" : "查询结果面板";
+  const resultPanelDescription =
+    activeResultsTab === "predict"
+      ? "模型推理完成后，这里会显示所选性质的预测结果与耗时。"
+      : "运行查询后，这里会显示摘要、命中记录和属性分组。";
+  const resultPrimaryBadge =
+    activeResultsTab === "predict"
+      ? predict.data
+        ? `${Object.keys(predict.data.predictions).length} predictions`
+        : "No predictions"
+      : data
+        ? `${data.total} records`
+        : "No results";
+  const resultSecondaryBadge =
+    activeResultsTab === "predict"
+      ? predict.isLoading
+        ? "Predicting"
+        : "Prediction mode"
+      : request.match_mode === "similarity"
+        ? "Similarity mode"
+        : "Exact mode";
 
   return (
     <Layout>
@@ -27,7 +89,7 @@ export default function App() {
             <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
               POLYPROP
             </div>
-            <Badge>聚合物结构检索</Badge>
+            <Badge>聚合物结构检索与性质预测</Badge>
           </div>
 
           <div className="mt-6 max-w-4xl">
@@ -43,14 +105,16 @@ export default function App() {
           <div className="mt-8 grid gap-3 md:grid-cols-3">
             <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
               <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
-                <Atom className="h-4 w-4 text-teal-600" />
+                {panelMode === "predict" ? <Sparkles className="h-4 w-4 text-teal-600" /> : <Atom className="h-4 w-4 text-teal-600" />}
                 当前模式
               </div>
               <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
                 {activeMode}
               </div>
               <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                控制卡中可切换精确匹配或相似度检索，并同步更新参数摘要。
+                {panelMode === "predict"
+                  ? "控制卡中可选择目标性质，并将当前结构送入模型推理。"
+                  : "控制卡中可切换精确匹配或相似度检索，并同步更新参数摘要。"}
               </div>
             </div>
 
@@ -63,7 +127,7 @@ export default function App() {
                 {smiles.trim().length > 0 ? "已准备" : "等待输入"}
               </div>
               <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                编辑器内容会同步到 SMILES 文本回退输入，作为本次检索的主结构来源。
+                编辑器内容会同步到 SMILES 文本回退输入，作为本次检索或预测的主结构来源。
               </div>
             </div>
 
@@ -72,11 +136,9 @@ export default function App() {
                 <Database className="h-4 w-4 text-teal-300" />
                 最近结果
               </div>
-              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">
-                {resultCount}
-              </div>
+              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">{resultCount}</div>
               <div className="mt-2 text-sm leading-6 text-slate-300">
-                {data ? `${data.query_time_ms.toFixed(1)} ms 返回` : "查询完成后显示结果规模与耗时"}
+                {resultTiming ? `${resultTiming.toFixed(1)} ms 返回` : "执行完成后显示结果规模与耗时"}
               </div>
             </div>
           </div>
@@ -130,11 +192,18 @@ export default function App() {
             <StructurePreview3D smiles={smiles} />
             <QueryPanel
               className="w-full self-start"
+              mode={panelMode}
+              onModeChange={setPanelMode}
               request={{ ...request, smiles }}
               onChange={setRequest}
-              onSubmit={() => submit({ ...request, smiles })}
-              disabled={!canRun}
-              isLoading={isLoading}
+              onQuerySubmit={handleQuerySubmit}
+              onPredictSubmit={handlePredictSubmit}
+              selectedProperties={selectedProperties}
+              onSelectedPropertiesChange={setSelectedProperties}
+              queryDisabled={!canQuery}
+              predictDisabled={!canPredict}
+              isQueryLoading={isLoading}
+              isPredicting={predict.isLoading}
             />
           </div>
         </div>
@@ -147,23 +216,15 @@ export default function App() {
             <div className="border-b border-slate-200/80 px-6 py-5 md:px-8">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div>
-                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-teal-700/70">
-                    Results
-                  </div>
+                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-teal-700/70">Results</div>
                   <h2 className="font-heading mt-2 text-[1.8rem] font-semibold tracking-tight text-slate-950">
-                    查询结果面板
+                    {resultPanelTitle}
                   </h2>
-                  <p className="mt-1 text-sm leading-6 text-mutedForeground">
-                    运行查询后，这里会显示摘要、命中记录和属性分组。
-                  </p>
+                  <p className="mt-1 text-sm leading-6 text-mutedForeground">{resultPanelDescription}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Badge className="bg-slate-100 text-slate-700">
-                    {data ? `${data.total} records` : "No results"}
-                  </Badge>
-                  <Badge className="bg-slate-100 text-slate-700">
-                    {request.match_mode === "similarity" ? "Similarity mode" : "Exact mode"}
-                  </Badge>
+                  <Badge className="bg-slate-100 text-slate-700">{resultPrimaryBadge}</Badge>
+                  <Badge className="bg-slate-100 text-slate-700">{resultSecondaryBadge}</Badge>
                 </div>
               </div>
             </div>
@@ -173,6 +234,11 @@ export default function App() {
                 error={error}
                 isLoading={isLoading}
                 request={{ ...request, smiles }}
+                predictData={predict.data}
+                isPredicting={predict.isLoading}
+                predictError={predict.error}
+                activeTab={activeResultsTab}
+                onTabChange={setActiveResultsTab}
               />
             </div>
           </div>

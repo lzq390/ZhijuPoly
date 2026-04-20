@@ -1,7 +1,14 @@
 import type { ReactNode } from "react";
 import { Database, LoaderCircle, ScanSearch, SearchX, Timer, TriangleAlert } from "lucide-react";
-import type { SmilesQueryRequest, SmilesQueryResponse } from "../types";
+import type {
+  PredictResponse,
+  ResultsTab,
+  SmilesQueryRequest,
+  SmilesQueryResponse
+} from "../types";
+import { cn } from "../lib/utils";
 import { PolymerCard } from "./PolymerCard";
+import { PredictionResults } from "./PredictionResults";
 import { SummaryMetric } from "./SummaryMetric";
 import { Alert } from "./ui/alert";
 import { Badge } from "./ui/badge";
@@ -12,6 +19,11 @@ type ResultsDisplayProps = {
   error: string | null;
   isLoading?: boolean;
   request: SmilesQueryRequest;
+  predictData: PredictResponse | null;
+  isPredicting?: boolean;
+  predictError: string | null;
+  activeTab: ResultsTab;
+  onTabChange: (tab: ResultsTab) => void;
 };
 
 function EmptyState({
@@ -34,13 +46,17 @@ function EmptyState({
   );
 }
 
-
-export function ResultsDisplay({
+function QueryResultsPanel({
   data,
   error,
   isLoading = false,
   request
-}: ResultsDisplayProps) {
+}: {
+  data: SmilesQueryResponse | null;
+  error: string | null;
+  isLoading?: boolean;
+  request: SmilesQueryRequest;
+}) {
   if (error) {
     return (
       <Card className="overflow-hidden rounded-[28px] border-destructive/20 shadow-none">
@@ -72,10 +88,7 @@ export function ResultsDisplay({
           </div>
           <div className="grid gap-4">
             {[0, 1].map((index) => (
-              <div
-                key={index}
-                className="space-y-4 rounded-[24px] border border-slate-200 bg-white p-5"
-              >
+              <div key={index} className="space-y-4 rounded-[24px] border border-slate-200 bg-white p-5">
                 <div className="grid auto-rows-fr gap-3 md:grid-cols-2 xl:grid-cols-4">
                   {[0, 1, 2, 3].map((item) => (
                     <div key={item} className="h-[144px] animate-pulse rounded-[18px] bg-slate-100/90" />
@@ -162,12 +175,7 @@ export function ResultsDisplay({
             value={`${data.query_time_ms.toFixed(1)} ms`}
             detail="本次检索与聚合耗时。"
           />
-          <SummaryMetric
-            label="Query SMILES"
-            value={request.smiles || "N/A"}
-            detail="当前查询输入。"
-            mono
-          />
+          <SummaryMetric label="Query SMILES" value={request.smiles || "N/A"} detail="当前查询输入。" mono />
         </div>
       </CardHeader>
 
@@ -177,5 +185,54 @@ export function ResultsDisplay({
         ))}
       </CardContent>
     </Card>
+  );
+}
+
+export function ResultsDisplay({
+  data,
+  error,
+  isLoading = false,
+  request,
+  predictData,
+  isPredicting = false,
+  predictError,
+  activeTab,
+  onTabChange
+}: ResultsDisplayProps) {
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onTabChange("query")}
+          className={cn(
+            "rounded-full border px-4 py-2 text-sm font-medium transition-colors duration-200",
+            activeTab === "query"
+              ? "border-teal-500/30 bg-teal-50 text-teal-800"
+              : "border-white/80 bg-white/80 text-slate-600 hover:border-slate-200"
+          )}
+        >
+          检索结果
+        </button>
+        <button
+          type="button"
+          onClick={() => onTabChange("predict")}
+          className={cn(
+            "rounded-full border px-4 py-2 text-sm font-medium transition-colors duration-200",
+            activeTab === "predict"
+              ? "border-teal-500/30 bg-teal-50 text-teal-800"
+              : "border-white/80 bg-white/80 text-slate-600 hover:border-slate-200"
+          )}
+        >
+          预测结果
+        </button>
+      </div>
+
+      {activeTab === "query" ? (
+        <QueryResultsPanel data={data} error={error} isLoading={isLoading} request={request} />
+      ) : (
+        <PredictionResults data={predictData} isLoading={isPredicting} error={predictError} />
+      )}
+    </div>
   );
 }

@@ -4,6 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.models import (
+    PredictRequest,
+    PredictResponse,
     PolymerResult,
     PropertyGroups,
     PropertyItem,
@@ -82,3 +84,32 @@ def test_structure_3d_models_validate() -> None:
 
     assert request.smiles == "*CC*"
     assert response.format == "mol"
+
+
+def test_predict_models_validate() -> None:
+    request = PredictRequest(
+        smiles=" CCO ",
+        properties=["Glass transition temperature"],
+    )
+    response = PredictResponse(
+        predictions={"Glass transition temperature": 123.4},
+        query_time_ms=12.5,
+    )
+
+    assert request.smiles == "CCO"
+    assert request.properties == ["Glass transition temperature"]
+    assert response.predictions["Glass transition temperature"] == 123.4
+
+
+def test_predict_request_rejects_invalid_properties() -> None:
+    with pytest.raises(ValidationError):
+        PredictRequest(smiles="CCO", properties=[])
+
+    request = PredictRequest(smiles="CCO", properties=["Tensile stress strength at break"])
+    assert request.properties == ["Tensile stress strength at break"]
+
+    request = PredictRequest(smiles="CCO", properties=["  Glass transition temperature  "])
+    assert request.properties == ["Glass transition temperature"]
+
+    with pytest.raises(ValidationError):
+        PredictRequest(smiles="CCO", properties=[" "])

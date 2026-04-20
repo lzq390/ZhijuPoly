@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SmilesQueryRequest(BaseModel):
@@ -55,6 +55,28 @@ class SmilesQueryResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     total: int = Field(ge=0)
     results: list[PolymerResult] = Field(default_factory=list)
+
+
+class PredictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str = Field(min_length=1)
+    properties: list[str] = Field(min_length=1)
+
+    @field_validator("properties")
+    @classmethod
+    def validate_properties(cls, properties: list[str]) -> list[str]:
+        normalized = [value.strip() for value in properties]
+        if any(not value for value in normalized):
+            raise ValueError("prediction properties must not be empty")
+        return normalized
+
+
+class PredictResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    predictions: dict[str, float]
+    query_time_ms: float = Field(ge=0.0)
 
 
 class Structure3DRequest(BaseModel):

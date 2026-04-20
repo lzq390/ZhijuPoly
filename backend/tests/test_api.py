@@ -5,11 +5,12 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 from fastapi import FastAPI
+from pydantic import ValidationError
 from starlette.requests import Request
 
 from app.config import PROJECT_ROOT
 from app.main import health
-from app.models import SmilesQueryRequest, Structure3DRequest
+from app.models import PredictRequest, SmilesQueryRequest, Structure3DRequest
 from app.routers.predict import predict
 from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles
 
@@ -106,12 +107,76 @@ async def test_get_polymer_detail(test_app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
-async def test_predict_returns_not_implemented() -> None:
-    with pytest.raises(HTTPException) as exc_info:
-        await predict()
+async def test_predict_returns_predictions(predict_enabled_app: FastAPI) -> None:
+    request = make_request(predict_enabled_app)
+    response = await predict(
+        PredictRequest(
+            smiles="CCO",
+            properties=["Glass transition temperature"],
+        ),
+        request,
+    )
 
-    assert exc_info.value.status_code == 501
-    assert exc_info.value.detail == "预测功能暂未启用,接口已预留"
+    assert "Glass transition temperature" in response.predictions
+    assert isinstance(response.predictions["Glass transition temperature"], float)
+    assert response.query_time_ms >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_predict_rejects_invalid_smiles(predict_enabled_app: FastAPI) -> None:
+    request = make_request(predict_enabled_app)
+    with pytest.raises(HTTPException) as exc_info:
+        await predict(
+            PredictRequest(
+                smiles="not-a-smiles",
+                properties=["Glass transition temperature"],
+            ),
+            request,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "invalid smiles" in exc_info.value.detail
+
+
+def test_predict_request_accepts_tensile_stress_strength_property() -> None:
+    payload = PredictRequest(
+        smiles="CCO",
+        properties=["Tensile stress strength at break"],
+    )
+
+    assert payload.properties == ["Tensile stress strength at break"]
+
+
+@pytest.mark.asyncio
+async def test_predict_respects_model_enabled_flag(test_app: FastAPI) -> None:
+    request = make_request(test_app)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await predict(
+            PredictRequest(
+                smiles="CCO",
+                properties=["Glass transition temperature"],
+            ),
+            request,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "prediction service is disabled"
+
+
+@pytest.mark.asyncio
+async def test_predict_uses_app_level_model_dir(predict_enabled_app: FastAPI) -> None:
+    request = make_request(predict_enabled_app)
+
+    response = await predict(
+        PredictRequest(
+            smiles="CCO",
+            properties=["Tensile stress strength at break"],
+        ),
+        request,
+    )
+
+    assert "Tensile stress strength at break" in response.predictions
 
 
 def test_api_uses_temporary_database(test_app: FastAPI) -> None:

@@ -25,6 +25,7 @@ class Settings:
         csv_source_path: str | None = None,
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
+        model_dir: str | None = None,
     ) -> None:
         env_values = dotenv_values(DEFAULT_ENV_FILE) if DEFAULT_ENV_FILE.exists() else {}
 
@@ -39,6 +40,10 @@ class Settings:
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",
             env_values.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"),
+        )
+        raw_model_dir = model_dir or os.getenv(
+            "MODEL_DIR",
+            env_values.get("MODEL_DIR", "model"),
         )
         raw_model_enabled = model_enabled
         if raw_model_enabled is None:
@@ -55,6 +60,7 @@ class Settings:
         self.sqlite_db_path = _resolve_from_root(raw_sqlite_db_path)
         self.csv_source_path = _resolve_from_root(raw_csv_source_path)
         self.allowed_origins = raw_allowed_origins
+        self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)
 
     @property
@@ -68,6 +74,10 @@ class Settings:
     @property
     def allowed_origins_list(self) -> list[str]:
         return [item.strip() for item in self.allowed_origins.split(",") if item.strip()]
+
+    @property
+    def model_dir_path(self) -> Path:
+        return Path(self.model_dir)
 
 
 @lru_cache(maxsize=1)

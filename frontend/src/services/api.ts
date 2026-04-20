@@ -1,4 +1,4 @@
-import type { SmilesQueryRequest, SmilesQueryResponse } from "../types";
+import type { PredictRequest, PredictResponse, SmilesQueryRequest, SmilesQueryResponse } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
@@ -21,6 +21,10 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
 
 export function querySmiles(payload: SmilesQueryRequest): Promise<SmilesQueryResponse> {
   return postJSON("/query/smiles", payload);
+}
+
+export function predictSmiles(payload: PredictRequest): Promise<PredictResponse> {
+  return postJSON("/predict", payload);
 }
 
 export function fetchStructure3D(
