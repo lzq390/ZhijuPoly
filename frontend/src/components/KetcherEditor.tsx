@@ -1,4 +1,4 @@
-import { LoaderCircle, RefreshCcw, Sigma } from "lucide-react";
+import { Eraser, LoaderCircle, RefreshCcw, Sigma } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -18,6 +18,7 @@ export function KetcherEditor({
   onChange
 }: KetcherEditorProps) {
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +65,30 @@ export function KetcherEditor({
     }
   }
 
+  async function clearKetcherCanvas() {
+    const ketcher = iframeRef.current?.contentWindow?.ketcher;
+    if (!ketcher) {
+      onReadyChange(false);
+      return;
+    }
+
+    setIsClearing(true);
+    try {
+      if (typeof ketcher.clear === "function") {
+        await ketcher.clear();
+      } else if (typeof ketcher.setMolecule === "function") {
+        await ketcher.setMolecule("");
+      }
+
+      onChange("");
+      onReadyChange(true);
+    } catch (error) {
+      console.error("Failed to clear Ketcher canvas", error);
+    } finally {
+      setIsClearing(false);
+    }
+  }
+
   return (
     <Card className="overflow-hidden rounded-[30px] border-white/70">
       <CardHeader className="mesh-surface min-h-[136px] gap-4 border-b border-white/70">
@@ -75,20 +100,36 @@ export function KetcherEditor({
             <CardTitle className="text-[1.4rem] tracking-tight">Structure Editor</CardTitle>
             <CardDescription>将结构编辑器作为主舞台，SMILES 同步和文本回退作为旁路输入。</CardDescription>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={syncSmilesFromKetcher}
-            disabled={isSyncing}
-            className="min-w-[212px] self-start"
-          >
-            {isSyncing ? (
-              <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCcw className="mr-2 h-4 w-4" />
-            )}
-            Pull SMILES From Ketcher
-          </Button>
+          <div className="flex flex-wrap justify-end gap-3 self-start lg:ml-auto">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={clearKetcherCanvas}
+              disabled={isClearing}
+              className="min-w-[152px]"
+            >
+              {isClearing ? (
+                <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Eraser className="mr-2 h-4 w-4" />
+              )}
+              清空画板
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={syncSmilesFromKetcher}
+              disabled={isSyncing}
+              className="min-w-[212px]"
+            >
+              {isSyncing ? (
+                <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCcw className="mr-2 h-4 w-4" />
+              )}
+              Pull SMILES From Ketcher
+            </Button>
+          </div>
         </div>
       </CardHeader>
 

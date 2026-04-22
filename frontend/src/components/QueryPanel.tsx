@@ -1,5 +1,5 @@
-import { Gauge, Search, SlidersHorizontal, Sparkles } from "lucide-react";
-import type { ReactNode } from "react";
+import { Check, Gauge, Search, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import {
   PREDICTABLE_PROPERTIES,
   PREDICT_PROPERTY_META,
@@ -106,11 +106,16 @@ export function QueryPanel({
   isPredicting = false,
   className
 }: QueryPanelProps) {
+  const [isPropertyDialogOpen, setIsPropertyDialogOpen] = useState(false);
   const isSimilarity = request.match_mode === "similarity";
   const isQueryMode = mode === "query";
   const thresholdValue = Number.isFinite(request.similarity_threshold)
     ? request.similarity_threshold.toFixed(2)
     : "0.00";
+  const selectedSummary = selectedProperties
+    .slice(0, 2)
+    .map((property) => PREDICT_PROPERTY_META[property].label)
+    .join("、");
 
   function applyPreset(matchMode: SmilesQueryRequest["match_mode"]) {
     onChange({
@@ -131,7 +136,8 @@ export function QueryPanel({
   }
 
   return (
-    <Card className={cn("overflow-hidden rounded-[30px] border-white/70", className)}>
+    <>
+      <Card className={cn("overflow-hidden rounded-[30px] border-white/70", className)}>
       <CardHeader className="gap-3 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(244,248,249,0.86)_100%)]">
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-2">
@@ -253,44 +259,27 @@ export function QueryPanel({
         ) : (
           <>
             <div className="rounded-[24px] border border-white/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.92)_0%,rgba(244,248,249,0.86)_100%)] p-4 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex min-h-[94px] flex-col justify-between gap-4 sm:flex-row sm:items-center">
                 <div>
                   <div className="text-sm font-semibold tracking-tight text-slate-950">选择待预测性质</div>
                   <div className="mt-1 text-sm leading-6 text-mutedForeground">
-                    当前开放 9 个 RDKit 描述符兼容模型，可按需多选并直接提交推理。
+                    {selectedProperties.length > 0
+                      ? `已选择 ${selectedProperties.length} 项：${selectedSummary}${selectedProperties.length > 2 ? " 等" : ""}`
+                      : "打开弹窗选择 1 个或多个性质，主控制卡高度保持稳定。"}
                   </div>
                 </div>
-                <Badge className="bg-slate-100 text-slate-700">{`${selectedProperties.length} selected`}</Badge>
-              </div>
-
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {PREDICTABLE_PROPERTIES.map((property) => {
-                  const selected = selectedProperties.includes(property);
-                  const meta = PREDICT_PROPERTY_META[property];
-
-                  return (
-                    <label
-                      key={property}
-                      className={cn(
-                        "flex cursor-pointer items-start gap-3 rounded-[20px] border px-4 py-3 transition-all duration-200",
-                        selected
-                          ? "border-teal-500/30 bg-teal-50/70 shadow-[0_12px_30px_rgba(15,118,110,0.08)]"
-                          : "border-white/80 bg-white/75 hover:border-slate-200"
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
-                        checked={selected}
-                        onChange={() => toggleProperty(property)}
-                      />
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium tracking-tight text-slate-950">{meta.label}</div>
-                        <div className="mt-1 text-xs uppercase tracking-[0.16em] text-mutedForeground">{meta.unit}</div>
-                      </div>
-                    </label>
-                  );
-                })}
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  <Badge className="bg-slate-100 text-slate-700">{`${selectedProperties.length} selected`}</Badge>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-[42px]"
+                    onClick={() => setIsPropertyDialogOpen(true)}
+                  >
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    选择性质
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -308,6 +297,95 @@ export function QueryPanel({
           </>
         )}
       </CardContent>
-    </Card>
+
+      </Card>
+
+      {isPropertyDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-3xl overflow-hidden rounded-[30px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(242,248,250,0.94)_100%)] shadow-[0_32px_90px_rgba(8,17,31,0.28)]">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 px-5 py-5 md:px-6">
+              <div>
+                <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
+                  Prediction Properties
+                </div>
+                <div className="font-heading mt-2 text-[1.45rem] font-semibold tracking-tight text-slate-950">
+                  选择预测性质
+                </div>
+                <div className="mt-1 text-sm leading-6 text-mutedForeground">
+                  当前开放 9 个 RDKit 描述符兼容模型，可多选后关闭弹窗继续预测。
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPropertyDialogOpen(false)}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/80 bg-white/80 text-slate-600 shadow-sm transition-colors hover:text-slate-950"
+                aria-label="关闭性质选择弹窗"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[62vh] overflow-y-auto px-5 py-5 md:px-6">
+              <div className="grid gap-3 md:grid-cols-2">
+                {PREDICTABLE_PROPERTIES.map((property) => {
+                  const selected = selectedProperties.includes(property);
+                  const meta = PREDICT_PROPERTY_META[property];
+
+                  return (
+                    <label
+                      key={property}
+                      className={cn(
+                        "flex cursor-pointer items-start gap-3 rounded-[20px] border px-4 py-3 transition-all duration-200",
+                        selected
+                          ? "border-teal-500/30 bg-teal-50/80 shadow-[0_12px_30px_rgba(15,118,110,0.08)]"
+                          : "border-white/80 bg-white/75 hover:border-slate-200"
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={selected}
+                        onChange={() => toggleProperty(property)}
+                      />
+                      <span
+                        className={cn(
+                          "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",
+                          selected ? "border-teal-600 bg-teal-600 text-white" : "border-slate-300 bg-white"
+                        )}
+                      >
+                        {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium tracking-tight text-slate-950">{meta.label}</span>
+                        <span className="mt-1 block text-xs uppercase tracking-[0.16em] text-mutedForeground">
+                          {meta.unit}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-slate-200/80 px-5 py-4 sm:flex-row sm:items-center sm:justify-between md:px-6">
+              <div className="text-sm text-mutedForeground">{`已选择 ${selectedProperties.length} / ${PREDICTABLE_PROPERTIES.length} 项性质`}</div>
+              <div className="flex flex-wrap gap-2 sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onSelectedPropertiesChange([])}
+                  disabled={selectedProperties.length === 0}
+                >
+                  清空选择
+                </Button>
+                <Button type="button" onClick={() => setIsPropertyDialogOpen(false)}>
+                  完成
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }

@@ -121,7 +121,7 @@ polyprop/
 SQLITE_DB_PATH=backend/data/polyprop.db
 CSV_SOURCE_PATH=database/data1.csv
 ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
-MODEL_ENABLED=false
+MODEL_ENABLED=true
 ```
 
 实现约束：

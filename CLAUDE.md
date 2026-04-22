@@ -53,7 +53,7 @@ cd frontend && npm run build
 |---|---|---|
 | `SQLITE_DB_PATH` | `backend/data/polyprop.db` | 相对于项目根目录的路径 |
 | `CSV_SOURCE_PATH` | `database/data1.csv` | 相对于项目根目录的路径 |
-| `MODEL_ENABLED` | `false` | 控制 `/predict` 端点（目前仅为存根） |
+| `MODEL_ENABLED` | `true` | 控制 `/predict` 端点，设为 `false` 时返回 503 |
 
 ## 架构说明
 
@@ -91,4 +91,4 @@ cd frontend && npm run build
 - **Ketcher 以预构建静态文件嵌入** — 位于 `public/ketcher/`，不通过 npm 安装。
 - **测试必须使用基于 `tmp_path` 的 SQLite 数据库** — `conftest.py` 中的 `test_app` fixture 为每个测试构建独立的临时数据库，禁止在测试中使用默认数据库文件。
 - **非法 SMILES 始终返回 422** — 查询时输入校验失败返回 422；导入时该行记录 `rdkit_parse_ok=0`，在相似度搜索中跳过。
-- **`MODEL_ENABLED=false`** 为默认值，predict 端点无论如何都返回 501 存根。
+- **`MODEL_ENABLED=true`** 为默认值，predict 端点会加载 `model/` 下的 RF 模型；设为 `false` 时返回 503。

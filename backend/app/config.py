@@ -49,7 +49,7 @@ class Settings:
         if raw_model_enabled is None:
             raw_model_enabled = os.getenv(
                 "MODEL_ENABLED",
-                str(env_values.get("MODEL_ENABLED", "false")),
+                str(env_values.get("MODEL_ENABLED", "true")),
             ).strip().lower() in {
                 "1",
                 "true",
