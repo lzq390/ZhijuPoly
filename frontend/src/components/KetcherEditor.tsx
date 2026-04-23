@@ -152,7 +152,7 @@ export function KetcherEditor({
           <Textarea
             value={smiles}
             onChange={(event) => onChange(event.target.value)}
-            placeholder="例如: *CC*、CCO 或其他用于匹配查询的 SMILES"
+            placeholder="例如: *CC*、CCO 或其他用于相似匹配的 SMILES"
             className="min-h-[128px] rounded-[18px] border-slate-200 bg-white px-4 py-3"
           />
         </div>

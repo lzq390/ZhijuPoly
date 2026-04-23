@@ -129,7 +129,7 @@ export function StructurePreview3D({ smiles }: StructurePreview3DProps) {
             </div>
             <CardTitle className="text-[1.35rem] tracking-tight">3D Structure</CardTitle>
             <CardDescription>
-              在运行查询前快速核对结构构型，作为视觉辅助检查面板。
+              在运行相似匹配前快速核对结构构型，作为视觉辅助检查面板。
             </CardDescription>
           </div>
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_12px_30px_rgba(8,17,31,0.18)]">

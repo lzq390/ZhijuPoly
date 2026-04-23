@@ -21,7 +21,7 @@ export function PropertyGroupCard({ title, items }: PropertyGroupCardProps) {
       <CardContent className="flex flex-1 flex-col space-y-2 pt-5">
         {items.length === 0 ? (
           <div className="flex flex-1 items-center rounded-[18px] border border-dashed border-slate-200/80 bg-white/85 px-4 py-5 text-sm leading-6 text-mutedForeground">
-            当前结果在该属性分组下没有可用记录，可继续查看其他分组或切换查询条件。
+            当前结果在该属性分组下没有可用记录，可继续查看其他分组或切换匹配方式。
           </div>
         ) : (
           items.map((item, index) => (

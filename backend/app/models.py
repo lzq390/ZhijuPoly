@@ -4,15 +4,27 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+MatchMode = Literal["structure", "property"]
+
 
 class SmilesQueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     smiles: str = Field(min_length=1)
-    match_mode: Literal["exact", "similarity"] = "exact"
+    match_mode: MatchMode = "structure"
     similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
     top_k: int = Field(default=10, ge=1, le=100)
 
+    @field_validator("match_mode", mode="before")
+    @classmethod
+    def normalize_match_mode(cls, match_mode: object) -> object:
+        legacy_modes = {
+            "exact": "structure",
+            "similarity": "property",
+        }
+        if isinstance(match_mode, str):
+            return legacy_modes.get(match_mode, match_mode)
+        return match_mode
 
 
 class PropertyItem(BaseModel):
@@ -45,13 +57,14 @@ class PolymerResult(BaseModel):
     smiles: str
     canonical_smiles: str | None = None
     similarity_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    structure_svg: str | None = None
     properties: PropertyGroups
 
 
 class SmilesQueryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    match_type: Literal["exact", "similarity"]
+    match_type: MatchMode
     query_time_ms: float = Field(ge=0.0)
     total: int = Field(ge=0)
     results: list[PolymerResult] = Field(default_factory=list)

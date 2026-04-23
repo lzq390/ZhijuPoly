@@ -1,78 +1,41 @@
-import { Braces, Fingerprint, Layers3 } from "lucide-react";
+import { Atom } from "lucide-react";
 import type { PolymerResult } from "../types";
-import { PropertyGroupCard } from "./PropertyGroupCard";
-import { SummaryMetric } from "./SummaryMetric";
-import { Badge } from "./ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Card } from "./ui/card";
 
 type PolymerCardProps = {
   result: PolymerResult;
 };
 
 export function PolymerCard({ result }: PolymerCardProps) {
-  const groups = [
-    { title: "Thermal", items: result.properties.thermal },
-    { title: "Mechanical", items: result.properties.mechanical },
-    { title: "Electrical", items: result.properties.electrical },
-    { title: "Chemical", items: result.properties.chemical },
-    { title: "Optical", items: result.properties.optical },
-    { title: "Other", items: result.properties.other }
-  ];
-  const propertyCount = groups.reduce((sum, group) => sum + group.items.length, 0);
-  const populatedGroups = groups.filter((group) => group.items.length > 0).length;
+  const displaySmiles = result.canonical_smiles || result.smiles;
+  const similarityText = result.similarity_score !== null ? result.similarity_score.toFixed(3) : "N/A";
 
   return (
-    <Card className="overflow-hidden rounded-[28px] border-white/70">
-      <CardHeader className="min-h-[216px] gap-5 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <CardTitle className="text-[1.35rem] tracking-tight">{result.polymer_name}</CardTitle>
-              {result.similarity_score !== null ? (
-                <Badge>{`Similarity ${result.similarity_score.toFixed(3)}`}</Badge>
-              ) : (
-                <Badge className="bg-emerald-50 text-emerald-700">精确命中</Badge>
-              )}
-            </div>
-            <div className="text-sm leading-6 text-mutedForeground">
-              查询命中实体与属性将以下方分组形式展示。
-            </div>
+    <Card className="overflow-hidden rounded-[24px] border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)] p-3">
+      <div className="overflow-hidden rounded-[18px] border border-white/80 bg-white/90 p-2.5 shadow-sm">
+        <div className="mb-1.5 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.18em] text-mutedForeground">
+          <Atom className="h-3.5 w-3.5 text-teal-600" />
+          2D Structure
+        </div>
+        {result.structure_svg ? (
+          <div
+            className="[&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-h-[170px] [&_svg]:w-full [&_svg]:max-w-full"
+            dangerouslySetInnerHTML={{ __html: result.structure_svg }}
+          />
+        ) : (
+          <div className="flex min-h-[150px] items-center justify-center rounded-[14px] bg-slate-50 px-3 text-center font-mono-ui text-xs leading-5 text-mutedForeground">
+            {displaySmiles}
           </div>
-          <div className="rounded-[20px] border border-white/80 bg-white/80 px-4 py-3 text-sm text-mutedForeground shadow-sm">
-            Polymer ID <span className="ml-2 font-medium text-slate-900">{result.polymer_id}</span>
-          </div>
-        </div>
+        )}
+      </div>
 
-        <div className="grid auto-rows-fr gap-3 lg:grid-cols-3">
-          <SummaryMetric
-            className="min-h-[116px] rounded-[18px]"
-            icon={<Braces className="h-4 w-4 text-teal-600" />}
-            label="Matched SMILES"
-            value={result.smiles}
-            mono
-          />
-          <SummaryMetric
-            className="min-h-[116px] rounded-[18px]"
-            icon={<Fingerprint className="h-4 w-4 text-teal-600" />}
-            label="Similarity"
-            value={result.similarity_score !== null ? result.similarity_score.toFixed(3) : "Exact"}
-          />
-          <SummaryMetric
-            className="min-h-[116px] rounded-[18px]"
-            icon={<Layers3 className="h-4 w-4 text-teal-600" />}
-            label="Property Coverage"
-            value={`${propertyCount} 项属性 / ${populatedGroups} 个分组`}
-          />
+      <div className="mt-2.5 rounded-[16px] border border-white/80 bg-white/75 px-3 py-2.5 shadow-sm">
+        <div className="font-mono-ui break-all text-xs leading-5 text-slate-800">{displaySmiles}</div>
+        <div className="mt-1.5 flex items-center justify-between gap-3 text-xs">
+          <span className="text-mutedForeground">相似度</span>
+          <span className="font-semibold text-teal-700">{similarityText}</span>
         </div>
-      </CardHeader>
-
-      <CardContent className="pt-6">
-        <div className="grid auto-rows-fr gap-4 xl:grid-cols-3">
-          {groups.map((group) => (
-            <PropertyGroupCard key={group.title} title={group.title} items={group.items} />
-          ))}
-        </div>
-      </CardContent>
+      </div>
     </Card>
   );
 }

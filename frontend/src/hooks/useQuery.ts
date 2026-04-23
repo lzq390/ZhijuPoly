@@ -10,7 +10,7 @@ type QueryState = {
 
 const DEFAULT_REQUEST: SmilesQueryRequest = {
   smiles: "",
-  match_mode: "exact",
+  match_mode: "structure",
   similarity_threshold: 0.7,
   top_k: 10
 };

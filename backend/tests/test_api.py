@@ -41,7 +41,7 @@ async def test_query_smiles_rejects_invalid_input(test_app: FastAPI) -> None:
         await query_smiles(
             SmilesQueryRequest(
                 smiles="not-a-smiles",
-                match_mode="exact",
+                match_mode="structure",
                 similarity_threshold=0.7,
                 top_k=10,
             ),
@@ -53,46 +53,50 @@ async def test_query_smiles_rejects_invalid_input(test_app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_smiles_exact_returns_grouped_result(test_app: FastAPI) -> None:
+async def test_query_smiles_structure_returns_top_structural_matches(test_app: FastAPI) -> None:
     request = make_request(test_app)
 
     response = await query_smiles(
         SmilesQueryRequest(
             smiles="OCC",
-            match_mode="exact",
+            match_mode="structure",
             similarity_threshold=0.7,
             top_k=10,
         ),
         request,
     )
 
-    assert response.match_type == "exact"
-    assert response.total == 1
+    assert response.match_type == "structure"
+    assert response.total == 2
     assert response.results[0].polymer_name == "polymer_a"
     assert response.results[0].similarity_score == 1.0
+    assert response.results[0].similarity_score >= response.results[1].similarity_score
+    assert response.results[0].structure_svg is not None
+    assert "<svg" in response.results[0].structure_svg
     assert response.results[0].properties.thermal[0].property_name == "Tg"
     assert response.results[0].properties.electrical[0].property_name == "Conductivity"
 
 
 @pytest.mark.asyncio
-async def test_query_smiles_similarity_returns_sorted_results(test_app: FastAPI) -> None:
+async def test_query_smiles_property_returns_sorted_results(test_app: FastAPI) -> None:
     request = make_request(test_app)
 
     response = await query_smiles(
         SmilesQueryRequest(
             smiles="CCO",
-            match_mode="similarity",
+            match_mode="property",
             similarity_threshold=0.3,
             top_k=2,
         ),
         request,
     )
 
-    assert response.match_type == "similarity"
+    assert response.match_type == "property"
     assert response.total == 2
     assert response.results[0].polymer_name == "polymer_a"
     assert response.results[0].similarity_score == 1.0
     assert response.results[0].similarity_score >= response.results[1].similarity_score
+    assert response.results[0].structure_svg is not None
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,6 @@ from app.models import (
     Structure3DResponse,
 )
 from app.services.aggregator import load_polymer_result, load_polymer_results
-from app.services.matcher import exact_match
 from app.services.similarity import similarity_search
 from app.services.structure_3d import generate_3d_molblock
 from app.utils.exceptions import InvalidSmilesError
@@ -28,9 +27,13 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
 
     try:
         with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-            if request_body.match_mode == "exact":
-                polymer_rows = exact_match(connection, request_body.smiles)
-                scores = {int(row["polymer_id"]): 1.0 for row in polymer_rows}
+            if request_body.match_mode == "structure":
+                rows_with_scores = similarity_search(
+                    connection,
+                    request_body.smiles,
+                    similarity_threshold=0.0,
+                    top_k=10,
+                )
             else:
                 rows_with_scores = similarity_search(
                     connection,
@@ -38,8 +41,9 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
                     similarity_threshold=request_body.similarity_threshold,
                     top_k=request_body.top_k,
                 )
-                polymer_rows = [row for row, _ in rows_with_scores]
-                scores = {int(row["polymer_id"]): score for row, score in rows_with_scores}
+
+            polymer_rows = [row for row, _ in rows_with_scores]
+            scores = {int(row["polymer_id"]): score for row, score in rows_with_scores}
 
             results = load_polymer_results(connection, polymer_rows, similarity_scores=scores)
     except InvalidSmilesError as exc:

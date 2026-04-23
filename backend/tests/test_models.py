@@ -20,9 +20,14 @@ def test_smiles_query_request_defaults() -> None:
     request = SmilesQueryRequest(smiles=" CCO ")
 
     assert request.smiles == "CCO"
-    assert request.match_mode == "exact"
+    assert request.match_mode == "structure"
     assert request.similarity_threshold == 0.7
     assert request.top_k == 10
+
+
+def test_smiles_query_request_accepts_legacy_match_mode_names() -> None:
+    assert SmilesQueryRequest(smiles="CCO", match_mode="exact").match_mode == "structure"  # type: ignore[arg-type]
+    assert SmilesQueryRequest(smiles="CCO", match_mode="similarity").match_mode == "property"  # type: ignore[arg-type]
 
 
 def test_smiles_query_request_rejects_invalid_values() -> None:
@@ -65,7 +70,7 @@ def test_query_response_serializes_polymer_results() -> None:
         properties=PropertyGroups(electrical=[item]),
     )
     response = SmilesQueryResponse(
-        match_type="exact",
+        match_type="structure",
         query_time_ms=12.5,
         total=1,
         results=[result],
@@ -73,7 +78,7 @@ def test_query_response_serializes_polymer_results() -> None:
 
     payload = response.model_dump()
 
-    assert payload["match_type"] == "exact"
+    assert payload["match_type"] == "structure"
     assert payload["total"] == 1
     assert payload["results"][0]["properties"]["electrical"][0]["property_name"] == "Electric conductivity"
 

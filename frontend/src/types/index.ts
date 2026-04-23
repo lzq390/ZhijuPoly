@@ -1,4 +1,4 @@
-export type MatchMode = "exact" | "similarity";
+export type MatchMode = "structure" | "property";
 export type WorkspaceMode = "query" | "predict";
 export type ResultsTab = "query" | "predict";
 
@@ -49,6 +49,7 @@ export type PolymerResult = {
   smiles: string;
   canonical_smiles: string | null;
   similarity_score: number | null;
+  structure_svg: string | null;
   properties: PropertyGroups;
 };
 

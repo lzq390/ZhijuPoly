@@ -50,6 +50,8 @@ def test_build_polymer_result_includes_similarity_score(tmp_path: Path) -> None:
 
     assert result.polymer_id == str(polymer_row["polymer_id"])
     assert result.similarity_score == 0.88
+    assert result.structure_svg is not None
+    assert "<svg" in result.structure_svg
     assert result.properties.thermal[0].property_value_num == 123.4
 
 

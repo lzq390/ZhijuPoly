@@ -29,9 +29,9 @@ export default function App() {
   const activeMode =
     panelMode === "predict"
       ? "Property prediction"
-      : request.match_mode === "similarity"
-        ? "Similarity retrieval"
-        : "Exact retrieval";
+      : request.match_mode === "property"
+        ? "性质相似匹配"
+        : "结构相似匹配";
 
   const resultCount =
     activeResultsTab === "predict" ? Object.keys(predict.data?.predictions ?? {}).length : data?.total ?? 0;
@@ -55,11 +55,11 @@ export default function App() {
     }
   }
 
-  const resultPanelTitle = activeResultsTab === "predict" ? "预测结果面板" : "查询结果面板";
+  const resultPanelTitle = activeResultsTab === "predict" ? "预测结果面板" : "相似匹配结果面板";
   const resultPanelDescription =
     activeResultsTab === "predict"
       ? "模型推理完成后，这里会显示所选性质的预测结果与耗时。"
-      : "运行查询后，这里会显示摘要、命中记录和属性分组。";
+      : "运行相似匹配后，这里会显示摘要、命中记录和属性分组。";
   const resultPrimaryBadge =
     activeResultsTab === "predict"
       ? predict.data
@@ -73,9 +73,9 @@ export default function App() {
       ? predict.isLoading
         ? "Predicting"
         : "Prediction mode"
-      : request.match_mode === "similarity"
-        ? "Similarity mode"
-        : "Exact mode";
+      : request.match_mode === "property"
+        ? "性质相似匹配"
+        : "结构相似匹配";
 
   return (
     <Layout>
@@ -89,15 +89,15 @@ export default function App() {
             <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
               POLYPROP
             </div>
-            <Badge>聚合物结构检索与性质预测</Badge>
+            <Badge>聚合物相似匹配与性质预测</Badge>
           </div>
 
           <div className="mt-6 max-w-4xl">
             <h1 className="font-heading text-balance max-w-4xl text-[2.5rem] font-semibold tracking-[-0.04em] text-slate-950 md:text-[4rem] md:leading-[0.95]">
-              分子结构检索与属性分析工作台
+              分子结构相似匹配与属性分析工作台
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
-              让结构编辑、相似度检索、三维核对和属性分组分析汇聚到同一张科研操作台上，
+              让结构编辑、相似匹配、三维核对和属性分组分析汇聚到同一张科研操作台上，
               用更清晰的视觉层次承接高密度信息。
             </p>
           </div>
@@ -114,7 +114,7 @@ export default function App() {
               <div className="mt-2 text-sm leading-6 text-mutedForeground">
                 {panelMode === "predict"
                   ? "控制卡中可选择目标性质，并将当前结构送入模型推理。"
-                  : "控制卡中可切换精确匹配或相似度检索，并同步更新参数摘要。"}
+                  : "控制卡中可切换结构相似匹配或性质相似匹配。"}
               </div>
             </div>
 
@@ -127,7 +127,7 @@ export default function App() {
                 {smiles.trim().length > 0 ? "已准备" : "等待输入"}
               </div>
               <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                编辑器内容会同步到 SMILES 文本回退输入，作为本次检索或预测的主结构来源。
+                编辑器内容会同步到 SMILES 文本回退输入，作为本次相似匹配或预测的主结构来源。
               </div>
             </div>
 
@@ -171,7 +171,7 @@ export default function App() {
               Secondary Surface
             </div>
             <h2 className="font-heading mt-2 text-[1.55rem] font-semibold tracking-tight text-slate-950">辅助面板</h2>
-            <p className="mt-1 text-sm text-mutedForeground">三维预览与查询控制保持统一起始线和栅格边界。</p>
+            <p className="mt-1 text-sm text-mutedForeground">三维预览与匹配控制保持统一起始线和栅格边界。</p>
           </div>
         </div>
 

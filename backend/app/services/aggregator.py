@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Iterable, Sequence
 
 from app.models import PolymerResult, PropertyGroups, PropertyItem
+from app.services.structure_2d import generate_2d_svg
 
 
 CATEGORY_MAP = {
@@ -66,12 +67,15 @@ def build_polymer_result(
     property_rows: Sequence[sqlite3.Row],
     similarity_score: float | None = None,
 ) -> PolymerResult:
+    source_smiles = polymer_row["canonical_smiles"] or polymer_row["smiles"]
+
     return PolymerResult(
         polymer_id=str(polymer_row["polymer_id"]),
         polymer_name=polymer_row["polymer_name"],
         smiles=polymer_row["smiles"],
         canonical_smiles=polymer_row["canonical_smiles"],
         similarity_score=similarity_score,
+        structure_svg=generate_2d_svg(source_smiles),
         properties=group_properties(property_rows),
     )
 

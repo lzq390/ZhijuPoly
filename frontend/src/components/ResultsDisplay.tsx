@@ -63,9 +63,9 @@ function QueryResultsPanel({
         <CardHeader className="min-h-[112px] border-b border-destructive/10 bg-destructiveForeground">
           <CardTitle className="flex items-center gap-2 text-lg text-destructive">
             <TriangleAlert className="h-5 w-5" />
-            查询失败
+            匹配失败
           </CardTitle>
-          <CardDescription>请求未成功返回，请检查结构输入、参数组合或服务可用性。</CardDescription>
+          <CardDescription>请求未成功返回，请检查结构输入、匹配方式或服务可用性。</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <Alert variant="destructive">{error}</Alert>
@@ -78,8 +78,8 @@ function QueryResultsPanel({
     return (
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Query Results</CardTitle>
-          <CardDescription>正在执行查询并汇总属性数据。</CardDescription>
+          <CardTitle className="text-xl">相似匹配结果</CardTitle>
+          <CardDescription>正在执行相似匹配并汇总属性数据。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 pt-5">
           <div className="flex items-center gap-3 rounded-[20px] border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700">
@@ -111,14 +111,14 @@ function QueryResultsPanel({
     return (
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Query Results</CardTitle>
-          <CardDescription>当前暂无查询结果。</CardDescription>
+          <CardTitle className="text-xl">相似匹配结果</CardTitle>
+          <CardDescription>当前暂无相似匹配结果。</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <EmptyState
             icon={<Database className="h-6 w-6" />}
             title="结果区已准备"
-            description="运行查询后，这里会显示摘要、命中记录和属性分组。"
+            description="运行相似匹配后，这里会显示摘要、命中记录和属性分组。"
           />
         </CardContent>
       </Card>
@@ -129,14 +129,14 @@ function QueryResultsPanel({
     return (
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Query Results</CardTitle>
-          <CardDescription>本次查询执行成功，但没有命中任何可展示结果。</CardDescription>
+          <CardTitle className="text-xl">相似匹配结果</CardTitle>
+          <CardDescription>本次相似匹配执行成功，但没有命中任何可展示结果。</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <EmptyState
             icon={<SearchX className="h-6 w-6" />}
             title="未找到匹配结果"
-            description="可以尝试放宽相似度阈值、调整返回数量，或检查当前 SMILES。"
+            description="可以检查当前 SMILES，或切换另一种相似匹配方式。"
           />
         </CardContent>
       </Card>
@@ -149,13 +149,13 @@ function QueryResultsPanel({
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-2">
             <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
-              Retrieved Dataset
+              Similarity Dataset
             </div>
-            <CardTitle className="text-[1.4rem] tracking-tight">Query Results</CardTitle>
+            <CardTitle className="text-[1.4rem] tracking-tight">相似匹配结果</CardTitle>
             <CardDescription>摘要、命中记录与属性分组会按顺序展示在这里。</CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Badge>{`${data.match_type === "similarity" ? "相似度" : "精确"}匹配`}</Badge>
+            <Badge>{data.match_type === "property" ? "性质相似匹配" : "结构相似匹配"}</Badge>
             <Badge className="text-slate-700">{`${data.total} 条结果`}</Badge>
             <Badge className="text-slate-700">{`${data.query_time_ms.toFixed(1)} ms`}</Badge>
           </div>
@@ -165,21 +165,21 @@ function QueryResultsPanel({
           <SummaryMetric
             icon={<ScanSearch className="h-4 w-4 text-teal-600" />}
             label="Match Mode"
-            value={data.match_type === "similarity" ? "Similarity" : "Exact"}
-            detail="当前查询的匹配方式。"
+            value={data.match_type === "property" ? "性质相似匹配" : "结构相似匹配"}
+            detail="当前相似匹配方式。"
           />
           <SummaryMetric label="Result Count" value={String(data.total)} detail="命中的聚合物记录总数。" />
           <SummaryMetric
             icon={<Timer className="h-4 w-4 text-teal-600" />}
             label="Elapsed Time"
             value={`${data.query_time_ms.toFixed(1)} ms`}
-            detail="本次检索与聚合耗时。"
+            detail="本次匹配与聚合耗时。"
           />
-          <SummaryMetric label="Query SMILES" value={request.smiles || "N/A"} detail="当前查询输入。" mono />
+          <SummaryMetric label="Input SMILES" value={request.smiles || "N/A"} detail="当前结构输入。" mono />
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-5 pt-5">
+      <CardContent className="grid gap-4 pt-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {data.results.map((result) => (
           <PolymerCard key={result.polymer_id} result={result} />
         ))}
@@ -212,7 +212,7 @@ export function ResultsDisplay({
               : "border-white/80 bg-white/80 text-slate-600 hover:border-slate-200"
           )}
         >
-          检索结果
+          相似匹配结果
         </button>
         <button
           type="button"
