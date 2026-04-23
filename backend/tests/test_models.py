@@ -69,7 +69,7 @@ def test_query_response_serializes_polymer_results() -> None:
         similarity_score=1.0,
         matched_property_name="Glass transition temperature",
         matched_property_value=210.0,
-        matched_property_unit="K",
+        matched_property_unit="°C",
         matched_property_source="exp",
         properties=PropertyGroups(electrical=[item]),
     )
@@ -79,7 +79,7 @@ def test_query_response_serializes_polymer_results() -> None:
         total=1,
         predicted_property_name="Glass transition temperature",
         predicted_property_value=222.0,
-        predicted_property_unit="K",
+        predicted_property_unit="°C",
         results=[result],
     )
 

@@ -89,9 +89,9 @@ export const PREDICT_PROPERTY_META: Record<
   PredictableProperty,
   { label: string; unit: string }
 > = {
-  "Glass transition temperature": { label: "玻璃化转变温度", unit: "K" },
-  "Melting temperature": { label: "熔融温度", unit: "K" },
-  "Thermal decomposition temperature": { label: "热分解温度", unit: "K" },
+  "Glass transition temperature": { label: "玻璃化转变温度", unit: "°C" },
+  "Melting temperature": { label: "熔融温度", unit: "°C" },
+  "Thermal decomposition temperature": { label: "热分解温度", unit: "°C" },
   "Thermal decomposition weight loss": { label: "热分解失重率", unit: "%" },
   "Elongation at break": { label: "断裂伸长率", unit: "%" },
   "Tensile stress strength at break": { label: "断裂拉伸强度", unit: "MPa" },

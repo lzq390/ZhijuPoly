@@ -32,6 +32,32 @@ CLEANED_FIELDS = [
     "label_source",
 ]
 
+CELSIUS_PROPERTIES = {
+    "Glass transition temperature",
+    "Melting temperature",
+    "Thermal decomposition temperature",
+}
+
+
+def normalize_value_and_unit(property_name: str, value: str, unit: str) -> tuple[str, str]:
+    normalized_unit = unit.strip()
+    normalized_value = value.strip()
+
+    if property_name not in CELSIUS_PROPERTIES:
+        return normalized_value, normalized_unit
+
+    if normalized_unit.lower() in {"c", "°c", "℃"}:
+        return normalized_value, "C"
+
+    if normalized_unit.lower() == "k":
+        try:
+            celsius_value = float(normalized_value) - 273.15
+        except ValueError:
+            return normalized_value, normalized_unit
+        return f"{celsius_value:.10g}", "C"
+
+    return normalized_value, normalized_unit
+
 
 def clean_csv(source_path: Path, output_path: Path) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,12 +74,18 @@ def clean_csv(source_path: Path, output_path: Path) -> int:
                 if property_name not in TARGET_PROPERTIES:
                     continue
 
+                property_value, property_unit = normalize_value_and_unit(
+                    property_name,
+                    row.get("property_value") or "",
+                    row.get("property_unit") or "",
+                )
+
                 writer.writerow(
                     {
                         "smiles": (row.get("smiles") or "").strip(),
                         "property_name": property_name,
-                        "property_value": (row.get("property_value") or "").strip(),
-                        "property_unit": (row.get("property_unit") or "").strip(),
+                        "property_value": property_value,
+                        "property_unit": property_unit,
                         "label_source": (row.get("label_source") or "").strip(),
                     }
                 )

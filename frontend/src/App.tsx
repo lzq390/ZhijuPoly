@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowRight, Atom, Database, Microscope, Sparkles } from "lucide-react";
+import { Atom, Database, Microscope, Sparkles } from "lucide-react";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { Layout } from "./components/Layout";
 import { QueryPanel } from "./components/QueryPanel";
@@ -35,6 +35,12 @@ export default function App() {
       : request.match_mode === "property"
         ? "性质相似匹配"
         : "结构相似匹配";
+  const activeModeLabel =
+    panelMode === "predict"
+      ? "Property Prediction"
+      : request.match_mode === "property"
+        ? "Property Similarity"
+        : "Structural Similarity";
 
   const resultCount =
     activeResultsTab === "predict" ? Object.keys(predict.data?.predictions ?? {}).length : data?.total ?? 0;
@@ -92,16 +98,15 @@ export default function App() {
             <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
               POLYPROP
             </div>
-            <Badge>聚合物相似匹配与性质预测</Badge>
+            <Badge>Polymer Similarity Matching & Property Prediction</Badge>
           </div>
 
-          <div className="mt-6 max-w-4xl">
-            <h1 className="font-heading text-balance max-w-4xl text-[2.5rem] font-semibold tracking-[-0.04em] text-slate-950 md:text-[4rem] md:leading-[0.95]">
-              分子结构相似匹配与属性分析工作台
+          <div className="mt-6 overflow-x-auto">
+            <h1 className="font-heading whitespace-nowrap text-[2.5rem] font-semibold tracking-[-0.04em] text-slate-950 md:text-[4rem] md:leading-[0.95]">
+              Polymer Property Explorer
             </h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
-              让结构编辑、相似匹配、三维核对和属性分组分析汇聚到同一张科研操作台上，
-              用更清晰的视觉层次承接高密度信息。
+            <p className="mt-4 whitespace-nowrap text-base leading-7 text-slate-600 md:text-lg">
+              Bring structure editing, similarity matching, 3D review, and property prediction into one focused research workspace.
             </p>
           </div>
 
@@ -109,75 +114,46 @@ export default function App() {
             <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
               <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
                 {panelMode === "predict" ? <Sparkles className="h-4 w-4 text-teal-600" /> : <Atom className="h-4 w-4 text-teal-600" />}
-                当前模式
+                Current Mode
               </div>
               <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                {activeMode}
+                {activeModeLabel}
               </div>
               <div className="mt-2 text-sm leading-6 text-mutedForeground">
                 {panelMode === "predict"
-                  ? "控制卡中可选择目标性质，并将当前结构送入模型推理。"
-                  : "控制卡中可切换结构相似匹配或性质相似匹配。"}
+                  ? "Select target properties in the control card and send the current structure to the prediction models."
+                  : "Switch between structural similarity and property similarity matching in the control card."}
               </div>
             </div>
 
             <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
               <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
                 <Microscope className="h-4 w-4 text-sky-600" />
-                结构输入
+                Structure Input
               </div>
               <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                {smiles.trim().length > 0 ? "已准备" : "等待输入"}
+                {smiles.trim().length > 0 ? "Ready" : "Waiting"}
               </div>
               <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                编辑器内容会同步到 SMILES 文本回退输入，作为本次相似匹配或预测的主结构来源。
+                Editor content syncs into the SMILES fallback input as the source structure for matching or prediction.
               </div>
             </div>
 
             <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-slate-950 p-5 text-center text-slate-50 shadow-[0_22px_50px_rgba(8,17,31,0.2)]">
               <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">
                 <Database className="h-4 w-4 text-teal-300" />
-                最近结果
+                Latest Results
               </div>
               <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">{resultCount}</div>
               <div className="mt-2 text-sm leading-6 text-slate-300">
-                {resultTiming ? `${resultTiming.toFixed(1)} ms 返回` : "执行完成后显示结果规模与耗时"}
+                {resultTiming ? `${resultTiming.toFixed(1)} ms returned` : "Result count and latency appear after execution."}
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="space-y-5">
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.22fr)_minmax(0,0.92fr)]">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
-                Primary Workspace
-              </div>
-              <h2 className="font-heading mt-2 text-[1.55rem] font-semibold tracking-tight text-slate-950">主工作区</h2>
-              <p className="mt-1 text-sm text-mutedForeground">
-                结构编辑作为主视图，输入与同步操作围绕编辑器展开。
-              </p>
-            </div>
-            <div className="hidden items-center gap-2 rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm text-slate-600 shadow-sm backdrop-blur lg:flex">
-              结构输入
-              <ArrowRight className="h-4 w-4 text-slate-400" />
-              参数控制
-              <ArrowRight className="h-4 w-4 text-slate-400" />
-              结果分析
-            </div>
-          </div>
-
-          <div>
-            <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-sky-700/80">
-              Secondary Surface
-            </div>
-            <h2 className="font-heading mt-2 text-[1.55rem] font-semibold tracking-tight text-slate-950">辅助面板</h2>
-            <p className="mt-1 text-sm text-mutedForeground">三维预览与匹配控制保持统一起始线和栅格边界。</p>
-          </div>
-        </div>
-
+      <section>
         <div className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,1.22fr)_minmax(0,0.92fr)]">
           <div className="min-w-0">
             <KetcherEditor

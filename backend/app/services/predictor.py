@@ -46,9 +46,9 @@ PROPERTY_LABELS_ZH: dict[str, str] = {
 }
 
 PROPERTY_UNITS: dict[str, str] = {
-    "Glass transition temperature": "K",
-    "Melting temperature": "K",
-    "Thermal decomposition temperature": "K",
+    "Glass transition temperature": "°C",
+    "Melting temperature": "°C",
+    "Thermal decomposition temperature": "°C",
     "Thermal decomposition weight loss": "%",
     "Elongation at break": "%",
     "Tensile stress strength at break": "MPa",

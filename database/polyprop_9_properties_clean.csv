@@ -1,12 +1,12 @@
 smiles,property_name,property_value,property_unit,label_source
-O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4)C)C)C=C5C)[*],Glass transition temperature,176.6,K,exp
+O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4)C)C)C=C5C)[*],Glass transition temperature,-96.55,C,exp
 **C(C(=O)OCC(COC(=O)C(C*)(C)*)(COC(=O)C(C*)*)CC)C,Glass transition temperature,-67.0,C,exp
 **CC(=O)OCC(COC(=O)C(C*)*)(COC(=O)C(C*)*)CC,Glass transition temperature,-73.0,C,exp
 **CC(=O)O[As](OC(=O)C(C*)*)OC(=O)C(C*)*,Melting temperature,43.0,C,exp
 **Cc1ccc(cc1)CN(c1ccccc1)N=Cc1ccc(cc1)N(c1ccc(cc1)C=NN(c1ccccc1)Cc1ccc(cc1)C(C*)*)c1ccccc1,Glass transition temperature,122.0,C,exp
 **c1cc(N*)ccc1*,Thermal decomposition temperature,700.0,C,exp
 **c1cc(N*)ccc1*,Thermal decomposition weight loss,36.0,%,exp
-*/C(=C(/*)\c1ccccc1)/c1ccccc1,Glass transition temperature,206.5698859,K,sim
+*/C(=C(/*)\c1ccccc1)/c1ccccc1,Glass transition temperature,-66.5801141,C,sim
 */C(=C(/*)c1ccc(CCCC)cc1)c1ccccc1,Co2 Permeability Barrer,9400.000009,Barrer,exp
 */C(=C(/*)c1ccc(CCCC)cc1)c1ccccc1,O2 Permeability Barrer,2600.0,Barrer,exp
 */C(=C(/*)c1ccc(CCCC)cc1)c1ccccc1,Co2 Permeability Barrer,9400.000009,Barrer,sim
@@ -181,18 +181,18 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 */C(=C(/*)c1ccccc1F)c1ccc2c(c1)C(C)(C)CC2(C)C,Co2 Permeability Barrer,35199.99996,Barrer,sim
 */C(=C(/*)c1ccccc1F)c1ccc2c(c1)C(C)(C)CC2(C)C,H2 Permeability Barrer,26999.99999,Barrer,sim
 */C(=C(/*)c1ccccc1F)c1ccc2c(c1)C(C)(C)CC2(C)C,O2 Permeability Barrer,14299.99998,Barrer,sim
-*/C(=C(/CC*)\C)/C,Melting temperature,259.5,K,
-*/C(=C(/CC*)\Cl)/Cl,Melting temperature,300.0,K,
+*/C(=C(/CC*)\C)/C,Melting temperature,-13.65,C,
+*/C(=C(/CC*)\Cl)/Cl,Melting temperature,26.85,C,
 */C(=C(/c1ccc(cc1)*)\OC(=O)C)/OC(=O)C,Thermal decomposition temperature,300.0,C,exp
 */C(=C(/c1ccc(cc1)*)\OC(=O)C)/OC(=O)C,Melting temperature,179.5,C,exp
-*/C(=C(\CC*)/C)/C,Melting temperature,193.5,K,
+*/C(=C(\CC*)/C)/C,Melting temperature,-79.65,C,
 */C(=C(\I)/*)/I,Thermal decomposition temperature,300.0,C,exp
-*/C(=C/C(C*)C)/C,Melting temperature,195.8,K,
-*/C(=C/CC*)/C,Melting temperature,70.04102564,K,
-*/C(=C/CC*)/Cl,Melting temperature,71.92857143,K,
-*/C(=C\CC*)/C,Melting temperature,47.79444444,K,
-*/C(=C\CC*)/C(C)(C)C,Melting temperature,104.5,K,
-*/C(=C\CC*)/Cl,Melting temperature,70.0,K,
+*/C(=C/C(C*)C)/C,Melting temperature,-77.35,C,
+*/C(=C/CC*)/C,Melting temperature,-203.1089744,C,
+*/C(=C/CC*)/Cl,Melting temperature,-201.2214286,C,
+*/C(=C\CC*)/C,Melting temperature,-225.3555556,C,
+*/C(=C\CC*)/C(C)(C)C,Melting temperature,-168.65,C,
+*/C(=C\CC*)/Cl,Melting temperature,-203.15,C,
 */C(C)=C(/*)CC(C)C,Co2 Permeability Barrer,899.9999991,Barrer,exp
 */C(C)=C(/*)CC(C)C,H2 Permeability Barrer,749.9999993,Barrer,exp
 */C(C)=C(/*)CC(C)C,O2 Permeability Barrer,244.9999998,Barrer,exp
@@ -317,20 +317,20 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 */C=C(/*)c1ccccc1C(F)(F)F,Co2 Permeability Barrer,129.9999999,Barrer,sim
 */C=C(/*)c1ccccc1C(F)(F)F,H2 Permeability Barrer,140.0000001,Barrer,sim
 */C=C(/*)c1ccccc1C(F)(F)F,O2 Permeability Barrer,25.00000002,Barrer,sim
-*/C=C/*,Glass transition temperature,59.5588378,K,sim
+*/C=C/*,Glass transition temperature,-213.5911622,C,sim
 */C=C/C#C*,Melting temperature,300.0,C,exp
-*/C=C/C(C(*)(C)C)(C)C,Melting temperature,264.0,K,
+*/C=C/C(C(*)(C)C)(C)C,Melting temperature,-9.15,C,
 */C=C/C(C(C)(C)*)(C)C,Melting temperature,264.0,C,exp
 */C=C/C(C*)C,Glass transition temperature,-60.0,C,exp
 */C=C/C(C*)C,Melting temperature,95.0,C,exp
-*/C=C/C(C*)C,Melting temperature,93.78571429,K,
-*/C=C/C(C*)C(CC)C,Melting temperature,172.5,K,
-*/C=C/C(C*)OC,Melting temperature,118.0,K,
+*/C=C/C(C*)C,Melting temperature,-179.3642857,C,
+*/C=C/C(C*)C(CC)C,Melting temperature,-100.65,C,
+*/C=C/C(C*)OC,Melting temperature,-155.15,C,
 */C=C/C(OC)C*,Melting temperature,118.0,C,exp
-*/C=C/CC*,Melting temperature,118.0981481,K,
-*/C=C/CCC*,Melting temperature,23.4,K,
-*/C=C/CCCCC*,Melting temperature,51.0,K,
-*/C=C/CCCCCCCCCC*,Melting temperature,80.0,K,
+*/C=C/CC*,Melting temperature,-155.0518519,C,
+*/C=C/CCC*,Melting temperature,-249.75,C,
+*/C=C/CCCCC*,Melting temperature,-222.15,C,
+*/C=C/CCCCCCCCCC*,Melting temperature,-193.15,C,
 */C=C/c1cc(OCCC(CCCC(C)C)C)c(cc1OC)*,Glass transition temperature,50.0,C,exp
 */C=C/c1ccc(cc1)N(Cc1ccccc1CN(c1ccc(cc1)/C=C/c1ccc(s1)/C=C(/S(=O)(=O)/C(=C/c1ccc(s1)*)/C#N)\C#N)CC)CC,Glass transition temperature,178.0,C,exp
 */C=C/c1ccc(cc1)N(Cc1ccccc1CN(c1ccc(cc1)/C=C/c1ccc(s1)/C=C(/S(=O)(=O)/C(=C/c1ccc(s1)*)/C#N)\C#N)CC)CC,Thermal decomposition temperature,269.0,C,exp
@@ -339,12 +339,12 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 */C=C\C(=O)c1cccc(c1)C(=O)/C=C\Nc1ccc(cc1)Cc1ccc(cc1)N*,Thermal decomposition weight loss,10.0,%,exp
 */C=C\C(C*)C,Glass transition temperature,-39.5,C,exp
 */C=C\C(C*)C,Melting temperature,48.0,C,exp
-*/C=C\C(C*)C,Melting temperature,48.375,K,
+*/C=C\C(C*)C,Melting temperature,-224.775,C,
 */C=C\C1CC(C2C1C=CC2)*,Glass transition temperature,53.0,C,exp
 */C=C\C1CC(C2C1C=CC2)*,Thermal decomposition temperature,415.0,C,exp
 */C=C\C1CC(C2C1C=CC2)*,Thermal decomposition weight loss,0.0,%,exp
-*/C=C\CC*,Melting temperature,-5.154166667,K,
-*/C=C\CCC*,Melting temperature,-41.0,K,
+*/C=C\CC*,Melting temperature,-278.3041667,C,
+*/C=C\CCC*,Melting temperature,-314.15,C,
 */C=C\c1ccc(cc1)/C=C\[Si](c1ccc(cc1)[Si](C)(C)*)(C)C,Glass transition temperature,90.2,C,exp
 */C=C\c1ccc(cc1)/C=C\[Si](c1ccc(cc1)[Si](C)(C)*)(C)C,Thermal decomposition temperature,356.0,C,exp
 */C=C\c1ccc(cc1)/C=C\[Si](c1ccc(cc1)[Si](C)(C)*)(C)C,Thermal decomposition weight loss,7.5,%,exp
@@ -390,19 +390,19 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 */C=C\c1cccc(c1)/C=C\[Si](c1cccc(c1)[Si](CCC(F)(F)F)(C)*)(CCC(F)(F)F)C,Thermal decomposition temperature,409.0,C,exp
 */C=C\c1cccc(c1)/C=C\[Si](c1cccc(c1)[Si](CCC(F)(F)F)(C)*)(CCC(F)(F)F)C,Thermal decomposition weight loss,7.5,%,exp
 *=C(C1=CC(=*)c2c1cccc2)c1ccccc1,Thermal decomposition temperature,510.0,C,exp
-*=C1C=c2ccc3cc(=C4c5ccccc5C(=*)c5ccccc45)cc4ccc(=C1)c2c34,Glass transition temperature,437.49,K,sim
-*=C1CN(CC(=Cc2oc(cc2)C(=O)CCCCC(=O)c2oc(cc2)C=*)C1=O)C,Glass transition temperature,95.14114513,K,sim
-*=C1OC(=c2cc3ccc4=CC(=*)C=c5ccc(c2)c3c45)c2c3c4c1ccc1cccc(c41)c1c3c(ccc1)cc2,Glass transition temperature,432.43,K,sim
-*=C1SC(=S)N(C1=O)c1ccc(cc1)N1C(=S)SC(=Cc2ccc(cc2)C=*)C1=O,Glass transition temperature,187.1036635,K,sim
-*=C1c2c(C(=O)O1)cc(cc2)c1cc2c(C(=O)OC2=Nc2cc(ccc2)Oc2cc(ccc2)Oc2cc(ccc2)N=*)cc1,Glass transition temperature,193.7356518,K,sim
-*=C=C=C(C(=*)CCCCOC(=O)NC(=O)OCCCC)CCCCOC(=O)NC(=O)OCCCC,Glass transition temperature,27.51087357,K,sim
-*=C=C=C(C(=*)CCCCOC(=O)NCC)CCCCOC(=O)NCC,Melting temperature,209.85,K,
-*=C=C=C(C(=*)CO)CO,Glass transition temperature,42.01413885,K,sim
-*=C=C=C(C(=*)COC(=O)NCC)COC(=O)NCC,Glass transition temperature,172.0633872,K,sim
+*=C1C=c2ccc3cc(=C4c5ccccc5C(=*)c5ccccc45)cc4ccc(=C1)c2c34,Glass transition temperature,164.34,C,sim
+*=C1CN(CC(=Cc2oc(cc2)C(=O)CCCCC(=O)c2oc(cc2)C=*)C1=O)C,Glass transition temperature,-178.0088549,C,sim
+*=C1OC(=c2cc3ccc4=CC(=*)C=c5ccc(c2)c3c45)c2c3c4c1ccc1cccc(c41)c1c3c(ccc1)cc2,Glass transition temperature,159.28,C,sim
+*=C1SC(=S)N(C1=O)c1ccc(cc1)N1C(=S)SC(=Cc2ccc(cc2)C=*)C1=O,Glass transition temperature,-86.0463365,C,sim
+*=C1c2c(C(=O)O1)cc(cc2)c1cc2c(C(=O)OC2=Nc2cc(ccc2)Oc2cc(ccc2)Oc2cc(ccc2)N=*)cc1,Glass transition temperature,-79.4143482,C,sim
+*=C=C=C(C(=*)CCCCOC(=O)NC(=O)OCCCC)CCCCOC(=O)NC(=O)OCCCC,Glass transition temperature,-245.6391264,C,sim
+*=C=C=C(C(=*)CCCCOC(=O)NCC)CCCCOC(=O)NCC,Melting temperature,-63.3,C,
+*=C=C=C(C(=*)CO)CO,Glass transition temperature,-231.1358611,C,sim
+*=C=C=C(C(=*)COC(=O)NCC)COC(=O)NCC,Glass transition temperature,-101.0866128,C,sim
 *=C=C=C(C(=*)COS(=O)(=O)c1ccc(cc1)C)COS(=O)(=O)c1ccc(cc1)C,Melting temperature,102.2,C,exp
-*=C=C=C(C(=*)COS(=O)(=O)c1ccc(cc1)C)COS(=O)(=O)c1ccc(cc1)C,Glass transition temperature,76.80290526,K,sim
-*=C=C=C(C(=*)COS(=O)(=O)c1ccc(cc1)C)COS(=O)(=O)c1ccc(cc1)C,Melting temperature,102.25,K,
-*=C=C=C(C(=*)COS(=O)(=O)c1ccc(cc1)OC)COS(=O)(=O)c1ccc(cc1)OC,Glass transition temperature,55.30555285,K,sim
+*=C=C=C(C(=*)COS(=O)(=O)c1ccc(cc1)C)COS(=O)(=O)c1ccc(cc1)C,Glass transition temperature,-196.3470947,C,sim
+*=C=C=C(C(=*)COS(=O)(=O)c1ccc(cc1)C)COS(=O)(=O)c1ccc(cc1)C,Melting temperature,-170.9,C,
+*=C=C=C(C(=*)COS(=O)(=O)c1ccc(cc1)OC)COS(=O)(=O)c1ccc(cc1)OC,Glass transition temperature,-217.8444471,C,sim
 *=C=C=C(C(=*)Cn1c2ccccc2c2c1cccc2)Cn1c2ccccc2c2c1cccc2,Thermal decomposition temperature,400.0,C,exp
 *=C=C=C(C(=*)Cn1c2ccccc2c2c1cccc2)Cn1c2ccccc2c2c1cccc2,Thermal decomposition weight loss,6.5,%,exp
 *=C=Nc1ccc(cc1)Cc1ccc(cc1)N=*,Thermal decomposition temperature,258.0,C,exp
@@ -475,9 +475,9 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 *=Cc1ccc(o1)C(=O)c1cccc(c1)C(=O)c1ccc(o1)C=C1CN(C)CC(=*)C1=O,Thermal decomposition weight loss,74.0,%,exp
 *=Cc1ccc(s1)/C=C/c1ccc(cc1)N(c1ccccc1)c1ccc(cc1)N(c1ccccc1)c1ccc(cc1)/C=C/c1ccc(s1)C=C1C(=C(C#N)C(=O)N(C1=O)c1cccc(c1)N1C(=O)C(=*)C(=C(C1=O)C#N)C)C,Thermal decomposition temperature,215.0,C,exp
 *=Cc1ccc(s1)/C=C/c1ccc(cc1)N(c1ccccc1)c1ccc(cc1)N(c1ccccc1)c1ccc(cc1)/C=C/c1ccc(s1)C=C1C(=C(C#N)C(=O)N(C1=O)c1cccc(c1)N1C(=O)C(=*)C(=C(C1=O)C#N)C)C,Thermal decomposition weight loss,2.0,%,exp
-*=NC1C(C1)N=C=*,Melting temperature,270.0,K,
+*=NC1C(C1)N=C=*,Melting temperature,-3.15,C,
 *=NC1CC1N=C=*,Melting temperature,270.0,C,exp
-*=NN=CC#C[Si](C#CC=*)(c1ccccc1)c1ccccc1,Glass transition temperature,131.2577432,K,sim
+*=NN=CC#C[Si](C#CC=*)(c1ccccc1)c1ccccc1,Glass transition temperature,-141.8922568,C,sim
 *=NNC(=S)N=Cc1ccc(cc1)C=*,Thermal decomposition temperature,171.0,C,exp
 *=NNC(=S)N=Cc1ccc(cc1)C=*,Thermal decomposition weight loss,5.0,%,exp
 *=NP(=NP(=*)(Cl)Oc1cc(C(C)(C)C)cc(C(C)(C)C)c1)(Oc1cc(C(C)(C)C)cc(C(C)(C)C)c1)Oc1cc(C(C)(C)C)cc(C(C)(C)C)c1,Co2 Permeability Barrer,26.99999999,Barrer,exp
@@ -515,45 +515,45 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 *=NP(=NP(=NC(=*)Oc1ccc(cc1)C(c1ccccc1)(C)C)(Oc1ccc(cc1)C(c1ccccc1)(C)C)Oc1ccc(cc1)C(c1ccccc1)(C)C)(Oc1ccc(cc1)C(c1ccccc1)(C)C)Oc1ccc(cc1)C(c1ccccc1)(C)C,Glass transition temperature,55.0,C,exp
 *=NP(=NP(=NC(=*)Oc1ccccc1)(Oc1ccccc1)Oc1ccccc1)(Oc1ccccc1)Oc1ccccc1,Glass transition temperature,18.0,C,exp
 *=NP(=NP(=NC(=*)Oc1ccccc1C(F)(F)F)(Oc1ccccc1C(F)(F)F)Oc1ccccc1C(F)(F)F)(Oc1ccccc1C(F)(F)F)Oc1ccccc1C(F)(F)F,Glass transition temperature,-20.0,C,exp
-*=Nc1c(cc(cc1)c1cc(c(cc1)N=C=*)OC)OC,Melting temperature,200.0,K,
+*=Nc1c(cc(cc1)c1cc(c(cc1)N=C=*)OC)OC,Melting temperature,-73.15,C,
 *=Nc1c(cc(cc1c1ccccc1)c1ccc(cc1)c1cc(c2ccccc2)c(c(c1)c1ccccc1)N=Cc1ccc(cc1)C=*)c1ccccc1,Glass transition temperature,300.0,C,exp
 *=Nc1c(cc(cc1c1ccccc1)c1ccc(cc1)c1cc(c2ccccc2)c(c(c1)c1ccccc1)N=Cc1ccc(cc1)C=*)c1ccccc1,Thermal decomposition temperature,430.0,C,exp
 *=Nc1c(cc(cc1c1ccccc1)c1ccc(cc1)c1cc(c2ccccc2)c(c(c1)c1ccccc1)N=Cc1ccc(cc1)C=*)c1ccccc1,Thermal decomposition weight loss,0.5,%,exp
-*=Nc1c2c(ccc1)c(ccc2)NC=*,Melting temperature,380.0,K,
-*=Nc1cc(ccc1)NC=*,Melting temperature,255.0,K,
-*=Nc1ccc(cc1)C(=O)c1ccc(cc1)NC=*,Melting temperature,380.0,K,
+*=Nc1c2c(ccc1)c(ccc2)NC=*,Melting temperature,106.85,C,
+*=Nc1cc(ccc1)NC=*,Melting temperature,-18.15,C,
+*=Nc1ccc(cc1)C(=O)c1ccc(cc1)NC=*,Melting temperature,106.85,C,
 *=Nc1ccc(cc1)C(c1ccc(cc1)C(c1ccc(cc1)N=C1OC(=O)c2c1cc(cc2)Oc1ccc2c(c1)C(=O)OC2=*)(C)C)(C)C,Glass transition temperature,247.0,C,exp
-*=Nc1ccc(cc1)CCc1ccc(cc1)NC=*,Melting temperature,265.0,K,
+*=Nc1ccc(cc1)CCc1ccc(cc1)NC=*,Melting temperature,-8.15,C,
 *=Nc1ccc(cc1)Cc1ccc(cc1)N=C(Nc1ccc(cc1C(=O)O)c1ccc(c(c1)C(=O)O)NC(=*)C)C,Thermal decomposition temperature,315.0,C,exp
 *=Nc1ccc(cc1)Cc1ccc(cc1)N=C(Nc1ccc(cc1C(=O)O)c1ccc(c(c1)C(=O)O)NC(=*)C)C,Thermal decomposition weight loss,50.0,%,exp
-*=Nc1ccc(cc1)Cc1ccc(cc1)N=C=*,Melting temperature,143.0,K,
+*=Nc1ccc(cc1)Cc1ccc(cc1)N=C=*,Melting temperature,-130.15,C,
 *=Nc1ccc(cc1)Cc1ccc(cc1)NC(=*)C,Glass transition temperature,142.0,C,exp
 *=Nc1ccc(cc1)Cc1ccc(cc1)NC(=*)C,Thermal decomposition temperature,425.0,C,exp
 *=Nc1ccc(cc1)Cc1ccc(cc1)NC(=*)C,Thermal decomposition weight loss,10.0,%,exp
 *=Nc1ccc(cc1)Cc1ccc(cc1)NC(=*)C,Melting temperature,205.0,C,exp
-*=Nc1ccc(cc1)Cc1ccc(cc1)NC(=*)C,Melting temperature,205.0,K,
+*=Nc1ccc(cc1)Cc1ccc(cc1)NC(=*)C,Melting temperature,-68.15,C,
 *=Nc1ccc(cc1)Cc1ccc(cc1)NC(=*)c1ccccc1,Glass transition temperature,158.0,C,exp
 *=Nc1ccc(cc1)Cc1ccc(cc1)NC(=*)c1ccccc1,Thermal decomposition temperature,461.0,C,exp
 *=Nc1ccc(cc1)Cc1ccc(cc1)NC(=*)c1ccccc1,Thermal decomposition weight loss,10.0,%,exp
-*=Nc1ccc(cc1)Cc1ccc(cc1)NC=*,Melting temperature,318.25,K,
-*=Nc1ccc(cc1)N=C(Nc1c(cc(cc1)c1cc(c(cc1)NC(=*)C)C(=O)O)C(=O)O)C,Glass transition temperature,89.38045943,K,sim
+*=Nc1ccc(cc1)Cc1ccc(cc1)NC=*,Melting temperature,45.1,C,
+*=Nc1ccc(cc1)N=C(Nc1c(cc(cc1)c1cc(c(cc1)NC(=*)C)C(=O)O)C(=O)O)C,Glass transition temperature,-183.7695406,C,sim
 *=Nc1ccc(cc1)N=C(Nc1ccc(cc1C(=O)O)c1ccc(c(c1)C(=O)O)NC(=*)C)C,Thermal decomposition temperature,347.5,C,exp
 *=Nc1ccc(cc1)N=C(Nc1ccc(cc1C(=O)O)c1ccc(c(c1)C(=O)O)NC(=*)C)C,Thermal decomposition weight loss,50.0,%,exp
 *=Nc1ccc(cc1)N=C(c1ccccc1)/C=C/C(=*)c1ccccc1,Glass transition temperature,157.0,C,exp
 *=Nc1ccc(cc1)N=C(c1ccccc1)c1ccc(cc1)C(=*)c1ccccc1,Glass transition temperature,179.0,C,exp
-*=Nc1ccc(cc1)N=Cc1c(cc(c(c1)OCCCCCCCCCCCCCC)C=*)OCCCCCCCCCCCCCC,Melting temperature,260.0,K,
-*=Nc1ccc(cc1)N=Cc1c(cc(c(c1)OCCCCCCCCCCCCCCCC)C=*)OCCCCCCCCCCCCCCCC,Melting temperature,270.0,K,
-*=Nc1ccc(cc1)NC=*,Melting temperature,380.0,K,
+*=Nc1ccc(cc1)N=Cc1c(cc(c(c1)OCCCCCCCCCCCCCC)C=*)OCCCCCCCCCCCCCC,Melting temperature,-13.15,C,
+*=Nc1ccc(cc1)N=Cc1c(cc(c(c1)OCCCCCCCCCCCCCCCC)C=*)OCCCCCCCCCCCCCCCC,Melting temperature,-3.15,C,
+*=Nc1ccc(cc1)NC=*,Melting temperature,106.85,C,
 *=Nc1ccc(cc1)Oc1ccc(cc1)C(C(F)(F)F)(C(F)(F)F)c1ccc(cc1)Oc1ccc(cc1)N=c1oc(=O)c2c1cc1c(=*)oc(=O)c1c2,Glass transition temperature,287.0,C,exp
-*=Nc1ccc(cc1)c1ccc(cc1)NC=*,Melting temperature,380.0,K,
+*=Nc1ccc(cc1)c1ccc(cc1)NC=*,Melting temperature,106.85,C,
 *=Nc1cccc(c1)N=C(c1ccccc1)/C=C/C(=*)c1ccccc1,Glass transition temperature,178.0,C,exp
 *=Nc1cccc(c1)N=C(c1ccccc1)c1ccc(cc1)C(=*)c1ccccc1,Glass transition temperature,179.0,C,exp
 *=Nc1cccc(c1)S(=O)(=O)c1cccc(c1)N=C1OC(=O)c2c1cc(cc2)Oc1ccc2c(c1)C(=O)OC2=*,Glass transition temperature,190.0,C,exp
 *=Nc1cccc(c1)S(=O)(=O)c1cccc(c1)N=C1OC(=O)c2c1cc(cc2)Oc1ccc2c(c1)C(=O)OC2=*,Thermal decomposition temperature,405.0,C,exp
 *=Nc1cccc(c1)S(=O)(=O)c1cccc(c1)N=C1OC(=O)c2c1cc(cc2)Oc1ccc2c(c1)C(=O)OC2=*,Thermal decomposition weight loss,5.0,%,exp
-*=c1c2cc3c(cc2c(=O)o1)c(=O)oc3=Nc1cc(ccc1)Oc1cc(ccc1)Oc1cc(ccc1)N=*,Glass transition temperature,132.5253262,K,sim
-*=c1sc(cs1)c1ccc(cc1)C=*,Glass transition temperature,105.3372816,K,sim
-*C#C/C=C/*,Melting temperature,300.0,K,
+*=c1c2cc3c(cc2c(=O)o1)c(=O)oc3=Nc1cc(ccc1)Oc1cc(ccc1)Oc1cc(ccc1)N=*,Glass transition temperature,-140.6246738,C,sim
+*=c1sc(cs1)c1ccc(cc1)C=*,Glass transition temperature,-167.8127184,C,sim
+*C#C/C=C/*,Melting temperature,26.85,C,
 *C#CC#Cc1cc(c(s1)*)C,Thermal decomposition temperature,550.0,C,exp
 *C#CC#Cc1cc(c(s1)*)C,Thermal decomposition weight loss,6.0,%,exp
 *C#CC#Cc1ccc(cc1)*,Thermal decomposition temperature,645.0,C,exp
@@ -567,26 +567,26 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 *C#CC#Cc1sc(c(c1)c1ccccc1)*,Thermal decomposition weight loss,6.0,%,exp
 *C#CC#Cc1sc2c(c1)sc(c2)*,Thermal decomposition temperature,550.0,C,exp
 *C#CC#Cc1sc2c(c1)sc(c2)*,Thermal decomposition weight loss,12.0,%,exp
-*C#CC(=C(*)CCCCOC(=O)NC)CCCCOC(=O)NC,Melting temperature,201.85,K,
-*C#CC(=C(*)CCCCOC(=O)NCCC)CCCCOC(=O)NCCC,Glass transition temperature,40.70123878,K,sim
-*C#CC(=C(*)CCCCOC(=O)NCCC)CCCCOC(=O)NCCC,Melting temperature,230.85,K,
-*C#CC(=C(*)CCCCOC(=O)NCCCC)CCCCOC(=O)NCCCC,Melting temperature,229.85,K,
-*C#CC(=C(*)CCCCOC(=O)NCCCCC)CCCCOC(=O)NCCCCC,Melting temperature,196.85,K,
-*C#CC(=C(*)CCCCOC(=O)NCCCCCC)CCCCOC(=O)NCCCCCC,Glass transition temperature,5.219913288,K,sim
-*C#CC(=C(*)CCCCOC(=O)NCCCCCC)CCCCOC(=O)NCCCCCC,Melting temperature,207.85,K,
-*C#CC(=C(*)CCCCOC(=O)NCCCCCCC)CCCCOC(=O)NCCCCCCC,Melting temperature,189.85,K,
-*C#CC(=C(*)CCCCOC(=O)NCCCCCCCC)CCCCOC(=O)NCCCCCCCC,Melting temperature,186.85,K,
-*C#CC(=C(*)CCCCOC(=O)NCCCCCCCCC)CCCCOC(=O)NCCCCCCCCC,Melting temperature,189.85,K,
-*C#CC(=C(*)CCCCOC(=O)NCCCCCCCCCC)CCCCOC(=O)NCCCCCCCCCC,Melting temperature,179.85,K,
-*C#CC(=C(*)COS(=O)(=O)c1ccc(cc1)C)COS(=O)(=O)c1ccc(cc1)C,Glass transition temperature,-73.0,K,
-*C#CC(=C(*)Cn1c2ccc(cc2c2cc(ccc12)CCCCCCCCCCCCCCCC)CCCCCCCCCCCCCCCC)Cn1c2ccc(cc2c2cc(ccc12)CCCCCCCCCCCCCCCC)CCCCCCCCCCCCCCCC,Glass transition temperature,-2.237818484,K,sim
-*C#CC(=C(*)OS(=O)(=O)c1ccc(cc1)C)OS(=O)(=O)c1ccc(cc1)C,Glass transition temperature,164.1018919,K,sim
-*C#CC(=C(*)c1cncnc1)CCCCOC(=O)NCC(=O)OCCCC,Glass transition temperature,73.99227071,K,sim
+*C#CC(=C(*)CCCCOC(=O)NC)CCCCOC(=O)NC,Melting temperature,-71.3,C,
+*C#CC(=C(*)CCCCOC(=O)NCCC)CCCCOC(=O)NCCC,Glass transition temperature,-232.4487612,C,sim
+*C#CC(=C(*)CCCCOC(=O)NCCC)CCCCOC(=O)NCCC,Melting temperature,-42.3,C,
+*C#CC(=C(*)CCCCOC(=O)NCCCC)CCCCOC(=O)NCCCC,Melting temperature,-43.3,C,
+*C#CC(=C(*)CCCCOC(=O)NCCCCC)CCCCOC(=O)NCCCCC,Melting temperature,-76.3,C,
+*C#CC(=C(*)CCCCOC(=O)NCCCCCC)CCCCOC(=O)NCCCCCC,Glass transition temperature,-267.9300867,C,sim
+*C#CC(=C(*)CCCCOC(=O)NCCCCCC)CCCCOC(=O)NCCCCCC,Melting temperature,-65.3,C,
+*C#CC(=C(*)CCCCOC(=O)NCCCCCCC)CCCCOC(=O)NCCCCCCC,Melting temperature,-83.3,C,
+*C#CC(=C(*)CCCCOC(=O)NCCCCCCCC)CCCCOC(=O)NCCCCCCCC,Melting temperature,-86.3,C,
+*C#CC(=C(*)CCCCOC(=O)NCCCCCCCCC)CCCCOC(=O)NCCCCCCCCC,Melting temperature,-83.3,C,
+*C#CC(=C(*)CCCCOC(=O)NCCCCCCCCCC)CCCCOC(=O)NCCCCCCCCCC,Melting temperature,-93.3,C,
+*C#CC(=C(*)COS(=O)(=O)c1ccc(cc1)C)COS(=O)(=O)c1ccc(cc1)C,Glass transition temperature,-346.15,C,
+*C#CC(=C(*)Cn1c2ccc(cc2c2cc(ccc12)CCCCCCCCCCCCCCCC)CCCCCCCCCCCCCCCC)Cn1c2ccc(cc2c2cc(ccc12)CCCCCCCCCCCCCCCC)CCCCCCCCCCCCCCCC,Glass transition temperature,-275.3878185,C,sim
+*C#CC(=C(*)OS(=O)(=O)c1ccc(cc1)C)OS(=O)(=O)c1ccc(cc1)C,Glass transition temperature,-109.0481081,C,sim
+*C#CC(=C(*)c1cncnc1)CCCCOC(=O)NCC(=O)OCCCC,Glass transition temperature,-199.1577293,C,sim
 *C#CC(=C(CCCCOC(=O)NC)*)CCCCOC(=O)NC,Melting temperature,202.0,C,exp
 *C#CC(=C(COS(=O)(=O)c1ccc(cc1)C)*)COS(=O)(=O)c1ccc(cc1)C,Glass transition temperature,-73.0,C,exp
 *C#CC(=C(COS(=O)(=O)c1ccc(cc1)C)*)COS(=O)(=O)c1ccc(cc1)C,Thermal decomposition temperature,210.0,C,exp
 *C#CC(=C(Cn1cnc2c1cccc2)*)Cn1cnc2c1cccc2,Thermal decomposition temperature,180.0,C,exp
-*C#Cc1cc(ccc1)Oc1nc(nc(n1)Oc1ccc(cc1)*)Oc1ccc(cc1)*,Melting temperature,240.0,K,
+*C#Cc1cc(ccc1)Oc1nc(nc(n1)Oc1ccc(cc1)*)Oc1ccc(cc1)*,Melting temperature,-33.15,C,
 *C#Cc1ccc(cc1)C#C[SiH](c1ccccc1)*,Thermal decomposition temperature,577.0,C,exp
 *C#Cc1ccc(cc1)C#C[SiH](c1ccccc1)*,Thermal decomposition weight loss,5.0,%,exp
 *C#Cc1ccc(s1)*,Thermal decomposition temperature,437.0,C,exp
@@ -611,40 +611,40 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 *C#Cc1ccccc1C#C[SiH](c1ccccc1)*,Glass transition temperature,71.0,C,exp
 *C#Cc1ccccc1C#C[SiH](c1ccccc1)*,Thermal decomposition temperature,567.0,C,exp
 *C#Cc1ccccc1C#C[SiH](c1ccccc1)*,Thermal decomposition weight loss,5.0,%,exp
-*C(*)(Cl)F,Glass transition temperature,77.0,K,
-*C(*)(F)F,Glass transition temperature,57.21,K,
-*C(*)(F)F,Melting temperature,326.9374846,K,
-*C(*)C,Glass transition temperature,122.3867673,K,sim
-*C(*)C,Melting temperature,145.0,K,
-*C(*)C(=O)OC,Glass transition temperature,80.25,K,
-*C(*)C(=O)OC(C)(C)C,Glass transition temperature,12.73837737,K,sim
-*C(*)C(=O)OC(C)C,Glass transition temperature,70.0,K,
-*C(*)C(=O)OC(CC)(C)C,Glass transition temperature,136.5678336,K,sim
-*C(*)C(=O)OC1CCCCC1,Glass transition temperature,140.0,K,
-*C(*)C(=O)OCC,Glass transition temperature,12.35,K,
-*C(*)C(=O)OCCC,Glass transition temperature,-15.0,K,
-*C(*)CC,Melting temperature,88.0,K,
-*C(*)F,Glass transition temperature,83.33,K,
-*C(*)O,Glass transition temperature,137.0,K,
+*C(*)(Cl)F,Glass transition temperature,-196.15,C,
+*C(*)(F)F,Glass transition temperature,-215.94,C,
+*C(*)(F)F,Melting temperature,53.7874846,C,
+*C(*)C,Glass transition temperature,-150.7632327,C,sim
+*C(*)C,Melting temperature,-128.15,C,
+*C(*)C(=O)OC,Glass transition temperature,-192.9,C,
+*C(*)C(=O)OC(C)(C)C,Glass transition temperature,-260.4116226,C,sim
+*C(*)C(=O)OC(C)C,Glass transition temperature,-203.15,C,
+*C(*)C(=O)OC(CC)(C)C,Glass transition temperature,-136.5821664,C,sim
+*C(*)C(=O)OC1CCCCC1,Glass transition temperature,-133.15,C,
+*C(*)C(=O)OCC,Glass transition temperature,-260.8,C,
+*C(*)C(=O)OCCC,Glass transition temperature,-288.15,C,
+*C(*)CC,Melting temperature,-185.15,C,
+*C(*)F,Glass transition temperature,-189.82,C,
+*C(*)O,Glass transition temperature,-136.15,C,
 *C(/C=C/C)C*,Melting temperature,5.0,C,exp
-*C(=C(*)C)CCC,Glass transition temperature,200.0,K,
-*C(=C(*)C)CCCCC,Glass transition temperature,180.0,K,
-*C(=C(*)C)CCCCCCC,Glass transition temperature,160.0,K,
-*C(=C(*)C)SCC,Glass transition temperature,160.0,K,
-*C(=C(*)C)SCCCCCC,Glass transition temperature,110.0,K,
-*C(=C(*)C)SCCCCCCCCCC,Glass transition temperature,60.0,K,
-*C(=C(*)C)[Ge](C)(C)C,Glass transition temperature,250.0,K,
-*C(=C(*)C)[Si](C)(C)C,Glass transition temperature,198.3,K,
-*C(=C(*)C)[Si](CC)(C)C,Glass transition temperature,157.1009863,K,sim
-*C(=C(*)C)[Si](CCCC)(C)C,Glass transition temperature,152.5242236,K,sim
-*C(=C(*)C)[Si](CCCCCC)(C)C,Glass transition temperature,200.0,K,
-*C(=C(*)C)[Si](CC[Si](C)(C)C)(C)C,Glass transition temperature,200.0,K,
-*C(=C(*)C)[Si](C[Si](C)(C)C)(C)C,Glass transition temperature,200.0,K,
-*C(=C(*)C)c1ccccc1,Glass transition temperature,200.0,K,
-*C(=C(*)Cl)CCCC,Glass transition temperature,190.0,K,
-*C(=C(*)Cl)CCCCCC,Glass transition temperature,150.0,K,
-*C(=C(*)Cl)CCCCCCCC,Glass transition temperature,90.0,K,
-*C(=C(*)Cl)c1ccccc1,Glass transition temperature,215.0,K,
+*C(=C(*)C)CCC,Glass transition temperature,-73.15,C,
+*C(=C(*)C)CCCCC,Glass transition temperature,-93.15,C,
+*C(=C(*)C)CCCCCCC,Glass transition temperature,-113.15,C,
+*C(=C(*)C)SCC,Glass transition temperature,-113.15,C,
+*C(=C(*)C)SCCCCCC,Glass transition temperature,-163.15,C,
+*C(=C(*)C)SCCCCCCCCCC,Glass transition temperature,-213.15,C,
+*C(=C(*)C)[Ge](C)(C)C,Glass transition temperature,-23.15,C,
+*C(=C(*)C)[Si](C)(C)C,Glass transition temperature,-74.85,C,
+*C(=C(*)C)[Si](CC)(C)C,Glass transition temperature,-116.0490137,C,sim
+*C(=C(*)C)[Si](CCCC)(C)C,Glass transition temperature,-120.6257764,C,sim
+*C(=C(*)C)[Si](CCCCCC)(C)C,Glass transition temperature,-73.15,C,
+*C(=C(*)C)[Si](CC[Si](C)(C)C)(C)C,Glass transition temperature,-73.15,C,
+*C(=C(*)C)[Si](C[Si](C)(C)C)(C)C,Glass transition temperature,-73.15,C,
+*C(=C(*)C)c1ccccc1,Glass transition temperature,-73.15,C,
+*C(=C(*)Cl)CCCC,Glass transition temperature,-83.15,C,
+*C(=C(*)Cl)CCCCCC,Glass transition temperature,-123.15,C,
+*C(=C(*)Cl)CCCCCCCC,Glass transition temperature,-183.15,C,
+*C(=C(*)Cl)c1ccccc1,Glass transition temperature,-58.15,C,
 *C(=C(*)c1ccc(C(C)(C)C)cc1)c1ccc(O)cc1,Co2 Permeability Barrer,530.0000005,Barrer,exp
 *C(=C(*)c1ccc(C(C)(C)C)cc1)c1ccc(O)cc1,H2 Permeability Barrer,340.0,Barrer,exp
 *C(=C(*)c1ccc(C(C)(C)C)cc1)c1ccc(O)cc1,O2 Permeability Barrer,81.99999993,Barrer,exp
@@ -781,38 +781,38 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 *C(=C(*)c1cccc(O[Si](C)(C)C(C)(C)C)c1)c1ccc([Si](C)(C)C)cc1,Co2 Permeability Barrer,2900.000001,Barrer,sim
 *C(=C(*)c1cccc(O[Si](C)(C)C(C)(C)C)c1)c1ccc([Si](C)(C)C)cc1,H2 Permeability Barrer,1600.000001,Barrer,sim
 *C(=C(*)c1cccc(O[Si](C)(C)C(C)(C)C)c1)c1ccc([Si](C)(C)C)cc1,O2 Permeability Barrer,810.0000002,Barrer,sim
-*C(=C(*)c1ccccc1)CC,Glass transition temperature,200.0,K,
-*C(=C(*)c1ccccc1)CCCCCC,Glass transition temperature,200.0,K,
-*C(=C(*)c1ccccc1)c1cc(ccc1)[Ge](C)(C)C,Glass transition temperature,200.0,K,
-*C(=C(*)c1ccccc1)c1cc(ccc1)[Si](C)(C)C,Glass transition temperature,200.0,K,
-*C(=C(*)c1ccccc1)c1ccc(cc1)C(C)(C)C,Glass transition temperature,200.0,K,
-*C(=C(*)c1ccccc1)c1ccc(cc1)CCCC,Glass transition temperature,200.0,K,
-*C(=C(*)c1ccccc1)c1ccc(cc1)Oc1ccccc1,Glass transition temperature,200.0,K,
-*C(=C(*)c1ccccc1)c1ccc(cc1)[Si](C(C)C)(C(C)C)C(C)C,Glass transition temperature,250.0,K,
-*C(=C(*)c1ccccc1)c1ccc(cc1)[Si](C)(C)C,Glass transition temperature,200.0,K,
+*C(=C(*)c1ccccc1)CC,Glass transition temperature,-73.15,C,
+*C(=C(*)c1ccccc1)CCCCCC,Glass transition temperature,-73.15,C,
+*C(=C(*)c1ccccc1)c1cc(ccc1)[Ge](C)(C)C,Glass transition temperature,-73.15,C,
+*C(=C(*)c1ccccc1)c1cc(ccc1)[Si](C)(C)C,Glass transition temperature,-73.15,C,
+*C(=C(*)c1ccccc1)c1ccc(cc1)C(C)(C)C,Glass transition temperature,-73.15,C,
+*C(=C(*)c1ccccc1)c1ccc(cc1)CCCC,Glass transition temperature,-73.15,C,
+*C(=C(*)c1ccccc1)c1ccc(cc1)Oc1ccccc1,Glass transition temperature,-73.15,C,
+*C(=C(*)c1ccccc1)c1ccc(cc1)[Si](C(C)C)(C(C)C)C(C)C,Glass transition temperature,-23.15,C,
+*C(=C(*)c1ccccc1)c1ccc(cc1)[Si](C)(C)C,Glass transition temperature,-73.15,C,
 *C(=C(*)c1ccccc1)c1ccccc1,Co2 Permeability Barrer,4199.999996,Barrer,exp
 *C(=C(*)c1ccccc1)c1ccccc1,O2 Permeability Barrer,1200.0,Barrer,exp
 *C(=C(*)c1ccccc1)c1ccccc1,Co2 Permeability Barrer,4199.999996,Barrer,sim
 *C(=C(*)c1ccccc1)c1ccccc1,O2 Permeability Barrer,1200.0,Barrer,sim
 *C(=C(Br)*)Br,Thermal decomposition temperature,160.0,C,exp
 *C(=C(Br)*)Br,Thermal decomposition weight loss,7.5,%,exp
-*C(=C(C(C(*)(F)F)(C(F)(F)F)F)F)F,Glass transition temperature,-3.0,K,
-*C(=C(C(C(*)([2H])[2H])([2H])[2H])[2H])C([2H])([2H])[2H],Glass transition temperature,-58.0,K,
+*C(=C(C(C(*)(F)F)(C(F)(F)F)F)F)F,Glass transition temperature,-276.15,C,
+*C(=C(C(C(*)([2H])[2H])([2H])[2H])[2H])C([2H])([2H])[2H],Glass transition temperature,-331.15,C,
 *C(=C(C(C(F)(F)F)(C(F)(F)*)F)F)F,Glass transition temperature,-3.0,C,exp
 *C(=C(C(C([2H])([2H])*)([2H])[2H])[2H])C([2H])([2H])[2H],Glass transition temperature,-58.0,C,exp
-*C(=C(C(C*)(F)F)F)Cl,Glass transition temperature,-17.0,K,
+*C(=C(C(C*)(F)F)F)Cl,Glass transition temperature,-290.15,C,
 *C(=C(C)*)c1ccccc1,Elongation at break,4.3,%,exp
 *C(=C(C)*)c1ccccc1,Tensile stress strength at break,0.093,GPa,exp
 *C(=C(C)*)c1ccccc1,Glass transition temperature,200.0,C,exp
-*C(=C(CC*)C)C,Glass transition temperature,46.49641909,K,sim
-*C(=C(CC*)c1ccccc1)c1ccccc1,Glass transition temperature,120.5,K,
+*C(=C(CC*)C)C,Glass transition temperature,-226.6535809,C,sim
+*C(=C(CC*)c1ccccc1)c1ccccc1,Glass transition temperature,-152.65,C,
 *C(=C(Cl)*)CCCC,Elongation at break,6.5,%,exp
 *C(=C(Cl)*)CCCC,Tensile stress strength at break,0.05,GPa,exp
 *C(=C(Cl)*)CCCC,Glass transition temperature,190.0,C,exp
 *C(=C(Cl)*)c1ccccc1,Elongation at break,3.75,%,exp
 *C(=C(Cl)*)c1ccccc1,Tensile stress strength at break,0.0805,GPa,exp
 *C(=C(Cl)*)c1ccccc1,Glass transition temperature,215.0,C,exp
-*C(=C(F)F)C(*)(F)F,Melting temperature,125.5,K,
+*C(=C(F)F)C(*)(F)F,Melting temperature,-147.65,C,
 *C(=C(I)*)c1ccccc1,Thermal decomposition temperature,342.5,C,exp
 *C(=C(I)*)c1ccccc1,Thermal decomposition weight loss,10.0,%,exp
 *C(=C([Ge](C)(C)C)*)C,Glass transition temperature,250.0,C,exp
@@ -844,69 +844,69 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 *C(=C(c1ccccc1)*)c1cccc(c1)[Si](C)(C)C,Elongation at break,2.1,%,exp
 *C(=C(c1ccccc1)*)c1cccc(c1)[Si](C)(C)C,Tensile stress strength at break,0.014,GPa,exp
 *C(=C(c1ccccc1)*)c1cccc(c1)[Si](C)(C)C,Glass transition temperature,200.0,C,exp
-*C(=C)C*,Melting temperature,104.6666667,K,
-*C(=C*)C,Glass transition temperature,4.023221393,K,sim
+*C(=C)C*,Melting temperature,-168.4833333,C,
+*C(=C*)C,Glass transition temperature,-269.1267786,C,sim
 *C(=C*)C#N,Melting temperature,400.0,C,exp
-*C(=C*)C#N,Melting temperature,400.0,K,
+*C(=C*)C#N,Melting temperature,126.85,C,
 *C(=C*)C(=O)C,Glass transition temperature,115.0,C,exp
 *C(=C*)C(=O)C,Thermal decomposition temperature,430.0,C,exp
 *C(=C*)C(=O)C,Thermal decomposition weight loss,96.0,%,exp
 *C(=C*)C(=O)C,Melting temperature,133.0,C,exp
-*C(=C*)C(C)(C)C,Glass transition temperature,200.0,K,
-*C(=C*)C(CCC)[Si](c1ccccc1)(C)C,Glass transition temperature,110.0,K,
-*C(=C*)C(CCCCC)[Si](C)(C)C,Glass transition temperature,170.0,K,
-*C(=C*)C(CCCCCCC)[Si](C)(C)C,Glass transition temperature,150.0,K,
-*C(=C*)C([Si](CCCCCC)(C)C)CCC,Glass transition temperature,40.0,K,
-*C(=C*)CCCCCCCCCCOc1ccc(cc1)c1ccc(cc1)OCC(CCCCCC)F,Glass transition temperature,27.34580481,K,sim
-*C(=C*)CCCOC(=O)c1c(ccc(c1)c1ccc(cc1)OC)c1ccc(cc1)OC,Glass transition temperature,72.4,K,
-*C(=C*)CCCOc1ccc(cc1)C1CCC(CC1)CCC,Melting temperature,70.0,K,
-*C(=C*)CCCOc1ccc(cc1)C1CCC(CC1)CCCCC,Melting temperature,100.0,K,
-*C(=C*)CCCOc1ccc(cc1)C1CCC(CC1)CCCCCCCC,Melting temperature,87.0,K,
-*C(=C*)CCCOc1ccc(cc1)OC(=O)c1ccc(cc1)OC,Glass transition temperature,20.0,K,
-*C(=C*)CCCOc1ccc(cc1)OC(=O)c1ccc(cc1)OCCCC,Glass transition temperature,36.0,K,
-*C(=C*)CCCOc1ccc(cc1)OC(=O)c1ccc(cc1)OCCCCCCCC,Glass transition temperature,38.25,K,
-*C(=C*)CCCOc1ccc(cc1)c1ccc(cc1)CCCCC,Melting temperature,132.0,K,
-*C(=C*)CNS(=O)(=O)CC,Glass transition temperature,44.748248,K,sim
+*C(=C*)C(C)(C)C,Glass transition temperature,-73.15,C,
+*C(=C*)C(CCC)[Si](c1ccccc1)(C)C,Glass transition temperature,-163.15,C,
+*C(=C*)C(CCCCC)[Si](C)(C)C,Glass transition temperature,-103.15,C,
+*C(=C*)C(CCCCCCC)[Si](C)(C)C,Glass transition temperature,-123.15,C,
+*C(=C*)C([Si](CCCCCC)(C)C)CCC,Glass transition temperature,-233.15,C,
+*C(=C*)CCCCCCCCCCOc1ccc(cc1)c1ccc(cc1)OCC(CCCCCC)F,Glass transition temperature,-245.8041952,C,sim
+*C(=C*)CCCOC(=O)c1c(ccc(c1)c1ccc(cc1)OC)c1ccc(cc1)OC,Glass transition temperature,-200.75,C,
+*C(=C*)CCCOc1ccc(cc1)C1CCC(CC1)CCC,Melting temperature,-203.15,C,
+*C(=C*)CCCOc1ccc(cc1)C1CCC(CC1)CCCCC,Melting temperature,-173.15,C,
+*C(=C*)CCCOc1ccc(cc1)C1CCC(CC1)CCCCCCCC,Melting temperature,-186.15,C,
+*C(=C*)CCCOc1ccc(cc1)OC(=O)c1ccc(cc1)OC,Glass transition temperature,-253.15,C,
+*C(=C*)CCCOc1ccc(cc1)OC(=O)c1ccc(cc1)OCCCC,Glass transition temperature,-237.15,C,
+*C(=C*)CCCOc1ccc(cc1)OC(=O)c1ccc(cc1)OCCCCCCCC,Glass transition temperature,-234.9,C,
+*C(=C*)CCCOc1ccc(cc1)c1ccc(cc1)CCCCC,Melting temperature,-141.15,C,
+*C(=C*)CNS(=O)(=O)CC,Glass transition temperature,-228.401752,C,sim
 *C(=C*)CO,Melting temperature,400.0,C,exp
-*C(=C*)CO,Melting temperature,400.0,K,
+*C(=C*)CO,Melting temperature,126.85,C,
 *C(=C*)OCCCC,Melting temperature,400.0,C,exp
-*C(=C*)OCCCC,Melting temperature,400.0,K,
-*C(=C*)c1c(c(c(c(c1F)F)CCCC)F)F,Glass transition temperature,110.0,K,
-*C(=C*)c1c(cc(cc1C)C(C)(C)C)C,Glass transition temperature,200.0,K,
-*C(=C*)c1c(ccc(c1)C(=O)Oc1ccc(cc1)OCCCCCC)C(=O)Oc1ccc(cc1)OCCCCCC,Melting temperature,194.0,K,
-*C(=C*)c1c(cccc1)C,Glass transition temperature,261.6623551,K,sim
-*C(=C*)c1c(cccc1)C(F)(F)F,Glass transition temperature,130.0,K,
-*C(=C*)c1c(cccc1)C[Si](C)(C)C,Glass transition temperature,170.0,K,
-*C(=C*)c1c(cccc1)[Ge](C)(C)C,Glass transition temperature,180.0,K,
-*C(=C*)c1c(cccc1)[Si](C)(C)C,Glass transition temperature,190.0,K,
-*C(=C*)c1c(sc(c1)C(F)(F)F)C(F)(F)F,Glass transition temperature,54.57900551,K,sim
-*C(=C*)c1cc(c(c(c1)CO)OCc1ccc(cc1)CNC(COCCCCCCCC)C)CO,Glass transition temperature,65.78481038,K,sim
+*C(=C*)OCCCC,Melting temperature,126.85,C,
+*C(=C*)c1c(c(c(c(c1F)F)CCCC)F)F,Glass transition temperature,-163.15,C,
+*C(=C*)c1c(cc(cc1C)C(C)(C)C)C,Glass transition temperature,-73.15,C,
+*C(=C*)c1c(ccc(c1)C(=O)Oc1ccc(cc1)OCCCCCC)C(=O)Oc1ccc(cc1)OCCCCCC,Melting temperature,-79.15,C,
+*C(=C*)c1c(cccc1)C,Glass transition temperature,-11.4876449,C,sim
+*C(=C*)c1c(cccc1)C(F)(F)F,Glass transition temperature,-143.15,C,
+*C(=C*)c1c(cccc1)C[Si](C)(C)C,Glass transition temperature,-103.15,C,
+*C(=C*)c1c(cccc1)[Ge](C)(C)C,Glass transition temperature,-93.15,C,
+*C(=C*)c1c(cccc1)[Si](C)(C)C,Glass transition temperature,-83.15,C,
+*C(=C*)c1c(sc(c1)C(F)(F)F)C(F)(F)F,Glass transition temperature,-218.5709945,C,sim
+*C(=C*)c1cc(c(c(c1)CO)OCc1ccc(cc1)CNC(COCCCCCCCC)C)CO,Glass transition temperature,-207.3651896,C,sim
 *C(=C*)c1cc(sc1C)C,Thermal decomposition temperature,301.0,C,exp
 *C(=C*)c1cc(sc1C)C,Thermal decomposition weight loss,0.0,%,exp
-*C(=C*)c1ccc(cc1)C(=O)c1ccc(cc1)[N+](=O)[O-],Melting temperature,300.0,K,
-*C(=C*)c1ccc(cc1)OCCCCCC(=O)Oc1c(c(c(c(c1F)F)F)F)F,Glass transition temperature,73.83198457,K,sim
-*C(=C*)c1ccc(cc1)S(=O)(=O)c1ccccc1,Melting temperature,262.5,K,
-*C(=C*)c1ccc(cc1)[N+](=O)[O-],Glass transition temperature,-12.60583746,K,sim
-*C(=C*)c1ccc(cc1)n1c(=O)c2cc3c(cc2c1=O)c(=O)n(c3=O)c1ccc(cc1)C#C,Glass transition temperature,420.0,K,
-*C(=C*)c1ccccc1,Glass transition temperature,66.12991425,K,sim
-*C(=C*)c1ccccc1,Melting temperature,189.7857143,K,
-*C(=C*)c1nc2c(n1C)cccc2,Glass transition temperature,-6.104199835,K,sim
-*C(=C*)c1nc2c(n1C)cccc2,Melting temperature,280.0,K,
-*C(=CC(C*)C)C,Glass transition temperature,2.08,K,
-*C(=CC(C*)C)C,Melting temperature,170.0,K,
-*C(=CCC*)C,Glass transition temperature,-60.98,K,
-*C(=CCC*)C(C)(C)C,Glass transition temperature,20.0,K,
-*C(=CCC*)C(C)(C)C,Melting temperature,106.0,K,
-*C(=CCC*)C(C)C,Glass transition temperature,-47.0,K,
-*C(=CCC*)CCC,Melting temperature,42.0,K,
-*C(=CCC*)CCCCCCC,Glass transition temperature,-83.0,K,
-*C(=CCC*)CCCCCCCCCC,Glass transition temperature,-53.0,K,
-*C(=CCC*)Cl,Glass transition temperature,-43.35,K,
-*C(=CCC*)Cl,Melting temperature,62.57894737,K,
-*C(=CCC*)c1ccccc1,Glass transition temperature,36.62,K,
-*C(=CCCC*)c1ccc(cc1)Cl,Glass transition temperature,16.0,K,
-*C(=CCCC*)c1ccc(cc1)OC,Glass transition temperature,11.0,K,
-*C(=CCCC*)c1ccccc1,Glass transition temperature,0.0,K,
+*C(=C*)c1ccc(cc1)C(=O)c1ccc(cc1)[N+](=O)[O-],Melting temperature,26.85,C,
+*C(=C*)c1ccc(cc1)OCCCCCC(=O)Oc1c(c(c(c(c1F)F)F)F)F,Glass transition temperature,-199.3180154,C,sim
+*C(=C*)c1ccc(cc1)S(=O)(=O)c1ccccc1,Melting temperature,-10.65,C,
+*C(=C*)c1ccc(cc1)[N+](=O)[O-],Glass transition temperature,-285.7558375,C,sim
+*C(=C*)c1ccc(cc1)n1c(=O)c2cc3c(cc2c1=O)c(=O)n(c3=O)c1ccc(cc1)C#C,Glass transition temperature,146.85,C,
+*C(=C*)c1ccccc1,Glass transition temperature,-207.0200857,C,sim
+*C(=C*)c1ccccc1,Melting temperature,-83.3642857,C,
+*C(=C*)c1nc2c(n1C)cccc2,Glass transition temperature,-279.2541998,C,sim
+*C(=C*)c1nc2c(n1C)cccc2,Melting temperature,6.85,C,
+*C(=CC(C*)C)C,Glass transition temperature,-271.07,C,
+*C(=CC(C*)C)C,Melting temperature,-103.15,C,
+*C(=CCC*)C,Glass transition temperature,-334.13,C,
+*C(=CCC*)C(C)(C)C,Glass transition temperature,-253.15,C,
+*C(=CCC*)C(C)(C)C,Melting temperature,-167.15,C,
+*C(=CCC*)C(C)C,Glass transition temperature,-320.15,C,
+*C(=CCC*)CCC,Melting temperature,-231.15,C,
+*C(=CCC*)CCCCCCC,Glass transition temperature,-356.15,C,
+*C(=CCC*)CCCCCCCCCC,Glass transition temperature,-326.15,C,
+*C(=CCC*)Cl,Glass transition temperature,-316.5,C,
+*C(=CCC*)Cl,Melting temperature,-210.5710526,C,
+*C(=CCC*)c1ccccc1,Glass transition temperature,-236.53,C,
+*C(=CCCC*)c1ccc(cc1)Cl,Glass transition temperature,-257.15,C,
+*C(=CCCC*)c1ccc(cc1)OC,Glass transition temperature,-262.15,C,
+*C(=CCCC*)c1ccccc1,Glass transition temperature,-273.15,C,
 *C(=O)/C=C(/C(=O)N1CC(C)N(CC1C)*)\C,Thermal decomposition temperature,360.0,C,exp
 *C(=O)C(C)(C)*,Thermal decomposition temperature,300.0,C,exp
 *C(=O)C(C)(C)*,Melting temperature,250.0,C,exp
@@ -924,8 +924,8 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 *C(=O)C=Cc1ccc(cc1)C=CC(=O)N1CC(=O)N(C1=O)*,Glass transition temperature,156.0,C,exp
 *C(=O)C=Cc1ccc(cc1)C=CC(=O)N1CC(=O)N(C1=O)*,Thermal decomposition temperature,360.0,C,exp
 *C(=O)C=Cc1ccc(cc1)C=CC(=O)N1CC(=O)N(C1=O)*,Thermal decomposition weight loss,7.5,%,exp
-*C(=O)CC*,Glass transition temperature,10.0,K,
-*C(=O)CC*,Melting temperature,247.3863636,K,
+*C(=O)CC*,Glass transition temperature,-263.15,C,
+*C(=O)CC*,Melting temperature,-25.7636364,C,
 *C(=O)CCC(=O)Oc1cc2ccccc2cc1n1c(=O)[nH]n(c1=O)*,Thermal decomposition temperature,297.5,C,exp
 *C(=O)CCC(=O)Oc1cc2ccccc2cc1n1c(=O)[nH]n(c1=O)*,Thermal decomposition weight loss,7.5,%,exp
 *C(=O)CCC(=O)c1ccc(s1)c1ccc(s1)c1ccc(s1)*,Thermal decomposition temperature,283.5,C,exp
@@ -950,7 +950,7 @@ O(C5=C(C)C=C(C2(C1=C(C=CC(=C1)Br)C3=CC=C(C=C23)Br)C4=CC(=C(O[S](=O)(=O)[*])C(=C4
 *C(=O)CCCCCCCCC(=O)c1ccc(cc1)C=C1CCCC(=Cc2ccc(cc2)*)C1=O,Thermal decomposition weight loss,10.0,%,exp
 *C(=O)CCCCCCCCC(=O)c1ccc(o1)C=C1CCC(=Cc2ccc(o2)*)C1=O,Thermal decomposition temperature,275.0,C,exp
 *C(=O)CCCCCCCCC(=O)c1ccc(o1)C=C1CCC(=Cc2ccc(o2)*)C1=O,Thermal decomposition weight loss,30.0,%,exp
-*C(=O)CCCCCCCCCCOc1ccc(cc1)c1c2nsnc2c(cc1)c1ccc(cc1)OCCCCCCCCCCC(=O)OCC(CO*)(CO*)C,Melting temperature,91.2,K,
+*C(=O)CCCCCCCCCCOc1ccc(cc1)c1c2nsnc2c(cc1)c1ccc(cc1)OCCCCCCCCCCC(=O)OCC(CO*)(CO*)C,Melting temperature,-181.95,C,
 *C(=O)CCN1CCN(CC1)CCC(=O)N1CCN(C(C1)C)*,Melting temperature,217.0,C,exp
 *C(=O)COc1c(Br)cc(C(C)(C)c2cc(Br)c(OC(=O)c3cc(*)cc(C(C)(C)C)c3)c(Br)c2)cc1Br,Co2 Permeability Barrer,21.5,Barrer,exp
 *C(=O)COc1c(Br)cc(C(C)(C)c2cc(Br)c(OC(=O)c3cc(*)cc(C(C)(C)C)c3)c(Br)c2)cc1Br,H2 Permeability Barrer,54.00000002,Barrer,exp

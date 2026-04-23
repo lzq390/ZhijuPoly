@@ -115,12 +115,12 @@ async def test_query_smiles_property_returns_nearest_property_matches(predict_en
     assert response.total == 2
     assert response.predicted_property_name == "Glass transition temperature"
     assert response.predicted_property_value is not None
-    assert response.predicted_property_unit == "K"
+    assert response.predicted_property_unit == "°C"
     assert response.results[0].similarity_score >= response.results[1].similarity_score
     assert response.results[0].structure_svg is not None
     assert response.results[0].matched_property_name == "Glass transition temperature"
     assert response.results[0].matched_property_value is not None
-    assert response.results[0].matched_property_unit == "K"
+    assert response.results[0].matched_property_unit == "°C"
     assert response.results[0].matched_property_source in {"exp", "calc"}
     assert all(
         any(item.property_name == "Glass transition temperature" for item in result.properties.other)

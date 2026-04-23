@@ -28,7 +28,7 @@ def write_sample_csv(path: Path) -> None:
             "property_category": "Thermal",
             "property_name": "Glass transition temperature",
             "property_value": "210.0",
-            "property_unit": "K",
+            "property_unit": "C",
             "label_source": "exp",
         },
         {
@@ -37,7 +37,7 @@ def write_sample_csv(path: Path) -> None:
             "property_category": "Thermal",
             "property_name": "Glass transition temperature",
             "property_value": "320.0",
-            "property_unit": "K",
+            "property_unit": "C",
             "label_source": "calc",
         },
         {
