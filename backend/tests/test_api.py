@@ -68,18 +68,37 @@ async def test_query_smiles_structure_returns_top_structural_matches(test_app: F
 
     assert response.match_type == "structure"
     assert response.total == 2
-    assert response.results[0].polymer_name == "polymer_a"
+    assert response.results[0].polymer_name == ""
     assert response.results[0].similarity_score == 1.0
     assert response.results[0].similarity_score >= response.results[1].similarity_score
     assert response.results[0].structure_svg is not None
     assert "<svg" in response.results[0].structure_svg
-    assert response.results[0].properties.thermal[0].property_name == "Tg"
-    assert response.results[0].properties.electrical[0].property_name == "Conductivity"
+    assert any(item.property_name == "Tg" for item in response.results[0].properties.other)
+    assert any(item.property_name == "Conductivity" for item in response.results[0].properties.other)
 
 
 @pytest.mark.asyncio
-async def test_query_smiles_property_returns_sorted_results(test_app: FastAPI) -> None:
+async def test_query_smiles_property_requires_selected_property(test_app: FastAPI) -> None:
     request = make_request(test_app)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await query_smiles(
+            SmilesQueryRequest(
+                smiles="CCO",
+                match_mode="property",
+                similarity_threshold=0.3,
+                top_k=2,
+            ),
+            request,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "property_name is required" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_query_smiles_property_returns_nearest_property_matches(predict_enabled_app: FastAPI) -> None:
+    request = make_request(predict_enabled_app)
 
     response = await query_smiles(
         SmilesQueryRequest(
@@ -87,16 +106,26 @@ async def test_query_smiles_property_returns_sorted_results(test_app: FastAPI) -
             match_mode="property",
             similarity_threshold=0.3,
             top_k=2,
+            property_name="Glass transition temperature",
         ),
         request,
     )
 
     assert response.match_type == "property"
     assert response.total == 2
-    assert response.results[0].polymer_name == "polymer_a"
-    assert response.results[0].similarity_score == 1.0
+    assert response.predicted_property_name == "Glass transition temperature"
+    assert response.predicted_property_value is not None
+    assert response.predicted_property_unit == "K"
     assert response.results[0].similarity_score >= response.results[1].similarity_score
     assert response.results[0].structure_svg is not None
+    assert response.results[0].matched_property_name == "Glass transition temperature"
+    assert response.results[0].matched_property_value is not None
+    assert response.results[0].matched_property_unit == "K"
+    assert response.results[0].matched_property_source in {"exp", "calc"}
+    assert all(
+        any(item.property_name == "Glass transition temperature" for item in result.properties.other)
+        for result in response.results
+    )
 
 
 @pytest.mark.asyncio
@@ -106,8 +135,8 @@ async def test_get_polymer_detail(test_app: FastAPI) -> None:
     response = await get_polymer_detail(1, request)
 
     assert response.polymer_id == "1"
-    assert response.polymer_name == "polymer_a"
-    assert response.properties.thermal[0].property_name == "Tg"
+    assert response.polymer_name == ""
+    assert any(item.property_name == "Tg" for item in response.properties.other)
 
 
 @pytest.mark.asyncio

@@ -21,7 +21,7 @@ def fetch_property_rows(connection: sqlite3.Connection, polymer_id: int) -> list
     rows = connection.execute(
         """
         SELECT
-            property_category,
+            '' AS property_category,
             property_name,
             property_value,
             property_value_num,
@@ -67,15 +67,20 @@ def build_polymer_result(
     property_rows: Sequence[sqlite3.Row],
     similarity_score: float | None = None,
 ) -> PolymerResult:
+    polymer_keys = polymer_row.keys()
     source_smiles = polymer_row["canonical_smiles"] or polymer_row["smiles"]
 
     return PolymerResult(
         polymer_id=str(polymer_row["polymer_id"]),
-        polymer_name=polymer_row["polymer_name"],
+        polymer_name=polymer_row["polymer_name"] if "polymer_name" in polymer_keys else "",
         smiles=polymer_row["smiles"],
         canonical_smiles=polymer_row["canonical_smiles"],
         similarity_score=similarity_score,
         structure_svg=generate_2d_svg(source_smiles),
+        matched_property_name=polymer_row["matched_property_name"] if "matched_property_name" in polymer_keys else None,
+        matched_property_value=polymer_row["matched_property_value"] if "matched_property_value" in polymer_keys else None,
+        matched_property_unit=polymer_row["matched_property_unit"] if "matched_property_unit" in polymer_keys else None,
+        matched_property_source=polymer_row["matched_property_source"] if "matched_property_source" in polymer_keys else None,
         properties=group_properties(property_rows),
     )
 

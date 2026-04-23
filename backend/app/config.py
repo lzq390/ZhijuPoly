@@ -35,7 +35,7 @@ class Settings:
         )
         raw_csv_source_path = csv_source_path or os.getenv(
             "CSV_SOURCE_PATH",
-            env_values.get("CSV_SOURCE_PATH", "database/data1.csv"),
+            env_values.get("CSV_SOURCE_PATH", "database/polyprop_9_properties_clean.csv"),
         )
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",

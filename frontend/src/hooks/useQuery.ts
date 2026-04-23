@@ -12,7 +12,8 @@ const DEFAULT_REQUEST: SmilesQueryRequest = {
   smiles: "",
   match_mode: "structure",
   similarity_threshold: 0.7,
-  top_k: 10
+  top_k: 10,
+  property_name: null
 };
 
 export function useQuery() {

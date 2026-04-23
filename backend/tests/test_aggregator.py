@@ -32,9 +32,7 @@ def test_group_properties_maps_unknown_categories_to_other(tmp_path: Path) -> No
         property_rows = fetch_property_rows(connection, int(polymer_row["polymer_id"]))
         grouped = group_properties(property_rows)
 
-    assert grouped.thermal[0].property_name == "Tg"
-    assert grouped.electrical[0].property_name == "Conductivity"
-    assert grouped.other[0].property_name == "Misc"
+    assert [item.property_name for item in grouped.other] == ["Tg", "Conductivity", "Misc"]
 
 
 def test_build_polymer_result_includes_similarity_score(tmp_path: Path) -> None:
@@ -52,7 +50,7 @@ def test_build_polymer_result_includes_similarity_score(tmp_path: Path) -> None:
     assert result.similarity_score == 0.88
     assert result.structure_svg is not None
     assert "<svg" in result.structure_svg
-    assert result.properties.thermal[0].property_value_num == 123.4
+    assert result.properties.other[0].property_value_num == 123.4
 
 
 def test_load_polymer_results_batches_rows(tmp_path: Path) -> None:

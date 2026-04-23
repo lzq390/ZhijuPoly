@@ -1,5 +1,5 @@
 import { Check, Search, SlidersHorizontal, Sparkles, X } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import {
   PREDICTABLE_PROPERTIES,
   PREDICT_PROPERTY_META,
@@ -11,6 +11,8 @@ import { cn } from "../lib/utils";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+
+type PropertyDialogMode = "query" | "predict";
 
 type QueryPanelProps = {
   mode: WorkspaceMode;
@@ -32,38 +34,44 @@ function ModeButton({
   active,
   title,
   detail,
-  onClick
+  onClick,
+  children
 }: {
   active: boolean;
   title: string;
   detail: string;
   onClick: () => void;
+  children?: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <div
       className={cn(
-        "min-h-[90px] rounded-[22px] border px-4 py-[0.92rem] text-left transition-all duration-300",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "rounded-[22px] border px-4 py-[0.92rem] transition-all duration-300",
         active
           ? "border-teal-500/30 bg-[linear-gradient(180deg,rgba(15,118,110,0.12)_0%,rgba(255,255,255,0.96)_100%)] shadow-[0_16px_40px_rgba(15,118,110,0.12)]"
           : "border-white/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.9)_0%,rgba(244,248,249,0.8)_100%)] shadow-sm hover:border-white hover:shadow-panel"
       )}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-semibold tracking-tight text-slate-950">{title}</div>
-        <div
-          className={cn(
-            "rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.16em]",
-            active ? "bg-teal-600 text-white" : "bg-slate-100 text-slate-500"
-          )}
-        >
-          {active ? "当前" : "切换"}
+      <button
+        type="button"
+        onClick={onClick}
+        className="min-h-[64px] w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm font-semibold tracking-tight text-slate-950">{title}</div>
+          <div
+            className={cn(
+              "rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.16em]",
+              active ? "bg-teal-600 text-white" : "bg-slate-100 text-slate-500"
+            )}
+          >
+            {active ? "当前" : "切换"}
+          </div>
         </div>
-      </div>
-      <div className="mt-2 text-sm leading-6 text-mutedForeground">{detail}</div>
-    </button>
+        <div className="mt-2 text-sm leading-6 text-mutedForeground">{detail}</div>
+      </button>
+      {children ? <div className="mt-3 border-t border-slate-200/70 pt-3">{children}</div> : null}
+    </div>
   );
 }
 
@@ -83,8 +91,11 @@ export function QueryPanel({
   className
 }: QueryPanelProps) {
   const [isPropertyDialogOpen, setIsPropertyDialogOpen] = useState(false);
+  const [propertyDialogMode, setPropertyDialogMode] = useState<PropertyDialogMode>("predict");
   const isPropertyMatch = request.match_mode === "property";
   const isQueryMode = mode === "query";
+  const selectedMatchProperty = request.property_name;
+  const selectedMatchMeta = selectedMatchProperty ? PREDICT_PROPERTY_META[selectedMatchProperty] : null;
   const selectedSummary = selectedProperties
     .slice(0, 2)
     .map((property) => PREDICT_PROPERTY_META[property].label)
@@ -95,8 +106,22 @@ export function QueryPanel({
       ...request,
       match_mode: matchMode,
       similarity_threshold: matchMode === "property" ? 0.72 : 1,
-      top_k: matchMode === "property" ? 12 : 10
+      top_k: 10
     });
+  }
+
+  function openPropertyDialog(dialogMode: PropertyDialogMode) {
+    setPropertyDialogMode(dialogMode);
+    setIsPropertyDialogOpen(true);
+  }
+
+  function selectMatchProperty(property: PredictableProperty) {
+    onChange({
+      ...request,
+      match_mode: "property",
+      property_name: property
+    });
+    setIsPropertyDialogOpen(false);
   }
 
   function toggleProperty(property: PredictableProperty) {
@@ -115,10 +140,10 @@ export function QueryPanel({
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-2">
             <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
-              {isQueryMode ? "Similarity Controls" : "Prediction Controls"}
+              {isQueryMode ? "Similarity" : "Prediction"}
             </div>
             <CardTitle className="text-[1.35rem] tracking-tight">
-              {isQueryMode ? "相似匹配控制" : "预测控制"}
+              {isQueryMode ? "相似匹配" : "预测"}
             </CardTitle>
             <CardDescription>
               {isQueryMode ? "在这里选择结构或性质相似匹配方式。" : "选择待预测性质，并用当前结构发起模型推理。"}
@@ -158,15 +183,40 @@ export function QueryPanel({
               <ModeButton
                 active={isPropertyMatch}
                 title="性质相似匹配"
-                detail="按性质相关性扩展候选范围。"
+                detail={
+                  selectedMatchMeta && selectedMatchProperty
+                    ? `已选择：${selectedMatchMeta.label} / ${selectedMatchProperty} (${selectedMatchMeta.unit})`
+                    : "请选择 1 个性质。"
+                }
                 onClick={() => applyPreset("property")}
-              />
+              >
+                {isPropertyMatch ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                      <Badge className="bg-slate-100 text-slate-700">
+                        {selectedMatchProperty ? "1 selected" : "0 selected"}
+                      </Badge>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-h-[38px]"
+                        onClick={() => openPropertyDialog("query")}
+                      >
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        选择性质
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </ModeButton>
             </div>
 
             <div className="flex flex-col gap-[0.5rem] border-t border-slate-200/70 pt-[0.8rem] sm:flex-row sm:items-center sm:justify-between">
               <div className="text-sm leading-6 text-mutedForeground">
                 {queryDisabled
-                  ? "先在编辑器中输入结构，再发起相似匹配。"
+                  ? isPropertyMatch
+                    ? "需要结构输入并选择 1 个性质，才能发起性质相似匹配。"
+                    : "先在编辑器中输入结构，再发起相似匹配。"
                   : "结构已就绪，可以立即提交相似匹配并刷新结果面板。"}
               </div>
               <Button className="min-h-[44px] min-w-[192px]" size="lg" onClick={onQuerySubmit} disabled={queryDisabled}>
@@ -193,7 +243,7 @@ export function QueryPanel({
                     type="button"
                     variant="outline"
                     className="min-h-[42px]"
-                    onClick={() => setIsPropertyDialogOpen(true)}
+                    onClick={() => openPropertyDialog("predict")}
                   >
                     <Sparkles className="mr-2 h-4 w-4" />
                     选择性质
@@ -225,13 +275,15 @@ export function QueryPanel({
             <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 px-5 py-5 md:px-6">
               <div>
                 <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
-                  Prediction Properties
+                  {propertyDialogMode === "query" ? "Property Match" : "Prediction Properties"}
                 </div>
                 <div className="font-heading mt-2 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                  选择预测性质
+                  {propertyDialogMode === "query" ? "选择性质相似匹配目标" : "选择预测性质"}
                 </div>
                 <div className="mt-1 text-sm leading-6 text-mutedForeground">
-                  当前开放 9 个 RDKit 描述符兼容模型，可多选后关闭弹窗继续预测。
+                  {propertyDialogMode === "query"
+                    ? "只能选择 1 个性质，系统会预测当前结构并检索库中最接近的 10 条记录。"
+                    : "当前开放 9 个 RDKit 描述符兼容模型，可多选后关闭弹窗继续预测。"}
                 </div>
               </div>
               <button
@@ -247,7 +299,10 @@ export function QueryPanel({
             <div className="max-h-[62vh] overflow-y-auto px-5 py-5 md:px-6">
               <div className="grid gap-3 md:grid-cols-2">
                 {PREDICTABLE_PROPERTIES.map((property) => {
-                  const selected = selectedProperties.includes(property);
+                  const selected =
+                    propertyDialogMode === "query"
+                      ? selectedMatchProperty === property
+                      : selectedProperties.includes(property);
                   const meta = PREDICT_PROPERTY_META[property];
 
                   return (
@@ -264,7 +319,14 @@ export function QueryPanel({
                         type="checkbox"
                         className="sr-only"
                         checked={selected}
-                        onChange={() => toggleProperty(property)}
+                        onChange={() => {
+                          if (propertyDialogMode === "query") {
+                            selectMatchProperty(property);
+                            return;
+                          }
+
+                          toggleProperty(property);
+                        }}
                       />
                       <span
                         className={cn(
@@ -287,16 +349,24 @@ export function QueryPanel({
             </div>
 
             <div className="flex flex-col gap-3 border-t border-slate-200/80 px-5 py-4 sm:flex-row sm:items-center sm:justify-between md:px-6">
-              <div className="text-sm text-mutedForeground">{`已选择 ${selectedProperties.length} / ${PREDICTABLE_PROPERTIES.length} 项性质`}</div>
+              <div className="text-sm text-mutedForeground">
+                {propertyDialogMode === "query"
+                  ? selectedMatchProperty
+                    ? `已选择 1 / ${PREDICTABLE_PROPERTIES.length} 项性质`
+                    : `已选择 0 / ${PREDICTABLE_PROPERTIES.length} 项性质`
+                  : `已选择 ${selectedProperties.length} / ${PREDICTABLE_PROPERTIES.length} 项性质`}
+              </div>
               <div className="flex flex-wrap gap-2 sm:justify-end">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => onSelectedPropertiesChange([])}
-                  disabled={selectedProperties.length === 0}
-                >
-                  清空选择
-                </Button>
+                {propertyDialogMode === "predict" ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => onSelectedPropertiesChange([])}
+                    disabled={selectedProperties.length === 0}
+                  >
+                    清空选择
+                  </Button>
+                ) : null}
                 <Button type="button" onClick={() => setIsPropertyDialogOpen(false)}>
                   完成
                 </Button>

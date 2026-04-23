@@ -7,6 +7,7 @@ export type SmilesQueryRequest = {
   match_mode: MatchMode;
   similarity_threshold: number;
   top_k: number;
+  property_name: PredictableProperty | null;
 };
 
 export type PredictableProperty =
@@ -50,6 +51,10 @@ export type PolymerResult = {
   canonical_smiles: string | null;
   similarity_score: number | null;
   structure_svg: string | null;
+  matched_property_name: string | null;
+  matched_property_value: number | null;
+  matched_property_unit: string | null;
+  matched_property_source: string | null;
   properties: PropertyGroups;
 };
 
@@ -57,6 +62,9 @@ export type SmilesQueryResponse = {
   match_type: MatchMode;
   query_time_ms: number;
   total: number;
+  predicted_property_name: PredictableProperty | null;
+  predicted_property_value: number | null;
+  predicted_property_unit: string | null;
   results: PolymerResult[];
 };
 

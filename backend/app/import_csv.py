@@ -123,7 +123,7 @@ def normalize_property_unit(value: str) -> str | None:
 
 
 def import_csv_to_sqlite(csv_path: str | Path, db_path: str | Path) -> ImportStats:
-    polymer_index: dict[tuple[str, str], int] = {}
+    polymer_index: dict[str, int] = {}
     parse_ok_count = 0
     parse_fail_count = 0
     property_count = 0
@@ -133,11 +133,9 @@ def import_csv_to_sqlite(csv_path: str | Path, db_path: str | Path) -> ImportSta
         with Path(csv_path).open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
             for row in reader:
-                polymer_name = (row.get("polymer_name") or "").strip()
                 smiles = (row.get("smiles") or "").strip()
-                polymer_key = (polymer_name, smiles)
 
-                polymer_id = polymer_index.get(polymer_key)
+                polymer_id = polymer_index.get(smiles)
                 if polymer_id is None:
                     canonical_smiles, rdkit_parse_ok = canonicalize_smiles(smiles)
                     if rdkit_parse_ok:
@@ -148,32 +146,29 @@ def import_csv_to_sqlite(csv_path: str | Path, db_path: str | Path) -> ImportSta
                     cursor = connection.execute(
                         """
                         INSERT INTO polymers (
-                            polymer_name,
                             smiles,
                             canonical_smiles,
                             rdkit_parse_ok
-                        ) VALUES (?, ?, ?, ?)
+                        ) VALUES (?, ?, ?)
                         """,
-                        (polymer_name, smiles, canonical_smiles, rdkit_parse_ok),
+                        (smiles, canonical_smiles, rdkit_parse_ok),
                     )
                     polymer_id = int(cursor.lastrowid)
-                    polymer_index[polymer_key] = polymer_id
+                    polymer_index[smiles] = polymer_id
 
                 connection.execute(
                     """
                     INSERT INTO properties (
                         polymer_id,
-                        property_category,
                         property_name,
                         property_value,
                         property_value_num,
                         property_unit,
                         label_source
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         polymer_id,
-                        (row.get("property_category") or "").strip(),
                         (row.get("property_name") or "").strip(),
                         (row.get("property_value") or "").strip(),
                         parse_float_or_none((row.get("property_value") or "").strip()),

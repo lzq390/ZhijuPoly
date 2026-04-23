@@ -67,12 +67,19 @@ def test_query_response_serializes_polymer_results() -> None:
         smiles="*CC*",
         canonical_smiles="*CC*",
         similarity_score=1.0,
+        matched_property_name="Glass transition temperature",
+        matched_property_value=210.0,
+        matched_property_unit="K",
+        matched_property_source="exp",
         properties=PropertyGroups(electrical=[item]),
     )
     response = SmilesQueryResponse(
         match_type="structure",
         query_time_ms=12.5,
         total=1,
+        predicted_property_name="Glass transition temperature",
+        predicted_property_value=222.0,
+        predicted_property_unit="K",
         results=[result],
     )
 
@@ -80,6 +87,9 @@ def test_query_response_serializes_polymer_results() -> None:
 
     assert payload["match_type"] == "structure"
     assert payload["total"] == 1
+    assert payload["predicted_property_value"] == 222.0
+    assert payload["results"][0]["matched_property_value"] == 210.0
+    assert payload["results"][0]["matched_property_source"] == "exp"
     assert payload["results"][0]["properties"]["electrical"][0]["property_name"] == "Electric conductivity"
 
 

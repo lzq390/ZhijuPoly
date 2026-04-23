@@ -35,7 +35,7 @@ def test_similarity_search_returns_sorted_matches(tmp_path: Path) -> None:
         results = similarity_search(connection, "CCO", similarity_threshold=0.3, top_k=2)
 
     assert len(results) == 2
-    assert results[0][0]["polymer_name"] == "polymer_a"
+    assert results[0][0]["smiles"] == "CCO"
     assert results[0][1] == 1.0
     assert results[0][1] >= results[1][1]
 
@@ -49,7 +49,7 @@ def test_similarity_search_skips_unparseable_rows(tmp_path: Path) -> None:
     with sqlite_connection(db_path) as connection:
         results = similarity_search(connection, "CCO", similarity_threshold=0.0, top_k=10)
 
-    assert all(row["polymer_name"] != "polymer_bad" for row, _ in results)
+    assert all(row["smiles"] != "not-a-smiles" for row, _ in results)
 
 
 def test_similarity_search_rejects_invalid_smiles(tmp_path: Path) -> None:
@@ -68,11 +68,11 @@ def test_similarity_search_skips_blank_candidate_rows(tmp_path: Path) -> None:
     with sqlite_connection(db_path) as connection:
         connection.execute(
             """
-            INSERT INTO polymers (polymer_name, smiles, canonical_smiles, rdkit_parse_ok)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO polymers (smiles, canonical_smiles, rdkit_parse_ok)
+            VALUES (?, ?, ?)
             """,
-            ("polymer_blank", "", "", 1),
+            ("", "", 1),
         )
         results = similarity_search(connection, "CCO", similarity_threshold=0.0, top_k=10)
 
-    assert all(row["polymer_name"] != "polymer_blank" for row, _ in results)
+    assert all(row["smiles"] != "" for row, _ in results)

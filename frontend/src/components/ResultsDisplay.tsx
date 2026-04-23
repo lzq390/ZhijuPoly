@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
 import { Database, LoaderCircle, ScanSearch, SearchX, Timer, TriangleAlert } from "lucide-react";
 import type {
+  PredictableProperty,
   PredictResponse,
   ResultsTab,
   SmilesQueryRequest,
   SmilesQueryResponse
 } from "../types";
+import { PREDICT_PROPERTY_META } from "../types";
 import { cn } from "../lib/utils";
 import { PolymerCard } from "./PolymerCard";
 import { PredictionResults } from "./PredictionResults";
@@ -143,6 +145,17 @@ function QueryResultsPanel({
     );
   }
 
+  const predictedPropertyMeta =
+    data.predicted_property_name ? PREDICT_PROPERTY_META[data.predicted_property_name as PredictableProperty] : null;
+  const predictedPropertyText =
+    data.predicted_property_value !== null
+      ? `${data.predicted_property_value.toPrecision(6)} ${
+          data.predicted_property_unit || predictedPropertyMeta?.unit || ""
+        }`.trim()
+      : null;
+  const predictedPropertyLabel =
+    predictedPropertyMeta?.label || data.predicted_property_name || "所选性质";
+
   return (
     <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
       <CardHeader className="min-h-[120px] gap-4 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
@@ -152,10 +165,17 @@ function QueryResultsPanel({
               Similarity Dataset
             </div>
             <CardTitle className="text-[1.4rem] tracking-tight">相似匹配结果</CardTitle>
-            <CardDescription>摘要、命中记录与属性分组会按顺序展示在这里。</CardDescription>
+            <CardDescription>
+              {data.match_type === "property"
+                ? "摘要、2D 结构图、SMILES 和所选性质值会按顺序展示在这里。"
+                : "摘要、2D 结构图、SMILES 和相似度会按顺序展示在这里。"}
+            </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge>{data.match_type === "property" ? "性质相似匹配" : "结构相似匹配"}</Badge>
+            {data.match_type === "property" && predictedPropertyText ? (
+              <Badge className="text-slate-700">{`${predictedPropertyLabel} ${predictedPropertyText}`}</Badge>
+            ) : null}
             <Badge className="text-slate-700">{`${data.total} 条结果`}</Badge>
             <Badge className="text-slate-700">{`${data.query_time_ms.toFixed(1)} ms`}</Badge>
           </div>
@@ -181,7 +201,12 @@ function QueryResultsPanel({
 
       <CardContent className="grid gap-4 pt-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {data.results.map((result) => (
-          <PolymerCard key={result.polymer_id} result={result} />
+          <PolymerCard
+            key={result.polymer_id}
+            result={result}
+            matchType={data.match_type}
+            selectedProperty={request.property_name}
+          />
         ))}
       </CardContent>
     </Card>

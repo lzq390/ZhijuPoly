@@ -68,7 +68,7 @@ def test_settings_resolve_paths_to_project_root() -> None:
     assert settings.sqlite_db_file.is_absolute()
     assert settings.csv_source_file.is_absolute()
     assert settings.sqlite_db_file.name == "polyprop.db"
-    assert settings.csv_source_file.name == "data1.csv"
+    assert settings.csv_source_file.name == "polyprop_9_properties_clean.csv"
 
 
 def test_settings_load_backend_dotenv(tmp_path: Path) -> None:
@@ -116,14 +116,14 @@ def test_import_csv_creates_schema_and_imports_data(tmp_path: Path) -> None:
 
     parsed_polymer = fetch_one(
         db_path,
-        "SELECT canonical_smiles, rdkit_parse_ok FROM polymers WHERE polymer_name = 'polymer_a'",
+        "SELECT canonical_smiles, rdkit_parse_ok FROM polymers WHERE smiles = 'CCO'",
     )
     assert parsed_polymer["canonical_smiles"] == "CCO"
     assert parsed_polymer["rdkit_parse_ok"] == 1
 
     invalid_polymer = fetch_one(
         db_path,
-        "SELECT canonical_smiles, rdkit_parse_ok FROM polymers WHERE polymer_name = 'polymer_b'",
+        "SELECT canonical_smiles, rdkit_parse_ok FROM polymers WHERE smiles = 'not-a-smiles'",
     )
     assert invalid_polymer["canonical_smiles"] is None
     assert invalid_polymer["rdkit_parse_ok"] == 0
@@ -138,7 +138,7 @@ def test_import_csv_creates_schema_and_imports_data(tmp_path: Path) -> None:
 
     empty_polymer = fetch_one(
         db_path,
-        "SELECT canonical_smiles, rdkit_parse_ok FROM polymers WHERE polymer_name = 'polymer_empty'",
+        "SELECT canonical_smiles, rdkit_parse_ok FROM polymers WHERE smiles = ''",
     )
     assert empty_polymer["canonical_smiles"] is None
     assert empty_polymer["rdkit_parse_ok"] == 0

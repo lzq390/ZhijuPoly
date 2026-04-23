@@ -23,7 +23,10 @@ export default function App() {
   const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>("query");
   const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>([]);
 
-  const canQuery = !isLoading && smiles.trim().length > 0;
+  const canQuery =
+    !isLoading &&
+    smiles.trim().length > 0 &&
+    (request.match_mode === "structure" || request.property_name !== null);
   const canPredict = !predict.isLoading && smiles.trim().length > 0 && selectedProperties.length > 0;
 
   const activeMode =
@@ -59,7 +62,7 @@ export default function App() {
   const resultPanelDescription =
     activeResultsTab === "predict"
       ? "模型推理完成后，这里会显示所选性质的预测结果与耗时。"
-      : "运行相似匹配后，这里会显示摘要、命中记录和属性分组。";
+      : "运行相似匹配后，这里会显示摘要、2D 结构图、SMILES 和相似度。";
   const resultPrimaryBadge =
     activeResultsTab === "predict"
       ? predict.data

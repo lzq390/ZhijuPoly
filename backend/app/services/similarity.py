@@ -19,7 +19,7 @@ def similarity_search(
 
     polymer_rows = connection.execute(
         """
-        SELECT polymer_id, polymer_name, smiles, canonical_smiles, rdkit_parse_ok
+        SELECT polymer_id, '' AS polymer_name, smiles, canonical_smiles, rdkit_parse_ok
         FROM polymers
         WHERE rdkit_parse_ok = 1
         ORDER BY polymer_id
