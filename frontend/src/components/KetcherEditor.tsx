@@ -1,7 +1,7 @@
-import { Eraser, LoaderCircle, RefreshCcw, Sigma } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Copy, Eraser, LoaderCircle, RefreshCcw, Sigma } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Textarea } from "./ui/textarea";
 
 type KetcherEditorProps = {
@@ -19,6 +19,16 @@ export function KetcherEditor({
 }: KetcherEditorProps) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [copyLabel, setCopyLabel] = useState("Copy");
+  const copyResetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current !== null) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,16 +99,43 @@ export function KetcherEditor({
     }
   }
 
+  async function copySmiles() {
+    const value = smiles.trim();
+    if (!value) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyLabel("Copied");
+      scheduleCopyLabelReset();
+    } catch (error) {
+      console.error("Failed to copy SMILES", error);
+      setCopyLabel("Failed");
+      scheduleCopyLabelReset();
+    }
+  }
+
+  function scheduleCopyLabelReset() {
+    if (copyResetTimerRef.current !== null) {
+      window.clearTimeout(copyResetTimerRef.current);
+    }
+
+    copyResetTimerRef.current = window.setTimeout(() => {
+      setCopyLabel("Copy");
+      copyResetTimerRef.current = null;
+    }, 1400);
+  }
+
   return (
     <Card className="overflow-hidden rounded-[30px] border-white/70">
-      <CardHeader className="mesh-surface min-h-[136px] gap-4 border-b border-white/70">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2">
+      <CardHeader className="mesh-surface border-b border-white/70 py-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1.5">
             <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
               Molecular Canvas
             </div>
             <CardTitle className="text-[1.4rem] tracking-tight">Structure Editor</CardTitle>
-            <CardDescription>将结构编辑器作为主舞台，SMILES 同步和文本回退作为旁路输入。</CardDescription>
           </div>
           <div className="flex flex-wrap justify-end gap-3 self-start lg:ml-auto">
             <Button
@@ -145,9 +182,21 @@ export function KetcherEditor({
         </div>
 
         <div className="rounded-[24px] border border-white/70 bg-[linear-gradient(180deg,rgba(248,251,252,0.98)_0%,rgba(239,246,247,0.88)_100%)] p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-900">
-            <Sigma className="h-4 w-4 text-teal-600" />
-            SMILES fallback
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+              <Sigma className="h-4 w-4 text-teal-600" />
+              SMILES fallback
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={copySmiles}
+              disabled={!smiles.trim()}
+              className="min-h-[38px] min-w-[96px] px-3"
+            >
+              <Copy className="mr-2 h-3.5 w-3.5" />
+              {copyLabel}
+            </Button>
           </div>
           <Textarea
             value={smiles}

@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { Atom, Database, Microscope, Sparkles } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { ArrowLeft, ArrowRight, Atom, BarChart3, BookOpen, Database, Microscope, Sparkles } from "lucide-react";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { Layout } from "./components/Layout";
 import { QueryPanel } from "./components/QueryPanel";
 import { ResultsDisplay } from "./components/ResultsDisplay";
 import { StructurePreview3D } from "./components/StructurePreview3D";
 import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
 import { useKetcher } from "./hooks/useKetcher";
 import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
@@ -15,7 +16,177 @@ import {
   type WorkspaceMode
 } from "./types";
 
+type ActiveModule = "home" | "explorer";
+
+type ModuleTileProps = {
+  icon: ReactNode;
+  eyebrow: string;
+  title: string;
+  description: string;
+  status: string;
+  actionLabel: string;
+  disabled?: boolean;
+  onClick?: () => void;
+};
+
+function ModuleTile({
+  icon,
+  eyebrow,
+  title,
+  description,
+  status,
+  actionLabel,
+  disabled = false,
+  onClick
+}: ModuleTileProps) {
+  return (
+    <section
+      className={[
+        "group flex min-h-[260px] flex-col justify-between rounded-[30px] border p-5 transition-all duration-300 md:p-6",
+        disabled
+          ? "border-white/70 bg-white/55 text-slate-500"
+          : "border-white/80 bg-white/85 text-slate-950 shadow-sm hover:-translate-y-1 hover:border-white hover:shadow-panel"
+      ].join(" ")}
+      aria-disabled={disabled}
+    >
+      <div>
+        <div className="flex items-start justify-between gap-4">
+          <div
+            className={[
+              "flex h-12 w-12 items-center justify-center rounded-2xl border shadow-sm",
+              disabled ? "border-slate-200 bg-slate-100 text-slate-400" : "border-white bg-slate-950 text-white"
+            ].join(" ")}
+          >
+            {icon}
+          </div>
+          <Badge className={disabled ? "bg-slate-100 text-slate-500" : "bg-teal-50 text-teal-800"}>{status}</Badge>
+        </div>
+        <div className="mt-7 text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">{eyebrow}</div>
+        <h2 className="font-heading mt-3 text-[1.55rem] font-semibold tracking-tight text-slate-950">{title}</h2>
+        <p className="mt-3 text-sm leading-6 text-mutedForeground">{description}</p>
+      </div>
+
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        className={[
+          "mt-8 inline-flex min-h-11 items-center justify-between rounded-2xl px-4 text-sm font-semibold transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          disabled
+            ? "cursor-not-allowed bg-slate-100 text-slate-400"
+            : "bg-slate-950 text-white hover:bg-teal-700"
+        ].join(" ")}
+      >
+        <span>{actionLabel}</span>
+        <ArrowRight className="h-4 w-4" />
+      </button>
+    </section>
+  );
+}
+
+function HomePage({ onOpenExplorer }: { onOpenExplorer: () => void }) {
+  const moduleRows = [
+    { name: "Polymer Property Explorer", status: "Ready" },
+    { name: "数据库分析", status: "Reserved" },
+    { name: "知识库本地检索", status: "Reserved" }
+  ];
+
+  return (
+    <>
+      <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-7 md:px-8 md:py-9">
+        <div className="animate-fade-up grid gap-8 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-center">
+          <div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
+                POLYPROP
+              </div>
+              <Badge>Workspace Home</Badge>
+            </div>
+
+            <div className="mt-7 max-w-4xl">
+              <h1 className="font-heading text-[2.65rem] font-semibold leading-[0.98] tracking-[-0.03em] text-slate-950 md:text-[4.4rem]">
+                PolyProp 工作台
+              </h1>
+              <p className="mt-5 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
+                首页集中管理三个模块：聚合物性质探索、数据库分析、知识库本地检索。
+              </p>
+            </div>
+
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <Button type="button" size="lg" onClick={onOpenExplorer}>
+                进入 Polymer Property Explorer
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+              <Badge className="bg-slate-100 text-slate-700">3 modules</Badge>
+            </div>
+          </div>
+
+          <div className="rounded-[30px] border border-white/15 bg-slate-950 p-5 text-slate-50 shadow-[0_28px_70px_rgba(8,17,31,0.24)]">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Module Index</div>
+                <div className="font-heading mt-2 text-xl font-semibold tracking-tight">当前模块结构</div>
+              </div>
+              <Database className="h-5 w-5 text-teal-300" />
+            </div>
+
+            <div className="mt-6 space-y-3">
+              {moduleRows.map((item, index) => (
+                <div
+                  key={item.name}
+                  className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.06] px-3 py-3"
+                >
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 font-mono-ui text-sm text-teal-200">
+                    {String(index + 1).padStart(2, "0")}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">{item.name}</div>
+                    <div className="mt-0.5 text-xs text-slate-400">{item.status}</div>
+                  </div>
+                  <div className={item.status === "Ready" ? "h-2.5 w-2.5 rounded-full bg-teal-300" : "h-2.5 w-2.5 rounded-full bg-slate-600"} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <ModuleTile
+          icon={<Atom className="h-5 w-5" />}
+          eyebrow="可用模块"
+          title="Polymer Property Explorer"
+          description="结构编辑、相似匹配、3D 预览与性质预测集中在一个工作区。"
+          status="Ready"
+          actionLabel="进入模块"
+          onClick={onOpenExplorer}
+        />
+        <ModuleTile
+          icon={<BarChart3 className="h-5 w-5" />}
+          eyebrow="预留模块"
+          title="数据库分析"
+          description="用于承载数据概览、字段分布、性质统计和质量检查。"
+          status="Reserved"
+          actionLabel="暂未开放"
+          disabled
+        />
+        <ModuleTile
+          icon={<BookOpen className="h-5 w-5" />}
+          eyebrow="预留模块"
+          title="知识库本地检索"
+          description="用于承载本地文档索引、语义检索和材料知识回溯。"
+          status="Reserved"
+          actionLabel="暂未开放"
+          disabled
+        />
+      </section>
+    </>
+  );
+}
+
 export default function App() {
+  const [activeModule, setActiveModule] = useState<ActiveModule>("home");
+  const [hasOpenedExplorer, setHasOpenedExplorer] = useState(false);
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const predict = usePredict();
@@ -86,143 +257,172 @@ export default function App() {
         ? "性质相似匹配"
         : "结构相似匹配";
 
+  function openExplorer() {
+    setHasOpenedExplorer(true);
+    setActiveModule("explorer");
+  }
+
   return (
     <Layout>
-      <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-6 md:px-8 md:py-8">
-        <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-[36%] bg-[radial-gradient(circle_at_center,rgba(15,118,110,0.14),transparent_58%)] lg:block" />
-        <div className="pointer-events-none absolute -right-10 top-12 h-40 w-40 rounded-full border border-white/40 bg-white/20 blur-2xl" />
-        <div className="pointer-events-none absolute left-8 top-24 h-24 w-24 rounded-full bg-teal-300/20 blur-3xl" />
+      <div className={activeModule === "home" ? "contents" : "hidden"}>
+        <HomePage onOpenExplorer={openExplorer} />
+      </div>
 
-        <div className="animate-fade-up">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
-              POLYPROP
-            </div>
-            <Badge>Polymer Similarity Matching & Property Prediction</Badge>
-          </div>
-
-          <div className="mt-6 overflow-x-auto">
-            <h1 className="font-heading whitespace-nowrap text-[2.5rem] font-semibold tracking-[-0.04em] text-slate-950 md:text-[4rem] md:leading-[0.95]">
-              Polymer Property Explorer
-            </h1>
-            <p className="mt-4 whitespace-nowrap text-base leading-7 text-slate-600 md:text-lg">
-              Bring structure editing, similarity matching, 3D review, and property prediction into one focused research workspace.
-            </p>
-          </div>
-
-          <div className="mt-8 grid gap-3 md:grid-cols-3">
-            <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
-              <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
-                {panelMode === "predict" ? <Sparkles className="h-4 w-4 text-teal-600" /> : <Atom className="h-4 w-4 text-teal-600" />}
-                Current Mode
-              </div>
-              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                {activeModeLabel}
-              </div>
-              <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                {panelMode === "predict"
-                  ? "Select target properties in the control card and send the current structure to the prediction models."
-                  : "Switch between structural similarity and property similarity matching in the control card."}
-              </div>
-            </div>
-
-            <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
-              <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
-                <Microscope className="h-4 w-4 text-sky-600" />
-                Structure Input
-              </div>
-              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                {smiles.trim().length > 0 ? "Ready" : "Waiting"}
-              </div>
-              <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                Editor content syncs into the SMILES fallback input as the source structure for matching or prediction.
-              </div>
-            </div>
-
-            <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-slate-950 p-5 text-center text-slate-50 shadow-[0_22px_50px_rgba(8,17,31,0.2)]">
-              <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">
-                <Database className="h-4 w-4 text-teal-300" />
-                Latest Results
-              </div>
-              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">{resultCount}</div>
-              <div className="mt-2 text-sm leading-6 text-slate-300">
-                {resultTiming ? `${resultTiming.toFixed(1)} ms returned` : "Result count and latency appear after execution."}
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,1.22fr)_minmax(0,0.92fr)]">
-          <div className="min-w-0">
-            <KetcherEditor
-              smiles={smiles}
-              iframeRef={iframeRef}
-              onReadyChange={setIsReady}
-              onChange={(value) => {
-                setSmiles(value);
-                setRequest({ ...request, smiles: value });
-              }}
-            />
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-6">
-            <StructurePreview3D smiles={smiles} />
-            <QueryPanel
-              className="w-full self-start"
-              mode={panelMode}
-              onModeChange={setPanelMode}
-              request={{ ...request, smiles }}
-              onChange={setRequest}
-              onQuerySubmit={handleQuerySubmit}
-              onPredictSubmit={handlePredictSubmit}
-              selectedProperties={selectedProperties}
-              onSelectedPropertiesChange={setSelectedProperties}
-              queryDisabled={!canQuery}
-              predictDisabled={!canPredict}
-              isQueryLoading={isLoading}
-              isPredicting={predict.isLoading}
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="relative pt-2">
-        <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-slate-400/40 to-transparent" />
-        <div className="pt-6">
-          <div className="overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(243,248,250,0.92)_100%)] shadow-soft">
-            <div className="border-b border-slate-200/80 px-6 py-5 md:px-8">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-teal-700/70">Results</div>
-                  <h2 className="font-heading mt-2 text-[1.8rem] font-semibold tracking-tight text-slate-950">
-                    {resultPanelTitle}
-                  </h2>
-                  <p className="mt-1 text-sm leading-6 text-mutedForeground">{resultPanelDescription}</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge className="bg-slate-100 text-slate-700">{resultPrimaryBadge}</Badge>
-                  <Badge className="bg-slate-100 text-slate-700">{resultSecondaryBadge}</Badge>
+      {hasOpenedExplorer ? (
+        <div className={activeModule === "explorer" ? "contents" : "hidden"} aria-hidden={activeModule !== "explorer"}>
+          <nav className="flex flex-col gap-3 rounded-[26px] border border-white/70 bg-white/80 px-4 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
+            <div className="flex items-center gap-3">
+              <Button type="button" variant="outline" onClick={() => setActiveModule("home")}>
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                首页
+              </Button>
+              <div>
+                <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">当前模块</div>
+                <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+                  Polymer Property Explorer
                 </div>
               </div>
             </div>
-            <div className="px-4 py-4 md:px-5 md:py-5">
-              <ResultsDisplay
-                data={data}
-                error={error}
-                isLoading={isLoading}
-                request={{ ...request, smiles }}
-                predictData={predict.data}
-                isPredicting={predict.isLoading}
-                predictError={predict.error}
-                activeTab={activeResultsTab}
-                onTabChange={setActiveResultsTab}
-              />
+            <Badge className="bg-teal-50 text-teal-800">Explorer</Badge>
+          </nav>
+
+          <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-6 md:px-8 md:py-8">
+            <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-[36%] bg-[radial-gradient(circle_at_center,rgba(15,118,110,0.14),transparent_58%)] lg:block" />
+            <div className="pointer-events-none absolute -right-10 top-12 h-40 w-40 rounded-full border border-white/40 bg-white/20 blur-2xl" />
+            <div className="pointer-events-none absolute left-8 top-24 h-24 w-24 rounded-full bg-teal-300/20 blur-3xl" />
+
+            <div className="animate-fade-up">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
+                  POLYPROP
+                </div>
+                <Badge>Polymer Similarity Matching & Property Prediction</Badge>
+              </div>
+
+              <div className="mt-6 overflow-x-auto">
+                <h1 className="font-heading whitespace-nowrap text-[2.5rem] font-semibold tracking-[-0.04em] text-slate-950 md:text-[4rem] md:leading-[0.95]">
+                  Polymer Property Explorer
+                </h1>
+                <p className="mt-4 whitespace-nowrap text-base leading-7 text-slate-600 md:text-lg">
+                  Bring structure editing, similarity matching, 3D review, and property prediction into one focused research workspace.
+                </p>
+              </div>
+
+              <div className="mt-8 grid gap-3 md:grid-cols-3">
+                <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
+                  <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
+                    {panelMode === "predict" ? <Sparkles className="h-4 w-4 text-teal-600" /> : <Atom className="h-4 w-4 text-teal-600" />}
+                    Current Mode
+                  </div>
+                  <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
+                    {activeModeLabel}
+                  </div>
+                  <div className="mt-2 text-sm leading-6 text-mutedForeground">
+                    {panelMode === "predict"
+                      ? "Select target properties in the control card and send the current structure to the prediction models."
+                      : "Switch between structural similarity and property similarity matching in the control card."}
+                  </div>
+                </div>
+
+                <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
+                  <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
+                    <Microscope className="h-4 w-4 text-sky-600" />
+                    Structure Input
+                  </div>
+                  <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
+                    {smiles.trim().length > 0 ? "Ready" : "Waiting"}
+                  </div>
+                  <div className="mt-2 text-sm leading-6 text-mutedForeground">
+                    Editor content syncs into the SMILES fallback input as the source structure for matching or prediction.
+                  </div>
+                </div>
+
+                <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-slate-950 p-5 text-center text-slate-50 shadow-[0_22px_50px_rgba(8,17,31,0.2)]">
+                  <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">
+                    <Database className="h-4 w-4 text-teal-300" />
+                    Latest Results
+                  </div>
+                  <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">{resultCount}</div>
+                  <div className="mt-2 text-sm leading-6 text-slate-300">
+                    {resultTiming ? `${resultTiming.toFixed(1)} ms returned` : "Result count and latency appear after execution."}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          </section>
+
+          <section>
+            <div className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,1.22fr)_minmax(0,0.92fr)]">
+              <div className="min-w-0">
+                <KetcherEditor
+                  smiles={smiles}
+                  iframeRef={iframeRef}
+                  onReadyChange={setIsReady}
+                  onChange={(value) => {
+                    setSmiles(value);
+                    setRequest({ ...request, smiles: value });
+                  }}
+                />
+              </div>
+
+              <div className="flex min-w-0 flex-col gap-6">
+                <StructurePreview3D smiles={smiles} />
+                <QueryPanel
+                  className="w-full self-start"
+                  mode={panelMode}
+                  onModeChange={setPanelMode}
+                  request={{ ...request, smiles }}
+                  onChange={setRequest}
+                  onQuerySubmit={handleQuerySubmit}
+                  onPredictSubmit={handlePredictSubmit}
+                  selectedProperties={selectedProperties}
+                  onSelectedPropertiesChange={setSelectedProperties}
+                  queryDisabled={!canQuery}
+                  predictDisabled={!canPredict}
+                  isQueryLoading={isLoading}
+                  isPredicting={predict.isLoading}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="relative pt-2">
+            <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-slate-400/40 to-transparent" />
+            <div className="pt-6">
+              <div className="overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(243,248,250,0.92)_100%)] shadow-soft">
+                <div className="border-b border-slate-200/80 px-6 py-5 md:px-8">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-teal-700/70">Results</div>
+                      <h2 className="font-heading mt-2 text-[1.8rem] font-semibold tracking-tight text-slate-950">
+                        {resultPanelTitle}
+                      </h2>
+                      <p className="mt-1 text-sm leading-6 text-mutedForeground">{resultPanelDescription}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge className="bg-slate-100 text-slate-700">{resultPrimaryBadge}</Badge>
+                      <Badge className="bg-slate-100 text-slate-700">{resultSecondaryBadge}</Badge>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-4 py-4 md:px-5 md:py-5">
+                  <ResultsDisplay
+                    data={data}
+                    error={error}
+                    isLoading={isLoading}
+                    request={{ ...request, smiles }}
+                    predictData={predict.data}
+                    isPredicting={predict.isLoading}
+                    predictError={predict.error}
+                    activeTab={activeResultsTab}
+                    onTabChange={setActiveResultsTab}
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
-      </section>
+      ) : null}
     </Layout>
   );
 }
