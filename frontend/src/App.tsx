@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from "react";
 import { ArrowLeft, ArrowRight, Atom, BarChart3, BookOpen, Database, Microscope, Sparkles } from "lucide-react";
+import { DatabaseAnalysis } from "./components/DatabaseAnalysis";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { Layout } from "./components/Layout";
 import { QueryPanel } from "./components/QueryPanel";
@@ -16,7 +17,7 @@ import {
   type WorkspaceMode
 } from "./types";
 
-type ActiveModule = "home" | "explorer";
+type ActiveModule = "home" | "explorer" | "database";
 
 type ModuleTileProps = {
   icon: ReactNode;
@@ -84,10 +85,16 @@ function ModuleTile({
   );
 }
 
-function HomePage({ onOpenExplorer }: { onOpenExplorer: () => void }) {
+function HomePage({
+  onOpenExplorer,
+  onOpenDatabase
+}: {
+  onOpenExplorer: () => void;
+  onOpenDatabase: () => void;
+}) {
   const moduleRows = [
     { name: "Polymer Property Explorer", status: "Ready" },
-    { name: "数据库分析", status: "Reserved" },
+    { name: "数据库分析", status: "Ready" },
     { name: "知识库本地检索", status: "Reserved" }
   ];
 
@@ -163,12 +170,12 @@ function HomePage({ onOpenExplorer }: { onOpenExplorer: () => void }) {
         />
         <ModuleTile
           icon={<BarChart3 className="h-5 w-5" />}
-          eyebrow="预留模块"
+          eyebrow="可用模块"
           title="数据库分析"
-          description="用于承载数据概览、字段分布、性质统计和质量检查。"
-          status="Reserved"
-          actionLabel="暂未开放"
-          disabled
+          description="进入五类数据模块入口，查看构象、占比、分布和词云分析。"
+          status="Ready"
+          actionLabel="进入模块"
+          onClick={onOpenDatabase}
         />
         <ModuleTile
           icon={<BookOpen className="h-5 w-5" />}
@@ -262,11 +269,19 @@ export default function App() {
     setActiveModule("explorer");
   }
 
+  function openDatabase() {
+    setActiveModule("database");
+  }
+
   return (
     <Layout>
       <div className={activeModule === "home" ? "contents" : "hidden"}>
-        <HomePage onOpenExplorer={openExplorer} />
+        <HomePage onOpenExplorer={openExplorer} onOpenDatabase={openDatabase} />
       </div>
+
+      {activeModule === "database" ? (
+        <DatabaseAnalysis onBackHome={() => setActiveModule("home")} />
+      ) : null}
 
       {hasOpenedExplorer ? (
         <div className={activeModule === "explorer" ? "contents" : "hidden"} aria-hidden={activeModule !== "explorer"}>
