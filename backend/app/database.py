@@ -34,9 +34,41 @@ CREATE INDEX idx_polymers_parse_ok ON polymers(rdkit_parse_ok);
 CREATE INDEX idx_properties_polymer_id ON properties(polymer_id);
 """
 
+KNOWLEDGE_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+  knowledge_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_file TEXT NOT NULL,
+  source_row_number INTEGER NOT NULL,
+  source_sequence TEXT,
+  title_zh TEXT,
+  title_en TEXT,
+  abstract TEXT NOT NULL,
+  claim TEXT,
+  analysis TEXT,
+  is_polymer_synthesis TEXT,
+  judgement_reason TEXT,
+  polymer_iupac TEXT,
+  formulation TEXT,
+  catalyst TEXT,
+  temperature TEXT,
+  reaction_time TEXT,
+  solvent TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source_file, source_row_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_source_file ON knowledge_documents(source_file);
+CREATE INDEX IF NOT EXISTS idx_knowledge_title_en ON knowledge_documents(title_en);
+CREATE INDEX IF NOT EXISTS idx_knowledge_polymer_iupac ON knowledge_documents(polymer_iupac);
+"""
+
 DROP_SQL = """
 DROP TABLE IF EXISTS properties;
 DROP TABLE IF EXISTS polymers;
+"""
+
+DROP_KNOWLEDGE_SQL = """
+DROP TABLE IF EXISTS knowledge_documents;
 """
 
 
@@ -70,3 +102,12 @@ def sqlite_connection(db_path: str | Path) -> Iterator[sqlite3.Connection]:
 def rebuild_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(DROP_SQL)
     connection.executescript(SCHEMA_SQL)
+
+
+def ensure_knowledge_schema(connection: sqlite3.Connection) -> None:
+    connection.executescript(KNOWLEDGE_SCHEMA_SQL)
+
+
+def rebuild_knowledge_schema(connection: sqlite3.Connection) -> None:
+    connection.executescript(DROP_KNOWLEDGE_SQL)
+    ensure_knowledge_schema(connection)

@@ -123,3 +123,42 @@ class Structure3DResponse(BaseModel):
     molblock: str
     capped_smiles: str
     format: Literal["mol"]
+
+
+class KnowledgeSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str = Field(min_length=1)
+    top_k: int = Field(default=25, ge=1, le=100)
+
+
+class KnowledgeDocumentResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    knowledge_id: int
+    source_file: str
+    source_row_number: int
+    source_sequence: str | None = None
+    title_zh: str | None = None
+    title_en: str | None = None
+    abstract: str
+    abstract_snippet: str
+    claim: str | None = None
+    analysis: str | None = None
+    is_polymer_synthesis: str | None = None
+    judgement_reason: str | None = None
+    polymer_iupac: str | None = None
+    formulation: str | None = None
+    catalyst: str | None = None
+    temperature: str | None = None
+    reaction_time: str | None = None
+    solvent: str | None = None
+
+
+class KnowledgeSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    query_time_ms: float = Field(ge=0.0)
+    total: int = Field(ge=0)
+    results: list[KnowledgeDocumentResult] = Field(default_factory=list)

@@ -17,7 +17,7 @@ import {
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
-type DatasetKey = "process" | "property" | "structureEffect" | "dft" | "reserved";
+type DatasetKey = "process" | "property" | "structureEffect" | "dft" | "formulation";
 
 type RankedItem = { label: string; value: number };
 type DonutItem = { label: string; value: number; color: string };
@@ -187,97 +187,212 @@ const structureEffectData = {
 };
 
 const dftCoordinates: AtomCoordinate[] = [
-  [8, -7.351685, 0.462768, -1.540367],
-  [6, -6.935456, 1.302362, -0.787285],
-  [8, -7.650348, 2.362276, -0.366597],
-  [7, -5.687492, 1.327659, -0.236607],
-  [6, -4.725015, 0.358813, -0.487133],
-  [6, -4.686786, -0.779742, -1.231638],
-  [6, -3.357919, -1.30219, -1.036171],
-  [6, -2.720512, -0.445374, -0.201328],
-  [6, -1.349654, -0.410272, 0.379392],
-  [8, -0.716623, -1.619462, 0.049177],
-  [6, 0.640142, -1.611409, 0.272986],
-  [8, 0.881507, -1.432484, 1.639211],
-  [6, 2.231217, -1.563819, 2.011496],
-  [6, 3.14114, -0.532039, 1.433288],
-  [6, 3.545692, 0.7023, 1.835292],
-  [6, 4.394257, 1.23399, 0.80597],
-  [6, 4.428448, 0.259615, -0.14786],
-  [7, 5.057229, 0.131721, -1.376149],
-  [6, 5.853655, 1.104712, -1.913309],
-  [8, 6.10007, 2.16399, -1.402762],
-  [8, 6.32815, 0.70702, -3.105743],
-  [8, 3.687761, -0.802891, 0.204684],
-  [8, -3.553726, 0.577776, 0.141552],
-  [1, -8.51887, 2.291891, -0.786376],
-  [1, -5.442329, 2.084082, 0.390591],
-  [1, -5.499892, -1.17581, -1.827586],
-  [1, -2.926773, -2.205197, -1.45634],
-  [1, -1.398138, -0.273348, 1.472966],
-  [1, -0.776641, 0.446909, -0.029192],
-  [1, 1.12938, -0.798458, -0.306206],
-  [1, 1.033884, -2.586388, -0.067795],
-  [1, 2.61034, -2.565254, 1.731567],
-  [1, 2.254812, -1.482373, 3.104826],
-  [1, 3.27059, 1.185561, 2.768867],
-  [1, 4.911818, 2.184367, 0.762612],
-  [1, 4.917277, -0.728845, -1.89196],
-  [1, 6.880494, 1.427543, -3.440082]
+  [7, -6.92476, 3.205737, 3.651556],
+  [7, -6.309176, 2.752159, 2.837125],
+  [7, -5.662965, 2.310025, 1.878159],
+  [6, -4.819618, 1.21389, 2.206058],
+  [8, -4.726147, 0.742038, 3.30702],
+  [6, -4.095055, 0.754729, 1.01891],
+  [6, -4.090362, 1.169018, -0.285262],
+  [6, -3.172228, 0.315688, -0.964873],
+  [6, -2.697575, -0.543275, -0.012372],
+  [6, -1.715775, -1.661341, -0.077112],
+  [8, -1.257874, -1.752789, -1.401161],
+  [6, -0.23127, -2.675159, -1.574042],
+  [8, 0.93261, -2.30842, -0.906889],
+  [6, 1.515604, -1.129552, -1.39742],
+  [6, 2.703846, -0.824653, -0.552643],
+  [6, 3.268921, -1.479957, 0.50618],
+  [6, 4.390325, -0.688207, 0.890995],
+  [6, 4.411393, 0.37747, 0.034507],
+  [6, 5.346908, 1.502647, -0.028911],
+  [8, 6.2795, 1.63377, 0.721871],
+  [7, 5.031408, 2.412346, -1.06741],
+  [7, 5.807155, 3.375269, -1.142214],
+  [7, 6.458986, 4.272079, -1.277145],
+  [8, 3.383171, 0.292873, -0.84359],
+  [8, -3.246573, -0.286994, 1.181316],
+  [1, -4.680595, 1.986886, -0.68805],
+  [1, -2.888756, 0.317406, -2.012096],
+  [1, -2.198742, -2.605794, 0.240033],
+  [1, -0.882193, -1.468711, 0.621398],
+  [1, -0.509297, -3.662855, -1.170619],
+  [1, -0.064439, -2.736792, -2.662249],
+  [1, 1.825387, -1.253169, -2.453454],
+  [1, 0.803512, -0.285966, -1.36276],
+  [1, 2.911306, -2.409003, 0.937515],
+  [1, 5.103367, -0.861391, 1.691896]
 ];
 
 const dftData = {
-  rows: 100,
-  molCount: 5,
-  selectedMol: "276001_Conf03",
-  selectedStep: 18,
-  selectedAtoms: 37,
-  finalEnergy: -1213.73634697,
-  finalGap: 7.540006826,
-  finalDipole: 2.6104,
-  finalLowestFreq: 5.7149,
-  energyRange: { min: -2431.42353977, max: -947.533225336, count: 95 },
-  gapRange: { min: 5.047170472, median: 7.536469344, max: 7.890217544 },
+  rows: 1582959,
+  molCount: 49301,
+  rangeGroupCount: 10,
+  selectedMol: "987779_Conf02",
+  selectedStep: 201,
+  selectedAtoms: 35,
+  finalEnergy: -1279.63469116,
+  finalGap: 114.247335,
+  finalDipole: 4.5614,
+  finalLowestFreq: 5.7387,
+  energyRange: { min: -3945.714671, median: -1561.785924, max: -381.881933, count: 48540 },
+  gapRange: { min: 97.190685, median: 108.959888, max: 119.045793, count: 49301 },
+  stepRange: { min: 5, median: 26, p95: 76, max: 202 },
+  atomRange: { min: 9, median: 52, p95: 77, max: 100 },
   atomTotals: [
-    { label: "C", value: 1730, color: "#334155" },
-    { label: "H", value: 1638, color: "#94a3b8" },
-    { label: "O", value: 555, color: "#2563eb" },
-    { label: "N", value: 200, color: "#7c3aed" },
-    { label: "S", value: 148, color: "#f59e0b" }
+    { label: "C", value: 1099029, color: "#334155" },
+    { label: "H", value: 1043640, color: "#94a3b8" },
+    { label: "O", value: 294304, color: "#2563eb" },
+    { label: "N", value: 97377, color: "#7c3aed" },
+    { label: "F", value: 39587, color: "#14b8a6" },
+    { label: "S", value: 9743, color: "#f59e0b" },
+    { label: "Cl", value: 4336, color: "#0f766e" },
+    { label: "B", value: 1701, color: "#e11d48" },
+    { label: "P", value: 1431, color: "#64748b" },
+    { label: "Si", value: 1398, color: "#38bdf8" }
   ],
   convergence: [
-    { label: "04", value: 63, color: "#0f766e" },
-    { label: "24", value: 15, color: "#2563eb" },
-    { label: "14", value: 9, color: "#f59e0b" },
-    { label: "44", value: 6, color: "#e11d48" },
-    { label: "blank", value: 5, color: "#64748b" },
-    { label: "34", value: 2, color: "#7c3aed" }
+    { label: "44", value: 28074, color: "#0f766e" },
+    { label: "34", value: 16748, color: "#2563eb" },
+    { label: "24", value: 3718, color: "#f59e0b" },
+    { label: "blank", value: 761, color: "#64748b" }
   ],
   moleculeFinals: [
-    { label: "276001_Conf03", steps: 19, atoms: 37, energy: -1213.73634697, gap: 7.540006826 },
-    { label: "276678_Conf02", steps: 10, atoms: 28, energy: -947.579102685, gap: 5.047170472 },
-    { label: "277665_Conf01", steps: 32, atoms: 57, energy: -2321.12782467, gap: 6.325017816 },
-    { label: "278090_Conf03", steps: 18, atoms: 37, energy: -1139.50774324, gap: 7.890217544 },
-    { label: "278446_Conf03", steps: 21, atoms: 38, energy: -2431.42144459, gap: 7.536469344 }
+    { label: "987779_Conf02", steps: 202, atoms: 35, energy: -1279.63469116, gap: 114.247335 },
+    { label: "000146_Conf02", steps: 6, atoms: 28, energy: -690.282695, gap: 102.620176 },
+    { label: "000931_Conf03", steps: 19, atoms: 39, energy: -879.622368, gap: 101.464508 },
+    { label: "000472_Conf01", steps: 13, atoms: 35, energy: -1370.74867, gap: 108.985194 },
+    { label: "000219_Conf03", steps: 21, atoms: 35, energy: -1274.265602, gap: 100.866401 }
   ],
   trajectory: [
-    { step: 1, energy: -1213.71965989 },
-    { step: 2, energy: -1213.73495746 },
-    { step: 3, energy: -1213.7352429 },
-    { step: 4, energy: -1213.73593709 },
-    { step: 5, energy: -1213.70906032 },
-    { step: 6, energy: -1213.73624855 },
-    { step: 7, energy: -1213.73624962 },
-    { step: 8, energy: -1213.73629127 },
-    { step: 9, energy: -1213.73631697 },
-    { step: 10, energy: -1213.7363287 },
-    { step: 11, energy: -1213.73633501 },
-    { step: 12, energy: -1213.73633668 },
-    { step: 13, energy: -1213.73634115 },
-    { step: 14, energy: -1213.73634543 },
-    { step: 18, energy: -1213.73634697 }
+    { step: 1, energy: -1279.61882133 },
+    { step: 2, energy: -1279.63373601 },
+    { step: 3, energy: -1279.6346027 },
+    { step: 4, energy: -1279.63428792 },
+    { step: 5, energy: -1279.63406367 },
+    { step: 6, energy: -1279.63310735 },
+    { step: 7, energy: -1279.63404447 },
+    { step: 8, energy: -1279.63007818 },
+    { step: 9, energy: -1279.63380553 },
+    { step: 10, energy: -1279.63186288 },
+    { step: 20, energy: -1279.63313271 },
+    { step: 30, energy: -1279.63322141 },
+    { step: 40, energy: -1279.63330445 },
+    { step: 50, energy: -1279.63338241 },
+    { step: 60, energy: -1279.63345536 },
+    { step: 70, energy: -1279.63352309 },
+    { step: 80, energy: -1279.63358529 },
+    { step: 201, energy: -1279.63469116 }
   ],
   coordinates: dftCoordinates
+};
+
+const formulationData = {
+  files: 143,
+  rows: 65840,
+  coverage: [
+    { label: "聚合物 IUPAC", count: 60942, pct: 92.6 },
+    { label: "配方及用量", count: 61092, pct: 92.8 },
+    { label: "催化剂", count: 30187, pct: 45.8 },
+    { label: "温度", count: 46620, pct: 70.8 },
+    { label: "时间", count: 37267, pct: 56.6 },
+    { label: "溶剂", count: 30970, pct: 47.0 }
+  ],
+  componentCounts: [
+    { label: "1", value: 122 },
+    { label: "2", value: 35567 },
+    { label: "3", value: 10934 },
+    { label: "4", value: 4772 },
+    { label: "5", value: 2085 },
+    { label: "6", value: 1023 },
+    { label: "7", value: 575 },
+    { label: "8+", value: 914 }
+  ],
+  topComponents: [
+    { label: "Ethylene glycol", value: 3090 },
+    { label: "Terephthalic acid", value: 2958 },
+    { label: "Epoxy resin", value: 2117 },
+    { label: "Isocyanate", value: 1956 },
+    { label: "Polyol", value: 1848 },
+    { label: "Diisocyanate", value: 1675 },
+    { label: "PET", value: 1305 },
+    { label: "Polyisocyanate", value: 1239 },
+    { label: "1,4-Butanediol", value: 1188 },
+    { label: "Polyurethane", value: 1179 },
+    { label: "Polyether polyol", value: 998 },
+    { label: "Styrene", value: 981 }
+  ],
+  polymerFamilies: [
+    { label: "polyolefin", value: 17513, color: "#0f766e" },
+    { label: "polyurethane", value: 16676, color: "#2563eb" },
+    { label: "polyester", value: 13069, color: "#f59e0b" },
+    { label: "other", value: 11546, color: "#64748b" },
+    { label: "polyamide / aramid", value: 5430, color: "#e11d48" },
+    { label: "acrylic", value: 4297, color: "#7c3aed" },
+    { label: "epoxy", value: 3180, color: "#14b8a6" },
+    { label: "polyimide", value: 2490, color: "#38bdf8" }
+  ],
+  ratioTypes: [
+    { label: "ratio colon", value: 61062 },
+    { label: "range", value: 11657 },
+    { label: "not specified", value: 5557 },
+    { label: "missing", value: 4748 },
+    { label: "percent", value: 3129 },
+    { label: "molar", value: 2578 },
+    { label: "parts / wt", value: 1875 }
+  ],
+  tempBands: [
+    { label: "<80 C", value: 13723 },
+    { label: "80-119 C", value: 10188 },
+    { label: "120-179 C", value: 9207 },
+    { label: "180-239 C", value: 6232 },
+    { label: ">=240 C", value: 6499 },
+    { label: "missing", value: 19991 }
+  ],
+  timeUnits: [
+    { label: "hours", value: 21130, color: "#0f766e" },
+    { label: "minutes", value: 11085, color: "#2563eb" },
+    { label: "days", value: 340, color: "#f59e0b" },
+    { label: "other", value: 4712, color: "#7c3aed" },
+    { label: "missing", value: 28573, color: "#64748b" }
+  ],
+  topCatalysts: [
+    { label: "Dibutyltin dilaurate", value: 2288 },
+    { label: "Triethylamine", value: 1179 },
+    { label: "Sb2O3", value: 467 },
+    { label: "Benzoyl peroxide", value: 433 },
+    { label: "p-Toluenesulfonic acid", value: 405 },
+    { label: "NaOH", value: 403 },
+    { label: "Pd", value: 361 },
+    { label: "Titanium butoxide", value: 347 },
+    { label: "Sodium hydroxide", value: 323 },
+    { label: "Stannous octoate", value: 317 }
+  ],
+  topSolvents: [
+    { label: "Water", value: 5366 },
+    { label: "DMF / dimethylformamide", value: 3346 },
+    { label: "Toluene", value: 2247 },
+    { label: "Acetone", value: 1488 },
+    { label: "Ethanol", value: 1211 },
+    { label: "Deionized water", value: 1176 },
+    { label: "DMAc", value: 896 },
+    { label: "Methanol", value: 822 },
+    { label: "Tetrahydrofuran", value: 745 }
+  ],
+  examples: [
+    {
+      title: "内筒和其制造方法",
+      polymer: "poly(bisphenol A epoxy resin)",
+      formula: "bisphenol A : epoxy resin = 1 : 1",
+      condition: "235-280 C · 15-20 minutes"
+    },
+    {
+      title: "树脂组合物，和层压预浸料坯",
+      polymer: "poly(bisphenol A epoxy resin)",
+      formula: "bisphenol-type epoxy resin : novolac-type phenol resin = 20-60 : 15-60",
+      condition: "190 C · 5 min · MEK and butyl cellosolve"
+    }
+  ]
 };
 
 const datasets = [
@@ -286,10 +401,9 @@ const datasets = [
     order: "01",
     title: "实验工艺数据",
     englishTitle: "Experimental Process",
-    description: "从工艺流程文本、产物名称和材料片段中统计工艺动作与材料实体。",
+    description: "展示实验制备过程中的工艺动作、产物名称与材料实体，帮助快速把握工艺文本重点。",
     status: "Ready",
     recordCount: processData.rows,
-    fieldCount: 5,
     icon: <FlaskConical className="h-5 w-5" />
   },
   {
@@ -297,10 +411,9 @@ const datasets = [
     order: "02",
     title: "实验性质数据",
     englishTitle: "Experimental Properties",
-    description: "围绕属性名、属性类别和数值范围展示实验性质数据画像。",
+    description: "汇总实验性质的名称、类别与数值范围，帮助观察性质数据的覆盖情况。",
     status: "Ready",
     recordCount: propertyData.rows,
-    fieldCount: 4,
     icon: <Sigma className="h-5 w-5" />
   },
   {
@@ -308,10 +421,9 @@ const datasets = [
     order: "03",
     title: "聚合物构效数据",
     englishTitle: "Structure-Property",
-    description: "展示 SMILES 关联的九类性质、单位、来源和数值覆盖范围。",
+    description: "关联聚合物结构与九类关键性质，帮助比较性质来源、单位和数值分布。",
     status: "Ready",
     recordCount: structureEffectData.rows,
-    fieldCount: 5,
     icon: <Network className="h-5 w-5" />
   },
   {
@@ -319,22 +431,20 @@ const datasets = [
     order: "04",
     title: "单体构象数据",
     englishTitle: "DFT Conformation",
-    description: "使用 preview_100.csv 中的 DFT 坐标、能量轨迹、原子组成和收敛状态作图。",
+    description: "展示单体构象的三维结构、能量轨迹、原子组成和收敛状态，帮助观察计算结果质量。",
     status: "Ready",
     recordCount: dftData.rows,
-    fieldCount: 21,
     icon: <Orbit className="h-5 w-5" />
   },
   {
-    key: "reserved" as const,
+    key: "formulation" as const,
     order: "05",
-    title: "预留数据模块",
-    englishTitle: "Reserved Dataset",
-    description: "保留给后续扩展的数据接口和分析面板。",
-    status: "Reserved",
-    recordCount: null,
-    fieldCount: null,
-    icon: <Database className="h-5 w-5" />
+    title: "配方配比数据",
+    englishTitle: "Formulation Ratios",
+    description: "汇总配方组分、比例表达、催化剂、溶剂和工艺条件，帮助识别常见配方模式。",
+    status: "Ready",
+    recordCount: formulationData.rows,
+    icon: <TableProperties className="h-5 w-5" />
   }
 ];
 
@@ -346,9 +456,13 @@ function formatNumber(value: number, digits = 2) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: digits }).format(value);
 }
 
+function formatPercent(value: number) {
+  return `${formatNumber(value, 1)}%`;
+}
+
 function MetricPill({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/80 bg-white/75 px-3 py-2 shadow-sm">
+    <div className="flex min-h-16 flex-col justify-center rounded-2xl border border-white/80 bg-white/75 px-3 py-2 shadow-sm">
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-mutedForeground">{label}</div>
       <div className="font-heading mt-1 truncate text-base font-semibold text-slate-950">{value}</div>
     </div>
@@ -484,6 +598,107 @@ function BubbleCloud({ data }: { data: RankedItem[] }) {
   );
 }
 
+function CoverageGrid({ data }: { data: typeof formulationData.coverage }) {
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {data.map((item) => (
+        <div key={item.label} className="rounded-2xl border border-white/80 bg-white/75 px-4 py-3 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div className="truncate text-sm font-semibold text-slate-800" title={item.label}>
+              {item.label}
+            </div>
+            <div className="font-mono-ui text-sm font-semibold text-teal-700">{formatPercent(item.pct)}</div>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full rounded-full bg-teal-700" style={{ width: `${item.pct}%` }} />
+          </div>
+          <div className="font-mono-ui mt-2 text-xs text-slate-500">{formatCount(item.count)} records</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ComponentDistribution({ data }: { data: RankedItem[] }) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  const peak = data.reduce((current, item) => (item.value > current.value ? item : current), data[0]);
+
+  return (
+    <div className="rounded-[24px] bg-[linear-gradient(180deg,#fbfdff_0%,#eef5f6_100%)] p-4">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricPill label="parsed formulas" value={formatCount(total)} />
+        <MetricPill label="peak bucket" value={`${peak.label} components`} />
+        <MetricPill label="peak share" value={formatPercent((peak.value / total) * 100)} />
+      </div>
+
+      <div className="mt-5 overflow-hidden rounded-full border border-white/80 bg-white/80 p-1 shadow-sm">
+        <div className="flex h-5 overflow-hidden rounded-full bg-slate-100">
+          {data.map((item, index) => (
+            <div
+              key={item.label}
+              className="h-full"
+              style={{
+                width: `${(item.value / total) * 100}%`,
+                backgroundColor: colors[index % colors.length]
+              }}
+              title={`${item.label} components: ${formatCount(item.value)}`}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        {data.map((item, index) => {
+          const share = (item.value / total) * 100;
+
+          return (
+            <div key={item.label} className="rounded-2xl border border-white/80 bg-white/75 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-slate-800">{item.label} components</div>
+                <div className="font-mono-ui text-xs text-slate-500">{formatPercent(share)}</div>
+              </div>
+              <div className="mt-2 flex items-center gap-3">
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${Math.max(share, 3)}%`,
+                      background: `linear-gradient(90deg, ${colors[index % colors.length]} 0%, #38bdf8 100%)`
+                    }}
+                  />
+                </div>
+                <div className="font-mono-ui w-16 text-right text-xs text-slate-500">{formatCount(item.value)}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FormulaExamples({ data }: { data: typeof formulationData.examples }) {
+  return (
+    <div className="grid flex-1 grid-rows-2 gap-3">
+      {data.map((item, index) => (
+        <article key={item.title} className="flex flex-col rounded-2xl border border-white/80 bg-white/75 px-4 py-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="truncate text-sm font-semibold text-slate-900" title={item.title}>
+              {item.title}
+            </h4>
+            <span className="font-mono-ui shrink-0 text-[11px] text-teal-700">EX {index + 1}</span>
+          </div>
+          <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{item.polymer}</p>
+          <div className="font-mono-ui mt-3 rounded-2xl bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
+            {item.formula}
+          </div>
+          <div className="font-mono-ui mt-auto pt-2 text-xs text-slate-500">{item.condition}</div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function RangePlot({ data }: { data: RangeItem[] }) {
   return (
     <div className="space-y-5">
@@ -571,8 +786,11 @@ function EnergyTrace() {
   const min = Math.min(...values.map((item) => item.energy));
   const max = Math.max(...values.map((item) => item.energy));
   const span = max - min || 1;
-  const points = values.map((item, index) => {
-    const x = 24 + (index / (values.length - 1)) * 452;
+  const minStep = Math.min(...values.map((item) => item.step));
+  const maxStep = Math.max(...values.map((item) => item.step));
+  const stepSpan = maxStep - minStep || 1;
+  const points = values.map((item) => {
+    const x = 24 + ((item.step - minStep) / stepSpan) * 452;
     const y = 182 - ((item.energy - min) / span) * 136;
     return { ...item, x, y };
   });
@@ -580,7 +798,7 @@ function EnergyTrace() {
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-white/80 bg-[linear-gradient(180deg,#fbfdff_0%,#f2f7f9_100%)] p-4">
       <div className="inline-flex w-fit shrink-0 rounded-full border border-white/80 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
-        {dftData.selectedMol} · {values.length} energy points
+        {dftData.selectedMol} · {values.length} sampled energy points
       </div>
       <div className="flex aspect-[13/9] min-h-[360px] flex-1 items-center">
         <svg viewBox="0 0 500 220" className="h-full w-full" preserveAspectRatio="xMidYMid meet">
@@ -598,10 +816,10 @@ function EnergyTrace() {
           <circle key={point.step} cx={point.x} cy={point.y} r="5" fill="#0f766e" stroke="white" strokeWidth="2" />
         ))}
         <text x="24" y="206" className="fill-slate-500 text-[11px]">
-          step 1
+          step {minStep}
         </text>
-        <text x="424" y="206" className="fill-slate-500 text-[11px]">
-          step 18
+        <text x="414" y="206" className="fill-slate-500 text-[11px]">
+          step {maxStep}
         </text>
         </svg>
       </div>
@@ -616,10 +834,15 @@ function EnergyTrace() {
 
 function atomStyle(atom: number) {
   if (atom === 1) return { label: "H", color: "#cbd5e1", radius: 5 };
+  if (atom === 5) return { label: "B", color: "#e11d48", radius: 8 };
   if (atom === 6) return { label: "C", color: "#334155", radius: 8 };
   if (atom === 7) return { label: "N", color: "#7c3aed", radius: 8 };
   if (atom === 8) return { label: "O", color: "#2563eb", radius: 8 };
+  if (atom === 9) return { label: "F", color: "#14b8a6", radius: 8 };
+  if (atom === 14) return { label: "Si", color: "#38bdf8", radius: 10 };
+  if (atom === 15) return { label: "P", color: "#64748b", radius: 10 };
   if (atom === 16) return { label: "S", color: "#f59e0b", radius: 10 };
+  if (atom === 17) return { label: "Cl", color: "#0f766e", radius: 10 };
   return { label: String(atom), color: "#64748b", radius: 7 };
 }
 
@@ -799,10 +1022,9 @@ function DatasetTile({
           {dataset.englishTitle}
         </div>
         <h3 className="font-heading mt-3 text-[1.4rem] font-semibold tracking-tight text-slate-950">{dataset.title}</h3>
-        <p className="mt-3 text-sm leading-6 text-mutedForeground">{dataset.description}</p>
-        <div className="mt-5 grid grid-cols-2 gap-3">
+        <p className="mt-3 flex h-[72px] items-start text-sm leading-6 text-mutedForeground">{dataset.description}</p>
+        <div className="mt-5">
           <MetricPill label="Records" value={formatCount(dataset.recordCount)} />
-          <MetricPill label="Fields" value={dataset.fieldCount === null ? "Reserved" : String(dataset.fieldCount)} />
         </div>
       </div>
       <button
@@ -823,6 +1045,7 @@ function DatasetTile({
 
 function DatabaseHome({ onBackHome, onOpenDataset }: { onBackHome: () => void; onOpenDataset: (key: DatasetKey) => void }) {
   const readyDatasets = datasets.filter((dataset) => dataset.status === "Ready");
+  const reservedDatasets = datasets.filter((dataset) => dataset.status === "Reserved");
   const totalRecords = readyDatasets.reduce((sum, dataset) => sum + (dataset.recordCount ?? 0), 0);
 
   return (
@@ -850,12 +1073,12 @@ function DatabaseHome({ onBackHome, onOpenDataset }: { onBackHome: () => void; o
               聚合物数据平台
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-slate-300">
-              入口页展示五类数据模块；进入模块后只展示基于真实 CSV 汇总出的分析图，不展示原始表格。
+              入口页展示五类数据模块；进入模块后只展示面向分析的图表视图，不展示原始表格。
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <MetricPill label="Ready" value={`${readyDatasets.length} modules`} />
-            <MetricPill label="Reserved" value="1 module" />
+            <MetricPill label="Reserved" value={`${reservedDatasets.length} modules`} />
             <MetricPill label="Records" value={formatCount(totalRecords)} />
             <MetricPill label="Raw tables" value="Hidden" />
           </div>
@@ -916,11 +1139,9 @@ function DatasetHero({
               <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600">{dataset.description}</p>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <MetricPill label="Records" value={formatCount(dataset.recordCount)} />
-            <MetricPill label="Fields" value={dataset.fieldCount === null ? "Reserved" : String(dataset.fieldCount)} />
-            <MetricPill label="Source" value="CSV summary" />
-            <MetricPill label="Raw Data" value="Hidden" />
+            <MetricPill label="View" value="Charts" />
           </div>
         </div>
       </section>
@@ -1037,7 +1258,15 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
           <DonutChart data={dftData.convergence} />
         </ChartPanel>
         <ChartPanel icon={<TableProperties className="h-4 w-4" />} title="分子最终态摘要">
-          <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <MetricPill label="molecules" value={formatCount(dftData.molCount)} />
+            <MetricPill label="range groups" value={String(dftData.rangeGroupCount)} />
+            <MetricPill label="median steps" value={String(dftData.stepRange.median)} />
+            <MetricPill label="max steps" value={String(dftData.stepRange.max)} />
+            <MetricPill label="median atoms" value={String(dftData.atomRange.median)} />
+            <MetricPill label="median gap eV" value={formatNumber(dftData.gapRange.median, 3)} />
+          </div>
+          <div className="mt-4 space-y-3">
             {dftData.moleculeFinals.map((item) => (
               <div key={item.label} className="rounded-2xl border border-white/80 bg-white/75 px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
@@ -1058,6 +1287,79 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
   );
 }
 
+function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
+  const dataset = datasets[4];
+
+  return (
+    <DatasetHero dataset={dataset} {...props}>
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+        <ChartPanel icon={<Database className="h-4 w-4" />} title="字段覆盖率">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <MetricPill label="source files" value={formatCount(formulationData.files)} />
+            <MetricPill label="records" value={formatCount(formulationData.rows)} />
+            <MetricPill label="avg components" value="2.73" />
+            <MetricPill label="median components" value="2" />
+          </div>
+          <div className="mt-4">
+            <CoverageGrid data={formulationData.coverage} />
+          </div>
+        </ChartPanel>
+        <ChartPanel icon={<Layers3 className="h-4 w-4" />} title="配方组分数量">
+          <ComponentDistribution data={formulationData.componentCounts} />
+        </ChartPanel>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)]">
+        <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="高频配方组分">
+          <HorizontalBars data={formulationData.topComponents} />
+        </ChartPanel>
+        <ChartPanel icon={<PieChart className="h-4 w-4" />} title="聚合物体系分布">
+          <DonutChart data={formulationData.polymerFamilies} />
+        </ChartPanel>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-3">
+        <ChartPanel icon={<Sigma className="h-4 w-4" />} title="配方表达类型命中">
+          <HorizontalBars data={formulationData.ratioTypes} />
+        </ChartPanel>
+        <ChartPanel icon={<FlaskConical className="h-4 w-4" />} title="工艺温度区间">
+          <HorizontalBars data={formulationData.tempBands} />
+        </ChartPanel>
+        <ChartPanel icon={<PieChart className="h-4 w-4" />} title="时间表达分布">
+          <DonutChart data={formulationData.timeUnits} />
+        </ChartPanel>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,0.95fr)_minmax(0,1.1fr)] xl:items-stretch">
+        <ChartPanel
+          className="flex h-full flex-col xl:min-h-[520px]"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<Atom className="h-4 w-4" />}
+          title="常见催化剂"
+        >
+          <HorizontalBars data={formulationData.topCatalysts} />
+        </ChartPanel>
+        <ChartPanel
+          className="flex h-full flex-col xl:min-h-[520px]"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<Search className="h-4 w-4" />}
+          title="常见溶剂"
+        >
+          <HorizontalBars data={formulationData.topSolvents} />
+        </ChartPanel>
+        <ChartPanel
+          className="flex h-full flex-col xl:min-h-[520px]"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<TableProperties className="h-4 w-4" />}
+          title="配方样例"
+        >
+          <FormulaExamples data={formulationData.examples} />
+        </ChartPanel>
+      </section>
+    </DatasetHero>
+  );
+}
+
 export function DatabaseAnalysis({ onBackHome }: { onBackHome: () => void }) {
   const [selectedKey, setSelectedKey] = useState<DatasetKey | null>(null);
   const commonProps = {
@@ -1069,6 +1371,7 @@ export function DatabaseAnalysis({ onBackHome }: { onBackHome: () => void }) {
   if (selectedKey === "property") return <PropertyPage {...commonProps} />;
   if (selectedKey === "structureEffect") return <StructureEffectPage {...commonProps} />;
   if (selectedKey === "dft") return <DftPage {...commonProps} />;
+  if (selectedKey === "formulation") return <FormulationPage {...commonProps} />;
 
   return <DatabaseHome onBackHome={onBackHome} onOpenDataset={setSelectedKey} />;
 }

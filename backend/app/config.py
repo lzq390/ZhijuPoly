@@ -4,7 +4,12 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from dotenv import dotenv_values
+try:
+    from dotenv import dotenv_values
+except ImportError:  # pragma: no cover - keeps local import scripts usable before dependency install
+    def dotenv_values(path: Path) -> dict[str, str]:
+        return {}
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = PROJECT_ROOT / "backend"
@@ -23,6 +28,7 @@ class Settings:
         self,
         sqlite_db_path: str | None = None,
         csv_source_path: str | None = None,
+        knowledge_zip_path: str | None = None,
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
         model_dir: str | None = None,
@@ -36,6 +42,10 @@ class Settings:
         raw_csv_source_path = csv_source_path or os.getenv(
             "CSV_SOURCE_PATH",
             env_values.get("CSV_SOURCE_PATH", "database/polyprop_9_properties_clean.csv"),
+        )
+        raw_knowledge_zip_path = knowledge_zip_path or os.getenv(
+            "KNOWLEDGE_ZIP_PATH",
+            env_values.get("KNOWLEDGE_ZIP_PATH", "database/data_txt.zip"),
         )
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",
@@ -59,6 +69,7 @@ class Settings:
 
         self.sqlite_db_path = _resolve_from_root(raw_sqlite_db_path)
         self.csv_source_path = _resolve_from_root(raw_csv_source_path)
+        self.knowledge_zip_path = _resolve_from_root(raw_knowledge_zip_path)
         self.allowed_origins = raw_allowed_origins
         self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)
@@ -70,6 +81,10 @@ class Settings:
     @property
     def csv_source_file(self) -> Path:
         return Path(self.csv_source_path)
+
+    @property
+    def knowledge_zip_file(self) -> Path:
+        return Path(self.knowledge_zip_path)
 
     @property
     def allowed_origins_list(self) -> list[str]:

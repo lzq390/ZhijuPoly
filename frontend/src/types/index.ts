@@ -73,6 +73,39 @@ export type PredictResponse = {
   query_time_ms: number;
 };
 
+export type KnowledgeSearchRequest = {
+  query: string;
+  top_k: number;
+};
+
+export type KnowledgeDocumentResult = {
+  knowledge_id: number;
+  source_file: string;
+  source_row_number: number;
+  source_sequence: string | null;
+  title_zh: string | null;
+  title_en: string | null;
+  abstract: string;
+  abstract_snippet: string;
+  claim: string | null;
+  analysis: string | null;
+  is_polymer_synthesis: string | null;
+  judgement_reason: string | null;
+  polymer_iupac: string | null;
+  formulation: string | null;
+  catalyst: string | null;
+  temperature: string | null;
+  reaction_time: string | null;
+  solvent: string | null;
+};
+
+export type KnowledgeSearchResponse = {
+  query: string;
+  query_time_ms: number;
+  total: number;
+  results: KnowledgeDocumentResult[];
+};
+
 export const PREDICTABLE_PROPERTIES: readonly PredictableProperty[] = [
   "Glass transition temperature",
   "Melting temperature",

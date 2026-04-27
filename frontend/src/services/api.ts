@@ -1,4 +1,11 @@
-import type { PredictRequest, PredictResponse, SmilesQueryRequest, SmilesQueryResponse } from "../types";
+import type {
+  KnowledgeSearchRequest,
+  KnowledgeSearchResponse,
+  PredictRequest,
+  PredictResponse,
+  SmilesQueryRequest,
+  SmilesQueryResponse
+} from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
@@ -25,6 +32,10 @@ export function querySmiles(payload: SmilesQueryRequest): Promise<SmilesQueryRes
 
 export function predictSmiles(payload: PredictRequest): Promise<PredictResponse> {
   return postJSON("/predict", payload);
+}
+
+export function searchKnowledge(payload: KnowledgeSearchRequest): Promise<KnowledgeSearchResponse> {
+  return postJSON("/knowledge/search", payload);
 }
 
 export function fetchStructure3D(

@@ -2,6 +2,7 @@ import { type ReactNode, useState } from "react";
 import { ArrowLeft, ArrowRight, Atom, BarChart3, BookOpen, Database, Microscope, Sparkles } from "lucide-react";
 import { DatabaseAnalysis } from "./components/DatabaseAnalysis";
 import { KetcherEditor } from "./components/KetcherEditor";
+import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { Layout } from "./components/Layout";
 import { QueryPanel } from "./components/QueryPanel";
 import { ResultsDisplay } from "./components/ResultsDisplay";
@@ -17,7 +18,7 @@ import {
   type WorkspaceMode
 } from "./types";
 
-type ActiveModule = "home" | "explorer" | "database";
+type ActiveModule = "home" | "explorer" | "database" | "knowledge";
 
 type ModuleTileProps = {
   icon: ReactNode;
@@ -87,15 +88,17 @@ function ModuleTile({
 
 function HomePage({
   onOpenExplorer,
-  onOpenDatabase
+  onOpenDatabase,
+  onOpenKnowledge
 }: {
   onOpenExplorer: () => void;
   onOpenDatabase: () => void;
+  onOpenKnowledge: () => void;
 }) {
   const moduleRows = [
     { name: "Polymer Property Explorer", status: "Ready" },
     { name: "数据库分析", status: "Ready" },
-    { name: "知识库本地检索", status: "Reserved" }
+    { name: "知识库本地检索", status: "Ready" }
   ];
 
   return (
@@ -119,13 +122,6 @@ function HomePage({
               </p>
             </div>
 
-            <div className="mt-8 flex flex-wrap items-center gap-3">
-              <Button type="button" size="lg" onClick={onOpenExplorer}>
-                进入 Polymer Property Explorer
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-              <Badge className="bg-slate-100 text-slate-700">3 modules</Badge>
-            </div>
           </div>
 
           <div className="rounded-[30px] border border-white/15 bg-slate-950 p-5 text-slate-50 shadow-[0_28px_70px_rgba(8,17,31,0.24)]">
@@ -179,12 +175,12 @@ function HomePage({
         />
         <ModuleTile
           icon={<BookOpen className="h-5 w-5" />}
-          eyebrow="预留模块"
+          eyebrow="可用模块"
           title="知识库本地检索"
-          description="用于承载本地文档索引、语义检索和材料知识回溯。"
-          status="Reserved"
-          actionLabel="暂未开放"
-          disabled
+          description="检索本地专利知识记录，按英文摘要关键词筛选并查看配方相关信息。"
+          status="Ready"
+          actionLabel="进入模块"
+          onClick={onOpenKnowledge}
         />
       </section>
     </>
@@ -273,15 +269,21 @@ export default function App() {
     setActiveModule("database");
   }
 
+  function openKnowledge() {
+    setActiveModule("knowledge");
+  }
+
   return (
     <Layout>
       <div className={activeModule === "home" ? "contents" : "hidden"}>
-        <HomePage onOpenExplorer={openExplorer} onOpenDatabase={openDatabase} />
+        <HomePage onOpenExplorer={openExplorer} onOpenDatabase={openDatabase} onOpenKnowledge={openKnowledge} />
       </div>
 
       {activeModule === "database" ? (
         <DatabaseAnalysis onBackHome={() => setActiveModule("home")} />
       ) : null}
+
+      {activeModule === "knowledge" ? <KnowledgeSearch onBackHome={() => setActiveModule("home")} /> : null}
 
       {hasOpenedExplorer ? (
         <div className={activeModule === "explorer" ? "contents" : "hidden"} aria-hidden={activeModule !== "explorer"}>
