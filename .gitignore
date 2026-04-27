@@ -22,3 +22,11 @@ frontend/.vite/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+
+# Local analysis inputs and scratch artifacts
+/1.png
+/AGENTS.md
+/database/data_txt.zip
+/database/polymer_process_material_filtered_cleaned_office_utf8_bom.csv
+/database/polymer_property_detail_cleaned_office_utf8_bom.csv
+/database/preview_100.csv
