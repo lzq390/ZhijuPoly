@@ -1,17 +1,39 @@
+name: polyprop
+
 services:
   backend:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
+    environment:
+      SQLITE_DB_PATH: /app/backend/data/polyprop.db
+      FUMOL_DB_PATH: /app/backend/data/fumol.db
+      MODEL_DIR: /app/model
+      MODEL_ENABLED: "true"
+      ALLOWED_ORIGINS: "http://localhost:${POLYPROP_WEB_PORT:-9000},http://127.0.0.1:${POLYPROP_WEB_PORT:-9000}"
     volumes:
       - ./backend/data:/app/backend/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, pathlib, sys, urllib.request; required=('SQLITE_DB_PATH','FUMOL_DB_PATH'); ok=all(pathlib.Path(os.environ[name]).is_file() and pathlib.Path(os.environ[name]).stat().st_size > 0 for name in required); sys.exit(1) if not ok else urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   nginx:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     restart: unless-stopped
     ports:
-      - "9000:80"
-    volumes:
-      - ./frontend/dist:/usr/share/nginx/html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - "${POLYPROP_WEB_PORT:-9000}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy

@@ -1,0 +1,36 @@
+.git
+.codex
+.superpowers
+AGENTS.md
+CLAUDE.md
+design-system/
+docs/superpowers/
+
+# Local environments and generated Python files
+.env
+backend/.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/tests/
+
+# Runtime data is mounted through docker-compose.
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Frontend build artifacts and dependencies
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Large source datasets are imported before deployment.
+database/
+
+# Local release bundles
+release/
+polyprop-release-*.tar.gz

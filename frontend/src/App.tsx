@@ -1,6 +1,6 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { ArrowLeft, ArrowRight, Atom, BarChart3, BookOpen, Database, Microscope, Sparkles } from "lucide-react";
-import { DatabaseAnalysis } from "./components/DatabaseAnalysis";
+import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { Layout } from "./components/Layout";
@@ -19,6 +19,75 @@ import {
 } from "./types";
 
 type ActiveModule = "home" | "explorer" | "database" | "knowledge";
+
+type AppRoute = {
+  module: ActiveModule;
+  datasetKey: DatasetKey | null;
+};
+
+const datasetPathByKey: Record<DatasetKey, string> = {
+  process: "/database/process",
+  property: "/database/property",
+  structureEffect: "/database/structure-effect",
+  dft: "/database/dft",
+  formulation: "/database/formulation"
+};
+
+const datasetKeyByPath = Object.fromEntries(
+  Object.entries(datasetPathByKey).map(([key, path]) => [path, key as DatasetKey])
+) as Record<string, DatasetKey>;
+
+function normalizePath(pathname: string) {
+  const normalized = pathname.replace(/\/+$/, "");
+  return normalized.length > 0 ? normalized : "/";
+}
+
+function routeFromPath(pathname: string): AppRoute {
+  const path = normalizePath(pathname);
+
+  if (path === "/explorer") {
+    return { module: "explorer", datasetKey: null };
+  }
+
+  if (path === "/knowledge") {
+    return { module: "knowledge", datasetKey: null };
+  }
+
+  if (path === "/database") {
+    return { module: "database", datasetKey: null };
+  }
+
+  const datasetKey = datasetKeyByPath[path];
+  if (datasetKey) {
+    return { module: "database", datasetKey };
+  }
+
+  return { module: "home", datasetKey: null };
+}
+
+function pathFromRoute(route: AppRoute) {
+  if (route.module === "explorer") {
+    return "/explorer";
+  }
+
+  if (route.module === "knowledge") {
+    return "/knowledge";
+  }
+
+  if (route.module === "database") {
+    return route.datasetKey ? datasetPathByKey[route.datasetKey] : "/database";
+  }
+
+  return "/";
+}
+
+function getInitialRoute() {
+  if (typeof window === "undefined") {
+    return { module: "home", datasetKey: null } satisfies AppRoute;
+  }
+
+  return routeFromPath(window.location.pathname);
+}
 
 type ModuleTileProps = {
   icon: ReactNode;
@@ -188,8 +257,9 @@ function HomePage({
 }
 
 export default function App() {
-  const [activeModule, setActiveModule] = useState<ActiveModule>("home");
-  const [hasOpenedExplorer, setHasOpenedExplorer] = useState(false);
+  const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
+  const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
+  const [hasOpenedExplorer, setHasOpenedExplorer] = useState(() => getInitialRoute().module === "explorer");
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const predict = usePredict();
@@ -260,17 +330,60 @@ export default function App() {
         ? "Property similarity"
         : "Structural similarity";
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !("scrollRestoration" in window.history)) {
+      return;
+    }
+
+    const previousScrollRestoration = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+
+    return () => {
+      window.history.scrollRestoration = previousScrollRestoration;
+    };
+  }, []);
+
+  function applyRoute(route: AppRoute) {
+    setActiveModule(route.module);
+    setSelectedDatasetKey(route.module === "database" ? route.datasetKey : null);
+
+    if (route.module === "explorer") {
+      setHasOpenedExplorer(true);
+    }
+  }
+
+  function navigate(route: AppRoute) {
+    const path = pathFromRoute(route);
+
+    if (typeof window !== "undefined") {
+      if (normalizePath(window.location.pathname) !== path) {
+        window.history.pushState(route, "", path);
+      }
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+
+    applyRoute(route);
+  }
+
+  useEffect(() => {
+    function handlePopState() {
+      applyRoute(routeFromPath(window.location.pathname));
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
   function openExplorer() {
-    setHasOpenedExplorer(true);
-    setActiveModule("explorer");
+    navigate({ module: "explorer", datasetKey: null });
   }
 
   function openDatabase() {
-    setActiveModule("database");
+    navigate({ module: "database", datasetKey: null });
   }
 
   function openKnowledge() {
-    setActiveModule("knowledge");
+    navigate({ module: "knowledge", datasetKey: null });
   }
 
   return (
@@ -280,16 +393,23 @@ export default function App() {
       </div>
 
       {activeModule === "database" ? (
-        <DatabaseAnalysis onBackHome={() => setActiveModule("home")} />
+        <DatabaseAnalysis
+          selectedKey={selectedDatasetKey}
+          onBackHome={() => navigate({ module: "home", datasetKey: null })}
+          onBackDatabase={() => navigate({ module: "database", datasetKey: null })}
+          onOpenDataset={(datasetKey) => navigate({ module: "database", datasetKey })}
+        />
       ) : null}
 
-      {activeModule === "knowledge" ? <KnowledgeSearch onBackHome={() => setActiveModule("home")} /> : null}
+      {activeModule === "knowledge" ? (
+        <KnowledgeSearch onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+      ) : null}
 
       {hasOpenedExplorer ? (
         <div className={activeModule === "explorer" ? "contents" : "hidden"} aria-hidden={activeModule !== "explorer"}>
           <nav className="flex flex-col gap-3 rounded-[26px] border border-white/70 bg-white/80 px-4 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
             <div className="flex items-center gap-3">
-              <Button type="button" variant="outline" onClick={() => setActiveModule("home")}>
+              <Button type="button" variant="outline" onClick={() => navigate({ module: "home", datasetKey: null })}>
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Home
               </Button>

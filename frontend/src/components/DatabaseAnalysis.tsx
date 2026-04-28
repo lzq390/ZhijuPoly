@@ -19,7 +19,7 @@ import type { DftMoleculeDetail, DftPcaPoint } from "../types";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
-type DatasetKey = "process" | "property" | "structureEffect" | "dft" | "formulation";
+export type DatasetKey = "process" | "property" | "structureEffect" | "dft" | "formulation";
 
 type RankedItem = { label: string; value: number };
 type DonutItem = { label: string; value: number; color: string };
@@ -534,7 +534,7 @@ function formatPercent(value: number) {
 
 function MetricPill({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex min-h-16 flex-col justify-center rounded-2xl border border-white/80 bg-white/75 px-3 py-2 shadow-sm">
+    <div className="flex h-16 flex-col justify-center rounded-2xl border border-white/80 bg-white/75 px-3 py-2 shadow-sm">
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-mutedForeground">{label}</div>
       <div className="font-heading mt-1 truncate text-base font-semibold text-slate-950">{value}</div>
     </div>
@@ -1658,14 +1658,14 @@ function DatasetTile({
   return (
     <section
       className={[
-        "flex min-h-[254px] flex-col justify-between rounded-[28px] border p-5 transition-all duration-300",
+        "flex min-h-[454px] flex-col rounded-[28px] border p-5 transition-all duration-300",
         isReserved
           ? "border-white/70 bg-white/55 text-slate-500"
           : "border-white/80 bg-white/85 text-slate-950 shadow-sm hover:-translate-y-1 hover:shadow-panel"
       ].join(" ")}
       aria-disabled={isReserved}
     >
-      <div>
+      <div className="flex flex-1 flex-col">
         <div className="flex items-start justify-between gap-4">
           <div
             className={[
@@ -1685,8 +1685,10 @@ function DatasetTile({
         <div className="mt-6 text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">
           {dataset.englishTitle}
         </div>
-        <h3 className="font-heading mt-3 text-[1.4rem] font-semibold tracking-tight text-slate-950">{dataset.title}</h3>
-        <p className="mt-3 flex h-[72px] items-start text-sm leading-6 text-mutedForeground">{dataset.description}</p>
+        <h3 className="font-heading mt-3 flex min-h-[68px] items-start text-[1.4rem] font-semibold tracking-tight text-slate-950">
+          {dataset.title}
+        </h3>
+        <p className="mt-2 flex h-[72px] items-start text-sm leading-6 text-mutedForeground">{dataset.description}</p>
         <div className="mt-5">
           <MetricPill label="Records" value={formatCount(dataset.recordCount)} />
         </div>
@@ -1785,11 +1787,20 @@ function DatasetHero({
     <>
       <nav className="flex flex-col gap-3 rounded-[26px] border border-white/70 bg-white/80 px-4 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" variant="outline" onClick={onBackDatabase}>
+          <Button
+            type="button"
+            onClick={onBackDatabase}
+            className="border-slate-950 bg-slate-950 text-white shadow-sm hover:bg-teal-700"
+          >
             <ArrowLeft className="mr-2 h-4 w-4" />
             {backDatabaseLabel}
           </Button>
-          <Button type="button" variant="outline" onClick={onBackHome}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onBackHome}
+            className="bg-white/65 text-slate-600 hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800"
+          >
             {homeLabel}
           </Button>
         </div>
@@ -2211,11 +2222,20 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
   );
 }
 
-export function DatabaseAnalysis({ onBackHome }: { onBackHome: () => void }) {
-  const [selectedKey, setSelectedKey] = useState<DatasetKey | null>(null);
+export function DatabaseAnalysis({
+  onBackHome,
+  onBackDatabase,
+  onOpenDataset,
+  selectedKey
+}: {
+  onBackHome: () => void;
+  onBackDatabase: () => void;
+  onOpenDataset: (key: DatasetKey) => void;
+  selectedKey: DatasetKey | null;
+}) {
   const commonProps = {
     onBackHome,
-    onBackDatabase: () => setSelectedKey(null)
+    onBackDatabase
   };
 
   if (selectedKey === "process") return <ProcessPage {...commonProps} />;
@@ -2224,5 +2244,5 @@ export function DatabaseAnalysis({ onBackHome }: { onBackHome: () => void }) {
   if (selectedKey === "dft") return <DftPage {...commonProps} />;
   if (selectedKey === "formulation") return <FormulationPage {...commonProps} />;
 
-  return <DatabaseHome onBackHome={onBackHome} onOpenDataset={setSelectedKey} />;
+  return <DatabaseHome onBackHome={onBackHome} onOpenDataset={onOpenDataset} />;
 }

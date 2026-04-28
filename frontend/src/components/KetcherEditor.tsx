@@ -177,6 +177,7 @@ export function KetcherEditor({
             title="Ketcher Editor"
             src="/ketcher/index.html"
             ref={iframeRef}
+            tabIndex={-1}
             className="h-[560px] w-full border-0"
           />
         </div>
