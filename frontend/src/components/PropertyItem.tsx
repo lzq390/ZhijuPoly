@@ -5,8 +5,15 @@ type PropertyItemProps = {
 };
 
 export function PropertyItem({ item }: PropertyItemProps) {
+  const normalizedSource = item.label_source?.trim().toLowerCase();
   const sourceLabel =
-    item.label_source?.toLowerCase() === "exp" ? "Experimental" : item.label_source;
+    normalizedSource === "exp" || normalizedSource === "experimental"
+      ? "Experimental"
+      : normalizedSource === "sim" || normalizedSource === "simulated"
+        ? "Simulated"
+        : normalizedSource === "n/a" || normalizedSource === "na"
+          ? "Not labeled"
+          : item.label_source;
 
   return (
     <div className="grid min-h-[82px] grid-cols-[minmax(0,1fr)_auto] items-start gap-4 rounded-[18px] border border-white/80 bg-white/90 px-3.5 py-3 shadow-sm">

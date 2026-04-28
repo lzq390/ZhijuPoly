@@ -65,7 +65,7 @@ function ModeButton({
               active ? "bg-teal-600 text-white" : "bg-slate-100 text-slate-500"
             )}
           >
-            {active ? "当前" : "切换"}
+            {active ? "Active" : "Switch"}
           </div>
         </div>
         <div className="mt-2 text-sm leading-6 text-mutedForeground">{detail}</div>
@@ -99,7 +99,7 @@ export function QueryPanel({
   const selectedSummary = selectedProperties
     .slice(0, 2)
     .map((property) => PREDICT_PROPERTY_META[property].label)
-    .join("、");
+    .join(", ");
 
   function applyPreset(matchMode: SmilesQueryRequest["match_mode"]) {
     onChange({
@@ -143,10 +143,10 @@ export function QueryPanel({
               {isQueryMode ? "Similarity" : "Prediction"}
             </div>
             <CardTitle className="text-[1.35rem] tracking-tight">
-              {isQueryMode ? "相似匹配" : "预测"}
+              {isQueryMode ? "Similarity Matching" : "Prediction"}
             </CardTitle>
             <CardDescription>
-              {isQueryMode ? "在这里选择结构或性质相似匹配方式。" : "选择待预测性质，并用当前结构发起模型推理。"}
+              {isQueryMode ? "Choose structural or property-based similarity matching." : "Select target properties and run a prediction for the current structure."}
             </CardDescription>
           </div>
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_12px_30px_rgba(8,17,31,0.18)]">
@@ -159,14 +159,14 @@ export function QueryPanel({
         <div className="grid gap-[0.62rem] lg:grid-cols-2">
           <ModeButton
             active={isQueryMode}
-            title="相似匹配"
-            detail="按结构或性质相似性匹配现有聚合物记录。"
+            title="Similarity Matching"
+            detail="Match existing polymer records by structural or property similarity."
             onClick={() => onModeChange("query")}
           />
           <ModeButton
             active={!isQueryMode}
-            title="预测"
-            detail="调用模型直接计算当前结构的目标性质。"
+            title="Prediction"
+            detail="Estimate target properties for the current structure."
             onClick={() => onModeChange("predict")}
           />
         </div>
@@ -176,17 +176,17 @@ export function QueryPanel({
             <div className="grid gap-[0.62rem] lg:grid-cols-2">
               <ModeButton
                 active={!isPropertyMatch}
-                title="结构相似匹配"
-                detail="按当前结构寻找相近的聚合物记录。"
+                title="Structural Similarity"
+                detail="Find polymer records with structures close to the current input."
                 onClick={() => applyPreset("structure")}
               />
               <ModeButton
                 active={isPropertyMatch}
-                title="性质相似匹配"
+                title="Property Similarity"
                 detail={
                   selectedMatchMeta && selectedMatchProperty
-                    ? `已选择：${selectedMatchMeta.label} / ${selectedMatchProperty} (${selectedMatchMeta.unit})`
-                    : "请选择 1 个性质。"
+                    ? `Selected: ${selectedMatchMeta.label} / ${selectedMatchProperty} (${selectedMatchMeta.unit})`
+                    : "Select one property."
                 }
                 onClick={() => applyPreset("property")}
               >
@@ -203,7 +203,7 @@ export function QueryPanel({
                         onClick={() => openPropertyDialog("query")}
                       >
                         <Sparkles className="mr-2 h-4 w-4" />
-                        选择性质
+                        Select Property
                       </Button>
                     </div>
                   </div>
@@ -215,13 +215,13 @@ export function QueryPanel({
               <div className="text-sm leading-6 text-mutedForeground">
                 {queryDisabled
                   ? isPropertyMatch
-                    ? "需要结构输入并选择 1 个性质，才能发起性质相似匹配。"
-                    : "先在编辑器中输入结构，再发起相似匹配。"
-                  : "结构已就绪，可以立即提交相似匹配并刷新结果面板。"}
+                    ? "Enter a structure and select one property before running property similarity."
+                    : "Enter a structure in the editor before running similarity matching."
+                  : "The structure is ready. Run similarity matching to refresh the results panel."}
               </div>
               <Button className="min-h-[44px] min-w-[192px]" size="lg" onClick={onQuerySubmit} disabled={queryDisabled}>
                 <Search className="mr-2 h-4 w-4" />
-                {isQueryLoading ? "匹配中..." : "立即匹配"}
+                {isQueryLoading ? "Matching..." : "Run Match"}
               </Button>
             </div>
           </>
@@ -230,11 +230,11 @@ export function QueryPanel({
             <div className="rounded-[24px] border border-white/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.92)_0%,rgba(244,248,249,0.86)_100%)] p-4 shadow-sm">
               <div className="flex min-h-[94px] flex-col justify-between gap-4 sm:flex-row sm:items-center">
                 <div>
-                  <div className="text-sm font-semibold tracking-tight text-slate-950">选择待预测性质</div>
+                  <div className="text-sm font-semibold tracking-tight text-slate-950">Target Properties</div>
                   <div className="mt-1 text-sm leading-6 text-mutedForeground">
                     {selectedProperties.length > 0
-                      ? `已选择 ${selectedProperties.length} 项：${selectedSummary}${selectedProperties.length > 2 ? " 等" : ""}`
-                      : "打开弹窗选择 1 个或多个性质，主控制卡高度保持稳定。"}
+                      ? `${selectedProperties.length} selected: ${selectedSummary}${selectedProperties.length > 2 ? ", and more" : ""}`
+                      : "Open the picker and select one or more properties."}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -246,7 +246,7 @@ export function QueryPanel({
                     onClick={() => openPropertyDialog("predict")}
                   >
                     <Sparkles className="mr-2 h-4 w-4" />
-                    选择性质
+                    Select Properties
                   </Button>
                 </div>
               </div>
@@ -255,12 +255,12 @@ export function QueryPanel({
             <div className="flex flex-col gap-[0.5rem] border-t border-slate-200/70 pt-[0.8rem] sm:flex-row sm:items-center sm:justify-between">
               <div className="text-sm leading-6 text-mutedForeground">
                 {predictDisabled
-                  ? "需要结构输入并至少勾选一个性质，才能发起预测。"
-                  : "结构与性质已就绪，可以提交模型推理并切换到预测结果。"}
+                  ? "Enter a structure and select at least one property before running prediction."
+                  : "The structure and properties are ready. Run prediction and switch to the results."}
               </div>
               <Button className="min-h-[44px] min-w-[192px]" size="lg" onClick={onPredictSubmit} disabled={predictDisabled}>
                 <Sparkles className="mr-2 h-4 w-4" />
-                {isPredicting ? "预测中..." : "立即预测"}
+                {isPredicting ? "Predicting..." : "Run Prediction"}
               </Button>
             </div>
           </>
@@ -278,19 +278,19 @@ export function QueryPanel({
                   {propertyDialogMode === "query" ? "Property Match" : "Prediction Properties"}
                 </div>
                 <div className="font-heading mt-2 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                  {propertyDialogMode === "query" ? "选择性质相似匹配目标" : "选择预测性质"}
+                  {propertyDialogMode === "query" ? "Select Property Similarity Target" : "Select Prediction Properties"}
                 </div>
                 <div className="mt-1 text-sm leading-6 text-mutedForeground">
                   {propertyDialogMode === "query"
-                    ? "只能选择 1 个性质，系统会预测当前结构并检索库中最接近的 10 条记录。"
-                    : "当前开放 9 个 RDKit 描述符兼容模型，可多选后关闭弹窗继续预测。"}
+                    ? "Select one property to compare the current structure with the closest records."
+                    : "Select one or more properties, then close the picker to continue."}
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setIsPropertyDialogOpen(false)}
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/80 bg-white/80 text-slate-600 shadow-sm transition-colors hover:text-slate-950"
-                aria-label="关闭性质选择弹窗"
+                aria-label="Close property picker"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -352,9 +352,9 @@ export function QueryPanel({
               <div className="text-sm text-mutedForeground">
                 {propertyDialogMode === "query"
                   ? selectedMatchProperty
-                    ? `已选择 1 / ${PREDICTABLE_PROPERTIES.length} 项性质`
-                    : `已选择 0 / ${PREDICTABLE_PROPERTIES.length} 项性质`
-                  : `已选择 ${selectedProperties.length} / ${PREDICTABLE_PROPERTIES.length} 项性质`}
+                    ? `1 / ${PREDICTABLE_PROPERTIES.length} properties selected`
+                    : `0 / ${PREDICTABLE_PROPERTIES.length} properties selected`
+                  : `${selectedProperties.length} / ${PREDICTABLE_PROPERTIES.length} properties selected`}
               </div>
               <div className="flex flex-wrap gap-2 sm:justify-end">
                 {propertyDialogMode === "predict" ? (
@@ -364,11 +364,11 @@ export function QueryPanel({
                     onClick={() => onSelectedPropertiesChange([])}
                     disabled={selectedProperties.length === 0}
                   >
-                    清空选择
+                    Clear Selection
                   </Button>
                 ) : null}
                 <Button type="button" onClick={() => setIsPropertyDialogOpen(false)}>
-                  完成
+                  Done
                 </Button>
               </div>
             </div>

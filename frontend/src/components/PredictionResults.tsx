@@ -51,9 +51,9 @@ export function PredictionResults({
         <CardHeader className="min-h-[112px] border-b border-destructive/10 bg-destructiveForeground">
           <CardTitle className="flex items-center gap-2 text-lg text-destructive">
             <TriangleAlert className="h-5 w-5" />
-            预测失败
+            Prediction Failed
           </CardTitle>
-          <CardDescription>预测请求未成功返回，请检查结构输入、属性选择或服务状态。</CardDescription>
+          <CardDescription>The prediction request did not complete. Check the structure input, property selection, or service status.</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <Alert variant="destructive">{error}</Alert>
@@ -67,13 +67,13 @@ export function PredictionResults({
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
           <CardTitle className="text-xl">Prediction Results</CardTitle>
-          <CardDescription>正在调用模型并计算所选性质。</CardDescription>
+          <CardDescription>Calculating the selected properties.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 pt-5">
           <EmptyPanel
             loading
-            title="正在执行预测"
-            description="模型推理完成后，结果卡片会自动刷新到当前面板。"
+            title="Running Prediction"
+            description="Result cards will refresh here after prediction completes."
           />
         </CardContent>
       </Card>
@@ -85,12 +85,12 @@ export function PredictionResults({
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
           <CardTitle className="text-xl">Prediction Results</CardTitle>
-          <CardDescription>当前暂无预测结果。</CardDescription>
+          <CardDescription>No prediction results yet.</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <EmptyPanel
-            title="预测区已准备"
-            description="切换到预测模式后勾选性质并提交，这里会显示预测值、单位和耗时。"
+            title="Prediction Panel Ready"
+            description="Switch to prediction mode, select properties, and submit to view predicted values, units, and calculation time."
           />
         </CardContent>
       </Card>
@@ -111,15 +111,15 @@ export function PredictionResults({
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-2">
             <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
-              Model Inference
+              Property Prediction
             </div>
             <CardTitle className="text-[1.4rem] tracking-tight">Prediction Results</CardTitle>
-            <CardDescription>所选性质的模型输出按卡片呈现，便于快速对比。</CardDescription>
+            <CardDescription>Predicted values for selected properties are presented as cards for quick comparison.</CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge>
               <Sparkles className="mr-1 h-3.5 w-3.5" />
-              {`${predictionEntries.length} 项性质`}
+              {`${predictionEntries.length} properties`}
             </Badge>
             <Badge className="text-slate-700">{`${data.query_time_ms.toFixed(1)} ms`}</Badge>
           </div>

@@ -37,8 +37,8 @@ function MetaItem({ label, value, onOpen }: MetaItemProps) {
         type="button"
         onClick={() => onOpen(label, value)}
         className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={`查看 ${label} 完整内容`}
-        title="查看完整内容"
+        aria-label={`View full ${label} content`}
+        title="View full content"
       >
         <Expand className="h-4 w-4" />
       </button>
@@ -88,14 +88,14 @@ function DetailDialog({
           <div className="min-w-0">
             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-teal-700">{detail.label}</div>
             <h2 id="knowledge-detail-title" className="font-heading mt-1 text-xl font-semibold tracking-tight text-slate-950">
-              完整内容
+              Full Content
             </h2>
           </div>
           <button
             type="button"
             onClick={onClose}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="关闭"
+            aria-label="Close"
           >
             <X className="h-4 w-4" />
           </button>
@@ -189,7 +189,7 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
   const resultBadge = searchState.data
     ? `${searchState.data.results.length} / ${searchState.data.total} shown`
     : "Ready";
-  const timingBadge = searchState.data ? `${searchState.data.query_time_ms.toFixed(1)} ms` : "Local SQLite";
+  const timingBadge = searchState.data ? `${searchState.data.query_time_ms.toFixed(1)} ms` : "Ready";
 
   return (
     <div className="contents">
@@ -197,11 +197,11 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
         <div className="flex items-center gap-3">
           <Button type="button" variant="outline" onClick={onBackHome}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            首页
+            Home
           </Button>
           <div>
-            <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">当前模块</div>
-            <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">知识库本地检索</div>
+            <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">Current Module</div>
+            <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">Local Knowledge Search</div>
           </div>
         </div>
         <Badge className="bg-teal-50 text-teal-800">Knowledge Base</Badge>
@@ -217,14 +217,14 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
               <Badge>Local Knowledge Retrieval</Badge>
             </div>
             <h1 className="font-heading mt-6 text-[2.4rem] font-semibold leading-tight tracking-tight text-slate-950 md:text-[3.7rem]">
-              知识库本地检索
+              Local Knowledge Search
             </h1>
             <form onSubmit={handleSubmit} className="mt-7 grid gap-3 lg:grid-cols-[minmax(0,1fr)_132px_120px]">
               <Input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="输入摘要关键词"
-                aria-label="摘要关键词"
+                placeholder="Enter an abstract keyword"
+                aria-label="Abstract keyword"
               />
               <Input
                 type="number"
@@ -232,11 +232,11 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
                 max={100}
                 value={topK}
                 onChange={(event) => setTopK(Number(event.target.value))}
-                aria-label="返回数量"
+                aria-label="Result limit"
               />
               <Button type="submit" disabled={!canSearch}>
                 {searchState.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
-                检索
+                Search
               </Button>
             </form>
           </div>
@@ -252,7 +252,7 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
             <div className="rounded-[24px] border border-white/80 bg-slate-950 p-5 text-slate-50 shadow-sm">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                 <Clock3 className="h-4 w-4 text-teal-300" />
-                Runtime
+                Search Time
               </div>
               <div className="font-heading mt-3 text-3xl font-semibold tracking-tight">{timingBadge}</div>
             </div>
@@ -266,7 +266,7 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
         ) : searchState.isLoading ? (
           <div className="flex min-h-[220px] items-center justify-center gap-3 text-sm font-medium text-slate-600">
             <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
-            正在检索
+            Searching
           </div>
         ) : searchState.data ? (
           searchState.data.results.length > 0 ? (
@@ -282,12 +282,12 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
             </div>
           ) : (
             <div className="flex min-h-[220px] items-center justify-center text-center text-sm text-mutedForeground">
-              未找到摘要包含“{searchState.data.query}”的记录。
+              No records found with abstracts containing "{searchState.data.query}".
             </div>
           )
         ) : (
           <div className="flex min-h-[220px] items-center justify-center text-center text-sm text-mutedForeground">
-            输入关键词后显示摘要命中记录。
+            Enter a keyword to show matching abstract records.
           </div>
         )}
       </section>

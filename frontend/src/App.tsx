@@ -97,8 +97,8 @@ function HomePage({
 }) {
   const moduleRows = [
     { name: "Polymer Property Explorer", status: "Ready" },
-    { name: "数据库分析", status: "Ready" },
-    { name: "知识库本地检索", status: "Ready" }
+    { name: "Database Analytics", status: "Ready" },
+    { name: "Local Knowledge Search", status: "Ready" }
   ];
 
   return (
@@ -115,10 +115,10 @@ function HomePage({
 
             <div className="mt-7 max-w-4xl">
               <h1 className="font-heading text-[2.65rem] font-semibold leading-[0.98] tracking-[-0.03em] text-slate-950 md:text-[4.4rem]">
-                PolyProp 工作台
+                PolyProp Workspace
               </h1>
               <p className="mt-5 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
-                首页集中管理三个模块：聚合物性质探索、数据库分析、知识库本地检索。
+                A unified entry point for polymer property exploration, database analytics, and local knowledge search.
               </p>
             </div>
 
@@ -128,7 +128,7 @@ function HomePage({
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Module Index</div>
-                <div className="font-heading mt-2 text-xl font-semibold tracking-tight">当前模块结构</div>
+                <div className="font-heading mt-2 text-xl font-semibold tracking-tight">Workspace Structure</div>
               </div>
               <Database className="h-5 w-5 text-teal-300" />
             </div>
@@ -157,29 +157,29 @@ function HomePage({
       <section className="grid gap-4 lg:grid-cols-3">
         <ModuleTile
           icon={<Atom className="h-5 w-5" />}
-          eyebrow="可用模块"
+          eyebrow="Available"
           title="Polymer Property Explorer"
-          description="结构编辑、相似匹配、3D 预览与性质预测集中在一个工作区。"
+          description="Edit structures, run similarity matching, preview 3D geometry, and request property predictions in one workspace."
           status="Ready"
-          actionLabel="进入模块"
+          actionLabel="Enter"
           onClick={onOpenExplorer}
         />
         <ModuleTile
           icon={<BarChart3 className="h-5 w-5" />}
-          eyebrow="可用模块"
-          title="数据库分析"
-          description="进入五类数据模块入口，查看构象、占比、分布和词云分析。"
+          eyebrow="Available"
+          title="Database Analytics"
+          description="Explore five curated data views covering conformations, shares, distributions, and text-derived summaries."
           status="Ready"
-          actionLabel="进入模块"
+          actionLabel="Enter"
           onClick={onOpenDatabase}
         />
         <ModuleTile
           icon={<BookOpen className="h-5 w-5" />}
-          eyebrow="可用模块"
-          title="知识库本地检索"
-          description="检索本地专利知识记录，按英文摘要关键词筛选并查看配方相关信息。"
+          eyebrow="Available"
+          title="Local Knowledge Search"
+          description="Search local patent knowledge records by abstract keywords and inspect formulation-related details."
           status="Ready"
-          actionLabel="进入模块"
+          actionLabel="Enter"
           onClick={onOpenKnowledge}
         />
       </section>
@@ -207,8 +207,8 @@ export default function App() {
     panelMode === "predict"
       ? "Property prediction"
       : request.match_mode === "property"
-        ? "性质相似匹配"
-        : "结构相似匹配";
+        ? "Property similarity"
+        : "Structural similarity";
   const activeModeLabel =
     panelMode === "predict"
       ? "Property Prediction"
@@ -238,11 +238,11 @@ export default function App() {
     }
   }
 
-  const resultPanelTitle = activeResultsTab === "predict" ? "预测结果面板" : "相似匹配结果面板";
+  const resultPanelTitle = activeResultsTab === "predict" ? "Prediction Results" : "Similarity Matching Results";
   const resultPanelDescription =
     activeResultsTab === "predict"
-      ? "模型推理完成后，这里会显示所选性质的预测结果与耗时。"
-      : "运行相似匹配后，这里会显示摘要、2D 结构图、SMILES 和相似度。";
+      ? "After prediction finishes, selected property values and calculation time appear here."
+      : "After similarity matching runs, summaries, 2D structures, SMILES, and similarity scores appear here.";
   const resultPrimaryBadge =
     activeResultsTab === "predict"
       ? predict.data
@@ -257,8 +257,8 @@ export default function App() {
         ? "Predicting"
         : "Prediction mode"
       : request.match_mode === "property"
-        ? "性质相似匹配"
-        : "结构相似匹配";
+        ? "Property similarity"
+        : "Structural similarity";
 
   function openExplorer() {
     setHasOpenedExplorer(true);
@@ -291,10 +291,10 @@ export default function App() {
             <div className="flex items-center gap-3">
               <Button type="button" variant="outline" onClick={() => setActiveModule("home")}>
                 <ArrowLeft className="mr-2 h-4 w-4" />
-                首页
+                Home
               </Button>
               <div>
-                <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">当前模块</div>
+                <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">Current Module</div>
                 <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">
                   Polymer Property Explorer
                 </div>
@@ -336,7 +336,7 @@ export default function App() {
                   </div>
                   <div className="mt-2 text-sm leading-6 text-mutedForeground">
                     {panelMode === "predict"
-                      ? "Select target properties in the control card and send the current structure to the prediction models."
+                      ? "Select target properties in the control card and run prediction for the current structure."
                       : "Switch between structural similarity and property similarity matching in the control card."}
                   </div>
                 </div>
@@ -350,7 +350,7 @@ export default function App() {
                     {smiles.trim().length > 0 ? "Ready" : "Waiting"}
                   </div>
                   <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                    Editor content syncs into the SMILES fallback input as the source structure for matching or prediction.
+                    The structure editor keeps the SMILES input updated for matching or prediction.
                   </div>
                 </div>
 

@@ -150,7 +150,7 @@ export function KetcherEditor({
               ) : (
                 <Eraser className="mr-2 h-4 w-4" />
               )}
-              清空画板
+              Clear Canvas
             </Button>
             <Button
               type="button"
@@ -164,7 +164,7 @@ export function KetcherEditor({
               ) : (
                 <RefreshCcw className="mr-2 h-4 w-4" />
               )}
-              Pull SMILES From Ketcher
+              Sync from Editor
             </Button>
           </div>
         </div>
@@ -185,7 +185,7 @@ export function KetcherEditor({
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
               <Sigma className="h-4 w-4 text-teal-600" />
-              SMILES fallback
+              SMILES Input
             </div>
             <Button
               type="button"
@@ -201,7 +201,7 @@ export function KetcherEditor({
           <Textarea
             value={smiles}
             onChange={(event) => onChange(event.target.value)}
-            placeholder="例如: *CC*、CCO 或其他用于相似匹配的 SMILES"
+            placeholder="For example: *CC*, CCO, or another SMILES for similarity matching"
             className="min-h-[128px] rounded-[18px] border-slate-200 bg-white px-4 py-3"
           />
         </div>

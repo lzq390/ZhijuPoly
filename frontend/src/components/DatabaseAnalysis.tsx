@@ -192,9 +192,9 @@ const structureEffectData = {
     { label: "GPa", value: 102, color: "#e11d48" }
   ],
   sources: [
-    { label: "exp", value: 1669, color: "#0f766e" },
-    { label: "sim", value: 309, color: "#2563eb" },
-    { label: "N/A", value: 136, color: "#64748b" }
+    { label: "experimental", value: 1669, color: "#0f766e" },
+    { label: "simulated", value: 309, color: "#2563eb" },
+    { label: "not labeled", value: 136, color: "#64748b" }
   ],
   sourceMatrix: [
     { label: "Tg", exp: 336, sim: 37, na: 67 },
@@ -493,7 +493,7 @@ const datasets = [
     order: "03",
     title: "Polymer Structure-Property Data",
     englishTitle: "Structure-Property",
-    description: "Links polymer structures with key properties, source types, units, and value ranges.",
+    description: "Links polymer structures with key properties, measurement origins, units, and value ranges.",
     status: "Ready",
     recordCount: structureEffectData.rows,
     icon: <Network className="h-5 w-5" />
@@ -503,7 +503,7 @@ const datasets = [
     order: "04",
     title: "DFT Conformation Data",
     englishTitle: "DFT Conformation",
-    description: "Visualizes PCA distribution, 3D conformations, energy traces, atoms, and orbital levels.",
+    description: "Browse optimized molecular conformations, energy-change curves, atom composition, and orbital levels.",
     status: "Ready",
     recordCount: dftData.rows,
     icon: <Orbit className="h-5 w-5" />
@@ -1063,9 +1063,9 @@ function RangePlot({ data }: { data: RangeItem[] }) {
 function SourceMatrix() {
   const max = Math.max(...structureEffectData.sourceMatrix.flatMap((item) => [item.exp, item.sim, item.na]));
   const columns = [
-    { key: "exp" as const, label: "exp" },
-    { key: "sim" as const, label: "sim" },
-    { key: "na" as const, label: "N/A" }
+    { key: "exp" as const, label: "experimental" },
+    { key: "sim" as const, label: "simulated" },
+    { key: "na" as const, label: "not labeled" }
   ];
 
   return (
@@ -1106,14 +1106,14 @@ function SourceMatrix() {
 function SourceMatrixWithSummary() {
   const total = structureEffectData.sources.reduce((sum, item) => sum + item.value, 0);
   const topSource = structureEffectData.sources.reduce((current, item) => (item.value > current.value ? item : current), structureEffectData.sources[0]);
-  const simulated = structureEffectData.sources.find((item) => item.label === "sim");
+  const simulated = structureEffectData.sources.find((item) => item.label === "simulated");
 
   return (
     <div className="flex flex-col gap-4">
       <SourceMatrix />
       <div className="grid gap-3 sm:grid-cols-3">
-        <MetricPill label="source records" value={formatCount(total)} />
-        <MetricPill label="top source" value={topSource.label} />
+        <MetricPill label="classified records" value={formatCount(total)} />
+        <MetricPill label="main origin" value={topSource.label} />
         <MetricPill label="simulated share" value={formatPercent(((simulated?.value ?? 0) / total) * 100)} />
       </div>
     </div>
@@ -1197,7 +1197,7 @@ function EnergyTrace({ molecule, detailError }: { molecule: DftMoleculeDetail | 
   if (!molecule || values.length === 0) {
     return (
       <div className="flex h-full min-h-[360px] items-center justify-center rounded-[28px] border border-white/80 bg-[linear-gradient(180deg,#fbfdff_0%,#f2f7f9_100%)] p-6 text-center text-sm font-medium text-slate-600">
-        Select a trajectory group from the PCA distribution to view the optimization energy trace.
+        Select a molecule from the map to view its optimization energy trace.
       </div>
     );
   }
@@ -1382,7 +1382,7 @@ function DftMolecule3D({ molecule, detailError }: { molecule: DftMoleculeDetail 
   if (!molecule) {
     return (
       <div className="flex h-full min-h-[360px] items-center justify-center rounded-[28px] border border-white/80 bg-[radial-gradient(circle_at_30%_15%,rgba(56,189,248,0.22),transparent_30%),radial-gradient(circle_at_76%_24%,rgba(245,158,11,0.16),transparent_26%),linear-gradient(180deg,#fbfdff_0%,#edf5f8_100%)] p-6 text-center text-sm font-medium text-slate-600">
-        Select a trajectory group from the PCA distribution to view the final-state 3D conformation.
+        Select a molecule from the map to view its final 3D conformation.
       </div>
     );
   }
@@ -1623,7 +1623,7 @@ function PcaDistribution3D({
         {isLoading ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/45">
             <div className="rounded-full border border-white/80 bg-white/95 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
-              Loading PCA distribution
+              Loading molecule map
             </div>
           </div>
         ) : null}
@@ -1637,7 +1637,7 @@ function PcaDistribution3D({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-4">
-        <MetricPill label="selected mol" value={selectedPoint?.mol_id ?? "-"} />
+        <MetricPill label="selected molecule" value={selectedPoint?.mol_id ?? "-"} />
         <MetricPill label="atoms" value={selectedPoint ? String(selectedPoint.n_atoms) : "-"} />
         <MetricPill label="gap eV" value={selectedPoint?.gap_ev === null || !selectedPoint ? "-" : formatNumber(selectedPoint.gap_ev, 3)} />
         <MetricPill label="final step" value={selectedPoint ? String(selectedPoint.final_step) : "-"} />
@@ -1721,7 +1721,7 @@ function DatabaseHome({ onBackHome, onOpenDataset }: { onBackHome: () => void; o
             Home
           </Button>
           <div>
-            <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">Current Module</div>
+            <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">Current View</div>
             <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">Database Analytics</div>
           </div>
         </div>
@@ -1737,14 +1737,14 @@ function DatabaseHome({ onBackHome, onOpenDataset }: { onBackHome: () => void; o
               Polymer Data Platform
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-slate-300">
-              Explore five curated data modules through analysis-focused chart views without exposing raw tables.
+              Explore five curated polymer data views through focused charts and summaries.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <MetricPill label="Ready" value={`${readyDatasets.length} modules`} />
-            <MetricPill label="Reserved" value={`${reservedDatasets.length} modules`} />
-            <MetricPill label="Records" value={formatCount(totalRecords)} />
-            <MetricPill label="Raw tables" value="Hidden" />
+            <MetricPill label="Available views" value={String(readyDatasets.length)} />
+            <MetricPill label="Upcoming views" value={String(reservedDatasets.length)} />
+            <MetricPill label="Total records" value={formatCount(totalRecords)} />
+            <MetricPill label="Chart views" value={String(datasets.length)} />
           </div>
         </div>
       </section>
@@ -1764,8 +1764,8 @@ function DatasetHero({
   onBackDatabase,
   children,
   hideDescription = false,
-  backDatabaseLabel = "数据库分析",
-  homeLabel = "首页",
+  backDatabaseLabel = "Database Analysis",
+  homeLabel = "Home",
   recordLabel = "Records",
   viewLabel = "View",
   viewValue = "Charts"
@@ -1935,13 +1935,13 @@ function StructureEffectPage(props: { onBackHome: () => void; onBackDatabase: ()
     ...datasets[2],
     title: "Polymer Structure-Property Data",
     description:
-      "Links polymer structures with key properties, source types, units, and value ranges to support structure-property comparison."
+      "Links polymer structures with key properties, measurement origins, units, and value ranges to support structure-property comparison."
   };
   return (
     <DatasetHero dataset={dataset} backDatabaseLabel="Database Analysis" homeLabel="Home" {...props}>
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1.02fr)_minmax(0,0.98fr)] xl:items-start">
         <div className="grid gap-5">
-          <ChartPanel icon={<Network className="h-4 w-4" />} title="Property-Source Matrix">
+          <ChartPanel icon={<Network className="h-4 w-4" />} title="Property Origin Matrix">
             <SourceMatrixWithSummary />
           </ChartPanel>
           <ChartPanel icon={<PieChart className="h-4 w-4" />} title="Unit Distribution">
@@ -1949,7 +1949,7 @@ function StructureEffectPage(props: { onBackHome: () => void; onBackDatabase: ()
           </ChartPanel>
         </div>
         <div className="grid gap-5">
-          <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="Nine Property Sample Counts">
+          <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="Property Record Counts">
             <RankedBarsWithSummary data={structureEffectData.properties} limit={9} />
           </ChartPanel>
           <ChartPanel icon={<Sigma className="h-4 w-4" />} title="Structure-Property Value Ranges">
@@ -1967,7 +1967,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
     title: "DFT Conformation Data",
     englishTitle: "DFT Conformation",
     description:
-      "Visualizes final-state PCA distribution, interactive 3D conformations, optimization energy traces, atom composition, and HOMO/LUMO energy distributions.",
+      "Browse optimized molecular conformations, inspect the selected final 3D structure, compare energy changes during optimization, and review atom and HOMO/LUMO summaries.",
     status: "Ready"
   };
   const [pcaPoints, setPcaPoints] = useState<DftPcaPoint[]>([]);
@@ -1990,7 +1990,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
         setSelectedMolId(response.results[0]?.mol_id ?? null);
       } catch (nextError) {
         if (!cancelled) {
-          setPcaError(nextError instanceof Error ? nextError.message : "Failed to load PCA distribution");
+          setPcaError(nextError instanceof Error ? nextError.message : "Failed to load molecule map");
         }
       } finally {
         if (!cancelled) {
@@ -2053,7 +2053,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
           className="flex h-full min-w-0 flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Network className="h-4 w-4" />}
-          title="Final-State PCA 3D Distribution"
+          title="Final-State Molecule Map"
         >
           <PcaDistribution3D
             points={pcaPoints}
@@ -2106,15 +2106,15 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
         >
           <div className="flex h-full flex-1 flex-col justify-between gap-4">
             <div className="grid gap-3 sm:grid-cols-2">
-              <MetricPill label="trajectory groups" value={formatCount(dftData.molCount)} />
+              <MetricPill label="conformation groups" value={formatCount(dftData.molCount)} />
               <MetricPill label="optimization steps" value={formatCount(dftData.rows)} />
               <MetricPill label="median steps" value={String(dftData.stepRange.median)} />
-              <MetricPill label="longest trajectory" value={`${dftData.stepRange.max} steps`} />
+              <MetricPill label="longest path" value={`${dftData.stepRange.max} steps`} />
               <MetricPill label="median atoms" value={String(dftData.atomRange.median)} />
               <MetricPill label="median gap eV" value={formatNumber(dftData.gapRange.median, 3)} />
             </div>
             <div className="rounded-2xl border border-white/80 bg-white/75 px-4 py-3 text-sm leading-6 text-slate-600 shadow-sm">
-              Each trajectory group represents the optimization process for one molecular conformation; total records count all optimization steps, and step metrics describe trajectory length.
+              Each conformation group represents one optimization path. The record count covers all optimization steps, and the step metrics help compare path length and final geometry size.
             </div>
           </div>
         </ChartPanel>
@@ -2136,7 +2136,7 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
       <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
         <ChartPanel icon={<Database className="h-4 w-4" />} title="Field Coverage">
           <div className="grid gap-4 sm:grid-cols-2">
-            <MetricPill label="source files" value={formatCount(formulationData.files)} />
+            <MetricPill label="document groups" value={formatCount(formulationData.files)} />
             <MetricPill label="records" value={formatCount(formulationData.rows)} />
             <MetricPill label="avg components" value="2.73" />
             <MetricPill label="median components" value="2" />
