@@ -106,6 +106,52 @@ export type KnowledgeSearchResponse = {
   results: KnowledgeDocumentResult[];
 };
 
+export type DftPcaPoint = {
+  mol_id: string;
+  x: number;
+  y: number;
+  z: number;
+  n_atoms: number;
+  final_step: number;
+  homo_ev: number | null;
+  lumo_ev: number | null;
+  gap_ev: number | null;
+  dipole_moment: number | null;
+};
+
+export type DftPcaSampleResponse = {
+  query_time_ms: number;
+  total: number;
+  results: DftPcaPoint[];
+};
+
+export type DftEnergyPoint = {
+  step: number;
+  scf_energy: number | null;
+  homo_ev: number | null;
+  lumo_ev: number | null;
+  gap_ev: number | null;
+};
+
+export type DftMoleculeDetail = {
+  mol_id: string;
+  range_group: string;
+  final_step: number;
+  n_atoms: number;
+  coordinates: [number, number, number, number][];
+  scf_energy: number | null;
+  zero_point_energy: number | null;
+  thermal_enthalpy: number | null;
+  gibbs_free_energy: number | null;
+  lowest_freq: number | null;
+  dipole_moment: number | null;
+  homo_ev: number | null;
+  lumo_ev: number | null;
+  gap_ev: number | null;
+  is_converged: string | null;
+  trace: DftEnergyPoint[];
+};
+
 export const PREDICTABLE_PROPERTIES: readonly PredictableProperty[] = [
   "Glass transition temperature",
   "Melting temperature",

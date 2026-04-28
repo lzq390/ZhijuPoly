@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from starlette.requests import Request
 
 from app.database import rebuild_knowledge_schema, sqlite_connection
-from app.import_knowledge import import_knowledge_zip_to_sqlite
+from app.import_knowledge import import_knowledge_directory_to_sqlite, import_knowledge_zip_to_sqlite
 from app.models import KnowledgeSearchRequest
 from app.routers.knowledge import search_knowledge
 from app.services.knowledge_search import search_knowledge_documents
@@ -186,6 +186,47 @@ def test_import_knowledge_uses_excel_row_numbers_with_blank_rows(tmp_path: Path)
         ).fetchall()
 
     assert [row["source_row_number"] for row in source_rows] == [2, 4]
+
+
+def test_import_knowledge_directory_incrementally_adds_new_workbooks(tmp_path: Path) -> None:
+    zip_path = tmp_path / "knowledge.zip"
+    db_path = tmp_path / "knowledge.db"
+    directory_path = tmp_path / "xlsx"
+    directory_path.mkdir()
+    write_knowledge_zip(zip_path)
+    import_knowledge_zip_to_sqlite(zip_path=zip_path, db_path=db_path)
+
+    rows = [
+        [
+            "序号",
+            "标题（中文）",
+            "标题（英文）",
+            "摘要（英文）",
+        ],
+        [
+            "3",
+            "聚酰亚胺薄膜",
+            "Polyimide film",
+            "A polyimide film is prepared from dianhydride and diamine monomers.",
+        ],
+    ]
+    (directory_path / "P2_提取结果.xlsx").write_bytes(make_xlsx(rows))
+
+    stats = import_knowledge_directory_to_sqlite(
+        directory_path=directory_path,
+        db_path=db_path,
+        rebuild=False,
+    )
+
+    assert stats.file_count == 1
+    assert stats.document_count == 1
+    assert stats.skipped_row_count == 0
+
+    with sqlite_connection(db_path) as connection:
+        total, rows = search_knowledge_documents(connection, "polyimide", top_k=10)
+
+    assert total == 1
+    assert rows[0]["source_file"] == "P2_提取结果.xlsx"
 
 
 @pytest.mark.asyncio

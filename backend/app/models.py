@@ -162,3 +162,57 @@ class KnowledgeSearchResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     total: int = Field(ge=0)
     results: list[KnowledgeDocumentResult] = Field(default_factory=list)
+
+
+class DftPcaPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    mol_id: str
+    x: float
+    y: float
+    z: float
+    n_atoms: int
+    final_step: int
+    homo_ev: float | None = None
+    lumo_ev: float | None = None
+    gap_ev: float | None = None
+    dipole_moment: float | None = None
+
+
+class DftPcaSampleResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query_time_ms: float = Field(ge=0.0)
+    total: int = Field(ge=0)
+    results: list[DftPcaPoint] = Field(default_factory=list)
+
+
+class DftEnergyPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step: int
+    scf_energy: float | None = None
+    homo_ev: float | None = None
+    lumo_ev: float | None = None
+    gap_ev: float | None = None
+
+
+class DftMoleculeDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    mol_id: str
+    range_group: str
+    final_step: int
+    n_atoms: int
+    coordinates: list[tuple[int, float, float, float]]
+    scf_energy: float | None = None
+    zero_point_energy: float | None = None
+    thermal_enthalpy: float | None = None
+    gibbs_free_energy: float | None = None
+    lowest_freq: float | None = None
+    dipole_moment: float | None = None
+    homo_ev: float | None = None
+    lumo_ev: float | None = None
+    gap_ev: float | None = None
+    is_converged: str | None = None
+    trace: list[DftEnergyPoint] = Field(default_factory=list)

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import get_settings
-from app.database import rebuild_knowledge_schema, sqlite_connection
+from app.database import ensure_knowledge_schema, rebuild_knowledge_schema, sqlite_connection
 from app.services.xlsx_reader import CellValue, iter_xlsx_rows_with_numbers
 
 
@@ -48,6 +49,8 @@ INSERT INTO knowledge_documents (
     solvent
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
+
+INSERT_OR_IGNORE_SQL = INSERT_SQL.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
 
 
 @dataclass(slots=True)
@@ -126,13 +129,90 @@ def _iter_workbook_documents(source_file: str, workbook_bytes: bytes) -> tuple[l
     return documents, skipped_count
 
 
-def import_knowledge_zip_to_sqlite(zip_path: str | Path, db_path: str | Path) -> KnowledgeImportStats:
+def _insert_documents(
+    connection,
+    documents: list[tuple[str | int | None, ...]],
+    *,
+    ignore_duplicates: bool,
+) -> int:
+    if not documents:
+        return 0
+
+    before_count = connection.total_changes
+    connection.executemany(INSERT_OR_IGNORE_SQL if ignore_duplicates else INSERT_SQL, documents)
+    return connection.total_changes - before_count
+
+
+def _xlsx_paths_from_directory(directory_path: str | Path) -> list[Path]:
+    directory = Path(directory_path)
+    return sorted(
+        path
+        for path in directory.iterdir()
+        if path.is_file() and path.suffix.lower() == ".xlsx" and not path.name.startswith("~$")
+    )
+
+
+def import_knowledge_xlsx_files_to_sqlite(
+    xlsx_paths: Iterable[str | Path],
+    db_path: str | Path,
+    *,
+    rebuild: bool = False,
+) -> KnowledgeImportStats:
     document_count = 0
     skipped_row_count = 0
     file_count = 0
 
     with sqlite_connection(db_path) as connection:
-        rebuild_knowledge_schema(connection)
+        if rebuild:
+            rebuild_knowledge_schema(connection)
+        else:
+            ensure_knowledge_schema(connection)
+
+        for path_value in sorted(Path(path) for path in xlsx_paths):
+            file_count += 1
+            documents, skipped_count = _iter_workbook_documents(path_value.name, path_value.read_bytes())
+            skipped_row_count += skipped_count
+            document_count += _insert_documents(
+                connection,
+                documents,
+                ignore_duplicates=not rebuild,
+            )
+
+    return KnowledgeImportStats(
+        file_count=file_count,
+        document_count=document_count,
+        skipped_row_count=skipped_row_count,
+    )
+
+
+def import_knowledge_directory_to_sqlite(
+    directory_path: str | Path,
+    db_path: str | Path,
+    *,
+    rebuild: bool = False,
+) -> KnowledgeImportStats:
+    return import_knowledge_xlsx_files_to_sqlite(
+        _xlsx_paths_from_directory(directory_path),
+        db_path,
+        rebuild=rebuild,
+    )
+
+
+def import_knowledge_zip_to_sqlite(
+    zip_path: str | Path,
+    db_path: str | Path,
+    *,
+    rebuild: bool = True,
+) -> KnowledgeImportStats:
+    document_count = 0
+    skipped_row_count = 0
+    file_count = 0
+
+    with sqlite_connection(db_path) as connection:
+        if rebuild:
+            rebuild_knowledge_schema(connection)
+        else:
+            ensure_knowledge_schema(connection)
 
         with zipfile.ZipFile(zip_path) as archive:
             xlsx_names = sorted(
@@ -146,8 +226,11 @@ def import_knowledge_zip_to_sqlite(zip_path: str | Path, db_path: str | Path) ->
                 skipped_row_count += skipped_count
                 if not documents:
                     continue
-                connection.executemany(INSERT_SQL, documents)
-                document_count += len(documents)
+                document_count += _insert_documents(
+                    connection,
+                    documents,
+                    ignore_duplicates=not rebuild,
+                )
 
     return KnowledgeImportStats(
         file_count=file_count,
@@ -159,11 +242,26 @@ def import_knowledge_zip_to_sqlite(zip_path: str | Path, db_path: str | Path) ->
 def main() -> None:
     settings = get_settings()
     parser = argparse.ArgumentParser(description="Import local knowledge-base Excel files into SQLite.")
-    parser.add_argument("--zip-path", default=str(settings.knowledge_zip_file))
+    source_group = parser.add_mutually_exclusive_group()
+    source_group.add_argument("--zip-path", default=None)
+    source_group.add_argument("--xlsx-dir", default=None)
     parser.add_argument("--db-path", default=str(settings.sqlite_db_file))
+    parser.add_argument("--incremental", action="store_true", help="Append new workbook rows without rebuilding the table.")
     args = parser.parse_args()
 
-    stats = import_knowledge_zip_to_sqlite(zip_path=args.zip_path, db_path=args.db_path)
+    rebuild = not args.incremental
+    if args.xlsx_dir is not None:
+        stats = import_knowledge_directory_to_sqlite(
+            directory_path=args.xlsx_dir,
+            db_path=args.db_path,
+            rebuild=rebuild,
+        )
+    else:
+        stats = import_knowledge_zip_to_sqlite(
+            zip_path=args.zip_path or settings.knowledge_zip_file,
+            db_path=args.db_path,
+            rebuild=rebuild,
+        )
     print(
         f"Imported knowledge files={stats.file_count} documents={stats.document_count}"
         f" skipped_rows={stats.skipped_row_count}"

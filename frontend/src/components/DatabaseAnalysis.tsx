@@ -14,6 +14,8 @@ import {
   Sigma,
   TableProperties
 } from "lucide-react";
+import { fetchDftMolecule, fetchDftPcaSample } from "../services/api";
+import type { DftMoleculeDetail, DftPcaPoint } from "../types";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
@@ -29,6 +31,18 @@ type RangeItem = {
   max: number;
   p5?: number;
   p95?: number;
+};
+type HistogramBin = { start: number; end: number; value: number };
+type OrbitalDistribution = {
+  label: string;
+  color: string;
+  count: number;
+  min: number;
+  p5: number;
+  median: number;
+  p95: number;
+  max: number;
+  bins: HistogramBin[];
 };
 type AtomCoordinate = [number, number, number, number];
 
@@ -227,7 +241,6 @@ const dftCoordinates: AtomCoordinate[] = [
 const dftData = {
   rows: 1582959,
   molCount: 49301,
-  rangeGroupCount: 10,
   selectedMol: "987779_Conf02",
   selectedStep: 201,
   selectedAtoms: 35,
@@ -237,6 +250,56 @@ const dftData = {
   finalLowestFreq: 5.7387,
   energyRange: { min: -3945.714671, median: -1561.785924, max: -381.881933, count: 48540 },
   gapRange: { min: 97.190685, median: 108.959888, max: 119.045793, count: 49301 },
+  orbitalDistributions: [
+    {
+      label: "HOMO",
+      color: "#0f766e",
+      count: 49301,
+      min: -9.899235206,
+      p5: -8.286687642,
+      median: -7.320410828,
+      p95: -6.40420299,
+      max: -5.464321234,
+      bins: [
+        { start: -9.899235, end: -9.529659, value: 6 },
+        { start: -9.529659, end: -9.160083, value: 49 },
+        { start: -9.160083, end: -8.790507, value: 296 },
+        { start: -8.790507, end: -8.420931, value: 1150 },
+        { start: -8.420931, end: -8.051354, value: 3561 },
+        { start: -8.051354, end: -7.681778, value: 8211 },
+        { start: -7.681778, end: -7.312202, value: 11703 },
+        { start: -7.312202, end: -6.942626, value: 12535 },
+        { start: -6.942626, end: -6.57305, value: 6821 },
+        { start: -6.57305, end: -6.203474, value: 4072 },
+        { start: -6.203474, end: -5.833897, value: 855 },
+        { start: -5.833897, end: -5.464321, value: 42 }
+      ]
+    },
+    {
+      label: "LUMO",
+      color: "#2563eb",
+      count: 49301,
+      min: 89.973405644,
+      p5: 94.840436648,
+      median: 101.555121712,
+      p95: 107.438498506,
+      max: 110.977885304,
+      bins: [
+        { start: 89.973406, end: 91.723779, value: 91 },
+        { start: 91.723779, end: 93.474152, value: 554 },
+        { start: 93.474152, end: 95.224526, value: 2115 },
+        { start: 95.224526, end: 96.974899, value: 913 },
+        { start: 96.974899, end: 98.725272, value: 2293 },
+        { start: 98.725272, end: 100.475645, value: 6828 },
+        { start: 100.475645, end: 102.226019, value: 17399 },
+        { start: 102.226019, end: 103.976392, value: 10425 },
+        { start: 103.976392, end: 105.726765, value: 3442 },
+        { start: 105.726765, end: 107.477139, value: 2879 },
+        { start: 107.477139, end: 109.227512, value: 2235 },
+        { start: 109.227512, end: 110.977885, value: 127 }
+      ]
+    }
+  ] satisfies OrbitalDistribution[],
   stepRange: { min: 5, median: 26, p95: 76, max: 202 },
   atomRange: { min: 9, median: 52, p95: 77, max: 100 },
   atomTotals: [
@@ -256,13 +319,6 @@ const dftData = {
     { label: "34", value: 16748, color: "#2563eb" },
     { label: "24", value: 3718, color: "#f59e0b" },
     { label: "blank", value: 761, color: "#64748b" }
-  ],
-  moleculeFinals: [
-    { label: "987779_Conf02", steps: 202, atoms: 35, energy: -1279.63469116, gap: 114.247335 },
-    { label: "000146_Conf02", steps: 6, atoms: 28, energy: -690.282695, gap: 102.620176 },
-    { label: "000931_Conf03", steps: 19, atoms: 39, energy: -879.622368, gap: 101.464508 },
-    { label: "000472_Conf01", steps: 13, atoms: 35, energy: -1370.74867, gap: 108.985194 },
-    { label: "000219_Conf03", steps: 21, atoms: 35, energy: -1274.265602, gap: 100.866401 }
   ],
   trajectory: [
     { step: 1, energy: -1279.61882133 },
@@ -528,6 +584,32 @@ function HorizontalBars({ data, valueLabel = "count" }: { data: RankedItem[]; va
   );
 }
 
+function RankedBarsWithSummary({
+  data,
+  limit = 8,
+  valueLabel = "count"
+}: {
+  data: RankedItem[];
+  limit?: number;
+  valueLabel?: string;
+}) {
+  const visible = data.slice(0, limit);
+  const shownTotal = visible.reduce((sum, item) => sum + item.value, 0);
+  const topThreeTotal = visible.slice(0, 3).reduce((sum, item) => sum + item.value, 0);
+  const topItem = visible[0];
+
+  return (
+    <div className="flex h-full flex-1 flex-col justify-between gap-4">
+      <HorizontalBars data={visible} valueLabel={valueLabel} />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricPill label={`top ${visible.length} sum`} value={formatCount(shownTotal)} />
+        <MetricPill label="top item" value={topItem?.label ?? "-"} />
+        <MetricPill label="top 3 sum" value={formatCount(topThreeTotal)} />
+      </div>
+    </div>
+  );
+}
+
 function DonutChart({ data }: { data: DonutItem[] }) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
   let offset = 0;
@@ -569,6 +651,78 @@ function DonutChart({ data }: { data: DonutItem[] }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function DonutChartWithSummary({ data, topLabel = "top segment" }: { data: DonutItem[]; topLabel?: string }) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  const topItem = data.reduce((current, item) => (item.value > current.value ? item : current), data[0]);
+  const topThreeShare = data
+    .slice(0, 3)
+    .reduce((sum, item) => sum + item.value, 0) / total * 100;
+
+  return (
+    <div className="flex h-full flex-1 flex-col justify-between gap-4">
+      <DonutChart data={data} />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricPill label={topLabel} value={topItem.label} />
+        <MetricPill label="top count" value={formatCount(topItem.value)} />
+        <MetricPill label="top 3 share" value={formatPercent(topThreeShare)} />
+      </div>
+    </div>
+  );
+}
+
+function OrbitalDistributionChart({ data }: { data: OrbitalDistribution[] }) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      {data.map((series) => {
+        const peak = Math.max(...series.bins.map((bin) => bin.value));
+
+        return (
+          <div key={series.label} className="flex h-full flex-col gap-4 rounded-[24px] bg-[linear-gradient(180deg,#fbfdff_0%,#eef5f6_100%)] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="font-heading text-base font-semibold text-slate-950">{series.label} energy</h4>
+                <div className="font-mono-ui mt-1 text-xs text-slate-500">{formatCount(series.count)} final states</div>
+              </div>
+              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: series.color }} />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <MetricPill label="P5 eV" value={formatNumber(series.p5, 3)} />
+              <MetricPill label="Median eV" value={formatNumber(series.median, 3)} />
+              <MetricPill label="P95 eV" value={formatNumber(series.p95, 3)} />
+            </div>
+
+            <div className="space-y-2">
+              {series.bins.map((bin) => (
+                <div key={`${series.label}-${bin.start}`} className="grid grid-cols-[7.25rem_minmax(0,1fr)_4.25rem] items-center gap-3">
+                  <div className="font-mono-ui text-[11px] text-slate-500">
+                    {formatNumber(bin.start, 1)} to {formatNumber(bin.end, 1)}
+                  </div>
+                  <div className="h-3 overflow-hidden rounded-full bg-white/90">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${Math.max((bin.value / peak) * 100, 2)}%`,
+                        background: `linear-gradient(90deg, ${series.color} 0%, #38bdf8 100%)`
+                      }}
+                    />
+                  </div>
+                  <div className="font-mono-ui text-right text-xs text-slate-500">{formatCount(bin.value)}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <MetricPill label="Min eV" value={formatNumber(series.min, 3)} />
+              <MetricPill label="Max eV" value={formatNumber(series.max, 3)} />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -781,8 +935,31 @@ function SourceMatrix() {
   );
 }
 
-function EnergyTrace() {
-  const values = dftData.trajectory;
+function DftDetailError({ message }: { message: string }) {
+  return (
+    <div className="flex h-full min-h-[360px] items-center justify-center rounded-[28px] border border-white/80 bg-[linear-gradient(180deg,#fbfdff_0%,#f2f7f9_100%)] p-6 text-center text-sm font-medium leading-6 text-slate-600">
+      {message}
+    </div>
+  );
+}
+
+function EnergyTrace({ molecule, detailError }: { molecule: DftMoleculeDetail | null; detailError?: string | null }) {
+  const values = (molecule?.trace ?? [])
+    .filter((item) => item.scf_energy !== null)
+    .map((item) => ({ step: item.step, energy: item.scf_energy as number }));
+
+  if (detailError) {
+    return <DftDetailError message={detailError} />;
+  }
+
+  if (!molecule || values.length === 0) {
+    return (
+      <div className="flex h-full min-h-[360px] items-center justify-center rounded-[28px] border border-white/80 bg-[linear-gradient(180deg,#fbfdff_0%,#f2f7f9_100%)] p-6 text-center text-sm font-medium text-slate-600">
+        从 PCA 分布图中选择一个构象轨迹组后显示优化能量轨迹。
+      </div>
+    );
+  }
+
   const min = Math.min(...values.map((item) => item.energy));
   const max = Math.max(...values.map((item) => item.energy));
   const span = max - min || 1;
@@ -798,9 +975,9 @@ function EnergyTrace() {
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-white/80 bg-[linear-gradient(180deg,#fbfdff_0%,#f2f7f9_100%)] p-4">
       <div className="inline-flex w-fit shrink-0 rounded-full border border-white/80 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
-        {dftData.selectedMol} · {values.length} sampled energy points
+        {molecule.mol_id} · {values.length} energy points
       </div>
-      <div className="flex aspect-[13/9] min-h-[360px] flex-1 items-center">
+      <div className="flex min-h-[360px] flex-1 items-center">
         <svg viewBox="0 0 500 220" className="h-full w-full" preserveAspectRatio="xMidYMid meet">
         <line x1="24" y1="182" x2="476" y2="182" stroke="#cbd5e1" />
         <line x1="24" y1="42" x2="24" y2="182" stroke="#cbd5e1" />
@@ -826,7 +1003,7 @@ function EnergyTrace() {
       <div className="grid shrink-0 gap-3 sm:grid-cols-3">
         <MetricPill label="min energy" value={formatNumber(min, 6)} />
         <MetricPill label="max energy" value={formatNumber(max, 6)} />
-        <MetricPill label="final step" value={String(dftData.selectedStep)} />
+        <MetricPill label="final step" value={String(molecule.final_step)} />
       </div>
     </div>
   );
@@ -850,10 +1027,10 @@ function distance(a: AtomCoordinate, b: AtomCoordinate) {
   return Math.hypot(a[1] - b[1], a[2] - b[2], a[3] - b[3]);
 }
 
-function dftBonds() {
+function dftBonds(coordinates: AtomCoordinate[]) {
   const bonds: { from: number; to: number }[] = [];
-  dftData.coordinates.forEach((a, from) => {
-    dftData.coordinates.slice(from + 1).forEach((b, offset) => {
+  coordinates.forEach((a, from) => {
+    coordinates.slice(from + 1).forEach((b, offset) => {
       const to = from + offset + 1;
       const threshold = a[0] === 1 || b[0] === 1 ? 1.22 : 1.72;
       if (distance(a, b) <= threshold) {
@@ -864,7 +1041,7 @@ function dftBonds() {
   return bonds;
 }
 
-function toMolBlock(coordinates: AtomCoordinate[], bonds: { from: number; to: number }[]) {
+function toMolBlock(molId: string, coordinates: AtomCoordinate[], bonds: { from: number; to: number }[]) {
   const atomLines = coordinates.map((coord) => {
     const element = atomStyle(coord[0]).label;
     const x = coord[1].toFixed(4).padStart(10);
@@ -880,7 +1057,7 @@ function toMolBlock(coordinates: AtomCoordinate[], bonds: { from: number; to: nu
   const counts = `${String(coordinates.length).padStart(3)}${String(bonds.length).padStart(3)}  0  0  0  0            999 V2000`;
 
   return [
-    dftData.selectedMol,
+    molId,
     "  PolyProp DFT",
     "",
     counts,
@@ -890,18 +1067,24 @@ function toMolBlock(coordinates: AtomCoordinate[], bonds: { from: number; to: nu
   ].join("\n");
 }
 
-function DftMolecule3D() {
+function DftMolecule3D({ molecule, detailError }: { molecule: DftMoleculeDetail | null; detailError?: string | null }) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const molBlock = useMemo(() => {
-    return toMolBlock(dftData.coordinates, dftBonds());
-  }, []);
+    if (!molecule) return null;
+    return toMolBlock(molecule.mol_id, molecule.coordinates, dftBonds(molecule.coordinates));
+  }, [molecule]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function renderMolecule() {
+      if (!molBlock) {
+        setIsLoading(false);
+        return;
+      }
+
       setIsLoading(true);
       setError(null);
 
@@ -950,12 +1133,24 @@ function DftMolecule3D() {
     };
   }, [molBlock]);
 
+  if (detailError) {
+    return <DftDetailError message={detailError} />;
+  }
+
+  if (!molecule) {
+    return (
+      <div className="flex h-full min-h-[360px] items-center justify-center rounded-[28px] border border-white/80 bg-[radial-gradient(circle_at_30%_15%,rgba(56,189,248,0.22),transparent_30%),radial-gradient(circle_at_76%_24%,rgba(245,158,11,0.16),transparent_26%),linear-gradient(180deg,#fbfdff_0%,#edf5f8_100%)] p-6 text-center text-sm font-medium text-slate-600">
+        从 PCA 分布图中选择一个构象轨迹组后显示最终态 3D 构象。
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-white/80 bg-[radial-gradient(circle_at_30%_15%,rgba(56,189,248,0.22),transparent_30%),radial-gradient(circle_at_76%_24%,rgba(245,158,11,0.16),transparent_26%),linear-gradient(180deg,#fbfdff_0%,#edf5f8_100%)] p-4">
       <div className="inline-flex w-fit shrink-0 rounded-full border border-white/80 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
-        {dftData.selectedMol} · step {dftData.selectedStep}
+        {molecule.mol_id} · step {molecule.final_step}
       </div>
-      <div className="relative flex aspect-[13/9] min-h-[360px] flex-1 items-center overflow-hidden rounded-[24px]">
+      <div className="relative flex min-h-[360px] flex-1 items-center overflow-hidden rounded-[24px]">
         <div ref={viewerRef} className="absolute inset-0 cursor-grab active:cursor-grabbing" />
         {isLoading ? (
           <div className="absolute inset-0 flex items-center justify-center">
@@ -973,10 +1168,237 @@ function DftMolecule3D() {
         ) : null}
       </div>
       <div className="grid shrink-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricPill label="atoms" value={String(dftData.selectedAtoms)} />
-        <MetricPill label="energy" value={formatNumber(dftData.finalEnergy, 4)} />
-        <MetricPill label="gap eV" value={formatNumber(dftData.finalGap, 3)} />
-        <MetricPill label="dipole" value={formatNumber(dftData.finalDipole, 3)} />
+        <MetricPill label="atoms" value={String(molecule.n_atoms)} />
+        <MetricPill label="energy" value={molecule.scf_energy === null ? "-" : formatNumber(molecule.scf_energy, 4)} />
+        <MetricPill label="gap eV" value={molecule.gap_ev === null ? "-" : formatNumber(molecule.gap_ev, 3)} />
+        <MetricPill label="dipole" value={molecule.dipole_moment === null ? "-" : formatNumber(molecule.dipole_moment, 3)} />
+      </div>
+    </div>
+  );
+}
+
+function PcaDistribution3D({
+  points,
+  selectedMolId,
+  isLoading,
+  error,
+  onSelect
+}: {
+  points: DftPcaPoint[];
+  selectedMolId: string | null;
+  isLoading: boolean;
+  error: string | null;
+  onSelect: (molId: string) => void;
+}) {
+  const [rotation, setRotation] = useState({ yaw: -0.65, pitch: 0.42 });
+  const [zoom, setZoom] = useState(1.35);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    moved: boolean;
+  } | null>(null);
+  const projected = useMemo(() => {
+    if (points.length === 0) return [];
+
+    const center = {
+      x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+      y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+      z: points.reduce((sum, point) => sum + point.z, 0) / points.length
+    };
+    const sortedDeviations = points
+      .flatMap((point) => [
+        Math.abs(point.x - center.x),
+        Math.abs(point.y - center.y),
+        Math.abs(point.z - center.z)
+      ])
+      .sort((a, b) => a - b);
+    const robustIndex = Math.floor(sortedDeviations.length * 0.92);
+    const scaleBase = Math.max(sortedDeviations[robustIndex] ?? 1, 1);
+    const gapValues = points.map((point) => point.gap_ev ?? 0);
+    const gapMin = Math.min(...gapValues);
+    const gapMax = Math.max(...gapValues);
+    const gapSpan = gapMax - gapMin || 1;
+    const cosYaw = Math.cos(rotation.yaw);
+    const sinYaw = Math.sin(rotation.yaw);
+    const cosPitch = Math.cos(rotation.pitch);
+    const sinPitch = Math.sin(rotation.pitch);
+
+    return points
+      .map((point) => {
+        const nx = (point.x - center.x) / scaleBase;
+        const ny = (point.y - center.y) / scaleBase;
+        const nz = (point.z - center.z) / scaleBase;
+        const rx = nx * cosYaw + nz * sinYaw;
+        const rz = -nx * sinYaw + nz * cosYaw;
+        const ry = ny * cosPitch - rz * sinPitch;
+        const depth = ny * sinPitch + rz * cosPitch;
+        const perspective = 2.45 / (2.8 - depth);
+        const gapRatio = ((point.gap_ev ?? gapMin) - gapMin) / gapSpan;
+
+        return {
+          ...point,
+          sx: 320 + rx * 180 * zoom * perspective,
+          sy: 230 - ry * 180 * zoom * perspective,
+          depth,
+          radius: 4.2 + perspective * 1.9,
+          color: `rgb(${Math.round(15 + gapRatio * 37)}, ${Math.round(118 + gapRatio * 71)}, ${Math.round(110 + gapRatio * 128)})`
+        };
+      })
+      .sort((a, b) => a.depth - b.depth);
+  }, [points, rotation, zoom]);
+  const selectedPoint = points.find((point) => point.mol_id === selectedMolId) ?? null;
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    function handleWheel(event: WheelEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+      const direction = event.deltaY > 0 ? -0.08 : 0.08;
+      setZoom((current) => Math.max(0.8, Math.min(2.2, current + direction)));
+    }
+
+    svg.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      svg.removeEventListener("wheel", handleWheel);
+    };
+  }, []);
+
+  function svgPointFromClient(clientX: number, clientY: number) {
+    const svg = svgRef.current;
+    const matrix = svg?.getScreenCTM();
+    if (!svg || !matrix) return null;
+
+    const point = svg.createSVGPoint();
+    point.x = clientX;
+    point.y = clientY;
+    const transformed = point.matrixTransform(matrix.inverse());
+    return { x: transformed.x, y: transformed.y };
+  }
+
+  function selectNearestPoint(clientX: number, clientY: number) {
+    const clickPoint = svgPointFromClient(clientX, clientY);
+    if (!clickPoint || projected.length === 0) return;
+
+    let nearest = projected[0];
+    let nearestDistance = Infinity;
+    projected.forEach((point) => {
+      const distance = Math.hypot(point.sx - clickPoint.x, point.sy - clickPoint.y);
+      if (distance < nearestDistance) {
+        nearest = point;
+        nearestDistance = distance;
+      }
+    });
+
+    if (nearestDistance <= Math.max(34, nearest.radius + 14)) {
+      onSelect(nearest.mol_id);
+    }
+  }
+
+  return (
+    <div className="flex h-full flex-col gap-4 rounded-[28px] border border-white/80 bg-[linear-gradient(180deg,#fbfdff_0%,#edf5f8_100%)] p-4">
+      <div className="relative min-h-[430px] flex-1 overflow-hidden overscroll-contain rounded-[24px] bg-[radial-gradient(circle_at_50%_40%,rgba(45,212,191,0.18),transparent_38%),linear-gradient(180deg,#f8fafc_0%,#eef5f6_100%)]">
+        <svg
+          ref={svgRef}
+          viewBox="0 0 640 460"
+          className="h-full min-h-[430px] w-full cursor-grab touch-none active:cursor-grabbing"
+          onPointerDown={(event) => {
+            dragRef.current = {
+              startX: event.clientX,
+              startY: event.clientY,
+              lastX: event.clientX,
+              lastY: event.clientY,
+              moved: false
+            };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            if (!dragRef.current) return;
+            const dx = event.clientX - dragRef.current.lastX;
+            const dy = event.clientY - dragRef.current.lastY;
+            const totalDistance = Math.hypot(
+              event.clientX - dragRef.current.startX,
+              event.clientY - dragRef.current.startY,
+            );
+            if (totalDistance > 4) {
+              dragRef.current.moved = true;
+            }
+            dragRef.current.lastX = event.clientX;
+            dragRef.current.lastY = event.clientY;
+            if (!dragRef.current.moved) return;
+
+            setRotation((current) => ({
+              yaw: current.yaw + dx * 0.006,
+              pitch: Math.max(-1.15, Math.min(1.15, current.pitch + dy * 0.006))
+            }));
+          }}
+          onPointerUp={(event) => {
+            const drag = dragRef.current;
+            dragRef.current = null;
+            if (drag && !drag.moved) {
+              selectNearestPoint(event.clientX, event.clientY);
+            }
+          }}
+          onPointerCancel={() => {
+            dragRef.current = null;
+          }}
+        >
+          <circle cx="320" cy="230" r="214" fill="rgba(255,255,255,0.34)" />
+          <circle cx="320" cy="230" r="150" fill="none" stroke="rgba(203,213,225,0.45)" strokeWidth="1.4" />
+          <circle cx="320" cy="230" r="76" fill="none" stroke="rgba(203,213,225,0.34)" strokeWidth="1.2" />
+          {projected.map((point) => {
+            const selected = point.mol_id === selectedMolId;
+            return (
+              <circle
+                key={point.mol_id}
+                cx={point.sx}
+                cy={point.sy}
+                r={selected ? point.radius + 3 : point.radius}
+                fill={selected ? "#e11d48" : point.color}
+                fillOpacity={selected ? 0.98 : 0.68}
+                className="transition-[r,opacity] duration-150 hover:opacity-100"
+                stroke={selected ? "white" : "transparent"}
+                strokeWidth={selected ? 3 : 0}
+                role="button"
+                onPointerUp={(event) => {
+                  if (!dragRef.current?.moved) {
+                    event.stopPropagation();
+                    onSelect(point.mol_id);
+                    dragRef.current = null;
+                  }
+                }}
+              >
+                <title>{point.mol_id}</title>
+              </circle>
+            );
+          })}
+        </svg>
+
+        {isLoading ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/45">
+            <div className="rounded-full border border-white/80 bg-white/95 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
+              正在加载 PCA 分布
+            </div>
+          </div>
+        ) : null}
+        {error ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/65 p-6">
+            <div className="max-w-xl rounded-2xl border border-slate-200 bg-white px-5 py-4 text-center text-sm font-medium leading-6 text-slate-700 shadow-sm">
+              {error}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-4">
+        <MetricPill label="selected mol" value={selectedPoint?.mol_id ?? "-"} />
+        <MetricPill label="atoms" value={selectedPoint ? String(selectedPoint.n_atoms) : "-"} />
+        <MetricPill label="gap eV" value={selectedPoint?.gap_ev === null || !selectedPoint ? "-" : formatNumber(selectedPoint.gap_ev, 3)} />
+        <MetricPill label="final step" value={selectedPoint ? String(selectedPoint.final_step) : "-"} />
       </div>
     </div>
   );
@@ -1155,19 +1577,46 @@ function ProcessPage(props: { onBackHome: () => void; onBackDatabase: () => void
   const dataset = datasets[0];
   return (
     <DatasetHero dataset={dataset} {...props}>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
-        <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="工艺流程高频词">
-          <HorizontalBars data={processData.topTerms} />
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)] xl:items-stretch">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<BarChart3 className="h-4 w-4" />}
+          title="工艺流程高频词"
+        >
+          <RankedBarsWithSummary data={processData.topTerms} />
         </ChartPanel>
-        <ChartPanel icon={<Atom className="h-4 w-4" />} title="材料实体气泡图">
-          <BubbleCloud data={processData.topMaterials} />
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<Atom className="h-4 w-4" />}
+          title="材料实体气泡图"
+        >
+          <div className="flex h-full flex-1 flex-col justify-between gap-4">
+            <BubbleCloud data={processData.topMaterials} />
+            <div className="grid gap-3 sm:grid-cols-3">
+              <MetricPill label="entities" value={formatCount(processData.topMaterials.length)} />
+              <MetricPill label="top entity" value={processData.topMaterials[0].label} />
+              <MetricPill label="top count" value={formatCount(processData.topMaterials[0].value)} />
+            </div>
+          </div>
         </ChartPanel>
       </section>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <ChartPanel icon={<TableProperties className="h-4 w-4" />} title="产物名称排行">
-          <HorizontalBars data={processData.topProducts} />
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:items-stretch">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<TableProperties className="h-4 w-4" />}
+          title="产物名称排行"
+        >
+          <RankedBarsWithSummary data={processData.topProducts} />
         </ChartPanel>
-        <ChartPanel icon={<Layers3 className="h-4 w-4" />} title="文本覆盖摘要">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col justify-center"
+          icon={<Layers3 className="h-4 w-4" />}
+          title="文本覆盖摘要"
+        >
           <div className="grid gap-4 sm:grid-cols-2">
             <MetricPill label="unique polymer ids" value={formatCount(processData.uniqueRecordIds)} />
             <MetricPill label="unique polymers" value={formatCount(processData.uniquePolymers)} />
@@ -1184,20 +1633,40 @@ function PropertyPage(props: { onBackHome: () => void; onBackDatabase: () => voi
   const dataset = datasets[1];
   return (
     <DatasetHero dataset={dataset} {...props}>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
-        <ChartPanel icon={<PieChart className="h-4 w-4" />} title="性质类别占比">
-          <DonutChart data={propertyData.categories} />
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] xl:items-stretch">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<PieChart className="h-4 w-4" />}
+          title="性质类别占比"
+        >
+          <DonutChartWithSummary data={propertyData.categories} topLabel="top category" />
         </ChartPanel>
-        <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="高频性质名称">
-          <HorizontalBars data={propertyData.topProperties} />
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<BarChart3 className="h-4 w-4" />}
+          title="高频性质名称"
+        >
+          <RankedBarsWithSummary data={propertyData.topProperties} />
         </ChartPanel>
       </section>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-        <ChartPanel icon={<Sigma className="h-4 w-4" />} title="高频性质值域范围">
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] xl:items-stretch">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col justify-center"
+          icon={<Sigma className="h-4 w-4" />}
+          title="高频性质值域范围"
+        >
           <RangePlot data={propertyData.ranges} />
         </ChartPanel>
-        <ChartPanel icon={<Search className="h-4 w-4" />} title="类别代表性质">
-          <HorizontalBars data={propertyData.categoryTop} />
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<Search className="h-4 w-4" />}
+          title="类别代表性质"
+        >
+          <RankedBarsWithSummary data={propertyData.categoryTop} />
         </ChartPanel>
       </section>
     </DatasetHero>
@@ -1208,19 +1677,39 @@ function StructureEffectPage(props: { onBackHome: () => void; onBackDatabase: ()
   const dataset = datasets[2];
   return (
     <DatasetHero dataset={dataset} {...props}>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-        <ChartPanel icon={<Network className="h-4 w-4" />} title="性质-来源矩阵">
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] xl:items-stretch">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col justify-center"
+          icon={<Network className="h-4 w-4" />}
+          title="性质-来源矩阵"
+        >
           <SourceMatrix />
         </ChartPanel>
-        <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="九类性质样本量">
-          <HorizontalBars data={structureEffectData.properties} />
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<BarChart3 className="h-4 w-4" />}
+          title="九类性质样本量"
+        >
+          <RankedBarsWithSummary data={structureEffectData.properties} />
         </ChartPanel>
       </section>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <ChartPanel icon={<PieChart className="h-4 w-4" />} title="单位分布">
-          <DonutChart data={structureEffectData.units} />
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:items-stretch">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<PieChart className="h-4 w-4" />}
+          title="单位分布"
+        >
+          <DonutChartWithSummary data={structureEffectData.units} topLabel="top unit" />
         </ChartPanel>
-        <ChartPanel icon={<Sigma className="h-4 w-4" />} title="构效性质值域">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col justify-center"
+          icon={<Sigma className="h-4 w-4" />}
+          title="构效性质值域"
+        >
           <RangePlot data={structureEffectData.ranges} />
         </ChartPanel>
       </section>
@@ -1230,56 +1719,153 @@ function StructureEffectPage(props: { onBackHome: () => void; onBackDatabase: ()
 
 function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
   const dataset = datasets[3];
+  const [pcaPoints, setPcaPoints] = useState<DftPcaPoint[]>([]);
+  const [pcaLoading, setPcaLoading] = useState(true);
+  const [pcaError, setPcaError] = useState<string | null>(null);
+  const [selectedMolId, setSelectedMolId] = useState<string | null>(null);
+  const [selectedMolecule, setSelectedMolecule] = useState<DftMoleculeDetail | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPcaSample() {
+      setPcaLoading(true);
+      setPcaError(null);
+      try {
+        const response = await fetchDftPcaSample(200);
+        if (cancelled) return;
+        setPcaPoints(response.results);
+        setSelectedMolId(response.results[0]?.mol_id ?? null);
+      } catch (nextError) {
+        if (!cancelled) {
+          setPcaError(nextError instanceof Error ? nextError.message : "PCA 分布加载失败");
+        }
+      } finally {
+        if (!cancelled) {
+          setPcaLoading(false);
+        }
+      }
+    }
+
+    void loadPcaSample();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedMolId) {
+      setSelectedMolecule(null);
+      return;
+    }
+
+    let cancelled = false;
+    const molId = selectedMolId;
+
+    async function loadMolecule() {
+      setDetailError(null);
+      setSelectedMolecule(null);
+      try {
+        const molecule = await fetchDftMolecule(molId);
+        if (!cancelled) {
+          setSelectedMolecule(molecule);
+        }
+      } catch (nextError) {
+        if (!cancelled) {
+          setSelectedMolecule(null);
+          setDetailError(nextError instanceof Error ? nextError.message : "构象轨迹加载失败");
+        }
+      }
+    }
+
+    void loadMolecule();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMolId]);
+
   return (
     <DatasetHero dataset={dataset} {...props}>
-      <section className="grid gap-5 xl:grid-cols-2 xl:items-stretch">
+      <section className="grid gap-5 xl:grid-cols-3 xl:items-stretch">
         <ChartPanel
-          className="flex h-full flex-col"
+          className="flex h-full min-w-0 flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<Network className="h-4 w-4" />}
+          title="最终态 PCA 3D 分布"
+        >
+          <PcaDistribution3D
+            points={pcaPoints}
+            selectedMolId={selectedMolId}
+            isLoading={pcaLoading}
+            error={pcaError}
+            onSelect={setSelectedMolId}
+          />
+        </ChartPanel>
+        <ChartPanel
+          className="flex h-full min-w-0 flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Orbit className="h-4 w-4" />}
           title="DFT 3D 构象图"
         >
-          <DftMolecule3D />
+          <DftMolecule3D molecule={selectedMolecule} detailError={detailError} />
         </ChartPanel>
         <ChartPanel
-          className="flex h-full flex-col"
+          className="flex h-full min-w-0 flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<BarChart3 className="h-4 w-4" />}
           title="优化能量轨迹"
         >
-          <EnergyTrace />
+          <EnergyTrace molecule={selectedMolecule} detailError={detailError} />
         </ChartPanel>
       </section>
-      <section className="grid gap-5 xl:grid-cols-3">
-        <ChartPanel icon={<PieChart className="h-4 w-4" />} title="原子组成">
-          <DonutChart data={dftData.atomTotals} />
+      <section className="grid gap-5">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<Sigma className="h-4 w-4" />}
+          title="HOMO / LUMO 能级分布"
+        >
+          <OrbitalDistributionChart data={dftData.orbitalDistributions} />
         </ChartPanel>
-        <ChartPanel icon={<Database className="h-4 w-4" />} title="is_converged 原始编码分布">
-          <DonutChart data={dftData.convergence} />
+      </section>
+      <section className="grid gap-5 xl:grid-cols-3 xl:items-stretch">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<PieChart className="h-4 w-4" />}
+          title="原子组成"
+        >
+          <DonutChartWithSummary data={dftData.atomTotals} topLabel="top atom" />
         </ChartPanel>
-        <ChartPanel icon={<TableProperties className="h-4 w-4" />} title="分子最终态摘要">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <MetricPill label="molecules" value={formatCount(dftData.molCount)} />
-            <MetricPill label="range groups" value={String(dftData.rangeGroupCount)} />
-            <MetricPill label="median steps" value={String(dftData.stepRange.median)} />
-            <MetricPill label="max steps" value={String(dftData.stepRange.max)} />
-            <MetricPill label="median atoms" value={String(dftData.atomRange.median)} />
-            <MetricPill label="median gap eV" value={formatNumber(dftData.gapRange.median, 3)} />
-          </div>
-          <div className="mt-4 space-y-3">
-            {dftData.moleculeFinals.map((item) => (
-              <div key={item.label} className="rounded-2xl border border-white/80 bg-white/75 px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="truncate text-sm font-semibold text-slate-800">{item.label}</div>
-                  <div className="font-mono-ui text-xs text-slate-500">{item.steps} steps</div>
-                </div>
-                <div className="mt-2 grid grid-cols-3 gap-2 font-mono-ui text-[11px] text-slate-500">
-                  <span>{item.atoms} atoms</span>
-                  <span>{formatNumber(item.energy, 3)}</span>
-                  <span>{formatNumber(item.gap, 3)} eV</span>
-                </div>
-              </div>
-            ))}
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<Database className="h-4 w-4" />}
+          title="is_converged 原始编码分布"
+        >
+          <DonutChartWithSummary data={dftData.convergence} topLabel="top code" />
+        </ChartPanel>
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<TableProperties className="h-4 w-4" />}
+          title="分子最终态摘要"
+        >
+          <div className="flex h-full flex-1 flex-col justify-between gap-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <MetricPill label="构象轨迹组" value={formatCount(dftData.molCount)} />
+              <MetricPill label="优化步记录" value={formatCount(dftData.rows)} />
+              <MetricPill label="步数中位数" value={String(dftData.stepRange.median)} />
+              <MetricPill label="最长轨迹" value={`${dftData.stepRange.max} steps`} />
+              <MetricPill label="原子数中位数" value={String(dftData.atomRange.median)} />
+              <MetricPill label="能隙中位数 eV" value={formatNumber(dftData.gapRange.median, 3)} />
+            </div>
+            <div className="rounded-2xl border border-white/80 bg-white/75 px-4 py-3 text-sm leading-6 text-slate-600 shadow-sm">
+              每个构象轨迹组代表一个分子构象的优化过程；记录总数是所有优化步的合计，步数指标用于描述每组轨迹的长度分布。
+            </div>
           </div>
         </ChartPanel>
       </section>
@@ -1309,12 +1895,22 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
         </ChartPanel>
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)]">
-        <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="高频配方组分">
-          <HorizontalBars data={formulationData.topComponents} />
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] xl:items-stretch">
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<BarChart3 className="h-4 w-4" />}
+          title="高频配方组分"
+        >
+          <RankedBarsWithSummary data={formulationData.topComponents} />
         </ChartPanel>
-        <ChartPanel icon={<PieChart className="h-4 w-4" />} title="聚合物体系分布">
-          <DonutChart data={formulationData.polymerFamilies} />
+        <ChartPanel
+          className="flex h-full flex-col"
+          bodyClassName="flex flex-1 flex-col"
+          icon={<PieChart className="h-4 w-4" />}
+          title="聚合物体系分布"
+        >
+          <DonutChartWithSummary data={formulationData.polymerFamilies} topLabel="top family" />
         </ChartPanel>
       </section>
 
@@ -1332,23 +1928,23 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
 
       <section className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,0.95fr)_minmax(0,1.1fr)] xl:items-stretch">
         <ChartPanel
-          className="flex h-full flex-col xl:min-h-[520px]"
+          className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Atom className="h-4 w-4" />}
           title="常见催化剂"
         >
-          <HorizontalBars data={formulationData.topCatalysts} />
+          <RankedBarsWithSummary data={formulationData.topCatalysts} />
         </ChartPanel>
         <ChartPanel
-          className="flex h-full flex-col xl:min-h-[520px]"
+          className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Search className="h-4 w-4" />}
           title="常见溶剂"
         >
-          <HorizontalBars data={formulationData.topSolvents} />
+          <RankedBarsWithSummary data={formulationData.topSolvents} />
         </ChartPanel>
         <ChartPanel
-          className="flex h-full flex-col xl:min-h-[520px]"
+          className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<TableProperties className="h-4 w-4" />}
           title="配方样例"

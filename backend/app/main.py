@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
 from app.database import sqlite_connection
+from app.routers.dft import router as dft_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.predict import router as predict_router
 from app.routers.query import router as query_router
@@ -33,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(query_router)
     app.include_router(predict_router)
     app.include_router(knowledge_router)
+    app.include_router(dft_router)
 
     return app
 

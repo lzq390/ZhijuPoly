@@ -71,6 +71,47 @@ DROP_KNOWLEDGE_SQL = """
 DROP TABLE IF EXISTS knowledge_documents;
 """
 
+FUMOL_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS dft_molecule_final (
+  mol_id TEXT PRIMARY KEY,
+  range_group TEXT NOT NULL,
+  final_step INTEGER NOT NULL,
+  n_atoms INTEGER NOT NULL,
+  coordinates TEXT NOT NULL,
+  scf_energy REAL,
+  zero_point_energy REAL,
+  thermal_enthalpy REAL,
+  gibbs_free_energy REAL,
+  lowest_freq REAL,
+  dipole_moment REAL,
+  homo_ev REAL,
+  lumo_ev REAL,
+  gap_ev REAL,
+  is_converged TEXT,
+  pca_x REAL NOT NULL,
+  pca_y REAL NOT NULL,
+  pca_z REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dft_energy_trace (
+  mol_id TEXT NOT NULL,
+  step INTEGER NOT NULL,
+  scf_energy REAL,
+  homo_ev REAL,
+  lumo_ev REAL,
+  gap_ev REAL,
+  PRIMARY KEY (mol_id, step)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dft_final_pca ON dft_molecule_final(pca_x, pca_y, pca_z);
+CREATE INDEX IF NOT EXISTS idx_dft_trace_mol_step ON dft_energy_trace(mol_id, step);
+"""
+
+DROP_FUMOL_SQL = """
+DROP TABLE IF EXISTS dft_energy_trace;
+DROP TABLE IF EXISTS dft_molecule_final;
+"""
+
 
 def ensure_parent_dir(db_path: str | Path) -> Path:
     path = Path(db_path)
@@ -111,3 +152,12 @@ def ensure_knowledge_schema(connection: sqlite3.Connection) -> None:
 def rebuild_knowledge_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(DROP_KNOWLEDGE_SQL)
     ensure_knowledge_schema(connection)
+
+
+def ensure_fumol_schema(connection: sqlite3.Connection) -> None:
+    connection.executescript(FUMOL_SCHEMA_SQL)
+
+
+def rebuild_fumol_schema(connection: sqlite3.Connection) -> None:
+    connection.executescript(DROP_FUMOL_SQL)
+    ensure_fumol_schema(connection)

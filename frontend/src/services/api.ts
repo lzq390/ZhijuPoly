@@ -1,4 +1,6 @@
 import type {
+  DftMoleculeDetail,
+  DftPcaSampleResponse,
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
   PredictRequest,
@@ -26,6 +28,19 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function getJSON<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`);
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    const message =
+      typeof data?.detail === "string" ? data.detail : `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return (await response.json()) as T;
+}
+
 export function querySmiles(payload: SmilesQueryRequest): Promise<SmilesQueryResponse> {
   return postJSON("/query/smiles", payload);
 }
@@ -42,4 +57,12 @@ export function fetchStructure3D(
   smiles: string
 ): Promise<{ molblock: string; capped_smiles: string; format: "mol" }> {
   return postJSON("/structure/3d", { smiles });
+}
+
+export function fetchDftPcaSample(limit = 200): Promise<DftPcaSampleResponse> {
+  return getJSON(`/dft/pca-sample?limit=${limit}`);
+}
+
+export function fetchDftMolecule(molId: string): Promise<DftMoleculeDetail> {
+  return getJSON(`/dft/molecule/${encodeURIComponent(molId)}`);
 }

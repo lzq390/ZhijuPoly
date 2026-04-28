@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +18,12 @@ DEFAULT_ENV_FILE = BACKEND_DIR / ".env"
 
 
 def _resolve_from_root(value: str) -> str:
+    windows_drive_match = re.match(r"^([A-Za-z]):[\\/](.*)$", value)
+    if windows_drive_match and os.name != "nt":
+        drive = windows_drive_match.group(1).lower()
+        remainder = windows_drive_match.group(2).replace("\\", "/")
+        return str((Path("/mnt") / drive / remainder).resolve())
+
     path = Path(value)
     if not path.is_absolute():
         path = PROJECT_ROOT / path
@@ -29,6 +36,8 @@ class Settings:
         sqlite_db_path: str | None = None,
         csv_source_path: str | None = None,
         knowledge_zip_path: str | None = None,
+        fumol_zip_path: str | None = None,
+        fumol_db_path: str | None = None,
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
         model_dir: str | None = None,
@@ -46,6 +55,14 @@ class Settings:
         raw_knowledge_zip_path = knowledge_zip_path or os.getenv(
             "KNOWLEDGE_ZIP_PATH",
             env_values.get("KNOWLEDGE_ZIP_PATH", "database/data_txt.zip"),
+        )
+        raw_fumol_zip_path = fumol_zip_path or os.getenv(
+            "FUMOL_ZIP_PATH",
+            env_values.get("FUMOL_ZIP_PATH", "D:/database/fumol/FuMolDatabase.zip"),
+        )
+        raw_fumol_db_path = fumol_db_path or os.getenv(
+            "FUMOL_DB_PATH",
+            env_values.get("FUMOL_DB_PATH", "backend/data/fumol.db"),
         )
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",
@@ -70,6 +87,8 @@ class Settings:
         self.sqlite_db_path = _resolve_from_root(raw_sqlite_db_path)
         self.csv_source_path = _resolve_from_root(raw_csv_source_path)
         self.knowledge_zip_path = _resolve_from_root(raw_knowledge_zip_path)
+        self.fumol_zip_path = _resolve_from_root(raw_fumol_zip_path)
+        self.fumol_db_path = _resolve_from_root(raw_fumol_db_path)
         self.allowed_origins = raw_allowed_origins
         self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)
@@ -85,6 +104,14 @@ class Settings:
     @property
     def knowledge_zip_file(self) -> Path:
         return Path(self.knowledge_zip_path)
+
+    @property
+    def fumol_zip_file(self) -> Path:
+        return Path(self.fumol_zip_path)
+
+    @property
+    def fumol_db_file(self) -> Path:
+        return Path(self.fumol_db_path)
 
     @property
     def allowed_origins_list(self) -> list[str]:
