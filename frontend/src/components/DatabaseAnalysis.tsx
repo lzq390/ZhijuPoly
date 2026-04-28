@@ -32,6 +32,7 @@ type RangeItem = {
   p5?: number;
   p95?: number;
 };
+type CoverageItem = { label: string; value: number; total: number };
 type HistogramBin = { start: number; end: number; value: number };
 type OrbitalDistribution = {
   label: string;
@@ -81,6 +82,21 @@ const processData = {
   uniquePolymers: 31738,
   uniqueProducts: 37646,
   avgProcessTextLength: 620.7,
+  processSignalSummary: {
+    extractedRows: 2293,
+    uniqueSnippets: 658,
+    medianChars: 347
+  },
+  processSignals: [
+    { label: "temperature", value: 371, total: 658 },
+    { label: "time", value: 352, total: 658 },
+    { label: "solvent", value: 305, total: 658 },
+    { label: "dried", value: 215, total: 658 },
+    { label: "added", value: 157, total: 658 },
+    { label: "stirred", value: 144, total: 658 },
+    { label: "vacuum", value: 115, total: 658 },
+    { label: "washed", value: 104, total: 658 }
+  ],
   topTerms: [
     { label: "solution", value: 153240 },
     { label: "temperature", value: 82950 },
@@ -347,12 +363,12 @@ const formulationData = {
   files: 143,
   rows: 65840,
   coverage: [
-    { label: "聚合物 IUPAC", count: 60942, pct: 92.6 },
-    { label: "配方及用量", count: 61092, pct: 92.8 },
-    { label: "催化剂", count: 30187, pct: 45.8 },
-    { label: "温度", count: 46620, pct: 70.8 },
-    { label: "时间", count: 37267, pct: 56.6 },
-    { label: "溶剂", count: 30970, pct: 47.0 }
+    { label: "Polymer IUPAC", count: 60942, pct: 92.6 },
+    { label: "Formula and dosage", count: 61092, pct: 92.8 },
+    { label: "Catalyst", count: 30187, pct: 45.8 },
+    { label: "Temperature", count: 46620, pct: 70.8 },
+    { label: "Time", count: 37267, pct: 56.6 },
+    { label: "Solvent", count: 30970, pct: 47.0 }
   ],
   componentCounts: [
     { label: "1", value: 122 },
@@ -437,13 +453,13 @@ const formulationData = {
   ],
   examples: [
     {
-      title: "内筒和其制造方法",
+      title: "Inner cylinder and manufacturing method",
       polymer: "poly(bisphenol A epoxy resin)",
       formula: "bisphenol A : epoxy resin = 1 : 1",
       condition: "235-280 C · 15-20 minutes"
     },
     {
-      title: "树脂组合物，和层压预浸料坯",
+      title: "Resin composition and laminated prepreg",
       polymer: "poly(bisphenol A epoxy resin)",
       formula: "bisphenol-type epoxy resin : novolac-type phenol resin = 20-60 : 15-60",
       condition: "190 C · 5 min · MEK and butyl cellosolve"
@@ -455,9 +471,9 @@ const datasets = [
   {
     key: "process" as const,
     order: "01",
-    title: "实验工艺数据",
+    title: "Experimental Process Data",
     englishTitle: "Experimental Process",
-    description: "展示实验制备过程中的工艺动作、产物名称与材料实体，帮助快速把握工艺文本重点。",
+    description: "Summarizes process actions, product names, and material entities from preparation records.",
     status: "Ready",
     recordCount: processData.rows,
     icon: <FlaskConical className="h-5 w-5" />
@@ -465,9 +481,9 @@ const datasets = [
   {
     key: "property" as const,
     order: "02",
-    title: "实验性质数据",
+    title: "Experimental Property Data",
     englishTitle: "Experimental Properties",
-    description: "汇总实验性质的名称、类别与数值范围，帮助观察性质数据的覆盖情况。",
+    description: "Summarizes property names, categories, value ranges, and representative measurements.",
     status: "Ready",
     recordCount: propertyData.rows,
     icon: <Sigma className="h-5 w-5" />
@@ -475,9 +491,9 @@ const datasets = [
   {
     key: "structureEffect" as const,
     order: "03",
-    title: "聚合物构效数据",
+    title: "Polymer Structure-Property Data",
     englishTitle: "Structure-Property",
-    description: "关联聚合物结构与九类关键性质，帮助比较性质来源、单位和数值分布。",
+    description: "Links polymer structures with key properties, source types, units, and value ranges.",
     status: "Ready",
     recordCount: structureEffectData.rows,
     icon: <Network className="h-5 w-5" />
@@ -485,9 +501,9 @@ const datasets = [
   {
     key: "dft" as const,
     order: "04",
-    title: "单体构象数据",
+    title: "DFT Conformation Data",
     englishTitle: "DFT Conformation",
-    description: "展示单体构象的三维结构、能量轨迹、原子组成和收敛状态，帮助观察计算结果质量。",
+    description: "Visualizes PCA distribution, 3D conformations, energy traces, atoms, and orbital levels.",
     status: "Ready",
     recordCount: dftData.rows,
     icon: <Orbit className="h-5 w-5" />
@@ -495,9 +511,9 @@ const datasets = [
   {
     key: "formulation" as const,
     order: "05",
-    title: "配方配比数据",
+    title: "Formulation Ratio Data",
     englishTitle: "Formulation Ratios",
-    description: "汇总配方组分、比例表达、催化剂、溶剂和工艺条件，帮助识别常见配方模式。",
+    description: "Summarizes formulation components, ratio expressions, catalysts, solvents, and conditions.",
     status: "Ready",
     recordCount: formulationData.rows,
     icon: <TableProperties className="h-5 w-5" />
@@ -610,6 +626,111 @@ function RankedBarsWithSummary({
   );
 }
 
+function CoverageSignals({
+  data,
+  summary
+}: {
+  data: CoverageItem[];
+  summary: { extractedRows: number; uniqueSnippets: number; medianChars: number };
+}) {
+  return (
+    <div className="flex h-full flex-1 flex-col justify-between gap-4">
+      <div className="space-y-4">
+        {data.map((item, index) => {
+          const ratio = (item.value / item.total) * 100;
+          return (
+            <div key={item.label} className="grid grid-cols-[minmax(7rem,10rem)_minmax(0,1fr)_5.75rem] items-center gap-3">
+              <div className="truncate text-sm font-medium text-slate-700" title={item.label}>
+                {item.label}
+              </div>
+              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.max(ratio, 4)}%`,
+                    background: `linear-gradient(90deg, ${colors[index % colors.length]} 0%, #38bdf8 100%)`
+                  }}
+                />
+              </div>
+              <div className="font-mono-ui text-right text-xs text-slate-500">
+                {formatPercent(ratio)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricPill label="extracted rows" value={formatCount(summary.extractedRows)} />
+        <MetricPill label="unique snippets" value={formatCount(summary.uniqueSnippets)} />
+        <MetricPill label="median chars" value={formatCount(summary.medianChars)} />
+      </div>
+    </div>
+  );
+}
+
+function CategoryRepresentativeCards({
+  data,
+  categories
+}: {
+  data: RankedItem[];
+  categories: DonutItem[];
+}) {
+  const categoryMap = new Map(categories.map((item) => [item.label, item]));
+  const representativeTotal = data.reduce((sum, item) => sum + item.value, 0);
+  const topRepresentative = data[0]?.label.split(":").slice(1).join(":").trim() || data[0]?.label || "-";
+
+  return (
+    <div className="flex h-full flex-1 flex-col justify-between gap-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {data.map((item, index) => {
+          const [categoryName, ...propertyParts] = item.label.split(":");
+          const category = categoryName.trim();
+          const propertyName = propertyParts.join(":").trim() || item.label;
+          const categoryInfo = categoryMap.get(category);
+          const color = categoryInfo?.color ?? colors[index % colors.length];
+          const share = categoryInfo ? (item.value / categoryInfo.value) * 100 : 0;
+
+          return (
+            <article key={item.label} className="rounded-2xl border border-white/80 bg-white/75 p-3 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                  <span className="truncate text-xs font-semibold capitalize text-slate-600" title={category}>
+                    {category}
+                  </span>
+                </div>
+                <span className="font-mono-ui shrink-0 text-xs text-slate-500">{formatCount(item.value)}</span>
+              </div>
+              <div className="mt-2 truncate text-sm font-semibold text-slate-900" title={propertyName}>
+                {propertyName}
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${categoryInfo ? Math.max(share, 4) : 100}%`,
+                    background: `linear-gradient(90deg, ${color} 0%, #38bdf8 100%)`
+                  }}
+                />
+              </div>
+              <div className="font-mono-ui mt-2 text-[11px] text-slate-500">
+                {categoryInfo ? `${formatPercent(share)} of category` : "representative count"}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricPill label="categories shown" value={`${data.length} / ${categories.length}`} />
+        <MetricPill label="representative sum" value={formatCount(representativeTotal)} />
+        <MetricPill label="top representative" value={topRepresentative} />
+      </div>
+    </div>
+  );
+}
+
 function DonutChart({ data }: { data: DonutItem[] }) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
   let offset = 0;
@@ -667,6 +788,53 @@ function DonutChartWithSummary({ data, topLabel = "top segment" }: { data: Donut
       <DonutChart data={data} />
       <div className="grid gap-3 sm:grid-cols-3">
         <MetricPill label={topLabel} value={topItem.label} />
+        <MetricPill label="top count" value={formatCount(topItem.value)} />
+        <MetricPill label="top 3 share" value={formatPercent(topThreeShare)} />
+      </div>
+    </div>
+  );
+}
+
+function AtomCompositionCompact({ data }: { data: DonutItem[] }) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  const topItem = data.reduce((current, item) => (item.value > current.value ? item : current), data[0]);
+  const topThreeShare = data.slice(0, 3).reduce((sum, item) => sum + item.value, 0) / total * 100;
+
+  return (
+    <div className="space-y-4">
+      <div className="overflow-hidden rounded-full border border-white/80 bg-white/80 p-1 shadow-sm">
+        <div className="flex h-4 overflow-hidden rounded-full bg-slate-100">
+          {data.map((item) => (
+            <div
+              key={item.label}
+              className="h-full"
+              style={{ width: `${(item.value / total) * 100}%`, backgroundColor: item.color }}
+              title={`${item.label}: ${formatCount(item.value)}`}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {data.map((item) => {
+          const share = (item.value / total) * 100;
+          return (
+            <div key={item.label} className="grid grid-cols-[1.75rem_minmax(0,1fr)_5.5rem] items-center gap-2 rounded-2xl bg-white/70 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
+                <span className="font-mono-ui text-xs font-semibold text-slate-700">{item.label}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full" style={{ width: `${Math.max(share, 3)}%`, backgroundColor: item.color }} />
+              </div>
+              <div className="font-mono-ui text-right text-xs text-slate-500">{formatCount(item.value)}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricPill label="top atom" value={topItem.label} />
         <MetricPill label="top count" value={formatCount(topItem.value)} />
         <MetricPill label="top 3 share" value={formatPercent(topThreeShare)} />
       </div>
@@ -935,6 +1103,80 @@ function SourceMatrix() {
   );
 }
 
+function SourceMatrixWithSummary() {
+  const total = structureEffectData.sources.reduce((sum, item) => sum + item.value, 0);
+  const topSource = structureEffectData.sources.reduce((current, item) => (item.value > current.value ? item : current), structureEffectData.sources[0]);
+  const simulated = structureEffectData.sources.find((item) => item.label === "sim");
+
+  return (
+    <div className="flex flex-col gap-4">
+      <SourceMatrix />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricPill label="source records" value={formatCount(total)} />
+        <MetricPill label="top source" value={topSource.label} />
+        <MetricPill label="simulated share" value={formatPercent(((simulated?.value ?? 0) / total) * 100)} />
+      </div>
+    </div>
+  );
+}
+
+function StructureRangeCards({ data }: { data: RangeItem[] }) {
+  const widest = data.reduce((current, item) => {
+    const currentSpan = current.max - current.min;
+    const nextSpan = item.max - item.min;
+    return nextSpan > currentSpan ? item : current;
+  }, data[0]);
+  const topCount = data.reduce((current, item) => (item.count > current.count ? item : current), data[0]);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="space-y-3">
+        {data.map((item, index) => {
+          const span = item.max - item.min || 1;
+          const medianPosition = Math.min(Math.max(((item.median - item.min) / span) * 100, 0), 100);
+
+          return (
+            <article key={item.label} className="rounded-2xl border border-white/80 bg-white/75 p-3 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="truncate text-sm font-semibold text-slate-900" title={item.label}>
+                  {item.label}
+                </div>
+                <div className="font-mono-ui shrink-0 text-xs text-slate-500">{formatCount(item.count)}</div>
+              </div>
+              <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.max(medianPosition, 4)}%`,
+                    background: `linear-gradient(90deg, ${colors[index % colors.length]} 0%, #38bdf8 100%)`
+                  }}
+                />
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 font-mono-ui text-[11px] text-slate-500">
+                <span className="truncate" title={`Min ${formatNumber(item.min)}`}>
+                  Min {formatNumber(item.min)}
+                </span>
+                <span className="truncate text-center" title={`Median ${formatNumber(item.median)}`}>
+                  Median {formatNumber(item.median)}
+                </span>
+                <span className="truncate text-right" title={`Max ${formatNumber(item.max)}`}>
+                  Max {formatNumber(item.max)}
+                </span>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricPill label="ranges shown" value={formatCount(data.length)} />
+        <MetricPill label="top count" value={topCount.label} />
+        <MetricPill label="widest span" value={widest.label} />
+      </div>
+    </div>
+  );
+}
+
 function DftDetailError({ message }: { message: string }) {
   return (
     <div className="flex h-full min-h-[360px] items-center justify-center rounded-[28px] border border-white/80 bg-[linear-gradient(180deg,#fbfdff_0%,#f2f7f9_100%)] p-6 text-center text-sm font-medium leading-6 text-slate-600">
@@ -955,7 +1197,7 @@ function EnergyTrace({ molecule, detailError }: { molecule: DftMoleculeDetail | 
   if (!molecule || values.length === 0) {
     return (
       <div className="flex h-full min-h-[360px] items-center justify-center rounded-[28px] border border-white/80 bg-[linear-gradient(180deg,#fbfdff_0%,#f2f7f9_100%)] p-6 text-center text-sm font-medium text-slate-600">
-        从 PCA 分布图中选择一个构象轨迹组后显示优化能量轨迹。
+        Select a trajectory group from the PCA distribution to view the optimization energy trace.
       </div>
     );
   }
@@ -1114,7 +1356,7 @@ function DftMolecule3D({ molecule, detailError }: { molecule: DftMoleculeDetail 
         viewer.render();
       } catch (nextError) {
         if (!cancelled) {
-          setError(nextError instanceof Error ? nextError.message : "3D 构象加载失败");
+          setError(nextError instanceof Error ? nextError.message : "Failed to load 3D conformation");
         }
       } finally {
         if (!cancelled) {
@@ -1140,7 +1382,7 @@ function DftMolecule3D({ molecule, detailError }: { molecule: DftMoleculeDetail 
   if (!molecule) {
     return (
       <div className="flex h-full min-h-[360px] items-center justify-center rounded-[28px] border border-white/80 bg-[radial-gradient(circle_at_30%_15%,rgba(56,189,248,0.22),transparent_30%),radial-gradient(circle_at_76%_24%,rgba(245,158,11,0.16),transparent_26%),linear-gradient(180deg,#fbfdff_0%,#edf5f8_100%)] p-6 text-center text-sm font-medium text-slate-600">
-        从 PCA 分布图中选择一个构象轨迹组后显示最终态 3D 构象。
+        Select a trajectory group from the PCA distribution to view the final-state 3D conformation.
       </div>
     );
   }
@@ -1155,7 +1397,7 @@ function DftMolecule3D({ molecule, detailError }: { molecule: DftMoleculeDetail 
         {isLoading ? (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="rounded-full border border-white/80 bg-white/90 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
-              正在加载 3D 构象
+              Loading 3D conformation
             </div>
           </div>
         ) : null}
@@ -1381,7 +1623,7 @@ function PcaDistribution3D({
         {isLoading ? (
           <div className="absolute inset-0 flex items-center justify-center bg-white/45">
             <div className="rounded-full border border-white/80 bg-white/95 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
-              正在加载 PCA 分布
+              Loading PCA distribution
             </div>
           </div>
         ) : null}
@@ -1458,7 +1700,7 @@ function DatasetTile({
           isReserved ? "cursor-not-allowed bg-slate-100 text-slate-400" : "bg-slate-950 text-white hover:bg-teal-700"
         ].join(" ")}
       >
-        <span>{isReserved ? "预留接口" : "查看分析图"}</span>
+        <span>{isReserved ? "Reserved" : "View Charts"}</span>
         <ArrowRight className="h-4 w-4" />
       </button>
     </section>
@@ -1476,11 +1718,11 @@ function DatabaseHome({ onBackHome, onOpenDataset }: { onBackHome: () => void; o
         <div className="flex items-center gap-3">
           <Button type="button" variant="outline" onClick={onBackHome}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            首页
+            Home
           </Button>
           <div>
-            <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">当前模块</div>
-            <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">数据库分析</div>
+            <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">Current Module</div>
+            <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">Database Analytics</div>
           </div>
         </div>
         <Badge className="bg-teal-50 text-teal-800">Database Analytics</Badge>
@@ -1492,10 +1734,10 @@ function DatabaseHome({ onBackHome, onOpenDataset }: { onBackHome: () => void; o
           <div>
             <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-200">Polymer Data Platform</div>
             <h1 className="font-heading mt-4 text-[2.55rem] font-semibold leading-none tracking-[-0.02em] md:text-[4rem]">
-              聚合物数据平台
+              Polymer Data Platform
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-slate-300">
-              入口页展示五类数据模块；进入模块后只展示面向分析的图表视图，不展示原始表格。
+              Explore five curated data modules through analysis-focused chart views without exposing raw tables.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1521,13 +1763,23 @@ function DatasetHero({
   onBackHome,
   onBackDatabase,
   children,
-  hideDescription = false
+  hideDescription = false,
+  backDatabaseLabel = "数据库分析",
+  homeLabel = "首页",
+  recordLabel = "Records",
+  viewLabel = "View",
+  viewValue = "Charts"
 }: {
   dataset: (typeof datasets)[number];
   onBackHome: () => void;
   onBackDatabase: () => void;
   children: ReactNode;
   hideDescription?: boolean;
+  backDatabaseLabel?: string;
+  homeLabel?: string;
+  recordLabel?: string;
+  viewLabel?: string;
+  viewValue?: string;
 }) {
   return (
     <>
@@ -1535,10 +1787,10 @@ function DatasetHero({
         <div className="flex flex-wrap items-center gap-3">
           <Button type="button" variant="outline" onClick={onBackDatabase}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            数据库分析
+            {backDatabaseLabel}
           </Button>
           <Button type="button" variant="outline" onClick={onBackHome}>
-            首页
+            {homeLabel}
           </Button>
         </div>
         <Badge className="bg-teal-50 text-teal-800">{dataset.englishTitle}</Badge>
@@ -1562,8 +1814,8 @@ function DatasetHero({
             )}
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <MetricPill label="Records" value={formatCount(dataset.recordCount)} />
-            <MetricPill label="View" value="Charts" />
+            <MetricPill label={recordLabel} value={formatCount(dataset.recordCount)} />
+            <MetricPill label={viewLabel} value={viewValue} />
           </div>
         </div>
       </section>
@@ -1574,15 +1826,20 @@ function DatasetHero({
 }
 
 function ProcessPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
-  const dataset = datasets[0];
+  const dataset = {
+    ...datasets[0],
+    title: "Experimental Process Data",
+    description:
+      "Summarizes process keywords, product names, material mentions, and extracted condition signals across polymer preparation records."
+  };
   return (
-    <DatasetHero dataset={dataset} {...props}>
+    <DatasetHero dataset={dataset} backDatabaseLabel="Database Analysis" homeLabel="Home" {...props}>
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)] xl:items-stretch">
         <ChartPanel
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<BarChart3 className="h-4 w-4" />}
-          title="工艺流程高频词"
+          title="Process Flow Keywords"
         >
           <RankedBarsWithSummary data={processData.topTerms} />
         </ChartPanel>
@@ -1590,7 +1847,7 @@ function ProcessPage(props: { onBackHome: () => void; onBackDatabase: () => void
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Atom className="h-4 w-4" />}
-          title="材料实体气泡图"
+          title="Material Entity Cloud"
         >
           <div className="flex h-full flex-1 flex-col justify-between gap-4">
             <BubbleCloud data={processData.topMaterials} />
@@ -1607,22 +1864,17 @@ function ProcessPage(props: { onBackHome: () => void; onBackDatabase: () => void
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<TableProperties className="h-4 w-4" />}
-          title="产物名称排行"
+          title="Product Name Ranking"
         >
           <RankedBarsWithSummary data={processData.topProducts} />
         </ChartPanel>
         <ChartPanel
           className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col justify-center"
+          bodyClassName="flex flex-1 flex-col"
           icon={<Layers3 className="h-4 w-4" />}
-          title="文本覆盖摘要"
+          title="Process Condition Signals"
         >
-          <div className="grid gap-4 sm:grid-cols-2">
-            <MetricPill label="unique polymer ids" value={formatCount(processData.uniqueRecordIds)} />
-            <MetricPill label="unique polymers" value={formatCount(processData.uniquePolymers)} />
-            <MetricPill label="unique products" value={formatCount(processData.uniqueProducts)} />
-            <MetricPill label="avg process chars" value={formatNumber(processData.avgProcessTextLength, 1)} />
-          </div>
+          <CoverageSignals data={processData.processSignals} summary={processData.processSignalSummary} />
         </ChartPanel>
       </section>
     </DatasetHero>
@@ -1630,15 +1882,20 @@ function ProcessPage(props: { onBackHome: () => void; onBackDatabase: () => void
 }
 
 function PropertyPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
-  const dataset = datasets[1];
+  const dataset = {
+    ...datasets[1],
+    title: "Experimental Property Data",
+    description:
+      "Summarizes property categories, high-frequency property names, value ranges, and representative properties across polymer records."
+  };
   return (
-    <DatasetHero dataset={dataset} {...props}>
+    <DatasetHero dataset={dataset} backDatabaseLabel="Database Analysis" homeLabel="Home" {...props}>
       <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] xl:items-stretch">
         <ChartPanel
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<PieChart className="h-4 w-4" />}
-          title="性质类别占比"
+          title="Property Category Share"
         >
           <DonutChartWithSummary data={propertyData.categories} topLabel="top category" />
         </ChartPanel>
@@ -1646,7 +1903,7 @@ function PropertyPage(props: { onBackHome: () => void; onBackDatabase: () => voi
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<BarChart3 className="h-4 w-4" />}
-          title="高频性质名称"
+          title="High-Frequency Property Names"
         >
           <RankedBarsWithSummary data={propertyData.topProperties} />
         </ChartPanel>
@@ -1654,19 +1911,19 @@ function PropertyPage(props: { onBackHome: () => void; onBackDatabase: () => voi
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] xl:items-stretch">
         <ChartPanel
           className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col justify-center"
+          bodyClassName="flex flex-1 flex-col"
           icon={<Sigma className="h-4 w-4" />}
-          title="高频性质值域范围"
+          title="High-Frequency Property Ranges"
         >
-          <RangePlot data={propertyData.ranges} />
+          <RangePlot data={propertyData.ranges.slice(0, 4)} />
         </ChartPanel>
         <ChartPanel
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Search className="h-4 w-4" />}
-          title="类别代表性质"
+          title="Representative Properties"
         >
-          <RankedBarsWithSummary data={propertyData.categoryTop} />
+          <CategoryRepresentativeCards data={propertyData.categoryTop} categories={propertyData.categories} />
         </ChartPanel>
       </section>
     </DatasetHero>
@@ -1674,51 +1931,45 @@ function PropertyPage(props: { onBackHome: () => void; onBackDatabase: () => voi
 }
 
 function StructureEffectPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
-  const dataset = datasets[2];
+  const dataset = {
+    ...datasets[2],
+    title: "Polymer Structure-Property Data",
+    description:
+      "Links polymer structures with key properties, source types, units, and value ranges to support structure-property comparison."
+  };
   return (
-    <DatasetHero dataset={dataset} {...props}>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] xl:items-stretch">
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col justify-center"
-          icon={<Network className="h-4 w-4" />}
-          title="性质-来源矩阵"
-        >
-          <SourceMatrix />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<BarChart3 className="h-4 w-4" />}
-          title="九类性质样本量"
-        >
-          <RankedBarsWithSummary data={structureEffectData.properties} />
-        </ChartPanel>
-      </section>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:items-stretch">
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<PieChart className="h-4 w-4" />}
-          title="单位分布"
-        >
-          <DonutChartWithSummary data={structureEffectData.units} topLabel="top unit" />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col justify-center"
-          icon={<Sigma className="h-4 w-4" />}
-          title="构效性质值域"
-        >
-          <RangePlot data={structureEffectData.ranges} />
-        </ChartPanel>
+    <DatasetHero dataset={dataset} backDatabaseLabel="Database Analysis" homeLabel="Home" {...props}>
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.02fr)_minmax(0,0.98fr)] xl:items-start">
+        <div className="grid gap-5">
+          <ChartPanel icon={<Network className="h-4 w-4" />} title="Property-Source Matrix">
+            <SourceMatrixWithSummary />
+          </ChartPanel>
+          <ChartPanel icon={<PieChart className="h-4 w-4" />} title="Unit Distribution">
+            <DonutChartWithSummary data={structureEffectData.units} topLabel="top unit" />
+          </ChartPanel>
+        </div>
+        <div className="grid gap-5">
+          <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="Nine Property Sample Counts">
+            <RankedBarsWithSummary data={structureEffectData.properties} limit={9} />
+          </ChartPanel>
+          <ChartPanel icon={<Sigma className="h-4 w-4" />} title="Structure-Property Value Ranges">
+            <StructureRangeCards data={structureEffectData.ranges.slice(0, 3)} />
+          </ChartPanel>
+        </div>
       </section>
     </DatasetHero>
   );
 }
 
 function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
-  const dataset = datasets[3];
+  const dataset = {
+    ...datasets[3],
+    title: "DFT Conformation Data",
+    englishTitle: "DFT Conformation",
+    description:
+      "Visualizes final-state PCA distribution, interactive 3D conformations, optimization energy traces, atom composition, and HOMO/LUMO energy distributions.",
+    status: "Ready"
+  };
   const [pcaPoints, setPcaPoints] = useState<DftPcaPoint[]>([]);
   const [pcaLoading, setPcaLoading] = useState(true);
   const [pcaError, setPcaError] = useState<string | null>(null);
@@ -1739,7 +1990,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
         setSelectedMolId(response.results[0]?.mol_id ?? null);
       } catch (nextError) {
         if (!cancelled) {
-          setPcaError(nextError instanceof Error ? nextError.message : "PCA 分布加载失败");
+          setPcaError(nextError instanceof Error ? nextError.message : "Failed to load PCA distribution");
         }
       } finally {
         if (!cancelled) {
@@ -1775,7 +2026,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
       } catch (nextError) {
         if (!cancelled) {
           setSelectedMolecule(null);
-          setDetailError(nextError instanceof Error ? nextError.message : "构象轨迹加载失败");
+          setDetailError(nextError instanceof Error ? nextError.message : "Failed to load conformation trajectory");
         }
       }
     }
@@ -1788,13 +2039,21 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
   }, [selectedMolId]);
 
   return (
-    <DatasetHero dataset={dataset} {...props}>
+    <DatasetHero
+      dataset={dataset}
+      backDatabaseLabel="Database Analysis"
+      homeLabel="Home"
+      recordLabel="Records"
+      viewLabel="View"
+      viewValue="Charts"
+      {...props}
+    >
       <section className="grid gap-5 xl:grid-cols-3 xl:items-stretch">
         <ChartPanel
           className="flex h-full min-w-0 flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Network className="h-4 w-4" />}
-          title="最终态 PCA 3D 分布"
+          title="Final-State PCA 3D Distribution"
         >
           <PcaDistribution3D
             points={pcaPoints}
@@ -1808,7 +2067,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
           className="flex h-full min-w-0 flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Orbit className="h-4 w-4" />}
-          title="DFT 3D 构象图"
+          title="DFT 3D Conformation"
         >
           <DftMolecule3D molecule={selectedMolecule} detailError={detailError} />
         </ChartPanel>
@@ -1816,7 +2075,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
           className="flex h-full min-w-0 flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<BarChart3 className="h-4 w-4" />}
-          title="优化能量轨迹"
+          title="Optimization Energy Trace"
         >
           <EnergyTrace molecule={selectedMolecule} detailError={detailError} />
         </ChartPanel>
@@ -1826,45 +2085,36 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Sigma className="h-4 w-4" />}
-          title="HOMO / LUMO 能级分布"
+          title="HOMO / LUMO Energy Distribution"
         >
           <OrbitalDistributionChart data={dftData.orbitalDistributions} />
         </ChartPanel>
       </section>
-      <section className="grid gap-5 xl:grid-cols-3 xl:items-stretch">
+      <section className="grid gap-5 xl:grid-cols-2 xl:items-start">
         <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
+          className="flex flex-col"
           icon={<PieChart className="h-4 w-4" />}
-          title="原子组成"
+          title="Atom Composition"
         >
-          <DonutChartWithSummary data={dftData.atomTotals} topLabel="top atom" />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<Database className="h-4 w-4" />}
-          title="is_converged 原始编码分布"
-        >
-          <DonutChartWithSummary data={dftData.convergence} topLabel="top code" />
+          <AtomCompositionCompact data={dftData.atomTotals} />
         </ChartPanel>
         <ChartPanel
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<TableProperties className="h-4 w-4" />}
-          title="分子最终态摘要"
+          title="Final-State Molecule Summary"
         >
           <div className="flex h-full flex-1 flex-col justify-between gap-4">
             <div className="grid gap-3 sm:grid-cols-2">
-              <MetricPill label="构象轨迹组" value={formatCount(dftData.molCount)} />
-              <MetricPill label="优化步记录" value={formatCount(dftData.rows)} />
-              <MetricPill label="步数中位数" value={String(dftData.stepRange.median)} />
-              <MetricPill label="最长轨迹" value={`${dftData.stepRange.max} steps`} />
-              <MetricPill label="原子数中位数" value={String(dftData.atomRange.median)} />
-              <MetricPill label="能隙中位数 eV" value={formatNumber(dftData.gapRange.median, 3)} />
+              <MetricPill label="trajectory groups" value={formatCount(dftData.molCount)} />
+              <MetricPill label="optimization steps" value={formatCount(dftData.rows)} />
+              <MetricPill label="median steps" value={String(dftData.stepRange.median)} />
+              <MetricPill label="longest trajectory" value={`${dftData.stepRange.max} steps`} />
+              <MetricPill label="median atoms" value={String(dftData.atomRange.median)} />
+              <MetricPill label="median gap eV" value={formatNumber(dftData.gapRange.median, 3)} />
             </div>
             <div className="rounded-2xl border border-white/80 bg-white/75 px-4 py-3 text-sm leading-6 text-slate-600 shadow-sm">
-              每个构象轨迹组代表一个分子构象的优化过程；记录总数是所有优化步的合计，步数指标用于描述每组轨迹的长度分布。
+              Each trajectory group represents the optimization process for one molecular conformation; total records count all optimization steps, and step metrics describe trajectory length.
             </div>
           </div>
         </ChartPanel>
@@ -1874,12 +2124,17 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
 }
 
 function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
-  const dataset = datasets[4];
+  const dataset = {
+    ...datasets[4],
+    title: "Formulation Ratio Data",
+    description:
+      "Summarizes formulation components, ratio expressions, catalysts, solvents, temperature bands, time units, and representative formulation examples."
+  };
 
   return (
-    <DatasetHero dataset={dataset} {...props}>
+    <DatasetHero dataset={dataset} backDatabaseLabel="Database Analysis" homeLabel="Home" {...props}>
       <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
-        <ChartPanel icon={<Database className="h-4 w-4" />} title="字段覆盖率">
+        <ChartPanel icon={<Database className="h-4 w-4" />} title="Field Coverage">
           <div className="grid gap-4 sm:grid-cols-2">
             <MetricPill label="source files" value={formatCount(formulationData.files)} />
             <MetricPill label="records" value={formatCount(formulationData.rows)} />
@@ -1890,7 +2145,7 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
             <CoverageGrid data={formulationData.coverage} />
           </div>
         </ChartPanel>
-        <ChartPanel icon={<Layers3 className="h-4 w-4" />} title="配方组分数量">
+        <ChartPanel icon={<Layers3 className="h-4 w-4" />} title="Formula Component Count">
           <ComponentDistribution data={formulationData.componentCounts} />
         </ChartPanel>
       </section>
@@ -1900,7 +2155,7 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<BarChart3 className="h-4 w-4" />}
-          title="高频配方组分"
+          title="High-Frequency Formula Components"
         >
           <RankedBarsWithSummary data={formulationData.topComponents} />
         </ChartPanel>
@@ -1908,20 +2163,20 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<PieChart className="h-4 w-4" />}
-          title="聚合物体系分布"
+          title="Polymer Family Distribution"
         >
           <DonutChartWithSummary data={formulationData.polymerFamilies} topLabel="top family" />
         </ChartPanel>
       </section>
 
       <section className="grid gap-5 xl:grid-cols-3">
-        <ChartPanel icon={<Sigma className="h-4 w-4" />} title="配方表达类型命中">
+        <ChartPanel icon={<Sigma className="h-4 w-4" />} title="Formula Expression Matches">
           <HorizontalBars data={formulationData.ratioTypes} />
         </ChartPanel>
-        <ChartPanel icon={<FlaskConical className="h-4 w-4" />} title="工艺温度区间">
+        <ChartPanel icon={<FlaskConical className="h-4 w-4" />} title="Process Temperature Bands">
           <HorizontalBars data={formulationData.tempBands} />
         </ChartPanel>
-        <ChartPanel icon={<PieChart className="h-4 w-4" />} title="时间表达分布">
+        <ChartPanel icon={<PieChart className="h-4 w-4" />} title="Time Expression Distribution">
           <DonutChart data={formulationData.timeUnits} />
         </ChartPanel>
       </section>
@@ -1931,7 +2186,7 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Atom className="h-4 w-4" />}
-          title="常见催化剂"
+          title="Common Catalysts"
         >
           <RankedBarsWithSummary data={formulationData.topCatalysts} />
         </ChartPanel>
@@ -1939,7 +2194,7 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<Search className="h-4 w-4" />}
-          title="常见溶剂"
+          title="Common Solvents"
         >
           <RankedBarsWithSummary data={formulationData.topSolvents} />
         </ChartPanel>
@@ -1947,7 +2202,7 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           className="flex h-full flex-col"
           bodyClassName="flex flex-1 flex-col"
           icon={<TableProperties className="h-4 w-4" />}
-          title="配方样例"
+          title="Formulation Examples"
         >
           <FormulaExamples data={formulationData.examples} />
         </ChartPanel>
