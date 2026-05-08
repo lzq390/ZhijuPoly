@@ -50,7 +50,7 @@ class Settings:
         )
         raw_csv_source_path = csv_source_path or os.getenv(
             "CSV_SOURCE_PATH",
-            env_values.get("CSV_SOURCE_PATH", "database/polyprop_9_properties_clean.csv"),
+            env_values.get("CSV_SOURCE_PATH", "database/data1.csv"),
         )
         raw_knowledge_zip_path = knowledge_zip_path or os.getenv(
             "KNOWLEDGE_ZIP_PATH",

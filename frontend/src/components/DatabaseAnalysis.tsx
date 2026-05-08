@@ -172,47 +172,50 @@ const propertyData = {
 };
 
 const structureEffectData = {
-  rows: 2114,
-  uniqueSmiles: 735,
+  rows: 82041,
+  uniqueSmiles: 26017,
   properties: [
-    { label: "Glass transition temperature", value: 440 },
-    { label: "Thermal decomposition temperature", value: 371 },
-    { label: "Thermal decomposition weight loss", value: 346 },
-    { label: "Melting temperature", value: 211 },
-    { label: "CO2 Permeability Barrer", value: 194 },
-    { label: "O2 Permeability Barrer", value: 194 },
-    { label: "H2 Permeability Barrer", value: 156 },
-    { label: "Tensile stress strength at break", value: 102 },
-    { label: "Elongation at break", value: 100 }
+    { label: "Tg K", value: 16942 },
+    { label: "Glass transition temperature", value: 8191 },
+    { label: "Thermal decomposition temperature", value: 6395 },
+    { label: "Thermal decomposition weight loss", value: 5293 },
+    { label: "Melting temperature", value: 3902 },
+    { label: "bandgap (chain)", value: 3380 },
+    { label: "Intrinsic viscosity eta", value: 1994 },
+    { label: "Density", value: 1756 },
+    { label: "Specific volume", value: 1756 }
   ],
   units: [
-    { label: "C", value: 1022, color: "#0f766e" },
-    { label: "Barrer", value: 544, color: "#2563eb" },
-    { label: "%", value: 446, color: "#f59e0b" },
-    { label: "GPa", value: 102, color: "#e11d48" }
+    { label: "C", value: 21301, color: "#0f766e" },
+    { label: "K", value: 19354, color: "#2563eb" },
+    { label: "%", value: 8137, color: "#f59e0b" },
+    { label: "eV", value: 4931, color: "#e11d48" },
+    { label: "not labeled", value: 4494, color: "#64748b" },
+    { label: "Barrer", value: 3964, color: "#7c3aed" },
+    { label: "GPa", value: 3837, color: "#14b8a6" }
   ],
   sources: [
-    { label: "experimental", value: 1669, color: "#0f766e" },
-    { label: "simulated", value: 309, color: "#2563eb" },
-    { label: "not labeled", value: 136, color: "#64748b" }
+    { label: "experimental", value: 62721, color: "#0f766e" },
+    { label: "simulated", value: 19320, color: "#2563eb" },
+    { label: "not labeled", value: 0, color: "#64748b" }
   ],
   sourceMatrix: [
-    { label: "Tg", exp: 336, sim: 37, na: 67 },
-    { label: "Tm", exp: 142, sim: 0, na: 69 },
-    { label: "Td", exp: 371, sim: 0, na: 0 },
-    { label: "Td loss", exp: 346, sim: 0, na: 0 },
-    { label: "CO2", exp: 97, sim: 97, na: 0 },
-    { label: "O2", exp: 97, sim: 97, na: 0 },
-    { label: "H2", exp: 78, sim: 78, na: 0 },
-    { label: "Elongation", exp: 100, sim: 0, na: 0 },
-    { label: "Stress", exp: 102, sim: 0, na: 0 }
+    { label: "Tg K", exp: 8471, sim: 8471, na: 0 },
+    { label: "Tg C", exp: 8191, sim: 0, na: 0 },
+    { label: "Td", exp: 6395, sim: 0, na: 0 },
+    { label: "Td loss", exp: 5293, sim: 0, na: 0 },
+    { label: "Tm", exp: 3902, sim: 0, na: 0 },
+    { label: "bandgap", exp: 0, sim: 3380, na: 0 },
+    { label: "viscosity", exp: 1994, sim: 0, na: 0 },
+    { label: "density", exp: 1756, sim: 0, na: 0 },
+    { label: "specific volume", exp: 1756, sim: 0, na: 0 }
   ],
   ranges: [
-    { label: "Glass transition temperature", count: 440, min: -356.15, median: 183.5, max: 386 },
-    { label: "Melting temperature", count: 211, min: -314.15, median: 162.5, max: 478 },
-    { label: "Thermal decomposition temperature", count: 371, min: 150, median: 485, max: 877 },
-    { label: "Thermal decomposition weight loss", count: 346, min: 0, median: 10, max: 96 },
-    { label: "CO2 Permeability Barrer", count: 194, min: 4.96, median: 1100, max: 47000 }
+    { label: "Tg K", count: 16942, min: 130, median: 409.15, max: 975.15 },
+    { label: "Glass transition temperature", count: 8191, min: -123, median: 138, max: 495 },
+    { label: "Thermal decomposition temperature", count: 6395, min: 18, median: 403, max: 1000 },
+    { label: "Thermal decomposition weight loss", count: 5293, min: 0, median: 5.25, max: 100 },
+    { label: "Melting temperature", count: 3902, min: -54, median: 186, max: 580 }
   ]
 };
 

@@ -130,7 +130,7 @@ def import_csv_to_sqlite(csv_path: str | Path, db_path: str | Path) -> ImportSta
 
     with sqlite_connection(db_path) as connection:
         rebuild_schema(connection)
-        with Path(csv_path).open("r", encoding="utf-8", newline="") as handle:
+        with Path(csv_path).open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             for row in reader:
                 smiles = (row.get("smiles") or "").strip()

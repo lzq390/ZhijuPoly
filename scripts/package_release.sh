@@ -9,7 +9,7 @@ RELEASE_DIR="$ROOT_DIR/release"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BUNDLE="$RELEASE_DIR/polyprop-release-$STAMP.tar.gz"
 
-for file in Dockerfile frontend/Dockerfile docker-compose.yml nginx.conf backend/.env.example; do
+for file in Dockerfile frontend/Dockerfile docker-compose.yml nginx.conf backend/.env.example online_retrieval/Dockerfile online_retrieval/requirements.txt online_retrieval/app.py; do
   if [[ ! -f "$file" ]]; then
     echo "Missing deployment file: $file" >&2
     exit 1
@@ -52,6 +52,7 @@ EXCLUDES=(
   --exclude=frontend/vite.config.d.ts
   --exclude=__pycache__
   --exclude=.pytest_cache
+  --exclude=online_retrieval/data/search_history.json
   --exclude=release
   --exclude=database
   --exclude=design-system

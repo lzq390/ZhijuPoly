@@ -1,11 +1,13 @@
 # PolyProp Deployment
 
-This deployment runs the application as two containers:
+This deployment runs the application as three containers:
 
 - `backend`: FastAPI service on port `8000` inside the Docker network.
+- `online-retrieval`: Flask/Gunicorn online literature retrieval service on port `5002` inside the Docker network.
 - `nginx`: Nginx static site on host port `9000`, with `/api` proxied to the backend.
 
 Runtime databases are mounted from `backend/data` and are not baked into the image.
+Online retrieval history is mounted from `online_retrieval/data`.
 The Compose project name is fixed as `polyprop`, so this deployment replaces the existing `polyprop-nginx-1` container that serves `9000:80`. It does not bind the server's port `80`.
 
 ## Required Runtime Files
@@ -73,3 +75,11 @@ Runtime environment variables can be adjusted in `docker-compose.yml`:
 | `MODEL_ENABLED` | Enables or disables prediction endpoints. |
 | `ALLOWED_ORIGINS` | Browser origins accepted by the API. |
 | `POLYPROP_WEB_PORT` | Host port used by Nginx. Defaults to `9000`. |
+
+Online retrieval is exposed under the same origin at:
+
+```text
+/online-retrieval/
+```
+
+This path is used by the knowledge search module's Online tab and is proxied by Nginx to the `online-retrieval` service.

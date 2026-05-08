@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { ArrowLeft, BookOpen, Clock3, Expand, FileText, Loader2, Search, X } from "lucide-react";
+import { ArrowLeft, BookOpen, Clock3, Expand, FileText, Globe2, Loader2, Search, X } from "lucide-react";
 import { useKnowledgeSearch } from "../hooks/useKnowledgeSearch";
 import type { KnowledgeDocumentResult } from "../types";
 import { Alert } from "./ui/alert";
@@ -21,6 +21,10 @@ type ActiveDetail = {
   label: string;
   value: string;
 } | null;
+
+type KnowledgeMode = "local" | "online";
+
+const ONLINE_RETRIEVAL_URL = import.meta.env.VITE_ONLINE_RETRIEVAL_URL ?? "/online-retrieval/";
 
 function MetaItem({ label, value, onOpen }: MetaItemProps) {
   if (!value) {
@@ -172,6 +176,7 @@ function KnowledgeResultCard({
 }
 
 export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
+  const [mode, setMode] = useState<KnowledgeMode>("local");
   const [query, setQuery] = useState("");
   const [topK, setTopK] = useState(25);
   const [activeDetail, setActiveDetail] = useState<ActiveDetail>(null);
@@ -204,7 +209,7 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
             <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">Local Knowledge Search</div>
           </div>
         </div>
-        <Badge className="bg-teal-50 text-teal-800">Knowledge Base</Badge>
+        <Badge className="bg-teal-50 text-teal-800">{mode === "local" ? "Local Retrieval" : "Online Retrieval"}</Badge>
       </nav>
 
       <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-7 md:px-8">
@@ -214,83 +219,125 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-sm">
                 <BookOpen className="h-5 w-5" />
               </div>
-              <Badge>Local Knowledge Retrieval</Badge>
+              <Badge>Knowledge Retrieval</Badge>
             </div>
             <h1 className="font-heading mt-6 text-[2.4rem] font-semibold leading-tight tracking-tight text-slate-950 md:text-[3.7rem]">
-              Local Knowledge Search
+              Knowledge Search
             </h1>
-            <form onSubmit={handleSubmit} className="mt-7 grid gap-3 lg:grid-cols-[minmax(0,1fr)_132px_120px]">
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Enter an abstract keyword"
-                aria-label="Abstract keyword"
-              />
-              <Input
-                type="number"
-                min={1}
-                max={100}
-                value={topK}
-                onChange={(event) => setTopK(Number(event.target.value))}
-                aria-label="Result limit"
-              />
-              <Button type="submit" disabled={!canSearch}>
-                {searchState.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
-                Search
-              </Button>
-            </form>
+            <div className="mt-7 flex flex-wrap gap-2 rounded-[22px] border border-white/80 bg-white/70 p-2 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setMode("local")}
+                className={[
+                  "inline-flex min-h-11 items-center rounded-2xl px-4 text-sm font-semibold transition-colors",
+                  mode === "local" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white"
+                ].join(" ")}
+              >
+                <Search className="mr-2 h-4 w-4" />
+                Local
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("online")}
+                className={[
+                  "inline-flex min-h-11 items-center rounded-2xl px-4 text-sm font-semibold transition-colors",
+                  mode === "online" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white"
+                ].join(" ")}
+              >
+                <Globe2 className="mr-2 h-4 w-4" />
+                Online
+              </button>
+            </div>
+            {mode === "local" ? (
+              <form onSubmit={handleSubmit} className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_132px_120px]">
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Enter an abstract keyword"
+                  aria-label="Abstract keyword"
+                />
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={topK}
+                  onChange={(event) => setTopK(Number(event.target.value))}
+                  aria-label="Result limit"
+                />
+                <Button type="submit" disabled={!canSearch}>
+                  {searchState.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
+                  Search
+                </Button>
+              </form>
+            ) : null}
           </div>
 
           <div className="grid gap-3">
             <div className="rounded-[24px] border border-white/80 bg-white/85 p-5 shadow-sm">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                <FileText className="h-4 w-4 text-teal-700" />
-                Results
+                {mode === "local" ? <FileText className="h-4 w-4 text-teal-700" /> : <Globe2 className="h-4 w-4 text-teal-700" />}
+                {mode === "local" ? "Local Results" : "Search Mode"}
               </div>
-              <div className="font-heading mt-3 text-3xl font-semibold tracking-tight text-slate-950">{resultBadge}</div>
+              <div className="font-heading mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                {mode === "local" ? resultBadge : "Online"}
+              </div>
             </div>
             <div className="rounded-[24px] border border-white/80 bg-slate-950 p-5 text-slate-50 shadow-sm">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                 <Clock3 className="h-4 w-4 text-teal-300" />
-                Search Time
+                {mode === "local" ? "Search Time" : "Data Source"}
               </div>
-              <div className="font-heading mt-3 text-3xl font-semibold tracking-tight">{timingBadge}</div>
+              <div className="font-heading mt-3 text-3xl font-semibold tracking-tight">
+                {mode === "local" ? timingBadge : "Literature"}
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="rounded-[32px] border border-white/70 bg-white/75 p-4 shadow-soft md:p-5">
-        {searchState.error ? (
-          <Alert variant="destructive">{searchState.error}</Alert>
-        ) : searchState.isLoading ? (
-          <div className="flex min-h-[220px] items-center justify-center gap-3 text-sm font-medium text-slate-600">
-            <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
-            Searching
-          </div>
-        ) : searchState.data ? (
-          searchState.data.results.length > 0 ? (
-            <div className="space-y-4">
-              {searchState.data.results.map((result) => (
-                <KnowledgeResultCard
-                  key={result.knowledge_id}
-                  result={result}
-                  query={searchState.data?.query ?? query}
-                  onOpenDetail={(label, value) => setActiveDetail({ label, value })}
-                />
-              ))}
+      {mode === "local" ? (
+        <section className="rounded-[32px] border border-white/70 bg-white/75 p-4 shadow-soft md:p-5">
+          {searchState.error ? (
+            <Alert variant="destructive">{searchState.error}</Alert>
+          ) : searchState.isLoading ? (
+            <div className="flex min-h-[220px] items-center justify-center gap-3 text-sm font-medium text-slate-600">
+              <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
+              Searching
             </div>
+          ) : searchState.data ? (
+            searchState.data.results.length > 0 ? (
+              <div className="space-y-4">
+                {searchState.data.results.map((result) => (
+                  <KnowledgeResultCard
+                    key={result.knowledge_id}
+                    result={result}
+                    query={searchState.data?.query ?? query}
+                    onOpenDetail={(label, value) => setActiveDetail({ label, value })}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex min-h-[220px] items-center justify-center text-center text-sm text-mutedForeground">
+                No records found with abstracts containing "{searchState.data.query}".
+              </div>
+            )
           ) : (
             <div className="flex min-h-[220px] items-center justify-center text-center text-sm text-mutedForeground">
-              No records found with abstracts containing "{searchState.data.query}".
+              Enter a keyword to show matching abstract records.
             </div>
-          )
-        ) : (
-          <div className="flex min-h-[220px] items-center justify-center text-center text-sm text-mutedForeground">
-            Enter a keyword to show matching abstract records.
+          )}
+        </section>
+      ) : (
+        <section className="overflow-hidden rounded-[32px] border border-white/70 bg-white/75 p-3 shadow-soft md:p-4">
+          <div className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-sm">
+            <iframe
+              title="Online Knowledge Retrieval"
+              src={ONLINE_RETRIEVAL_URL}
+              className="h-[calc(100vh-180px)] min-h-[760px] w-full border-0"
+            />
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
       <DetailDialog detail={activeDetail} onClose={() => setActiveDetail(null)} />
     </div>

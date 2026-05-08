@@ -68,7 +68,7 @@ def test_settings_resolve_paths_to_project_root() -> None:
     assert settings.sqlite_db_file.is_absolute()
     assert settings.csv_source_file.is_absolute()
     assert settings.sqlite_db_file.name == "polyprop.db"
-    assert settings.csv_source_file.name == "polyprop_9_properties_clean.csv"
+    assert settings.csv_source_file.name == "data1.csv"
 
 
 def test_settings_load_backend_dotenv(tmp_path: Path) -> None:
