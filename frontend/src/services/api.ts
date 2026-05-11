@@ -3,8 +3,16 @@ import type {
   DftPcaSampleResponse,
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
+  OnlineKnowledgeExportResponse,
+  OnlineKnowledgeHistoryResponse,
+  OnlineKnowledgeSearchRequest,
+  OnlineKnowledgeSearchResponse,
   PredictRequest,
   PredictResponse,
+  ReverseDesignKnowledgeRequest,
+  ReverseDesignKnowledgeResponse,
+  ReverseDesignTgRequest,
+  ReverseDesignTgResponse,
   SmilesQueryRequest,
   SmilesQueryResponse
 } from "../types";
@@ -51,6 +59,52 @@ export function predictSmiles(payload: PredictRequest): Promise<PredictResponse>
 
 export function searchKnowledge(payload: KnowledgeSearchRequest): Promise<KnowledgeSearchResponse> {
   return postJSON("/knowledge/search", payload);
+}
+
+export function searchOnlineKnowledge(
+  payload: OnlineKnowledgeSearchRequest
+): Promise<OnlineKnowledgeSearchResponse> {
+  return postJSON("/online-knowledge/search", payload);
+}
+
+export function fetchOnlineKnowledgeHistory(): Promise<OnlineKnowledgeHistoryResponse> {
+  return getJSON("/online-knowledge/history");
+}
+
+export function clearOnlineKnowledgeHistory(): Promise<{ success: boolean }> {
+  return postJSON("/online-knowledge/history/clear", {});
+}
+
+export async function deleteOnlineKnowledgeHistory(historyId: number): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/online-knowledge/history/${historyId}`, {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    const message =
+      typeof data?.detail === "string" ? data.detail : `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return (await response.json()) as { success: boolean };
+}
+
+export function exportOnlineKnowledgeCsv(
+  data: Record<string, unknown>[],
+  filename?: string
+): Promise<OnlineKnowledgeExportResponse> {
+  return postJSON("/online-knowledge/export-csv", { data, filename });
+}
+
+export function searchReverseDesignByTg(payload: ReverseDesignTgRequest): Promise<ReverseDesignTgResponse> {
+  return postJSON("/reverse-design/tg", payload);
+}
+
+export function fetchReverseDesignKnowledge(
+  payload: ReverseDesignKnowledgeRequest
+): Promise<ReverseDesignKnowledgeResponse> {
+  return postJSON("/reverse-design/knowledge", payload);
 }
 
 export function fetchStructure3D(

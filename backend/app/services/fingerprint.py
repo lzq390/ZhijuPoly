@@ -23,3 +23,11 @@ def generate(smiles: str) -> ExplicitBitVect:
 
 def tanimoto(fp1: ExplicitBitVect, fp2: ExplicitBitVect) -> float:
     return float(DataStructs.TanimotoSimilarity(fp1, fp2))
+
+
+def fingerprint_to_bytes(fp: ExplicitBitVect) -> bytes:
+    return bytes(DataStructs.BitVectToBinaryText(fp))
+
+
+def fingerprint_from_bytes(data: bytes | bytearray | memoryview) -> ExplicitBitVect:
+    return DataStructs.CreateFromBinaryText(bytes(data))

@@ -7,8 +7,10 @@ from app.config import Settings, get_settings
 from app.database import sqlite_connection
 from app.routers.dft import router as dft_router
 from app.routers.knowledge import router as knowledge_router
+from app.routers.online_knowledge import router as online_knowledge_router
 from app.routers.predict import router as predict_router
 from app.routers.query import router as query_router
+from app.routers.reverse_design import router as reverse_design_router
 
 
 async def health() -> dict[str, str]:
@@ -34,7 +36,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(query_router)
     app.include_router(predict_router)
     app.include_router(knowledge_router)
+    app.include_router(online_knowledge_router)
     app.include_router(dft_router)
+    app.include_router(reverse_design_router)
 
     return app
 

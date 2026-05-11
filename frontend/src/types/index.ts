@@ -106,6 +106,128 @@ export type KnowledgeSearchResponse = {
   results: KnowledgeDocumentResult[];
 };
 
+export type OnlineKnowledgeMode = "synthesis" | "property";
+
+export type OnlineKnowledgeSearchRequest = {
+  material: string;
+  mode: OnlineKnowledgeMode;
+  model: string;
+  api_key: string;
+  base_url: string;
+  max_papers: number;
+  extraction_delay_seconds: number;
+};
+
+export type OnlineKnowledgeCountItem = {
+  label: string;
+  count: number;
+  percentage: number;
+};
+
+export type OnlineKnowledgeSynthesis = {
+  method: string;
+  reaction_type: string;
+  product_name: string;
+  product_abbreviation: string;
+  temperature: string;
+  catalyst: string;
+  solvent: string;
+  time: string;
+  atmosphere: string;
+  pressure: string;
+  initiator: string;
+  reactants: string;
+  properties: string;
+};
+
+export type OnlineKnowledgeSearchResponse = {
+  material: string;
+  mode: OnlineKnowledgeMode;
+  query_time_ms: number;
+  totalPapers: number;
+  max_papers: number;
+  exampleUsed: boolean;
+  stats: Record<string, unknown>;
+  syntheses: OnlineKnowledgeSynthesis[];
+  temperatureDistribution: OnlineKnowledgeCountItem[];
+  solventDistribution: OnlineKnowledgeCountItem[];
+  catalystTable: OnlineKnowledgeCountItem[];
+  tempLabels: OnlineKnowledgeCountItem[];
+  conditionSummary: string[];
+  reactionTypeTable: OnlineKnowledgeCountItem[];
+  dataframe: Record<string, unknown>[];
+};
+
+export type OnlineKnowledgeHistoryItem = {
+  history_id: number;
+  material: string;
+  mode: OnlineKnowledgeMode;
+  timestamp: string;
+  papers_found: number;
+  reactions_extracted: number;
+  max_papers: number;
+  result_data: OnlineKnowledgeSearchResponse;
+};
+
+export type OnlineKnowledgeHistoryResponse = {
+  history: OnlineKnowledgeHistoryItem[];
+};
+
+export type OnlineKnowledgeExportResponse = {
+  success: boolean;
+  csv_content: string;
+  filename: string;
+};
+
+export type ReverseDesignTgRequest = {
+  target_tg: number | null;
+  smiles: string;
+  similarity_threshold: number;
+  candidate_sample_size: number;
+  top_k: number;
+  random_seed: number | null;
+};
+
+export type ReverseDesignTgCandidate = {
+  rank: number;
+  pi_id: number;
+  polymer_smiles: string;
+  canonical_polym: string | null;
+  monomer_a_smiles: string;
+  monomer_b_smiles: string;
+  tg_value: number;
+  tg_unit: "°C";
+  tg_difference: number;
+  similarity_score: number;
+  structure_svg: string | null;
+  knowledge_available: boolean;
+};
+
+export type ReverseDesignTgResponse = {
+  target_tg: number;
+  query_time_ms: number;
+  candidate_pool_size: number;
+  sampled_candidate_count: number;
+  total: number;
+  data_source: "pi_reverse_design";
+  results: ReverseDesignTgCandidate[];
+};
+
+export type ReverseDesignKnowledgeRequest = {
+  pi_id: number;
+  top_k: number;
+};
+
+export type ReverseDesignKnowledgeResponse = {
+  pi_id: number;
+  monomer_a_smiles: string;
+  monomer_b_smiles: string;
+  monomer_a_iupac: string | null;
+  monomer_b_iupac: string | null;
+  knowledge_query: string | null;
+  knowledge: KnowledgeDocumentResult[] | null;
+};
+
 export type DftPcaPoint = {
   mol_id: string;
   x: number;

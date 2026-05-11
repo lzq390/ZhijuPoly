@@ -6,6 +6,7 @@ import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { Layout } from "./components/Layout";
 import { QueryPanel } from "./components/QueryPanel";
 import { ResultsDisplay } from "./components/ResultsDisplay";
+import { ReverseDesignPage } from "./components/ReverseDesignPage";
 import { StructurePreview3D } from "./components/StructurePreview3D";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -18,7 +19,7 @@ import {
   type WorkspaceMode
 } from "./types";
 
-type ActiveModule = "home" | "explorer" | "database" | "knowledge";
+type ActiveModule = "home" | "explorer" | "reverseDesign" | "database" | "knowledge";
 
 type AppRoute = {
   module: ActiveModule;
@@ -49,6 +50,10 @@ function routeFromPath(pathname: string): AppRoute {
     return { module: "explorer", datasetKey: null };
   }
 
+  if (path === "/reverse-design") {
+    return { module: "reverseDesign", datasetKey: null };
+  }
+
   if (path === "/knowledge") {
     return { module: "knowledge", datasetKey: null };
   }
@@ -68,6 +73,10 @@ function routeFromPath(pathname: string): AppRoute {
 function pathFromRoute(route: AppRoute) {
   if (route.module === "explorer") {
     return "/explorer";
+  }
+
+  if (route.module === "reverseDesign") {
+    return "/reverse-design";
   }
 
   if (route.module === "knowledge") {
@@ -157,15 +166,18 @@ function ModuleTile({
 
 function HomePage({
   onOpenExplorer,
+  onOpenReverseDesign,
   onOpenDatabase,
   onOpenKnowledge
 }: {
   onOpenExplorer: () => void;
+  onOpenReverseDesign: () => void;
   onOpenDatabase: () => void;
   onOpenKnowledge: () => void;
 }) {
   const moduleRows = [
     { name: "Polymer Property Explorer", status: "Ready" },
+    { name: "Tg Reverse Design", status: "Ready" },
     { name: "Database Analytics", status: "Ready" },
     { name: "Local Knowledge Search", status: "Ready" }
   ];
@@ -187,7 +199,7 @@ function HomePage({
                 PolyProp Workspace
               </h1>
               <p className="mt-5 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
-                A unified entry point for polymer property exploration, database analytics, and local knowledge search.
+                A unified entry point for polymer property exploration, reverse design, database analytics, and local knowledge search.
               </p>
             </div>
 
@@ -223,7 +235,7 @@ function HomePage({
         </div>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-3">
+      <section className="grid gap-4 lg:grid-cols-4">
         <ModuleTile
           icon={<Atom className="h-5 w-5" />}
           eyebrow="Available"
@@ -232,6 +244,15 @@ function HomePage({
           status="Ready"
           actionLabel="Enter"
           onClick={onOpenExplorer}
+        />
+        <ModuleTile
+          icon={<Sparkles className="h-5 w-5" />}
+          eyebrow="Available"
+          title="Tg Reverse Design"
+          description="Draw a polymer structure, enter a target Tg, and search the local PI candidate database."
+          status="Ready"
+          actionLabel="Enter"
+          onClick={onOpenReverseDesign}
         />
         <ModuleTile
           icon={<BarChart3 className="h-5 w-5" />}
@@ -378,6 +399,10 @@ export default function App() {
     navigate({ module: "explorer", datasetKey: null });
   }
 
+  function openReverseDesign() {
+    navigate({ module: "reverseDesign", datasetKey: null });
+  }
+
   function openDatabase() {
     navigate({ module: "database", datasetKey: null });
   }
@@ -389,7 +414,12 @@ export default function App() {
   return (
     <Layout>
       <div className={activeModule === "home" ? "contents" : "hidden"}>
-        <HomePage onOpenExplorer={openExplorer} onOpenDatabase={openDatabase} onOpenKnowledge={openKnowledge} />
+        <HomePage
+          onOpenExplorer={openExplorer}
+          onOpenReverseDesign={openReverseDesign}
+          onOpenDatabase={openDatabase}
+          onOpenKnowledge={openKnowledge}
+        />
       </div>
 
       {activeModule === "database" ? (
@@ -403,6 +433,10 @@ export default function App() {
 
       {activeModule === "knowledge" ? (
         <KnowledgeSearch onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+      ) : null}
+
+      {activeModule === "reverseDesign" ? (
+        <ReverseDesignPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
       ) : null}
 
       {hasOpenedExplorer ? (

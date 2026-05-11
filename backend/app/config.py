@@ -38,6 +38,8 @@ class Settings:
         knowledge_zip_path: str | None = None,
         fumol_zip_path: str | None = None,
         fumol_db_path: str | None = None,
+        pi_reverse_db_path: str | None = None,
+        pi_reverse_csv_path: str | None = None,
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
         model_dir: str | None = None,
@@ -64,6 +66,16 @@ class Settings:
             "FUMOL_DB_PATH",
             env_values.get("FUMOL_DB_PATH", "backend/data/fumol.db"),
         )
+        raw_pi_reverse_db_path = pi_reverse_db_path or os.getenv(
+            "PI_REVERSE_DB_PATH",
+            env_values.get("PI_REVERSE_DB_PATH", "backend/data/pi_reverse_design.db"),
+        )
+        raw_pi_reverse_csv_path = pi_reverse_csv_path
+        if raw_pi_reverse_csv_path is None:
+            raw_pi_reverse_csv_path = os.getenv(
+                "PI_REVERSE_CSV_PATH",
+                env_values.get("PI_REVERSE_CSV_PATH", ""),
+            )
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",
             env_values.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"),
@@ -89,6 +101,12 @@ class Settings:
         self.knowledge_zip_path = _resolve_from_root(raw_knowledge_zip_path)
         self.fumol_zip_path = _resolve_from_root(raw_fumol_zip_path)
         self.fumol_db_path = _resolve_from_root(raw_fumol_db_path)
+        self.pi_reverse_db_path = _resolve_from_root(raw_pi_reverse_db_path)
+        self.pi_reverse_csv_path = (
+            _resolve_from_root(raw_pi_reverse_csv_path.strip())
+            if raw_pi_reverse_csv_path.strip()
+            else ""
+        )
         self.allowed_origins = raw_allowed_origins
         self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)
@@ -112,6 +130,16 @@ class Settings:
     @property
     def fumol_db_file(self) -> Path:
         return Path(self.fumol_db_path)
+
+    @property
+    def pi_reverse_db_file(self) -> Path:
+        return Path(self.pi_reverse_db_path)
+
+    @property
+    def pi_reverse_csv_file(self) -> Path | None:
+        if not self.pi_reverse_csv_path:
+            return None
+        return Path(self.pi_reverse_csv_path)
 
     @property
     def allowed_origins_list(self) -> list[str]:

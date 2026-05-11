@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -162,6 +162,166 @@ class KnowledgeSearchResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     total: int = Field(ge=0)
     results: list[KnowledgeDocumentResult] = Field(default_factory=list)
+
+
+OnlineKnowledgeMode = Literal["synthesis", "property"]
+
+
+class OnlineKnowledgeSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    material: str = Field(min_length=1)
+    mode: OnlineKnowledgeMode = "synthesis"
+    model: str = Field(min_length=1)
+    api_key: str = Field(min_length=1, repr=False)
+    base_url: str = Field(min_length=1)
+    max_papers: int = Field(default=100, ge=1, le=2000)
+    extraction_delay_seconds: float = Field(default=0.5, ge=0.0, le=5.0)
+
+
+class OnlineKnowledgeCountItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    label: str
+    count: int = Field(ge=0)
+    percentage: float = Field(ge=0.0, le=100.0)
+
+
+class OnlineKnowledgeSynthesis(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    method: str
+    reaction_type: str
+    product_name: str
+    product_abbreviation: str
+    temperature: str
+    catalyst: str
+    solvent: str
+    time: str
+    atmosphere: str
+    pressure: str
+    initiator: str
+    reactants: str
+    properties: str
+
+
+class OnlineKnowledgeSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    material: str
+    mode: OnlineKnowledgeMode
+    query_time_ms: float = Field(ge=0.0)
+    totalPapers: int = Field(ge=0)
+    max_papers: int = Field(ge=1)
+    exampleUsed: bool
+    stats: dict[str, Any]
+    syntheses: list[OnlineKnowledgeSynthesis] = Field(default_factory=list)
+    temperatureDistribution: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
+    solventDistribution: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
+    catalystTable: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
+    tempLabels: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
+    conditionSummary: list[str] = Field(default_factory=list)
+    reactionTypeTable: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
+    dataframe: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class OnlineKnowledgeHistoryItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    history_id: int = Field(ge=1)
+    material: str
+    mode: OnlineKnowledgeMode
+    timestamp: str
+    papers_found: int = Field(ge=0)
+    reactions_extracted: int = Field(ge=0)
+    max_papers: int = Field(ge=0)
+    result_data: OnlineKnowledgeSearchResponse
+
+
+class OnlineKnowledgeHistoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    history: list[OnlineKnowledgeHistoryItem] = Field(default_factory=list)
+
+
+class OnlineKnowledgeExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    data: list[dict[str, Any]] = Field(min_length=1)
+    filename: str | None = None
+
+
+class OnlineKnowledgeExportResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    success: bool
+    csv_content: str
+    filename: str
+
+
+class MutationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool
+
+
+class ReverseDesignTgRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target_tg: float
+    smiles: str = Field(min_length=1)
+    similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    candidate_sample_size: int = Field(default=200, ge=1, le=200)
+    top_k: int = Field(default=50, ge=1, le=100)
+    random_seed: int | None = None
+
+
+class ReverseDesignTgCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    rank: int = Field(ge=1)
+    pi_id: int
+    polymer_smiles: str
+    canonical_polym: str | None = None
+    monomer_a_smiles: str
+    monomer_b_smiles: str
+    tg_value: float
+    tg_unit: Literal["°C"] = "°C"
+    tg_difference: float = Field(ge=0.0)
+    similarity_score: float = Field(ge=0.0, le=1.0)
+    structure_svg: str | None = None
+    knowledge_available: bool = False
+
+
+class ReverseDesignTgResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_tg: float
+    query_time_ms: float = Field(ge=0.0)
+    candidate_pool_size: int = Field(ge=0)
+    sampled_candidate_count: int = Field(ge=0)
+    total: int = Field(ge=0)
+    data_source: Literal["pi_reverse_design"] = "pi_reverse_design"
+    results: list[ReverseDesignTgCandidate] = Field(default_factory=list)
+
+
+class ReverseDesignKnowledgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pi_id: int = Field(ge=1)
+    top_k: int = Field(default=10, ge=1, le=100)
+
+
+class ReverseDesignKnowledgeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    pi_id: int
+    monomer_a_smiles: str
+    monomer_b_smiles: str
+    monomer_a_iupac: str | None = None
+    monomer_b_iupac: str | None = None
+    knowledge_query: str | None = None
+    knowledge: list[KnowledgeDocumentResult] | None = None
 
 
 class DftPcaPoint(BaseModel):
