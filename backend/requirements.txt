@@ -4,6 +4,8 @@ pydantic==2.10.6
 python-dotenv==1.0.1
 numpy<2
 pandas==2.2.3
+requests==2.32.5
+openai==2.36.0
 rdkit==2023.9.1
 joblib==1.5.3
 scikit-learn==1.8.0

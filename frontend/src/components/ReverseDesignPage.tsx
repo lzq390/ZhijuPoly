@@ -8,10 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Input } from "./ui/input";
 import { useKetcher } from "../hooks/useKetcher";
 import { useReverseDesign } from "../hooks/useReverseDesign";
-import type { ReverseDesignTgRequest } from "../types";
+import type { KnowledgeNavigationRequest, ReverseDesignTgRequest } from "../types";
 
 type ReverseDesignPageProps = {
   onBackHome: () => void;
+  onOpenKnowledge: (request: KnowledgeNavigationRequest) => void;
 };
 
 function parseOptionalNumber(value: string) {
@@ -23,7 +24,7 @@ function parseOptionalNumber(value: string) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-export function ReverseDesignPage({ onBackHome }: ReverseDesignPageProps) {
+export function ReverseDesignPage({ onBackHome, onOpenKnowledge }: ReverseDesignPageProps) {
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
   const reverseDesign = useReverseDesign();
 
@@ -208,11 +209,7 @@ export function ReverseDesignPage({ onBackHome }: ReverseDesignPageProps) {
         data={reverseDesign.data}
         error={reverseDesign.error}
         isLoading={reverseDesign.isLoading}
-        selectedCandidate={reverseDesign.selectedCandidate}
-        knowledgeData={reverseDesign.knowledgeData}
-        knowledgeLoading={reverseDesign.knowledgeLoading}
-        knowledgeError={reverseDesign.knowledgeError}
-        onLoadKnowledge={reverseDesign.loadKnowledge}
+        onOpenKnowledge={onOpenKnowledge}
       />
     </div>
   );

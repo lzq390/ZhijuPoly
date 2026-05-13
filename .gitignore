@@ -31,6 +31,12 @@ polyprop-release-*.tar.gz
 /1.png
 /AGENTS.md
 /database/data_txt.zip
+/database/pi_reverse_design_test_*.csv
 /database/polymer_process_material_filtered_cleaned_office_utf8_bom.csv
 /database/polymer_property_detail_cleaned_office_utf8_bom.csv
 /database/preview_100.csv
+
+# Local one-off scripts and tests
+/scripts/build_pi_reverse_design_sqlite.py
+/scripts/prepare_pi_reverse_design_test_data.py
+/backend/tests/

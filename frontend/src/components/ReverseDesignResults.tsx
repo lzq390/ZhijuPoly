@@ -1,7 +1,7 @@
-import type { ReactNode } from "react";
-import { Atom, BookOpen, Database, LoaderCircle, SearchX, Target, Timer, TriangleAlert } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Atom, BookOpen, ChevronRight, Database, LoaderCircle, SearchX, Target, Timer, TriangleAlert } from "lucide-react";
 import type {
-  ReverseDesignKnowledgeResponse,
+  KnowledgeNavigationRequest,
   ReverseDesignTgCandidate,
   ReverseDesignTgResponse
 } from "../types";
@@ -14,12 +14,27 @@ type ReverseDesignResultsProps = {
   data: ReverseDesignTgResponse | null;
   error: string | null;
   isLoading?: boolean;
-  selectedCandidate: ReverseDesignTgCandidate | null;
-  knowledgeData: ReverseDesignKnowledgeResponse | null;
-  knowledgeLoading?: boolean;
-  knowledgeError: string | null;
-  onLoadKnowledge: (candidate: ReverseDesignTgCandidate) => void;
+  onOpenKnowledge: (request: KnowledgeNavigationRequest) => void;
 };
+
+type KnowledgeMenuPosition = {
+  left: number;
+  top: number;
+  placement: "left" | "right";
+};
+
+const KNOWLEDGE_MENU_WIDTH = 144;
+const KNOWLEDGE_MENU_HEIGHT = 120;
+const KNOWLEDGE_MENU_GAP = 8;
+const KNOWLEDGE_MENU_MARGIN = 12;
+
+function clampToViewport(value: number, min: number, max: number) {
+  if (max < min) {
+    return min;
+  }
+
+  return Math.min(Math.max(value, min), max);
+}
 
 function EmptyPanel({
   icon,
@@ -43,15 +58,103 @@ function EmptyPanel({
 
 function CandidateCard({
   candidate,
-  onLoadKnowledge
+  onOpenKnowledge
 }: {
   candidate: ReverseDesignTgCandidate;
-  onLoadKnowledge: (candidate: ReverseDesignTgCandidate) => void;
+  onOpenKnowledge: (request: KnowledgeNavigationRequest) => void;
 }) {
+  const [showIupac, setShowIupac] = useState(false);
+  const [knowledgeMenuOpen, setKnowledgeMenuOpen] = useState(false);
+  const [knowledgeMenuPosition, setKnowledgeMenuPosition] = useState<KnowledgeMenuPosition | null>(null);
+  const knowledgeMenuRef = useRef<HTMLDivElement | null>(null);
+  const knowledgeMenuPanelRef = useRef<HTMLDivElement | null>(null);
   const displaySmiles = candidate.canonical_polym || candidate.polymer_smiles;
+  const monomerATerm = candidate.monomer_a_iupac?.trim() || candidate.monomer_a_smiles.trim();
+  const monomerBTerm = candidate.monomer_b_iupac?.trim() || candidate.monomer_b_smiles.trim();
+  const pairTerms = [monomerATerm, monomerBTerm].filter((value) => value.length > 0);
+  const knowledgeMenuId = `knowledge-menu-${candidate.pi_id}`;
+
+  function openKnowledge(terms: string[]) {
+    setKnowledgeMenuOpen(false);
+    onOpenKnowledge({
+      query: terms.join(" OR "),
+      terms
+    });
+  }
+
+  function updateKnowledgeMenuPosition() {
+    const triggerRect = knowledgeMenuRef.current?.getBoundingClientRect();
+    if (!triggerRect) {
+      return;
+    }
+
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const rightLeft = triggerRect.right + KNOWLEDGE_MENU_GAP;
+    const leftLeft = triggerRect.left - KNOWLEDGE_MENU_GAP - KNOWLEDGE_MENU_WIDTH;
+    const fitsRight = rightLeft + KNOWLEDGE_MENU_WIDTH <= viewportWidth - KNOWLEDGE_MENU_MARGIN;
+    const fitsLeft = leftLeft >= KNOWLEDGE_MENU_MARGIN;
+    const placement = fitsRight || !fitsLeft ? "right" : "left";
+    const preferredLeft = placement === "right" ? rightLeft : leftLeft;
+    const left = clampToViewport(
+      preferredLeft,
+      KNOWLEDGE_MENU_MARGIN,
+      viewportWidth - KNOWLEDGE_MENU_WIDTH - KNOWLEDGE_MENU_MARGIN,
+    );
+    const top = clampToViewport(
+      triggerRect.bottom - KNOWLEDGE_MENU_HEIGHT,
+      KNOWLEDGE_MENU_MARGIN,
+      viewportHeight - KNOWLEDGE_MENU_HEIGHT - KNOWLEDGE_MENU_MARGIN,
+    );
+
+    setKnowledgeMenuPosition({ left, top, placement });
+  }
+
+  useEffect(() => {
+    if (!knowledgeMenuOpen) {
+      setKnowledgeMenuPosition(null);
+      return;
+    }
+
+    updateKnowledgeMenuPosition();
+    window.addEventListener("resize", updateKnowledgeMenuPosition);
+    window.addEventListener("scroll", updateKnowledgeMenuPosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updateKnowledgeMenuPosition);
+      window.removeEventListener("scroll", updateKnowledgeMenuPosition, true);
+    };
+  }, [knowledgeMenuOpen]);
+
+  useEffect(() => {
+    if (!knowledgeMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (
+        !(target instanceof Node) ||
+        knowledgeMenuRef.current?.contains(target) ||
+        knowledgeMenuPanelRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setKnowledgeMenuOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [knowledgeMenuOpen]);
 
   return (
-    <Card className="overflow-hidden rounded-[24px] border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)] p-3">
+    <Card
+      className={[
+        "relative rounded-[24px] border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)] p-3",
+        knowledgeMenuOpen ? "z-30 overflow-visible" : "overflow-visible"
+      ].join(" ")}
+    >
       <div className="overflow-hidden rounded-[18px] border border-white/80 bg-white/90 p-2.5 shadow-sm">
         <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.18em] text-mutedForeground">
           <span className="inline-flex items-center gap-2">
@@ -94,19 +197,101 @@ function CandidateCard({
 
       <div className="mt-2.5 rounded-[16px] border border-white/80 bg-white/75 px-3 py-2.5 shadow-sm">
         <div className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">Monomers</div>
-        <div className="mt-2 space-y-1.5 font-mono-ui text-xs leading-5 text-slate-800">
-          <div className="break-all">{candidate.monomer_a_smiles || "Not available"}</div>
-          <div className="break-all">{candidate.monomer_b_smiles || "Not available"}</div>
+        <div className="mt-2 space-y-3 text-xs leading-5 text-slate-800">
+          <div className="space-y-1">
+            <div className="font-semibold text-slate-700">A</div>
+            {showIupac ? (
+              <div className="break-words text-slate-900">{candidate.monomer_a_iupac || "IUPAC not available"}</div>
+            ) : null}
+            <div className="font-mono-ui break-all text-mutedForeground">{candidate.monomer_a_smiles || "Not available"}</div>
+          </div>
+          <div className="space-y-1">
+            <div className="font-semibold text-slate-700">B</div>
+            {showIupac ? (
+              <div className="break-words text-slate-900">{candidate.monomer_b_iupac || "IUPAC not available"}</div>
+            ) : null}
+            <div className="font-mono-ui break-all text-mutedForeground">{candidate.monomer_b_smiles || "Not available"}</div>
+          </div>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          className="mt-3 min-h-[38px] w-full"
-          onClick={() => onLoadKnowledge(candidate)}
-        >
-          <BookOpen className="mr-2 h-4 w-4" />
-          Knowledge
-        </Button>
+        <div className="mt-3 grid grid-cols-[minmax(5.5rem,0.72fr)_minmax(9.5rem,1.28fr)] gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-[38px] whitespace-nowrap px-3 text-xs"
+            onClick={() => setShowIupac((current) => !current)}
+          >
+            <Atom className="mr-1.5 h-4 w-4 shrink-0" />
+            {showIupac ? "Hide" : "IUPAC"}
+          </Button>
+          <div className="relative" ref={knowledgeMenuRef}>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-[38px] w-full whitespace-nowrap px-3 text-xs"
+              onClick={() => setKnowledgeMenuOpen((current) => !current)}
+              disabled={pairTerms.length === 0}
+              aria-expanded={knowledgeMenuOpen}
+              aria-controls={knowledgeMenuId}
+            >
+              <BookOpen className="mr-1.5 h-4 w-4 shrink-0" />
+              Local Knowledge
+              <ChevronRight
+                className={[
+                  "ml-1.5 h-4 w-4 shrink-0 transition-transform",
+                  knowledgeMenuOpen && knowledgeMenuPosition?.placement === "left"
+                    ? "rotate-180"
+                    : knowledgeMenuOpen
+                      ? "translate-x-0.5"
+                      : ""
+                ].join(" ")}
+              />
+            </Button>
+            {knowledgeMenuOpen ? (
+              <div
+                id={knowledgeMenuId}
+                ref={knowledgeMenuPanelRef}
+                role="menu"
+                style={{
+                  left: knowledgeMenuPosition?.left ?? -9999,
+                  top: knowledgeMenuPosition?.top ?? -9999,
+                  visibility: knowledgeMenuPosition ? "visible" : "hidden",
+                }}
+                className="fixed z-50 w-36 rounded-[18px] border border-white/80 bg-white/95 p-1.5 shadow-[0_18px_45px_rgba(8,17,31,0.18)] backdrop-blur"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex min-h-9 w-full items-center rounded-[14px] px-3 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-800 disabled:pointer-events-none disabled:opacity-45"
+                  onClick={() => openKnowledge([monomerATerm])}
+                  disabled={!monomerATerm}
+                  title="Search monomer A"
+                >
+                  Monomer A
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex min-h-9 w-full items-center rounded-[14px] px-3 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-800 disabled:pointer-events-none disabled:opacity-45"
+                  onClick={() => openKnowledge([monomerBTerm])}
+                  disabled={!monomerBTerm}
+                  title="Search monomer B"
+                >
+                  Monomer B
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex min-h-9 w-full items-center rounded-[14px] px-3 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-800 disabled:pointer-events-none disabled:opacity-45"
+                  onClick={() => openKnowledge(pairTerms)}
+                  disabled={pairTerms.length === 0}
+                  title="Search monomers A and B"
+                >
+                  A + B
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
     </Card>
   );
@@ -116,11 +301,7 @@ export function ReverseDesignResults({
   data,
   error,
   isLoading = false,
-  selectedCandidate,
-  knowledgeData,
-  knowledgeLoading = false,
-  knowledgeError,
-  onLoadKnowledge
+  onOpenKnowledge
 }: ReverseDesignResultsProps) {
   if (error) {
     return (
@@ -193,7 +374,7 @@ export function ReverseDesignResults({
   }
 
   return (
-    <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
+    <Card className="overflow-visible rounded-[28px] border-white/70 shadow-none">
       <CardHeader className="min-h-[120px] gap-4 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-2">
@@ -234,44 +415,13 @@ export function ReverseDesignResults({
       <CardContent className="space-y-4 pt-5">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {data.results.map((candidate) => (
-            <CandidateCard key={candidate.pi_id} candidate={candidate} onLoadKnowledge={onLoadKnowledge} />
+            <CandidateCard
+              key={candidate.pi_id}
+              candidate={candidate}
+              onOpenKnowledge={onOpenKnowledge}
+            />
           ))}
         </div>
-
-        {selectedCandidate ? (
-          <div className="rounded-[24px] border border-white/80 bg-white/80 p-4 shadow-sm">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">Knowledge Link</div>
-                <div className="mt-1 text-sm font-semibold text-slate-950">PI #{selectedCandidate.pi_id}</div>
-              </div>
-              {knowledgeLoading ? (
-                <Badge className="bg-slate-100 text-slate-700">Loading</Badge>
-              ) : knowledgeData?.knowledge_query ? (
-                <Badge className="bg-teal-50 text-teal-800">IUPAC query ready</Badge>
-              ) : (
-                <Badge className="bg-slate-100 text-slate-700">No IUPAC</Badge>
-              )}
-            </div>
-            {knowledgeError ? <Alert variant="destructive" className="mt-3">{knowledgeError}</Alert> : null}
-            {knowledgeData ? (
-              <div className="mt-3 grid gap-2 text-sm text-slate-700">
-                <div>
-                  <span className="font-semibold">Monomer A:</span>{" "}
-                  {knowledgeData.monomer_a_iupac || "Not converted"}
-                </div>
-                <div>
-                  <span className="font-semibold">Monomer B:</span>{" "}
-                  {knowledgeData.monomer_b_iupac || "Not converted"}
-                </div>
-                <div>
-                  <span className="font-semibold">Knowledge records:</span>{" "}
-                  {knowledgeData.knowledge ? knowledgeData.knowledge.length : 0}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
       </CardContent>
     </Card>
   );

@@ -5,12 +5,12 @@ import type {
   KnowledgeSearchResponse,
   OnlineKnowledgeExportResponse,
   OnlineKnowledgeHistoryResponse,
+  OnlineKnowledgeJobCreateResponse,
+  OnlineKnowledgeJobResponse,
   OnlineKnowledgeSearchRequest,
   OnlineKnowledgeSearchResponse,
   PredictRequest,
   PredictResponse,
-  ReverseDesignKnowledgeRequest,
-  ReverseDesignKnowledgeResponse,
   ReverseDesignTgRequest,
   ReverseDesignTgResponse,
   SmilesQueryRequest,
@@ -67,6 +67,16 @@ export function searchOnlineKnowledge(
   return postJSON("/online-knowledge/search", payload);
 }
 
+export function createOnlineKnowledgeJob(
+  payload: OnlineKnowledgeSearchRequest
+): Promise<OnlineKnowledgeJobCreateResponse> {
+  return postJSON("/online-knowledge/jobs", payload);
+}
+
+export function fetchOnlineKnowledgeJob(jobId: string): Promise<OnlineKnowledgeJobResponse> {
+  return getJSON(`/online-knowledge/jobs/${encodeURIComponent(jobId)}`);
+}
+
 export function fetchOnlineKnowledgeHistory(): Promise<OnlineKnowledgeHistoryResponse> {
   return getJSON("/online-knowledge/history");
 }
@@ -99,12 +109,6 @@ export function exportOnlineKnowledgeCsv(
 
 export function searchReverseDesignByTg(payload: ReverseDesignTgRequest): Promise<ReverseDesignTgResponse> {
   return postJSON("/reverse-design/tg", payload);
-}
-
-export function fetchReverseDesignKnowledge(
-  payload: ReverseDesignKnowledgeRequest
-): Promise<ReverseDesignKnowledgeResponse> {
-  return postJSON("/reverse-design/knowledge", payload);
 }
 
 export function fetchStructure3D(

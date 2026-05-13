@@ -130,6 +130,27 @@ class KnowledgeSearchRequest(BaseModel):
 
     query: str = Field(min_length=1)
     top_k: int = Field(default=25, ge=1, le=100)
+    terms: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("terms")
+    @classmethod
+    def validate_terms(cls, terms: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+
+        for term in terms:
+            value = term.strip()
+            if not value:
+                continue
+
+            key = value.casefold()
+            if key in seen:
+                continue
+
+            seen.add(key)
+            normalized.append(value)
+
+        return normalized
 
 
 class KnowledgeDocumentResult(BaseModel):
@@ -153,12 +174,15 @@ class KnowledgeDocumentResult(BaseModel):
     temperature: str | None = None
     reaction_time: str | None = None
     solvent: str | None = None
+    matched_terms: list[str] = Field(default_factory=list)
+    matched_fields: list[str] = Field(default_factory=list)
 
 
 class KnowledgeSearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
+    terms: list[str] = Field(default_factory=list)
     query_time_ms: float = Field(ge=0.0)
     total: int = Field(ge=0)
     results: list[KnowledgeDocumentResult] = Field(default_factory=list)
@@ -171,10 +195,10 @@ class OnlineKnowledgeSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     material: str = Field(min_length=1)
-    mode: OnlineKnowledgeMode = "synthesis"
-    model: str = Field(min_length=1)
     api_key: str = Field(min_length=1, repr=False)
     base_url: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    mode: OnlineKnowledgeMode = "synthesis"
     max_papers: int = Field(default=100, ge=1, le=2000)
     extraction_delay_seconds: float = Field(default=0.5, ge=0.0, le=5.0)
 
@@ -205,6 +229,19 @@ class OnlineKnowledgeSynthesis(BaseModel):
     properties: str
 
 
+class OnlineKnowledgePropertyPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    polymer_type: str
+    polymer_name: str
+    condition_name: str
+    condition_value: str
+    property_name: str
+    property_value: str
+    relationship: str
+    paper_title: str
+
+
 class OnlineKnowledgeSearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -216,12 +253,17 @@ class OnlineKnowledgeSearchResponse(BaseModel):
     exampleUsed: bool
     stats: dict[str, Any]
     syntheses: list[OnlineKnowledgeSynthesis] = Field(default_factory=list)
+    propertyPoints: list[OnlineKnowledgePropertyPoint] = Field(default_factory=list)
     temperatureDistribution: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
     solventDistribution: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
     catalystTable: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
     tempLabels: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
     conditionSummary: list[str] = Field(default_factory=list)
     reactionTypeTable: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
+    propertyNameDistribution: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
+    conditionDistribution: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
+    polymerTypeDistribution: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
+    relationshipDistribution: list[OnlineKnowledgeCountItem] = Field(default_factory=list)
     dataframe: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -242,6 +284,30 @@ class OnlineKnowledgeHistoryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     history: list[OnlineKnowledgeHistoryItem] = Field(default_factory=list)
+
+
+OnlineKnowledgeJobStatus = Literal["pending", "running", "completed", "failed"]
+
+
+class OnlineKnowledgeJobCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: OnlineKnowledgeJobStatus
+
+
+class OnlineKnowledgeJobResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: OnlineKnowledgeJobStatus
+    material: str
+    mode: OnlineKnowledgeMode
+    max_papers: int = Field(ge=1)
+    created_at: str
+    updated_at: str
+    error_message: str | None = None
+    result: OnlineKnowledgeSearchResponse | None = None
 
 
 class OnlineKnowledgeExportRequest(BaseModel):
@@ -285,6 +351,8 @@ class ReverseDesignTgCandidate(BaseModel):
     canonical_polym: str | None = None
     monomer_a_smiles: str
     monomer_b_smiles: str
+    monomer_a_iupac: str | None = None
+    monomer_b_iupac: str | None = None
     tg_value: float
     tg_unit: Literal["°C"] = "°C"
     tg_difference: float = Field(ge=0.0)
@@ -303,25 +371,6 @@ class ReverseDesignTgResponse(BaseModel):
     total: int = Field(ge=0)
     data_source: Literal["pi_reverse_design"] = "pi_reverse_design"
     results: list[ReverseDesignTgCandidate] = Field(default_factory=list)
-
-
-class ReverseDesignKnowledgeRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    pi_id: int = Field(ge=1)
-    top_k: int = Field(default=10, ge=1, le=100)
-
-
-class ReverseDesignKnowledgeResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    pi_id: int
-    monomer_a_smiles: str
-    monomer_b_smiles: str
-    monomer_a_iupac: str | None = None
-    monomer_b_iupac: str | None = None
-    knowledge_query: str | None = None
-    knowledge: list[KnowledgeDocumentResult] | None = None
 
 
 class DftPcaPoint(BaseModel):

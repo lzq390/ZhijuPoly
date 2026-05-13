@@ -14,6 +14,7 @@ import { useKetcher } from "./hooks/useKetcher";
 import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
 import {
+  type KnowledgeNavigationRequest,
   type PredictableProperty,
   type ResultsTab,
   type WorkspaceMode
@@ -25,6 +26,8 @@ type AppRoute = {
   module: ActiveModule;
   datasetKey: DatasetKey | null;
 };
+
+type KnowledgeNavigationInput = string | KnowledgeNavigationRequest;
 
 const datasetPathByKey: Record<DatasetKey, string> = {
   process: "/database/process",
@@ -96,6 +99,32 @@ function getInitialRoute() {
   }
 
   return routeFromPath(window.location.pathname);
+}
+
+function normalizeKnowledgeTerms(terms: string[] | undefined) {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  for (const term of terms ?? []) {
+    const value = term.trim();
+    if (!value) {
+      continue;
+    }
+
+    const key = value.toLocaleLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    normalized.push(value);
+  }
+
+  return normalized;
+}
+
+function getKnowledgeTermsFromSearch(search: string) {
+  return normalizeKnowledgeTerms(new URLSearchParams(search).getAll("term"));
 }
 
 type ModuleTileProps = {
@@ -280,7 +309,20 @@ function HomePage({
 export default function App() {
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
+  const [knowledgeInitialQuery, setKnowledgeInitialQuery] = useState(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+    return new URLSearchParams(window.location.search).get("q") ?? "";
+  });
+  const [knowledgeInitialTerms, setKnowledgeInitialTerms] = useState(() => {
+    if (typeof window === "undefined") {
+      return [] as string[];
+    }
+    return getKnowledgeTermsFromSearch(window.location.search);
+  });
   const [hasOpenedExplorer, setHasOpenedExplorer] = useState(() => getInitialRoute().module === "explorer");
+  const [preserveReverseDesignForKnowledge, setPreserveReverseDesignForKnowledge] = useState(false);
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const predict = usePredict();
@@ -371,6 +413,9 @@ export default function App() {
     if (route.module === "explorer") {
       setHasOpenedExplorer(true);
     }
+    if (route.module !== "knowledge") {
+      setPreserveReverseDesignForKnowledge(false);
+    }
   }
 
   function navigate(route: AppRoute) {
@@ -388,7 +433,12 @@ export default function App() {
 
   useEffect(() => {
     function handlePopState() {
-      applyRoute(routeFromPath(window.location.pathname));
+      const route = routeFromPath(window.location.pathname);
+      if (route.module === "knowledge") {
+        setKnowledgeInitialQuery(new URLSearchParams(window.location.search).get("q") ?? "");
+        setKnowledgeInitialTerms(getKnowledgeTermsFromSearch(window.location.search));
+      }
+      applyRoute(route);
     }
 
     window.addEventListener("popstate", handlePopState);
@@ -407,8 +457,35 @@ export default function App() {
     navigate({ module: "database", datasetKey: null });
   }
 
-  function openKnowledge() {
-    navigate({ module: "knowledge", datasetKey: null });
+  function openKnowledge(input?: KnowledgeNavigationInput) {
+    const rawQuery = typeof input === "string" ? input : input?.query;
+    const trimmedQuery = rawQuery?.trim() ?? "";
+    const terms = typeof input === "string" ? [] : normalizeKnowledgeTerms(input?.terms);
+    const route = { module: "knowledge", datasetKey: null } satisfies AppRoute;
+    const searchParams = new URLSearchParams();
+
+    if (trimmedQuery) {
+      searchParams.set("q", trimmedQuery);
+    }
+    for (const term of terms) {
+      searchParams.append("term", term);
+    }
+
+    const queryString = searchParams.toString();
+    const path = queryString ? `/knowledge?${queryString}` : "/knowledge";
+
+    setPreserveReverseDesignForKnowledge(activeModule === "reverseDesign");
+    setKnowledgeInitialQuery(trimmedQuery);
+    setKnowledgeInitialTerms(terms);
+
+    if (typeof window !== "undefined") {
+      if (`${normalizePath(window.location.pathname)}${window.location.search}` !== path) {
+        window.history.pushState(route, "", path);
+      }
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+
+    applyRoute(route);
   }
 
   return (
@@ -432,11 +509,23 @@ export default function App() {
       ) : null}
 
       {activeModule === "knowledge" ? (
-        <KnowledgeSearch onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+        <KnowledgeSearch
+          onBackHome={() => navigate({ module: "home", datasetKey: null })}
+          initialQuery={knowledgeInitialQuery}
+          initialTerms={knowledgeInitialTerms}
+        />
       ) : null}
 
-      {activeModule === "reverseDesign" ? (
-        <ReverseDesignPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+      {activeModule === "reverseDesign" || preserveReverseDesignForKnowledge ? (
+        <div
+          className={activeModule === "reverseDesign" ? "contents" : "hidden"}
+          aria-hidden={activeModule !== "reverseDesign"}
+        >
+          <ReverseDesignPage
+            onBackHome={() => navigate({ module: "home", datasetKey: null })}
+            onOpenKnowledge={openKnowledge}
+          />
+        </div>
       ) : null}
 
       {hasOpenedExplorer ? (

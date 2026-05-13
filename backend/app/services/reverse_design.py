@@ -4,7 +4,6 @@ import random
 import sqlite3
 from dataclasses import dataclass
 
-from app.pi_database import ensure_pi_schema
 from app.services.fingerprint import fingerprint_from_bytes, generate, tanimoto
 from app.utils.exceptions import InvalidSmilesError
 
@@ -127,21 +126,3 @@ def search_reverse_design_by_tg(
         sampled_candidate_count=len(sample),
         results=sample[:top_k],
     )
-
-
-def get_pi_candidate(connection: sqlite3.Connection, pi_id: int) -> sqlite3.Row | None:
-    ensure_pi_schema(connection)
-    return connection.execute(
-        """
-        SELECT
-            pi_id,
-            mon1,
-            mon2,
-            polym,
-            canonical_polym,
-            tg_celsius
-        FROM pi_candidates
-        WHERE pi_id = ?
-        """,
-        (pi_id,),
-    ).fetchone()

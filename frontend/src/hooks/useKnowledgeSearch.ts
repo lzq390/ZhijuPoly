@@ -15,7 +15,7 @@ export function useKnowledgeSearch() {
     data: null
   });
 
-  async function submit(query: string, topK: number) {
+  async function submit(query: string, topK: number, terms?: string[]) {
     setState((current) => ({
       ...current,
       isLoading: true,
@@ -23,7 +23,18 @@ export function useKnowledgeSearch() {
     }));
 
     try {
-      const data = await searchKnowledge({ query, top_k: topK });
+      const cleanedTerms = terms
+        ?.map((term) => term.trim())
+        .filter(
+          (term, index, values) =>
+            term.length > 0 &&
+            values.findIndex((value) => value.toLocaleLowerCase() === term.toLocaleLowerCase()) === index
+        );
+      const data = await searchKnowledge({
+        query,
+        top_k: topK,
+        ...(cleanedTerms?.length ? { terms: cleanedTerms } : {})
+      });
       setState({
         isLoading: false,
         error: null,

@@ -76,6 +76,7 @@ export type PredictResponse = {
 export type KnowledgeSearchRequest = {
   query: string;
   top_k: number;
+  terms?: string[];
 };
 
 export type KnowledgeDocumentResult = {
@@ -97,23 +98,31 @@ export type KnowledgeDocumentResult = {
   temperature: string | null;
   reaction_time: string | null;
   solvent: string | null;
+  matched_terms: string[];
+  matched_fields: string[];
 };
 
 export type KnowledgeSearchResponse = {
   query: string;
+  terms: string[];
   query_time_ms: number;
   total: number;
   results: KnowledgeDocumentResult[];
+};
+
+export type KnowledgeNavigationRequest = {
+  query: string;
+  terms?: string[];
 };
 
 export type OnlineKnowledgeMode = "synthesis" | "property";
 
 export type OnlineKnowledgeSearchRequest = {
   material: string;
-  mode: OnlineKnowledgeMode;
-  model: string;
   api_key: string;
   base_url: string;
+  model: string;
+  mode: OnlineKnowledgeMode;
   max_papers: number;
   extraction_delay_seconds: number;
 };
@@ -140,6 +149,17 @@ export type OnlineKnowledgeSynthesis = {
   properties: string;
 };
 
+export type OnlineKnowledgePropertyPoint = {
+  polymer_type: string;
+  polymer_name: string;
+  condition_name: string;
+  condition_value: string;
+  property_name: string;
+  property_value: string;
+  relationship: string;
+  paper_title: string;
+};
+
 export type OnlineKnowledgeSearchResponse = {
   material: string;
   mode: OnlineKnowledgeMode;
@@ -149,12 +169,17 @@ export type OnlineKnowledgeSearchResponse = {
   exampleUsed: boolean;
   stats: Record<string, unknown>;
   syntheses: OnlineKnowledgeSynthesis[];
+  propertyPoints: OnlineKnowledgePropertyPoint[];
   temperatureDistribution: OnlineKnowledgeCountItem[];
   solventDistribution: OnlineKnowledgeCountItem[];
   catalystTable: OnlineKnowledgeCountItem[];
   tempLabels: OnlineKnowledgeCountItem[];
   conditionSummary: string[];
   reactionTypeTable: OnlineKnowledgeCountItem[];
+  propertyNameDistribution: OnlineKnowledgeCountItem[];
+  conditionDistribution: OnlineKnowledgeCountItem[];
+  polymerTypeDistribution: OnlineKnowledgeCountItem[];
+  relationshipDistribution: OnlineKnowledgeCountItem[];
   dataframe: Record<string, unknown>[];
 };
 
@@ -171,6 +196,25 @@ export type OnlineKnowledgeHistoryItem = {
 
 export type OnlineKnowledgeHistoryResponse = {
   history: OnlineKnowledgeHistoryItem[];
+};
+
+export type OnlineKnowledgeJobStatus = "pending" | "running" | "completed" | "failed";
+
+export type OnlineKnowledgeJobCreateResponse = {
+  job_id: string;
+  status: OnlineKnowledgeJobStatus;
+};
+
+export type OnlineKnowledgeJobResponse = {
+  job_id: string;
+  status: OnlineKnowledgeJobStatus;
+  material: string;
+  mode: OnlineKnowledgeMode;
+  max_papers: number;
+  created_at: string;
+  updated_at: string;
+  error_message: string | null;
+  result: OnlineKnowledgeSearchResponse | null;
 };
 
 export type OnlineKnowledgeExportResponse = {
@@ -195,6 +239,8 @@ export type ReverseDesignTgCandidate = {
   canonical_polym: string | null;
   monomer_a_smiles: string;
   monomer_b_smiles: string;
+  monomer_a_iupac: string | null;
+  monomer_b_iupac: string | null;
   tg_value: number;
   tg_unit: "°C";
   tg_difference: number;
@@ -211,21 +257,6 @@ export type ReverseDesignTgResponse = {
   total: number;
   data_source: "pi_reverse_design";
   results: ReverseDesignTgCandidate[];
-};
-
-export type ReverseDesignKnowledgeRequest = {
-  pi_id: number;
-  top_k: number;
-};
-
-export type ReverseDesignKnowledgeResponse = {
-  pi_id: number;
-  monomer_a_smiles: string;
-  monomer_b_smiles: string;
-  monomer_a_iupac: string | null;
-  monomer_b_iupac: string | null;
-  knowledge_query: string | null;
-  knowledge: KnowledgeDocumentResult[] | null;
 };
 
 export type DftPcaPoint = {

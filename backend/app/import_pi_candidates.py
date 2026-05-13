@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -10,7 +11,9 @@ from app.config import get_settings
 from app.database import sqlite_connection
 from app.pi_database import ensure_pi_schema, rebuild_pi_schema
 from app.services.fingerprint import fingerprint_to_bytes, generate
+from app.services.smiles_to_iupac import prepare_monomer_smiles_for_iupac
 from app.services.smiles_utils import normalize
+from app.utils.exceptions import InvalidSmilesError
 
 
 OPTIONAL_FLOAT_FIELDS = (
@@ -61,6 +64,7 @@ class PiCandidateImportStats:
     parse_fail_count: int
     missing_tg_count: int
     skipped_required_count: int
+    iupac_cache_count: int = 0
 
 
 def _parse_float(value: object) -> float | None:
@@ -136,6 +140,39 @@ def _build_insert_values(row: dict[str, str]) -> tuple[object, ...] | None:
     )
 
 
+def _collect_iupac_cache_entries(row: dict[str, str], cache_entries: dict[str, str]) -> None:
+    for smiles_field, iupac_field in (("mon1", "mon1_iupac"), ("mon2", "mon2_iupac")):
+        smiles = (row.get(smiles_field) or "").strip()
+        iupac_name = (row.get(iupac_field) or "").strip()
+        if not smiles or not iupac_name or smiles in cache_entries:
+            continue
+
+        cache_entries[smiles] = iupac_name
+
+
+def _iupac_cache_key(smiles: str) -> str:
+    try:
+        return prepare_monomer_smiles_for_iupac(smiles)
+    except InvalidSmilesError:
+        return smiles.strip()
+
+
+def _write_iupac_cache(connection: sqlite3.Connection, cache_entries: dict[str, str]) -> int:
+    values = [
+        (_iupac_cache_key(smiles), iupac_name)
+        for smiles, iupac_name in cache_entries.items()
+        if smiles.strip()
+    ]
+    connection.executemany(
+        """
+        INSERT OR REPLACE INTO smiles_iupac_cache (smiles, iupac_name)
+        VALUES (?, ?)
+        """,
+        values,
+    )
+    return len(values)
+
+
 def import_pi_candidates_to_sqlite(
     csv_path: str | Path,
     db_path: str | Path,
@@ -151,6 +188,7 @@ def import_pi_candidates_to_sqlite(
     parse_fail_count = 0
     missing_tg_count = 0
     skipped_required_count = 0
+    iupac_cache_entries: dict[str, str] = {}
     batch: list[tuple[object, ...]] = []
 
     with sqlite_connection(db_path) as connection:
@@ -176,6 +214,8 @@ def import_pi_candidates_to_sqlite(
                     skipped_required_count += 1
                     continue
 
+                _collect_iupac_cache_entries(row, iupac_cache_entries)
+
                 if values[5] == 1:
                     parse_ok_count += 1
                 else:
@@ -198,6 +238,8 @@ def import_pi_candidates_to_sqlite(
         if batch:
             connection.executemany(INSERT_SQL, batch)
 
+        iupac_cache_count = _write_iupac_cache(connection, iupac_cache_entries)
+
     return PiCandidateImportStats(
         total_rows=total_rows,
         imported_count=imported_count,
@@ -205,6 +247,7 @@ def import_pi_candidates_to_sqlite(
         parse_fail_count=parse_fail_count,
         missing_tg_count=missing_tg_count,
         skipped_required_count=skipped_required_count,
+        iupac_cache_count=iupac_cache_count,
     )
 
 
@@ -236,6 +279,7 @@ def main() -> None:
         f"Imported pi_candidates={stats.imported_count} rows={stats.total_rows}"
         f" parse_ok={stats.parse_ok_count} parse_fail={stats.parse_fail_count}"
         f" missing_tg={stats.missing_tg_count} skipped={stats.skipped_required_count}"
+        f" iupac_cache={stats.iupac_cache_count}"
     )
 
 

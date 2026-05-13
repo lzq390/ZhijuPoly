@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { ArrowLeft, BookOpen, Clock3, Expand, FileText, Globe2, Loader2, Search, X } from "lucide-react";
 import { useKnowledgeSearch } from "../hooks/useKnowledgeSearch";
 import type { KnowledgeDocumentResult } from "../types";
+import { OnlineKnowledgeSearchPanel } from "./online-knowledge/OnlineKnowledgeSearchPanel";
 import { Alert } from "./ui/alert";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -9,6 +10,8 @@ import { Input } from "./ui/input";
 
 type KnowledgeSearchProps = {
   onBackHome: () => void;
+  initialQuery?: string;
+  initialTerms?: string[];
 };
 
 type MetaItemProps = {
@@ -23,8 +26,6 @@ type ActiveDetail = {
 } | null;
 
 type KnowledgeMode = "local" | "online";
-
-const ONLINE_RETRIEVAL_URL = import.meta.env.VITE_ONLINE_RETRIEVAL_URL ?? "/online-retrieval/";
 
 function MetaItem({ label, value, onOpen }: MetaItemProps) {
   if (!value) {
@@ -116,17 +117,39 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function HighlightedText({ text, query }: { text: string; query: string }) {
-  const trimmedQuery = query.trim();
-  if (!trimmedQuery) {
+function normalizeTerms(terms: string[]) {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  for (const term of terms) {
+    const value = term.trim();
+    if (!value) {
+      continue;
+    }
+
+    const key = value.toLocaleLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    normalized.push(value);
+  }
+
+  return normalized;
+}
+
+function HighlightedText({ text, terms }: { text: string; terms: string[] }) {
+  const highlightTerms = normalizeTerms(terms).sort((first, second) => second.length - first.length);
+  if (highlightTerms.length === 0) {
     return <>{text}</>;
   }
 
-  const parts = text.split(new RegExp(`(${escapeRegExp(trimmedQuery)})`, "ig"));
+  const parts = text.split(new RegExp(`(${highlightTerms.map(escapeRegExp).join("|")})`, "ig"));
   return (
     <>
       {parts.map((part, index) =>
-        part.toLocaleLowerCase() === trimmedQuery.toLocaleLowerCase() ? (
+        highlightTerms.some((term) => part.toLocaleLowerCase() === term.toLocaleLowerCase()) ? (
           <mark key={`${part}-${index}`} className="rounded bg-amber-200/80 px-1 text-slate-950">
             {part}
           </mark>
@@ -148,6 +171,7 @@ function KnowledgeResultCard({
   onOpenDetail: (label: string, value: string) => void;
 }) {
   const title = result.title_en || result.title_zh || `Knowledge record #${result.knowledge_id}`;
+  const highlightTerms = result.matched_terms.length > 0 ? result.matched_terms : [query];
 
   return (
     <article className="rounded-[24px] border border-white/80 bg-white/85 p-5 shadow-sm">
@@ -160,8 +184,23 @@ function KnowledgeResultCard({
       </div>
 
       <p className="mt-4 text-sm leading-7 text-slate-700">
-        <HighlightedText text={result.abstract_snippet} query={query} />
+        <HighlightedText text={result.abstract_snippet} terms={highlightTerms} />
       </p>
+
+      {result.matched_terms.length > 0 || result.matched_fields.length > 0 ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {result.matched_terms.map((term) => (
+            <Badge key={`term-${term}`} className="max-w-full break-all bg-teal-50 text-left text-teal-800">
+              {term}
+            </Badge>
+          ))}
+          {result.matched_fields.map((field) => (
+            <Badge key={`field-${field}`} className="bg-slate-100 text-slate-700">
+              {field}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
 
       <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         <MetaItem label="Polymer" value={result.polymer_iupac} onOpen={onOpenDetail} />
@@ -175,20 +214,36 @@ function KnowledgeResultCard({
   );
 }
 
-export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
+export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = [] }: KnowledgeSearchProps) {
   const [mode, setMode] = useState<KnowledgeMode>("local");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
+  const [activeTerms, setActiveTerms] = useState<string[]>(() => normalizeTerms(initialTerms));
   const [topK, setTopK] = useState(25);
   const [activeDetail, setActiveDetail] = useState<ActiveDetail>(null);
   const searchState = useKnowledgeSearch();
   const canSearch = query.trim().length > 0 && topK >= 1 && topK <= 100 && !searchState.isLoading;
+
+  useEffect(() => {
+    const trimmedQuery = initialQuery.trim();
+    const terms = normalizeTerms(initialTerms);
+    if (!trimmedQuery && terms.length === 0) {
+      return;
+    }
+
+    const searchQuery = trimmedQuery || terms.join(" OR ");
+    setMode("local");
+    setQuery(searchQuery);
+    setActiveTerms(terms);
+    void searchState.submit(searchQuery, topK, terms);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuery, initialTerms]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canSearch) {
       return;
     }
-    await searchState.submit(query.trim(), topK);
+    await searchState.submit(query.trim(), topK, activeTerms);
   }
 
   const resultBadge = searchState.data
@@ -252,9 +307,12 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
               <form onSubmit={handleSubmit} className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_132px_120px]">
                 <Input
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Enter an abstract keyword"
-                  aria-label="Abstract keyword"
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setActiveTerms([]);
+                  }}
+                  placeholder="Enter a keyword, IUPAC name, or formulation term"
+                  aria-label="Knowledge search query"
                 />
                 <Input
                   type="number"
@@ -318,25 +376,17 @@ export function KnowledgeSearch({ onBackHome }: KnowledgeSearchProps) {
               </div>
             ) : (
               <div className="flex min-h-[220px] items-center justify-center text-center text-sm text-mutedForeground">
-                No records found with abstracts containing "{searchState.data.query}".
+                No records found for "{searchState.data.query}".
               </div>
             )
           ) : (
             <div className="flex min-h-[220px] items-center justify-center text-center text-sm text-mutedForeground">
-              Enter a keyword to show matching abstract records.
+              Enter a keyword to show matching knowledge records.
             </div>
           )}
         </section>
       ) : (
-        <section className="overflow-hidden rounded-[32px] border border-white/70 bg-white/75 p-3 shadow-soft md:p-4">
-          <div className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-sm">
-            <iframe
-              title="Online Knowledge Retrieval"
-              src={ONLINE_RETRIEVAL_URL}
-              className="h-[calc(100vh-180px)] min-h-[760px] w-full border-0"
-            />
-          </div>
-        </section>
+        <OnlineKnowledgeSearchPanel />
       )}
 
       <DetailDialog detail={activeDetail} onClose={() => setActiveDetail(null)} />
