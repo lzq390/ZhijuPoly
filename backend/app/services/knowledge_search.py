@@ -7,6 +7,21 @@ from app.database import ensure_knowledge_schema
 
 
 OR_QUERY_SEPARATOR = re.compile(r"\s+OR\s+", re.IGNORECASE)
+IUPAC_TOKEN_SEPARATOR = re.compile(r"[\s,;:/()\[\]{}]+")
+LEADING_LOCANT = re.compile(r"^\d+(?:,\d+)*(?:-\d+)*-+")
+GENERIC_IUPAC_TOKENS = {
+    "acid",
+    "amine",
+    "ester",
+    "polymer",
+    "resin",
+    "the",
+    "and",
+    "or",
+    "of",
+    "with",
+}
+MAX_EXPANDED_TERMS = 24
 
 SEARCH_FIELDS = (
     ("polymer_iupac", "Polymer", 8),
@@ -29,6 +44,31 @@ def _fallback_query_terms(query: str) -> list[str]:
     return [query]
 
 
+def _iter_iupac_fragments(term: str) -> list[str]:
+    fragments: list[str] = []
+    for token in IUPAC_TOKEN_SEPARATOR.split(term):
+        value = token.strip("()[]{}\"'.,;:-")
+        if (
+            len(value) < 4
+            or value.casefold() in GENERIC_IUPAC_TOKENS
+            or not any(character.isalpha() for character in value)
+        ):
+            continue
+
+        fragments.append(value)
+        locant_free = LEADING_LOCANT.sub("", value)
+        if (
+            locant_free
+            and locant_free != value
+            and len(locant_free) >= 4
+            and locant_free.casefold() not in GENERIC_IUPAC_TOKENS
+            and any(character.isalpha() for character in locant_free)
+        ):
+            fragments.append(locant_free)
+
+    return fragments
+
+
 def normalize_search_terms(query: str, terms: list[str] | None = None) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
@@ -39,12 +79,15 @@ def normalize_search_terms(query: str, terms: list[str] | None = None) -> list[s
         if not value:
             continue
 
-        key = value.casefold()
-        if key in seen:
-            continue
+        for candidate in [value, *_iter_iupac_fragments(value)]:
+            key = candidate.casefold()
+            if key in seen:
+                continue
 
-        seen.add(key)
-        normalized.append(value)
+            seen.add(key)
+            normalized.append(candidate)
+            if len(normalized) >= MAX_EXPANDED_TERMS:
+                return normalized
 
     return normalized
 
@@ -98,28 +141,35 @@ def _field_like_sql(column: str) -> str:
     return f"COALESCE({column}, '') COLLATE NOCASE LIKE ? ESCAPE '\\'"
 
 
-def _build_search_sql_parts(terms: list[str]) -> tuple[str, list[str], str, list[str]]:
+def _build_search_sql_parts(terms: list[str]) -> tuple[str, list[str], str, list[str], str, list[str]]:
     where_parts: list[str] = []
     where_params: list[str] = []
+    match_count_parts: list[str] = []
+    match_count_params: list[str] = []
     score_parts: list[str] = []
     score_params: list[str] = []
 
     for term in terms:
         like_query = f"%{_escape_like(term)}%"
         term_parts: list[str] = []
+        count_term_parts: list[str] = []
 
         for column, _, weight in SEARCH_FIELDS:
             field_sql = _field_like_sql(column)
             term_parts.append(field_sql)
             where_params.append(like_query)
+            count_term_parts.append(field_sql)
+            match_count_params.append(like_query)
             score_parts.append(f"CASE WHEN {field_sql} THEN {weight} ELSE 0 END")
             score_params.append(like_query)
 
         where_parts.append("(" + " OR ".join(term_parts) + ")")
+        match_count_parts.append("CASE WHEN (" + " OR ".join(count_term_parts) + ") THEN 1 ELSE 0 END")
 
     where_sql = " OR ".join(where_parts) if where_parts else "0"
+    match_count_sql = " + ".join(match_count_parts) if match_count_parts else "0"
     score_sql = " + ".join(score_parts) if score_parts else "0"
-    return where_sql, where_params, score_sql, score_params
+    return where_sql, where_params, match_count_sql, match_count_params, score_sql, score_params
 
 
 def search_knowledge_documents(
@@ -127,6 +177,7 @@ def search_knowledge_documents(
     query: str,
     *,
     top_k: int,
+    offset: int = 0,
     terms: list[str] | None = None,
 ) -> tuple[int, list[sqlite3.Row]]:
     ensure_knowledge_schema(connection)
@@ -134,7 +185,7 @@ def search_knowledge_documents(
     if not search_terms:
         return 0, []
 
-    where_sql, where_params, score_sql, score_params = _build_search_sql_parts(search_terms)
+    where_sql, where_params, match_count_sql, match_count_params, score_sql, score_params = _build_search_sql_parts(search_terms)
 
     total_row = connection.execute(
         f"""
@@ -166,12 +217,13 @@ def search_knowledge_documents(
             temperature,
             reaction_time,
             solvent,
+            ({match_count_sql}) AS matched_term_count,
             ({score_sql}) AS match_score
         FROM knowledge_documents
         WHERE {where_sql}
-        ORDER BY match_score DESC, knowledge_id ASC
-        LIMIT ?
+        ORDER BY matched_term_count DESC, match_score DESC, knowledge_id ASC
+        LIMIT ? OFFSET ?
         """,
-        [*score_params, *where_params, top_k],
+        [*match_count_params, *score_params, *where_params, top_k, offset],
     ).fetchall()
     return total, rows

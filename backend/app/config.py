@@ -40,6 +40,15 @@ class Settings:
         fumol_db_path: str | None = None,
         pi_reverse_db_path: str | None = None,
         pi_reverse_csv_path: str | None = None,
+        pi_reverse_backend: str | None = None,
+        pi_postgres_dsn: str | None = None,
+        pi_reverse_tg_window_celsius: float | None = None,
+        pi_reverse_tg_max_window_celsius: float | None = None,
+        pi_reverse_max_scan_rows: int | None = None,
+        pi_reverse_timeout_seconds: float | None = None,
+        pi_reverse_job_workers: int | None = None,
+        pi_reverse_job_batch_size: int | None = None,
+        pi_reverse_progress_interval_rows: int | None = None,
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
         model_dir: str | None = None,
@@ -76,6 +85,73 @@ class Settings:
                 "PI_REVERSE_CSV_PATH",
                 env_values.get("PI_REVERSE_CSV_PATH", ""),
             )
+        raw_pi_reverse_backend = pi_reverse_backend or os.getenv(
+            "PI_REVERSE_BACKEND",
+            env_values.get("PI_REVERSE_BACKEND", "sqlite"),
+        )
+        raw_pi_postgres_dsn = pi_postgres_dsn or os.getenv(
+            "PI_POSTGRES_DSN",
+            env_values.get(
+                "PI_POSTGRES_DSN",
+                "postgresql://polyprop:polyprop@localhost:55432/polyprop_pi",
+            ),
+        )
+        raw_pi_reverse_tg_window_celsius = (
+            str(pi_reverse_tg_window_celsius)
+            if pi_reverse_tg_window_celsius is not None
+            else os.getenv(
+                "PI_REVERSE_TG_WINDOW_CELSIUS",
+                str(env_values.get("PI_REVERSE_TG_WINDOW_CELSIUS", "50")),
+            )
+        )
+        raw_pi_reverse_tg_max_window_celsius = (
+            str(pi_reverse_tg_max_window_celsius)
+            if pi_reverse_tg_max_window_celsius is not None
+            else os.getenv(
+                "PI_REVERSE_TG_MAX_WINDOW_CELSIUS",
+                str(env_values.get("PI_REVERSE_TG_MAX_WINDOW_CELSIUS", "200")),
+            )
+        )
+        raw_pi_reverse_max_scan_rows = (
+            str(pi_reverse_max_scan_rows)
+            if pi_reverse_max_scan_rows is not None
+            else os.getenv(
+                "PI_REVERSE_MAX_SCAN_ROWS",
+                str(env_values.get("PI_REVERSE_MAX_SCAN_ROWS", "500000")),
+            )
+        )
+        raw_pi_reverse_timeout_seconds = (
+            str(pi_reverse_timeout_seconds)
+            if pi_reverse_timeout_seconds is not None
+            else os.getenv(
+                "PI_REVERSE_TIMEOUT_SECONDS",
+                str(env_values.get("PI_REVERSE_TIMEOUT_SECONDS", "30")),
+            )
+        )
+        raw_pi_reverse_job_workers = (
+            str(pi_reverse_job_workers)
+            if pi_reverse_job_workers is not None
+            else os.getenv(
+                "PI_REVERSE_JOB_WORKERS",
+                str(env_values.get("PI_REVERSE_JOB_WORKERS", "1")),
+            )
+        )
+        raw_pi_reverse_job_batch_size = (
+            str(pi_reverse_job_batch_size)
+            if pi_reverse_job_batch_size is not None
+            else os.getenv(
+                "PI_REVERSE_JOB_BATCH_SIZE",
+                str(env_values.get("PI_REVERSE_JOB_BATCH_SIZE", "20000")),
+            )
+        )
+        raw_pi_reverse_progress_interval_rows = (
+            str(pi_reverse_progress_interval_rows)
+            if pi_reverse_progress_interval_rows is not None
+            else os.getenv(
+                "PI_REVERSE_PROGRESS_INTERVAL_ROWS",
+                str(env_values.get("PI_REVERSE_PROGRESS_INTERVAL_ROWS", "50000")),
+            )
+        )
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",
             env_values.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"),
@@ -107,6 +183,17 @@ class Settings:
             if raw_pi_reverse_csv_path.strip()
             else ""
         )
+        self.pi_reverse_backend = raw_pi_reverse_backend.strip().lower()
+        if self.pi_reverse_backend not in {"sqlite", "postgres"}:
+            raise ValueError("PI_REVERSE_BACKEND must be either 'sqlite' or 'postgres'")
+        self.pi_postgres_dsn = raw_pi_postgres_dsn.strip()
+        self.pi_reverse_tg_window_celsius = float(raw_pi_reverse_tg_window_celsius)
+        self.pi_reverse_tg_max_window_celsius = float(raw_pi_reverse_tg_max_window_celsius)
+        self.pi_reverse_max_scan_rows = int(raw_pi_reverse_max_scan_rows)
+        self.pi_reverse_timeout_seconds = float(raw_pi_reverse_timeout_seconds)
+        self.pi_reverse_job_workers = max(1, int(raw_pi_reverse_job_workers))
+        self.pi_reverse_job_batch_size = max(1, int(raw_pi_reverse_job_batch_size))
+        self.pi_reverse_progress_interval_rows = max(1, int(raw_pi_reverse_progress_interval_rows))
         self.allowed_origins = raw_allowed_origins
         self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)

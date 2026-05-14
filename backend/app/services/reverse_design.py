@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-import random
 import sqlite3
 from dataclasses import dataclass
+from typing import Any, Callable
 
 from app.services.fingerprint import fingerprint_from_bytes, generate, tanimoto
 from app.utils.exceptions import InvalidSmilesError
+
+ProgressCallback = Callable[..., None]
+CancellationCheck = Callable[[], bool]
 
 
 @dataclass(slots=True)
@@ -18,6 +21,8 @@ class ReverseDesignCandidate:
     tg_value: float
     tg_difference: float
     similarity_score: float
+    monomer_a_iupac: str | None = None
+    monomer_b_iupac: str | None = None
 
 
 @dataclass(slots=True)
@@ -25,37 +30,42 @@ class ReverseDesignSearchResult:
     candidate_pool_size: int
     sampled_candidate_count: int
     results: list[ReverseDesignCandidate]
+    scanned_rows: int = 0
+    best_similarity_score: float | None = None
+    current_tg_radius: float | None = None
+    exhausted: bool = False
+    stopped_by_limit: bool = False
+    cancelled: bool = False
 
 
-def _build_candidate(row: sqlite3.Row, similarity_score: float, target_tg: float) -> ReverseDesignCandidate:
-    tg_value = float(row["tg_celsius"])
+def _row_get(row: Any, key: str, default: object = None) -> object:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _build_candidate(row: Any, similarity_score: float, target_tg: float) -> ReverseDesignCandidate:
+    tg_value = float(_row_get(row, "tg_celsius"))
     return ReverseDesignCandidate(
-        pi_id=int(row["pi_id"]),
-        polymer_smiles=row["polym"],
-        canonical_polym=row["canonical_polym"],
-        monomer_a_smiles=row["mon1"],
-        monomer_b_smiles=row["mon2"],
+        pi_id=int(_row_get(row, "pi_id")),
+        polymer_smiles=str(_row_get(row, "polym", "")),
+        canonical_polym=_optional_text(_row_get(row, "canonical_polym")),
+        monomer_a_smiles=str(_row_get(row, "mon1", "")),
+        monomer_b_smiles=str(_row_get(row, "mon2", "")),
+        monomer_a_iupac=_optional_text(_row_get(row, "mon1_iupac_name")),
+        monomer_b_iupac=_optional_text(_row_get(row, "mon2_iupac_name")),
         tg_value=tg_value,
         tg_difference=abs(tg_value - target_tg),
         similarity_score=similarity_score,
     )
-
-
-def _add_to_reservoir(
-    sample: list[ReverseDesignCandidate],
-    candidate: ReverseDesignCandidate,
-    *,
-    seen_count: int,
-    sample_size: int,
-    rng: random.Random,
-) -> None:
-    if len(sample) < sample_size:
-        sample.append(candidate)
-        return
-
-    replacement_index = rng.randrange(seen_count)
-    if replacement_index < sample_size:
-        sample[replacement_index] = candidate
 
 
 def search_reverse_design_by_tg(
@@ -68,15 +78,44 @@ def search_reverse_design_by_tg(
     top_k: int = 50,
     random_seed: int | None = None,
     chunk_size: int = 5000,
+    progress_callback: ProgressCallback | None = None,
+    progress_interval_rows: int = 50000,
+    cancellation_check: CancellationCheck | None = None,
 ) -> ReverseDesignSearchResult:
     try:
         query_fp = generate(smiles.strip())
     except ValueError as exc:
         raise InvalidSmilesError(str(exc)) from exc
 
-    rng = random.Random(random_seed)
-    sample: list[ReverseDesignCandidate] = []
+    matches: list[ReverseDesignCandidate] = []
     candidate_pool_size = 0
+    scanned_rows = 0
+    best_similarity_score: float | None = None
+    current_tg_radius: float | None = None
+    progress_interval = max(1, progress_interval_rows)
+
+    def emit_progress() -> None:
+        if progress_callback is None:
+            return
+        progress_callback(
+            scanned_rows=scanned_rows,
+            matched_count=candidate_pool_size,
+            current_tg_radius=current_tg_radius,
+            best_similarity_score=best_similarity_score,
+        )
+
+    def build_result(*, exhausted: bool = False, cancelled: bool = False) -> ReverseDesignSearchResult:
+        matches.sort(key=lambda item: (item.tg_difference, -item.similarity_score, item.pi_id))
+        return ReverseDesignSearchResult(
+            candidate_pool_size=candidate_pool_size,
+            sampled_candidate_count=len(matches),
+            results=matches[:top_k],
+            scanned_rows=scanned_rows,
+            best_similarity_score=best_similarity_score,
+            current_tg_radius=current_tg_radius,
+            exhausted=exhausted,
+            cancelled=cancelled,
+        )
 
     cursor = connection.execute(
         """
@@ -101,28 +140,34 @@ def search_reverse_design_by_tg(
             break
 
         for row in rows:
+            scanned_rows += 1
+            tg_value = float(row["tg_celsius"])
+            current_tg_radius = abs(tg_value - float(target_tg))
             try:
                 candidate_fp = fingerprint_from_bytes(row["morgan_fp"])
             except (TypeError, ValueError, RuntimeError):
+                if scanned_rows % progress_interval == 0:
+                    emit_progress()
+                    if cancellation_check is not None and cancellation_check():
+                        return build_result(cancelled=True)
                 continue
 
             similarity_score = tanimoto(query_fp, candidate_fp)
+            if best_similarity_score is None or similarity_score > best_similarity_score:
+                best_similarity_score = similarity_score
             if similarity_score < similarity_threshold:
+                if scanned_rows % progress_interval == 0:
+                    emit_progress()
+                    if cancellation_check is not None and cancellation_check():
+                        return build_result(cancelled=True)
                 continue
 
             candidate_pool_size += 1
             candidate = _build_candidate(row, similarity_score, float(target_tg))
-            _add_to_reservoir(
-                sample,
-                candidate,
-                seen_count=candidate_pool_size,
-                sample_size=candidate_sample_size,
-                rng=rng,
-            )
+            matches.append(candidate)
+            if scanned_rows % progress_interval == 0:
+                emit_progress()
+                if cancellation_check is not None and cancellation_check():
+                    return build_result(cancelled=True)
 
-    sample.sort(key=lambda item: (item.tg_difference, -item.similarity_score, item.pi_id))
-    return ReverseDesignSearchResult(
-        candidate_pool_size=candidate_pool_size,
-        sampled_candidate_count=len(sample),
-        results=sample[:top_k],
-    )
+    return build_result(exhausted=True)

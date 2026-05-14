@@ -1,4 +1,4 @@
-import { Copy, Eraser, LoaderCircle, RefreshCcw, Sigma } from "lucide-react";
+import { Copy, Eraser, FlaskConical, LoaderCircle, RefreshCcw, Sigma } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -9,16 +9,22 @@ type KetcherEditorProps = {
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
   onReadyChange: (ready: boolean) => void;
   onChange: (value: string) => void;
+  presetStructure?: {
+    label: string;
+    smiles: string;
+  };
 };
 
 export function KetcherEditor({
   smiles,
   iframeRef,
   onReadyChange,
-  onChange
+  onChange,
+  presetStructure
 }: KetcherEditorProps) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [isLoadingPreset, setIsLoadingPreset] = useState(false);
   const [copyLabel, setCopyLabel] = useState("Copy");
   const copyResetTimerRef = useRef<number | null>(null);
 
@@ -99,6 +105,33 @@ export function KetcherEditor({
     }
   }
 
+  async function loadPresetStructure() {
+    if (!presetStructure) {
+      return;
+    }
+
+    const ketcher = iframeRef.current?.contentWindow?.ketcher;
+    if (!ketcher || typeof ketcher.setMolecule !== "function") {
+      onReadyChange(false);
+      return;
+    }
+
+    setIsLoadingPreset(true);
+    try {
+      await ketcher.setMolecule(presetStructure.smiles);
+      const nextSmiles =
+        typeof ketcher.getSmiles === "function"
+          ? await ketcher.getSmiles()
+          : presetStructure.smiles;
+      onChange(nextSmiles || presetStructure.smiles);
+      onReadyChange(true);
+    } catch (error) {
+      console.error("Failed to load preset structure into Ketcher", error);
+    } finally {
+      setIsLoadingPreset(false);
+    }
+  }
+
   async function copySmiles() {
     const value = smiles.trim();
     if (!value) {
@@ -138,6 +171,22 @@ export function KetcherEditor({
             <CardTitle className="text-[1.4rem] tracking-tight">Structure Editor</CardTitle>
           </div>
           <div className="flex flex-wrap justify-end gap-3 self-start lg:ml-auto">
+            {presetStructure ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={loadPresetStructure}
+                disabled={isLoadingPreset}
+                className="min-w-[190px]"
+              >
+                {isLoadingPreset ? (
+                  <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <FlaskConical className="mr-2 h-4 w-4" />
+                )}
+                {presetStructure.label}
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="outline"

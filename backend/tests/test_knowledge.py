@@ -280,3 +280,219 @@ async def test_search_knowledge_api_returns_matches_from_abstract(test_app: Fast
     assert response.total == 1
     assert response.results[0].title_en == "Epoxy coating"
     assert "epoxy resin" in response.results[0].abstract_snippet.casefold()
+    assert response.results[0].matched_terms == ["epoxy"]
+    assert response.results[0].matched_fields == ["Polymer", "Title", "Abstract"]
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_api_matches_structured_terms_across_fields(test_app: FastAPI) -> None:
+    db_path = Path(test_app.state.settings.sqlite_db_path)
+    with sqlite_connection(db_path) as connection:
+        rebuild_knowledge_schema(connection)
+        connection.execute(
+            """
+            INSERT INTO knowledge_documents (
+                source_file,
+                source_row_number,
+                title_en,
+                abstract,
+                formulation
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "P1_提取结果.xlsx",
+                2,
+                "Pair formulation",
+                "This record describes a polymerization recipe.",
+                "ethanol : propane",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO knowledge_documents (
+                source_file,
+                source_row_number,
+                title_en,
+                abstract
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                "P1_提取结果.xlsx",
+                3,
+                "Single abstract hit",
+                "Only ethanol is mentioned in this abstract.",
+            ),
+        )
+
+    response = await search_knowledge(
+        KnowledgeSearchRequest(query="monomer pair", terms=["ethanol", "propane"], top_k=5),
+        make_request(test_app),
+    )
+
+    assert response.query == "monomer pair"
+    assert response.terms == ["ethanol", "propane"]
+    assert response.total == 2
+    assert response.results[0].title_en == "Pair formulation"
+    assert response.results[0].matched_terms == ["ethanol", "propane"]
+    assert response.results[0].matched_fields == ["Formulation"]
+    assert response.results[1].title_en == "Single abstract hit"
+    assert response.results[1].matched_terms == ["ethanol"]
+    assert response.results[1].matched_fields == ["Abstract"]
+
+    fallback_response = await search_knowledge(
+        KnowledgeSearchRequest(query="ethanol OR propane", top_k=5),
+        make_request(test_app),
+    )
+
+    assert fallback_response.terms == ["ethanol", "propane"]
+    assert fallback_response.total == 2
+    assert fallback_response.results[0].title_en == "Pair formulation"
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_api_expands_iupac_terms_for_partial_group_matches(test_app: FastAPI) -> None:
+    db_path = Path(test_app.state.settings.sqlite_db_path)
+    with sqlite_connection(db_path) as connection:
+        rebuild_knowledge_schema(connection)
+        connection.execute(
+            """
+            INSERT INTO knowledge_documents (
+                source_file,
+                source_row_number,
+                title_en,
+                abstract,
+                formulation
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "P1_提取结果.xlsx",
+                2,
+                "Aminophenyl paper",
+                "The synthesis uses a 4-Aminophenyl-containing diamine.",
+                "",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO knowledge_documents (
+                source_file,
+                source_row_number,
+                title_en,
+                abstract,
+                formulation
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "P1_提取结果.xlsx",
+                3,
+                "Aminobenzoate paper",
+                "The formulation uses an aromatic ester.",
+                "4-aminobenzoate derivative",
+            ),
+        )
+
+    response = await search_knowledge(
+        KnowledgeSearchRequest(query="monomer", terms=["4-Aminophenyl 4-aminobenzoate"], top_k=5),
+        make_request(test_app),
+    )
+
+    assert response.terms == [
+        "4-Aminophenyl 4-aminobenzoate",
+        "4-Aminophenyl",
+        "Aminophenyl",
+        "4-aminobenzoate",
+        "aminobenzoate",
+    ]
+    assert response.total == 2
+    results_by_title = {result.title_en: result for result in response.results}
+    assert set(results_by_title) == {"Aminophenyl paper", "Aminobenzoate paper"}
+    assert results_by_title["Aminophenyl paper"].matched_terms == ["4-Aminophenyl", "Aminophenyl"]
+    assert results_by_title["Aminobenzoate paper"].matched_terms == ["4-aminobenzoate", "aminobenzoate"]
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_api_ranks_more_matched_fragments_first(test_app: FastAPI) -> None:
+    db_path = Path(test_app.state.settings.sqlite_db_path)
+    with sqlite_connection(db_path) as connection:
+        rebuild_knowledge_schema(connection)
+        connection.execute(
+            """
+            INSERT INTO knowledge_documents (
+                source_file,
+                source_row_number,
+                title_en,
+                abstract,
+                polymer_iupac
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "P1_提取结果.xlsx",
+                2,
+                "One fragment in polymer",
+                "This record only has background text.",
+                "poly(benzophenone imide)",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO knowledge_documents (
+                source_file,
+                source_row_number,
+                title_en,
+                abstract,
+                polymer_iupac
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "P1_提取结果.xlsx",
+                3,
+                "Two fragments in abstract",
+                "This record mentions benzophenone and aminobenzoate fragments together.",
+                "",
+            ),
+        )
+
+    response = await search_knowledge(
+        KnowledgeSearchRequest(query="monomer", terms=["benzophenone aminobenzoate"], top_k=5),
+        make_request(test_app),
+    )
+
+    assert [result.title_en for result in response.results] == [
+        "Two fragments in abstract",
+        "One fragment in polymer",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_api_returns_requested_result_page(test_app: FastAPI) -> None:
+    db_path = Path(test_app.state.settings.sqlite_db_path)
+    with sqlite_connection(db_path) as connection:
+        rebuild_knowledge_schema(connection)
+        for index in range(25):
+            connection.execute(
+                """
+                INSERT INTO knowledge_documents (
+                    source_file,
+                    source_row_number,
+                    title_en,
+                    abstract
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    "P1_提取结果.xlsx",
+                    index + 1,
+                    f"Epoxy paper {index + 1}",
+                    "This paper describes an epoxy polymer.",
+                ),
+            )
+
+    response = await search_knowledge(
+        KnowledgeSearchRequest(query="epoxy", top_k=100, page=2, page_size=20),
+        make_request(test_app),
+    )
+
+    assert response.total == 25
+    assert response.page == 2
+    assert response.page_size == 20
+    assert len(response.results) == 5
+    assert response.results[0].title_en == "Epoxy paper 21"

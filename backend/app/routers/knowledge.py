@@ -25,12 +25,15 @@ async def search_knowledge(
     started_at = perf_counter()
     settings = request.app.state.settings
     search_terms = normalize_search_terms(request_body.query, request_body.terms)
+    page_size = request_body.page_size or request_body.top_k
+    offset = (request_body.page - 1) * page_size
 
     with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
         total, rows = search_knowledge_documents(
             connection,
             request_body.query,
-            top_k=request_body.top_k,
+            top_k=page_size,
+            offset=offset,
             terms=search_terms,
         )
 
@@ -69,6 +72,8 @@ async def search_knowledge(
     return KnowledgeSearchResponse(
         query=request_body.query,
         terms=search_terms,
+        page=request_body.page,
+        page_size=page_size,
         query_time_ms=elapsed_ms,
         total=total,
         results=results,

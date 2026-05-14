@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.import_pi_candidates import import_pi_candidates_to_sqlite
+from app.services.smiles_to_iupac import lookup_iupac_name
 
 
 def write_pi_csv(path: Path) -> None:
@@ -96,3 +97,31 @@ def test_import_pi_candidates_requires_tg_column(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="tg_celsius"):
         import_pi_candidates_to_sqlite(csv_path=csv_path, db_path=db_path, progress_interval=0)
+
+
+def test_import_pi_candidates_caches_optional_iupac_names(tmp_path: Path) -> None:
+    csv_path = tmp_path / "pi.csv"
+    db_path = tmp_path / "pi.db"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "id,mon1,mon1_iupac,mon2,mon2_iupac,polym,tg_celsius",
+                "1,CCO,ethanol,CCN,ethanamine,CCO,100",
+                "2,CCO,ethanol,CCC,propane,CCC,110",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    stats = import_pi_candidates_to_sqlite(csv_path=csv_path, db_path=db_path, progress_interval=0)
+
+    assert stats.iupac_cache_count == 3
+
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        assert lookup_iupac_name(connection, "CCO") == "ethanol"
+        assert lookup_iupac_name(connection, "CCN") == "ethanamine"
+        assert lookup_iupac_name(connection, "CCC") == "propane"
+    finally:
+        connection.close()

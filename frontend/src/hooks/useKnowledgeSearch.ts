@@ -15,7 +15,7 @@ export function useKnowledgeSearch() {
     data: null
   });
 
-  async function submit(query: string, topK: number, terms?: string[]) {
+  async function submit(query: string, topK: number, terms?: string[], page = 1, pageSize?: number) {
     setState((current) => ({
       ...current,
       isLoading: true,
@@ -33,6 +33,8 @@ export function useKnowledgeSearch() {
       const data = await searchKnowledge({
         query,
         top_k: topK,
+        page,
+        ...(pageSize ? { page_size: pageSize } : {}),
         ...(cleanedTerms?.length ? { terms: cleanedTerms } : {})
       });
       setState({

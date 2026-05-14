@@ -11,9 +11,20 @@ services:
       FUMOL_DB_PATH: /app/backend/data/fumol.db
       MODEL_DIR: /app/model
       MODEL_ENABLED: "true"
+      PI_REVERSE_BACKEND: postgres
+      PI_POSTGRES_DSN: postgresql://polyprop:polyprop@host.docker.internal:55432/polyprop_pi
+      PI_REVERSE_TG_WINDOW_CELSIUS: "50"
+      PI_REVERSE_TG_MAX_WINDOW_CELSIUS: "200"
+      PI_REVERSE_MAX_SCAN_ROWS: "500000"
+      PI_REVERSE_TIMEOUT_SECONDS: "30"
+      PI_REVERSE_JOB_WORKERS: "1"
+      PI_REVERSE_JOB_BATCH_SIZE: "20000"
+      PI_REVERSE_PROGRESS_INTERVAL_ROWS: "50000"
       ALLOWED_ORIGINS: "http://localhost:${POLYPROP_WEB_PORT:-9000},http://127.0.0.1:${POLYPROP_WEB_PORT:-9000}"
     volumes:
       - ./backend/data:/app/backend/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         [

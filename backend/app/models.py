@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MatchMode = Literal["structure", "property"]
 
@@ -130,6 +130,8 @@ class KnowledgeSearchRequest(BaseModel):
 
     query: str = Field(min_length=1)
     top_k: int = Field(default=25, ge=1, le=100)
+    page: int = Field(default=1, ge=1)
+    page_size: int | None = Field(default=None, ge=1, le=100)
     terms: list[str] = Field(default_factory=list, max_length=10)
 
     @field_validator("terms")
@@ -183,6 +185,8 @@ class KnowledgeSearchResponse(BaseModel):
 
     query: str
     terms: list[str] = Field(default_factory=list)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=25, ge=1)
     query_time_ms: float = Field(ge=0.0)
     total: int = Field(ge=0)
     results: list[KnowledgeDocumentResult] = Field(default_factory=list)
@@ -337,9 +341,17 @@ class ReverseDesignTgRequest(BaseModel):
     target_tg: float
     smiles: str = Field(min_length=1)
     similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
-    candidate_sample_size: int = Field(default=200, ge=1, le=200)
-    top_k: int = Field(default=50, ge=1, le=100)
-    random_seed: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_client_limits(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        for key in ("candidate_sample_size", "top_k", "random_seed"):
+            normalized.pop(key, None)
+        return normalized
 
 
 class ReverseDesignTgCandidate(BaseModel):
@@ -353,6 +365,8 @@ class ReverseDesignTgCandidate(BaseModel):
     monomer_b_smiles: str
     monomer_a_iupac: str | None = None
     monomer_b_iupac: str | None = None
+    monomer_a_structure_svg: str | None = None
+    monomer_b_structure_svg: str | None = None
     tg_value: float
     tg_unit: Literal["°C"] = "°C"
     tg_difference: float = Field(ge=0.0)
@@ -371,6 +385,36 @@ class ReverseDesignTgResponse(BaseModel):
     total: int = Field(ge=0)
     data_source: Literal["pi_reverse_design"] = "pi_reverse_design"
     results: list[ReverseDesignTgCandidate] = Field(default_factory=list)
+
+
+ReverseDesignJobStatus = Literal["pending", "running", "found_enough", "exhausted", "failed", "cancelled"]
+
+
+class ReverseDesignTgJobCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: ReverseDesignJobStatus
+
+
+class ReverseDesignTgJobStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: ReverseDesignJobStatus
+    target_tg: float
+    similarity_threshold: float
+    created_at: str
+    updated_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    scanned_rows: int = Field(ge=0)
+    matched_count: int = Field(ge=0)
+    current_tg_radius: float | None = Field(default=None, ge=0.0)
+    best_similarity_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    message: str | None = None
+    error: str | None = None
+    result: ReverseDesignTgResponse | None = None
 
 
 class DftPcaPoint(BaseModel):

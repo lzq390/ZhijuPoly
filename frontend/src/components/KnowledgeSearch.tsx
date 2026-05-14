@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { ArrowLeft, BookOpen, Clock3, Expand, FileText, Globe2, Loader2, Search, X } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Clock3, Expand, FileText, Globe2, Loader2, Search, X } from "lucide-react";
 import { useKnowledgeSearch } from "../hooks/useKnowledgeSearch";
 import type { KnowledgeDocumentResult } from "../types";
 import { OnlineKnowledgeSearchPanel } from "./online-knowledge/OnlineKnowledgeSearchPanel";
@@ -17,17 +17,21 @@ type KnowledgeSearchProps = {
 type MetaItemProps = {
   label: string;
   value: string | null;
-  onOpen: (label: string, value: string) => void;
+  terms: string[];
+  onOpen: (label: string, value: string, terms: string[]) => void;
 };
 
 type ActiveDetail = {
   label: string;
   value: string;
+  terms: string[];
 } | null;
 
 type KnowledgeMode = "local" | "online";
 
-function MetaItem({ label, value, onOpen }: MetaItemProps) {
+const LOCAL_KNOWLEDGE_PAGE_SIZE = 20;
+
+function MetaItem({ label, value, terms, onOpen }: MetaItemProps) {
   if (!value) {
     return null;
   }
@@ -36,11 +40,13 @@ function MetaItem({ label, value, onOpen }: MetaItemProps) {
     <div className="group grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center gap-2 rounded-2xl border border-slate-200/80 bg-white/70 px-3 py-2 transition-colors hover:border-teal-300/70 hover:bg-white">
       <div className="min-w-0">
         <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
-        <div className="mt-1 truncate text-sm font-medium text-slate-900">{value}</div>
+        <div className="mt-1 truncate text-sm font-medium text-slate-900">
+          <HighlightedText text={value} terms={terms} />
+        </div>
       </div>
       <button
         type="button"
-        onClick={() => onOpen(label, value)}
+        onClick={() => onOpen(label, value, terms)}
         className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`View full ${label} content`}
         title="View full content"
@@ -106,7 +112,9 @@ function DetailDialog({
           </button>
         </div>
         <div className="max-h-[60vh] overflow-auto px-5 py-5">
-          <p className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-800">{detail.value}</p>
+          <p className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-800">
+            <HighlightedText text={detail.value} terms={detail.terms} />
+          </p>
         </div>
       </div>
     </div>
@@ -168,7 +176,7 @@ function KnowledgeResultCard({
 }: {
   result: KnowledgeDocumentResult;
   query: string;
-  onOpenDetail: (label: string, value: string) => void;
+  onOpenDetail: (label: string, value: string, terms: string[]) => void;
 }) {
   const title = result.title_en || result.title_zh || `Knowledge record #${result.knowledge_id}`;
   const highlightTerms = result.matched_terms.length > 0 ? result.matched_terms : [query];
@@ -177,8 +185,9 @@ function KnowledgeResultCard({
     <article className="rounded-[24px] border border-white/80 bg-white/85 p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h3 className="font-heading text-xl font-semibold tracking-tight text-slate-950">{title}</h3>
-          {result.title_zh ? <p className="mt-1 text-sm text-mutedForeground">{result.title_zh}</p> : null}
+          <h3 className="font-heading text-xl font-semibold tracking-tight text-slate-950">
+            <HighlightedText text={title} terms={highlightTerms} />
+          </h3>
         </div>
         <Badge className="bg-teal-50 text-teal-800">#{result.knowledge_id}</Badge>
       </div>
@@ -203,14 +212,68 @@ function KnowledgeResultCard({
       ) : null}
 
       <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-        <MetaItem label="Polymer" value={result.polymer_iupac} onOpen={onOpenDetail} />
-        <MetaItem label="Formulation" value={result.formulation} onOpen={onOpenDetail} />
-        <MetaItem label="Catalyst" value={result.catalyst} onOpen={onOpenDetail} />
-        <MetaItem label="Solvent" value={result.solvent} onOpen={onOpenDetail} />
-        <MetaItem label="Temperature" value={result.temperature} onOpen={onOpenDetail} />
-        <MetaItem label="Time" value={result.reaction_time} onOpen={onOpenDetail} />
+        <MetaItem label="Polymer" value={result.polymer_iupac} terms={highlightTerms} onOpen={onOpenDetail} />
+        <MetaItem label="Formulation" value={result.formulation} terms={highlightTerms} onOpen={onOpenDetail} />
+        <MetaItem label="Claim" value={result.claim} terms={highlightTerms} onOpen={onOpenDetail} />
+        <MetaItem label="Catalyst" value={result.catalyst} terms={highlightTerms} onOpen={onOpenDetail} />
+        <MetaItem label="Solvent" value={result.solvent} terms={highlightTerms} onOpen={onOpenDetail} />
+        <MetaItem label="Temperature" value={result.temperature} terms={highlightTerms} onOpen={onOpenDetail} />
+        <MetaItem label="Time" value={result.reaction_time} terms={highlightTerms} onOpen={onOpenDetail} />
       </div>
     </article>
+  );
+}
+
+function KnowledgePagination({
+  currentPage,
+  totalPages,
+  startIndex,
+  endIndex,
+  matchedTotal,
+  onPageChange
+}: {
+  currentPage: number;
+  totalPages: number;
+  startIndex: number;
+  endIndex: number;
+  matchedTotal: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (matchedTotal <= LOCAL_KNOWLEDGE_PAGE_SIZE) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-[20px] border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+      <div className="font-medium text-slate-700">
+        {`${startIndex + 1}-${endIndex} of ${matchedTotal} matched`}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          className="min-h-[38px] px-3 text-xs"
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage <= 1}
+          aria-label="Previous knowledge page"
+        >
+          <ChevronLeft className="mr-1.5 h-4 w-4" />
+          Prev
+        </Button>
+        <Badge className="text-slate-700">{`Page ${currentPage} / ${totalPages}`}</Badge>
+        <Button
+          type="button"
+          variant="outline"
+          className="min-h-[38px] px-3 text-xs"
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage >= totalPages}
+          aria-label="Next knowledge page"
+        >
+          Next
+          <ChevronRight className="ml-1.5 h-4 w-4" />
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -218,10 +281,15 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
   const [mode, setMode] = useState<KnowledgeMode>("local");
   const [query, setQuery] = useState(initialQuery);
   const [activeTerms, setActiveTerms] = useState<string[]>(() => normalizeTerms(initialTerms));
-  const [topK, setTopK] = useState(25);
+  const [resultPage, setResultPage] = useState(1);
   const [activeDetail, setActiveDetail] = useState<ActiveDetail>(null);
   const searchState = useKnowledgeSearch();
-  const canSearch = query.trim().length > 0 && topK >= 1 && topK <= 100 && !searchState.isLoading;
+  const canSearch = query.trim().length > 0 && !searchState.isLoading;
+  const localResults = searchState.data?.results ?? [];
+  const totalResultPages = Math.max(1, Math.ceil((searchState.data?.total ?? 0) / LOCAL_KNOWLEDGE_PAGE_SIZE));
+  const currentResultPage = searchState.data?.page ?? resultPage;
+  const startResultIndex = (currentResultPage - 1) * LOCAL_KNOWLEDGE_PAGE_SIZE;
+  const endResultIndex = Math.min(startResultIndex + localResults.length, searchState.data?.total ?? 0);
 
   useEffect(() => {
     const trimmedQuery = initialQuery.trim();
@@ -234,7 +302,8 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
     setMode("local");
     setQuery(searchQuery);
     setActiveTerms(terms);
-    void searchState.submit(searchQuery, topK, terms);
+    setResultPage(1);
+    void searchState.submit(searchQuery, LOCAL_KNOWLEDGE_PAGE_SIZE, terms, 1, LOCAL_KNOWLEDGE_PAGE_SIZE);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuery, initialTerms]);
 
@@ -243,13 +312,21 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
     if (!canSearch) {
       return;
     }
-    await searchState.submit(query.trim(), topK, activeTerms);
+    setResultPage(1);
+    await searchState.submit(query.trim(), LOCAL_KNOWLEDGE_PAGE_SIZE, activeTerms, 1, LOCAL_KNOWLEDGE_PAGE_SIZE);
   }
 
   const resultBadge = searchState.data
-    ? `${searchState.data.results.length} / ${searchState.data.total} shown`
+    ? `${localResults.length} / ${searchState.data.total} shown`
     : "Ready";
   const timingBadge = searchState.data ? `${searchState.data.query_time_ms.toFixed(1)} ms` : "Ready";
+
+  async function updateResultPage(page: number) {
+    const nextPage = Math.min(Math.max(page, 1), totalResultPages);
+    setResultPage(nextPage);
+    const searchQuery = query.trim() || activeTerms.join(" OR ");
+    await searchState.submit(searchQuery, LOCAL_KNOWLEDGE_PAGE_SIZE, activeTerms, nextPage, LOCAL_KNOWLEDGE_PAGE_SIZE);
+  }
 
   return (
     <div className="contents">
@@ -304,7 +381,7 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
               </button>
             </div>
             {mode === "local" ? (
-              <form onSubmit={handleSubmit} className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_132px_120px]">
+              <form onSubmit={handleSubmit} className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px]">
                 <Input
                   value={query}
                   onChange={(event) => {
@@ -313,14 +390,6 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
                   }}
                   placeholder="Enter a keyword, IUPAC name, or formulation term"
                   aria-label="Knowledge search query"
-                />
-                <Input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={topK}
-                  onChange={(event) => setTopK(Number(event.target.value))}
-                  aria-label="Result limit"
                 />
                 <Button type="submit" disabled={!canSearch}>
                   {searchState.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
@@ -365,14 +434,30 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
           ) : searchState.data ? (
             searchState.data.results.length > 0 ? (
               <div className="space-y-4">
-                {searchState.data.results.map((result) => (
+                <KnowledgePagination
+                  currentPage={currentResultPage}
+                  totalPages={totalResultPages}
+                  startIndex={startResultIndex}
+                  endIndex={endResultIndex}
+                  matchedTotal={searchState.data.total}
+                  onPageChange={updateResultPage}
+                />
+                {localResults.map((result) => (
                   <KnowledgeResultCard
                     key={result.knowledge_id}
                     result={result}
                     query={searchState.data?.query ?? query}
-                    onOpenDetail={(label, value) => setActiveDetail({ label, value })}
+                    onOpenDetail={(label, value, terms) => setActiveDetail({ label, value, terms })}
                   />
                 ))}
+                <KnowledgePagination
+                  currentPage={currentResultPage}
+                  totalPages={totalResultPages}
+                  startIndex={startResultIndex}
+                  endIndex={endResultIndex}
+                  matchedTotal={searchState.data.total}
+                  onPageChange={updateResultPage}
+                />
               </div>
             ) : (
               <div className="flex min-h-[220px] items-center justify-center text-center text-sm text-mutedForeground">
@@ -386,7 +471,7 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
           )}
         </section>
       ) : (
-        <OnlineKnowledgeSearchPanel />
+        <OnlineKnowledgeSearchPanel initialMaterial={query} />
       )}
 
       <DetailDialog detail={activeDetail} onClose={() => setActiveDetail(null)} />

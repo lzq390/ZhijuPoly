@@ -76,6 +76,8 @@ export type PredictResponse = {
 export type KnowledgeSearchRequest = {
   query: string;
   top_k: number;
+  page?: number;
+  page_size?: number;
   terms?: string[];
 };
 
@@ -105,6 +107,8 @@ export type KnowledgeDocumentResult = {
 export type KnowledgeSearchResponse = {
   query: string;
   terms: string[];
+  page: number;
+  page_size: number;
   query_time_ms: number;
   total: number;
   results: KnowledgeDocumentResult[];
@@ -227,9 +231,6 @@ export type ReverseDesignTgRequest = {
   target_tg: number | null;
   smiles: string;
   similarity_threshold: number;
-  candidate_sample_size: number;
-  top_k: number;
-  random_seed: number | null;
 };
 
 export type ReverseDesignTgCandidate = {
@@ -241,6 +242,8 @@ export type ReverseDesignTgCandidate = {
   monomer_b_smiles: string;
   monomer_a_iupac: string | null;
   monomer_b_iupac: string | null;
+  monomer_a_structure_svg: string | null;
+  monomer_b_structure_svg: string | null;
   tg_value: number;
   tg_unit: "°C";
   tg_difference: number;
@@ -257,6 +260,37 @@ export type ReverseDesignTgResponse = {
   total: number;
   data_source: "pi_reverse_design";
   results: ReverseDesignTgCandidate[];
+};
+
+export type ReverseDesignJobStatus =
+  | "pending"
+  | "running"
+  | "found_enough"
+  | "exhausted"
+  | "failed"
+  | "cancelled";
+
+export type ReverseDesignTgJobCreateResponse = {
+  job_id: string;
+  status: ReverseDesignJobStatus;
+};
+
+export type ReverseDesignTgJobStatusResponse = {
+  job_id: string;
+  status: ReverseDesignJobStatus;
+  target_tg: number;
+  similarity_threshold: number;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  scanned_rows: number;
+  matched_count: number;
+  current_tg_radius: number | null;
+  best_similarity_score: number | null;
+  message: string | null;
+  error: string | null;
+  result: ReverseDesignTgResponse | null;
 };
 
 export type DftPcaPoint = {
