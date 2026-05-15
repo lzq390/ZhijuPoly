@@ -264,6 +264,7 @@ export type ReverseDesignTgRequest = {
   target_tg: number | null;
   smiles: string;
   similarity_threshold: number;
+  candidate_size: number;
 };
 
 export type ReverseDesignTgCandidate = {

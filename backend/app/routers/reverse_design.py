@@ -14,7 +14,7 @@ from app.models import (
     ReverseDesignTgResponse,
 )
 from app.postgres_database import PostgresUnavailableError
-from app.services.postgres_reverse_design import DEFAULT_RESULT_LIMIT, search_reverse_design_by_tg_postgres
+from app.services.postgres_reverse_design import search_reverse_design_by_tg_postgres
 from app.services.fingerprint import generate
 from app.services.reverse_design import search_reverse_design_by_tg
 from app.services.smiles_to_iupac import lookup_iupac_name
@@ -108,7 +108,7 @@ def _search_by_tg_response(
             with app.state.postgres_connection_factory(settings.pi_postgres_dsn) as connection:
                 search_kwargs: dict[str, Any] = {
                     "similarity_threshold": request_body.similarity_threshold,
-                    "result_limit": DEFAULT_RESULT_LIMIT,
+                    "result_limit": request_body.candidate_size,
                 }
                 if full_scan:
                     search_kwargs.update(
@@ -142,8 +142,8 @@ def _search_by_tg_response(
                     request_body.smiles,
                     request_body.target_tg,
                     similarity_threshold=request_body.similarity_threshold,
-                    candidate_sample_size=DEFAULT_RESULT_LIMIT,
-                    top_k=DEFAULT_RESULT_LIMIT,
+                    candidate_sample_size=request_body.candidate_size,
+                    top_k=request_body.candidate_size,
                     progress_callback=progress_callback,
                     progress_interval_rows=settings.pi_reverse_progress_interval_rows,
                     cancellation_check=cancellation_check,

@@ -106,12 +106,12 @@ class ReverseDesignJobManager:
             if job.cancel_event.is_set():
                 job.status = "cancelled"
                 job.message = "Reverse-design search was cancelled."
-            elif response.total >= 200:
+            elif response.total >= job.request.candidate_size:
                 job.status = "found_enough"
-                job.message = "Found 200 candidates that satisfy the similarity threshold."
+                job.message = f"Found {job.request.candidate_size} candidates that satisfy the similarity threshold."
             else:
                 job.status = "exhausted"
-                job.message = "The PI database was fully scanned before 200 candidates were found."
+                job.message = f"The PI database was fully scanned before {job.request.candidate_size} candidates were found."
             job.result = response
             job.matched_count = response.total
             job.updated_at = _utc_now()

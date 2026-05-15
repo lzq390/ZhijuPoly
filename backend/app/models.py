@@ -526,6 +526,7 @@ class ReverseDesignTgRequest(BaseModel):
     target_tg: float
     smiles: str = Field(min_length=1)
     similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    candidate_size: int = Field(default=200, ge=1, le=200)
 
     @model_validator(mode="before")
     @classmethod

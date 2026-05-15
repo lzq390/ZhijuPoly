@@ -42,7 +42,9 @@ export function ReverseDesignPage({ onBackHome, onOpenKnowledge }: ReverseDesign
     reverseDesign.request.target_tg !== null &&
     !Number.isNaN(reverseDesign.request.target_tg) &&
     reverseDesign.request.similarity_threshold >= 0 &&
-    reverseDesign.request.similarity_threshold <= 1;
+    reverseDesign.request.similarity_threshold <= 1 &&
+    reverseDesign.request.candidate_size >= 1 &&
+    reverseDesign.request.candidate_size <= 200;
 
   async function handleSubmit() {
     await reverseDesign.submit({
@@ -116,7 +118,7 @@ export function ReverseDesignPage({ onBackHome, onOpenKnowledge }: ReverseDesign
         </div>
       </section>
 
-      <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
+      <section className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,1.18fr)_minmax(380px,0.82fr)]">
         <div className="min-w-0">
           <KetcherEditor
             smiles={smiles}
@@ -133,13 +135,19 @@ export function ReverseDesignPage({ onBackHome, onOpenKnowledge }: ReverseDesign
           />
         </div>
 
-        <div className="min-w-0 space-y-6">
+        <div className="flex min-w-0 flex-col gap-6">
+          <StructurePreview3D
+            smiles={smiles}
+            className="xl:flex xl:flex-1 xl:flex-col"
+            contentClassName="xl:flex xl:flex-1 xl:flex-col"
+            previewClassName="h-[320px] xl:h-auto xl:min-h-[360px] xl:flex-1"
+          />
           <Card className="overflow-hidden rounded-[30px] border-white/70">
             <CardHeader className="gap-3 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(244,248,249,0.86)_100%)]">
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">Reverse Design</div>
-                  <CardTitle className="mt-2 text-[1.35rem] tracking-tight">Tg Candidate Search</CardTitle>
+                  <CardTitle className="mt-2 text-[1.35rem] tracking-tight">Reverse Settings</CardTitle>
                   <CardDescription>Search PI candidates by target Tg and Tanimoto similarity.</CardDescription>
                 </div>
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_12px_30px_rgba(8,17,31,0.18)]">
@@ -148,9 +156,9 @@ export function ReverseDesignPage({ onBackHome, onOpenKnowledge }: ReverseDesign
               </div>
             </CardHeader>
             <CardContent className="space-y-4 pt-5">
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-3">
                 <label className="space-y-1.5">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">Target Tg (°C)</span>
+                  <span className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.08em] text-mutedForeground">Target Tg (°C)</span>
                   <Input
                     type="number"
                     value={reverseDesign.request.target_tg ?? ""}
@@ -159,7 +167,7 @@ export function ReverseDesignPage({ onBackHome, onOpenKnowledge }: ReverseDesign
                   />
                 </label>
                 <label className="space-y-1.5">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">Similarity Threshold</span>
+                  <span className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.08em] text-mutedForeground">Similarity Threshold</span>
                   <Input
                     type="number"
                     min={0}
@@ -167,6 +175,17 @@ export function ReverseDesignPage({ onBackHome, onOpenKnowledge }: ReverseDesign
                     step={0.01}
                     value={reverseDesign.request.similarity_threshold}
                     onChange={(event) => updateRequest({ similarity_threshold: Number(event.target.value) })}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.08em] text-mutedForeground">Candidate Size</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={200}
+                    step={1}
+                    value={reverseDesign.request.candidate_size}
+                    onChange={(event) => updateRequest({ candidate_size: Number(event.target.value) })}
                   />
                 </label>
               </div>
@@ -182,7 +201,6 @@ export function ReverseDesignPage({ onBackHome, onOpenKnowledge }: ReverseDesign
               </div>
             </CardContent>
           </Card>
-          <StructurePreview3D smiles={smiles} />
         </div>
       </section>
 

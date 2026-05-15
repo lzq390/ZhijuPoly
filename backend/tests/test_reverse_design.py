@@ -416,6 +416,19 @@ def test_reverse_design_request_ignores_removed_client_limits() -> None:
     assert not hasattr(request, "candidate_sample_size")
 
 
+def test_reverse_design_request_accepts_candidate_size() -> None:
+    default_request = ReverseDesignTgRequest(smiles="CCO", target_tg=120, similarity_threshold=0.7)
+    explicit_request = ReverseDesignTgRequest(
+        smiles="CCO",
+        target_tg=120,
+        similarity_threshold=0.7,
+        candidate_size=25,
+    )
+
+    assert default_request.candidate_size == 200
+    assert explicit_request.candidate_size == 25
+
+
 def test_reverse_design_request_rejects_unknown_extra_fields() -> None:
     with pytest.raises(ValidationError):
         ReverseDesignTgRequest(
@@ -436,6 +449,7 @@ async def test_reverse_design_api_returns_candidates(tmp_path: Path) -> None:
             smiles="CCO",
             target_tg=120,
             similarity_threshold=0.0,
+            candidate_size=2,
         ),
         request,
     )
@@ -443,7 +457,7 @@ async def test_reverse_design_api_returns_candidates(tmp_path: Path) -> None:
     assert response.target_tg == 120
     assert response.candidate_pool_size == 4
     assert response.sampled_candidate_count == 4
-    assert response.total == 4
+    assert response.total == 2
     assert response.results[0].rank == 1
     assert response.results[0].pi_id == 2
     assert response.results[0].structure_svg is not None

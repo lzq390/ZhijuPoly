@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createReverseDesignTgJob, fetchReverseDesignTgJob } from "../services/api";
 import {
+  REVERSE_DESIGN_DEFAULT_CANDIDATE_SIZE,
   REVERSE_DESIGN_DEFAULT_SIMILARITY,
   REVERSE_DESIGN_DEFAULT_TARGET_TG
 } from "../constants/reverseDesignDefaults";
@@ -24,7 +25,8 @@ const TERMINAL_STATUSES = new Set<ReverseDesignJobStatus>(["found_enough", "exha
 const DEFAULT_REQUEST: ReverseDesignTgRequest = {
   target_tg: REVERSE_DESIGN_DEFAULT_TARGET_TG,
   smiles: "",
-  similarity_threshold: REVERSE_DESIGN_DEFAULT_SIMILARITY
+  similarity_threshold: REVERSE_DESIGN_DEFAULT_SIMILARITY,
+  candidate_size: REVERSE_DESIGN_DEFAULT_CANDIDATE_SIZE
 };
 
 export function useReverseDesign() {
