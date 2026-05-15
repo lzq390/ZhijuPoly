@@ -1,6 +1,7 @@
 import { Orbit, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { fetchStructure3D } from "../services/api";
+import { cn } from "../lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 
 const D3MOL_SRC = "/vendor/3Dmol-min.js";
@@ -47,9 +48,17 @@ function loadScriptOnce(src: string, id: string): Promise<void> {
 
 type StructurePreview3DProps = {
   smiles: string;
+  className?: string;
+  contentClassName?: string;
+  previewClassName?: string;
 };
 
-export function StructurePreview3D({ smiles }: StructurePreview3DProps) {
+export function StructurePreview3D({
+  smiles,
+  className,
+  contentClassName,
+  previewClassName
+}: StructurePreview3DProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -120,7 +129,7 @@ export function StructurePreview3D({ smiles }: StructurePreview3DProps) {
   }, [smiles]);
 
   return (
-    <Card className="overflow-hidden rounded-[30px] border-white/70">
+    <Card className={cn("overflow-hidden rounded-[30px] border-white/70", className)}>
       <CardHeader className="min-h-[112px] gap-3 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(244,248,249,0.86)_100%)]">
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-2">
@@ -137,8 +146,13 @@ export function StructurePreview3D({ smiles }: StructurePreview3DProps) {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="pt-4">
-        <div className="relative h-[280px] overflow-hidden rounded-[24px] border border-white/80 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.2),transparent_42%),radial-gradient(circle_at_80%_20%,rgba(20,184,166,0.12),transparent_26%),linear-gradient(180deg,#fbfdff_0%,#edf5f8_100%)]">
+      <CardContent className={cn("pt-4", contentClassName)}>
+        <div
+          className={cn(
+            "relative h-[280px] overflow-hidden rounded-[24px] border border-white/80 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.2),transparent_42%),radial-gradient(circle_at_80%_20%,rgba(20,184,166,0.12),transparent_26%),linear-gradient(180deg,#fbfdff_0%,#edf5f8_100%)]",
+            previewClassName
+          )}
+        >
           <div className="pointer-events-none absolute left-1/2 top-6 h-24 w-24 -translate-x-1/2 rounded-full bg-white/60 blur-2xl" />
           <div ref={viewerRef} className="absolute inset-0" />
           {isLoading ? (

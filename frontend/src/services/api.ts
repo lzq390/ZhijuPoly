@@ -1,6 +1,10 @@
 import type {
+  DftEnergyStepBrowseResponse,
   DftMoleculeDetail,
+  DftMoleculeBrowseResponse,
   DftPcaSampleResponse,
+  ExperimentalProcessBrowseResponse,
+  ExperimentalPropertyBrowseResponse,
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
   OnlineKnowledgeExportResponse,
@@ -16,8 +20,11 @@ import type {
   ReverseDesignTgJobStatusResponse,
   ReverseDesignTgRequest,
   ReverseDesignTgResponse,
+  SmilesLookupRequest,
+  SmilesLookupResponse,
   SmilesQueryRequest,
-  SmilesQueryResponse
+  SmilesQueryResponse,
+  StructurePropertyBrowseResponse
 } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
@@ -54,6 +61,10 @@ async function getJSON<T>(path: string): Promise<T> {
 
 export function querySmiles(payload: SmilesQueryRequest): Promise<SmilesQueryResponse> {
   return postJSON("/query/smiles", payload);
+}
+
+export function lookupSmilesInDatabase(payload: SmilesLookupRequest): Promise<SmilesLookupResponse> {
+  return postJSON("/database-browser/smiles-lookup", payload);
 }
 
 export function predictSmiles(payload: PredictRequest): Promise<PredictResponse> {
@@ -140,4 +151,74 @@ export function fetchDftPcaSample(limit = 200): Promise<DftPcaSampleResponse> {
 
 export function fetchDftMolecule(molId: string): Promise<DftMoleculeDetail> {
   return getJSON(`/dft/molecule/${encodeURIComponent(molId)}`);
+}
+
+export function browseStructurePropertyRecords(params: {
+  q?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<StructurePropertyBrowseResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.q) {
+    searchParams.set("q", params.q);
+  }
+  if (params.page !== undefined) {
+    searchParams.set("page", String(params.page));
+  }
+  if (params.page_size !== undefined) {
+    searchParams.set("page_size", String(params.page_size));
+  }
+
+  const suffix = searchParams.toString() ? `?${searchParams.toString()}` : "";
+  return getJSON(`/database-browser/structure-property${suffix}`);
+}
+
+function buildQueryString(params: { q?: string; mol_id?: string; page?: number; page_size?: number }): string {
+  const searchParams = new URLSearchParams();
+  if (params.q) {
+    searchParams.set("q", params.q);
+  }
+  if (params.mol_id) {
+    searchParams.set("mol_id", params.mol_id);
+  }
+  if (params.page !== undefined) {
+    searchParams.set("page", String(params.page));
+  }
+  if (params.page_size !== undefined) {
+    searchParams.set("page_size", String(params.page_size));
+  }
+  return searchParams.toString() ? `?${searchParams.toString()}` : "";
+}
+
+export function browseDftMolecules(params: {
+  q?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<DftMoleculeBrowseResponse> {
+  return getJSON(`/database-browser/dft/molecules${buildQueryString(params)}`);
+}
+
+export function browseDftEnergySteps(params: {
+  q?: string;
+  mol_id?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<DftEnergyStepBrowseResponse> {
+  return getJSON(`/database-browser/dft/steps${buildQueryString(params)}`);
+}
+
+export function browseExperimentalProcessRecords(params: {
+  q?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<ExperimentalProcessBrowseResponse> {
+  return getJSON(`/database-browser/experimental-process${buildQueryString(params)}`);
+}
+
+export function browseExperimentalPropertyRecords(params: {
+  q?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<ExperimentalPropertyBrowseResponse> {
+  return getJSON(`/database-browser/experimental-property${buildQueryString(params)}`);
 }

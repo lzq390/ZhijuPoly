@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, Atom, BarChart3, BookOpen, Database, Microscope, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, Atom, BarChart3, BookOpen, Database, Microscope, Search, Sparkles } from "lucide-react";
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
+import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { Layout } from "./components/Layout";
@@ -20,7 +21,7 @@ import {
   type WorkspaceMode
 } from "./types";
 
-type ActiveModule = "home" | "explorer" | "reverseDesign" | "database" | "knowledge";
+type ActiveModule = "home" | "explorer" | "reverseDesign" | "databaseQuery" | "database" | "knowledge";
 
 type AppRoute = {
   module: ActiveModule;
@@ -57,6 +58,10 @@ function routeFromPath(pathname: string): AppRoute {
     return { module: "reverseDesign", datasetKey: null };
   }
 
+  if (path === "/database-query") {
+    return { module: "databaseQuery", datasetKey: null };
+  }
+
   if (path === "/knowledge") {
     return { module: "knowledge", datasetKey: null };
   }
@@ -80,6 +85,10 @@ function pathFromRoute(route: AppRoute) {
 
   if (route.module === "reverseDesign") {
     return "/reverse-design";
+  }
+
+  if (route.module === "databaseQuery") {
+    return "/database-query";
   }
 
   if (route.module === "knowledge") {
@@ -196,17 +205,20 @@ function ModuleTile({
 function HomePage({
   onOpenExplorer,
   onOpenReverseDesign,
+  onOpenDatabaseQuery,
   onOpenDatabase,
   onOpenKnowledge
 }: {
   onOpenExplorer: () => void;
   onOpenReverseDesign: () => void;
+  onOpenDatabaseQuery: () => void;
   onOpenDatabase: () => void;
   onOpenKnowledge: () => void;
 }) {
   const moduleRows = [
     { name: "Polymer Property Explorer", status: "Ready" },
     { name: "Tg Reverse Design", status: "Ready" },
+    { name: "Database Query", status: "Ready" },
     { name: "Database Analytics", status: "Ready" },
     { name: "Local Knowledge Search", status: "Ready" }
   ];
@@ -264,7 +276,7 @@ function HomePage({
         </div>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <ModuleTile
           icon={<Atom className="h-5 w-5" />}
           eyebrow="Available"
@@ -282,6 +294,15 @@ function HomePage({
           status="Ready"
           actionLabel="Enter"
           onClick={onOpenReverseDesign}
+        />
+        <ModuleTile
+          icon={<Search className="h-5 w-5" />}
+          eyebrow="Available"
+          title="Database Query"
+          description="Draw or paste a SMILES string, select a local table, and check whether that exact structure is already stored."
+          status="Ready"
+          actionLabel="Enter"
+          onClick={onOpenDatabaseQuery}
         />
         <ModuleTile
           icon={<BarChart3 className="h-5 w-5" />}
@@ -453,6 +474,10 @@ export default function App() {
     navigate({ module: "reverseDesign", datasetKey: null });
   }
 
+  function openDatabaseQuery() {
+    navigate({ module: "databaseQuery", datasetKey: null });
+  }
+
   function openDatabase() {
     navigate({ module: "database", datasetKey: null });
   }
@@ -494,10 +519,15 @@ export default function App() {
         <HomePage
           onOpenExplorer={openExplorer}
           onOpenReverseDesign={openReverseDesign}
+          onOpenDatabaseQuery={openDatabaseQuery}
           onOpenDatabase={openDatabase}
           onOpenKnowledge={openKnowledge}
         />
       </div>
+
+      {activeModule === "databaseQuery" ? (
+        <DatabaseQueryPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+      ) : null}
 
       {activeModule === "database" ? (
         <DatabaseAnalysis

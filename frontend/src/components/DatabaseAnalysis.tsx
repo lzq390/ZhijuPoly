@@ -4,6 +4,8 @@ import {
   ArrowRight,
   Atom,
   BarChart3,
+  ChevronLeft,
+  ChevronRight,
   Database,
   FlaskConical,
   Layers3,
@@ -12,12 +14,30 @@ import {
   PieChart,
   Search,
   Sigma,
-  TableProperties
+  TableProperties,
+  X
 } from "lucide-react";
-import { fetchDftMolecule, fetchDftPcaSample } from "../services/api";
-import type { DftMoleculeDetail, DftPcaPoint } from "../types";
+import {
+  browseDftEnergySteps,
+  browseDftMolecules,
+  browseExperimentalProcessRecords,
+  browseExperimentalPropertyRecords,
+  browseStructurePropertyRecords,
+  fetchDftMolecule,
+  fetchDftPcaSample
+} from "../services/api";
+import type {
+  DftEnergyStepBrowseResponse,
+  DftMoleculeBrowseResponse,
+  DftMoleculeDetail,
+  DftPcaPoint,
+  ExperimentalProcessBrowseResponse,
+  ExperimentalPropertyBrowseResponse,
+  StructurePropertyBrowseResponse
+} from "../types";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 
 export type DatasetKey = "process" | "property" | "structureEffect" | "dft" | "formulation";
 
@@ -535,11 +555,42 @@ function formatPercent(value: number) {
   return `${formatNumber(value, 1)}%`;
 }
 
-function MetricPill({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex h-16 flex-col justify-center rounded-2xl border border-white/80 bg-white/75 px-3 py-2 shadow-sm">
+function MetricPill({
+  label,
+  value,
+  onClick,
+  ariaLabel
+}: {
+  label: string;
+  value: string;
+  onClick?: () => void;
+  ariaLabel?: string;
+}) {
+  const className =
+    "flex h-16 flex-col justify-center rounded-2xl border border-white/80 bg-white/75 px-3 py-2 text-left shadow-sm";
+  const content = (
+    <>
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-mutedForeground">{label}</div>
       <div className="font-heading mt-1 truncate text-base font-semibold text-slate-950">{value}</div>
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        aria-label={ariaLabel ?? `${label}: ${value}`}
+        onClick={onClick}
+        className={`${className} transition-all hover:-translate-y-0.5 hover:border-teal-200 hover:bg-teal-50/85 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div className={className}>
+      {content}
     </div>
   );
 }
@@ -1773,7 +1824,8 @@ function DatasetHero({
   homeLabel = "Home",
   recordLabel = "Records",
   viewLabel = "View",
-  viewValue = "Charts"
+  viewValue = "Charts",
+  onViewClick
 }: {
   dataset: (typeof datasets)[number];
   onBackHome: () => void;
@@ -1785,6 +1837,7 @@ function DatasetHero({
   recordLabel?: string;
   viewLabel?: string;
   viewValue?: string;
+  onViewClick?: () => void;
 }) {
   return (
     <>
@@ -1829,13 +1882,1103 @@ function DatasetHero({
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <MetricPill label={recordLabel} value={formatCount(dataset.recordCount)} />
-            <MetricPill label={viewLabel} value={viewValue} />
+            <MetricPill
+              label={viewLabel}
+              value={viewValue}
+              onClick={onViewClick}
+              ariaLabel={onViewClick ? `Open ${dataset.englishTitle} record search` : undefined}
+            />
           </div>
         </div>
       </section>
 
       {children}
     </>
+  );
+}
+
+function EmptyCell() {
+  return <span className="text-slate-400">-</span>;
+}
+
+function StructurePropertyRecordBrowser({
+  open,
+  onClose,
+  expectedTotal
+}: {
+  open: boolean;
+  onClose: () => void;
+  expectedTotal: number;
+}) {
+  const [queryDraft, setQueryDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [data, setData] = useState<StructurePropertyBrowseResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    browseStructurePropertyRecords({ q: query, page, page_size: pageSize })
+      .then((response) => {
+        if (!cancelled) {
+          setData(response);
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) {
+          setError(nextError instanceof Error ? nextError.message : "Failed to load records");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, page, pageSize, query]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const matchedRecords = data?.matched_records ?? 0;
+  const totalRecords = data?.total_records ?? expectedTotal;
+  const totalPages = Math.max(1, Math.ceil(matchedRecords / pageSize));
+  const startRecord = matchedRecords === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endRecord = Math.min(page * pageSize, matchedRecords);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm">
+      <section className="flex h-[min(88vh,760px)] w-[min(1180px,calc(100vw-2rem))] flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/95 shadow-[0_30px_100px_rgba(8,17,31,0.34)]">
+        <header className="flex flex-col gap-4 border-b border-slate-200 bg-slate-50/90 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white">
+                <TableProperties className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-teal-700">
+                  Structure-Property
+                </div>
+                <h2 className="font-heading truncate text-xl font-semibold tracking-tight text-slate-950">
+                  Record Search
+                </h2>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <MetricPill label="total records" value={formatCount(totalRecords)} />
+            <MetricPill label="matched" value={formatCount(matchedRecords)} />
+            <button
+              type="button"
+              aria-label="Close record search"
+              onClick={onClose}
+              className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className="border-b border-slate-200 bg-white px-5 py-4">
+          <form
+            className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setPage(1);
+              setQuery(queryDraft.trim());
+            }}
+          >
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                value={queryDraft}
+                onChange={(event) => setQueryDraft(event.target.value)}
+                placeholder="Search SMILES, property, value, unit, source"
+                className="border-slate-200 bg-slate-50 pl-10"
+              />
+            </div>
+            <select
+              aria-label="Rows per page"
+              value={pageSize}
+              onChange={(event) => {
+                setPage(1);
+                setPageSize(Number(event.target.value));
+              }}
+              className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value={25}>25 rows</option>
+              <option value={50}>50 rows</option>
+              <option value={100}>100 rows</option>
+            </select>
+            <div className="flex gap-2">
+              <Button type="submit" className="min-w-24">
+                Search
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setQueryDraft("");
+                  setQuery("");
+                  setPage(1);
+                }}
+              >
+                Clear
+              </Button>
+            </div>
+          </form>
+        </div>
+
+        <div className="relative min-h-0 flex-1 overflow-auto bg-white">
+          {error ? (
+            <div className="m-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {error}
+            </div>
+          ) : null}
+
+          <table className="min-w-[1040px] w-full border-separate border-spacing-0 text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
+              <tr>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Property ID</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Polymer ID</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">SMILES</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Property</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Value</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Unit</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data?.results.map((row) => (
+                <tr key={row.property_id} className="align-top hover:bg-teal-50/35">
+                  <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                    {row.property_id}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                    {row.polymer_id}
+                  </td>
+                  <td className="max-w-[24rem] border-b border-slate-100 px-4 py-3">
+                    <div className="truncate font-mono-ui text-xs text-slate-700" title={row.smiles}>
+                      {row.smiles}
+                    </div>
+                  </td>
+                  <td className="max-w-[16rem] border-b border-slate-100 px-4 py-3">
+                    <div className="font-medium text-slate-900">{row.property_name}</div>
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                    {row.property_value || <EmptyCell />}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">
+                    {row.property_unit || <EmptyCell />}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3">
+                    {row.label_source ? (
+                      <Badge className="bg-slate-100 text-slate-700">{row.label_source}</Badge>
+                    ) : (
+                      <EmptyCell />
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {!loading && !error && data?.results.length === 0 ? (
+            <div className="px-5 py-10 text-center text-sm text-slate-500">No matching records.</div>
+          ) : null}
+          {loading ? (
+            <div className="absolute inset-x-0 bottom-16 mx-auto w-fit rounded-full border border-white/80 bg-white px-4 py-2 text-sm text-slate-600 shadow-lg">
+              Loading records...
+            </div>
+          ) : null}
+        </div>
+
+        <footer className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/95 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="font-mono-ui text-xs text-slate-500">
+            {startRecord}-{endRecord} / {formatCount(matchedRecords)}
+            {query ? ` for "${query}"` : ""}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              <ChevronLeft className="mr-2 h-4 w-4" />
+              Previous
+            </Button>
+            <div className="min-w-24 text-center font-mono-ui text-xs text-slate-500">
+              {page} / {totalPages}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={page >= totalPages || loading}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            >
+              Next
+              <ChevronRight className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+type DftBrowserTab = "molecules" | "steps";
+
+function OptionalNumber({ value, digits = 3 }: { value: number | null; digits?: number }) {
+  if (value === null || Number.isNaN(value)) {
+    return <EmptyCell />;
+  }
+
+  return <>{formatNumber(value, digits)}</>;
+}
+
+function DftRecordBrowser({
+  open,
+  onClose,
+  expectedMolecules,
+  expectedSteps
+}: {
+  open: boolean;
+  onClose: () => void;
+  expectedMolecules: number;
+  expectedSteps: number;
+}) {
+  const [activeTab, setActiveTab] = useState<DftBrowserTab>("molecules");
+  const [moleculeQueryDraft, setMoleculeQueryDraft] = useState("");
+  const [moleculeQuery, setMoleculeQuery] = useState("");
+  const [moleculePage, setMoleculePage] = useState(1);
+  const [moleculePageSize, setMoleculePageSize] = useState(25);
+  const [moleculeData, setMoleculeData] = useState<DftMoleculeBrowseResponse | null>(null);
+  const [moleculeLoading, setMoleculeLoading] = useState(false);
+  const [moleculeError, setMoleculeError] = useState<string | null>(null);
+
+  const [stepQueryDraft, setStepQueryDraft] = useState("");
+  const [stepQuery, setStepQuery] = useState("");
+  const [stepMolId, setStepMolId] = useState<string | null>(null);
+  const [stepPage, setStepPage] = useState(1);
+  const [stepPageSize, setStepPageSize] = useState(25);
+  const [stepData, setStepData] = useState<DftEnergyStepBrowseResponse | null>(null);
+  const [stepLoading, setStepLoading] = useState(false);
+  const [stepError, setStepError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+    setMoleculeLoading(true);
+    setMoleculeError(null);
+
+    browseDftMolecules({ q: moleculeQuery, page: moleculePage, page_size: moleculePageSize })
+      .then((response) => {
+        if (!cancelled) {
+          setMoleculeData(response);
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) {
+          setMoleculeError(nextError instanceof Error ? nextError.message : "Failed to load DFT molecules");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setMoleculeLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [moleculePage, moleculePageSize, moleculeQuery, open]);
+
+  useEffect(() => {
+    if (!open || activeTab !== "steps") {
+      return;
+    }
+
+    let cancelled = false;
+    setStepLoading(true);
+    setStepError(null);
+
+    browseDftEnergySteps({
+      q: stepMolId ? undefined : stepQuery,
+      mol_id: stepMolId ?? undefined,
+      page: stepPage,
+      page_size: stepPageSize
+    })
+      .then((response) => {
+        if (!cancelled) {
+          setStepData(response);
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) {
+          setStepError(nextError instanceof Error ? nextError.message : "Failed to load optimization steps");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setStepLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, open, stepMolId, stepPage, stepPageSize, stepQuery]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const moleculeTotal = moleculeData?.total_records ?? expectedMolecules;
+  const stepTotal = moleculeData?.total_step_records ?? stepData?.total_records ?? expectedSteps;
+  const averageSteps = moleculeData?.average_steps ?? 0;
+  const maxSteps = moleculeData?.max_steps ?? 0;
+  const moleculeMatched = moleculeData?.matched_records ?? 0;
+  const stepMatched = stepData?.matched_records ?? 0;
+  const moleculePages = Math.max(1, Math.ceil(moleculeMatched / moleculePageSize));
+  const stepPages = Math.max(1, Math.ceil(stepMatched / stepPageSize));
+  const moleculeStart = moleculeMatched === 0 ? 0 : (moleculePage - 1) * moleculePageSize + 1;
+  const moleculeEnd = Math.min(moleculePage * moleculePageSize, moleculeMatched);
+  const stepStart = stepMatched === 0 ? 0 : (stepPage - 1) * stepPageSize + 1;
+  const stepEnd = Math.min(stepPage * stepPageSize, stepMatched);
+  const loading = activeTab === "molecules" ? moleculeLoading : stepLoading;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm">
+      <section className="flex h-[min(90vh,790px)] w-[min(1240px,calc(100vw-2rem))] flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/95 shadow-[0_30px_100px_rgba(8,17,31,0.34)]">
+        <header className="flex flex-col gap-4 border-b border-slate-200 bg-slate-50/90 px-5 py-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white">
+                <Orbit className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-teal-700">
+                  DFT Conformation
+                </div>
+                <h2 className="font-heading truncate text-xl font-semibold tracking-tight text-slate-950">
+                  DFT Record Browser
+                </h2>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <MetricPill label="molecules" value={formatCount(moleculeTotal)} />
+            <MetricPill label="steps" value={formatCount(stepTotal)} />
+            <MetricPill label="avg steps" value={formatNumber(averageSteps, 1)} />
+            <MetricPill label="max steps" value={formatCount(maxSteps)} />
+            <button
+              type="button"
+              aria-label="Close DFT record browser"
+              onClick={onClose}
+              className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className="border-b border-slate-200 bg-white px-5 py-4">
+          <div className="mb-4 flex flex-wrap gap-2">
+            {[
+              ["molecules", "Molecules"],
+              ["steps", "Optimization Steps"]
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveTab(key as DftBrowserTab)}
+                className={[
+                  "rounded-2xl border px-4 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  activeTab === key
+                    ? "border-slate-950 bg-slate-950 text-white shadow-sm"
+                    : "border-slate-200 bg-slate-50 text-slate-600 hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800"
+                ].join(" ")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === "molecules" ? (
+            <form
+              className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setMoleculePage(1);
+                setMoleculeQuery(moleculeQueryDraft.trim());
+              }}
+            >
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  value={moleculeQueryDraft}
+                  onChange={(event) => setMoleculeQueryDraft(event.target.value)}
+                  placeholder="Search mol_id, range group, energy, gap, convergence"
+                  className="border-slate-200 bg-slate-50 pl-10"
+                />
+              </div>
+              <select
+                aria-label="Molecule rows per page"
+                value={moleculePageSize}
+                onChange={(event) => {
+                  setMoleculePage(1);
+                  setMoleculePageSize(Number(event.target.value));
+                }}
+                className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value={25}>25 rows</option>
+                <option value={50}>50 rows</option>
+                <option value={100}>100 rows</option>
+              </select>
+              <div className="flex gap-2">
+                <Button type="submit" className="min-w-24">
+                  Search
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setMoleculeQueryDraft("");
+                    setMoleculeQuery("");
+                    setMoleculePage(1);
+                  }}
+                >
+                  Clear
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <form
+              className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setStepPage(1);
+                setStepMolId(null);
+                setStepQuery(stepQueryDraft.trim());
+              }}
+            >
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  value={stepQueryDraft}
+                  onChange={(event) => setStepQueryDraft(event.target.value)}
+                  placeholder="Search mol_id or numeric step/energy values"
+                  className="border-slate-200 bg-slate-50 pl-10"
+                />
+              </div>
+              <select
+                aria-label="Step rows per page"
+                value={stepPageSize}
+                onChange={(event) => {
+                  setStepPage(1);
+                  setStepPageSize(Number(event.target.value));
+                }}
+                className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value={25}>25 rows</option>
+                <option value={50}>50 rows</option>
+                <option value={100}>100 rows</option>
+              </select>
+              <div className="flex gap-2">
+                <Button type="submit" className="min-w-24">
+                  Search
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setStepQueryDraft("");
+                    setStepQuery("");
+                    setStepMolId(null);
+                    setStepPage(1);
+                  }}
+                >
+                  Clear
+                </Button>
+              </div>
+            </form>
+          )}
+        </div>
+
+        <div className="relative min-h-0 flex-1 overflow-auto bg-white">
+          {activeTab === "molecules" ? (
+            <>
+              {moleculeError ? (
+                <div className="m-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {moleculeError}
+                </div>
+              ) : null}
+              <table className="min-w-[1180px] w-full border-separate border-spacing-0 text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                  <tr>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Mol ID</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Group</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Final Step</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Trace Points</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Atoms</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">SCF Energy</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">HOMO</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">LUMO</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Gap</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Dipole</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Converged</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Steps</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {moleculeData?.results.map((row) => (
+                    <tr key={row.mol_id} className="align-top hover:bg-teal-50/35">
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs font-semibold text-slate-800">
+                        {row.mol_id}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{row.range_group}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                        {row.final_step}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                        {row.trace_points}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                        {row.n_atoms}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                        <OptionalNumber value={row.scf_energy} digits={6} />
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                        <OptionalNumber value={row.homo_ev} digits={4} />
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                        <OptionalNumber value={row.lumo_ev} digits={4} />
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                        <OptionalNumber value={row.gap_ev} digits={4} />
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                        <OptionalNumber value={row.dipole_moment} digits={4} />
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3">
+                        {row.is_converged ? (
+                          <Badge className="bg-slate-100 text-slate-700">{row.is_converged}</Badge>
+                        ) : (
+                          <EmptyCell />
+                        )}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-9 rounded-xl px-3 text-xs"
+                          onClick={() => {
+                            setStepQueryDraft(row.mol_id);
+                            setStepQuery("");
+                            setStepMolId(row.mol_id);
+                            setStepPage(1);
+                            setActiveTab("steps");
+                          }}
+                        >
+                          View Steps
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!moleculeLoading && !moleculeError && moleculeData?.results.length === 0 ? (
+                <div className="px-5 py-10 text-center text-sm text-slate-500">No matching molecules.</div>
+              ) : null}
+            </>
+          ) : (
+            <>
+              {stepError ? (
+                <div className="m-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {stepError}
+                </div>
+              ) : null}
+              <table className="min-w-[820px] w-full border-separate border-spacing-0 text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                  <tr>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Mol ID</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Step</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">SCF Energy</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">HOMO</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">LUMO</th>
+                    <th className="border-b border-slate-200 px-4 py-3 font-semibold">Gap</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stepData?.results.map((row) => (
+                    <tr key={`${row.mol_id}-${row.step}`} className="align-top hover:bg-teal-50/35">
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs font-semibold text-slate-800">
+                        {row.mol_id}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                        {row.step}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                        <OptionalNumber value={row.scf_energy} digits={6} />
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                        <OptionalNumber value={row.homo_ev} digits={4} />
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                        <OptionalNumber value={row.lumo_ev} digits={4} />
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                        <OptionalNumber value={row.gap_ev} digits={4} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!stepLoading && !stepError && stepData?.results.length === 0 ? (
+                <div className="px-5 py-10 text-center text-sm text-slate-500">No matching optimization steps.</div>
+              ) : null}
+            </>
+          )}
+
+          {loading ? (
+            <div className="absolute inset-x-0 bottom-16 mx-auto w-fit rounded-full border border-white/80 bg-white px-4 py-2 text-sm text-slate-600 shadow-lg">
+              Loading DFT records...
+            </div>
+          ) : null}
+        </div>
+
+        <footer className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/95 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          {activeTab === "molecules" ? (
+            <>
+              <div className="font-mono-ui text-xs text-slate-500">
+                {moleculeStart}-{moleculeEnd} / {formatCount(moleculeMatched)}
+                {moleculeQuery ? ` for "${moleculeQuery}"` : ""}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={moleculePage <= 1 || moleculeLoading}
+                  onClick={() => setMoleculePage((current) => Math.max(1, current - 1))}
+                >
+                  <ChevronLeft className="mr-2 h-4 w-4" />
+                  Previous
+                </Button>
+                <div className="min-w-24 text-center font-mono-ui text-xs text-slate-500">
+                  {moleculePage} / {moleculePages}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={moleculePage >= moleculePages || moleculeLoading}
+                  onClick={() => setMoleculePage((current) => Math.min(moleculePages, current + 1))}
+                >
+                  Next
+                  <ChevronRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="font-mono-ui text-xs text-slate-500">
+                {stepStart}-{stepEnd} / {formatCount(stepMatched)}
+                {stepMolId || stepQuery ? ` for "${stepMolId ?? stepQuery}"` : ""}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={stepPage <= 1 || stepLoading}
+                  onClick={() => setStepPage((current) => Math.max(1, current - 1))}
+                >
+                  <ChevronLeft className="mr-2 h-4 w-4" />
+                  Previous
+                </Button>
+                <div className="min-w-24 text-center font-mono-ui text-xs text-slate-500">
+                  {stepPage} / {stepPages}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={stepPage >= stepPages || stepLoading}
+                  onClick={() => setStepPage((current) => Math.min(stepPages, current + 1))}
+                >
+                  Next
+                  <ChevronRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            </>
+          )}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+type ExperimentalCsvKind = "process" | "property";
+type ExperimentalCsvResponse = ExperimentalProcessBrowseResponse | ExperimentalPropertyBrowseResponse;
+
+function ExperimentalCsvRecordBrowser({
+  kind,
+  open,
+  onClose,
+  expectedTotal
+}: {
+  kind: ExperimentalCsvKind;
+  open: boolean;
+  onClose: () => void;
+  expectedTotal: number;
+}) {
+  const [queryDraft, setQueryDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [data, setData] = useState<ExperimentalCsvResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const isProcess = kind === "process";
+  const title = isProcess ? "Experimental Process Records" : "Experimental Property Records";
+  const eyebrow = isProcess ? "Experimental Process" : "Experimental Properties";
+  const placeholder = isProcess
+    ? "Search polymer, product, process text, material text"
+    : "Search polymer, property name, value";
+  const processRows = isProcess ? ((data as ExperimentalProcessBrowseResponse | null)?.results ?? []) : [];
+  const propertyRows = !isProcess ? ((data as ExperimentalPropertyBrowseResponse | null)?.results ?? []) : [];
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    const params = { q: query, page, page_size: pageSize };
+    const request = isProcess
+      ? browseExperimentalProcessRecords(params)
+      : browseExperimentalPropertyRecords(params);
+
+    request
+      .then((response) => {
+        if (!cancelled) {
+          setData(response);
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) {
+          setError(nextError instanceof Error ? nextError.message : "Failed to load CSV records");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isProcess, open, page, pageSize, query]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const matchedRecords = data?.matched_records ?? 0;
+  const totalRecords = data?.total_records ?? expectedTotal;
+  const totalPages = Math.max(1, Math.ceil(matchedRecords / pageSize));
+  const startRecord = matchedRecords === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endRecord = Math.min(page * pageSize, matchedRecords);
+  const rowCount = isProcess ? processRows.length : propertyRows.length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm">
+      <section className="flex h-[min(88vh,760px)] w-[min(1180px,calc(100vw-2rem))] flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/95 shadow-[0_30px_100px_rgba(8,17,31,0.34)]">
+        <header className="flex flex-col gap-4 border-b border-slate-200 bg-slate-50/90 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white">
+                {isProcess ? <FlaskConical className="h-4 w-4" /> : <Sigma className="h-4 w-4" />}
+              </div>
+              <div className="min-w-0">
+                <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-teal-700">
+                  {eyebrow}
+                </div>
+                <h2 className="font-heading truncate text-xl font-semibold tracking-tight text-slate-950">
+                  {title}
+                </h2>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <MetricPill label="total records" value={formatCount(totalRecords)} />
+            <MetricPill label="matched" value={formatCount(matchedRecords)} />
+            <button
+              type="button"
+              aria-label={`Close ${title}`}
+              onClick={onClose}
+              className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className="border-b border-slate-200 bg-white px-5 py-4">
+          <form
+            className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setPage(1);
+              setQuery(queryDraft.trim());
+            }}
+          >
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                value={queryDraft}
+                onChange={(event) => setQueryDraft(event.target.value)}
+                placeholder={placeholder}
+                className="border-slate-200 bg-slate-50 pl-10"
+              />
+            </div>
+            <select
+              aria-label={`${title} rows per page`}
+              value={pageSize}
+              onChange={(event) => {
+                setPage(1);
+                setPageSize(Number(event.target.value));
+              }}
+              className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value={25}>25 rows</option>
+              <option value={50}>50 rows</option>
+              <option value={100}>100 rows</option>
+            </select>
+            <div className="flex gap-2">
+              <Button type="submit" className="min-w-24">
+                Search
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setQueryDraft("");
+                  setQuery("");
+                  setPage(1);
+                }}
+              >
+                Clear
+              </Button>
+            </div>
+          </form>
+        </div>
+
+        <div className="relative min-h-0 flex-1 overflow-auto bg-white">
+          {error ? (
+            <div className="m-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {error}
+            </div>
+          ) : null}
+
+          {isProcess ? (
+            <table className="min-w-[1280px] w-full border-separate border-spacing-0 text-left text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                <tr>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">CSV Row</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Polymer ID</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Polymer</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Product</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Process Text</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Material Text</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {processRows.map((row) => (
+                  <tr key={`${row.source_file}-${row.source_row_number}`} className="align-top hover:bg-teal-50/35">
+                    <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                      {row.source_row_number}
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                      {row.polymer_id}
+                    </td>
+                    <td className="max-w-[14rem] border-b border-slate-100 px-4 py-3">
+                      <div className="truncate font-medium text-slate-900" title={row.polymer_name}>
+                        {row.polymer_name || <EmptyCell />}
+                      </div>
+                    </td>
+                    <td className="max-w-[14rem] border-b border-slate-100 px-4 py-3">
+                      <div className="truncate text-slate-700" title={row.product_name}>
+                        {row.product_name || <EmptyCell />}
+                      </div>
+                    </td>
+                    <td className="max-w-[28rem] border-b border-slate-100 px-4 py-3">
+                      <div className="line-clamp-3 text-xs leading-5 text-slate-700" title={row.process_flow_original_text}>
+                        {row.process_flow_original_text || <EmptyCell />}
+                      </div>
+                    </td>
+                    <td className="max-w-[22rem] border-b border-slate-100 px-4 py-3">
+                      <div className="line-clamp-3 text-xs leading-5 text-slate-700" title={row.material_original_text}>
+                        {row.material_original_text || <EmptyCell />}
+                      </div>
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-[11px] text-slate-500">
+                      {row.source_file}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <table className="min-w-[920px] w-full border-separate border-spacing-0 text-left text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                <tr>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">CSV Row</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Polymer ID</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Polymer</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Property</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Value</th>
+                  <th className="border-b border-slate-200 px-4 py-3 font-semibold">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {propertyRows.map((row) => (
+                  <tr key={`${row.source_file}-${row.source_row_number}`} className="align-top hover:bg-teal-50/35">
+                    <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                      {row.source_row_number}
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                      {row.polymer_id}
+                    </td>
+                    <td className="max-w-[16rem] border-b border-slate-100 px-4 py-3">
+                      <div className="truncate font-medium text-slate-900" title={row.polymer_name}>
+                        {row.polymer_name || <EmptyCell />}
+                      </div>
+                    </td>
+                    <td className="max-w-[16rem] border-b border-slate-100 px-4 py-3">
+                      <div className="truncate text-slate-700" title={row.property_name_en}>
+                        {row.property_name_en}
+                      </div>
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-700">
+                      {row.value || <EmptyCell />}
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-[11px] text-slate-500">
+                      {row.source_file}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {!loading && !error && rowCount === 0 ? (
+            <div className="px-5 py-10 text-center text-sm text-slate-500">No matching records.</div>
+          ) : null}
+          {loading ? (
+            <div className="absolute inset-x-0 bottom-16 mx-auto w-fit rounded-full border border-white/80 bg-white px-4 py-2 text-sm text-slate-600 shadow-lg">
+              Loading CSV records...
+            </div>
+          ) : null}
+        </div>
+
+        <footer className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/95 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="font-mono-ui text-xs text-slate-500">
+            {startRecord}-{endRecord} / {formatCount(matchedRecords)}
+            {query ? ` for "${query}"` : ""}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              <ChevronLeft className="mr-2 h-4 w-4" />
+              Previous
+            </Button>
+            <div className="min-w-24 text-center font-mono-ui text-xs text-slate-500">
+              {page} / {totalPages}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={page >= totalPages || loading}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            >
+              Next
+              <ChevronRight className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -1846,52 +2989,69 @@ function ProcessPage(props: { onBackHome: () => void; onBackDatabase: () => void
     description:
       "Summarizes process keywords, product names, material mentions, and extracted condition signals across polymer preparation records."
   };
+  const [recordBrowserOpen, setRecordBrowserOpen] = useState(false);
+
   return (
-    <DatasetHero dataset={dataset} backDatabaseLabel="Database Analysis" homeLabel="Home" {...props}>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)] xl:items-stretch">
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<BarChart3 className="h-4 w-4" />}
-          title="Process Flow Keywords"
-        >
-          <RankedBarsWithSummary data={processData.topTerms} />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<Atom className="h-4 w-4" />}
-          title="Material Entity Cloud"
-        >
-          <div className="flex h-full flex-1 flex-col justify-between gap-4">
-            <BubbleCloud data={processData.topMaterials} />
-            <div className="grid gap-3 sm:grid-cols-3">
-              <MetricPill label="entities" value={formatCount(processData.topMaterials.length)} />
-              <MetricPill label="top entity" value={processData.topMaterials[0].label} />
-              <MetricPill label="top count" value={formatCount(processData.topMaterials[0].value)} />
+    <>
+      <DatasetHero
+        dataset={dataset}
+        backDatabaseLabel="Database Analysis"
+        homeLabel="Home"
+        viewValue="Search Records"
+        onViewClick={() => setRecordBrowserOpen(true)}
+        {...props}
+      >
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)] xl:items-stretch">
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<BarChart3 className="h-4 w-4" />}
+            title="Process Flow Keywords"
+          >
+            <RankedBarsWithSummary data={processData.topTerms} />
+          </ChartPanel>
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<Atom className="h-4 w-4" />}
+            title="Material Entity Cloud"
+          >
+            <div className="flex h-full flex-1 flex-col justify-between gap-4">
+              <BubbleCloud data={processData.topMaterials} />
+              <div className="grid gap-3 sm:grid-cols-3">
+                <MetricPill label="entities" value={formatCount(processData.topMaterials.length)} />
+                <MetricPill label="top entity" value={processData.topMaterials[0].label} />
+                <MetricPill label="top count" value={formatCount(processData.topMaterials[0].value)} />
+              </div>
             </div>
-          </div>
-        </ChartPanel>
-      </section>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:items-stretch">
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<TableProperties className="h-4 w-4" />}
-          title="Product Name Ranking"
-        >
-          <RankedBarsWithSummary data={processData.topProducts} />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<Layers3 className="h-4 w-4" />}
-          title="Process Condition Signals"
-        >
-          <CoverageSignals data={processData.processSignals} summary={processData.processSignalSummary} />
-        </ChartPanel>
-      </section>
-    </DatasetHero>
+          </ChartPanel>
+        </section>
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:items-stretch">
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<TableProperties className="h-4 w-4" />}
+            title="Product Name Ranking"
+          >
+            <RankedBarsWithSummary data={processData.topProducts} />
+          </ChartPanel>
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<Layers3 className="h-4 w-4" />}
+            title="Process Condition Signals"
+          >
+            <CoverageSignals data={processData.processSignals} summary={processData.processSignalSummary} />
+          </ChartPanel>
+        </section>
+      </DatasetHero>
+      <ExperimentalCsvRecordBrowser
+        kind="process"
+        open={recordBrowserOpen}
+        onClose={() => setRecordBrowserOpen(false)}
+        expectedTotal={processData.rows}
+      />
+    </>
   );
 }
 
@@ -1902,45 +3062,62 @@ function PropertyPage(props: { onBackHome: () => void; onBackDatabase: () => voi
     description:
       "Summarizes property categories, high-frequency property names, value ranges, and representative properties across polymer records."
   };
+  const [recordBrowserOpen, setRecordBrowserOpen] = useState(false);
+
   return (
-    <DatasetHero dataset={dataset} backDatabaseLabel="Database Analysis" homeLabel="Home" {...props}>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] xl:items-stretch">
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<PieChart className="h-4 w-4" />}
-          title="Property Category Share"
-        >
-          <DonutChartWithSummary data={propertyData.categories} topLabel="top category" />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<BarChart3 className="h-4 w-4" />}
-          title="High-Frequency Property Names"
-        >
-          <RankedBarsWithSummary data={propertyData.topProperties} />
-        </ChartPanel>
-      </section>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] xl:items-stretch">
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<Sigma className="h-4 w-4" />}
-          title="High-Frequency Property Ranges"
-        >
-          <RangePlot data={propertyData.ranges.slice(0, 4)} />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<Search className="h-4 w-4" />}
-          title="Representative Properties"
-        >
-          <CategoryRepresentativeCards data={propertyData.categoryTop} categories={propertyData.categories} />
-        </ChartPanel>
-      </section>
-    </DatasetHero>
+    <>
+      <DatasetHero
+        dataset={dataset}
+        backDatabaseLabel="Database Analysis"
+        homeLabel="Home"
+        viewValue="Search Records"
+        onViewClick={() => setRecordBrowserOpen(true)}
+        {...props}
+      >
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] xl:items-stretch">
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<PieChart className="h-4 w-4" />}
+            title="Property Category Share"
+          >
+            <DonutChartWithSummary data={propertyData.categories} topLabel="top category" />
+          </ChartPanel>
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<BarChart3 className="h-4 w-4" />}
+            title="High-Frequency Property Names"
+          >
+            <RankedBarsWithSummary data={propertyData.topProperties} />
+          </ChartPanel>
+        </section>
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] xl:items-stretch">
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<Sigma className="h-4 w-4" />}
+            title="High-Frequency Property Ranges"
+          >
+            <RangePlot data={propertyData.ranges.slice(0, 4)} />
+          </ChartPanel>
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<Search className="h-4 w-4" />}
+            title="Representative Properties"
+          >
+            <CategoryRepresentativeCards data={propertyData.categoryTop} categories={propertyData.categories} />
+          </ChartPanel>
+        </section>
+      </DatasetHero>
+      <ExperimentalCsvRecordBrowser
+        kind="property"
+        open={recordBrowserOpen}
+        onClose={() => setRecordBrowserOpen(false)}
+        expectedTotal={propertyData.rows}
+      />
+    </>
   );
 }
 
@@ -1951,27 +3128,43 @@ function StructureEffectPage(props: { onBackHome: () => void; onBackDatabase: ()
     description:
       "Links polymer structures with key properties, measurement origins, units, and value ranges to support structure-property comparison."
   };
+  const [recordBrowserOpen, setRecordBrowserOpen] = useState(false);
+
   return (
-    <DatasetHero dataset={dataset} backDatabaseLabel="Database Analysis" homeLabel="Home" {...props}>
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.02fr)_minmax(0,0.98fr)] xl:items-start">
-        <div className="grid gap-5">
-          <ChartPanel icon={<Network className="h-4 w-4" />} title="Property Origin Matrix">
-            <SourceMatrixWithSummary />
-          </ChartPanel>
-          <ChartPanel icon={<PieChart className="h-4 w-4" />} title="Unit Distribution">
-            <DonutChartWithSummary data={structureEffectData.units} topLabel="top unit" />
-          </ChartPanel>
-        </div>
-        <div className="grid gap-5">
-          <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="Property Record Counts">
-            <RankedBarsWithSummary data={structureEffectData.properties} limit={9} />
-          </ChartPanel>
-          <ChartPanel icon={<Sigma className="h-4 w-4" />} title="Structure-Property Value Ranges">
-            <StructureRangeCards data={structureEffectData.ranges.slice(0, 3)} />
-          </ChartPanel>
-        </div>
-      </section>
-    </DatasetHero>
+    <>
+      <DatasetHero
+        dataset={dataset}
+        backDatabaseLabel="Database Analysis"
+        homeLabel="Home"
+        viewValue="Search Records"
+        onViewClick={() => setRecordBrowserOpen(true)}
+        {...props}
+      >
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.02fr)_minmax(0,0.98fr)] xl:items-start">
+          <div className="grid gap-5">
+            <ChartPanel icon={<Network className="h-4 w-4" />} title="Property Origin Matrix">
+              <SourceMatrixWithSummary />
+            </ChartPanel>
+            <ChartPanel icon={<PieChart className="h-4 w-4" />} title="Unit Distribution">
+              <DonutChartWithSummary data={structureEffectData.units} topLabel="top unit" />
+            </ChartPanel>
+          </div>
+          <div className="grid gap-5">
+            <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="Property Record Counts">
+              <RankedBarsWithSummary data={structureEffectData.properties} limit={9} />
+            </ChartPanel>
+            <ChartPanel icon={<Sigma className="h-4 w-4" />} title="Structure-Property Value Ranges">
+              <StructureRangeCards data={structureEffectData.ranges.slice(0, 3)} />
+            </ChartPanel>
+          </div>
+        </section>
+      </DatasetHero>
+      <StructurePropertyRecordBrowser
+        open={recordBrowserOpen}
+        onClose={() => setRecordBrowserOpen(false)}
+        expectedTotal={structureEffectData.rows}
+      />
+    </>
   );
 }
 
@@ -1990,6 +3183,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
   const [selectedMolId, setSelectedMolId] = useState<string | null>(null);
   const [selectedMolecule, setSelectedMolecule] = useState<DftMoleculeDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [recordBrowserOpen, setRecordBrowserOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -2053,87 +3247,96 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
   }, [selectedMolId]);
 
   return (
-    <DatasetHero
-      dataset={dataset}
-      backDatabaseLabel="Database Analysis"
-      homeLabel="Home"
-      recordLabel="Records"
-      viewLabel="View"
-      viewValue="Charts"
-      {...props}
-    >
-      <section className="grid gap-5 xl:grid-cols-3 xl:items-stretch">
-        <ChartPanel
-          className="flex h-full min-w-0 flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<Network className="h-4 w-4" />}
-          title="Final-State Molecule Map"
-        >
-          <PcaDistribution3D
-            points={pcaPoints}
-            selectedMolId={selectedMolId}
-            isLoading={pcaLoading}
-            error={pcaError}
-            onSelect={setSelectedMolId}
-          />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full min-w-0 flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<Orbit className="h-4 w-4" />}
-          title="DFT 3D Conformation"
-        >
-          <DftMolecule3D molecule={selectedMolecule} detailError={detailError} />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full min-w-0 flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<BarChart3 className="h-4 w-4" />}
-          title="Optimization Energy Trace"
-        >
-          <EnergyTrace molecule={selectedMolecule} detailError={detailError} />
-        </ChartPanel>
-      </section>
-      <section className="grid gap-5">
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<Sigma className="h-4 w-4" />}
-          title="HOMO / LUMO Energy Distribution"
-        >
-          <OrbitalDistributionChart data={dftData.orbitalDistributions} />
-        </ChartPanel>
-      </section>
-      <section className="grid gap-5 xl:grid-cols-2 xl:items-start">
-        <ChartPanel
-          className="flex flex-col"
-          icon={<PieChart className="h-4 w-4" />}
-          title="Atom Composition"
-        >
-          <AtomCompositionCompact data={dftData.atomTotals} />
-        </ChartPanel>
-        <ChartPanel
-          className="flex h-full flex-col"
-          bodyClassName="flex flex-1 flex-col"
-          icon={<TableProperties className="h-4 w-4" />}
-          title="Final-State Molecule Summary"
-        >
-          <div className="flex h-full flex-1 flex-col justify-between gap-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <MetricPill label="conformation groups" value={formatCount(dftData.molCount)} />
-              <MetricPill label="optimization steps" value={formatCount(dftData.rows)} />
-              <MetricPill label="median steps" value={String(dftData.stepRange.median)} />
-              <MetricPill label="longest path" value={`${dftData.stepRange.max} steps`} />
-              <MetricPill label="median atoms" value={String(dftData.atomRange.median)} />
-              <MetricPill label="median gap eV" value={formatNumber(dftData.gapRange.median, 3)} />
+    <>
+      <DatasetHero
+        dataset={dataset}
+        backDatabaseLabel="Database Analysis"
+        homeLabel="Home"
+        recordLabel="Records"
+        viewLabel="View"
+        viewValue="Search Records"
+        onViewClick={() => setRecordBrowserOpen(true)}
+        {...props}
+      >
+        <section className="grid gap-5 xl:grid-cols-3 xl:items-stretch">
+          <ChartPanel
+            className="flex h-full min-w-0 flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<Network className="h-4 w-4" />}
+            title="Final-State Molecule Map"
+          >
+            <PcaDistribution3D
+              points={pcaPoints}
+              selectedMolId={selectedMolId}
+              isLoading={pcaLoading}
+              error={pcaError}
+              onSelect={setSelectedMolId}
+            />
+          </ChartPanel>
+          <ChartPanel
+            className="flex h-full min-w-0 flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<Orbit className="h-4 w-4" />}
+            title="DFT 3D Conformation"
+          >
+            <DftMolecule3D molecule={selectedMolecule} detailError={detailError} />
+          </ChartPanel>
+          <ChartPanel
+            className="flex h-full min-w-0 flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<BarChart3 className="h-4 w-4" />}
+            title="Optimization Energy Trace"
+          >
+            <EnergyTrace molecule={selectedMolecule} detailError={detailError} />
+          </ChartPanel>
+        </section>
+        <section className="grid gap-5">
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<Sigma className="h-4 w-4" />}
+            title="HOMO / LUMO Energy Distribution"
+          >
+            <OrbitalDistributionChart data={dftData.orbitalDistributions} />
+          </ChartPanel>
+        </section>
+        <section className="grid gap-5 xl:grid-cols-2 xl:items-start">
+          <ChartPanel
+            className="flex flex-col"
+            icon={<PieChart className="h-4 w-4" />}
+            title="Atom Composition"
+          >
+            <AtomCompositionCompact data={dftData.atomTotals} />
+          </ChartPanel>
+          <ChartPanel
+            className="flex h-full flex-col"
+            bodyClassName="flex flex-1 flex-col"
+            icon={<TableProperties className="h-4 w-4" />}
+            title="Final-State Molecule Summary"
+          >
+            <div className="flex h-full flex-1 flex-col justify-between gap-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <MetricPill label="conformation groups" value={formatCount(dftData.molCount)} />
+                <MetricPill label="optimization steps" value={formatCount(dftData.rows)} />
+                <MetricPill label="median steps" value={String(dftData.stepRange.median)} />
+                <MetricPill label="longest path" value={`${dftData.stepRange.max} steps`} />
+                <MetricPill label="median atoms" value={String(dftData.atomRange.median)} />
+                <MetricPill label="median gap eV" value={formatNumber(dftData.gapRange.median, 3)} />
+              </div>
+              <div className="rounded-2xl border border-white/80 bg-white/75 px-4 py-3 text-sm leading-6 text-slate-600 shadow-sm">
+                Each conformation group represents one optimization path. The record count covers all optimization steps, and the step metrics help compare path length and final geometry size.
+              </div>
             </div>
-            <div className="rounded-2xl border border-white/80 bg-white/75 px-4 py-3 text-sm leading-6 text-slate-600 shadow-sm">
-              Each conformation group represents one optimization path. The record count covers all optimization steps, and the step metrics help compare path length and final geometry size.
-            </div>
-          </div>
-        </ChartPanel>
-      </section>
-    </DatasetHero>
+          </ChartPanel>
+        </section>
+      </DatasetHero>
+      <DftRecordBrowser
+        open={recordBrowserOpen}
+        onClose={() => setRecordBrowserOpen(false)}
+        expectedMolecules={dftData.molCount}
+        expectedSteps={dftData.rows}
+      />
+    </>
   );
 }
 

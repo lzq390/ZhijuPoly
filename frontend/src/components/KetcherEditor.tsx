@@ -13,6 +13,7 @@ type KetcherEditorProps = {
     label: string;
     smiles: string;
   };
+  smilesPlaceholder?: string;
 };
 
 export function KetcherEditor({
@@ -20,7 +21,8 @@ export function KetcherEditor({
   iframeRef,
   onReadyChange,
   onChange,
-  presetStructure
+  presetStructure,
+  smilesPlaceholder = "For example: *CC*, CCO, or another SMILES for similarity matching"
 }: KetcherEditorProps) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -251,7 +253,7 @@ export function KetcherEditor({
           <Textarea
             value={smiles}
             onChange={(event) => onChange(event.target.value)}
-            placeholder="For example: *CC*, CCO, or another SMILES for similarity matching"
+            placeholder={smilesPlaceholder}
             className="min-h-[128px] rounded-[18px] border-slate-200 bg-white px-4 py-3"
           />
         </div>

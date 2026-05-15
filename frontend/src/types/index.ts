@@ -1,6 +1,7 @@
 export type MatchMode = "structure" | "property";
 export type WorkspaceMode = "query" | "predict";
 export type ResultsTab = "query" | "predict";
+export type SmilesLookupTable = "polymers" | "properties" | "pi_candidates";
 
 export type SmilesQueryRequest = {
   smiles: string;
@@ -71,6 +72,30 @@ export type SmilesQueryResponse = {
 export type PredictResponse = {
   predictions: Partial<Record<PredictableProperty, number>>;
   query_time_ms: number;
+};
+
+export type SmilesLookupRequest = {
+  smiles: string;
+  table: SmilesLookupTable;
+};
+
+export type SmilesLookupResult = {
+  record_id: string;
+  source_column: string;
+  smiles: string;
+  canonical_smiles: string | null;
+  summary: string;
+  fields: Record<string, string | number | boolean | null>;
+};
+
+export type SmilesLookupResponse = {
+  query_smiles: string;
+  canonical_smiles: string;
+  table: SmilesLookupTable;
+  exists: boolean;
+  total: number;
+  query_time_ms: number;
+  results: SmilesLookupResult[];
 };
 
 export type KnowledgeSearchRequest = {
@@ -299,6 +324,117 @@ export type ReverseDesignTgJobStatusResponse = {
   message: string | null;
   error: string | null;
   result: ReverseDesignTgResponse | null;
+};
+
+export type StructurePropertyRecord = {
+  property_id: number;
+  polymer_id: number;
+  smiles: string;
+  canonical_smiles: string | null;
+  property_name: string;
+  property_value: string;
+  property_value_num: number | null;
+  property_unit: string | null;
+  label_source: string | null;
+};
+
+export type StructurePropertyBrowseResponse = {
+  query: string;
+  page: number;
+  page_size: number;
+  query_time_ms: number;
+  total_records: number;
+  matched_records: number;
+  results: StructurePropertyRecord[];
+};
+
+export type DftMoleculeBrowserRecord = {
+  mol_id: string;
+  range_group: string;
+  final_step: number;
+  n_atoms: number;
+  trace_points: number;
+  scf_energy: number | null;
+  zero_point_energy: number | null;
+  thermal_enthalpy: number | null;
+  gibbs_free_energy: number | null;
+  lowest_freq: number | null;
+  dipole_moment: number | null;
+  homo_ev: number | null;
+  lumo_ev: number | null;
+  gap_ev: number | null;
+  is_converged: string | null;
+};
+
+export type DftMoleculeBrowseResponse = {
+  query: string;
+  page: number;
+  page_size: number;
+  query_time_ms: number;
+  total_records: number;
+  matched_records: number;
+  total_step_records: number;
+  average_steps: number;
+  max_steps: number;
+  results: DftMoleculeBrowserRecord[];
+};
+
+export type DftEnergyStepRecord = {
+  mol_id: string;
+  step: number;
+  scf_energy: number | null;
+  homo_ev: number | null;
+  lumo_ev: number | null;
+  gap_ev: number | null;
+};
+
+export type DftEnergyStepBrowseResponse = {
+  query: string;
+  page: number;
+  page_size: number;
+  query_time_ms: number;
+  total_records: number;
+  matched_records: number;
+  results: DftEnergyStepRecord[];
+};
+
+export type ExperimentalProcessRecord = {
+  source_file: string;
+  source_row_number: number;
+  polymer_id: string;
+  polymer_name: string;
+  product_name: string;
+  process_flow_original_text: string;
+  material_original_text: string;
+};
+
+export type ExperimentalProcessBrowseResponse = {
+  query: string;
+  page: number;
+  page_size: number;
+  query_time_ms: number;
+  total_records: number;
+  matched_records: number;
+  results: ExperimentalProcessRecord[];
+};
+
+export type ExperimentalPropertyRecord = {
+  source_file: string;
+  source_row_number: number;
+  polymer_id: string;
+  polymer_name: string;
+  property_name_en: string;
+  value: string;
+};
+
+export type ExperimentalPropertyBrowseResponse = {
+  query: string;
+  page: number;
+  page_size: number;
+  query_time_ms: number;
+  total_records: number;
+  matched_records: number;
+  results: ExperimentalPropertyRecord[];
 };
 
 export type DftPcaPoint = {

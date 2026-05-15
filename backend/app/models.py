@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MatchMode = Literal["structure", "property"]
+SmilesLookupTable = Literal["polymers", "properties", "pi_candidates"]
 
 
 class SmilesQueryRequest(BaseModel):
@@ -123,6 +124,167 @@ class Structure3DResponse(BaseModel):
     molblock: str
     capped_smiles: str
     format: Literal["mol"]
+
+
+class SmilesLookupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str = Field(min_length=1)
+    table: SmilesLookupTable
+
+
+class SmilesLookupResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    record_id: str
+    source_column: str
+    smiles: str
+    canonical_smiles: str | None = None
+    summary: str
+    fields: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+
+class SmilesLookupResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query_smiles: str
+    canonical_smiles: str
+    table: SmilesLookupTable
+    exists: bool
+    total: int = Field(ge=0)
+    query_time_ms: float = Field(ge=0.0)
+    results: list[SmilesLookupResult] = Field(default_factory=list)
+
+
+class StructurePropertyRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    property_id: int
+    polymer_id: int
+    smiles: str
+    canonical_smiles: str | None = None
+    property_name: str
+    property_value: str
+    property_value_num: float | None = None
+    property_unit: str | None = None
+    label_source: str | None = None
+
+
+class StructurePropertyBrowseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    query_time_ms: float = Field(ge=0.0)
+    total_records: int = Field(ge=0)
+    matched_records: int = Field(ge=0)
+    results: list[StructurePropertyRecord] = Field(default_factory=list)
+
+
+class DftMoleculeBrowserRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    mol_id: str
+    range_group: str
+    final_step: int
+    n_atoms: int
+    trace_points: int
+    scf_energy: float | None = None
+    zero_point_energy: float | None = None
+    thermal_enthalpy: float | None = None
+    gibbs_free_energy: float | None = None
+    lowest_freq: float | None = None
+    dipole_moment: float | None = None
+    homo_ev: float | None = None
+    lumo_ev: float | None = None
+    gap_ev: float | None = None
+    is_converged: str | None = None
+
+
+class DftMoleculeBrowseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    query_time_ms: float = Field(ge=0.0)
+    total_records: int = Field(ge=0)
+    matched_records: int = Field(ge=0)
+    total_step_records: int = Field(ge=0)
+    average_steps: float = Field(ge=0.0)
+    max_steps: int = Field(ge=0)
+    results: list[DftMoleculeBrowserRecord] = Field(default_factory=list)
+
+
+class DftEnergyStepRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    mol_id: str
+    step: int
+    scf_energy: float | None = None
+    homo_ev: float | None = None
+    lumo_ev: float | None = None
+    gap_ev: float | None = None
+
+
+class DftEnergyStepBrowseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    query_time_ms: float = Field(ge=0.0)
+    total_records: int = Field(ge=0)
+    matched_records: int = Field(ge=0)
+    results: list[DftEnergyStepRecord] = Field(default_factory=list)
+
+
+class ExperimentalProcessRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    source_file: str
+    source_row_number: int
+    polymer_id: str
+    polymer_name: str
+    product_name: str
+    process_flow_original_text: str
+    material_original_text: str
+
+
+class ExperimentalProcessBrowseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    query_time_ms: float = Field(ge=0.0)
+    total_records: int = Field(ge=0)
+    matched_records: int = Field(ge=0)
+    results: list[ExperimentalProcessRecord] = Field(default_factory=list)
+
+
+class ExperimentalPropertyRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    source_file: str
+    source_row_number: int
+    polymer_id: str
+    polymer_name: str
+    property_name_en: str
+    value: str
+
+
+class ExperimentalPropertyBrowseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    query_time_ms: float = Field(ge=0.0)
+    total_records: int = Field(ge=0)
+    matched_records: int = Field(ge=0)
+    results: list[ExperimentalPropertyRecord] = Field(default_factory=list)
 
 
 class KnowledgeSearchRequest(BaseModel):
