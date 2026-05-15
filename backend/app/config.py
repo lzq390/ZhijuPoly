@@ -52,6 +52,10 @@ class Settings:
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
         model_dir: str | None = None,
+        online_knowledge_api_key: str | None = None,
+        online_knowledge_base_url: str | None = None,
+        online_knowledge_model: str | None = None,
+        online_knowledge_max_papers: int | None = None,
     ) -> None:
         env_values = dotenv_values(DEFAULT_ENV_FILE) if DEFAULT_ENV_FILE.exists() else {}
 
@@ -160,6 +164,28 @@ class Settings:
             "MODEL_DIR",
             env_values.get("MODEL_DIR", "model"),
         )
+        raw_online_knowledge_api_key = online_knowledge_api_key
+        if raw_online_knowledge_api_key is None:
+            raw_online_knowledge_api_key = os.getenv(
+                "ONLINE_KNOWLEDGE_API_KEY",
+                env_values.get("ONLINE_KNOWLEDGE_API_KEY", ""),
+            )
+        raw_online_knowledge_base_url = online_knowledge_base_url or os.getenv(
+            "ONLINE_KNOWLEDGE_BASE_URL",
+            env_values.get("ONLINE_KNOWLEDGE_BASE_URL", "https://api.vectorengine.ai/v1"),
+        )
+        raw_online_knowledge_model = online_knowledge_model or os.getenv(
+            "ONLINE_KNOWLEDGE_MODEL",
+            env_values.get("ONLINE_KNOWLEDGE_MODEL", "gpt-4.1-nano-2025-04-14"),
+        )
+        raw_online_knowledge_max_papers = (
+            str(online_knowledge_max_papers)
+            if online_knowledge_max_papers is not None
+            else os.getenv(
+                "ONLINE_KNOWLEDGE_MAX_PAPERS",
+                str(env_values.get("ONLINE_KNOWLEDGE_MAX_PAPERS", "20")),
+            )
+        )
         raw_model_enabled = model_enabled
         if raw_model_enabled is None:
             raw_model_enabled = os.getenv(
@@ -197,6 +223,10 @@ class Settings:
         self.allowed_origins = raw_allowed_origins
         self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)
+        self.online_knowledge_api_key = raw_online_knowledge_api_key.strip()
+        self.online_knowledge_base_url = raw_online_knowledge_base_url.strip()
+        self.online_knowledge_model = raw_online_knowledge_model.strip()
+        self.online_knowledge_max_papers = min(2000, max(1, int(raw_online_knowledge_max_papers)))
 
     @property
     def sqlite_db_file(self) -> Path:

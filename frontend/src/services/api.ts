@@ -4,6 +4,7 @@ import type {
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
   OnlineKnowledgeExportResponse,
+  OnlineKnowledgeDefaultConfigResponse,
   OnlineKnowledgeHistoryResponse,
   OnlineKnowledgeJobCreateResponse,
   OnlineKnowledgeJobResponse,
@@ -73,6 +74,10 @@ export function createOnlineKnowledgeJob(
   payload: OnlineKnowledgeSearchRequest
 ): Promise<OnlineKnowledgeJobCreateResponse> {
   return postJSON("/online-knowledge/jobs", payload);
+}
+
+export function fetchOnlineKnowledgeDefaultConfig(): Promise<OnlineKnowledgeDefaultConfigResponse> {
+  return getJSON("/online-knowledge/default-config");
 }
 
 export function fetchOnlineKnowledgeJob(jobId: string): Promise<OnlineKnowledgeJobResponse> {

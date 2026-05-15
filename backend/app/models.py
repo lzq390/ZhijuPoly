@@ -199,12 +199,35 @@ class OnlineKnowledgeSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     material: str = Field(min_length=1)
-    api_key: str = Field(min_length=1, repr=False)
+    api_key: str | None = Field(default=None, repr=False)
     base_url: str = Field(min_length=1)
     model: str = Field(min_length=1)
     mode: OnlineKnowledgeMode = "synthesis"
     max_papers: int = Field(default=100, ge=1, le=2000)
     extraction_delay_seconds: float = Field(default=0.5, ge=0.0, le=5.0)
+    use_server_default: bool = False
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def normalize_api_key(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def require_model_access_source(self) -> "OnlineKnowledgeSearchRequest":
+        if not self.use_server_default and not self.api_key:
+            raise ValueError("API Key is required unless server default configuration is used")
+        return self
+
+
+class OnlineKnowledgeDefaultConfigResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    base_url: str
+    model: str
+    max_papers: int = Field(ge=1, le=2000)
+    has_server_api_key: bool
 
 
 class OnlineKnowledgeCountItem(BaseModel):

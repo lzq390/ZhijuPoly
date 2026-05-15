@@ -71,7 +71,7 @@ export function ReverseDesignPage({ onBackHome, onOpenKnowledge }: ReverseDesign
         <div className="animate-fade-up">
           <div className="flex flex-wrap items-center gap-3">
             <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
-              POLYPROP
+              NEXPOLY
             </div>
             <Badge>PI Candidate Search</Badge>
           </div>

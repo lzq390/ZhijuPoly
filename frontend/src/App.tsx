@@ -218,14 +218,14 @@ function HomePage({
           <div>
             <div className="flex flex-wrap items-center gap-3">
               <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
-                POLYPROP
+                NEXPOLY
               </div>
               <Badge>Workspace Home</Badge>
             </div>
 
             <div className="mt-7 max-w-4xl">
               <h1 className="font-heading text-[2.65rem] font-semibold leading-[0.98] tracking-[-0.03em] text-slate-950 md:text-[4.4rem]">
-                PolyProp Workspace
+                NexPoly Workspace
               </h1>
               <p className="mt-5 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
                 A unified entry point for polymer property exploration, reverse design, database analytics, and local knowledge search.
@@ -554,7 +554,7 @@ export default function App() {
             <div className="animate-fade-up">
               <div className="flex flex-wrap items-center gap-3">
                 <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
-                  POLYPROP
+                  NEXPOLY
                 </div>
                 <Badge>Polymer Similarity Matching & Property Prediction</Badge>
               </div>

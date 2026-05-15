@@ -16,7 +16,12 @@ import {
   X
 } from "lucide-react";
 import { useOnlineKnowledgeSearch } from "../../hooks/useOnlineKnowledgeSearch";
-import { exportOnlineKnowledgeCsv } from "../../services/api";
+import { exportOnlineKnowledgeCsv, fetchOnlineKnowledgeDefaultConfig } from "../../services/api";
+import {
+  ONLINE_KNOWLEDGE_DEFAULT_BASE_URL,
+  ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS,
+  ONLINE_KNOWLEDGE_DEFAULT_MODEL
+} from "../../constants/onlineKnowledgeDefaults";
 import type {
   OnlineKnowledgeCountItem,
   OnlineKnowledgeMode,
@@ -36,23 +41,38 @@ type DetailState = {
   value: string;
 } | null;
 
-export function OnlineKnowledgeSearchPanel() {
-  const [material, setMaterial] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [model, setModel] = useState("");
+type OnlineKnowledgeSearchPanelProps = {
+  initialMaterial?: string;
+};
+
+export function OnlineKnowledgeSearchPanel({ initialMaterial = "" }: OnlineKnowledgeSearchPanelProps) {
+  const [material, setMaterial] = useState(initialMaterial.trim());
+  const [baseUrl, setBaseUrl] = useState(ONLINE_KNOWLEDGE_DEFAULT_BASE_URL);
+  const [model, setModel] = useState(ONLINE_KNOWLEDGE_DEFAULT_MODEL);
   const [apiKey, setApiKey] = useState("");
+  const [useServerDefault, setUseServerDefault] = useState(false);
+  const [hasServerApiKey, setHasServerApiKey] = useState(false);
   const [mode, setMode] = useState<OnlineKnowledgeMode>("synthesis");
-  const [maxPapers, setMaxPapers] = useState(100);
+  const [maxPapers, setMaxPapers] = useState(ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS);
   const [detail, setDetail] = useState<DetailState>(null);
   const [csvError, setCsvError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [isLoadingConfig, setIsLoadingConfig] = useState(false);
   const searchState = useOnlineKnowledgeSearch();
+
+  useEffect(() => {
+    const nextMaterial = initialMaterial.trim();
+    if (nextMaterial) {
+      setMaterial(nextMaterial);
+    }
+  }, [initialMaterial]);
 
   useEffect(() => {
     void searchState.loadHistory();
   }, [searchState.loadHistory]);
 
   const hasModelAccess =
-    apiKey.trim().length > 0 &&
+    ((useServerDefault && hasServerApiKey) || apiKey.trim().length > 0) &&
     baseUrl.trim().length > 0 &&
     model.trim().length > 0;
   const canSearch =
@@ -80,18 +100,38 @@ export function OnlineKnowledgeSearchPanel() {
 
     const payload = {
       material: nextMaterial,
-      api_key: apiKey.trim(),
+      api_key: useServerDefault ? null : apiKey.trim(),
       base_url: baseUrl.trim(),
       model: model.trim(),
       mode: nextMode,
       max_papers: nextMaxPapers,
-      extraction_delay_seconds: 0.5
+      extraction_delay_seconds: 0.5,
+      use_server_default: useServerDefault
     };
 
-    setApiKey("");
-    setBaseUrl("");
-    setModel("");
     await searchState.submit(payload);
+  }
+
+  async function handleLoadDefaultConfig() {
+    setConfigError(null);
+    setIsLoadingConfig(true);
+    try {
+      const config = await fetchOnlineKnowledgeDefaultConfig();
+      setBaseUrl(config.base_url);
+      setModel(config.model);
+      setMaxPapers(config.max_papers);
+      setHasServerApiKey(config.has_server_api_key);
+      setUseServerDefault(config.has_server_api_key);
+      if (config.has_server_api_key) {
+        setApiKey("");
+      } else {
+        setConfigError("Server API key is not configured. Fill an API key manually or update backend .env.");
+      }
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : "Failed to load API config");
+    } finally {
+      setIsLoadingConfig(false);
+    }
   }
 
   async function handleExportCsv() {
@@ -138,16 +178,17 @@ export function OnlineKnowledgeSearchPanel() {
             </Field>
           </div>
 
-          <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_220px]">
+          <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_220px_180px]">
             <Field label="API Key">
               <Input
-                type="password"
-                value={apiKey}
+                type={useServerDefault ? "text" : "password"}
+                value={useServerDefault ? "Configured on server" : apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                placeholder="API key"
+                placeholder={useServerDefault ? "Configured on server" : "API key"}
                 autoComplete="new-password"
                 name="online-api-key-current"
                 aria-label="API key"
+                disabled={useServerDefault}
               />
             </Field>
             <Field label="Base URL">
@@ -170,6 +211,12 @@ export function OnlineKnowledgeSearchPanel() {
                 aria-label="Model"
               />
             </Field>
+            <div className="flex items-end">
+              <Button type="button" variant="outline" onClick={handleLoadDefaultConfig} disabled={isLoadingConfig} className="w-full">
+                {isLoadingConfig ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
+                Load API Config
+              </Button>
+            </div>
           </div>
 
           <div className="mt-3 grid gap-3 lg:grid-cols-[160px_140px]">
@@ -205,6 +252,7 @@ export function OnlineKnowledgeSearchPanel() {
 
         {searchState.error ? <Alert variant="destructive">{searchState.error}</Alert> : null}
         {csvError ? <Alert variant="destructive">{csvError}</Alert> : null}
+        {configError ? <Alert variant="destructive">{configError}</Alert> : null}
 
         {searchState.isLoading ? (
           <div className="flex min-h-[280px] flex-col items-center justify-center rounded-[32px] border border-white/70 bg-white/75 p-5 text-center shadow-soft">

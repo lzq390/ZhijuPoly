@@ -1303,7 +1303,7 @@ function toMolBlock(molId: string, coordinates: AtomCoordinate[], bonds: { from:
 
   return [
     molId,
-    "  PolyProp DFT",
+    "  NexPoly DFT",
     "",
     counts,
     ...atomLines,

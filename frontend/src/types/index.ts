@@ -123,12 +123,20 @@ export type OnlineKnowledgeMode = "synthesis" | "property";
 
 export type OnlineKnowledgeSearchRequest = {
   material: string;
-  api_key: string;
+  api_key?: string | null;
   base_url: string;
   model: string;
   mode: OnlineKnowledgeMode;
   max_papers: number;
   extraction_delay_seconds: number;
+  use_server_default?: boolean;
+};
+
+export type OnlineKnowledgeDefaultConfigResponse = {
+  base_url: string;
+  model: string;
+  max_papers: number;
+  has_server_api_key: boolean;
 };
 
 export type OnlineKnowledgeCountItem = {

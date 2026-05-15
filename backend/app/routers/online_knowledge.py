@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
 from time import perf_counter
@@ -8,8 +9,10 @@ from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
+from app.config import Settings
 from app.models import (
     MutationResponse,
+    OnlineKnowledgeDefaultConfigResponse,
     OnlineKnowledgeExportRequest,
     OnlineKnowledgeExportResponse,
     OnlineKnowledgeJobCreateResponse,
@@ -41,15 +44,35 @@ from app.services.online_knowledge.search_service import (
 router = APIRouter(prefix="/api/v1/online-knowledge", tags=["online-knowledge"])
 
 
+@dataclass(frozen=True)
+class OnlineModelAccess:
+    api_key: str
+    base_url: str
+    model: str
+
+
+@router.get("/default-config", response_model=OnlineKnowledgeDefaultConfigResponse)
+def get_online_knowledge_default_config(request: Request) -> OnlineKnowledgeDefaultConfigResponse:
+    settings = request.app.state.settings
+    return OnlineKnowledgeDefaultConfigResponse(
+        base_url=settings.online_knowledge_base_url,
+        model=settings.online_knowledge_model,
+        max_papers=settings.online_knowledge_max_papers,
+        has_server_api_key=bool(settings.online_knowledge_api_key),
+    )
+
+
 @router.post("/search", response_model=OnlineKnowledgeSearchResponse)
 def search_online_knowledge(
     request_body: OnlineKnowledgeSearchRequest,
     request: Request,
 ) -> OnlineKnowledgeSearchResponse:
     started_at = perf_counter()
+    settings = request.app.state.settings
 
     try:
-        result_data = _run_search_from_request(request_body)
+        model_access = resolve_online_model_access(request_body, settings)
+        result_data = _run_search_from_request(request_body, model_access)
     except OnlineKnowledgeConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except OnlineKnowledgeModelError as exc:
@@ -60,7 +83,6 @@ def search_online_knowledge(
     result_data["query_time_ms"] = (perf_counter() - started_at) * 1000
     response = OnlineKnowledgeSearchResponse.model_validate(result_data)
 
-    settings = request.app.state.settings
     with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
         save_online_history(
             connection,
@@ -81,11 +103,7 @@ def create_online_knowledge_job(
 ) -> OnlineKnowledgeJobCreateResponse:
     settings = request.app.state.settings
     try:
-        validate_model_access(
-            api_key=request_body.api_key,
-            base_url=request_body.base_url,
-            model=request_body.model,
-        )
+        model_access = resolve_online_model_access(request_body, settings)
     except OnlineKnowledgeConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -104,6 +122,7 @@ def create_online_knowledge_job(
         job_id,
         settings.sqlite_db_file,
         request_body,
+        model_access,
     )
     return OnlineKnowledgeJobCreateResponse(job_id=job_id, status="pending")
 
@@ -168,22 +187,47 @@ def export_online_knowledge_csv(request_body: OnlineKnowledgeExportRequest) -> O
 
 def _run_search_from_request(
     request_body: OnlineKnowledgeSearchRequest,
+    model_access: OnlineModelAccess,
 ) -> dict:
     return run_online_knowledge_search(
         material=request_body.material,
         mode=request_body.mode,
-        api_key=request_body.api_key,
-        base_url=request_body.base_url,
-        model=request_body.model,
+        api_key=model_access.api_key,
+        base_url=model_access.base_url,
+        model=model_access.model,
         max_papers=request_body.max_papers,
         extraction_delay_seconds=request_body.extraction_delay_seconds,
     )
+
+
+def resolve_online_model_access(
+    request_body: OnlineKnowledgeSearchRequest,
+    settings: Settings,
+) -> OnlineModelAccess:
+    api_key = request_body.api_key or ""
+    if request_body.use_server_default:
+        api_key = settings.online_knowledge_api_key
+        if not api_key:
+            raise OnlineKnowledgeConfigError("Server default API Key is not configured")
+
+    access = OnlineModelAccess(
+        api_key=api_key,
+        base_url=request_body.base_url,
+        model=request_body.model,
+    )
+    validate_model_access(
+        api_key=access.api_key,
+        base_url=access.base_url,
+        model=access.model,
+    )
+    return access
 
 
 def _run_online_knowledge_job(
     job_id: str,
     sqlite_db_file,
     request_body: OnlineKnowledgeSearchRequest,
+    model_access: OnlineModelAccess,
 ) -> None:
     with sqlite_connection(sqlite_db_file) as connection:
         mark_online_job_running(connection, job_id)
@@ -193,9 +237,9 @@ def _run_online_knowledge_job(
         result_data = run_online_knowledge_search(
             material=request_body.material,
             mode=request_body.mode,
-            api_key=request_body.api_key,
-            base_url=request_body.base_url,
-            model=request_body.model,
+            api_key=model_access.api_key,
+            base_url=model_access.base_url,
+            model=model_access.model,
             max_papers=request_body.max_papers,
             extraction_delay_seconds=request_body.extraction_delay_seconds,
         )
