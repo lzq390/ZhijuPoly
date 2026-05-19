@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
 from app.database import sqlite_connection
+from app.middleware import BrowserCrossSiteProtectionMiddleware
 from app.postgres_database import postgres_connection
 from app.routers.database_browser import router as database_browser_router
 from app.routers.dft import router as dft_router
@@ -45,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(BrowserCrossSiteProtectionMiddleware)
 
     app.add_api_route("/health", health, methods=["GET"])
     app.include_router(query_router)

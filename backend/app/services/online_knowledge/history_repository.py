@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS online_knowledge_jobs (
   material TEXT NOT NULL,
   mode TEXT NOT NULL,
   max_papers INTEGER NOT NULL,
+  progress_stage TEXT NOT NULL DEFAULT 'pending',
+  progress_message TEXT NOT NULL DEFAULT 'Waiting for the search worker to start.',
+  processed_papers INTEGER NOT NULL DEFAULT 0,
+  total_papers INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   error_message TEXT,
@@ -40,6 +44,7 @@ ON online_knowledge_jobs(created_at);
 
 def ensure_online_knowledge_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(ONLINE_KNOWLEDGE_SCHEMA_SQL)
+    _ensure_online_job_progress_columns(connection)
 
 
 def save_online_history(
@@ -120,15 +125,59 @@ def create_online_job(
     ensure_online_knowledge_schema(connection)
     connection.execute(
         """
-        INSERT INTO online_knowledge_jobs (job_id, status, material, mode, max_papers)
-        VALUES (?, 'pending', ?, ?, ?)
+        INSERT INTO online_knowledge_jobs (
+          job_id,
+          status,
+          material,
+          mode,
+          max_papers,
+          progress_stage,
+          progress_message
+        )
+        VALUES (?, 'pending', ?, ?, ?, 'pending', 'Waiting for the search worker to start.')
         """,
         (job_id, material, mode, max_papers),
     )
 
 
 def mark_online_job_running(connection: sqlite3.Connection, job_id: str) -> None:
-    _update_online_job(connection, job_id, status="running")
+    _update_online_job(
+        connection,
+        job_id,
+        status="running",
+        progress_stage="running",
+        progress_message="Starting online knowledge retrieval.",
+    )
+
+
+def update_online_job_progress(
+    connection: sqlite3.Connection,
+    job_id: str,
+    *,
+    stage: str,
+    message: str,
+    processed_papers: int = 0,
+    total_papers: int = 0,
+) -> None:
+    ensure_online_knowledge_schema(connection)
+    connection.execute(
+        """
+        UPDATE online_knowledge_jobs
+        SET progress_stage = ?,
+            progress_message = ?,
+            processed_papers = ?,
+            total_papers = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE job_id = ?
+        """,
+        (
+            stage,
+            message,
+            max(0, int(processed_papers)),
+            max(0, int(total_papers)),
+            job_id,
+        ),
+    )
 
 
 def mark_online_job_completed(connection: sqlite3.Connection, job_id: str, result_data: dict[str, Any]) -> None:
@@ -137,6 +186,12 @@ def mark_online_job_completed(connection: sqlite3.Connection, job_id: str, resul
         """
         UPDATE online_knowledge_jobs
         SET status = 'completed',
+            progress_stage = 'completed',
+            progress_message = 'Online knowledge retrieval completed.',
+            processed_papers = CASE
+              WHEN total_papers > 0 THEN total_papers
+              ELSE processed_papers
+            END,
             updated_at = CURRENT_TIMESTAMP,
             error_message = NULL,
             result_json = ?
@@ -152,12 +207,14 @@ def mark_online_job_failed(connection: sqlite3.Connection, job_id: str, error_me
         """
         UPDATE online_knowledge_jobs
         SET status = 'failed',
+            progress_stage = 'failed',
+            progress_message = ?,
             updated_at = CURRENT_TIMESTAMP,
             error_message = ?,
             result_json = NULL
         WHERE job_id = ?
         """,
-        (error_message, job_id),
+        (error_message, error_message, job_id),
     )
 
 
@@ -165,7 +222,20 @@ def get_online_job(connection: sqlite3.Connection, job_id: str) -> dict[str, Any
     ensure_online_knowledge_schema(connection)
     row = connection.execute(
         """
-        SELECT job_id, status, material, mode, max_papers, created_at, updated_at, error_message, result_json
+        SELECT
+          job_id,
+          status,
+          material,
+          mode,
+          max_papers,
+          progress_stage,
+          progress_message,
+          processed_papers,
+          total_papers,
+          created_at,
+          updated_at,
+          error_message,
+          result_json
         FROM online_knowledge_jobs
         WHERE job_id = ?
         """,
@@ -180,6 +250,10 @@ def get_online_job(connection: sqlite3.Connection, job_id: str) -> dict[str, Any
         "material": row["material"],
         "mode": row["mode"],
         "max_papers": int(row["max_papers"]),
+        "progress_stage": row["progress_stage"],
+        "progress_message": row["progress_message"],
+        "processed_papers": int(row["processed_papers"]),
+        "total_papers": int(row["total_papers"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "error_message": row["error_message"],
@@ -187,15 +261,25 @@ def get_online_job(connection: sqlite3.Connection, job_id: str) -> dict[str, Any
     }
 
 
-def _update_online_job(connection: sqlite3.Connection, job_id: str, *, status: str) -> None:
+def _update_online_job(
+    connection: sqlite3.Connection,
+    job_id: str,
+    *,
+    status: str,
+    progress_stage: str,
+    progress_message: str,
+) -> None:
     ensure_online_knowledge_schema(connection)
     connection.execute(
         """
         UPDATE online_knowledge_jobs
-        SET status = ?, updated_at = CURRENT_TIMESTAMP
+        SET status = ?,
+            progress_stage = ?,
+            progress_message = ?,
+            updated_at = CURRENT_TIMESTAMP
         WHERE job_id = ?
         """,
-        (status, job_id),
+        (status, progress_stage, progress_message, job_id),
     )
 
 
@@ -211,3 +295,21 @@ def _history_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "max_papers": int(row["max_papers"]),
         "result_data": result_data,
     }
+
+
+def _ensure_online_job_progress_columns(connection: sqlite3.Connection) -> None:
+    existing_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(online_knowledge_jobs)").fetchall()
+    }
+    column_sql = {
+        "progress_stage": "ALTER TABLE online_knowledge_jobs ADD COLUMN progress_stage TEXT NOT NULL DEFAULT 'pending'",
+        "progress_message": (
+            "ALTER TABLE online_knowledge_jobs "
+            "ADD COLUMN progress_message TEXT NOT NULL DEFAULT 'Waiting for the search worker to start.'"
+        ),
+        "processed_papers": "ALTER TABLE online_knowledge_jobs ADD COLUMN processed_papers INTEGER NOT NULL DEFAULT 0",
+        "total_papers": "ALTER TABLE online_knowledge_jobs ADD COLUMN total_papers INTEGER NOT NULL DEFAULT 0",
+    }
+    for column, statement in column_sql.items():
+        if column not in existing_columns:
+            connection.execute(statement)

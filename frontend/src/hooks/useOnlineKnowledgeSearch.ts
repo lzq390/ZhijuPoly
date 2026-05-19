@@ -8,6 +8,7 @@ import {
 } from "../services/api";
 import type {
   OnlineKnowledgeHistoryItem,
+  OnlineKnowledgeJobResponse,
   OnlineKnowledgeJobStatus,
   OnlineKnowledgeSearchRequest,
   OnlineKnowledgeSearchResponse
@@ -22,6 +23,7 @@ type OnlineKnowledgeSearchState = {
   history: OnlineKnowledgeHistoryItem[];
   jobId: string | null;
   jobStatus: OnlineKnowledgeJobStatus | null;
+  job: OnlineKnowledgeJobResponse | null;
 };
 
 const JOB_POLL_INTERVAL_MS = 1200;
@@ -38,7 +40,8 @@ export function useOnlineKnowledgeSearch() {
     data: null,
     history: [],
     jobId: null,
-    jobStatus: null
+    jobStatus: null,
+    job: null
   });
 
   const loadHistory = useCallback(async () => {
@@ -66,7 +69,8 @@ export function useOnlineKnowledgeSearch() {
       error: null,
       data: null,
       jobId: null,
-      jobStatus: null
+      jobStatus: null,
+      job: null
     }));
 
     try {
@@ -74,7 +78,8 @@ export function useOnlineKnowledgeSearch() {
       setState((current) => ({
         ...current,
         jobId: created.job_id,
-        jobStatus: created.status
+        jobStatus: created.status,
+        job: null
       }));
       await pollJob(created.job_id, payload.max_papers);
     } catch (error) {
@@ -96,7 +101,8 @@ export function useOnlineKnowledgeSearch() {
       const job = await fetchOnlineKnowledgeJob(jobId);
       setState((current) => ({
         ...current,
-        jobStatus: job.status
+        jobStatus: job.status,
+        job
       }));
 
       if (job.status === "completed") {
@@ -135,7 +141,8 @@ export function useOnlineKnowledgeSearch() {
       data: item.result_data,
       error: null,
       jobId: null,
-      jobStatus: null
+      jobStatus: null,
+      job: null
     }));
   }
 

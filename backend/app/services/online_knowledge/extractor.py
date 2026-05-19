@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any
 
 from openai import OpenAI
@@ -144,9 +145,18 @@ Return only valid JSON. No markdown."""
                 failed_result.update({"has_polymerization": False, "reactions": []})
             return failed_result
 
-    def process_papers(self, papers: list[Paper], mode: str = "synthesis", delay: float = 0.5) -> list[ExtractionResult]:
+    def process_papers(
+        self,
+        papers: list[Paper],
+        mode: str = "synthesis",
+        delay: float = 0.5,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> list[ExtractionResult]:
         self.results = []
         papers_with_abstract = [paper for paper in papers if paper.get("abstract")]
+        total_papers = len(papers_with_abstract)
+        if progress_callback is not None:
+            progress_callback(0, total_papers)
 
         for index, paper in enumerate(papers_with_abstract):
             result = self.extract_from_abstract(
@@ -156,6 +166,8 @@ Return only valid JSON. No markdown."""
                 mode=mode,
             )
             self.results.append(result)
+            if progress_callback is not None:
+                progress_callback(index + 1, total_papers)
             if delay > 0 and index < len(papers_with_abstract) - 1:
                 time.sleep(delay)
 

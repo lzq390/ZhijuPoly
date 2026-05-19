@@ -248,6 +248,10 @@ export type OnlineKnowledgeJobResponse = {
   material: string;
   mode: OnlineKnowledgeMode;
   max_papers: number;
+  progress_stage: string;
+  progress_message: string;
+  processed_papers: number;
+  total_papers: number;
   created_at: string;
   updated_at: string;
   error_message: string | null;

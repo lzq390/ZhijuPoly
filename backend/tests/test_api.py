@@ -25,6 +25,7 @@ from app.routers import database_browser
 from app.routers.predict import predict
 from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles
 from app.services.database_browser import browse_csv_records
+from app.services.structure_3d import generate_3d_molblock
 
 
 def make_request(app: FastAPI) -> Request:
@@ -38,6 +39,12 @@ def make_request(app: FastAPI) -> Request:
             "app": app,
         }
     )
+
+
+REVERSE_DESIGN_DEMO_SMILES = (
+    "*c1ccc(C(=O)OCc2ccc(-c3ccc(COC(=O)c4ccc(N5C(=O)c6ccc(OC(=O)c7ccc"
+    "(C(C)c8ccc(C(=O)Oc9ccc%10c(c9)C(=O)N(*)C%10=O)o8)o7)cc6C5=O)cc4)o3)o2)cc1"
+)
 
 
 @pytest.mark.asyncio
@@ -69,6 +76,33 @@ def test_structure_property_browser_lists_records_with_total_count(test_app: Fas
         "property_unit": "°C",
         "label_source": "exp",
     }
+
+
+def test_api_rejects_browser_cross_site_fetch_requests(test_app: FastAPI) -> None:
+    client = TestClient(test_app)
+
+    response = client.get(
+        "/api/v1/database-browser/structure-property",
+        headers={
+            "Origin": "http://evil.example",
+            "Sec-Fetch-Site": "cross-site",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "cross-site browser requests are not allowed"
+
+
+def test_api_rejects_untrusted_browser_origin_without_fetch_metadata(test_app: FastAPI) -> None:
+    client = TestClient(test_app)
+
+    response = client.get(
+        "/api/v1/database-browser/structure-property",
+        headers={"Origin": "http://evil.example"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "cross-site browser requests are not allowed"
 
 
 def test_structure_property_browser_searches_properties_and_smiles(test_app: FastAPI) -> None:
@@ -744,8 +778,26 @@ def test_api_uses_temporary_database(test_app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_structure_3d_caps_polymer_ends() -> None:
-    response = await generate_structure_3d(Structure3DRequest(smiles="*CC*"))
+async def test_generate_structure_3d_uses_configured_timeout(test_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = make_request(test_app)
+    test_app.state.settings.structure_3d_timeout_seconds = 27.5
+    captured: dict[str, float] = {}
+
+    def fake_generate_3d_molblock(smiles: str, *, timeout_seconds: float) -> tuple[str, str]:
+        captured["timeout_seconds"] = timeout_seconds
+        return ("mock molblock V2000", smiles)
+
+    monkeypatch.setattr("app.routers.query.generate_3d_molblock", fake_generate_3d_molblock)
+
+    response = await generate_structure_3d(Structure3DRequest(smiles="*CC*"), request)
+
+    assert response.format == "mol"
+    assert captured == {"timeout_seconds": 27.5}
+
+
+@pytest.mark.asyncio
+async def test_generate_structure_3d_caps_polymer_ends(test_app: FastAPI) -> None:
+    response = await generate_structure_3d(Structure3DRequest(smiles="*CC*"), make_request(test_app))
 
     assert response.format == "mol"
     assert "V2000" in response.molblock
@@ -754,27 +806,44 @@ async def test_generate_structure_3d_caps_polymer_ends() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_structure_3d_rejects_invalid_smiles() -> None:
+async def test_generate_structure_3d_rejects_invalid_smiles(test_app: FastAPI) -> None:
     with pytest.raises(HTTPException) as exc_info:
-        await generate_structure_3d(Structure3DRequest(smiles="not-a-smiles"))
+        await generate_structure_3d(Structure3DRequest(smiles="not-a-smiles"), make_request(test_app))
 
     assert exc_info.value.status_code == 422
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("smiles", ["*=C*", "*#C*", "*1CC1*"])
-async def test_generate_structure_3d_rejects_invalid_capped_topology(smiles: str) -> None:
+async def test_generate_structure_3d_rejects_invalid_capped_topology(smiles: str, test_app: FastAPI) -> None:
     with pytest.raises(HTTPException) as exc_info:
-        await generate_structure_3d(Structure3DRequest(smiles=smiles))
+        await generate_structure_3d(Structure3DRequest(smiles=smiles), make_request(test_app))
 
     assert exc_info.value.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_generate_structure_3d_handles_complex_polymer_structure() -> None:
+async def test_generate_structure_3d_handles_complex_polymer_structure(test_app: FastAPI) -> None:
     smiles = "*/C=C\\C(=O)c1cccc(c1)C(=O)/C=C\\Nc1ccc(cc1)Cc1ccc(cc1)N*"
-    response = await generate_structure_3d(Structure3DRequest(smiles=smiles))
+    response = await generate_structure_3d(Structure3DRequest(smiles=smiles), make_request(test_app))
 
     assert response.format == "mol"
     assert "V2000" in response.molblock
     assert "[H]" in response.capped_smiles
+
+
+@pytest.mark.asyncio
+async def test_generate_structure_3d_handles_large_reverse_design_preview(test_app: FastAPI) -> None:
+    response = await generate_structure_3d(Structure3DRequest(smiles=REVERSE_DESIGN_DEMO_SMILES), make_request(test_app))
+
+    assert response.format == "mol"
+    assert "V2000" in response.molblock
+    assert len(response.molblock) > 8000
+
+
+def test_generate_3d_molblock_handles_large_payload_without_queue_deadlock() -> None:
+    molblock, capped_smiles = generate_3d_molblock(REVERSE_DESIGN_DEMO_SMILES)
+
+    assert "V2000" in molblock
+    assert len(molblock) > 8000
+    assert capped_smiles.startswith("[H]c1ccc")

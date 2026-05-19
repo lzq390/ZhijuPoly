@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import multiprocessing
+import queue
+import time
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
@@ -59,25 +61,38 @@ def _generate_3d_worker(smiles: str, queue: multiprocessing.Queue) -> None:
         queue.put(("failed", "failed to generate 3D coordinates"))
 
 
-def generate_3d_molblock(smiles: str) -> tuple[str, str]:
+def generate_3d_molblock(smiles: str, *, timeout_seconds: float = 8.0) -> tuple[str, str]:
     context = multiprocessing.get_context("spawn")
-    queue: multiprocessing.Queue = context.Queue()
-    process = context.Process(target=_generate_3d_worker, args=(smiles, queue))
+    result_queue: multiprocessing.Queue = context.Queue()
+    process = context.Process(target=_generate_3d_worker, args=(smiles, result_queue))
     process.start()
-    process.join(timeout=8)
 
+    result: tuple[str, tuple[str, str] | str] | None = None
+    deadline = time.monotonic() + max(float(timeout_seconds), 1.0)
+    while result is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            process.terminate()
+            process.join()
+            raise InvalidSmilesError("3D generation timed out")
+
+        try:
+            result = result_queue.get(timeout=min(0.1, remaining))
+        except queue.Empty:
+            if not process.is_alive():
+                process.join()
+                raise InvalidSmilesError("failed to generate 3D coordinates")
+
+    process.join(timeout=1)
     if process.is_alive():
         process.terminate()
         process.join()
-        raise InvalidSmilesError("3D generation timed out")
+        raise InvalidSmilesError("failed to generate 3D coordinates")
 
     if process.exitcode != 0:
         raise InvalidSmilesError("failed to generate 3D coordinates")
 
-    if queue.empty():
-        raise InvalidSmilesError("failed to generate 3D coordinates")
-
-    status, payload = queue.get()
+    status, payload = result
     if status == "ok":
         return payload
     raise InvalidSmilesError(payload)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -41,28 +42,83 @@ def run_online_knowledge_search(
     model: str,
     max_papers: int,
     extraction_delay_seconds: float,
+    progress_callback: Callable[[str, str, int, int], None] | None = None,
 ) -> dict[str, Any]:
     validate_model_access(api_key=api_key, base_url=base_url, model=model)
     searcher = SimpleLiteratureSearcher(max_workers=4)
     source_count = len(SimpleLiteratureSearcher.DEFAULT_SOURCES)
     per_source_limit = max(1, math.ceil(max_papers / source_count))
+    _report_progress(
+        progress_callback,
+        "searching",
+        "Collecting papers from Semantic Scholar, PubMed, OpenAlex, and arXiv.",
+        0,
+        max_papers,
+    )
     raw_papers = searcher.search_all(material, max_papers=per_source_limit)
+    _report_progress(
+        progress_callback,
+        "deduplicating",
+        f"Collected {len(raw_papers)} raw papers. Deduplicating search results.",
+        0,
+        max_papers,
+    )
     papers = searcher.deduplicate(raw_papers)
+    _report_progress(
+        progress_callback,
+        "enriching",
+        f"Found {len(papers)} unique papers. Enriching missing abstracts with Crossref.",
+        0,
+        max_papers,
+    )
     papers = searcher.enrich_batch_with_crossref(papers)
     papers = [paper for paper in papers if paper.get("abstract")][:max_papers]
 
     if papers:
         example_used = False
     else:
+        _report_progress(
+            progress_callback,
+            "fallback",
+            "No abstracts were returned by online sources. Using built-in example abstracts.",
+            0,
+            max_papers,
+        )
         papers = create_example_data(material, mode)
         example_used = True
 
     extractor = PolymerExtractor(api_key=api_key, base_url=base_url, model_name=model)
-    extraction_results = extractor.process_papers(papers, mode=mode, delay=extraction_delay_seconds)
+    extraction_total = len([paper for paper in papers if paper.get("abstract")])
+    _report_progress(
+        progress_callback,
+        "extracting",
+        f"Extracting polymer information from {extraction_total} abstracts.",
+        0,
+        extraction_total,
+    )
+    extraction_results = extractor.process_papers(
+        papers,
+        mode=mode,
+        delay=extraction_delay_seconds,
+        progress_callback=lambda processed, total: _report_progress(
+            progress_callback,
+            "extracting",
+            _extraction_progress_message(processed, total),
+            processed,
+            total,
+        ),
+    )
     rows = extractor.convert_to_rows(mode=mode)
     if extraction_results and all(result.get("error") for result in extraction_results):
         first_error = str(extraction_results[0].get("error") or "model call failed")
         raise OnlineKnowledgeModelError(first_error)
+    _report_progress(
+        progress_callback,
+        "finalizing",
+        f"Building tables from {len(rows)} extracted rows.",
+        extraction_total,
+        extraction_total,
+    )
     syntheses = build_syntheses(rows) if mode == "synthesis" else []
     property_points = build_property_points(rows) if mode == "property" else []
 
@@ -98,3 +154,23 @@ def validate_model_access(*, api_key: str, base_url: str, model: str) -> None:
     parsed = urlparse(base_url)
     if not parsed.scheme or not parsed.hostname:
         raise OnlineKnowledgeConfigError("Base URL must include protocol and host")
+
+
+def _report_progress(
+    progress_callback: Callable[[str, str, int, int], None] | None,
+    stage: str,
+    message: str,
+    processed_papers: int,
+    total_papers: int,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(stage, message, processed_papers, total_papers)
+
+
+def _extraction_progress_message(processed_papers: int, total_papers: int) -> str:
+    if total_papers <= 0:
+        return "No abstracts are available for model extraction."
+    if processed_papers >= total_papers:
+        return f"Extracted all {total_papers} abstracts."
+    return f"Extracting abstract {processed_papers + 1} of {total_papers}."

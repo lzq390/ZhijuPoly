@@ -96,9 +96,13 @@ async def get_polymer_detail(polymer_id: int, request: Request) -> PolymerResult
 
 
 @router.post("/structure/3d", response_model=Structure3DResponse)
-async def generate_structure_3d(request_body: Structure3DRequest) -> Structure3DResponse:
+async def generate_structure_3d(request_body: Structure3DRequest, request: Request) -> Structure3DResponse:
     try:
-        molblock, capped_smiles = generate_3d_molblock(request_body.smiles)
+        settings = request.app.state.settings
+        molblock, capped_smiles = generate_3d_molblock(
+            request_body.smiles,
+            timeout_seconds=settings.structure_3d_timeout_seconds,
+        )
     except InvalidSmilesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

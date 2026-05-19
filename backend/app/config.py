@@ -49,6 +49,7 @@ class Settings:
         pi_reverse_job_workers: int | None = None,
         pi_reverse_job_batch_size: int | None = None,
         pi_reverse_progress_interval_rows: int | None = None,
+        structure_3d_timeout_seconds: float | None = None,
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
         model_dir: str | None = None,
@@ -156,6 +157,14 @@ class Settings:
                 str(env_values.get("PI_REVERSE_PROGRESS_INTERVAL_ROWS", "50000")),
             )
         )
+        raw_structure_3d_timeout_seconds = (
+            str(structure_3d_timeout_seconds)
+            if structure_3d_timeout_seconds is not None
+            else os.getenv(
+                "STRUCTURE_3D_TIMEOUT_SECONDS",
+                str(env_values.get("STRUCTURE_3D_TIMEOUT_SECONDS", "8")),
+            )
+        )
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",
             env_values.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"),
@@ -220,6 +229,7 @@ class Settings:
         self.pi_reverse_job_workers = max(1, int(raw_pi_reverse_job_workers))
         self.pi_reverse_job_batch_size = max(1, int(raw_pi_reverse_job_batch_size))
         self.pi_reverse_progress_interval_rows = max(1, int(raw_pi_reverse_progress_interval_rows))
+        self.structure_3d_timeout_seconds = max(1.0, float(raw_structure_3d_timeout_seconds))
         self.allowed_origins = raw_allowed_origins
         self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)

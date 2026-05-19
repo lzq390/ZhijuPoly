@@ -220,7 +220,7 @@ function HomePage({
     { name: "Tg Reverse Design", status: "Ready" },
     { name: "Database Query", status: "Ready" },
     { name: "Database Analytics", status: "Ready" },
-    { name: "Local Knowledge Search", status: "Ready" }
+    { name: "Knowledge Search", status: "Ready" }
   ];
 
   return (
@@ -240,7 +240,7 @@ function HomePage({
                 NexPoly Workspace
               </h1>
               <p className="mt-5 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
-                A unified entry point for polymer property exploration, reverse design, database analytics, and local knowledge search.
+                A unified entry point for polymer property exploration, reverse design, database analytics, and knowledge search.
               </p>
             </div>
 
@@ -316,8 +316,8 @@ function HomePage({
         <ModuleTile
           icon={<BookOpen className="h-5 w-5" />}
           eyebrow="Available"
-          title="Local Knowledge Search"
-          description="Search local patent knowledge records by abstract keywords and inspect formulation-related details."
+          title="Knowledge Search"
+          description="Search knowledge records by abstract keywords and inspect formulation-related details."
           status="Ready"
           actionLabel="Enter"
           onClick={onOpenKnowledge}

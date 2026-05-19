@@ -32,6 +32,7 @@ from app.services.online_knowledge.history_repository import (
     mark_online_job_failed,
     mark_online_job_running,
     save_online_history,
+    update_online_job_progress,
 )
 from app.services.online_knowledge.search_service import (
     OnlineKnowledgeConfigError,
@@ -233,6 +234,18 @@ def _run_online_knowledge_job(
         mark_online_job_running(connection, job_id)
 
     started_at = perf_counter()
+
+    def report_progress(stage: str, message: str, processed_papers: int, total_papers: int) -> None:
+        with sqlite_connection(sqlite_db_file) as connection:
+            update_online_job_progress(
+                connection,
+                job_id,
+                stage=stage,
+                message=message,
+                processed_papers=processed_papers,
+                total_papers=total_papers,
+            )
+
     try:
         result_data = run_online_knowledge_search(
             material=request_body.material,
@@ -242,6 +255,7 @@ def _run_online_knowledge_job(
             model=model_access.model,
             max_papers=request_body.max_papers,
             extraction_delay_seconds=request_body.extraction_delay_seconds,
+            progress_callback=report_progress,
         )
         result_data["query_time_ms"] = (perf_counter() - started_at) * 1000
         response = OnlineKnowledgeSearchResponse.model_validate(result_data)
@@ -272,5 +286,13 @@ def _public_job_error_message(exc: Exception) -> str:
     if isinstance(exc, OnlineKnowledgeConfigError):
         return "Model access configuration is invalid."
     if isinstance(exc, OnlineKnowledgeModelError):
-        return "Model extraction failed. Check the API key, Base URL, model, and provider access."
+        detail = _safe_provider_error_detail(str(exc))
+        return f"Model extraction failed: {detail}"
     return "Online retrieval failed. Check network access and provider availability."
+
+
+def _safe_provider_error_detail(detail: str) -> str:
+    text = " ".join(detail.split())
+    if not text:
+        return "Check the API key, Base URL, model, and provider access."
+    return text[:500]

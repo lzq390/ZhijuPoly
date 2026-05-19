@@ -83,6 +83,11 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "" }: OnlineKnowl
     !searchState.isLoading;
 
   const activeData = searchState.data;
+  const activeJob = searchState.job;
+  const progressPercent =
+    activeJob && activeJob.total_papers > 0
+      ? Math.min(100, Math.round((activeJob.processed_papers / activeJob.total_papers) * 100))
+      : null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -259,8 +264,24 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "" }: OnlineKnowl
             <Loader2 className="h-8 w-8 animate-spin text-teal-700" />
             <div className="mt-4 font-heading text-xl font-semibold tracking-tight text-slate-950">Retrieving literature</div>
             <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
-              The system is collecting abstracts and extracting polymer information. Current status: {searchState.jobStatus ?? "pending"}.
+              {activeJob?.progress_message || `Current status: ${searchState.jobStatus ?? "pending"}.`}
             </p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              <Badge className="bg-white text-slate-700">Stage: {formatJobStage(activeJob?.progress_stage, searchState.jobStatus)}</Badge>
+              {activeJob ? (
+                <Badge className="bg-white text-slate-700">
+                  Papers: {activeJob.processed_papers}/{activeJob.total_papers || activeJob.max_papers}
+                </Badge>
+              ) : null}
+            </div>
+            {progressPercent !== null ? (
+              <div className="mt-4 w-full max-w-xl">
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-full rounded-full bg-teal-600 transition-all" style={{ width: `${progressPercent}%` }} />
+                </div>
+                <div className="mt-2 text-xs font-medium text-slate-500">{progressPercent}%</div>
+              </div>
+            ) : null}
           </div>
         ) : activeData ? (
           <OnlineResults data={activeData} onOpenDetail={(label, value) => setDetail({ label, value })} onExportCsv={handleExportCsv} />
@@ -624,6 +645,11 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {children}
     </label>
   );
+}
+
+function formatJobStage(stage: string | undefined, status: string | null) {
+  const normalized = stage || status || "pending";
+  return normalized.replace(/_/g, " ");
 }
 
 function DetailDialog({ detail, onClose }: { detail: DetailState; onClose: () => void }) {

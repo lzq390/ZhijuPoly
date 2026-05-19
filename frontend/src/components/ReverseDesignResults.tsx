@@ -382,7 +382,7 @@ function CandidateCard({
               aria-controls={knowledgeMenuId}
             >
               <BookOpen className="mr-1.5 h-4 w-4 shrink-0" />
-              Local Knowledge
+              Knowledge
               <ChevronRight
                 className={[
                   "ml-1.5 h-4 w-4 shrink-0 transition-transform",

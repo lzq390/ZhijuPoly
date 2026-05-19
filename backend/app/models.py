@@ -493,6 +493,10 @@ class OnlineKnowledgeJobResponse(BaseModel):
     material: str
     mode: OnlineKnowledgeMode
     max_papers: int = Field(ge=1)
+    progress_stage: str = ""
+    progress_message: str = ""
+    processed_papers: int = Field(default=0, ge=0)
+    total_papers: int = Field(default=0, ge=0)
     created_at: str
     updated_at: str
     error_message: str | None = None

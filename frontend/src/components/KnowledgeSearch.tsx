@@ -338,10 +338,10 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
           </Button>
           <div>
             <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">Current Module</div>
-            <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">Local Knowledge Search</div>
+            <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">Knowledge Search</div>
           </div>
         </div>
-        <Badge className="bg-teal-50 text-teal-800">{mode === "local" ? "Local Retrieval" : "Online Retrieval"}</Badge>
+        <Badge className="bg-teal-50 text-teal-800">{mode === "local" ? "Knowledge Retrieval" : "Online Retrieval"}</Badge>
       </nav>
 
       <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-7 md:px-8">
