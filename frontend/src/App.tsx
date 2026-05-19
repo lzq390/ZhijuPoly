@@ -141,7 +141,7 @@ type ModuleTileProps = {
   eyebrow: string;
   title: string;
   description: string;
-  status: string;
+  status: "Ready" | "Planned";
   actionLabel: string;
   disabled?: boolean;
   onClick?: () => void;
@@ -202,6 +202,23 @@ function ModuleTile({
   );
 }
 
+type ModuleItem = {
+  icon: ReactNode;
+  eyebrow: string;
+  title: string;
+  description: string;
+  status: "Ready" | "Planned";
+  actionLabel: string;
+  disabled?: boolean;
+  onClick?: () => void;
+};
+
+type ModuleCategory = {
+  title: string;
+  description: string;
+  modules: ModuleItem[];
+};
+
 function HomePage({
   onOpenExplorer,
   onOpenReverseDesign,
@@ -215,12 +232,88 @@ function HomePage({
   onOpenDatabase: () => void;
   onOpenKnowledge: () => void;
 }) {
-  const moduleRows = [
-    { name: "Polymer Property Explorer", status: "Ready" },
-    { name: "Tg Reverse Design", status: "Ready" },
-    { name: "Database Query", status: "Ready" },
-    { name: "Database Analytics", status: "Ready" },
-    { name: "Knowledge Search", status: "Ready" }
+  const moduleCategories: ModuleCategory[] = [
+    {
+      title: "Data & Knowledge Center",
+      description: "Collect, verify, analyze, and retrieve polymer data and research knowledge.",
+      modules: [
+        {
+          icon: <Database className="h-5 w-5" />,
+          eyebrow: "Planned",
+          title: "Data Collection",
+          description: "Collect polymer structure, property, process, and literature records for future database expansion.",
+          status: "Planned",
+          actionLabel: "Planned",
+          disabled: true
+        },
+        {
+          icon: <Search className="h-5 w-5" />,
+          eyebrow: "Available",
+          title: "Database Query",
+          description: "Draw or paste a SMILES string, select a local table, and check whether that exact structure is already stored.",
+          status: "Ready",
+          actionLabel: "Enter",
+          onClick: onOpenDatabaseQuery
+        },
+        {
+          icon: <BarChart3 className="h-5 w-5" />,
+          eyebrow: "Available",
+          title: "Database Analytics",
+          description: "Explore five curated data views covering conformations, shares, distributions, and text-derived summaries.",
+          status: "Ready",
+          actionLabel: "Enter",
+          onClick: onOpenDatabase
+        },
+        {
+          icon: <BookOpen className="h-5 w-5" />,
+          eyebrow: "Available",
+          title: "Knowledge Search",
+          description: "Search knowledge records by abstract keywords and inspect formulation-related details.",
+          status: "Ready",
+          actionLabel: "Enter",
+          onClick: onOpenKnowledge
+        }
+      ]
+    },
+    {
+      title: "Property Exploration",
+      description: "Investigate a drawn polymer structure through matching, 3D preview, and property prediction.",
+      modules: [
+        {
+          icon: <Atom className="h-5 w-5" />,
+          eyebrow: "Available",
+          title: "Polymer Property Explorer",
+          description: "Edit structures, run similarity matching, preview 3D geometry, and request property predictions in one workspace.",
+          status: "Ready",
+          actionLabel: "Enter",
+          onClick: onOpenExplorer
+        }
+      ]
+    },
+    {
+      title: "Polymer Design",
+      description: "Move from target properties and design constraints toward candidate polymer structures.",
+      modules: [
+        {
+          icon: <Sparkles className="h-5 w-5" />,
+          eyebrow: "Available",
+          title: "Tg Reverse Design",
+          description: "Draw a polymer structure, enter a target Tg, and search the local PI candidate database.",
+          status: "Ready",
+          actionLabel: "Enter",
+          onClick: onOpenReverseDesign
+        },
+        {
+          icon: <Microscope className="h-5 w-5" />,
+          eyebrow: "Planned",
+          title: "Conditional Polymer Generation",
+          description: "Generate candidate polymer structures from target conditions and design constraints.",
+          status: "Planned",
+          actionLabel: "Planned",
+          disabled: true
+        }
+      ]
+    }
   ];
 
   return (
@@ -240,7 +333,7 @@ function HomePage({
                 NexPoly Workspace
               </h1>
               <p className="mt-5 max-w-2xl text-base leading-7 text-slate-600 md:text-lg">
-                A unified entry point for polymer property exploration, reverse design, database analytics, and knowledge search.
+                A unified entry point organized around three polymer research workflows: data and knowledge, property exploration, and polymer design.
               </p>
             </div>
 
@@ -256,73 +349,75 @@ function HomePage({
             </div>
 
             <div className="mt-6 space-y-3">
-              {moduleRows.map((item, index) => (
-                <div
-                  key={item.name}
-                  className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.06] px-3 py-3"
-                >
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 font-mono-ui text-sm text-teal-200">
-                    {String(index + 1).padStart(2, "0")}
+              {moduleCategories.map((category, index) => {
+                const readyCount = category.modules.filter((module) => module.status === "Ready").length;
+                const plannedCount = category.modules.length - readyCount;
+
+                return (
+                  <div
+                    key={category.title}
+                    className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.06] px-3 py-3"
+                  >
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 font-mono-ui text-sm text-teal-200">
+                      {String(index + 1).padStart(2, "0")}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">{category.title}</div>
+                      <div className="mt-0.5 text-xs text-slate-400">
+                        {category.modules.length} modules | {readyCount} Ready{plannedCount > 0 ? ` | ${plannedCount} Planned` : ""}
+                      </div>
+                    </div>
+                    <div className={plannedCount === 0 ? "h-2.5 w-2.5 rounded-full bg-teal-300" : "h-2.5 w-2.5 rounded-full bg-amber-300"} />
                   </div>
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">{item.name}</div>
-                    <div className="mt-0.5 text-xs text-slate-400">{item.status}</div>
-                  </div>
-                  <div className={item.status === "Ready" ? "h-2.5 w-2.5 rounded-full bg-teal-300" : "h-2.5 w-2.5 rounded-full bg-slate-600"} />
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <ModuleTile
-          icon={<Atom className="h-5 w-5" />}
-          eyebrow="Available"
-          title="Polymer Property Explorer"
-          description="Edit structures, run similarity matching, preview 3D geometry, and request property predictions in one workspace."
-          status="Ready"
-          actionLabel="Enter"
-          onClick={onOpenExplorer}
-        />
-        <ModuleTile
-          icon={<Sparkles className="h-5 w-5" />}
-          eyebrow="Available"
-          title="Tg Reverse Design"
-          description="Draw a polymer structure, enter a target Tg, and search the local PI candidate database."
-          status="Ready"
-          actionLabel="Enter"
-          onClick={onOpenReverseDesign}
-        />
-        <ModuleTile
-          icon={<Search className="h-5 w-5" />}
-          eyebrow="Available"
-          title="Database Query"
-          description="Draw or paste a SMILES string, select a local table, and check whether that exact structure is already stored."
-          status="Ready"
-          actionLabel="Enter"
-          onClick={onOpenDatabaseQuery}
-        />
-        <ModuleTile
-          icon={<BarChart3 className="h-5 w-5" />}
-          eyebrow="Available"
-          title="Database Analytics"
-          description="Explore five curated data views covering conformations, shares, distributions, and text-derived summaries."
-          status="Ready"
-          actionLabel="Enter"
-          onClick={onOpenDatabase}
-        />
-        <ModuleTile
-          icon={<BookOpen className="h-5 w-5" />}
-          eyebrow="Available"
-          title="Knowledge Search"
-          description="Search knowledge records by abstract keywords and inspect formulation-related details."
-          status="Ready"
-          actionLabel="Enter"
-          onClick={onOpenKnowledge}
-        />
-      </section>
+      <div className="space-y-9">
+        {moduleCategories.map((category) => {
+          const readyCount = category.modules.filter((module) => module.status === "Ready").length;
+          const plannedCount = category.modules.length - readyCount;
+
+          return (
+            <section key={category.title} className="space-y-4">
+              <div className="flex flex-col gap-3 border-t border-white/70 pt-6 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">
+                    {category.modules.length} Modules
+                  </div>
+                  <h2 className="font-heading mt-2 text-[1.9rem] font-semibold tracking-tight text-slate-950">
+                    {category.title}
+                  </h2>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{category.description}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge className="bg-teal-50 text-teal-800">{readyCount} Ready</Badge>
+                  {plannedCount > 0 ? <Badge className="bg-amber-50 text-amber-800">{plannedCount} Planned</Badge> : null}
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {category.modules.map((module) => (
+                  <ModuleTile
+                    key={module.title}
+                    icon={module.icon}
+                    eyebrow={module.eyebrow}
+                    title={module.title}
+                    description={module.description}
+                    status={module.status}
+                    actionLabel={module.actionLabel}
+                    disabled={module.disabled}
+                    onClick={module.onClick}
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
     </>
   );
 }
