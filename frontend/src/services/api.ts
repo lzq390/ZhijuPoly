@@ -1,4 +1,7 @@
 import type {
+  ConditionalGenerationJobCreateResponse,
+  ConditionalGenerationJobStatusResponse,
+  ConditionalGenerationTgRequest,
   DftEnergyStepBrowseResponse,
   DftMoleculeDetail,
   DftMoleculeBrowseResponse,
@@ -7,6 +10,12 @@ import type {
   ExperimentalPropertyBrowseResponse,
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
+  LabDataProjectStats,
+  LabDataSampleMeasurement,
+  LabDataSampleMeasurementPage,
+  LabDataSampleMeasurementPayload,
+  LabDataSummary,
+  LabDataTestProject,
   OnlineKnowledgeExportResponse,
   OnlineKnowledgeDefaultConfigResponse,
   OnlineKnowledgeHistoryResponse,
@@ -139,6 +148,18 @@ export function fetchReverseDesignTgJob(jobId: string): Promise<ReverseDesignTgJ
   return getJSON(`/reverse-design/tg/jobs/${encodeURIComponent(jobId)}`);
 }
 
+export function createConditionalGenerationTgJob(
+  payload: ConditionalGenerationTgRequest
+): Promise<ConditionalGenerationJobCreateResponse> {
+  return postJSON("/conditional-generation/tg/jobs", payload);
+}
+
+export function fetchConditionalGenerationTgJob(
+  jobId: string
+): Promise<ConditionalGenerationJobStatusResponse> {
+  return getJSON(`/conditional-generation/tg/jobs/${encodeURIComponent(jobId)}`);
+}
+
 export function fetchStructure3D(
   smiles: string
 ): Promise<{ molblock: string; capped_smiles: string; format: "mol" }> {
@@ -221,4 +242,50 @@ export function browseExperimentalPropertyRecords(params: {
   page_size?: number;
 }): Promise<ExperimentalPropertyBrowseResponse> {
   return getJSON(`/database-browser/experimental-property${buildQueryString(params)}`);
+}
+
+export function fetchLabDataTestProjects(): Promise<LabDataTestProject[]> {
+  return getJSON("/lab-data/test-projects");
+}
+
+export function createLabDataSampleMeasurement(
+  payload: LabDataSampleMeasurementPayload
+): Promise<LabDataSampleMeasurement> {
+  return postJSON("/lab-data/sample-measurements", payload);
+}
+
+export function fetchLabDataSampleMeasurements(params: {
+  experimentProject?: string;
+  page?: number;
+  pageSize?: number;
+  recentDays?: number;
+}): Promise<LabDataSampleMeasurementPage> {
+  const searchParams = new URLSearchParams();
+  if (params.experimentProject) {
+    searchParams.set("experiment_project", params.experimentProject);
+  }
+  if (params.page !== undefined) {
+    searchParams.set("page", String(params.page));
+  }
+  if (params.pageSize !== undefined) {
+    searchParams.set("page_size", String(params.pageSize));
+  }
+  if (params.recentDays !== undefined) {
+    searchParams.set("recent_days", String(params.recentDays));
+  }
+
+  const suffix = searchParams.toString() ? `?${searchParams.toString()}` : "";
+  return getJSON(`/lab-data/sample-measurements${suffix}`);
+}
+
+export function fetchLabDataSampleMeasurementCount(): Promise<{ count: number }> {
+  return getJSON("/lab-data/sample-measurements/count");
+}
+
+export function fetchLabDataStatsByProject(): Promise<LabDataProjectStats[]> {
+  return getJSON("/lab-data/sample-measurements/stats/by-project");
+}
+
+export function fetchLabDataSummary(): Promise<LabDataSummary> {
+  return getJSON("/lab-data/sample-measurements/stats/summary");
 }

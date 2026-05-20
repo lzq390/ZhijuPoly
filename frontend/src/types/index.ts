@@ -258,6 +258,46 @@ export type OnlineKnowledgeJobResponse = {
   result: OnlineKnowledgeSearchResponse | null;
 };
 
+export type LabDataTestProject = {
+  id: number;
+  projectName: string;
+  resultUnit: string;
+};
+
+export type LabDataSampleMeasurementPayload = {
+  sampleId: string;
+  experimentProject: string;
+  instrumentId: string;
+  operator: string;
+  collectionTime: string;
+  temperature: number | null;
+  concentration: number | null;
+  resultValue: number;
+  resultUnit: string;
+  remarks: string | null;
+};
+
+export type LabDataSampleMeasurement = LabDataSampleMeasurementPayload & {
+  id: number;
+};
+
+export type LabDataSampleMeasurementPage = {
+  items: LabDataSampleMeasurement[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type LabDataProjectStats = {
+  experimentProject: string;
+  count: number;
+};
+
+export type LabDataSummary = {
+  totalCount: number;
+  byProject: LabDataProjectStats[];
+};
+
 export type OnlineKnowledgeExportResponse = {
   success: boolean;
   csv_content: string;
@@ -329,6 +369,59 @@ export type ReverseDesignTgJobStatusResponse = {
   message: string | null;
   error: string | null;
   result: ReverseDesignTgResponse | null;
+};
+
+export type ConditionalGenerationTgRequest = {
+  smiles: string;
+  delta_tg: number;
+  candidate_count: number;
+  top_k: number;
+  temperature: number;
+};
+
+export type ConditionalGenerationCandidate = {
+  rank: number;
+  generated_smiles: string;
+  structure_svg: string | null;
+  predicted_tg: number | null;
+  tg_unit: "°C";
+  tg_error: number | null;
+  similarity_score: number | null;
+  sa_score: number | null;
+};
+
+export type ConditionalGenerationTgResponse = {
+  input_smiles: string;
+  normalized_input_smiles: string;
+  delta_tg: number;
+  query_time_ms: number;
+  requested_count: number;
+  returned_count: number;
+  attempts: number;
+  filter_counter: Record<string, number>;
+  results: ConditionalGenerationCandidate[];
+};
+
+export type ConditionalGenerationJobStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+export type ConditionalGenerationJobCreateResponse = {
+  job_id: string;
+  status: ConditionalGenerationJobStatus;
+};
+
+export type ConditionalGenerationJobStatusResponse = {
+  job_id: string;
+  status: ConditionalGenerationJobStatus;
+  delta_tg: number;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  attempts: number;
+  accepted_count: number;
+  message: string | null;
+  error: string | null;
+  result: ConditionalGenerationTgResponse | null;
 };
 
 export type StructurePropertyRecord = {

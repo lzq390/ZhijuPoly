@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -607,6 +608,70 @@ class ReverseDesignTgJobStatusResponse(BaseModel):
     result: ReverseDesignTgResponse | None = None
 
 
+class ConditionalGenerationTgRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
+
+    smiles: str = Field(min_length=1)
+    delta_tg: float = Field(allow_inf_nan=False)
+    candidate_count: int = Field(default=10, ge=1, le=50)
+    top_k: int = Field(default=5, ge=1, le=20)
+    temperature: float = Field(default=1.0, ge=0.1, le=2.0)
+
+
+class ConditionalGenerationCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    rank: int = Field(ge=1)
+    generated_smiles: str
+    structure_svg: str | None = None
+    predicted_tg: float | None = None
+    tg_unit: Literal["°C"] = "°C"
+    tg_error: float | None = Field(default=None, ge=0.0)
+    similarity_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    sa_score: float | None = Field(default=None, ge=0.0)
+
+
+class ConditionalGenerationTgResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input_smiles: str
+    normalized_input_smiles: str
+    delta_tg: float
+    query_time_ms: float = Field(ge=0.0)
+    requested_count: int = Field(ge=1)
+    returned_count: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+    filter_counter: dict[str, int] = Field(default_factory=dict)
+    results: list[ConditionalGenerationCandidate] = Field(default_factory=list)
+
+
+ConditionalGenerationJobStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+
+
+class ConditionalGenerationJobCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: ConditionalGenerationJobStatus
+
+
+class ConditionalGenerationJobStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: ConditionalGenerationJobStatus
+    delta_tg: float
+    created_at: str
+    updated_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    attempts: int = Field(ge=0)
+    accepted_count: int = Field(ge=0)
+    message: str | None = None
+    error: str | None = None
+    result: ConditionalGenerationTgResponse | None = None
+
+
 class DftPcaPoint(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -659,3 +724,65 @@ class DftMoleculeDetailResponse(BaseModel):
     gap_ev: float | None = None
     is_converged: str | None = None
     trace: list[DftEnergyPoint] = Field(default_factory=list)
+
+
+class LabDataTestProjectRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True, populate_by_name=True, str_strip_whitespace=True)
+
+    id: int
+    project_name: str = Field(alias="projectName")
+    result_unit: str = Field(alias="resultUnit")
+
+
+class LabDataSampleMeasurementBase(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, str_strip_whitespace=True)
+
+    sample_id: str = Field(min_length=1, max_length=50, alias="sampleId")
+    experiment_project: str = Field(min_length=1, max_length=100, alias="experimentProject")
+    instrument_id: str = Field(min_length=1, max_length=50, alias="instrumentId")
+    operator: str = Field(min_length=1, max_length=100)
+    collection_time: datetime = Field(alias="collectionTime")
+    temperature: float | None = None
+    concentration: float | None = None
+    result_value: float = Field(alias="resultValue")
+    result_unit: str = Field(min_length=1, max_length=20, alias="resultUnit")
+    remarks: str | None = None
+
+
+class LabDataSampleMeasurementCreate(LabDataSampleMeasurementBase):
+    pass
+
+
+class LabDataSampleMeasurementRead(LabDataSampleMeasurementBase):
+    model_config = ConfigDict(extra="forbid", from_attributes=True, populate_by_name=True, str_strip_whitespace=True)
+
+    id: int
+
+
+class LabDataSampleMeasurementPageRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    items: list[LabDataSampleMeasurementRead]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(alias="pageSize", ge=1)
+
+
+class LabDataCountRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    count: int = Field(ge=0)
+
+
+class LabDataProjectStatsRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, str_strip_whitespace=True)
+
+    experiment_project: str = Field(alias="experimentProject")
+    count: int = Field(ge=0)
+
+
+class LabDataSummaryRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    total_count: int = Field(alias="totalCount", ge=0)
+    by_project: list[LabDataProjectStatsRead] = Field(alias="byProject")

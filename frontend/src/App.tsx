@@ -1,9 +1,22 @@
 import { type ReactNode, useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, Atom, BarChart3, BookOpen, Database, Microscope, Search, Sparkles } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Atom,
+  BarChart3,
+  BookOpen,
+  ClipboardList,
+  Database,
+  Microscope,
+  Search,
+  Sparkles
+} from "lucide-react";
+import { ConditionalGenerationPage } from "./components/ConditionalGenerationPage";
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
+import { LabDataPage, type LabDataView } from "./components/LabDataPage";
 import { Layout } from "./components/Layout";
 import { QueryPanel } from "./components/QueryPanel";
 import { ResultsDisplay } from "./components/ResultsDisplay";
@@ -21,11 +34,20 @@ import {
   type WorkspaceMode
 } from "./types";
 
-type ActiveModule = "home" | "explorer" | "reverseDesign" | "databaseQuery" | "database" | "knowledge";
+type ActiveModule =
+  | "home"
+  | "explorer"
+  | "reverseDesign"
+  | "conditionalGeneration"
+  | "databaseQuery"
+  | "database"
+  | "knowledge"
+  | "labData";
 
 type AppRoute = {
   module: ActiveModule;
   datasetKey: DatasetKey | null;
+  labDataView?: LabDataView;
 };
 
 type KnowledgeNavigationInput = string | KnowledgeNavigationRequest;
@@ -58,12 +80,24 @@ function routeFromPath(pathname: string): AppRoute {
     return { module: "reverseDesign", datasetKey: null };
   }
 
+  if (path === "/conditional-generation") {
+    return { module: "conditionalGeneration", datasetKey: null };
+  }
+
   if (path === "/database-query") {
     return { module: "databaseQuery", datasetKey: null };
   }
 
   if (path === "/knowledge") {
     return { module: "knowledge", datasetKey: null };
+  }
+
+  if (path === "/lab-data" || path === "/lab-data/collect") {
+    return { module: "labData", datasetKey: null, labDataView: "collect" };
+  }
+
+  if (path === "/lab-data/dashboard") {
+    return { module: "labData", datasetKey: null, labDataView: "dashboard" };
   }
 
   if (path === "/database") {
@@ -87,12 +121,20 @@ function pathFromRoute(route: AppRoute) {
     return "/reverse-design";
   }
 
+  if (route.module === "conditionalGeneration") {
+    return "/conditional-generation";
+  }
+
   if (route.module === "databaseQuery") {
     return "/database-query";
   }
 
   if (route.module === "knowledge") {
     return "/knowledge";
+  }
+
+  if (route.module === "labData") {
+    return route.labDataView === "dashboard" ? "/lab-data/dashboard" : "/lab-data/collect";
   }
 
   if (route.module === "database") {
@@ -220,14 +262,18 @@ type ModuleCategory = {
 };
 
 function HomePage({
+  onOpenLabData,
   onOpenExplorer,
   onOpenReverseDesign,
+  onOpenConditionalGeneration,
   onOpenDatabaseQuery,
   onOpenDatabase,
   onOpenKnowledge
 }: {
+  onOpenLabData: () => void;
   onOpenExplorer: () => void;
   onOpenReverseDesign: () => void;
+  onOpenConditionalGeneration: () => void;
   onOpenDatabaseQuery: () => void;
   onOpenDatabase: () => void;
   onOpenKnowledge: () => void;
@@ -238,13 +284,13 @@ function HomePage({
       description: "Collect, verify, analyze, and retrieve polymer data and research knowledge.",
       modules: [
         {
-          icon: <Database className="h-5 w-5" />,
-          eyebrow: "Planned",
-          title: "Data Collection",
-          description: "Collect polymer structure, property, process, and literature records for future database expansion.",
-          status: "Planned",
-          actionLabel: "Planned",
-          disabled: true
+          icon: <ClipboardList className="h-5 w-5" />,
+          eyebrow: "Available",
+          title: "Lab Data Collection",
+          description: "Capture experiment measurements, review project-level statistics, and copy recent data batches.",
+          status: "Ready",
+          actionLabel: "Enter",
+          onClick: onOpenLabData
         },
         {
           icon: <Search className="h-5 w-5" />,
@@ -305,12 +351,12 @@ function HomePage({
         },
         {
           icon: <Microscope className="h-5 w-5" />,
-          eyebrow: "Planned",
+          eyebrow: "Available",
           title: "Conditional Polymer Generation",
           description: "Generate candidate polymer structures from target conditions and design constraints.",
-          status: "Planned",
-          actionLabel: "Planned",
-          disabled: true
+          status: "Ready",
+          actionLabel: "Enter",
+          onClick: onOpenConditionalGeneration
         }
       ]
     }
@@ -425,6 +471,7 @@ function HomePage({
 export default function App() {
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
+  const [labDataView, setLabDataView] = useState<LabDataView>(() => getInitialRoute().labDataView ?? "collect");
   const [knowledgeInitialQuery, setKnowledgeInitialQuery] = useState(() => {
     if (typeof window === "undefined") {
       return "";
@@ -525,6 +572,7 @@ export default function App() {
   function applyRoute(route: AppRoute) {
     setActiveModule(route.module);
     setSelectedDatasetKey(route.module === "database" ? route.datasetKey : null);
+    setLabDataView(route.module === "labData" ? route.labDataView ?? "collect" : "collect");
 
     if (route.module === "explorer") {
       setHasOpenedExplorer(true);
@@ -569,6 +617,10 @@ export default function App() {
     navigate({ module: "reverseDesign", datasetKey: null });
   }
 
+  function openConditionalGeneration() {
+    navigate({ module: "conditionalGeneration", datasetKey: null });
+  }
+
   function openDatabaseQuery() {
     navigate({ module: "databaseQuery", datasetKey: null });
   }
@@ -608,12 +660,18 @@ export default function App() {
     applyRoute(route);
   }
 
+  function openLabData(view: LabDataView = "collect") {
+    navigate({ module: "labData", datasetKey: null, labDataView: view });
+  }
+
   return (
     <Layout>
       <div className={activeModule === "home" ? "contents" : "hidden"}>
         <HomePage
+          onOpenLabData={() => openLabData("collect")}
           onOpenExplorer={openExplorer}
           onOpenReverseDesign={openReverseDesign}
+          onOpenConditionalGeneration={openConditionalGeneration}
           onOpenDatabaseQuery={openDatabaseQuery}
           onOpenDatabase={openDatabase}
           onOpenKnowledge={openKnowledge}
@@ -639,6 +697,18 @@ export default function App() {
           initialQuery={knowledgeInitialQuery}
           initialTerms={knowledgeInitialTerms}
         />
+      ) : null}
+
+      {activeModule === "labData" ? (
+        <LabDataPage
+          view={labDataView}
+          onBackHome={() => navigate({ module: "home", datasetKey: null })}
+          onChangeView={(view) => openLabData(view)}
+        />
+      ) : null}
+
+      {activeModule === "conditionalGeneration" ? (
+        <ConditionalGenerationPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
       ) : null}
 
       {activeModule === "reverseDesign" || preserveReverseDesignForKnowledge ? (

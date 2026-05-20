@@ -11,8 +11,13 @@ services:
       FUMOL_DB_PATH: /app/backend/data/fumol.db
       MODEL_DIR: /app/model
       MODEL_ENABLED: "true"
+      GEN_MODEL_ENABLED: "${GEN_MODEL_ENABLED:-false}"
+      GEN_MODEL_DIR: /app/model/conditional_generation
+      GEN_DEVICE: "${GEN_DEVICE:-auto}"
+      GEN_JOB_WORKERS: "${GEN_JOB_WORKERS:-1}"
       PI_REVERSE_BACKEND: postgres
       PI_POSTGRES_DSN: postgresql://polyprop:polyprop@host.docker.internal:55432/polyprop_pi
+      LAB_DATA_POSTGRES_DSN: ${LAB_DATA_POSTGRES_DSN:-}
       PI_REVERSE_TG_WINDOW_CELSIUS: "50"
       PI_REVERSE_TG_MAX_WINDOW_CELSIUS: "200"
       PI_REVERSE_MAX_SCAN_ROWS: "500000"

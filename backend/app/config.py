@@ -42,6 +42,7 @@ class Settings:
         pi_reverse_csv_path: str | None = None,
         pi_reverse_backend: str | None = None,
         pi_postgres_dsn: str | None = None,
+        lab_data_postgres_dsn: str | None = None,
         pi_reverse_tg_window_celsius: float | None = None,
         pi_reverse_tg_max_window_celsius: float | None = None,
         pi_reverse_max_scan_rows: int | None = None,
@@ -57,6 +58,10 @@ class Settings:
         online_knowledge_base_url: str | None = None,
         online_knowledge_model: str | None = None,
         online_knowledge_max_papers: int | None = None,
+        gen_model_enabled: bool | None = None,
+        gen_model_dir: str | None = None,
+        gen_device: str | None = None,
+        gen_job_workers: int | None = None,
     ) -> None:
         env_values = dotenv_values(DEFAULT_ENV_FILE) if DEFAULT_ENV_FILE.exists() else {}
 
@@ -101,6 +106,13 @@ class Settings:
                 "postgresql://polyprop:polyprop@localhost:55432/polyprop_pi",
             ),
         )
+        raw_lab_data_postgres_dsn = lab_data_postgres_dsn
+        if raw_lab_data_postgres_dsn is None:
+            raw_lab_data_postgres_dsn = os.getenv(
+                "LAB_DATA_POSTGRES_DSN",
+                env_values.get("LAB_DATA_POSTGRES_DSN", ""),
+            )
+        raw_lab_data_postgres_dsn = raw_lab_data_postgres_dsn.strip() or raw_pi_postgres_dsn
         raw_pi_reverse_tg_window_celsius = (
             str(pi_reverse_tg_window_celsius)
             if pi_reverse_tg_window_celsius is not None
@@ -195,6 +207,33 @@ class Settings:
                 str(env_values.get("ONLINE_KNOWLEDGE_MAX_PAPERS", "20")),
             )
         )
+        raw_gen_model_dir = gen_model_dir or os.getenv(
+            "GEN_MODEL_DIR",
+            env_values.get("GEN_MODEL_DIR", "model/conditional_generation"),
+        )
+        raw_gen_device = gen_device or os.getenv(
+            "GEN_DEVICE",
+            env_values.get("GEN_DEVICE", "auto"),
+        )
+        raw_gen_job_workers = (
+            str(gen_job_workers)
+            if gen_job_workers is not None
+            else os.getenv(
+                "GEN_JOB_WORKERS",
+                str(env_values.get("GEN_JOB_WORKERS", "1")),
+            )
+        )
+        raw_gen_model_enabled = gen_model_enabled
+        if raw_gen_model_enabled is None:
+            raw_gen_model_enabled = os.getenv(
+                "GEN_MODEL_ENABLED",
+                str(env_values.get("GEN_MODEL_ENABLED", "false")),
+            ).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
         raw_model_enabled = model_enabled
         if raw_model_enabled is None:
             raw_model_enabled = os.getenv(
@@ -222,6 +261,7 @@ class Settings:
         if self.pi_reverse_backend not in {"sqlite", "postgres"}:
             raise ValueError("PI_REVERSE_BACKEND must be either 'sqlite' or 'postgres'")
         self.pi_postgres_dsn = raw_pi_postgres_dsn.strip()
+        self.lab_data_postgres_dsn = raw_lab_data_postgres_dsn.strip()
         self.pi_reverse_tg_window_celsius = float(raw_pi_reverse_tg_window_celsius)
         self.pi_reverse_tg_max_window_celsius = float(raw_pi_reverse_tg_max_window_celsius)
         self.pi_reverse_max_scan_rows = int(raw_pi_reverse_max_scan_rows)
@@ -237,6 +277,10 @@ class Settings:
         self.online_knowledge_base_url = raw_online_knowledge_base_url.strip()
         self.online_knowledge_model = raw_online_knowledge_model.strip()
         self.online_knowledge_max_papers = min(2000, max(1, int(raw_online_knowledge_max_papers)))
+        self.gen_model_enabled = bool(raw_gen_model_enabled)
+        self.gen_model_dir = _resolve_from_root(raw_gen_model_dir)
+        self.gen_device = raw_gen_device.strip().lower()
+        self.gen_job_workers = max(1, int(raw_gen_job_workers))
 
     @property
     def sqlite_db_file(self) -> Path:
@@ -275,6 +319,10 @@ class Settings:
     @property
     def model_dir_path(self) -> Path:
         return Path(self.model_dir)
+
+    @property
+    def gen_model_dir_path(self) -> Path:
+        return Path(self.gen_model_dir)
 
 
 @lru_cache(maxsize=1)

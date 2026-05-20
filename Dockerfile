@@ -6,6 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FUMOL_DB_PATH=/app/backend/data/fumol.db \
     MODEL_DIR=/app/model \
     MODEL_ENABLED=true \
+    GEN_MODEL_ENABLED=false \
+    GEN_MODEL_DIR=/app/model/conditional_generation \
+    GEN_DEVICE=auto \
+    GEN_JOB_WORKERS=1 \
     ALLOWED_ORIGINS=http://localhost:9000,http://127.0.0.1:9000
 
 WORKDIR /app

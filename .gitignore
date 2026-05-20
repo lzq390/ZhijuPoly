@@ -15,6 +15,9 @@ backend/.env
 *.sqlite
 *.sqlite3
 
+# Local conditional-generation model artifacts
+/model/conditional_generation/
+
 # Frontend generated artifacts
 frontend/node_modules/
 frontend/dist/
