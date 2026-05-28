@@ -17,6 +17,9 @@ backend/.env
 
 # Local conditional-generation model artifacts
 /model/conditional_generation/
+/model/ocsr/*.ckpt
+/model/ocsr/*.pth
+/model/ocsr/*.pt
 
 # Frontend generated artifacts
 frontend/node_modules/

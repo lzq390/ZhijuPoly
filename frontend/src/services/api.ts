@@ -31,12 +31,18 @@ import type {
   ReverseDesignTgResponse,
   SmilesLookupRequest,
   SmilesLookupResponse,
+  StructureImageRecognitionResponse,
   SmilesQueryRequest,
   SmilesQueryResponse,
   StructurePropertyBrowseResponse
 } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
+
+async function errorMessageFromResponse(response: Response): Promise<string> {
+  const data = await response.json().catch(() => null);
+  return typeof data?.detail === "string" ? data.detail : `Request failed with status ${response.status}`;
+}
 
 async function postJSON<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -46,10 +52,20 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   });
 
   if (!response.ok) {
-    const data = await response.json().catch(() => null);
-    const message =
-      typeof data?.detail === "string" ? data.detail : `Request failed with status ${response.status}`;
-    throw new Error(message);
+    throw new Error(await errorMessageFromResponse(response));
+  }
+
+  return (await response.json()) as T;
+}
+
+async function postForm<T>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    body
+  });
+
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
   }
 
   return (await response.json()) as T;
@@ -59,10 +75,7 @@ async function getJSON<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`);
 
   if (!response.ok) {
-    const data = await response.json().catch(() => null);
-    const message =
-      typeof data?.detail === "string" ? data.detail : `Request failed with status ${response.status}`;
-    throw new Error(message);
+    throw new Error(await errorMessageFromResponse(response));
   }
 
   return (await response.json()) as T;
@@ -118,10 +131,7 @@ export async function deleteOnlineKnowledgeHistory(historyId: number): Promise<{
   });
 
   if (!response.ok) {
-    const data = await response.json().catch(() => null);
-    const message =
-      typeof data?.detail === "string" ? data.detail : `Request failed with status ${response.status}`;
-    throw new Error(message);
+    throw new Error(await errorMessageFromResponse(response));
   }
 
   return (await response.json()) as { success: boolean };
@@ -164,6 +174,12 @@ export function fetchStructure3D(
   smiles: string
 ): Promise<{ molblock: string; capped_smiles: string; format: "mol" }> {
   return postJSON("/structure/3d", { smiles });
+}
+
+export function recognizeStructureImage(file: File): Promise<StructureImageRecognitionResponse> {
+  const body = new FormData();
+  body.append("image", file);
+  return postForm("/structure/recognize-image", body);
 }
 
 export function fetchDftPcaSample(limit = 200): Promise<DftPcaSampleResponse> {

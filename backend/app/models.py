@@ -127,6 +127,24 @@ class Structure3DResponse(BaseModel):
     format: Literal["mol"]
 
 
+class StructureImageRecognitionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    smiles: str = Field(min_length=1)
+    molfile: str | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    warnings: list[str] = Field(default_factory=list)
+    query_time_ms: float = Field(ge=0.0)
+
+    @field_validator("smiles")
+    @classmethod
+    def validate_smiles(cls, smiles: str) -> str:
+        normalized = smiles.strip()
+        if not normalized:
+            raise ValueError("smiles must not be empty")
+        return normalized
+
+
 class SmilesLookupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

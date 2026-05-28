@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi import FastAPI
@@ -25,7 +26,9 @@ from app.routers import database_browser
 from app.routers.predict import predict
 from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles
 from app.services.database_browser import browse_csv_records
+from app.services.image_recognition import RecognizedStructure
 from app.services.structure_3d import generate_3d_molblock
+from app.utils.exceptions import StructureRecognitionError
 
 
 def make_request(app: FastAPI) -> Request:
@@ -45,6 +48,22 @@ REVERSE_DESIGN_DEMO_SMILES = (
     "*c1ccc(C(=O)OCc2ccc(-c3ccc(COC(=O)c4ccc(N5C(=O)c6ccc(OC(=O)c7ccc"
     "(C(C)c8ccc(C(=O)Oc9ccc%10c(c9)C(=O)N(*)C%10=O)o8)o7)cc6C5=O)cc4)o3)o2)cc1"
 )
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 32)
+
+
+async def post_structure_image(
+    app: FastAPI,
+    *,
+    filename: str = "structure.png",
+    content: bytes = PNG_BYTES,
+    content_type: str = "image/png",
+) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        return await client.post(
+            "/api/v1/structure/recognize-image",
+            files={"image": (filename, content, content_type)},
+        )
 
 
 @pytest.mark.asyncio
@@ -793,6 +812,127 @@ async def test_generate_structure_3d_uses_configured_timeout(test_app: FastAPI, 
 
     assert response.format == "mol"
     assert captured == {"timeout_seconds": 27.5}
+
+
+@pytest.mark.asyncio
+async def test_recognize_structure_image_returns_molfile_first(
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_recognize(
+        image_bytes: bytes,
+        *,
+        content_type: str | None,
+        model_path: Path,
+        device: str,
+        max_bytes: int,
+    ) -> RecognizedStructure:
+        captured["image_bytes"] = image_bytes
+        captured["content_type"] = content_type
+        captured["model_path"] = model_path
+        captured["device"] = device
+        captured["max_bytes"] = max_bytes
+        return RecognizedStructure(
+            smiles="CCO",
+            molfile="mock molfile V2000",
+            confidence=0.91,
+            warnings=["low confidence"],
+        )
+
+    monkeypatch.setattr("app.routers.query.recognize_structure_image_from_bytes", fake_recognize)
+    test_app.state.settings.ocsr_enabled = True
+    test_app.state.settings.ocsr_max_image_bytes = 1024
+
+    response = await post_structure_image(test_app)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["smiles"] == "CCO"
+    assert data["molfile"] == "mock molfile V2000"
+    assert data["confidence"] == 0.91
+    assert data["warnings"] == ["low confidence"]
+    assert data["query_time_ms"] >= 0
+    assert captured["image_bytes"] == PNG_BYTES
+    assert captured["content_type"] == "image/png"
+    assert captured["max_bytes"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_recognize_structure_image_respects_disabled_flag(test_app: FastAPI) -> None:
+    test_app.state.settings.ocsr_enabled = False
+
+    response = await post_structure_image(test_app)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "image recognition service is disabled"
+
+
+@pytest.mark.asyncio
+async def test_recognize_structure_image_reports_missing_model(test_app: FastAPI, tmp_path: Path) -> None:
+    test_app.state.settings.ocsr_enabled = True
+    test_app.state.settings.ocsr_model_dir = str(tmp_path / "missing-ocsr-model")
+
+    response = await post_structure_image(test_app)
+
+    assert response.status_code == 503
+    assert "OCSR model path not found" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_recognize_structure_image_rejects_unsupported_file_type(test_app: FastAPI) -> None:
+    test_app.state.settings.ocsr_enabled = True
+
+    response = await post_structure_image(
+        test_app,
+        filename="structure.txt",
+        content=b"not image",
+        content_type="text/plain",
+    )
+
+    assert response.status_code == 415
+    assert response.json()["detail"] == "unsupported image type"
+
+
+@pytest.mark.asyncio
+async def test_recognize_structure_image_rejects_oversized_file(test_app: FastAPI) -> None:
+    test_app.state.settings.ocsr_enabled = True
+    test_app.state.settings.ocsr_max_image_bytes = 8
+
+    response = await post_structure_image(test_app)
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "image file is too large"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_detail"),
+    [
+        ("recognition did not return a structure", "recognition did not return a structure"),
+        (
+            "recognition result is not a valid chemical structure",
+            "recognition result is not a valid chemical structure",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_recognize_structure_image_reports_unusable_results(
+    message: str,
+    expected_detail: str,
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_recognize(*_args: object, **_kwargs: object) -> RecognizedStructure:
+        raise StructureRecognitionError(message)
+
+    monkeypatch.setattr("app.routers.query.recognize_structure_image_from_bytes", fake_recognize)
+    test_app.state.settings.ocsr_enabled = True
+
+    response = await post_structure_image(test_app)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == expected_detail
 
 
 @pytest.mark.asyncio

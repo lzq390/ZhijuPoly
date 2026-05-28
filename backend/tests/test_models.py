@@ -13,6 +13,7 @@ from app.models import (
     SmilesQueryResponse,
     Structure3DRequest,
     Structure3DResponse,
+    StructureImageRecognitionResponse,
 )
 
 
@@ -99,6 +100,29 @@ def test_structure_3d_models_validate() -> None:
 
     assert request.smiles == "*CC*"
     assert response.format == "mol"
+
+
+def test_structure_image_recognition_response_validates() -> None:
+    response = StructureImageRecognitionResponse(
+        smiles=" CCO ",
+        molfile="mol\n",
+        confidence=0.91,
+        warnings=["low confidence"],
+        query_time_ms=42.0,
+    )
+
+    payload = response.model_dump()
+
+    assert response.smiles == "CCO"
+    assert payload["molfile"] == "mol\n"
+    assert payload["confidence"] == 0.91
+    assert payload["warnings"] == ["low confidence"]
+
+    with pytest.raises(ValidationError):
+        StructureImageRecognitionResponse(smiles="CCO", confidence=1.5, query_time_ms=1.0)
+
+    with pytest.raises(ValidationError):
+        StructureImageRecognitionResponse(smiles=" ", query_time_ms=1.0)
 
 
 def test_predict_models_validate() -> None:

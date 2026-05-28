@@ -58,6 +58,10 @@ class Settings:
         online_knowledge_base_url: str | None = None,
         online_knowledge_model: str | None = None,
         online_knowledge_max_papers: int | None = None,
+        ocsr_enabled: bool | None = None,
+        ocsr_model_dir: str | None = None,
+        ocsr_device: str | None = None,
+        ocsr_max_image_bytes: int | None = None,
         gen_model_enabled: bool | None = None,
         gen_model_dir: str | None = None,
         gen_device: str | None = None,
@@ -207,6 +211,26 @@ class Settings:
                 str(env_values.get("ONLINE_KNOWLEDGE_MAX_PAPERS", "20")),
             )
         )
+        raw_ocsr_model_dir = ocsr_model_dir
+        if raw_ocsr_model_dir is None:
+            raw_ocsr_model_dir = (
+                os.getenv("OCSR_MODEL_PATH")
+                or env_values.get("OCSR_MODEL_PATH")
+                or os.getenv("OCSR_MODEL_DIR")
+                or env_values.get("OCSR_MODEL_DIR", "model/ocsr")
+            )
+        raw_ocsr_device = ocsr_device or os.getenv(
+            "OCSR_DEVICE",
+            env_values.get("OCSR_DEVICE", "auto"),
+        )
+        raw_ocsr_max_image_bytes = (
+            str(ocsr_max_image_bytes)
+            if ocsr_max_image_bytes is not None
+            else os.getenv(
+                "OCSR_MAX_IMAGE_BYTES",
+                str(env_values.get("OCSR_MAX_IMAGE_BYTES", "5242880")),
+            )
+        )
         raw_gen_model_dir = gen_model_dir or os.getenv(
             "GEN_MODEL_DIR",
             env_values.get("GEN_MODEL_DIR", "model/conditional_generation"),
@@ -245,6 +269,17 @@ class Settings:
                 "yes",
                 "on",
             }
+        raw_ocsr_enabled = ocsr_enabled
+        if raw_ocsr_enabled is None:
+            raw_ocsr_enabled = os.getenv(
+                "OCSR_ENABLED",
+                str(env_values.get("OCSR_ENABLED", "true")),
+            ).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
 
         self.sqlite_db_path = _resolve_from_root(raw_sqlite_db_path)
         self.csv_source_path = _resolve_from_root(raw_csv_source_path)
@@ -277,6 +312,10 @@ class Settings:
         self.online_knowledge_base_url = raw_online_knowledge_base_url.strip()
         self.online_knowledge_model = raw_online_knowledge_model.strip()
         self.online_knowledge_max_papers = min(2000, max(1, int(raw_online_knowledge_max_papers)))
+        self.ocsr_enabled = bool(raw_ocsr_enabled)
+        self.ocsr_model_dir = _resolve_from_root(raw_ocsr_model_dir)
+        self.ocsr_device = raw_ocsr_device.strip().lower()
+        self.ocsr_max_image_bytes = max(1, int(raw_ocsr_max_image_bytes))
         self.gen_model_enabled = bool(raw_gen_model_enabled)
         self.gen_model_dir = _resolve_from_root(raw_gen_model_dir)
         self.gen_device = raw_gen_device.strip().lower()
@@ -323,6 +362,10 @@ class Settings:
     @property
     def gen_model_dir_path(self) -> Path:
         return Path(self.gen_model_dir)
+
+    @property
+    def ocsr_model_dir_path(self) -> Path:
+        return Path(self.ocsr_model_dir)
 
 
 @lru_cache(maxsize=1)

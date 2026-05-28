@@ -51,13 +51,15 @@ type StructurePreview3DProps = {
   className?: string;
   contentClassName?: string;
   previewClassName?: string;
+  variant?: "card" | "bare";
 };
 
 export function StructurePreview3D({
   smiles,
   className,
   contentClassName,
-  previewClassName
+  previewClassName,
+  variant = "card"
 }: StructurePreview3DProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,7 +100,7 @@ export function StructurePreview3D({
 
         viewerRef.current.innerHTML = "";
         const viewer = window.$3Dmol.createViewer(viewerRef.current, {
-          backgroundColor: "#f8fbff"
+          backgroundColor: "#ffffff"
         });
         viewer.addModel(payload.molblock, "mol");
         viewer.setStyle(
@@ -128,9 +130,44 @@ export function StructurePreview3D({
     };
   }, [smiles]);
 
+  const previewFrame = (
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-[24px] border border-slate-200 bg-white",
+        variant === "bare" ? "min-h-[260px] flex-1" : "h-[280px]",
+        previewClassName
+      )}
+    >
+      <div ref={viewerRef} className="absolute inset-0" />
+      {isLoading ? (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
+            <Sparkles className="h-4 w-4 text-teal-600" />
+            Generating 3D structure...
+          </div>
+        </div>
+      ) : null}
+      {error ? (
+        <div className="absolute inset-0 flex items-center justify-center p-6">
+          <div className="max-w-[85%] rounded-2xl border border-slate-200 bg-white px-5 py-4 text-center text-sm font-medium leading-6 text-slate-700 shadow-sm">
+            {error}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  if (variant === "bare") {
+    return (
+      <div className={cn("flex min-h-0 flex-1", className)}>
+        <div className={cn("flex min-h-0 flex-1", contentClassName)}>{previewFrame}</div>
+      </div>
+    );
+  }
+
   return (
     <Card className={cn("overflow-hidden rounded-[30px] border-white/70", className)}>
-      <CardHeader className="min-h-[112px] gap-3 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(244,248,249,0.86)_100%)]">
+      <CardHeader className="min-h-[112px] gap-3 border-b border-slate-200 bg-white">
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-2">
             <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-sky-700/80">
@@ -147,30 +184,7 @@ export function StructurePreview3D({
         </div>
       </CardHeader>
       <CardContent className={cn("pt-4", contentClassName)}>
-        <div
-          className={cn(
-            "relative h-[280px] overflow-hidden rounded-[24px] border border-white/80 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.2),transparent_42%),radial-gradient(circle_at_80%_20%,rgba(20,184,166,0.12),transparent_26%),linear-gradient(180deg,#fbfdff_0%,#edf5f8_100%)]",
-            previewClassName
-          )}
-        >
-          <div className="pointer-events-none absolute left-1/2 top-6 h-24 w-24 -translate-x-1/2 rounded-full bg-white/60 blur-2xl" />
-          <div ref={viewerRef} className="absolute inset-0" />
-          {isLoading ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/90 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm backdrop-blur">
-                <Sparkles className="h-4 w-4 text-teal-600" />
-                Generating 3D structure...
-              </div>
-            </div>
-          ) : null}
-          {error ? (
-            <div className="absolute inset-0 flex items-center justify-center p-6">
-              <div className="max-w-[85%] rounded-2xl border border-slate-200 bg-white px-5 py-4 text-center text-sm font-medium leading-6 text-slate-700 shadow-sm">
-                {error}
-              </div>
-            </div>
-          ) : null}
-        </div>
+        {previewFrame}
       </CardContent>
     </Card>
   );

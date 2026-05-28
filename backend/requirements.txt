@@ -1,7 +1,9 @@
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
 pydantic==2.10.6
+python-multipart==0.0.20
 python-dotenv==1.0.1
+MolScribe
 numpy<2
 pandas==2.2.3
 requests==2.32.5

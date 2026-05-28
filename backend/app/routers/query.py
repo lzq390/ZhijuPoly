@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from time import perf_counter
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from app.models import (
     PolymerResult,
@@ -10,12 +10,20 @@ from app.models import (
     SmilesQueryResponse,
     Structure3DRequest,
     Structure3DResponse,
+    StructureImageRecognitionResponse,
 )
 from app.services.aggregator import load_polymer_result, load_polymer_results
+from app.services.image_recognition import recognize_structure_image_from_bytes
 from app.services.property_similarity import property_similarity_search
 from app.services.similarity import similarity_search
 from app.services.structure_3d import generate_3d_molblock
-from app.utils.exceptions import InvalidSmilesError, ModelArtifactError, UnsupportedPredictionPropertyError
+from app.utils.exceptions import (
+    InvalidImageError,
+    InvalidSmilesError,
+    ModelArtifactError,
+    StructureRecognitionError,
+    UnsupportedPredictionPropertyError,
+)
 
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
@@ -110,4 +118,43 @@ async def generate_structure_3d(request_body: Structure3DRequest, request: Reque
         molblock=molblock,
         capped_smiles=capped_smiles,
         format="mol",
+    )
+
+
+@router.post("/structure/recognize-image", response_model=StructureImageRecognitionResponse)
+async def recognize_structure_image(
+    request: Request,
+    image: UploadFile = File(...),
+) -> StructureImageRecognitionResponse:
+    started_at = perf_counter()
+    settings = request.app.state.settings
+    if not settings.ocsr_enabled:
+        await image.close()
+        raise HTTPException(status_code=503, detail="image recognition service is disabled")
+
+    try:
+        image_bytes = await image.read(settings.ocsr_max_image_bytes + 1)
+        result = recognize_structure_image_from_bytes(
+            image_bytes,
+            content_type=image.content_type,
+            model_path=settings.ocsr_model_dir_path,
+            device=settings.ocsr_device,
+            max_bytes=settings.ocsr_max_image_bytes,
+        )
+    except InvalidImageError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except ModelArtifactError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except StructureRecognitionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        await image.close()
+
+    elapsed_ms = (perf_counter() - started_at) * 1000
+    return StructureImageRecognitionResponse(
+        smiles=result.smiles,
+        molfile=result.molfile,
+        confidence=result.confidence,
+        warnings=result.warnings or [],
+        query_time_ms=elapsed_ms,
     )

@@ -879,7 +879,7 @@ export default function App() {
   }
 
   return (
-    <Layout fullBleed={activeModule === "home"}>
+    <Layout fullBleed={activeModule === "home" || activeModule === "reverseDesign"}>
       <div className={activeModule === "home" ? "contents" : "hidden"}>
         <HomePage
           onOpenLabData={() => openLabData("collect")}
@@ -931,7 +931,6 @@ export default function App() {
           aria-hidden={activeModule !== "reverseDesign"}
         >
           <ReverseDesignPage
-            onBackHome={() => navigate({ module: "home", datasetKey: null })}
             onOpenKnowledge={openKnowledge}
           />
         </div>

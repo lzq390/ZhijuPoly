@@ -74,6 +74,14 @@ export type PredictResponse = {
   query_time_ms: number;
 };
 
+export type StructureImageRecognitionResponse = {
+  smiles: string;
+  molfile: string | null;
+  confidence: number | null;
+  warnings: string[];
+  query_time_ms: number;
+};
+
 export type SmilesLookupRequest = {
   smiles: string;
   table: SmilesLookupTable;
