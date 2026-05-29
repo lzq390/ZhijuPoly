@@ -32,6 +32,7 @@ type KetcherEditorProps = {
   smilesPanelClassName?: string;
   smilesTextareaClassName?: string;
   showSmilesPanel?: boolean;
+  showToolsBadge?: boolean;
   eyebrow?: string;
   title?: string;
 };
@@ -52,6 +53,7 @@ export function KetcherEditor({
   smilesPanelClassName,
   smilesTextareaClassName,
   showSmilesPanel = true,
+  showToolsBadge = true,
   eyebrow = "Molecular Canvas",
   title = "Structure Editor"
 }: KetcherEditorProps) {
@@ -640,15 +642,15 @@ export function KetcherEditor({
 
   const canvasActionButtonClass = isDarkTone
     ? "border-white/10 bg-white/[0.08] text-white hover:bg-white/[0.14] hover:text-white"
-    : "";
+    : "border-sky-100 bg-white text-slate-800 shadow-[0_12px_28px_rgba(37,99,235,0.08)] hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700";
 
   const canvasActions = (
     <div
       className={cn(
         isSplitLayout
           ? cn(
-              "mt-auto grid gap-2 border-t p-3 sm:grid-cols-2 2xl:grid-cols-4",
-              isDarkTone ? "border-cyan-200/10 bg-slate-950/55" : "border-slate-200 bg-white"
+              "mt-auto grid gap-2 p-3 sm:grid-cols-2 2xl:grid-cols-4",
+              isDarkTone ? "bg-slate-950/55" : "bg-white"
             )
           : "flex flex-wrap justify-end gap-3"
       )}
@@ -721,40 +723,45 @@ export function KetcherEditor({
           "relative flex h-full flex-col overflow-hidden rounded-[24px] border",
           isDarkTone
             ? "border-cyan-200/10 bg-slate-950 text-slate-100"
-            : "border-slate-200 bg-white text-slate-900 shadow-[0_1px_3px_rgba(15,23,42,0.04)]",
+            : "border-sky-100 bg-white text-slate-900 shadow-[0_22px_58px_rgba(37,99,235,0.12),0_6px_18px_rgba(15,23,42,0.05)] ring-1 ring-white/80",
           frameClassName
         )}
       >
         {hiddenFileInput}
         <div
           className={cn(
-            "flex items-center justify-between gap-4 border-b px-4 py-3",
-            isDarkTone ? "border-cyan-200/10 bg-slate-900/55" : "border-slate-200 bg-white"
+            "flex items-center justify-between gap-4 px-4 py-3",
+            isDarkTone ? "bg-slate-900/55" : "bg-white"
           )}
         >
           <div className="min-w-0">
-            <div className={cn("truncate text-[11px] font-semibold uppercase tracking-[0.18em]", isDarkTone ? "text-cyan-300/85" : "text-teal-700/80")}>
-              {eyebrow}
-            </div>
-            <div className={cn("font-heading mt-1 truncate text-base font-semibold", isDarkTone ? "text-white" : "text-slate-950")}>
+            {eyebrow ? (
+              <div className={cn("truncate text-[11px] font-semibold uppercase tracking-[0.18em]", isDarkTone ? "text-cyan-300/85" : "text-teal-700/80")}>
+                {eyebrow}
+              </div>
+            ) : null}
+            <div className={cn("font-heading truncate text-base font-semibold", eyebrow ? "mt-1" : "", isDarkTone ? "text-white" : "text-slate-950")}>
               {title}
             </div>
           </div>
-          <div
-            className={cn(
-              "rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]",
-              isDarkTone ? "border-white/10 bg-white/[0.05] text-slate-400" : "border-blue-100 bg-blue-50 text-blue-600"
-            )}
-          >
-            Streaming Tools
-          </div>
+          {showToolsBadge ? (
+            <div
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]",
+                isDarkTone ? "border-white/10 bg-white/[0.05] text-slate-400" : "border-blue-100 bg-blue-50 text-blue-600"
+              )}
+            >
+              Streaming Tools
+            </div>
+          ) : null}
         </div>
 
-        <div className="p-3">
+        <div className={isSplitLayout ? "p-0" : "p-3"}>
           <div
             className={cn(
               "overflow-hidden rounded-[18px] border bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]",
-              isDarkTone ? "border-cyan-200/10 bg-slate-900/80 shadow-none" : "border-slate-200"
+              isSplitLayout ? "rounded-none border-x-0" : "",
+              isDarkTone ? "border-cyan-200/10 bg-slate-900/80 shadow-none" : "border-sky-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_10px_26px_rgba(37,99,235,0.06)]"
             )}
           >
             <iframe
@@ -801,9 +808,11 @@ export function KetcherEditor({
       >
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-1.5">
-            <div className={cn("text-[11px] font-medium uppercase tracking-[0.22em]", isDarkTone ? "text-cyan-300/85" : "text-teal-700/80")}>
-              {eyebrow}
-            </div>
+            {eyebrow ? (
+              <div className={cn("text-[11px] font-medium uppercase tracking-[0.22em]", isDarkTone ? "text-cyan-300/85" : "text-teal-700/80")}>
+                {eyebrow}
+              </div>
+            ) : null}
             <CardTitle className={cn("text-[1.4rem] tracking-tight", isDarkTone ? "text-white" : "")}>
               {title}
             </CardTitle>

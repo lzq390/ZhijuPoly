@@ -2,7 +2,6 @@ import { useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowLeft,
-  ArrowRight,
   Bell,
   Box,
   Database,
@@ -13,8 +12,10 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   Target,
-  Timer
+  Timer,
+  User
 } from "lucide-react";
 import { KetcherEditor } from "./KetcherEditor";
 import { ReverseDesignResults } from "./ReverseDesignResults";
@@ -54,34 +55,232 @@ function parseOptionalNumber(value: string) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+function isDecimalInput(value: string) {
+  return /^\d*\.?\d*$/.test(value);
+}
+
+function isIntegerInput(value: string) {
+  return /^\d*$/.test(value);
+}
+
 function formatTargetTg(value: number | null) {
   return value === null || Number.isNaN(value) ? "Waiting" : `${value} °C`;
 }
 
+function clampMetric(value: number, min = 0, max = 1) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatMetricValue(value: number) {
+  return `${Math.round(clampMetric(value) * 100)}%`;
+}
+
 function PolymerReverseLogo({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 64 64" aria-hidden="true" className={className}>
-      <polygon points="32 6 55 19 55 45 32 58 9 45 9 19" fill="#ecfeff" stroke="#38bdf8" strokeWidth="2.4" />
-      <polygon points="32 12 49 22 49 42 32 52 15 42 15 22" fill="#ffffff" stroke="#7dd3fc" strokeWidth="1.8" />
-      <polygon points="32 19 43 25.5 43 38.5 32 45 21 38.5 21 25.5" fill="#f0f9ff" stroke="#0284c7" strokeWidth="1.4" />
-      <path d="M32 20v24M22 26l20 12M42 26 22 38M27 29l10 6M37 29l-10 6M27 35l10 6" fill="none" stroke="#0891b2" strokeWidth="1.8" strokeLinecap="round" />
-      {[
-        [32, 20],
-        [22, 26],
-        [42, 26],
-        [27, 29],
-        [37, 29],
-        [32, 35],
-        [22, 38],
-        [42, 38],
-        [27, 41],
-        [37, 41],
-        [32, 44]
-      ].map(([cx, cy]) => (
-        <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={2.8} fill="#ffffff" stroke="#06b6d4" strokeWidth="1.6" />
-      ))}
-      <path d="M18 18h-4v4M50 18v4h-4M18 46h-4v-4M50 46h-4v4" fill="none" stroke="#38bdf8" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
+    <span
+      aria-hidden="true"
+      className={cn("relative block overflow-hidden", className)}
+    >
+      <img
+        src="/images/polymer-reverse-logo-icon.png"
+        alt=""
+        className="h-full w-full object-contain"
+      />
+    </span>
+  );
+}
+
+function ModelPerformanceRadar({
+  targetTg,
+  similarityThreshold,
+  candidateSize,
+  resultCount,
+  scannedRows,
+  progress,
+  averageSimilarityScore,
+  averageTgDifference,
+  candidatePoolSize,
+  queryTimeMs,
+  bestSimilarityScore
+}: {
+  targetTg: number | null;
+  similarityThreshold: number;
+  candidateSize: number;
+  resultCount: number;
+  scannedRows: number;
+  progress: number;
+  averageSimilarityScore: number | null;
+  averageTgDifference: number | null;
+  candidatePoolSize: number | null;
+  queryTimeMs: number | null;
+  bestSimilarityScore: number | null;
+}) {
+  const hasObservedSearch = progress > 0 || resultCount > 0 || scannedRows > 0;
+  const tgFit =
+    averageTgDifference === null
+      ? targetTg === null
+        ? 0.56
+        : 0.78
+      : clampMetric(1 - averageTgDifference / 80, 0.18, 1);
+  const similarity = clampMetric(averageSimilarityScore ?? bestSimilarityScore ?? similarityThreshold ?? 0.68, 0.18, 1);
+  const yieldScore = hasObservedSearch ? clampMetric(resultCount / Math.max(candidateSize, 1), 0.16, 1) : 0.72;
+  const coverage =
+    hasObservedSearch && candidatePoolSize && candidatePoolSize > 0
+      ? clampMetric(scannedRows / candidatePoolSize, 0.18, 1)
+      : hasObservedSearch
+        ? clampMetric(progress / 100, 0.18, 1)
+        : 0.66;
+  const speed =
+    queryTimeMs === null
+      ? hasObservedSearch
+        ? 0.72
+        : 0.7
+      : clampMetric(1 - queryTimeMs / 3200, 0.2, 1);
+  const confidence = clampMetric(tgFit * 0.42 + similarity * 0.34 + yieldScore * 0.14 + coverage * 0.1, 0.18, 1);
+  const benchmark = clampMetric(similarityThreshold * 0.52 + tgFit * 0.24 + coverage * 0.24, 0.22, 0.86);
+  const metrics = [
+    { label: "Tg Fit", value: tgFit, color: "#a78bfa" },
+    { label: "Similarity", value: similarity, color: "#38bdf8" },
+    { label: "Yield", value: yieldScore, color: "#22d3ee" },
+    { label: "Speed", value: speed, color: "#34d399" },
+    { label: "Coverage", value: coverage, color: "#2dd4bf" },
+    { label: "Confidence", value: confidence, color: "#c084fc" }
+  ];
+  const centerX = 180;
+  const centerY = 142;
+  const maxRadius = 72;
+  const labelRadius = 110;
+  const toPoint = (index: number, radius: number) => {
+    const angle = (-90 + (360 / metrics.length) * index) * (Math.PI / 180);
+    return {
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius
+    };
+  };
+  const gridPolygons = [0.25, 0.5, 0.75, 1].map((level) =>
+    metrics.map((_, index) => {
+      const point = toPoint(index, maxRadius * level);
+      return `${point.x},${point.y}`;
+    })
+  );
+  const valuePoints = metrics
+    .map((metric, index) => {
+      const point = toPoint(index, maxRadius * metric.value);
+      return `${point.x},${point.y}`;
+    })
+    .join(" ");
+  const benchmarkPoints = metrics
+    .map((_, index) => {
+      const point = toPoint(index, maxRadius * benchmark);
+      return `${point.x},${point.y}`;
+    })
+    .join(" ");
+  const signatureScore = Math.round(confidence * 100);
+  const fitDelta = averageTgDifference === null ? "--" : `${averageTgDifference.toFixed(1)} °C`;
+
+  return (
+    <div className="relative mx-auto mt-3 min-h-[292px] w-full max-w-[calc(100vw-48px)] overflow-hidden bg-white px-0 py-2">
+      <div className="relative flex flex-wrap items-center justify-between gap-2 px-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+        <span>Performance Matrix</span>
+        <span className="rounded-full border border-sky-100 bg-white px-2.5 py-1 text-sky-700 shadow-[0_8px_20px_rgba(14,165,233,0.1)]">
+          Score {signatureScore}%
+        </span>
+      </div>
+      <svg viewBox="0 0 360 284" className="relative mt-1 h-[226px] w-full max-w-full overflow-visible sm:h-[238px]" role="img" aria-label="Model performance radar chart">
+        <defs>
+          <radialGradient id="performanceCoreGlow" cx="50%" cy="45%" r="64%">
+            <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.14" />
+            <stop offset="48%" stopColor="#8b5cf6" stopOpacity="0.06" />
+            <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+          </radialGradient>
+          <linearGradient id="performanceRadarFill" x1="94" x2="266" y1="54" y2="230" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#8b5cf6" stopOpacity="0.26" />
+            <stop offset="55%" stopColor="#38bdf8" stopOpacity="0.16" />
+            <stop offset="100%" stopColor="#22d3ee" stopOpacity="0.12" />
+          </linearGradient>
+          <linearGradient id="performanceRadarStroke" x1="98" x2="262" y1="62" y2="222" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#8b5cf6" />
+            <stop offset="45%" stopColor="#3b82f6" />
+            <stop offset="100%" stopColor="#06b6d4" />
+          </linearGradient>
+          <filter id="performanceRadarGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <circle cx={centerX} cy={centerY} r="118" fill="url(#performanceCoreGlow)" />
+        <circle cx={centerX} cy={centerY} r="86" fill="none" stroke="#38bdf8" strokeDasharray="2 8" strokeOpacity="0.18" />
+        <circle cx={centerX} cy={centerY} r="102" fill="none" stroke="#8b5cf6" strokeDasharray="18 12" strokeOpacity="0.14" />
+        {gridPolygons.map((points, index) => (
+          <polygon
+            key={points.join(" ")}
+            points={points.join(" ")}
+            fill="none"
+            stroke={index === gridPolygons.length - 1 ? "#93c5fd" : "#bae6fd"}
+            strokeOpacity={index === gridPolygons.length - 1 ? 0.76 : 0.58}
+            strokeWidth={index === gridPolygons.length - 1 ? 1.3 : 1}
+          />
+        ))}
+        <polygon points={benchmarkPoints} fill="none" stroke="#64748b" strokeDasharray="5 5" strokeOpacity="0.28" strokeWidth="1.2" />
+        {metrics.map((metric, index) => {
+          const axisPoint = toPoint(index, maxRadius);
+          const labelPoint = toPoint(index, labelRadius);
+          const labelAnchor = Math.abs(labelPoint.x - centerX) < 6 ? "middle" : labelPoint.x > centerX ? "start" : "end";
+          const valueOffset = labelPoint.y < centerY ? -14 : 15;
+          return (
+            <g key={metric.label}>
+              <line x1={centerX} y1={centerY} x2={axisPoint.x} y2={axisPoint.y} stroke="#bfdbfe" strokeOpacity="0.74" strokeWidth="1" />
+              <circle cx={axisPoint.x} cy={axisPoint.y} r="2" fill={metric.color} fillOpacity="0.85" />
+              <text
+                x={labelPoint.x}
+                y={labelPoint.y}
+                textAnchor={labelAnchor}
+                dominantBaseline="middle"
+                className="fill-slate-600 text-[10px] font-semibold"
+              >
+                {metric.label}
+              </text>
+              <text
+                x={labelPoint.x}
+                y={labelPoint.y + valueOffset}
+                textAnchor={labelAnchor}
+                dominantBaseline="middle"
+                className="fill-slate-400 text-[9px] font-semibold"
+              >
+                {formatMetricValue(metric.value)}
+              </text>
+            </g>
+          );
+        })}
+        <polygon points={valuePoints} fill="url(#performanceRadarFill)" stroke="url(#performanceRadarStroke)" strokeWidth="2.8" filter="url(#performanceRadarGlow)" />
+        {metrics.map((metric, index) => {
+          const point = toPoint(index, maxRadius * metric.value);
+          return (
+            <g key={`${metric.label}-point`} filter="url(#performanceRadarGlow)">
+              <circle cx={point.x} cy={point.y} r="7" fill={metric.color} fillOpacity="0.16" />
+              <circle cx={point.x} cy={point.y} r="4.1" fill="#ffffff" stroke={metric.color} strokeWidth="2.4" />
+              <circle cx={point.x} cy={point.y} r="1.6" fill={metric.color} />
+            </g>
+          );
+        })}
+        <circle cx={centerX} cy={centerY} r="5.6" fill="#ffffff" stroke="#38bdf8" strokeOpacity="0.86" strokeWidth="1.8" />
+        <circle cx={centerX} cy={centerY} r="2.4" fill="#3b82f6" />
+      </svg>
+      <div className="relative grid grid-cols-1 gap-2 px-2 text-center text-[10px] font-semibold text-slate-500 sm:grid-cols-3">
+        <div className="rounded-full border border-sky-100 bg-white/80 px-2 py-1.5 shadow-[0_10px_24px_rgba(14,165,233,0.1)]">
+          <span className="text-sky-700">Tg Δ</span> {fitDelta}
+        </div>
+        <div className="rounded-full border border-violet-100 bg-white/80 px-2 py-1.5 shadow-[0_10px_24px_rgba(139,92,246,0.09)]">
+          <span className="text-violet-700">Pool</span> {candidatePoolSize ?? "--"}
+        </div>
+        <div className="rounded-full border border-teal-100 bg-white/80 px-2 py-1.5 shadow-[0_10px_24px_rgba(20,184,166,0.09)]">
+          <span className="text-teal-700">Hits</span> {resultCount}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -90,10 +289,11 @@ function DashboardPanel({ children, className, id }: { children: ReactNode; clas
     <section
       id={id}
       className={cn(
-        "relative overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]",
+        "relative overflow-hidden rounded-[24px] border border-sky-100 bg-white shadow-[0_22px_58px_rgba(37,99,235,0.12),0_6px_18px_rgba(15,23,42,0.05)] ring-1 ring-white/80 transition-all duration-300 hover:shadow-[0_26px_68px_rgba(37,99,235,0.16),0_8px_24px_rgba(15,23,42,0.06)]",
         className
       )}
     >
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-sky-200 to-transparent" />
       <div className="relative">{children}</div>
     </section>
   );
@@ -106,12 +306,12 @@ function ToolDirectoryButton({ item, compact = false }: { item: ToolDirectoryIte
       ? "min-h-11 whitespace-nowrap rounded-2xl px-3 py-2 text-sm"
       : "w-full rounded-[18px] px-3.5 py-3",
     item.active
-      ? "border-blue-200 bg-blue-50 text-blue-950 shadow-[inset_3px_0_0_rgba(37,99,235,0.86)]"
+      ? "border-blue-200 bg-blue-50 text-blue-950 shadow-[0_14px_30px_rgba(37,99,235,0.12),inset_3px_0_0_rgba(37,99,235,0.86)]"
       : item.tone === "action"
         ? "border-cyan-200 bg-cyan-50 text-cyan-900 hover:border-cyan-300 hover:bg-cyan-100"
         : item.tone === "accent"
           ? "border-violet-200 bg-violet-50 text-violet-900 hover:border-violet-300 hover:bg-violet-100"
-          : "border-transparent bg-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-950",
+          : "border-transparent bg-transparent text-slate-600 hover:border-sky-100 hover:bg-white hover:text-slate-950 hover:shadow-[0_12px_28px_rgba(37,99,235,0.08)]",
     item.disabled ? "cursor-not-allowed opacity-45" : "hover:-translate-y-0.5"
   );
 
@@ -119,7 +319,7 @@ function ToolDirectoryButton({ item, compact = false }: { item: ToolDirectoryIte
     <button type="button" className={classes} onClick={item.onClick} disabled={item.disabled}>
       <span
         className={cn(
-          "flex h-9 w-9 flex-none items-center justify-center rounded-xl border border-slate-200 bg-white shadow-sm",
+          "flex h-9 w-9 flex-none items-center justify-center rounded-xl border border-sky-100 bg-white shadow-[0_10px_22px_rgba(37,99,235,0.08)]",
           item.active ? "text-blue-600" : "text-slate-600"
         )}
       >
@@ -129,9 +329,6 @@ function ToolDirectoryButton({ item, compact = false }: { item: ToolDirectoryIte
         <span className="block truncate font-semibold">{item.label}</span>
         {!compact ? <span className="mt-1 block truncate text-xs text-slate-500">{item.detail}</span> : null}
       </span>
-      {!compact ? (
-        <ArrowRight className="h-4 w-4 flex-none text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-blue-600" />
-      ) : null}
     </button>
   );
 }
@@ -156,7 +353,7 @@ function MetricCard({
   }[accent];
 
   return (
-    <div className="relative min-h-[124px] overflow-hidden rounded-[22px] border border-slate-200 bg-white px-5 py-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+    <div className="relative min-h-[124px] overflow-hidden rounded-[22px] border border-sky-100 bg-white px-5 py-5 shadow-[0_18px_42px_rgba(37,99,235,0.1),0_6px_16px_rgba(15,23,42,0.045)] ring-1 ring-white/80">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-blue-100" />
       <div className="flex items-start gap-4">
         <div className={cn("flex h-14 w-14 flex-none items-center justify-center rounded-[18px]", accentClass)}>
@@ -189,16 +386,15 @@ function SearchProgressCard({
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
             <h2 className="font-heading text-xl font-semibold text-slate-950">Search Progress</h2>
-            <p className="mt-1 text-sm text-slate-500">Live Tg screening status and candidate accumulation.</p>
           </div>
-          <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
+          <div className="rounded-2xl border border-violet-100 bg-white px-4 py-3 shadow-[0_14px_32px_rgba(139,92,246,0.12)]">
             <div className="text-xs text-slate-500">Overall Progress</div>
             <div className="font-heading mt-1 text-3xl font-semibold text-violet-600">{progress}%</div>
           </div>
         </div>
 
         <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_190px]">
-          <div className="relative min-h-[150px] overflow-hidden rounded-[18px] border border-slate-200 bg-white px-4 py-4">
+          <div className="relative min-h-[150px] overflow-hidden rounded-[18px] border border-sky-100 bg-white px-4 py-4 shadow-[0_14px_34px_rgba(37,99,235,0.08)]">
             <div className="absolute inset-x-4 top-1/2 border-t border-dashed border-slate-200" />
             <div className="absolute inset-x-4 top-[28%] border-t border-dashed border-slate-200" />
             <svg viewBox="0 0 640 150" className="relative h-[150px] w-full overflow-visible" aria-hidden="true">
@@ -220,11 +416,11 @@ function SearchProgressCard({
           </div>
 
           <div className="grid content-center gap-3">
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="rounded-2xl border border-sky-100 bg-white px-4 py-3 shadow-[0_12px_28px_rgba(37,99,235,0.07)]">
               <div className="text-xs text-slate-500">Status</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{statusLabel}</div>
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="rounded-2xl border border-sky-100 bg-white px-4 py-3 shadow-[0_12px_28px_rgba(37,99,235,0.07)]">
               <div className="text-xs text-slate-500">Scanned / Matched</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">
                 {scanned} / {matched}
@@ -247,14 +443,13 @@ function SmilesSequencePanel({
   onChange: (value: string) => void;
 }) {
   return (
-    <DashboardPanel className="min-h-[150px]">
-      <div className="border-b border-slate-200 px-4 py-2.5">
+    <DashboardPanel className="min-h-[130px]">
+      <div className="px-4 py-2">
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.08em] text-slate-950">
               Polymer Sequence
             </h2>
-            <div className="mt-1 text-[11px] font-medium text-teal-600">SMILES Sequence</div>
           </div>
           <MoreHorizontal className="h-4 w-4 text-slate-400" />
         </div>
@@ -265,7 +460,7 @@ function SmilesSequencePanel({
           onChange={(event) => onChange(event.target.value)}
           placeholder={placeholder}
           spellCheck={false}
-          className="min-h-[86px] resize-none rounded-[14px] border-slate-200 bg-white px-3 py-2 font-mono-ui text-sm leading-6 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-cyan-400"
+          className="min-h-[68px] resize-none rounded-[14px] border-sky-200 bg-sky-50/80 px-3 py-2 font-mono-ui text-sm leading-6 text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_10px_24px_rgba(14,165,233,0.08)] placeholder:text-sky-700/45 selection:bg-sky-200/70 focus-visible:ring-sky-300"
         />
       </div>
     </DashboardPanel>
@@ -307,6 +502,43 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
     });
   }
 
+  function handleTargetTgChange(value: string) {
+    if (isDecimalInput(value)) {
+      updateRequest({ target_tg: parseOptionalNumber(value) });
+    }
+  }
+
+  function handleSimilarityThresholdChange(value: string) {
+    if (!isDecimalInput(value)) {
+      return;
+    }
+
+    updateRequest({ similarity_threshold: value.trim() && value !== "." ? Number(value) : 0 });
+  }
+
+  function handleCandidateSizeChange(value: string) {
+    if (!isIntegerInput(value)) {
+      return;
+    }
+
+    updateRequest({ candidate_size: value.trim() ? Number(value) : 0 });
+  }
+
+  function handleAskAI() {
+    const queryParts = [
+      smiles.trim() ? `SMILES: ${smiles.trim()}` : "",
+      reverseDesign.request.target_tg !== null && !Number.isNaN(reverseDesign.request.target_tg)
+        ? `Target Tg: ${reverseDesign.request.target_tg} °C`
+        : "",
+      "polymer reverse design"
+    ].filter(Boolean);
+
+    onOpenKnowledge({
+      query: queryParts.join(" "),
+      terms: smiles.trim() ? [smiles.trim(), "glass transition temperature"] : ["glass transition temperature"]
+    });
+  }
+
   const canSubmit =
     !reverseDesign.isLoading &&
     smiles.trim().length > 0 &&
@@ -331,11 +563,18 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
       : reverseDesign.data
         ? "Complete"
         : "Idle";
-  const runMessage = reverseDesign.job
-    ? `${reverseDesign.job.status} | scanned ${reverseDesign.job.scanned_rows} | matched ${reverseDesign.job.matched_count}`
-    : canSubmit
-      ? "Target and structure are ready."
-      : "Enter a structure and a numeric target Tg.";
+  const observedCandidates = reverseDesign.data?.results ?? reverseDesign.job?.result?.results ?? [];
+  const averageSimilarityScore = observedCandidates.length
+    ? observedCandidates.reduce((total, candidate) => total + candidate.similarity_score, 0) / observedCandidates.length
+    : null;
+  const averageTgDifference = observedCandidates.length
+    ? observedCandidates.reduce((total, candidate) => total + Math.abs(candidate.tg_difference), 0) / observedCandidates.length
+    : null;
+  const candidatePoolSize = reverseDesign.data?.candidate_pool_size ?? reverseDesign.job?.result?.candidate_pool_size ?? null;
+  const queryTimeMs = reverseDesign.data?.query_time_ms ?? reverseDesign.job?.result?.query_time_ms ?? null;
+  const bestSimilarityScore =
+    reverseDesign.job?.best_similarity_score ??
+    (observedCandidates.length ? Math.max(...observedCandidates.map((candidate) => candidate.similarity_score)) : null);
 
   const toolItems: ToolDirectoryItem[] = [
     {
@@ -369,7 +608,6 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
   ];
 
   async function handleSubmit() {
-    openResults();
     await reverseDesign.submit({
       ...reverseDesign.request,
       smiles
@@ -377,10 +615,10 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
   }
 
   return (
-    <div className="relative left-1/2 -my-5 w-screen -translate-x-1/2 overflow-hidden bg-white text-slate-900 md:-my-8">
-      <header className="relative z-20 flex min-h-[76px] flex-col gap-4 border-b border-slate-200 bg-white px-4 py-4 lg:grid lg:grid-cols-[minmax(220px,1fr)_minmax(320px,560px)_minmax(220px,1fr)] lg:items-center lg:px-8">
+    <div className="relative left-1/2 -my-5 w-screen -translate-x-1/2 overflow-hidden bg-[#f5fbff] text-slate-900 md:-my-8">
+      <header className="relative z-20 flex min-h-[76px] flex-col gap-4 border-b border-sky-100 bg-white px-4 py-4 shadow-[0_12px_34px_rgba(37,99,235,0.06)] lg:grid lg:grid-cols-[minmax(220px,1fr)_minmax(320px,560px)_minmax(220px,1fr)] lg:items-center lg:px-8">
         <button type="button" onClick={scrollToTop} className="flex w-fit items-center gap-3 text-left">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-200 bg-white text-cyan-700">
+          <span className="flex h-12 w-12 items-center justify-center">
             <PolymerReverseLogo className="h-10 w-10" />
           </span>
           <span>
@@ -388,30 +626,29 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
           </span>
         </button>
 
-        <div className="flex h-12 w-full items-center gap-3 rounded-[16px] border border-slate-200 bg-white px-4 text-slate-500 shadow-[0_1px_3px_rgba(15,23,42,0.04)] lg:justify-self-center">
+        <div className="flex h-12 w-full items-center gap-3 rounded-[16px] border border-sky-100 bg-white px-4 text-slate-500 shadow-[0_14px_34px_rgba(37,99,235,0.09),0_4px_12px_rgba(15,23,42,0.035)] transition-all duration-300 hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_18px_44px_rgba(37,99,235,0.14),0_6px_16px_rgba(15,23,42,0.04)] lg:justify-self-center">
           <Search className="h-5 w-5 flex-none text-slate-400" />
           <span className="truncate text-sm md:text-base">Search structures, Tg targets, candidate records...</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-          <Badge className="border border-cyan-200 bg-cyan-50 text-cyan-800">{statusLabel}</Badge>
-          <button type="button" className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600">
+          <button type="button" className="flex h-11 w-11 items-center justify-center rounded-full border border-sky-100 bg-white text-slate-600 shadow-[0_12px_28px_rgba(37,99,235,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-blue-200 hover:text-blue-600 hover:shadow-[0_16px_34px_rgba(37,99,235,0.14)]">
             <Bell className="h-5 w-5" />
           </button>
-          <button type="button" className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600">
+          <button type="button" className="flex h-11 w-11 items-center justify-center rounded-full border border-sky-100 bg-white text-slate-600 shadow-[0_12px_28px_rgba(37,99,235,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-violet-200 hover:text-violet-600 hover:shadow-[0_16px_34px_rgba(139,92,246,0.14)]">
             <Settings className="h-5 w-5" />
           </button>
-          <div className="flex h-12 items-center gap-3 rounded-full border border-slate-200 bg-white pl-2 pr-4">
-            <span className="flex h-9 w-9 items-center justify-center rounded-full border border-violet-200 bg-violet-50 text-violet-700">
-              <Orbit className="h-5 w-5" />
+          <div className="flex h-12 items-center gap-3 rounded-full border border-sky-100 bg-white pl-2 pr-4 shadow-[0_12px_28px_rgba(37,99,235,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_16px_34px_rgba(37,99,235,0.12)]">
+            <span className="flex h-9 w-9 items-center justify-center rounded-full border border-sky-100 bg-white text-slate-600 shadow-sm">
+              <User className="h-5 w-5" />
             </span>
-            <span className="text-sm font-semibold text-slate-800">Dr. Nova</span>
+            <span className="text-sm font-semibold text-slate-800">User</span>
           </div>
         </div>
       </header>
 
       <div className="relative z-10 grid lg:grid-cols-[268px_minmax(0,1fr)]">
-        <aside className="border-b border-slate-200 bg-white px-4 py-4 lg:min-h-[calc(100vh-76px)] lg:border-b-0 lg:border-r lg:px-5 lg:py-8">
+        <aside className="border-b border-sky-200 bg-[#eaf6ff] px-4 py-4 lg:min-h-[calc(100vh-76px)] lg:border-b-0 lg:border-r lg:px-5 lg:py-8">
           <div className="flex gap-2 overflow-x-auto lg:hidden">
             {toolItems.map((item) => (
               <ToolDirectoryButton key={item.label} item={item} compact />
@@ -425,8 +662,8 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
           </div>
         </aside>
 
-        <main className="min-w-0 px-4 py-4 md:px-6 md:py-6">
-          <div className={activeView === "workspace" ? "space-y-4" : "hidden"}>
+        <main className="relative min-w-0 overflow-hidden bg-[#f7f9fc] px-4 py-4 md:px-6 md:py-6">
+          <div className={cn("relative z-10", activeView === "workspace" ? "space-y-4" : "hidden")}>
             <div id="reverse-overview" className="scroll-mt-28" />
 
             <div id="reverse-structure" className="scroll-mt-28 grid gap-4 xl:grid-cols-[minmax(500px,0.48fr)_minmax(0,0.52fr)] xl:items-stretch">
@@ -440,11 +677,12 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                 }}
                 layout="split"
                 showSmilesPanel={false}
-                eyebrow="Interactive Polymer Model"
+                showToolsBadge={false}
+                eyebrow=""
                 title="Molecular Canvas"
                 className="h-full"
-                frameClassName="h-full min-h-[500px] 2xl:min-h-[560px]"
-                iframeClassName="h-[455px] 2xl:h-[515px]"
+                frameClassName="h-full min-h-[445px] 2xl:min-h-[500px]"
+                iframeClassName="h-[400px] 2xl:h-[455px]"
                 onChange={(value) => {
                   setSmiles(value);
                   reverseDesign.setRequest({ ...reverseDesign.request, smiles: value });
@@ -463,85 +701,92 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
 
                 <div className="grid gap-4 xl:h-full xl:grid-cols-2">
                   <DashboardPanel id="reverse-preview" className="scroll-mt-28 flex h-full flex-col">
-                    <div className="border-b border-slate-200 px-5 py-4">
+                    <div className="px-5 py-3.5">
                       <div className="flex items-center justify-between gap-4">
                         <div>
                           <h2 className="font-heading text-lg font-semibold text-slate-950">3D Structure Map</h2>
-                          <p className="mt-1 text-sm text-slate-500">Molecular conformation preview</p>
                         </div>
                         <Orbit className="h-5 w-5 text-cyan-600" />
                       </div>
                     </div>
-                    <div className="flex min-h-0 flex-1 p-4">
+                    <div className="flex min-h-0 flex-1">
                       <StructurePreview3D
                         smiles={smiles}
                         variant="bare"
                         className="min-h-0 flex-1"
                         contentClassName="min-h-0 flex-1"
-                        previewClassName="min-h-[260px] xl:min-h-[280px] 2xl:min-h-[320px]"
+                        previewClassName="min-h-[220px] xl:min-h-[240px] 2xl:min-h-[280px]"
+                        viewerClassName="translate-y-5 2xl:translate-y-6"
+                        visualStyle="polished-atoms"
                       />
                     </div>
                   </DashboardPanel>
 
                   <DashboardPanel id="reverse-controls" className="scroll-mt-28 flex h-full flex-col">
-                    <div className="border-b border-slate-200 px-5 py-4">
+                    <div className="px-5 py-3.5">
                       <div className="flex items-center justify-between gap-4">
                         <div>
                           <h2 className="font-heading text-lg font-semibold text-slate-950">Reverse Controls</h2>
-                          <p className="mt-1 text-sm text-slate-500">Tg and similarity search settings</p>
                         </div>
                         <SlidersHorizontal className="h-5 w-5 text-violet-600" />
                       </div>
                     </div>
-                    <div className="grid flex-1 gap-3 p-4 sm:grid-cols-2">
-                      <label className="space-y-1.5">
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Target Tg (°C)</span>
-                        <Input
-                          type="number"
-                          value={reverseDesign.request.target_tg ?? ""}
-                          onChange={(event) => updateRequest({ target_tg: parseOptionalNumber(event.target.value) })}
-                          placeholder="500"
-                          className="border-slate-200 bg-white text-slate-900 placeholder:text-slate-400"
-                        />
-                      </label>
-                      <label className="space-y-1.5">
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Similarity Threshold</span>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          value={reverseDesign.request.similarity_threshold}
-                          onChange={(event) => updateRequest({ similarity_threshold: Number(event.target.value) })}
-                          className="border-slate-200 bg-white text-slate-900"
-                        />
-                      </label>
-                      <label className="space-y-1.5 sm:col-span-2">
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Candidate Size</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={200}
-                          step={1}
-                          value={reverseDesign.request.candidate_size}
-                          onChange={(event) => updateRequest({ candidate_size: Number(event.target.value) })}
-                          className="border-slate-200 bg-white text-slate-900"
-                        />
-                      </label>
-
-                      <div className="rounded-[18px] border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-slate-700 sm:col-span-2">
-                        {runMessage}
+                    <div className="flex flex-1 flex-col p-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="space-y-1.5">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Target Tg (°C)</span>
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            value={reverseDesign.request.target_tg ?? ""}
+                            onChange={(event) => handleTargetTgChange(event.target.value)}
+                            placeholder="500"
+                            className="border-sky-100 bg-white text-slate-900 shadow-[0_10px_24px_rgba(37,99,235,0.06)] placeholder:text-slate-400"
+                          />
+                        </label>
+                        <label className="space-y-1.5">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Similarity Threshold</span>
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            value={reverseDesign.request.similarity_threshold}
+                            onChange={(event) => handleSimilarityThresholdChange(event.target.value)}
+                            className="border-sky-100 bg-white text-slate-900 shadow-[0_10px_24px_rgba(37,99,235,0.06)]"
+                          />
+                        </label>
+                        <label className="space-y-1.5 sm:col-span-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Candidate Size</span>
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={reverseDesign.request.candidate_size}
+                            onChange={(event) => handleCandidateSizeChange(event.target.value)}
+                            className="border-sky-100 bg-white text-slate-900 shadow-[0_10px_24px_rgba(37,99,235,0.06)]"
+                          />
+                        </label>
                       </div>
 
-                      <Button
-                        type="button"
-                        className="min-h-[50px] w-full rounded-[16px] bg-blue-600 text-white shadow-[0_18px_46px_rgba(37,99,235,0.34)] hover:bg-blue-500 sm:col-span-2"
-                        onClick={handleSubmit}
-                        disabled={!canSubmit}
-                      >
-                        <Search className="mr-2 h-4 w-4" />
-                        {reverseDesign.isLoading ? "Searching..." : "Run Tg Search"}
-                      </Button>
+                      <div className="mt-auto space-y-3 pt-8">
+                        <Button
+                          type="button"
+                          className="min-h-[50px] w-full rounded-[16px] bg-blue-600 text-white shadow-[0_18px_46px_rgba(37,99,235,0.34),0_6px_16px_rgba(15,23,42,0.08)] hover:bg-blue-500"
+                          onClick={handleSubmit}
+                          disabled={!canSubmit}
+                        >
+                          <Search className="mr-2 h-4 w-4" />
+                          {reverseDesign.isLoading ? "Searching..." : "Run Tg Search"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="min-h-[48px] w-full rounded-[16px] border-blue-100 bg-white text-blue-700 shadow-[0_14px_34px_rgba(37,99,235,0.1)] hover:border-blue-300 hover:bg-blue-50"
+                          onClick={handleAskAI}
+                        >
+                          <Sparkles className="mr-2 h-4 w-4" />
+                          Ask AI
+                        </Button>
+                      </div>
                     </div>
                   </DashboardPanel>
                 </div>
@@ -559,23 +804,25 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
               <DashboardPanel>
                 <div className="p-5">
                   <h2 className="font-heading text-lg font-semibold text-slate-950">Model Performance</h2>
-                  <div className="mt-5 flex min-h-[220px] items-center justify-center rounded-[20px] border border-slate-200 bg-white">
-                    <div className="relative h-[190px] w-[190px]">
-                      <div className="absolute inset-0 rounded-full border border-blue-200" />
-                      <div className="absolute inset-[14%] rounded-full border border-violet-200" />
-                      <div className="absolute inset-[28%] rounded-full border border-cyan-200" />
-                      <div className="absolute left-1/2 top-0 h-full border-l border-slate-200" />
-                      <div className="absolute inset-y-0 left-0 right-0 top-1/2 border-t border-slate-200" />
-                      <div className="absolute inset-[17%] rounded-[36%] border border-violet-400 bg-violet-100 shadow-[0_0_34px_rgba(139,92,246,0.14)]" />
-                      <div className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.45)]" />
-                    </div>
-                  </div>
+                  <ModelPerformanceRadar
+                    targetTg={reverseDesign.request.target_tg}
+                    similarityThreshold={reverseDesign.request.similarity_threshold}
+                    candidateSize={reverseDesign.request.candidate_size}
+                    resultCount={resultCount}
+                    scannedRows={scannedRows}
+                    progress={progress}
+                    averageSimilarityScore={averageSimilarityScore}
+                    averageTgDifference={averageTgDifference}
+                    candidatePoolSize={candidatePoolSize}
+                    queryTimeMs={queryTimeMs}
+                    bestSimilarityScore={bestSimilarityScore}
+                  />
                 </div>
               </DashboardPanel>
             </div>
           </div>
 
-          <div className={activeView === "results" ? "space-y-4" : "hidden"}>
+          <div className={cn("relative z-10", activeView === "results" ? "space-y-4" : "hidden")}>
             <DashboardPanel>
               <div className="p-5 md:p-6">
                 <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
@@ -596,7 +843,7 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                       type="button"
                       variant="outline"
                       onClick={openWorkspace}
-                      className="min-h-[44px] min-w-[172px] border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50"
+                      className="min-h-[44px] min-w-[172px] border-sky-100 bg-white text-slate-700 shadow-[0_12px_28px_rgba(37,99,235,0.08)] hover:border-blue-200 hover:bg-blue-50"
                     >
                       <ArrowLeft className="mr-2 h-4 w-4" />
                       Back to Workbench
@@ -622,7 +869,7 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
               </div>
             </DashboardPanel>
 
-            <div className="rounded-[24px] border border-slate-200 bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+            <div className="rounded-[24px] border border-sky-100 bg-white p-3 shadow-[0_22px_58px_rgba(37,99,235,0.12),0_6px_18px_rgba(15,23,42,0.05)] ring-1 ring-white/80">
               <ReverseDesignResults
                 data={reverseDesign.data}
                 error={reverseDesign.error}

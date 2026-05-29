@@ -51,6 +51,8 @@ type StructurePreview3DProps = {
   className?: string;
   contentClassName?: string;
   previewClassName?: string;
+  viewerClassName?: string;
+  visualStyle?: "standard" | "polished-atoms";
   variant?: "card" | "bare";
 };
 
@@ -59,6 +61,8 @@ export function StructurePreview3D({
   className,
   contentClassName,
   previewClassName,
+  viewerClassName,
+  visualStyle = "standard",
   variant = "card"
 }: StructurePreview3DProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
@@ -103,13 +107,28 @@ export function StructurePreview3D({
           backgroundColor: "#ffffff"
         });
         viewer.addModel(payload.molblock, "mol");
-        viewer.setStyle(
-          {},
-          {
-            stick: { radius: 0.2, color: "0x475569" },
-            sphere: { scale: 0.34, colorscheme: "Jmol" }
-          }
-        );
+        if (visualStyle === "polished-atoms") {
+          const glossyBond = { radius: 0.15, color: "0x8b95a5", opacity: 0.96 };
+          viewer.setStyle({}, { stick: glossyBond, sphere: { scale: 0.34, colorscheme: "Jmol" } });
+          viewer.setStyle({ elem: "C" }, { stick: glossyBond, sphere: { scale: 0.37, color: "0x9aa3ad" } });
+          viewer.setStyle({ elem: "H" }, { stick: glossyBond, sphere: { scale: 0.24, color: "0xf8fafc" } });
+          viewer.setStyle({ elem: "O" }, { stick: glossyBond, sphere: { scale: 0.37, color: "0xdc2626" } });
+          viewer.setStyle({ elem: "N" }, { stick: glossyBond, sphere: { scale: 0.37, color: "0x2563eb" } });
+          viewer.setStyle({ elem: "S" }, { stick: glossyBond, sphere: { scale: 0.39, color: "0xfacc15" } });
+          viewer.setStyle({ elem: "P" }, { stick: glossyBond, sphere: { scale: 0.39, color: "0xf97316" } });
+          viewer.setStyle({ elem: "F" }, { stick: glossyBond, sphere: { scale: 0.35, color: "0x22c55e" } });
+          viewer.setStyle({ elem: "Cl" }, { stick: glossyBond, sphere: { scale: 0.39, color: "0x16a34a" } });
+          viewer.setStyle({ elem: "Br" }, { stick: glossyBond, sphere: { scale: 0.41, color: "0x92400e" } });
+          viewer.setStyle({ elem: "I" }, { stick: glossyBond, sphere: { scale: 0.43, color: "0x7c3aed" } });
+        } else {
+          viewer.setStyle(
+            {},
+            {
+              stick: { radius: 0.2, color: "0x475569" },
+              sphere: { scale: 0.34, colorscheme: "Jmol" }
+            }
+          );
+        }
         viewer.zoomTo();
         viewer.render();
       } catch (nextError) {
@@ -128,17 +147,17 @@ export function StructurePreview3D({
     return () => {
       cancelled = true;
     };
-  }, [smiles]);
+  }, [smiles, visualStyle]);
 
   const previewFrame = (
     <div
       className={cn(
-        "relative overflow-hidden rounded-[24px] border border-slate-200 bg-white",
-        variant === "bare" ? "min-h-[260px] flex-1" : "h-[280px]",
+        "relative overflow-hidden bg-white",
+        variant === "bare" ? "min-h-[260px] flex-1" : "h-[280px] rounded-[24px] border border-slate-200",
         previewClassName
       )}
     >
-      <div ref={viewerRef} className="absolute inset-0" />
+      <div ref={viewerRef} className={cn("absolute inset-0", viewerClassName)} />
       {isLoading ? (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
