@@ -3,6 +3,7 @@ import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Clock3, Expand, FileTex
 import { useKnowledgeSearch } from "../hooks/useKnowledgeSearch";
 import type { KnowledgeDocumentResult } from "../types";
 import { OnlineKnowledgeSearchPanel } from "./online-knowledge/OnlineKnowledgeSearchPanel";
+import { PdfSimilarityDemoPanel } from "./PdfSimilarityDemoPanel";
 import { Alert } from "./ui/alert";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -27,7 +28,7 @@ type ActiveDetail = {
   terms: string[];
 } | null;
 
-type KnowledgeMode = "local" | "online";
+type KnowledgeMode = "local" | "online" | "pdf";
 
 const LOCAL_KNOWLEDGE_PAGE_SIZE = 20;
 
@@ -320,6 +321,14 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
     ? `${localResults.length} / ${searchState.data.total} shown`
     : "Ready";
   const timingBadge = searchState.data ? `${searchState.data.query_time_ms.toFixed(1)} ms` : "Ready";
+  const moduleBadge =
+    mode === "local" ? "Knowledge Retrieval" : mode === "online" ? "Online Retrieval" : "PDF Similarity";
+  const primaryMetricLabel =
+    mode === "local" ? "Local Results" : mode === "online" ? "Search Mode" : "Upload Mode";
+  const primaryMetricValue = mode === "local" ? resultBadge : mode === "online" ? "Online" : "Demo";
+  const secondaryMetricLabel =
+    mode === "local" ? "Search Time" : mode === "online" ? "Data Source" : "Result Source";
+  const secondaryMetricValue = mode === "local" ? timingBadge : mode === "online" ? "Literature" : "Static Preview";
 
   async function updateResultPage(page: number) {
     const nextPage = Math.min(Math.max(page, 1), totalResultPages);
@@ -341,7 +350,7 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
             <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">Knowledge Search</div>
           </div>
         </div>
-        <Badge className="bg-teal-50 text-teal-800">{mode === "local" ? "Knowledge Retrieval" : "Online Retrieval"}</Badge>
+        <Badge className="bg-teal-50 text-teal-800">{moduleBadge}</Badge>
       </nav>
 
       <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-7 md:px-8">
@@ -351,7 +360,7 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-sm">
                 <BookOpen className="h-5 w-5" />
               </div>
-              <Badge>Knowledge Retrieval</Badge>
+              <Badge>{moduleBadge}</Badge>
             </div>
             <h1 className="font-heading mt-6 text-[2.4rem] font-semibold leading-tight tracking-tight text-slate-950 md:text-[3.7rem]">
               Knowledge Search
@@ -379,6 +388,17 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
                 <Globe2 className="mr-2 h-4 w-4" />
                 Online
               </button>
+              <button
+                type="button"
+                onClick={() => setMode("pdf")}
+                className={[
+                  "inline-flex min-h-11 items-center rounded-2xl px-4 text-sm font-semibold transition-colors",
+                  mode === "pdf" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white"
+                ].join(" ")}
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                PDF Similarity
+              </button>
             </div>
             {mode === "local" ? (
               <form onSubmit={handleSubmit} className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px]">
@@ -402,20 +422,20 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
           <div className="grid gap-3">
             <div className="rounded-[24px] border border-white/80 bg-white/85 p-5 shadow-sm">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                {mode === "local" ? <FileText className="h-4 w-4 text-teal-700" /> : <Globe2 className="h-4 w-4 text-teal-700" />}
-                {mode === "local" ? "Local Results" : "Search Mode"}
+                {mode === "online" ? <Globe2 className="h-4 w-4 text-teal-700" /> : <FileText className="h-4 w-4 text-teal-700" />}
+                {primaryMetricLabel}
               </div>
               <div className="font-heading mt-3 text-3xl font-semibold tracking-tight text-slate-950">
-                {mode === "local" ? resultBadge : "Online"}
+                {primaryMetricValue}
               </div>
             </div>
             <div className="rounded-[24px] border border-white/80 bg-slate-950 p-5 text-slate-50 shadow-sm">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                 <Clock3 className="h-4 w-4 text-teal-300" />
-                {mode === "local" ? "Search Time" : "Data Source"}
+                {secondaryMetricLabel}
               </div>
               <div className="font-heading mt-3 text-3xl font-semibold tracking-tight">
-                {mode === "local" ? timingBadge : "Literature"}
+                {secondaryMetricValue}
               </div>
             </div>
           </div>
@@ -470,8 +490,10 @@ export function KnowledgeSearch({ onBackHome, initialQuery = "", initialTerms = 
             </div>
           )}
         </section>
-      ) : (
+      ) : mode === "online" ? (
         <OnlineKnowledgeSearchPanel initialMaterial={query} />
+      ) : (
+        <PdfSimilarityDemoPanel />
       )}
 
       <DetailDialog detail={activeDetail} onClose={() => setActiveDetail(null)} />

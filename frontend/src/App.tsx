@@ -26,6 +26,7 @@ import {
 import { ConditionalGenerationPage } from "./components/ConditionalGenerationPage";
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
+import { ExperimentWorkflowDemoPage } from "./components/ExperimentWorkflowDemoPage";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { LabDataPage, type LabDataView } from "./components/LabDataPage";
@@ -54,7 +55,8 @@ type ActiveModule =
   | "databaseQuery"
   | "database"
   | "knowledge"
-  | "labData";
+  | "labData"
+  | "experimentWorkflowDemo";
 
 type AppRoute = {
   module: ActiveModule;
@@ -104,6 +106,10 @@ function routeFromPath(pathname: string): AppRoute {
     return { module: "knowledge", datasetKey: null };
   }
 
+  if (path === "/experiment-workflow-demo") {
+    return { module: "experimentWorkflowDemo", datasetKey: null };
+  }
+
   if (path === "/lab-data" || path === "/lab-data/collect") {
     return { module: "labData", datasetKey: null, labDataView: "collect" };
   }
@@ -143,6 +149,10 @@ function pathFromRoute(route: AppRoute) {
 
   if (route.module === "knowledge") {
     return "/knowledge";
+  }
+
+  if (route.module === "experimentWorkflowDemo") {
+    return "/experiment-workflow-demo";
   }
 
   if (route.module === "labData") {
@@ -220,6 +230,7 @@ function HomePage({
   onOpenExplorer,
   onOpenReverseDesign,
   onOpenConditionalGeneration,
+  onOpenExperimentWorkflowDemo,
   onOpenDatabaseQuery,
   onOpenDatabase,
   onOpenKnowledge
@@ -228,6 +239,7 @@ function HomePage({
   onOpenExplorer: () => void;
   onOpenReverseDesign: () => void;
   onOpenConditionalGeneration: () => void;
+  onOpenExperimentWorkflowDemo: () => void;
   onOpenDatabaseQuery: () => void;
   onOpenDatabase: () => void;
   onOpenKnowledge: () => void;
@@ -318,8 +330,8 @@ function HomePage({
         },
         {
           icon: <BookOpen className="h-5 w-5" />,
-          label: "Design Review",
-          disabled: true
+          label: "Experiment Workflow Demo",
+          onClick: onOpenExperimentWorkflowDemo
         }
       ]
     }
@@ -835,6 +847,10 @@ export default function App() {
     navigate({ module: "conditionalGeneration", datasetKey: null });
   }
 
+  function openExperimentWorkflowDemo() {
+    navigate({ module: "experimentWorkflowDemo", datasetKey: null });
+  }
+
   function openDatabaseQuery() {
     navigate({ module: "databaseQuery", datasetKey: null });
   }
@@ -879,13 +895,14 @@ export default function App() {
   }
 
   return (
-    <Layout fullBleed={activeModule === "home" || activeModule === "reverseDesign"}>
+    <Layout fullBleed={activeModule === "home" || activeModule === "reverseDesign" || activeModule === "experimentWorkflowDemo"}>
       <div className={activeModule === "home" ? "contents" : "hidden"}>
         <HomePage
           onOpenLabData={() => openLabData("collect")}
           onOpenExplorer={openExplorer}
           onOpenReverseDesign={openReverseDesign}
           onOpenConditionalGeneration={openConditionalGeneration}
+          onOpenExperimentWorkflowDemo={openExperimentWorkflowDemo}
           onOpenDatabaseQuery={openDatabaseQuery}
           onOpenDatabase={openDatabase}
           onOpenKnowledge={openKnowledge}
@@ -919,6 +936,10 @@ export default function App() {
           onBackHome={() => navigate({ module: "home", datasetKey: null })}
           onChangeView={(view) => openLabData(view)}
         />
+      ) : null}
+
+      {activeModule === "experimentWorkflowDemo" ? (
+        <ExperimentWorkflowDemoPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
       ) : null}
 
       {activeModule === "conditionalGeneration" ? (
