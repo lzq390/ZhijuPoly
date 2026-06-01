@@ -55,3 +55,7 @@ polyprop-release-*.tar.gz
 /scripts/prepare_pi_reverse_design_demo_data.py
 /scripts/prepare_pi_reverse_design_test_data.py
 /backend/tests/
+
+# Local dev server runtime files
+/*.log
+/*.pid
