@@ -170,10 +170,9 @@ def _cuda_is_usable(torch_module: Any) -> bool:
     if not torch_module.cuda.is_available():
         return False
     try:
-        major, minor = torch_module.cuda.get_device_capability(0)
-        supported_arches = set(torch_module.cuda.get_arch_list())
-        if supported_arches and f"sm_{major}{minor}" not in supported_arches:
-            return False
+        # Prefer a real allocation probe over architecture-list matching:
+        # PyTorch can run on GPUs whose exact compute capability is absent from
+        # get_arch_list() when compatible PTX/runtime support is available.
         torch_module.empty(1, device="cuda")
         torch_module.cuda.synchronize()
     except Exception:

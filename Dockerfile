@@ -28,7 +28,18 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN grep -vE '^MolScribe([[:space:]=<>].*)?$' /tmp/requirements.txt > /tmp/requirements-base.txt \
+    && pip install --no-cache-dir -r /tmp/requirements-base.txt \
+    && pip install --no-cache-dir \
+        'numpy<2' \
+        albumentations==1.1.0 \
+        opencv-python-headless==4.10.0.84 \
+        torchvision==0.27.0 \
+    && pip install --no-cache-dir --no-deps \
+        MolScribe==1.1.1 \
+        OpenNMT-py==2.2.0 \
+        SmilesPE==0.0.3 \
+        timm==0.4.12
 
 COPY backend /app/backend
 COPY model /app/model
