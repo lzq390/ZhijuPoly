@@ -105,15 +105,15 @@ class ReverseDesignJobManager:
             job = self._jobs[job_id]
             if job.cancel_event.is_set():
                 job.status = "cancelled"
-                job.message = "Reverse-design search was cancelled."
+                job.message = "逆向设计搜索已取消。"
             elif response.total >= job.request.candidate_size:
                 job.status = "found_enough"
-                job.message = f"Found {job.request.candidate_size} candidates that satisfy the similarity threshold."
+                job.message = f"已找到 {job.request.candidate_size} 个满足阈值的候选。"
             else:
                 job.status = "exhausted"
-                job.message = f"The PI database was fully scanned before {job.request.candidate_size} candidates were found."
+                job.message = f"PI 数据库已扫描完成，未找到 {job.request.candidate_size} 个满足阈值的候选。"
             job.result = response
-            job.matched_count = response.total
+            job.matched_count = response.candidate_pool_size
             job.updated_at = _utc_now()
             job.finished_at = job.updated_at
 

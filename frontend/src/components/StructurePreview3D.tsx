@@ -27,7 +27,7 @@ function loadScriptOnce(src: string, id: string): Promise<void> {
         return;
       }
       existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error(`Failed to load script: ${src}`)), {
+      existing.addEventListener("error", () => reject(new Error(`3D 依赖加载失败：${src}`)), {
         once: true
       });
       return;
@@ -41,7 +41,7 @@ function loadScriptOnce(src: string, id: string): Promise<void> {
       script.dataset.loaded = "true";
       resolve();
     };
-    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+    script.onerror = () => reject(new Error(`3D 依赖加载失败：${src}`));
     document.head.appendChild(script);
   });
 }
@@ -73,7 +73,7 @@ export function StructurePreview3D({
     const source = smiles.trim();
     if (!source) {
       setIsLoading(false);
-      setError("No structure available for preview");
+      setError("暂无可预览结构");
       if (viewerRef.current) {
         viewerRef.current.innerHTML = "";
       }
@@ -89,7 +89,7 @@ export function StructurePreview3D({
       try {
         await loadScriptOnce(D3MOL_SRC, "3dmol-script");
         if (!window.$3Dmol) {
-          throw new Error("3Dmol not available");
+          throw new Error("3Dmol 不可用");
         }
 
         let payload = structureCache.get(source);
@@ -133,7 +133,7 @@ export function StructurePreview3D({
         viewer.render();
       } catch (nextError) {
         if (!cancelled) {
-          setError(nextError instanceof Error ? nextError.message : "3D render failed");
+          setError(nextError instanceof Error ? nextError.message : "3D 渲染失败");
         }
       } finally {
         if (!cancelled) {
@@ -162,7 +162,7 @@ export function StructurePreview3D({
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
             <Sparkles className="h-4 w-4 text-teal-600" />
-            Generating 3D structure...
+            正在生成 3D 结构...
           </div>
         </div>
       ) : null}
@@ -190,11 +190,11 @@ export function StructurePreview3D({
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-2">
             <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-sky-700/80">
-              Spatial Preview
+              空间预览
             </div>
-            <CardTitle className="text-[1.35rem] tracking-tight">3D Structure</CardTitle>
+            <CardTitle className="text-[1.35rem] tracking-tight">3D 结构</CardTitle>
             <CardDescription>
-              Review the generated 3D conformation before running similarity matching.
+              在运行相似匹配前查看生成的 3D 构象。
             </CardDescription>
           </div>
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_12px_30px_rgba(8,17,31,0.18)]">

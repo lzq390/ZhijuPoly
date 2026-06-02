@@ -12,7 +12,6 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
-  Sparkles,
   Target,
   Timer,
   User
@@ -64,7 +63,7 @@ function isIntegerInput(value: string) {
 }
 
 function formatTargetTg(value: number | null) {
-  return value === null || Number.isNaN(value) ? "Waiting" : `${value} °C`;
+  return value === null || Number.isNaN(value) ? "待设置" : `${value} °C`;
 }
 
 function clampMetric(value: number, min = 0, max = 1) {
@@ -139,12 +138,12 @@ function ModelPerformanceRadar({
   const confidence = clampMetric(tgFit * 0.42 + similarity * 0.34 + yieldScore * 0.14 + coverage * 0.1, 0.18, 1);
   const benchmark = clampMetric(similarityThreshold * 0.52 + tgFit * 0.24 + coverage * 0.24, 0.22, 0.86);
   const metrics = [
-    { label: "Tg Fit", value: tgFit, color: "#a78bfa" },
-    { label: "Similarity", value: similarity, color: "#38bdf8" },
-    { label: "Yield", value: yieldScore, color: "#22d3ee" },
-    { label: "Speed", value: speed, color: "#34d399" },
-    { label: "Coverage", value: coverage, color: "#2dd4bf" },
-    { label: "Confidence", value: confidence, color: "#c084fc" }
+    { label: "Tg 匹配", value: tgFit, color: "#a78bfa" },
+    { label: "相似度", value: similarity, color: "#38bdf8" },
+    { label: "命中率", value: yieldScore, color: "#22d3ee" },
+    { label: "速度", value: speed, color: "#34d399" },
+    { label: "覆盖率", value: coverage, color: "#2dd4bf" },
+    { label: "置信度", value: confidence, color: "#c084fc" }
   ];
   const centerX = 180;
   const centerY = 142;
@@ -181,12 +180,12 @@ function ModelPerformanceRadar({
   return (
     <div className="relative mx-auto mt-3 min-h-[292px] w-full max-w-[calc(100vw-48px)] overflow-hidden bg-white px-0 py-2">
       <div className="relative flex flex-wrap items-center justify-between gap-2 px-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-        <span>Performance Matrix</span>
+        <span>性能矩阵</span>
         <span className="rounded-full border border-sky-100 bg-white px-2.5 py-1 text-sky-700 shadow-[0_8px_20px_rgba(14,165,233,0.1)]">
-          Score {signatureScore}%
+          评分 {signatureScore}%
         </span>
       </div>
-      <svg viewBox="0 0 360 284" className="relative mt-1 h-[226px] w-full max-w-full overflow-visible sm:h-[238px]" role="img" aria-label="Model performance radar chart">
+      <svg viewBox="0 0 360 284" className="relative mt-1 h-[226px] w-full max-w-full overflow-visible sm:h-[238px]" role="img" aria-label="模型表现雷达图">
         <defs>
           <radialGradient id="performanceCoreGlow" cx="50%" cy="45%" r="64%">
             <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.14" />
@@ -274,10 +273,10 @@ function ModelPerformanceRadar({
           <span className="text-sky-700">Tg Δ</span> {fitDelta}
         </div>
         <div className="rounded-full border border-violet-100 bg-white/80 px-2 py-1.5 shadow-[0_10px_24px_rgba(139,92,246,0.09)]">
-          <span className="text-violet-700">Pool</span> {candidatePoolSize ?? "--"}
+          <span className="text-violet-700">候选池</span> {candidatePoolSize ?? "--"}
         </div>
         <div className="rounded-full border border-teal-100 bg-white/80 px-2 py-1.5 shadow-[0_10px_24px_rgba(20,184,166,0.09)]">
-          <span className="text-teal-700">Hits</span> {resultCount}
+          <span className="text-teal-700">命中</span> {resultCount}
         </div>
       </div>
     </div>
@@ -385,10 +384,10 @@ function SearchProgressCard({
       <div className="p-5 md:p-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
-            <h2 className="font-heading text-xl font-semibold text-slate-950">Search Progress</h2>
+            <h2 className="font-heading text-xl font-semibold text-slate-950">搜索进度</h2>
           </div>
           <div className="rounded-2xl border border-violet-100 bg-white px-4 py-3 shadow-[0_14px_32px_rgba(139,92,246,0.12)]">
-            <div className="text-xs text-slate-500">Overall Progress</div>
+            <div className="text-xs text-slate-500">总体进度</div>
             <div className="font-heading mt-1 text-3xl font-semibold text-violet-600">{progress}%</div>
           </div>
         </div>
@@ -417,11 +416,11 @@ function SearchProgressCard({
 
           <div className="grid content-center gap-3">
             <div className="rounded-2xl border border-sky-100 bg-white px-4 py-3 shadow-[0_12px_28px_rgba(37,99,235,0.07)]">
-              <div className="text-xs text-slate-500">Status</div>
+              <div className="text-xs text-slate-500">状态</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{statusLabel}</div>
             </div>
             <div className="rounded-2xl border border-sky-100 bg-white px-4 py-3 shadow-[0_12px_28px_rgba(37,99,235,0.07)]">
-              <div className="text-xs text-slate-500">Scanned / Matched</div>
+              <div className="text-xs text-slate-500">已扫描 / 已命中</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">
                 {scanned} / {matched}
               </div>
@@ -448,7 +447,7 @@ function SmilesSequencePanel({
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="font-heading text-sm font-semibold uppercase tracking-[0.08em] text-slate-950">
-              Polymer Sequence
+              聚合物序列
             </h2>
           </div>
           <MoreHorizontal className="h-4 w-4 text-slate-400" />
@@ -524,24 +523,8 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
     updateRequest({ candidate_size: value.trim() ? Number(value) : 0 });
   }
 
-  function handleAskAI() {
-    const queryParts = [
-      smiles.trim() ? `SMILES: ${smiles.trim()}` : "",
-      reverseDesign.request.target_tg !== null && !Number.isNaN(reverseDesign.request.target_tg)
-        ? `Target Tg: ${reverseDesign.request.target_tg} °C`
-        : "",
-      "polymer reverse design"
-    ].filter(Boolean);
-
-    onOpenKnowledge({
-      query: queryParts.join(" "),
-      terms: smiles.trim() ? [smiles.trim(), "glass transition temperature"] : ["glass transition temperature"]
-    });
-  }
-
   const canSubmit =
     !reverseDesign.isLoading &&
-    smiles.trim().length > 0 &&
     reverseDesign.request.target_tg !== null &&
     !Number.isNaN(reverseDesign.request.target_tg) &&
     reverseDesign.request.similarity_threshold >= 0 &&
@@ -557,12 +540,12 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
       ? Math.max(18, Math.min(92, Math.round((resultCount / Math.max(reverseDesign.request.candidate_size, 1)) * 100)))
       : 0;
   const statusLabel = reverseDesign.isLoading
-    ? "Scanning"
+    ? "扫描中"
     : reverseDesign.error
-      ? "Failed"
+      ? "失败"
       : reverseDesign.data
-        ? "Complete"
-        : "Idle";
+        ? "完成"
+        : "空闲";
   const observedCandidates = reverseDesign.data?.results ?? reverseDesign.job?.result?.results ?? [];
   const averageSimilarityScore = observedCandidates.length
     ? observedCandidates.reduce((total, candidate) => total + candidate.similarity_score, 0) / observedCandidates.length
@@ -578,57 +561,85 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
 
   const toolItems: ToolDirectoryItem[] = [
     {
-      label: "Overview",
-      detail: "Dashboard summary",
+      label: "概览",
+      detail: "仪表盘摘要",
       icon: <Grid2X2 className="h-4 w-4" />,
       onClick: () => goToSection("reverse-overview"),
       active: activeView === "workspace"
     },
     {
-      label: "Projects",
-      detail: "Structure canvas",
+      label: "结构",
+      detail: "结构画布",
       icon: <Folder className="h-4 w-4" />,
       onClick: () => goToSection("reverse-structure")
     },
     {
-      label: "Results",
-      detail: `${resultCount} candidates`,
+      label: "结果",
+      detail: `${resultCount} 个候选`,
       icon: <Box className="h-4 w-4" />,
       onClick: openResults,
       active: activeView === "results",
       tone: "accent"
     },
     {
-      label: "History",
-      detail: "Coming soon",
+      label: "历史",
+      detail: "即将开放",
       icon: <Database className="h-4 w-4" />,
       onClick: () => undefined,
       disabled: true
     }
   ];
 
+  async function getCurrentSmilesForSearch() {
+    const fallbackSmiles = smiles.trim();
+    const ketcher = iframeRef.current?.contentWindow?.ketcher;
+    if (!ketcher || typeof ketcher.getSmiles !== "function") {
+      return fallbackSmiles;
+    }
+
+    try {
+      const editorSmiles = (await ketcher.getSmiles()).trim();
+      if (editorSmiles && editorSmiles !== fallbackSmiles) {
+        setSmiles(editorSmiles);
+        reverseDesign.setRequest({ ...reverseDesign.request, smiles: editorSmiles });
+      }
+      return editorSmiles || fallbackSmiles;
+    } catch (error) {
+      console.error("Failed to read SMILES from Ketcher before Tg search", error);
+      throw new Error("无法读取当前编辑器结构，请重试或先点击“从编辑器同步”。");
+    }
+  }
+
   async function handleSubmit() {
+    let currentSmiles = "";
+    try {
+      currentSmiles = await getCurrentSmilesForSearch();
+    } catch (error) {
+      reverseDesign.reportError(error instanceof Error ? error.message : "无法读取当前编辑器结构。");
+      return;
+    }
+
     await reverseDesign.submit({
       ...reverseDesign.request,
-      smiles
+      smiles: currentSmiles
     });
   }
 
   return (
-    <div className="relative left-1/2 -my-5 w-screen -translate-x-1/2 overflow-hidden bg-[#f5fbff] text-slate-900 md:-my-8">
+    <div className="relative -mx-4 -my-5 w-auto overflow-x-clip bg-[#f5fbff] text-slate-900 md:-mx-8 md:-my-8">
       <header className="relative z-20 flex min-h-[76px] flex-col gap-4 border-b border-sky-100 bg-white px-4 py-4 shadow-[0_12px_34px_rgba(37,99,235,0.06)] lg:grid lg:grid-cols-[minmax(220px,1fr)_minmax(320px,560px)_minmax(220px,1fr)] lg:items-center lg:px-8">
         <button type="button" onClick={scrollToTop} className="flex w-fit items-center gap-3 text-left">
           <span className="flex h-12 w-12 items-center justify-center">
             <PolymerReverseLogo className="h-10 w-10" />
           </span>
           <span>
-            <span className="block font-heading text-xl font-semibold text-slate-950">Tg Reverse Design</span>
+            <span className="block font-heading text-xl font-semibold text-slate-950">Tg 逆向设计</span>
           </span>
         </button>
 
         <div className="flex h-12 w-full items-center gap-3 rounded-[16px] border border-sky-100 bg-white px-4 text-slate-500 shadow-[0_14px_34px_rgba(37,99,235,0.09),0_4px_12px_rgba(15,23,42,0.035)] transition-all duration-300 hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_18px_44px_rgba(37,99,235,0.14),0_6px_16px_rgba(15,23,42,0.04)] lg:justify-self-center">
           <Search className="h-5 w-5 flex-none text-slate-400" />
-          <span className="truncate text-sm md:text-base">Search structures, Tg targets, candidate records...</span>
+          <span className="truncate text-sm md:text-base">搜索结构、Tg 目标或候选记录...</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 lg:justify-end">
@@ -642,69 +653,63 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
             <span className="flex h-9 w-9 items-center justify-center rounded-full border border-sky-100 bg-white text-slate-600 shadow-sm">
               <User className="h-5 w-5" />
             </span>
-            <span className="text-sm font-semibold text-slate-800">User</span>
+            <span className="text-sm font-semibold text-slate-800">用户</span>
           </div>
         </div>
       </header>
 
-      <div className="relative z-10 grid lg:grid-cols-[268px_minmax(0,1fr)]">
-        <aside className="border-b border-sky-200 bg-[#eaf6ff] px-4 py-4 lg:min-h-[calc(100vh-76px)] lg:border-b-0 lg:border-r lg:px-5 lg:py-8">
-          <div className="flex gap-2 overflow-x-auto lg:hidden">
+      <div className="relative z-10 overflow-x-clip bg-[#f7f9fc]">
+        <nav className="border-b border-sky-100 bg-[#eaf6ff] px-4 py-3 md:px-6" aria-label="逆向设计页面导航">
+          <div className="flex min-w-0 gap-2 overflow-x-auto pb-1">
             {toolItems.map((item) => (
               <ToolDirectoryButton key={item.label} item={item} compact />
             ))}
           </div>
+        </nav>
 
-          <div className="hidden space-y-4 lg:block">
-            {toolItems.map((item) => (
-              <ToolDirectoryButton key={item.label} item={item} />
-            ))}
-          </div>
-        </aside>
-
-        <main className="relative min-w-0 overflow-hidden bg-[#f7f9fc] px-4 py-4 md:px-6 md:py-6">
+        <main className="relative min-w-0 overflow-x-clip bg-[#f7f9fc] px-4 py-4 md:px-6 md:py-6">
           <div className={cn("relative z-10", activeView === "workspace" ? "space-y-4" : "hidden")}>
             <div id="reverse-overview" className="scroll-mt-28" />
 
-            <div id="reverse-structure" className="scroll-mt-28 grid gap-4 xl:grid-cols-[minmax(500px,0.48fr)_minmax(0,0.52fr)] xl:items-stretch">
+            <div id="reverse-structure" className="scroll-mt-28 grid min-w-0 gap-4 2xl:grid-cols-[minmax(520px,0.92fr)_minmax(0,1fr)] 2xl:items-stretch">
               <KetcherEditor
                 smiles={smiles}
                 iframeRef={iframeRef}
                 onReadyChange={setIsReady}
                 presetStructure={{
-                  label: "Load Demo Structure",
+                  label: "加载演示结构",
                   smiles: REVERSE_DESIGN_DEMO_SMILES
                 }}
                 layout="split"
                 showSmilesPanel={false}
                 showToolsBadge={false}
                 eyebrow=""
-                title="Molecular Canvas"
-                className="h-full"
-                frameClassName="h-full min-h-[445px] 2xl:min-h-[500px]"
-                iframeClassName="h-[400px] 2xl:h-[455px]"
+                title="分子画布"
+                className="min-w-0 2xl:h-full"
+                frameClassName="h-full min-h-[445px] 2xl:min-h-[520px]"
+                iframeClassName="h-[400px] 2xl:h-[475px]"
                 onChange={(value) => {
                   setSmiles(value);
                   reverseDesign.setRequest({ ...reverseDesign.request, smiles: value });
                 }}
               />
 
-              <div className="grid min-w-0 gap-4 xl:h-full xl:grid-rows-[auto_minmax(0,1fr)]">
+              <div className="grid min-w-0 gap-4 2xl:h-full 2xl:grid-rows-[auto_minmax(0,1fr)]">
                 <SmilesSequencePanel
                   smiles={smiles}
-                  placeholder="For example: *CC*, CCO, or another SMILES for similarity matching"
+                  placeholder="例如：*CC*、CCO，或用于相似匹配的其他 SMILES"
                   onChange={(value) => {
                     setSmiles(value);
                     reverseDesign.setRequest({ ...reverseDesign.request, smiles: value });
                   }}
                 />
 
-                <div className="grid gap-4 xl:h-full xl:grid-cols-2">
+                <div className="grid min-w-0 gap-4 xl:grid-cols-2 2xl:h-full">
                   <DashboardPanel id="reverse-preview" className="scroll-mt-28 flex h-full flex-col">
                     <div className="px-5 py-3.5">
                       <div className="flex items-center justify-between gap-4">
                         <div>
-                          <h2 className="font-heading text-lg font-semibold text-slate-950">3D Structure Map</h2>
+                          <h2 className="font-heading text-lg font-semibold text-slate-950">3D 结构图</h2>
                         </div>
                         <Orbit className="h-5 w-5 text-cyan-600" />
                       </div>
@@ -726,7 +731,7 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                     <div className="px-5 py-3.5">
                       <div className="flex items-center justify-between gap-4">
                         <div>
-                          <h2 className="font-heading text-lg font-semibold text-slate-950">Reverse Controls</h2>
+                          <h2 className="font-heading text-lg font-semibold text-slate-950">逆向设计控制</h2>
                         </div>
                         <SlidersHorizontal className="h-5 w-5 text-violet-600" />
                       </div>
@@ -734,7 +739,7 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                     <div className="flex flex-1 flex-col p-4">
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="space-y-1.5">
-                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Target Tg (°C)</span>
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">目标 Tg (°C)</span>
                           <Input
                             type="text"
                             inputMode="decimal"
@@ -745,7 +750,7 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                           />
                         </label>
                         <label className="space-y-1.5">
-                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Similarity Threshold</span>
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">相似度阈值</span>
                           <Input
                             type="text"
                             inputMode="decimal"
@@ -755,7 +760,7 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                           />
                         </label>
                         <label className="space-y-1.5 sm:col-span-2">
-                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Candidate Size</span>
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">候选数量</span>
                           <Input
                             type="text"
                             inputMode="numeric"
@@ -767,25 +772,21 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                         </label>
                       </div>
 
-                      <div className="mt-auto space-y-3 pt-8">
+                      <div className="mt-8 flex min-h-[144px] flex-col items-center justify-center gap-2 pb-2 xl:min-h-[160px] 2xl:min-h-[176px]">
                         <Button
                           type="button"
-                          className="min-h-[50px] w-full rounded-[16px] bg-blue-600 text-white shadow-[0_18px_46px_rgba(37,99,235,0.34),0_6px_16px_rgba(15,23,42,0.08)] hover:bg-blue-500"
+                          className="min-h-[48px] w-full max-w-[220px] rounded-[16px] bg-blue-600 text-white shadow-[0_18px_46px_rgba(37,99,235,0.34),0_6px_16px_rgba(15,23,42,0.08)] hover:bg-blue-500"
                           onClick={handleSubmit}
                           disabled={!canSubmit}
                         >
                           <Search className="mr-2 h-4 w-4" />
-                          {reverseDesign.isLoading ? "Searching..." : "Run Tg Search"}
+                          {reverseDesign.isLoading ? "搜索中..." : "运行 Tg 搜索"}
                         </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="min-h-[48px] w-full rounded-[16px] border-blue-100 bg-white text-blue-700 shadow-[0_14px_34px_rgba(37,99,235,0.1)] hover:border-blue-300 hover:bg-blue-50"
-                          onClick={handleAskAI}
-                        >
-                          <Sparkles className="mr-2 h-4 w-4" />
-                          Ask AI
-                        </Button>
+                        {reverseDesign.error ? (
+                          <p className="w-full max-w-[260px] text-center text-xs leading-5 text-rose-600">
+                            {reverseDesign.error}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
                   </DashboardPanel>
@@ -803,7 +804,7 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
 
               <DashboardPanel>
                 <div className="p-5">
-                  <h2 className="font-heading text-lg font-semibold text-slate-950">Model Performance</h2>
+                  <h2 className="font-heading text-lg font-semibold text-slate-950">模型表现</h2>
                   <ModelPerformanceRadar
                     targetTg={reverseDesign.request.target_tg}
                     similarityThreshold={reverseDesign.request.similarity_threshold}
@@ -828,14 +829,14 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                 <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge className="border border-cyan-200 bg-cyan-50 text-cyan-800">Reverse Design</Badge>
+                      <Badge className="border border-cyan-200 bg-cyan-50 text-cyan-800">逆向设计</Badge>
                       <Badge className="border border-violet-200 bg-violet-50 text-violet-800">{statusLabel}</Badge>
                     </div>
                     <h1 className="font-heading mt-5 text-[2rem] font-semibold leading-tight text-slate-950 md:text-[3rem]">
-                      Tg Reverse Design Results
+                      Tg 逆向设计结果
                     </h1>
                     <p className="mt-3 max-w-3xl text-base leading-7 text-slate-600">
-                      Candidate review remains in the same scientific workbench while preserving the active canvas state.
+                      候选结果审阅保留在同一科学工作台中，并保持当前画布状态。
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-3 xl:justify-end">
@@ -846,7 +847,7 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                       className="min-h-[44px] min-w-[172px] border-sky-100 bg-white text-slate-700 shadow-[0_12px_28px_rgba(37,99,235,0.08)] hover:border-blue-200 hover:bg-blue-50"
                     >
                       <ArrowLeft className="mr-2 h-4 w-4" />
-                      Back to Workbench
+                      返回工作台
                     </Button>
                     <Button
                       type="button"
@@ -855,16 +856,16 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                       className="min-h-[44px] min-w-[162px] rounded-[16px] bg-blue-600 text-white shadow-[0_18px_46px_rgba(37,99,235,0.3)] hover:bg-blue-500"
                     >
                       <Search className="mr-2 h-4 w-4" />
-                      {reverseDesign.isLoading ? "Searching..." : "Run Again"}
+                      {reverseDesign.isLoading ? "搜索中..." : "再次运行"}
                     </Button>
                   </div>
                 </div>
 
                 <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <MetricCard icon={<Target className="h-7 w-7" />} label="Target Tg" value={formatTargetTg(reverseDesign.request.target_tg)} trend="Active query" />
-                  <MetricCard icon={<Database className="h-7 w-7" />} label="Matched" value={resultCount} trend="Candidate records" accent="cyan" />
-                  <MetricCard icon={<Timer className="h-7 w-7" />} label="Scanned" value={scannedRows} trend="PI rows reviewed" accent="violet" />
-                  <MetricCard icon={<Activity className="h-7 w-7" />} label="Status" value={statusLabel} trend="Job state" accent="blue" />
+                  <MetricCard icon={<Target className="h-7 w-7" />} label="目标 Tg" value={formatTargetTg(reverseDesign.request.target_tg)} trend="当前查询" />
+                  <MetricCard icon={<Database className="h-7 w-7" />} label="命中" value={resultCount} trend="候选记录" accent="cyan" />
+                  <MetricCard icon={<Timer className="h-7 w-7" />} label="已扫描" value={scannedRows} trend="已检查 PI 行" accent="violet" />
+                  <MetricCard icon={<Activity className="h-7 w-7" />} label="状态" value={statusLabel} trend="任务状态" accent="blue" />
                 </div>
               </div>
             </DashboardPanel>
@@ -875,6 +876,7 @@ export function ReverseDesignPage({ onOpenKnowledge }: ReverseDesignPageProps) {
                 error={reverseDesign.error}
                 isLoading={reverseDesign.isLoading}
                 job={reverseDesign.job}
+                targetCandidateSize={reverseDesign.request.candidate_size}
                 onOpenKnowledge={onOpenKnowledge}
               />
             </div>

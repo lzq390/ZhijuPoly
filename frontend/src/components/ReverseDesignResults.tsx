@@ -16,6 +16,7 @@ type ReverseDesignResultsProps = {
   error: string | null;
   isLoading?: boolean;
   job?: ReverseDesignTgJobStatusResponse | null;
+  targetCandidateSize?: number;
   onOpenKnowledge: (request: KnowledgeNavigationRequest) => void;
 };
 
@@ -51,7 +52,7 @@ function formatInteger(value: number | null | undefined) {
 }
 
 function formatOptionalNumber(value: number | null | undefined, digits = 2) {
-  return value == null ? "Pending" : value.toFixed(digits);
+  return value == null ? "待定" : value.toFixed(digits);
 }
 
 function EmptyPanel({
@@ -96,7 +97,7 @@ function ResultsPagination({
   return (
     <div className="flex flex-col gap-3 rounded-[20px] border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm sm:flex-row sm:items-center sm:justify-between">
       <div className="font-medium text-slate-700">
-        {`${formatInteger(startIndex + 1)}-${formatInteger(endIndex)} of ${formatInteger(total)}`}
+        {`${formatInteger(startIndex + 1)}-${formatInteger(endIndex)} / 共 ${formatInteger(total)}`}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button
@@ -105,21 +106,21 @@ function ResultsPagination({
           className="min-h-[38px] px-3 text-xs"
           onClick={() => onPageChange(currentPage - 1)}
           disabled={currentPage <= 1}
-          aria-label="Previous page"
+          aria-label="上一页"
         >
           <ChevronLeft className="mr-1.5 h-4 w-4" />
-          Prev
+          上一页
         </Button>
-        <Badge className="text-slate-700">{`Page ${currentPage} / ${totalPages}`}</Badge>
+        <Badge className="text-slate-700">{`第 ${currentPage} / ${totalPages} 页`}</Badge>
         <Button
           type="button"
           variant="outline"
           className="min-h-[38px] px-3 text-xs"
           onClick={() => onPageChange(currentPage + 1)}
           disabled={currentPage >= totalPages}
-          aria-label="Next page"
+          aria-label="下一页"
         >
-          Next
+          下一页
           <ChevronRight className="ml-1.5 h-4 w-4" />
         </Button>
       </div>
@@ -137,7 +138,7 @@ function MonomerSmilesPreview({
   structureSvg: string | null;
 }) {
   if (!smiles) {
-    return <div className="font-mono-ui break-all text-mutedForeground">Not available</div>;
+    return <div className="font-mono-ui break-all text-mutedForeground">暂无数据</div>;
   }
 
   return (
@@ -150,7 +151,7 @@ function MonomerSmilesPreview({
       </div>
       <div className="pointer-events-auto absolute bottom-full left-1/2 z-50 mb-2 hidden w-72 max-w-[calc(100vw-3rem)] rounded-[18px] border border-white/80 bg-white/95 p-3 text-left shadow-[0_18px_45px_rgba(8,17,31,0.18)] backdrop-blur group-hover:block group-focus-within:block">
         <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">
-          <span>Monomer {label}</span>
+          <span>单体 {label}</span>
           <span>2D</span>
         </div>
         {structureSvg ? (
@@ -160,7 +161,7 @@ function MonomerSmilesPreview({
           />
         ) : (
           <div className="flex min-h-28 items-center justify-center rounded-[14px] border border-slate-200/70 bg-slate-50 px-3 text-center text-xs text-mutedForeground">
-            2D structure unavailable
+            暂无 2D 结构
           </div>
         )}
       </div>
@@ -301,7 +302,7 @@ function CandidateCard({
             <Atom className="h-3.5 w-3.5 text-teal-600" />
             PI #{candidate.pi_id}
           </span>
-          <Badge className="bg-teal-50 text-teal-800">Rank {candidate.rank}</Badge>
+          <Badge className="bg-teal-50 text-teal-800">排名 {candidate.rank}</Badge>
         </div>
         {candidate.structure_svg ? (
           <div
@@ -325,23 +326,23 @@ function CandidateCard({
             </span>
           </div>
           <div className="flex items-center justify-between gap-3">
-            <span className="text-mutedForeground">Tg Difference</span>
+            <span className="text-mutedForeground">Tg 差值</span>
             <span className="text-right font-semibold text-teal-700">{candidate.tg_difference.toFixed(2)} °C</span>
           </div>
           <div className="flex items-center justify-between gap-3">
-            <span className="text-mutedForeground">Similarity</span>
+            <span className="text-mutedForeground">相似度</span>
             <span className="text-right font-semibold text-slate-800">{candidate.similarity_score.toFixed(3)}</span>
           </div>
         </div>
       </div>
 
       <div className="mt-2.5 rounded-[16px] border border-white/80 bg-white/75 px-3 py-2.5 shadow-sm">
-        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">Monomers</div>
+        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">单体</div>
         <div className="mt-2 space-y-3 text-xs leading-5 text-slate-800">
           <div className="space-y-1">
             <div className="font-semibold text-slate-700">A</div>
             {showIupac ? (
-              <div className="break-words text-slate-900">{candidate.monomer_a_iupac || "IUPAC not available"}</div>
+              <div className="break-words text-slate-900">{candidate.monomer_a_iupac || "暂无 IUPAC"}</div>
             ) : null}
             <MonomerSmilesPreview
               label="A"
@@ -352,7 +353,7 @@ function CandidateCard({
           <div className="space-y-1">
             <div className="font-semibold text-slate-700">B</div>
             {showIupac ? (
-              <div className="break-words text-slate-900">{candidate.monomer_b_iupac || "IUPAC not available"}</div>
+              <div className="break-words text-slate-900">{candidate.monomer_b_iupac || "暂无 IUPAC"}</div>
             ) : null}
             <MonomerSmilesPreview
               label="B"
@@ -369,7 +370,7 @@ function CandidateCard({
             onClick={() => setShowIupac((current) => !current)}
           >
             <Atom className="mr-1.5 h-4 w-4 shrink-0" />
-            {showIupac ? "Hide" : "IUPAC"}
+            {showIupac ? "隐藏" : "IUPAC"}
           </Button>
           <div className="relative" ref={knowledgeMenuRef}>
             <Button
@@ -382,7 +383,7 @@ function CandidateCard({
               aria-controls={knowledgeMenuId}
             >
               <BookOpen className="mr-1.5 h-4 w-4 shrink-0" />
-              Knowledge
+              知识检索
               <ChevronRight
                 className={[
                   "ml-1.5 h-4 w-4 shrink-0 transition-transform",
@@ -410,9 +411,9 @@ function CandidateCard({
                   className="flex min-h-9 w-full items-center rounded-[14px] px-3 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-800 disabled:pointer-events-none disabled:opacity-45"
                   onClick={() => openKnowledge([monomerATerm])}
                   disabled={!monomerATerm}
-                  title="Search monomer A"
+                  title="检索单体 A"
                 >
-                  Monomer A
+                  单体 A
                 </button>
                 <button
                   type="button"
@@ -420,9 +421,9 @@ function CandidateCard({
                   className="flex min-h-9 w-full items-center rounded-[14px] px-3 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-800 disabled:pointer-events-none disabled:opacity-45"
                   onClick={() => openKnowledge([monomerBTerm])}
                   disabled={!monomerBTerm}
-                  title="Search monomer B"
+                  title="检索单体 B"
                 >
-                  Monomer B
+                  单体 B
                 </button>
                 <button
                   type="button"
@@ -430,7 +431,7 @@ function CandidateCard({
                   className="flex min-h-9 w-full items-center rounded-[14px] px-3 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-800 disabled:pointer-events-none disabled:opacity-45"
                   onClick={() => openKnowledge(pairTerms)}
                   disabled={pairTerms.length === 0}
-                  title="Search monomers A and B"
+                  title="检索单体 A 和 B"
                 >
                   A + B
                 </button>
@@ -448,6 +449,7 @@ export function ReverseDesignResults({
   error,
   isLoading = false,
   job,
+  targetCandidateSize,
   onOpenKnowledge
 }: ReverseDesignResultsProps) {
   const [resultPage, setResultPage] = useState(1);
@@ -472,9 +474,9 @@ export function ReverseDesignResults({
         <CardHeader className="min-h-[112px] border-b border-destructive/10 bg-destructiveForeground">
           <CardTitle className="flex items-center gap-2 text-lg text-destructive">
             <TriangleAlert className="h-5 w-5" />
-            Reverse Design Failed
+            逆向设计失败
           </CardTitle>
-          <CardDescription>The Tg search did not complete. Check the target Tg, structure, or PI database status.</CardDescription>
+          <CardDescription>Tg 搜索未完成，请检查目标 Tg、结构或 PI 数据库状态。</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <Alert variant="destructive">{error}</Alert>
@@ -487,32 +489,36 @@ export function ReverseDesignResults({
     return (
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Tg Reverse Design Results</CardTitle>
-          <CardDescription>Scanning PI candidates by Tg distance until 200 threshold-matched results are found.</CardDescription>
+          <CardTitle className="text-xl">Tg 逆向设计结果</CardTitle>
+          <CardDescription>
+            {targetCandidateSize
+              ? `按 Tg 距离扫描 PI 候选，直到找到 ${targetCandidateSize} 个满足阈值的结果。`
+              : "按 Tg 距离扫描 PI 候选，直到找到设定数量的满足阈值结果。"}
+          </CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <div className="space-y-4 rounded-[20px] border border-white/80 bg-white/80 px-4 py-4 text-sm text-slate-700">
             <div className="flex items-center gap-3">
               <LoaderCircle className="h-4 w-4 animate-spin" />
-              Searching PI candidates.
+              正在搜索 PI 候选。
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-[16px] border border-slate-200/70 bg-slate-50/80 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">Scanned</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">已扫描</div>
                 <div className="mt-1 text-lg font-semibold text-slate-950">{formatInteger(job?.scanned_rows)}</div>
               </div>
               <div className="rounded-[16px] border border-slate-200/70 bg-slate-50/80 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">Matched</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">已命中</div>
                 <div className="mt-1 text-lg font-semibold text-slate-950">{formatInteger(job?.matched_count)}</div>
               </div>
               <div className="rounded-[16px] border border-slate-200/70 bg-slate-50/80 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">Tg Radius</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">Tg 半径</div>
                 <div className="mt-1 text-lg font-semibold text-slate-950">
-                  {job?.current_tg_radius == null ? "Pending" : `±${job.current_tg_radius.toFixed(2)} °C`}
+                  {job?.current_tg_radius == null ? "待定" : `±${job.current_tg_radius.toFixed(2)} °C`}
                 </div>
               </div>
               <div className="rounded-[16px] border border-slate-200/70 bg-slate-50/80 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">Best Similarity</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">最佳相似度</div>
                 <div className="mt-1 text-lg font-semibold text-slate-950">{formatOptionalNumber(job?.best_similarity_score, 3)}</div>
               </div>
             </div>
@@ -526,14 +532,14 @@ export function ReverseDesignResults({
     return (
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Tg Reverse Design Results</CardTitle>
-          <CardDescription>No reverse-design results yet.</CardDescription>
+          <CardTitle className="text-xl">Tg 逆向设计结果</CardTitle>
+          <CardDescription>暂无逆向设计结果。</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <EmptyPanel
             icon={<Database className="h-6 w-6" />}
-            title="Reverse Design Ready"
-            description="Enter a target Tg and run Tg search to inspect similar PI candidates."
+            title="逆向设计已就绪"
+            description="输入目标 Tg 并运行 Tg 搜索，即可查看相似 PI 候选。"
           />
         </CardContent>
       </Card>
@@ -544,14 +550,14 @@ export function ReverseDesignResults({
     return (
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Tg Reverse Design Results</CardTitle>
-          <CardDescription>The PI database scan completed but no candidates satisfied the similarity threshold.</CardDescription>
+          <CardTitle className="text-xl">Tg 逆向设计结果</CardTitle>
+          <CardDescription>PI 数据库扫描已完成，但没有候选满足相似度阈值。</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <EmptyPanel
             icon={<SearchX className="h-6 w-6" />}
-            title="No Candidates Found"
-            description="Try lowering the similarity threshold or checking the drawn polymer structure."
+            title="未找到候选"
+            description="可以尝试降低相似度阈值，或检查绘制的聚合物结构。"
           />
         </CardContent>
       </Card>
@@ -563,16 +569,16 @@ export function ReverseDesignResults({
       <CardHeader className="min-h-[120px] gap-4 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-2">
-            <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">PI Candidate Search</div>
-            <CardTitle className="text-[1.4rem] tracking-tight">Tg Reverse Design Results</CardTitle>
-            <CardDescription>Similar PI candidates sorted by distance to the target Tg.</CardDescription>
+            <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">PI 候选搜索</div>
+            <CardTitle className="text-[1.4rem] tracking-tight">Tg 逆向设计结果</CardTitle>
+            <CardDescription>相似 PI 候选按与目标 Tg 的距离排序。</CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Badge>{`${visibleResults.length} shown`}</Badge>
-            <Badge className="text-slate-700">{`${data.total} total`}</Badge>
-            <Badge className="text-slate-700">{`${data.candidate_pool_size} matched`}</Badge>
+            <Badge>{`显示 ${visibleResults.length} 个`}</Badge>
+            <Badge className="text-slate-700">{`共 ${data.total} 个`}</Badge>
+            <Badge className="text-slate-700">{`候选池 ${data.candidate_pool_size} 个`}</Badge>
             {job?.scanned_rows != null ? (
-              <Badge className="text-slate-700">{`${formatInteger(job.scanned_rows)} scanned`}</Badge>
+              <Badge className="text-slate-700">{`已扫描 ${formatInteger(job.scanned_rows)} 行`}</Badge>
             ) : null}
             <Badge className="text-slate-700">{`${data.query_time_ms.toFixed(1)} ms`}</Badge>
           </div>
@@ -582,18 +588,18 @@ export function ReverseDesignResults({
           <div className="rounded-[18px] border border-white/80 bg-white/80 p-4 shadow-sm">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">
               <Target className="h-4 w-4 text-teal-600" />
-              Target Tg
+              目标 Tg
             </div>
             <div className="mt-2 text-xl font-semibold text-slate-950">{data.target_tg.toFixed(2)} °C</div>
           </div>
           <div className="rounded-[18px] border border-white/80 bg-white/80 p-4 shadow-sm">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">Candidate Pool</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">候选池</div>
             <div className="mt-2 text-xl font-semibold text-slate-950">{data.candidate_pool_size}</div>
           </div>
           <div className="rounded-[18px] border border-white/80 bg-white/80 p-4 shadow-sm">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">
               <Timer className="h-4 w-4 text-teal-600" />
-              Elapsed
+              耗时
             </div>
             <div className="mt-2 text-xl font-semibold text-slate-950">{data.query_time_ms.toFixed(1)} ms</div>
           </div>

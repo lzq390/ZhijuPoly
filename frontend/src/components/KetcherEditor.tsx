@@ -43,7 +43,7 @@ export function KetcherEditor({
   onReadyChange,
   onChange,
   presetStructure,
-  smilesPlaceholder = "For example: *CC*, CCO, or another SMILES for similarity matching",
+  smilesPlaceholder = "例如：*CC*、CCO，或用于相似匹配的其他 SMILES",
   layout = "stacked",
   tone = "default",
   className,
@@ -54,14 +54,14 @@ export function KetcherEditor({
   smilesTextareaClassName,
   showSmilesPanel = true,
   showToolsBadge = true,
-  eyebrow = "Molecular Canvas",
-  title = "Structure Editor"
+  eyebrow = "分子画布",
+  title = "结构编辑器"
 }: KetcherEditorProps) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [isLoadingPreset, setIsLoadingPreset] = useState(false);
   const [isLoadingSmilesIntoEditor, setIsLoadingSmilesIntoEditor] = useState(false);
-  const [copyLabel, setCopyLabel] = useState("Copy");
+  const [copyLabel, setCopyLabel] = useState("复制");
   const [isImportingImage, setIsImportingImage] = useState(false);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [imageImportName, setImageImportName] = useState<string | null>(null);
@@ -145,7 +145,7 @@ export function KetcherEditor({
     const previewUrl = URL.createObjectURL(file);
     previewUrlRef.current = previewUrl;
     setImagePreviewUrl(previewUrl);
-    setImageImportName(file.name || "Pasted image");
+    setImageImportName(file.name || "粘贴的图片");
   }, []);
 
   const clearImageImportFeedback = useCallback(() => {
@@ -183,7 +183,7 @@ export function KetcherEditor({
   const writeStructureToEditor = useCallback(
     async (ketcher: KetcherApi, structure: string, fallbackSmiles: string) => {
       if (typeof ketcher.setMolecule !== "function") {
-        throw new Error("Structure editor cannot load molecules.");
+        throw new Error("结构编辑器无法加载分子。");
       }
 
       await ketcher.setMolecule(structure);
@@ -206,7 +206,7 @@ export function KetcherEditor({
       const ketcher = iframeRef.current?.contentWindow?.ketcher;
       if (!ketcher || typeof ketcher.setMolecule !== "function") {
         onReadyChange(false);
-        throw new Error("Structure editor is not ready.");
+        throw new Error("结构编辑器尚未就绪。");
       }
 
       const normalizedSmiles = payload.smiles.trim();
@@ -219,24 +219,24 @@ export function KetcherEditor({
             return { nextSmiles: editorSmiles, loadedFormat: "molfile", warnings: nextWarnings };
           }
           nextWarnings.push(
-            "Molfile was sent to Ketcher, but the editor returned no structure; SMILES fallback was used.",
+            "Molfile 已发送到 Ketcher，但编辑器未返回结构；已改用 SMILES。",
           );
         } catch (error) {
           console.error("Failed to load recognized molfile into Ketcher", error);
           if (!normalizedSmiles) {
             throw error;
           }
-          nextWarnings.push("Molfile could not be loaded; SMILES fallback was used.");
+          nextWarnings.push("Molfile 无法加载；已改用 SMILES。");
         }
       }
 
       if (!normalizedSmiles) {
-        throw new Error("Recognition did not return a structure.");
+        throw new Error("识别结果未返回结构。");
       }
 
       const editorSmiles = await writeStructureToEditor(ketcher, normalizedSmiles, normalizedSmiles);
       if (!editorSmiles && typeof ketcher.getSmiles === "function") {
-        throw new Error("Ketcher did not accept the recognized structure.");
+        throw new Error("Ketcher 未接受识别出的结构。");
       }
 
       return {
@@ -261,8 +261,8 @@ export function KetcherEditor({
           previewUrlRef.current = null;
         }
         setImagePreviewUrl(null);
-        setImageImportName(file.name || "Selected file");
-        setImageImportError("Only image files can be imported.");
+        setImageImportName(file.name || "已选择文件");
+        setImageImportError("只能导入图片文件。");
         return;
       }
 
@@ -271,7 +271,7 @@ export function KetcherEditor({
       const ketcher = iframeRef.current?.contentWindow?.ketcher;
       if (!ketcher || typeof ketcher.setMolecule !== "function") {
         onReadyChange(false);
-        setImageImportError("Structure editor is not ready.");
+        setImageImportError("结构编辑器尚未就绪。");
         return;
       }
 
@@ -283,7 +283,7 @@ export function KetcherEditor({
         const payload = { molfile, smiles: recognizedSmiles };
 
         if (!payload.molfile.trim() && !payload.smiles) {
-          throw new Error("Recognition did not return a structure.");
+          throw new Error("识别结果未返回结构。");
         }
 
         setLastRecognizedStructure(payload);
@@ -297,7 +297,7 @@ export function KetcherEditor({
         setImageImportWarnings(warnings);
       } catch (error) {
         console.error("Failed to import structure image", error);
-        setImageImportError(error instanceof Error ? error.message : "Image import failed.");
+        setImageImportError(error instanceof Error ? error.message : "图片导入失败。");
       } finally {
         setIsImportingImage(false);
         if (fileInputRef.current) {
@@ -325,7 +325,7 @@ export function KetcherEditor({
       setImageImportWarnings(warnings);
     } catch (error) {
       console.error("Failed to load recognized structure into Ketcher", error);
-      setImageImportError(error instanceof Error ? error.message : "Failed to load structure into editor.");
+      setImageImportError(error instanceof Error ? error.message : "无法将结构加载到编辑器。");
     } finally {
       setIsImportingImage(false);
     }
@@ -466,11 +466,11 @@ export function KetcherEditor({
 
     try {
       await writeClipboardText(value);
-      setCopyLabel("Copied");
+      setCopyLabel("已复制");
       scheduleCopyLabelReset();
     } catch (error) {
       console.error("Failed to copy SMILES", error);
-      setCopyLabel("Failed");
+      setCopyLabel("失败");
       scheduleCopyLabelReset();
     }
   }
@@ -481,7 +481,7 @@ export function KetcherEditor({
     }
 
     copyResetTimerRef.current = window.setTimeout(() => {
-      setCopyLabel("Copy");
+      setCopyLabel("复制");
       copyResetTimerRef.current = null;
     }, 1400);
   }
@@ -499,7 +499,7 @@ export function KetcherEditor({
       {imagePreviewUrl ? (
         <img
           src={imagePreviewUrl}
-          alt={imageImportName ?? "Imported structure"}
+          alt={imageImportName ?? "导入的结构"}
           className="h-24 w-32 flex-none rounded-2xl border border-slate-200 bg-white object-contain"
         />
       ) : (
@@ -516,12 +516,12 @@ export function KetcherEditor({
         <div className="flex flex-wrap items-center gap-2">
           <div className={cn("text-sm font-semibold", isDarkTone ? "text-slate-100" : "text-slate-950")}>
             {isImportingImage
-              ? "Recognizing image"
+              ? "正在识别图片"
               : imageImportError
-                ? "Image import failed"
+                ? "图片导入失败"
                 : imageImportLoadedFormat
-                  ? "Loaded to editor"
-                  : "Image import ready"}
+                  ? "已加载到编辑器"
+                  : "图片导入就绪"}
           </div>
           {imageImportName ? (
             <div className="max-w-full truncate rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700">
@@ -532,7 +532,7 @@ export function KetcherEditor({
         {imageImportError ? <p className="text-sm text-rose-700">{imageImportError}</p> : null}
         {!imageImportError && imageImportLoadedFormat ? (
           <p className={cn("text-sm", isDarkTone ? "text-teal-300" : "text-teal-700")}>
-            Structure loaded by {imageImportLoadedFormat === "molfile" ? "molfile coordinates" : "SMILES"}.
+            结构已通过 {imageImportLoadedFormat === "molfile" ? "molfile 坐标" : "SMILES"} 加载。
           </p>
         ) : null}
         {imageImportWarnings.length > 0 ? (
@@ -550,14 +550,14 @@ export function KetcherEditor({
             className="min-h-[36px] min-w-[138px] px-3"
           >
             <Upload className="mr-2 h-3.5 w-3.5" />
-            Load to Canvas
+            加载到画布
           </Button>
         ) : null}
       </div>
       <Button
         type="button"
         variant="outline"
-        aria-label="Dismiss image import status"
+        aria-label="关闭图片导入状态"
         onClick={clearImageImportFeedback}
         className="h-9 w-9 flex-none rounded-full p-0"
       >
@@ -580,7 +580,7 @@ export function KetcherEditor({
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className={cn("flex items-center gap-2 text-sm font-medium", isDarkTone ? "text-slate-100" : "text-slate-900")}>
           <Sigma className={cn("h-4 w-4", isDarkTone ? "text-cyan-300" : "text-teal-600")} />
-          SMILES Input
+          SMILES 输入
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -595,7 +595,7 @@ export function KetcherEditor({
             ) : (
               <Upload className="mr-2 h-3.5 w-3.5" />
             )}
-            Load to Editor
+            加载到编辑器
           </Button>
           <Button
             type="button"
@@ -667,7 +667,7 @@ export function KetcherEditor({
         ) : (
           <ImagePlus className="mr-2 h-4 w-4" />
         )}
-        {isImportingImage ? "Importing..." : "Import Image"}
+        {isImportingImage ? "导入中..." : "导入图片"}
       </Button>
       {presetStructure ? (
         <Button
@@ -697,7 +697,7 @@ export function KetcherEditor({
         ) : (
           <Eraser className="mr-2 h-4 w-4" />
         )}
-        Clear Canvas
+        清空画布
       </Button>
       <Button
         type="button"
@@ -711,7 +711,7 @@ export function KetcherEditor({
         ) : (
           <RefreshCcw className="mr-2 h-4 w-4" />
         )}
-        Sync from Editor
+        从编辑器同步
       </Button>
     </div>
   );
@@ -751,7 +751,7 @@ export function KetcherEditor({
                 isDarkTone ? "border-white/10 bg-white/[0.05] text-slate-400" : "border-blue-100 bg-blue-50 text-blue-600"
               )}
             >
-              Streaming Tools
+              编辑工具
             </div>
           ) : null}
         </div>
@@ -766,7 +766,7 @@ export function KetcherEditor({
           >
             <iframe
               key="polyprop-ketcher-frame"
-              title="Ketcher Editor"
+              title="Ketcher 编辑器"
               src="/ketcher/index.html"
               ref={iframeRef}
               tabIndex={-1}
@@ -835,7 +835,7 @@ export function KetcherEditor({
           >
             <iframe
               key="polyprop-ketcher-frame"
-              title="Ketcher Editor"
+              title="Ketcher 编辑器"
               src="/ketcher/index.html"
               ref={iframeRef}
               tabIndex={-1}
