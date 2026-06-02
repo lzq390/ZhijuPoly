@@ -1,13 +1,4 @@
-import {
-  type CSSProperties,
-  type FocusEvent,
-  type KeyboardEvent,
-  type MouseEvent,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState
-} from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,13 +7,12 @@ import {
   BookOpen,
   ClipboardList,
   Database,
-  Bell,
-  Menu,
   Microscope,
   Search,
-  Settings,
   Sparkles
 } from "lucide-react";
+import { AppShell, type AppShellModuleGroup } from "./components/AppShell";
+import { AssistantHomePage } from "./components/AssistantHomePage";
 import { ConditionalGenerationPage } from "./components/ConditionalGenerationPage";
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
@@ -30,7 +20,6 @@ import { ExperimentWorkflowDemoPage } from "./components/ExperimentWorkflowDemoP
 import { KetcherEditor } from "./components/KetcherEditor";
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { LabDataPage, type LabDataView } from "./components/LabDataPage";
-import { Layout } from "./components/Layout";
 import { QueryPanel } from "./components/QueryPanel";
 import { ResultsDisplay } from "./components/ResultsDisplay";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
@@ -41,6 +30,7 @@ import { useKetcher } from "./hooks/useKetcher";
 import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
 import {
+  type AssistantModuleContext,
   type KnowledgeNavigationRequest,
   type PredictableProperty,
   type ResultsTab,
@@ -198,500 +188,6 @@ function normalizeKnowledgeTerms(terms: string[] | undefined) {
 
 function getKnowledgeTermsFromSearch(search: string) {
   return normalizeKnowledgeTerms(new URLSearchParams(search).getAll("term"));
-}
-
-type HomeModuleAction = {
-  icon: ReactNode;
-  label: string;
-  onClick?: () => void;
-  disabled?: boolean;
-};
-
-type HomeCategory = {
-  id: string;
-  icon: ReactNode;
-  title: string;
-  description: string;
-  variant: "light" | "dark" | "warm";
-  backgroundImage?: string;
-  actions: HomeModuleAction[];
-};
-
-type HomeCardTone = "data" | "light" | "design" | "dark" | "warm";
-
-type HomeCardStyle = CSSProperties & {
-  "--spotlight-color"?: string;
-  "--spotlight-x"?: string;
-  "--spotlight-y"?: string;
-};
-
-function HomePage({
-  onOpenLabData,
-  onOpenExplorer,
-  onOpenReverseDesign,
-  onOpenConditionalGeneration,
-  onOpenExperimentWorkflowDemo,
-  onOpenDatabaseQuery,
-  onOpenDatabase,
-  onOpenKnowledge
-}: {
-  onOpenLabData: () => void;
-  onOpenExplorer: () => void;
-  onOpenReverseDesign: () => void;
-  onOpenConditionalGeneration: () => void;
-  onOpenExperimentWorkflowDemo: () => void;
-  onOpenDatabaseQuery: () => void;
-  onOpenDatabase: () => void;
-  onOpenKnowledge: () => void;
-}) {
-  const categories: HomeCategory[] = [
-    {
-      id: "data-and-knowledge",
-      icon: <Database className="h-5 w-5" />,
-      title: "Data & Knowledge Center",
-      description: "Collect, structure, analyze, and retrieve polymer research data from a unified knowledge workspace.",
-      variant: "light",
-      backgroundImage: "/images/data-knowledge-card-bg.png",
-      actions: [
-        {
-          icon: <ClipboardList className="h-5 w-5" />,
-          label: "Lab Data Collection",
-          onClick: onOpenLabData
-        },
-        {
-          icon: <Search className="h-5 w-5" />,
-          label: "Database Query",
-          onClick: onOpenDatabaseQuery
-        },
-        {
-          icon: <BarChart3 className="h-5 w-5" />,
-          label: "Database Analytics",
-          onClick: onOpenDatabase
-        },
-        {
-          icon: <BookOpen className="h-5 w-5" />,
-          label: "Knowledge Search",
-          onClick: onOpenKnowledge
-        }
-      ]
-    },
-    {
-      id: "property-exploration",
-      icon: <Atom className="h-5 w-5" />,
-      title: "Property Exploration",
-      description: "Inspect polymer structures, compare property signals, and move from molecular input to interpretable results.",
-      variant: "dark",
-      backgroundImage: "/images/property-exploration-card-bg.png",
-      actions: [
-        {
-          icon: <Atom className="h-5 w-5" />,
-          label: "Polymer Property Explorer",
-          onClick: onOpenExplorer
-        },
-        {
-          icon: <Sparkles className="h-5 w-5" />,
-          label: "Prediction Bench",
-          disabled: true
-        },
-        {
-          icon: <BarChart3 className="h-5 w-5" />,
-          label: "Similarity Atlas",
-          disabled: true
-        },
-        {
-          icon: <Microscope className="h-5 w-5" />,
-          label: "3D Review Queue",
-          disabled: true
-        }
-      ]
-    },
-    {
-      id: "polymer-design",
-      icon: <Sparkles className="h-5 w-5" />,
-      title: "Polymer Design",
-      description: "Generate and refine candidate polymers from target properties, constraints, and design intent.",
-      variant: "warm",
-      backgroundImage: "/images/polymer-design-card-bg.png",
-      actions: [
-        {
-          icon: <Sparkles className="h-5 w-5" />,
-          label: "Tg Reverse Design",
-          onClick: onOpenReverseDesign
-        },
-        {
-          icon: <Microscope className="h-5 w-5" />,
-          label: "Conditional Polymer Generation",
-          onClick: onOpenConditionalGeneration
-        },
-        {
-          icon: <Database className="h-5 w-5" />,
-          label: "Candidate Library",
-          disabled: true
-        },
-        {
-          icon: <BookOpen className="h-5 w-5" />,
-          label: "Experiment Workflow Demo",
-          onClick: onOpenExperimentWorkflowDemo
-        }
-      ]
-    }
-  ];
-
-  return (
-    <section className="home-stage relative -mx-4 -my-5 min-h-screen overflow-hidden md:-mx-8 md:-my-8">
-      <div className="relative z-10 flex min-h-screen flex-col">
-        <header className="absolute inset-x-0 top-0 z-30 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-5 pt-5 md:px-8 lg:px-10">
-          <button
-            type="button"
-            className="home-top-control inline-flex h-11 items-center gap-2 rounded-full border border-white/20 bg-transparent px-3 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 sm:px-4"
-            aria-label="Open main menu"
-          >
-            <Menu className="h-4 w-4" />
-            <span className="hidden sm:inline">Menu</span>
-          </button>
-
-          <div className="home-brand-mark pointer-events-none flex w-[9.25rem] min-w-0 flex-col items-center justify-self-center text-center sm:w-[10.75rem] md:absolute md:left-1/2 md:top-1/2 md:w-[11.25rem] md:-translate-x-1/2 md:-translate-y-1/2">
-            <div className="home-brand-word font-heading w-full text-[clamp(1rem,6vw,1.55rem)] font-semibold uppercase leading-none text-white sm:text-[clamp(1.08rem,3vw,1.8rem)]">
-              <span>N</span>
-              <span>E</span>
-              <span>X</span>
-              <span>P</span>
-              <span>O</span>
-              <span>L</span>
-              <span>Y</span>
-            </div>
-            <div className="home-brand-subtitle mt-1.5 w-full text-center text-[0.68rem] font-medium text-white sm:text-[0.78rem] md:text-[0.84rem]">
-              <span>智</span>
-              <span>聚</span>
-              <span>万</span>
-              <span>物</span>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              className="home-icon-control hidden h-10 w-10 items-center justify-center rounded-md bg-transparent text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 sm:inline-flex"
-              aria-label="Notifications"
-            >
-              <Bell className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              className="home-icon-control inline-flex h-10 w-10 items-center justify-center rounded-md bg-transparent text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
-              aria-label="Settings"
-            >
-              <Settings className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              className="home-top-control hidden h-11 items-center rounded-full border border-white/20 bg-transparent px-4 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 lg:inline-flex"
-            >
-              Log In
-            </button>
-            <label className="home-top-control hidden h-11 w-[172px] items-center gap-2 rounded-full border border-white/20 bg-transparent px-4 text-white focus-within:ring-2 focus-within:ring-amber-300 md:inline-flex">
-              <Search className="h-4 w-4 shrink-0" />
-              <input
-                className="min-w-0 flex-1 bg-transparent font-mono-ui text-xs font-semibold uppercase tracking-[0.08em] text-white outline-none placeholder:text-white/68"
-                aria-label="Search platform"
-              />
-            </label>
-          </div>
-        </header>
-
-        <section className="grid flex-1 content-center gap-20 px-5 pb-12 pt-24 md:gap-28 md:px-10 md:pb-16 md:pt-28 lg:gap-36 lg:px-16 lg:pb-20 lg:pt-32">
-          <div className="mx-auto mt-14 max-w-5xl animate-fade-up text-center md:mt-16">
-            <h1 className="font-heading mx-auto max-w-5xl text-[2.65rem] font-semibold leading-[1.02] text-white drop-shadow-[0_18px_40px_rgba(0,0,0,0.42)] md:text-[4.7rem]">
-              The Future of Autonomous Polymer Science
-            </h1>
-          </div>
-
-          <div className="mt-8 grid auto-rows-fr gap-5 md:mt-10 md:gap-6 lg:mt-12 lg:grid-cols-3">
-            {categories.map((category) => (
-              <HomeCategoryCard key={category.id} category={category} />
-            ))}
-          </div>
-        </section>
-      </div>
-    </section>
-  );
-}
-
-function HomeCategoryCard({ category }: { category: HomeCategory }) {
-  const cardBoundsRef = useRef<DOMRect | null>(null);
-  const pendingSpotlightRef = useRef<{ element: HTMLElement; x: string; y: string } | null>(null);
-  const spotlightFrameRef = useRef<number | null>(null);
-  const [isPointerOpen, setIsPointerOpen] = useState(false);
-  const [isFocusWithin, setIsFocusWithin] = useState(false);
-  const isDark = category.variant === "dark";
-  const isWarm = category.variant === "warm";
-  const isDataCard = category.id === "data-and-knowledge";
-  const isLightPhoto = category.id === "property-exploration";
-  const isDesignCard = category.id === "polymer-design";
-  const isDrawerOpen = isPointerOpen || isFocusWithin;
-  const cardBackgroundStyle: CSSProperties | undefined = category.backgroundImage
-    ? {
-        backgroundImage: isLightPhoto
-          ? `linear-gradient(180deg, rgba(246, 251, 255, 0.7) 0%, rgba(221, 234, 247, 0.58) 52%, rgba(188, 208, 230, 0.68) 100%), url("${category.backgroundImage}")`
-          : `linear-gradient(180deg, rgba(5, 9, 18, 0.42) 0%, rgba(5, 9, 18, 0.7) 100%), url("${category.backgroundImage}")`,
-        backgroundPosition: "center",
-        backgroundSize: "cover"
-      }
-    : undefined;
-  const spotlightColor = isLightPhoto
-    ? "rgba(255, 255, 255, 0.52)"
-    : isDataCard
-      ? "rgba(34, 211, 238, 0.28)"
-      : isDesignCard
-        ? "rgba(251, 191, 36, 0.24)"
-        : "rgba(255, 255, 255, 0.22)";
-  const cardStyle: HomeCardStyle = {
-    "--spotlight-color": spotlightColor,
-    "--spotlight-x": "50%",
-    "--spotlight-y": "48%"
-  };
-  const cardClass = isLightPhoto
-    ? "border-white/55 bg-white/[0.24] text-slate-950 shadow-[0_24px_70px_rgba(15,23,42,0.18)] hover:bg-white/[0.3]"
-    : isDataCard
-      ? "border-cyan-200/24 bg-cyan-950/[0.16] text-cyan-50 shadow-[0_24px_70px_rgba(3,169,244,0.14)] hover:bg-cyan-950/[0.24]"
-      : isDesignCard
-        ? "border-amber-200/34 bg-amber-950/[0.16] text-amber-50 shadow-[0_24px_70px_rgba(245,158,11,0.14)] hover:bg-amber-950/[0.24]"
-        : isDark
-          ? "border-cyan-200/20 bg-slate-950/[0.72] text-white shadow-[0_24px_70px_rgba(0,0,0,0.22)] hover:bg-slate-950/[0.84]"
-          : isWarm
-            ? "border-amber-200/30 bg-amber-50/[0.10] text-white shadow-[0_20px_60px_rgba(0,0,0,0.18)] hover:bg-amber-50/[0.16]"
-            : "border-white/20 bg-white/[0.10] text-white shadow-[0_20px_60px_rgba(0,0,0,0.18)] hover:bg-white/[0.16]";
-  const iconClass = isLightPhoto
-    ? "border-sky-500/25 bg-white/62 text-sky-800 shadow-[0_10px_28px_rgba(14,165,233,0.16)]"
-    : isDataCard
-      ? "border-cyan-200/30 bg-cyan-200/[0.12] text-cyan-100 shadow-[0_10px_28px_rgba(34,211,238,0.16)]"
-      : isDesignCard
-        ? "border-amber-200/35 bg-amber-200/[0.14] text-amber-100 shadow-[0_10px_28px_rgba(251,191,36,0.16)]"
-        : isDark
-          ? "border-cyan-200/20 bg-white/[0.08] text-cyan-200"
-          : isWarm
-            ? "border-amber-200/30 bg-amber-200/10 text-amber-200"
-            : "border-white/20 bg-white/[0.08] text-amber-100";
-  const topLineClass = isLightPhoto ? "bg-sky-500/24" : isDataCard ? "bg-cyan-200/55" : isDesignCard ? "bg-amber-200/55" : "bg-white/70";
-  const decorClass = isLightPhoto ? "border-sky-600/24 text-sky-800" : isDataCard ? "border-cyan-200/28 text-cyan-100" : isDesignCard ? "border-amber-200/30 text-amber-100" : "border-current";
-  const headingClass = isLightPhoto
-    ? "text-slate-950 drop-shadow-[0_1px_12px_rgba(255,255,255,0.72)]"
-    : isDataCard
-      ? "text-cyan-50 drop-shadow-[0_10px_24px_rgba(6,182,212,0.18)]"
-      : isDesignCard
-        ? "text-amber-50 drop-shadow-[0_10px_24px_rgba(245,158,11,0.18)]"
-        : "";
-  const descriptionClass = isLightPhoto
-    ? "text-slate-800 drop-shadow-[0_1px_12px_rgba(255,255,255,0.72)]"
-    : isDataCard
-        ? "text-cyan-50/[0.88] drop-shadow-[0_10px_24px_rgba(6,182,212,0.16)]"
-      : isDesignCard
-        ? "text-amber-50/[0.86] drop-shadow-[0_10px_24px_rgba(245,158,11,0.16)]"
-        : "text-white/82 drop-shadow-[0_10px_24px_rgba(0,0,0,0.34)]";
-  const buttonTone: HomeCardTone = isLightPhoto ? "light" : isDataCard ? "data" : isDesignCard ? "design" : isDark ? "dark" : "warm";
-  const descriptionStateClass = isDrawerOpen ? "-translate-y-[calc(50%_+_2rem)] opacity-0" : "-translate-y-1/2 opacity-100";
-  const drawerStateClass = isDrawerOpen
-    ? "pointer-events-auto translate-y-0 opacity-100"
-    : "pointer-events-none translate-y-[calc(100%+1.25rem)] opacity-0";
-
-  useEffect(() => {
-    return () => {
-      if (spotlightFrameRef.current !== null) {
-        window.cancelAnimationFrame(spotlightFrameRef.current);
-      }
-    };
-  }, []);
-
-  function scheduleSpotlightUpdate(element: HTMLElement, x: string, y: string) {
-    pendingSpotlightRef.current = { element, x, y };
-
-    if (spotlightFrameRef.current !== null) {
-      return;
-    }
-
-    spotlightFrameRef.current = window.requestAnimationFrame(() => {
-      const pending = pendingSpotlightRef.current;
-      if (pending) {
-        pending.element.style.setProperty("--spotlight-x", pending.x);
-        pending.element.style.setProperty("--spotlight-y", pending.y);
-      }
-      spotlightFrameRef.current = null;
-    });
-  }
-
-  function handleCardMouseEnter(event: MouseEvent<HTMLElement>) {
-    setIsPointerOpen(true);
-    cardBoundsRef.current = event.currentTarget.getBoundingClientRect();
-  }
-
-  function handleCardMouseMove(event: MouseEvent<HTMLElement>) {
-    const bounds = cardBoundsRef.current ?? event.currentTarget.getBoundingClientRect();
-    const x = ((event.clientX - bounds.left) / bounds.width) * 100;
-    const y = ((event.clientY - bounds.top) / bounds.height) * 100;
-
-    scheduleSpotlightUpdate(event.currentTarget, `${x.toFixed(1)}%`, `${y.toFixed(1)}%`);
-  }
-
-  function handleCardMouseLeave(event: MouseEvent<HTMLElement>) {
-    setIsPointerOpen(false);
-    cardBoundsRef.current = null;
-    pendingSpotlightRef.current = null;
-    if (spotlightFrameRef.current !== null) {
-      window.cancelAnimationFrame(spotlightFrameRef.current);
-      spotlightFrameRef.current = null;
-    }
-    event.currentTarget.style.setProperty("--spotlight-x", "50%");
-    event.currentTarget.style.setProperty("--spotlight-y", "48%");
-  }
-
-  function handleCardFocus() {
-    setIsFocusWithin(true);
-  }
-
-  function handleCardBlur(event: FocusEvent<HTMLElement>) {
-    const nextTarget = event.relatedTarget;
-
-    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
-      return;
-    }
-
-    setIsFocusWithin(false);
-  }
-
-  function handleCardKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (event.key !== "Escape") {
-      return;
-    }
-
-    setIsPointerOpen(false);
-    setIsFocusWithin(false);
-
-    if (event.target instanceof HTMLElement) {
-      event.target.blur();
-    }
-  }
-
-  return (
-    <section
-      id={category.id}
-      style={cardStyle}
-      tabIndex={0}
-      role="group"
-      aria-label={`${category.title} module shortcuts`}
-      data-drawer-open={isDrawerOpen ? "true" : "false"}
-      onMouseEnter={handleCardMouseEnter}
-      onMouseMove={handleCardMouseMove}
-      onMouseLeave={handleCardMouseLeave}
-      onFocus={handleCardFocus}
-      onBlur={handleCardBlur}
-      onKeyDown={handleCardKeyDown}
-      className={[
-        "home-card relative flex min-h-[368px] scroll-mt-8 flex-col overflow-hidden rounded-[26px] border p-5 backdrop-blur-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/70 md:p-6",
-        cardClass
-      ].join(" ")}
-    >
-      {cardBackgroundStyle ? <div className="home-card-bg pointer-events-none absolute inset-0 z-0" style={cardBackgroundStyle} /> : null}
-      <div className="home-card-spotlight pointer-events-none absolute inset-0 z-[1]" />
-      <div className={["pointer-events-none absolute inset-x-0 top-0 h-px", topLineClass].join(" ")} />
-      <div className={["pointer-events-none absolute -right-20 top-10 h-56 w-56 rounded-full border opacity-[0.1]", decorClass].join(" ")} />
-      <div className={["pointer-events-none absolute bottom-28 right-10 h-px w-40 rotate-[-22deg] bg-current opacity-[0.12]", decorClass].join(" ")} />
-
-      <div className="relative z-10 flex min-w-0 items-center gap-3">
-        <div className={["flex h-12 w-12 items-center justify-center rounded-2xl border", iconClass].join(" ")}>
-          {category.icon}
-        </div>
-        <h2
-          className={[
-            "font-heading min-w-0 truncate text-[1.62rem] font-semibold leading-none md:text-[1.82rem]",
-            headingClass
-          ].join(" ")}
-          title={category.title}
-        >
-          {category.title}
-        </h2>
-      </div>
-
-      <div
-        className={[
-          "pointer-events-none absolute inset-x-5 top-1/2 z-10 max-w-[22rem] transition-all duration-500 ease-out md:inset-x-6",
-          descriptionStateClass
-        ].join(" ")}
-      >
-        <p
-          className={[
-            "text-[1.08rem] font-medium leading-7",
-            descriptionClass
-          ].join(" ")}
-        >
-          {category.description}
-        </p>
-      </div>
-
-      <div
-        className={[
-          "absolute inset-x-5 bottom-5 z-20 transition-all duration-500 ease-out md:inset-x-6 md:bottom-6",
-          drawerStateClass
-        ].join(" ")}
-        aria-hidden={!isDrawerOpen}
-      >
-        <div className="grid gap-2.5">
-          {category.actions.map((action) => (
-            <HomeActionButton key={action.label} action={action} drawerOpen={isDrawerOpen} tone={buttonTone} />
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function HomeActionButton({
-  action,
-  drawerOpen,
-  tone
-}: {
-  action: HomeModuleAction;
-  drawerOpen: boolean;
-  tone: "data" | "light" | "design" | "dark" | "warm";
-}) {
-  const buttonClass =
-    tone === "light"
-      ? "border-slate-900/10 bg-white/[0.72] text-slate-950 shadow-[0_10px_26px_rgba(15,23,42,0.08)] hover:border-sky-500/30 hover:bg-white/[0.88]"
-      : tone === "data"
-        ? "border-cyan-200/20 bg-cyan-950/[0.34] text-cyan-50 shadow-[0_10px_26px_rgba(6,182,212,0.08)] hover:border-cyan-200/48 hover:bg-cyan-900/[0.44]"
-        : tone === "design"
-          ? "border-amber-100/24 bg-slate-950/[0.36] text-amber-50 shadow-[0_10px_26px_rgba(2,6,23,0.16)] hover:border-amber-100/55 hover:bg-slate-900/[0.52]"
-          : tone === "dark"
-            ? "border-white/10 bg-white/[0.07] text-white hover:border-cyan-200/40 hover:bg-white/[0.12]"
-            : "border-amber-200/24 bg-black/20 text-white hover:border-amber-200/50 hover:bg-black/30";
-  const iconClass =
-    tone === "light"
-      ? "bg-sky-100/[0.85] text-sky-800"
-      : tone === "data"
-        ? "bg-cyan-200/[0.14] text-cyan-100"
-      : tone === "design"
-          ? "bg-amber-100/[0.14] text-amber-100"
-          : tone === "dark"
-            ? "bg-white/10 text-cyan-200"
-            : "bg-amber-200/12 text-amber-200";
-
-  return (
-    <button
-      type="button"
-      onClick={action.onClick}
-      disabled={action.disabled}
-      tabIndex={drawerOpen && !action.disabled ? 0 : -1}
-      className={[
-        "home-action-button grid min-h-[50px] grid-cols-[2rem_minmax(0,1fr)_1.25rem] items-center gap-2 rounded-[15px] border px-2.5 text-left text-[0.95rem] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-55",
-        buttonClass
-      ].join(" ")}
-    >
-      <span className={["flex h-8 w-8 items-center justify-center rounded-xl [&_svg]:h-4 [&_svg]:w-4", iconClass].join(" ")}>
-        {action.icon}
-      </span>
-      <span className="min-w-0 truncate">{action.label}</span>
-      <ArrowRight className="home-action-arrow h-4 w-4 justify-self-end" />
-    </button>
-  );
 }
 
 export default function App() {
@@ -894,18 +390,148 @@ export default function App() {
     navigate({ module: "labData", datasetKey: null, labDataView: view });
   }
 
+  function openModuleById(moduleId: string) {
+    switch (moduleId) {
+      case "labData":
+        openLabData("collect");
+        break;
+      case "databaseQuery":
+        openDatabaseQuery();
+        break;
+      case "database":
+        openDatabase();
+        break;
+      case "knowledge":
+        openKnowledge();
+        break;
+      case "explorer":
+        openExplorer();
+        break;
+      case "reverseDesign":
+        openReverseDesign();
+        break;
+      case "conditionalGeneration":
+        openConditionalGeneration();
+        break;
+      case "experimentWorkflowDemo":
+        openExperimentWorkflowDemo();
+        break;
+    }
+  }
+
+  const moduleGroups: AppShellModuleGroup[] = [
+    {
+      title: "数据与知识",
+      items: [
+        {
+          id: "labData",
+          label: "实验数据采集",
+          description: "录入实验样品、测试项目和测量结果。",
+          route: "/lab-data/collect",
+          icon: <ClipboardList className="h-4 w-4" />,
+          isActive: activeModule === "labData",
+          onClick: () => openLabData("collect")
+        },
+        {
+          id: "databaseQuery",
+          label: "数据库查询",
+          description: "用结构或 SMILES 检查数据库记录。",
+          route: "/database-query",
+          icon: <Search className="h-4 w-4" />,
+          isActive: activeModule === "databaseQuery",
+          onClick: openDatabaseQuery
+        },
+        {
+          id: "database",
+          label: "数据库分析",
+          description: "浏览过程、性能、DFT 与结构数据集。",
+          route: "/database",
+          icon: <Database className="h-4 w-4" />,
+          isActive: activeModule === "database",
+          onClick: openDatabase
+        },
+        {
+          id: "knowledge",
+          label: "知识检索",
+          description: "检索聚合物文献、摘要和合成知识。",
+          route: "/knowledge",
+          icon: <BookOpen className="h-4 w-4" />,
+          isActive: activeModule === "knowledge",
+          onClick: () => openKnowledge()
+        }
+      ]
+    },
+    {
+      title: "性能探索",
+      items: [
+        {
+          id: "explorer",
+          label: "聚合物性能探索",
+          description: "编辑结构、相似匹配、3D 预览和性能预测。",
+          route: "/explorer",
+          icon: <Atom className="h-4 w-4" />,
+          isActive: activeModule === "explorer",
+          onClick: openExplorer
+        }
+      ]
+    },
+    {
+      title: "聚合物设计",
+      items: [
+        {
+          id: "reverseDesign",
+          label: "Tg 逆向设计",
+          description: "按目标玻璃化转变温度筛选候选结构。",
+          route: "/reverse-design",
+          icon: <Sparkles className="h-4 w-4" />,
+          isActive: activeModule === "reverseDesign",
+          onClick: openReverseDesign
+        },
+        {
+          id: "conditionalGeneration",
+          label: "条件聚合物生成",
+          description: "基于目标条件生成候选聚合物。",
+          route: "/conditional-generation",
+          icon: <Microscope className="h-4 w-4" />,
+          isActive: activeModule === "conditionalGeneration",
+          onClick: openConditionalGeneration
+        },
+        {
+          id: "experimentWorkflowDemo",
+          label: "实验工作流演示",
+          description: "查看从设计到实验记录的流程样例。",
+          route: "/experiment-workflow-demo",
+          icon: <BarChart3 className="h-4 w-4" />,
+          isActive: activeModule === "experimentWorkflowDemo",
+          onClick: openExperimentWorkflowDemo
+        }
+      ]
+    }
+  ];
+  const assistantModules: AssistantModuleContext[] = moduleGroups.flatMap((group) =>
+    group.items.map((item) => ({
+      id: item.id,
+      title: item.label,
+      route: item.route,
+      group: group.title,
+      description: item.description
+    }))
+  );
+  const isFullBleedModule = activeModule === "reverseDesign" || activeModule === "experimentWorkflowDemo";
+
   return (
-    <Layout fullBleed={activeModule === "home" || activeModule === "reverseDesign" || activeModule === "experimentWorkflowDemo"}>
-      <div className={activeModule === "home" ? "contents" : "hidden"}>
-        <HomePage
-          onOpenLabData={() => openLabData("collect")}
-          onOpenExplorer={openExplorer}
-          onOpenReverseDesign={openReverseDesign}
-          onOpenConditionalGeneration={openConditionalGeneration}
-          onOpenExperimentWorkflowDemo={openExperimentWorkflowDemo}
-          onOpenDatabaseQuery={openDatabaseQuery}
-          onOpenDatabase={openDatabase}
-          onOpenKnowledge={openKnowledge}
+    <AppShell
+      activeModule={activeModule}
+      fullBleed={isFullBleedModule}
+      moduleGroups={moduleGroups}
+      onOpenHome={() => navigate({ module: "home", datasetKey: null })}
+    >
+      <div className={activeModule === "home" ? "h-full" : "hidden"}>
+        <AssistantHomePage
+          activeModule={activeModule}
+          modules={assistantModules}
+          moduleGroups={moduleGroups}
+          onOpenModule={openModuleById}
         />
       </div>
 
@@ -1112,6 +738,6 @@ export default function App() {
           </section>
         </div>
       ) : null}
-    </Layout>
+    </AppShell>
   );
 }

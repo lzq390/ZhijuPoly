@@ -372,6 +372,44 @@ class KnowledgeSearchResponse(BaseModel):
     total: int = Field(ge=0)
     results: list[KnowledgeDocumentResult] = Field(default_factory=list)
 
+AssistantChatRole = Literal["user", "assistant"]
+
+
+class AssistantChatMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    role: AssistantChatRole
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class AssistantModuleContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=120)
+    route: str = Field(min_length=1, max_length=160)
+    group: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=400)
+
+
+class AssistantChatContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    active_module: str | None = Field(default=None, max_length=80)
+    modules: list[AssistantModuleContext] = Field(default_factory=list, max_length=24)
+
+
+class AssistantChatStreamRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    messages: list[AssistantChatMessage] = Field(min_length=1, max_length=30)
+    context: AssistantChatContext = Field(default_factory=AssistantChatContext)
+
+    @model_validator(mode="after")
+    def require_latest_user_message(self) -> "AssistantChatStreamRequest":
+        if self.messages[-1].role != "user":
+            raise ValueError("latest assistant chat message must be from the user")
+        return self
 
 OnlineKnowledgeMode = Literal["synthesis", "property"]
 

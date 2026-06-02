@@ -1,4 +1,5 @@
 import type {
+  AssistantChatStreamRequest,
   ConditionalGenerationJobCreateResponse,
   ConditionalGenerationJobStatusResponse,
   ConditionalGenerationTgRequest,
@@ -71,6 +72,83 @@ async function postForm<T>(path: string, body: FormData): Promise<T> {
   return (await response.json()) as T;
 }
 
+
+export type AssistantStreamHandlers = {
+  signal?: AbortSignal;
+  onToken: (token: string) => void;
+  onDone?: (message: string) => void;
+  onError?: (detail: string) => void;
+};
+
+export async function streamAssistantChat(
+  payload: AssistantChatStreamRequest,
+  handlers: AssistantStreamHandlers
+): Promise<void> {
+  const response = await fetch(API_BASE_URL + "/assistant/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: handlers.signal
+  });
+
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
+  }
+  if (!response.body) {
+    throw new Error("Assistant response stream is not available");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      handleAssistantStreamEvent(part, handlers);
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    handleAssistantStreamEvent(buffer, handlers);
+  }
+}
+
+function handleAssistantStreamEvent(rawEvent: string, handlers: AssistantStreamHandlers): void {
+  const lines = rawEvent.split(/\r?\n/);
+  let eventName = "message";
+  const dataLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      eventName = line.slice("event:".length).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trimStart());
+    }
+  }
+
+  if (!dataLines.length) {
+    return;
+  }
+
+  const data = JSON.parse(dataLines.join("\n")) as { content?: string; message?: string; detail?: string };
+  if (eventName === "token" && data.content) {
+    handlers.onToken(data.content);
+  } else if (eventName === "done") {
+    handlers.onDone?.(data.message ?? "");
+  } else if (eventName === "error") {
+    const detail = data.detail ?? "Assistant chat failed.";
+    handlers.onError?.(detail);
+    throw new Error(detail);
+  }
+}
 async function getJSON<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`);
 

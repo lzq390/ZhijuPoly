@@ -13,6 +13,7 @@ from app.config import Settings, get_settings
 from app.database import sqlite_connection
 from app.middleware import BrowserCrossSiteProtectionMiddleware
 from app.postgres_database import postgres_connection
+from app.routers.assistant import router as assistant_router
 from app.routers.conditional_generation import router as conditional_generation_router
 from app.routers.database_browser import router as database_browser_router
 from app.routers.dft import router as dft_router
@@ -87,6 +88,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(BrowserCrossSiteProtectionMiddleware)
 
     app.add_api_route("/health", health, methods=["GET"])
+    app.include_router(assistant_router)
     app.include_router(query_router)
     app.include_router(predict_router)
     app.include_router(conditional_generation_router)

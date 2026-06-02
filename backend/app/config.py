@@ -17,6 +17,12 @@ BACKEND_DIR = PROJECT_ROOT / "backend"
 DEFAULT_ENV_FILE = BACKEND_DIR / ".env"
 
 
+def _first_non_blank(*values: str | None, default: str = "") -> str:
+    for value in values:
+        if value is not None and value.strip():
+            return value.strip()
+    return default
+
 def _resolve_from_root(value: str) -> str:
     windows_drive_match = re.match(r"^([A-Za-z]):[\\/](.*)$", value)
     if windows_drive_match and os.name != "nt":
@@ -58,6 +64,9 @@ class Settings:
         online_knowledge_base_url: str | None = None,
         online_knowledge_model: str | None = None,
         online_knowledge_max_papers: int | None = None,
+        assistant_api_key: str | None = None,
+        assistant_base_url: str | None = None,
+        assistant_model: str | None = None,
         ocsr_enabled: bool | None = None,
         ocsr_model_dir: str | None = None,
         ocsr_device: str | None = None,
@@ -211,6 +220,24 @@ class Settings:
                 str(env_values.get("ONLINE_KNOWLEDGE_MAX_PAPERS", "20")),
             )
         )
+        raw_assistant_api_key = _first_non_blank(
+            assistant_api_key,
+            os.getenv("ASSISTANT_API_KEY"),
+            env_values.get("ASSISTANT_API_KEY"),
+            raw_online_knowledge_api_key,
+        )
+        raw_assistant_base_url = _first_non_blank(
+            assistant_base_url,
+            os.getenv("ASSISTANT_BASE_URL"),
+            env_values.get("ASSISTANT_BASE_URL"),
+            raw_online_knowledge_base_url,
+        )
+        raw_assistant_model = _first_non_blank(
+            assistant_model,
+            os.getenv("ASSISTANT_MODEL"),
+            env_values.get("ASSISTANT_MODEL"),
+            default="gpt-5.5",
+        )
         raw_ocsr_model_dir = ocsr_model_dir
         if raw_ocsr_model_dir is None:
             raw_ocsr_model_dir = (
@@ -312,6 +339,9 @@ class Settings:
         self.online_knowledge_base_url = raw_online_knowledge_base_url.strip()
         self.online_knowledge_model = raw_online_knowledge_model.strip()
         self.online_knowledge_max_papers = min(2000, max(1, int(raw_online_knowledge_max_papers)))
+        self.assistant_api_key = raw_assistant_api_key.strip()
+        self.assistant_base_url = raw_assistant_base_url.strip()
+        self.assistant_model = raw_assistant_model.strip()
         self.ocsr_enabled = bool(raw_ocsr_enabled)
         self.ocsr_model_dir = _resolve_from_root(raw_ocsr_model_dir)
         self.ocsr_device = raw_ocsr_device.strip().lower()

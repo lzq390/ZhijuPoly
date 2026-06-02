@@ -151,6 +151,30 @@ export type KnowledgeNavigationRequest = {
   query: string;
   terms?: string[];
 };
+export type AssistantChatRole = "user" | "assistant";
+
+export type AssistantChatMessage = {
+  role: AssistantChatRole;
+  content: string;
+};
+
+export type AssistantModuleContext = {
+  id: string;
+  title: string;
+  route: string;
+  group: string;
+  description: string;
+};
+
+export type AssistantChatContext = {
+  active_module?: string | null;
+  modules: AssistantModuleContext[];
+};
+
+export type AssistantChatStreamRequest = {
+  messages: AssistantChatMessage[];
+  context: AssistantChatContext;
+};
 
 export type OnlineKnowledgeMode = "synthesis" | "property";
 
