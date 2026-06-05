@@ -1,5 +1,8 @@
 import type {
   AssistantChatStreamRequest,
+  AssistantSkillErrorEvent,
+  AssistantSkillResultEvent,
+  AssistantSkillStartEvent,
   ConditionalGenerationJobCreateResponse,
   ConditionalGenerationJobStatusResponse,
   ConditionalGenerationTgRequest,
@@ -78,6 +81,9 @@ export type AssistantStreamHandlers = {
   onToken: (token: string) => void;
   onDone?: (message: string) => void;
   onError?: (detail: string) => void;
+  onSkillStart?: (payload: AssistantSkillStartEvent) => void;
+  onSkillResult?: (payload: AssistantSkillResultEvent) => void;
+  onSkillError?: (payload: AssistantSkillErrorEvent) => void;
 };
 
 export async function streamAssistantChat(
@@ -143,6 +149,12 @@ function handleAssistantStreamEvent(rawEvent: string, handlers: AssistantStreamH
     handlers.onToken(data.content);
   } else if (eventName === "done") {
     handlers.onDone?.(data.message ?? "");
+  } else if (eventName === "skill_start") {
+    handlers.onSkillStart?.(data as AssistantSkillStartEvent);
+  } else if (eventName === "skill_result") {
+    handlers.onSkillResult?.(data as AssistantSkillResultEvent);
+  } else if (eventName === "skill_error") {
+    handlers.onSkillError?.(data as AssistantSkillErrorEvent);
   } else if (eventName === "error") {
     const detail = data.detail ?? "Assistant chat failed.";
     handlers.onError?.(detail);

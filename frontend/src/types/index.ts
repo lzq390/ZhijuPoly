@@ -176,6 +176,60 @@ export type AssistantChatStreamRequest = {
   context: AssistantChatContext;
 };
 
+export type AssistantSkillStatus = "running" | "completed" | "error";
+
+export type AssistantPredictionSkillProperty = {
+  name: PredictableProperty;
+  label_zh: string;
+  unit: string;
+  value: number;
+};
+
+export type AssistantPredictionSkillResult = {
+  type: "predict_polymer_properties";
+  smiles: string;
+  predictions: Partial<Record<PredictableProperty, number>>;
+  properties: AssistantPredictionSkillProperty[];
+  query_time_ms: number;
+};
+
+export type AssistantUnknownSkillResult = {
+  type: string;
+  [key: string]: unknown;
+};
+
+export type AssistantSkillResult = AssistantPredictionSkillResult | AssistantUnknownSkillResult;
+
+export type AssistantSkillCall = {
+  skill_call_id: string;
+  skill_name: string;
+  display_name?: string;
+  arguments?: Record<string, unknown>;
+  status: AssistantSkillStatus;
+  result?: AssistantSkillResult;
+  error?: string;
+};
+
+export type AssistantSkillStartEvent = {
+  skill_call_id: string;
+  skill_name: string;
+  display_name?: string;
+  arguments?: Record<string, unknown>;
+};
+
+export type AssistantSkillResultEvent = {
+  skill_call_id: string;
+  skill_name: string;
+  display_name?: string;
+  result: AssistantSkillResult;
+};
+
+export type AssistantSkillErrorEvent = {
+  skill_call_id?: string;
+  skill_name: string;
+  detail: string;
+};
+
 export type OnlineKnowledgeMode = "synthesis" | "property";
 
 export type OnlineKnowledgeSearchRequest = {

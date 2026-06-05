@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from app.models import AssistantChatStreamRequest
-from app.services.assistant_chat import (
-    AssistantChatConfigError,
-    AssistantChatModelError,
-    stream_assistant_chat,
-)
+from app.services.assistant_chat import AssistantChatConfigError, AssistantChatModelError
+from app.services.assistant_orchestrator import stream_assistant_events
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
 
 
@@ -25,24 +24,24 @@ def stream_chat(
     settings = request.app.state.settings
 
     def events() -> Iterable[str]:
-        full_message: list[str] = []
         try:
-            for token in stream_assistant_chat(
+            for event in stream_assistant_events(
                 messages=request_body.messages,
                 modules=request_body.context.modules,
                 active_module=request_body.context.active_module,
                 api_key=settings.assistant_api_key,
                 base_url=settings.assistant_base_url,
                 model=settings.assistant_model,
+                model_enabled=settings.model_enabled,
+                model_dir=settings.model_dir_path,
             ):
-                full_message.append(token)
-                yield _sse("token", {"content": token})
-            yield _sse("done", {"message": "".join(full_message)})
+                yield _sse(event.event, event.payload)
         except AssistantChatConfigError as exc:
             yield _sse("error", {"detail": str(exc)})
         except AssistantChatModelError as exc:
             yield _sse("error", {"detail": f"Assistant model call failed: {_safe_error_detail(str(exc))}"})
         except Exception:
+            logger.exception("Assistant chat stream failed")
             yield _sse("error", {"detail": "Assistant chat failed. Check backend logs for details."})
 
     return StreamingResponse(
