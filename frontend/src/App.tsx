@@ -7,6 +7,7 @@ import {
   BookOpen,
   ClipboardList,
   Database,
+  Grid2X2,
   Microscope,
   Search,
   Sparkles
@@ -24,6 +25,7 @@ import { QueryPanel } from "./components/QueryPanel";
 import { ResultsDisplay } from "./components/ResultsDisplay";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
 import { StructurePreview3D } from "./components/StructurePreview3D";
+import { StructureWorkbenchPage } from "./components/StructureWorkbenchPage";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { useKetcher } from "./hooks/useKetcher";
@@ -34,11 +36,13 @@ import {
   type KnowledgeNavigationRequest,
   type PredictableProperty,
   type ResultsTab,
+  type StructureWorkspaceContext,
   type WorkspaceMode
 } from "./types";
 
 type ActiveModule =
   | "home"
+  | "structureWorkbench"
   | "explorer"
   | "reverseDesign"
   | "conditionalGeneration"
@@ -75,6 +79,10 @@ function normalizePath(pathname: string) {
 
 function routeFromPath(pathname: string): AppRoute {
   const path = normalizePath(pathname);
+
+  if (path === "/structure-workbench") {
+    return { module: "structureWorkbench", datasetKey: null };
+  }
 
   if (path === "/explorer") {
     return { module: "explorer", datasetKey: null };
@@ -121,6 +129,10 @@ function routeFromPath(pathname: string): AppRoute {
 }
 
 function pathFromRoute(route: AppRoute) {
+  if (route.module === "structureWorkbench") {
+    return "/structure-workbench";
+  }
+
   if (route.module === "explorer") {
     return "/explorer";
   }
@@ -206,7 +218,6 @@ export default function App() {
     }
     return getKnowledgeTermsFromSearch(window.location.search);
   });
-  const [hasOpenedExplorer, setHasOpenedExplorer] = useState(() => getInitialRoute().module === "explorer");
   const [preserveReverseDesignForKnowledge, setPreserveReverseDesignForKnowledge] = useState(false);
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
@@ -237,18 +248,28 @@ export default function App() {
   const resultCount =
     activeResultsTab === "predict" ? Object.keys(predict.data?.predictions ?? {}).length : data?.total ?? 0;
   const resultTiming =
-    activeResultsTab === "predict" ? predict.data?.query_time_ms : data?.query_time_ms;
+    activeResultsTab === "predict" ? null : data?.query_time_ms;
+  const latestResultDescription =
+    activeResultsTab === "predict"
+      ? predict.data
+        ? "Prediction values returned."
+        : "Prediction count appears after execution."
+      : resultTiming
+        ? `${resultTiming.toFixed(1)} ms returned`
+        : "Result count and latency appear after execution.";
 
   async function handleQuerySubmit() {
     setActiveResultsTab("query");
-    await submit({ ...request, smiles });
+    const currentSmiles = await getCurrentSmiles();
+    await submit({ ...request, smiles: currentSmiles });
   }
 
   async function handlePredictSubmit() {
     setActiveResultsTab("predict");
     try {
+      const currentSmiles = await getCurrentSmiles();
       await predict.submit({
-        smiles,
+        smiles: currentSmiles,
         properties: selectedProperties
       });
     } catch {
@@ -259,7 +280,7 @@ export default function App() {
   const resultPanelTitle = activeResultsTab === "predict" ? "Prediction Results" : "Similarity Matching Results";
   const resultPanelDescription =
     activeResultsTab === "predict"
-      ? "After prediction finishes, selected property values and calculation time appear here."
+      ? "After prediction finishes, selected property values appear here."
       : "After similarity matching runs, summaries, 2D structures, SMILES, and similarity scores appear here.";
   const resultPrimaryBadge =
     activeResultsTab === "predict"
@@ -277,6 +298,33 @@ export default function App() {
       : request.match_mode === "property"
         ? "Property similarity"
         : "Structural similarity";
+
+  async function getCurrentSmiles() {
+    const fallbackSmiles = smiles.trim();
+    const ketcher = iframeRef.current?.contentWindow?.ketcher;
+    if (!ketcher || typeof ketcher.getSmiles !== "function") {
+      return fallbackSmiles;
+    }
+
+    try {
+      const editorSmiles = (await ketcher.getSmiles()).trim();
+      if (editorSmiles !== fallbackSmiles) {
+        setSmiles(editorSmiles);
+      }
+      return editorSmiles;
+    } catch (syncError) {
+      console.error("Failed to read SMILES from Ketcher", syncError);
+      return fallbackSmiles;
+    }
+  }
+
+  const structureWorkspace: StructureWorkspaceContext = {
+    smiles,
+    setSmiles,
+    iframeRef,
+    setIsReady,
+    getCurrentSmiles
+  };
 
   useEffect(() => {
     if (typeof window === "undefined" || !("scrollRestoration" in window.history)) {
@@ -296,9 +344,6 @@ export default function App() {
     setSelectedDatasetKey(route.module === "database" ? route.datasetKey : null);
     setLabDataView(route.module === "labData" ? route.labDataView ?? "collect" : "collect");
 
-    if (route.module === "explorer") {
-      setHasOpenedExplorer(true);
-    }
     if (route.module !== "knowledge") {
       setPreserveReverseDesignForKnowledge(false);
     }
@@ -333,6 +378,10 @@ export default function App() {
 
   function openExplorer() {
     navigate({ module: "explorer", datasetKey: null });
+  }
+
+  function openStructureWorkbench() {
+    navigate({ module: "structureWorkbench", datasetKey: null });
   }
 
   function openReverseDesign() {
@@ -392,6 +441,9 @@ export default function App() {
 
   function openModuleById(moduleId: string) {
     switch (moduleId) {
+      case "structureWorkbench":
+        openStructureWorkbench();
+        break;
       case "labData":
         openLabData("collect");
         break;
@@ -420,6 +472,20 @@ export default function App() {
   }
 
   const moduleGroups: AppShellModuleGroup[] = [
+    {
+      title: "结构",
+      items: [
+        {
+          id: "structureWorkbench",
+          label: "结构工作台",
+          description: "统一绘制、输入和预览当前共享结构。",
+          route: "/structure-workbench",
+          icon: <Grid2X2 className="h-4 w-4" />,
+          isActive: activeModule === "structureWorkbench",
+          onClick: openStructureWorkbench
+        }
+      ]
+    },
     {
       title: "数据与知识",
       items: [
@@ -517,7 +583,10 @@ export default function App() {
       description: item.description
     }))
   );
-  const isFullBleedModule = activeModule === "reverseDesign" || activeModule === "experimentWorkflowDemo";
+  const isFullBleedModule =
+    activeModule === "structureWorkbench" ||
+    activeModule === "reverseDesign" ||
+    activeModule === "experimentWorkflowDemo";
 
   return (
     <AppShell
@@ -536,7 +605,19 @@ export default function App() {
       </div>
 
       {activeModule === "databaseQuery" ? (
-        <DatabaseQueryPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+        <DatabaseQueryPage
+          structure={structureWorkspace}
+          onEditStructure={openStructureWorkbench}
+          onBackHome={() => navigate({ module: "home", datasetKey: null })}
+        />
+      ) : null}
+
+      {activeModule === "structureWorkbench" ? (
+        <StructureWorkbenchPage
+          structure={structureWorkspace}
+          onBackHome={() => navigate({ module: "home", datasetKey: null })}
+          onOpenModule={openModuleById}
+        />
       ) : null}
 
       {activeModule === "database" ? (
@@ -569,7 +650,11 @@ export default function App() {
       ) : null}
 
       {activeModule === "conditionalGeneration" ? (
-        <ConditionalGenerationPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+        <ConditionalGenerationPage
+          structure={structureWorkspace}
+          onEditStructure={openStructureWorkbench}
+          onBackHome={() => navigate({ module: "home", datasetKey: null })}
+        />
       ) : null}
 
       {activeModule === "reverseDesign" || preserveReverseDesignForKnowledge ? (
@@ -578,12 +663,14 @@ export default function App() {
           aria-hidden={activeModule !== "reverseDesign"}
         >
           <ReverseDesignPage
+            structure={structureWorkspace}
+            onEditStructure={openStructureWorkbench}
             onOpenKnowledge={openKnowledge}
           />
         </div>
       ) : null}
 
-      {hasOpenedExplorer ? (
+      {activeModule === "explorer" ? (
         <div className={activeModule === "explorer" ? "contents" : "hidden"} aria-hidden={activeModule !== "explorer"}>
           <nav className="flex flex-col gap-3 rounded-[26px] border border-white/70 bg-white/80 px-4 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
             <div className="flex items-center gap-3">
@@ -659,7 +746,7 @@ export default function App() {
                   </div>
                   <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">{resultCount}</div>
                   <div className="mt-2 text-sm leading-6 text-slate-300">
-                    {resultTiming ? `${resultTiming.toFixed(1)} ms returned` : "Result count and latency appear after execution."}
+                    {latestResultDescription}
                   </div>
                 </div>
               </div>

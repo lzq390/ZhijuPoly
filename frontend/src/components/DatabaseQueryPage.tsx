@@ -1,16 +1,17 @@
-import { ArrowLeft, CheckCircle2, Database, Search, TableProperties, XCircle } from "lucide-react";
-import { useRef, useState } from "react";
+import { ArrowLeft, Search } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { lookupSmilesInDatabase } from "../services/api";
-import type { SmilesLookupResponse, SmilesLookupResult, SmilesLookupTable } from "../types";
-import { KetcherEditor } from "./KetcherEditor";
+import type { SmilesLookupResponse, SmilesLookupResult, SmilesLookupTable, StructureWorkspaceContext } from "../types";
+import { CurrentStructurePanel, MissingStructurePanel } from "./StructureWorkbenchPage";
 import { StructurePreview3D } from "./StructurePreview3D";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Select } from "./ui/select";
-import { useKetcher } from "../hooks/useKetcher";
 
 type DatabaseQueryPageProps = {
+  structure: StructureWorkspaceContext;
+  onEditStructure: () => void;
   onBackHome: () => void;
 };
 
@@ -202,13 +203,92 @@ function LookupResults({
   );
 }
 
-export function DatabaseQueryPage({ onBackHome }: DatabaseQueryPageProps) {
-  const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher();
+function LookupProgressPanel({
+  canSubmit,
+  data,
+  error,
+  isLoading
+}: {
+  canSubmit: boolean;
+  data: SmilesLookupResponse | null;
+  error: string | null;
+  isLoading: boolean;
+}) {
+  const progress = error ? 100 : data ? 100 : isLoading ? 78 : canSubmit ? 66 : 28;
+  const statusLabel = error
+    ? "Lookup failed"
+    : isLoading
+      ? "Searching"
+      : data
+        ? data.exists
+          ? "Match found"
+          : "No exact match"
+        : canSubmit
+          ? "Ready"
+          : "Waiting for structure";
+  const summary = error
+    ? "Check the selected table or backend connection."
+    : data
+      ? `${data.total} matches returned from selected table.`
+      : isLoading
+        ? "Canonicalizing SMILES and scanning records."
+        : canSubmit
+          ? "Current structure and table are available."
+          : "Set a shared structure before running lookup.";
+  const steps = [
+    { label: "Structure", isActive: canSubmit || isLoading || Boolean(data) || Boolean(error) },
+    { label: "Table", isActive: canSubmit || isLoading || Boolean(data) || Boolean(error) },
+    { label: "Result", isActive: isLoading || Boolean(data) || Boolean(error) }
+  ];
+
+  return (
+    <div className="mt-auto rounded-[22px] border border-sky-100 bg-sky-50/55 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)]">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700/80">Lookup Progress</div>
+          <div className="mt-1 text-sm font-semibold text-slate-950">{statusLabel}</div>
+        </div>
+        <div className="rounded-full border border-sky-100 bg-white px-2.5 py-1 text-xs font-semibold text-sky-700 shadow-sm">
+          {progress}%
+        </div>
+      </div>
+
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white shadow-inner">
+        <div
+          className="h-full rounded-full bg-[linear-gradient(90deg,#0f766e_0%,#2563eb_100%)] transition-all duration-500"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        {steps.map((step) => (
+          <div key={step.label} className="flex min-w-0 items-center gap-2">
+            <span
+              className={[
+                "h-2.5 w-2.5 flex-none rounded-full border",
+                step.isActive ? "border-teal-500 bg-teal-500" : "border-slate-300 bg-white"
+              ].join(" ")}
+            />
+            <span className="truncate text-xs font-medium text-slate-600">{step.label}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-white/80 bg-white/78 px-3 py-2 text-xs leading-5 text-slate-600">
+        {summary}
+      </div>
+    </div>
+  );
+}
+
+export function DatabaseQueryPage({ structure, onEditStructure, onBackHome }: DatabaseQueryPageProps) {
   const [selectedTable, setSelectedTable] = useState<SmilesLookupTable>("polymers");
   const [data, setData] = useState<SmilesLookupResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const lookupRequestId = useRef(0);
+  const previousSmilesRef = useRef(structure.smiles);
+  const smiles = structure.smiles;
   const canSubmit = smiles.trim().length > 0 && !isLoading;
   const selectedOption = tableOptionByValue[selectedTable];
 
@@ -219,12 +299,12 @@ export function DatabaseQueryPage({ onBackHome }: DatabaseQueryPageProps) {
     setIsLoading(false);
   }
 
-  function handleSmilesChange(value: string) {
-    if (value !== smiles) {
+  useEffect(() => {
+    if (previousSmilesRef.current !== smiles) {
+      previousSmilesRef.current = smiles;
       clearLookupFeedback();
     }
-    setSmiles(value);
-  }
+  }, [smiles]);
 
   function handleTableChange(nextTable: SmilesLookupTable) {
     if (nextTable !== selectedTable) {
@@ -234,8 +314,9 @@ export function DatabaseQueryPage({ onBackHome }: DatabaseQueryPageProps) {
   }
 
   async function handleSubmit() {
-    const querySmiles = smiles.trim();
+    const querySmiles = (await structure.getCurrentSmiles()).trim();
     if (!querySmiles || isLoading) {
+      setError("请先在结构工作台绘制或输入 SMILES。");
       return;
     }
 
@@ -282,126 +363,78 @@ export function DatabaseQueryPage({ onBackHome }: DatabaseQueryPageProps) {
         <Badge className="bg-teal-50 text-teal-800">Exact SMILES Lookup</Badge>
       </nav>
 
-      <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-6 md:px-8 md:py-8">
-        <div className="animate-fade-up">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
-              NEXPOLY
-            </div>
-            <Badge>Database Query</Badge>
-          </div>
-          <div className="mt-6 max-w-4xl">
-            <h1 className="font-heading text-[2.4rem] font-semibold tracking-[-0.03em] text-slate-950 md:text-[4rem] md:leading-[0.95]">
-              Database Query
-            </h1>
-            <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600 md:text-lg">
-              Draw a structure or enter a SMILES string, select a table, and check whether the database already contains it.
-            </p>
-          </div>
+      <CurrentStructurePanel structure={structure} onEditStructure={onEditStructure} />
 
-          <div className="mt-8 grid gap-3 md:grid-cols-3">
-            <div className="flex min-h-[168px] min-w-0 flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
-              <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
-                <TableProperties className="h-4 w-4 text-teal-600" />
-                Selected Table
-              </div>
-              <div
-                className="mt-3 min-w-0 break-words text-[clamp(1rem,1.5vw,1.32rem)] font-semibold leading-snug tracking-tight text-slate-950 [overflow-wrap:anywhere]"
-                title={selectedOption.label}
-              >
-                {selectedOption.label}
-              </div>
-            </div>
-            <div className="flex min-h-[150px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
-              <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
-                <Database className="h-4 w-4 text-sky-600" />
-                Structure Input
-              </div>
-              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                {smiles.trim().length > 0 ? "Ready" : "Waiting"}
-              </div>
-            </div>
-            <div className="flex min-h-[150px] flex-col justify-center rounded-[26px] border border-white/80 bg-slate-950 p-5 text-center text-slate-50 shadow-[0_22px_50px_rgba(8,17,31,0.2)]">
-              <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">
-                {data?.exists ? <CheckCircle2 className="h-4 w-4 text-teal-300" /> : <XCircle className="h-4 w-4 text-slate-300" />}
-                Last Result
-              </div>
-              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">
-                {data ? (data.exists ? "Found" : "Missing") : "Not Run"}
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+      {!smiles.trim() ? (
+        <MissingStructurePanel
+          title="请先设置查询结构"
+          description="数据库查询会使用结构工作台中的共享 SMILES。先绘制、导入或输入结构后，再回到这里选择表并运行精确查询。"
+          onEditStructure={onEditStructure}
+        />
+      ) : (
+        <>
+          <section className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,0.92fr)_minmax(360px,0.56fr)]">
+            <StructurePreview3D
+              smiles={smiles}
+              className="xl:flex xl:flex-1 xl:flex-col"
+              contentClassName="xl:flex xl:flex-1 xl:flex-col"
+              previewClassName="h-[340px] xl:h-auto xl:min-h-[420px] xl:flex-1"
+              visualStyle="polished-atoms"
+            />
 
-      <section className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,1.18fr)_minmax(380px,0.82fr)]">
-        <div className="min-w-0">
-          <KetcherEditor
-            smiles={smiles}
-            iframeRef={iframeRef}
-            onReadyChange={setIsReady}
-            onChange={handleSmilesChange}
-            smilesPlaceholder="For example: *CC*, CCO, or another SMILES for exact database lookup"
-          />
-        </div>
-
-        <div className="flex min-w-0 flex-col gap-6">
-          <StructurePreview3D
-            smiles={smiles}
-            className="xl:flex xl:flex-1 xl:flex-col"
-            contentClassName="xl:flex xl:flex-1 xl:flex-col"
-            previewClassName="h-[320px] xl:h-auto xl:min-h-[360px] xl:flex-1"
-          />
-          <Card className="overflow-hidden rounded-[30px] border-white/70">
-            <CardHeader className="gap-3 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(244,248,249,0.86)_100%)]">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">Table Lookup</div>
-                  <CardTitle className="mt-2 text-[1.35rem] tracking-tight">Lookup Settings</CardTitle>
-                  <CardDescription>Select the database table to check against the current SMILES.</CardDescription>
+            <Card className="flex flex-col overflow-hidden rounded-[24px] border-sky-100 bg-white shadow-[0_22px_58px_rgba(37,99,235,0.10)]">
+              <CardHeader className="gap-3 border-b border-sky-100 bg-white">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">Table Lookup</div>
+                    <CardTitle className="mt-2 text-[1.35rem] tracking-tight">Lookup Settings</CardTitle>
+                    <CardDescription>Select the database table to check against the current SMILES.</CardDescription>
+                  </div>
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_12px_30px_rgba(8,17,31,0.18)]">
+                    <Search className="h-4 w-4" />
+                  </div>
                 </div>
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_12px_30px_rgba(8,17,31,0.18)]">
-                  <Search className="h-4 w-4" />
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col space-y-4 pt-5">
+                <label className="space-y-1.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mutedForeground">
+                    Table
+                  </span>
+                  <Select
+                    value={selectedTable}
+                    onChange={(event) => handleTableChange(event.target.value as SmilesLookupTable)}
+                  >
+                    {tableOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+
+                <div className="rounded-2xl border border-slate-200/80 bg-slate-50 px-4 py-3">
+                  <div className="text-sm font-semibold text-slate-950">{selectedOption.detail}</div>
+                  <div className="mt-1 break-all font-mono-ui text-xs text-slate-600">{selectedOption.fields}</div>
                 </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4 pt-5">
-              <label className="space-y-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mutedForeground">
-                  Table
-                </span>
-                <Select
-                  value={selectedTable}
-                  onChange={(event) => handleTableChange(event.target.value as SmilesLookupTable)}
-                >
-                  {tableOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </Select>
-              </label>
 
-              <div className="rounded-2xl border border-slate-200/80 bg-slate-50 px-4 py-3">
-                <div className="text-sm font-semibold text-slate-950">{selectedOption.detail}</div>
-                <div className="mt-1 break-all font-mono-ui text-xs text-slate-600">{selectedOption.fields}</div>
-              </div>
-
-              <div className="flex flex-col gap-3 border-t border-slate-200/70 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm leading-6 text-mutedForeground">
-                  {canSubmit ? "Structure and table are ready." : "Enter a structure before running lookup."}
+                <div className="flex flex-col gap-3 border-t border-slate-200/70 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm leading-6 text-mutedForeground">
+                    {canSubmit ? "Structure and table are ready." : "Enter a structure before running lookup."}
+                  </div>
+                  <Button type="button" className="min-h-[44px] min-w-[172px]" onClick={handleSubmit} disabled={!canSubmit}>
+                    <Search className="mr-2 h-4 w-4" />
+                    {isLoading ? "Searching..." : "Run Lookup"}
+                  </Button>
                 </div>
-                <Button type="button" className="min-h-[44px] min-w-[172px]" onClick={handleSubmit} disabled={!canSubmit}>
-                  <Search className="mr-2 h-4 w-4" />
-                  {isLoading ? "Searching..." : "Run Lookup"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </section>
 
-      <LookupResults data={data} error={error} isLoading={isLoading} />
+                <LookupProgressPanel canSubmit={canSubmit} data={data} error={error} isLoading={isLoading} />
+              </CardContent>
+            </Card>
+          </section>
+
+          <LookupResults data={data} error={error} isLoading={isLoading} />
+        </>
+      )}
     </div>
   );
 }

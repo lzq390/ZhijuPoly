@@ -1,19 +1,19 @@
 import { ArrowLeft, Atom, LoaderCircle, Microscope, Sparkles } from "lucide-react";
-import { KetcherEditor } from "./KetcherEditor";
 import { StructurePreview3D } from "./StructurePreview3D";
+import { CurrentStructurePanel, MissingStructurePanel } from "./StructureWorkbenchPage";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
+import { useState } from "react";
 import { useConditionalGeneration } from "../hooks/useConditionalGeneration";
-import { useKetcher } from "../hooks/useKetcher";
-import type { ConditionalGenerationCandidate, ConditionalGenerationTgRequest } from "../types";
+import type { ConditionalGenerationCandidate, ConditionalGenerationTgRequest, StructureWorkspaceContext } from "../types";
 
 type ConditionalGenerationPageProps = {
+  structure: StructureWorkspaceContext;
+  onEditStructure: () => void;
   onBackHome: () => void;
 };
-
-const DEMO_GENERATION_SMILES = "[*]COCC([*])(C)COCCC#N";
 
 function parseNumber(value: string, fallback: number) {
   const parsed = Number(value);
@@ -73,9 +73,10 @@ function CandidateCard({ candidate }: { candidate: ConditionalGenerationCandidat
   );
 }
 
-export function ConditionalGenerationPage({ onBackHome }: ConditionalGenerationPageProps) {
-  const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher(DEMO_GENERATION_SMILES);
+export function ConditionalGenerationPage({ structure, onEditStructure, onBackHome }: ConditionalGenerationPageProps) {
+  const smiles = structure.smiles;
   const generation = useConditionalGeneration();
+  const [structureError, setStructureError] = useState<string | null>(null);
 
   function updateRequest(partial: Partial<ConditionalGenerationTgRequest>) {
     generation.setRequest({
@@ -96,9 +97,16 @@ export function ConditionalGenerationPage({ onBackHome }: ConditionalGenerationP
     generation.request.temperature <= 2.0;
 
   async function handleSubmit() {
+    setStructureError(null);
+    const currentSmiles = (await structure.getCurrentSmiles()).trim();
+    if (!currentSmiles) {
+      setStructureError("请先在结构工作台绘制或输入种子结构。");
+      return;
+    }
+    generation.setRequest({ ...generation.request, smiles: currentSmiles });
     await generation.submit({
       ...generation.request,
-      smiles
+      smiles: currentSmiles
     });
   }
 
@@ -169,31 +177,26 @@ export function ConditionalGenerationPage({ onBackHome }: ConditionalGenerationP
         </div>
       </section>
 
-      <section className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,1.18fr)_minmax(380px,0.82fr)]">
-        <div className="min-w-0">
-          <KetcherEditor
-            smiles={smiles}
-            iframeRef={iframeRef}
-            onReadyChange={setIsReady}
-            presetStructure={{
-              label: "Load Demo Structure",
-              smiles: DEMO_GENERATION_SMILES
-            }}
-            smilesPlaceholder="For example: [*]COCC([*])(C)COCCC#N"
-            onChange={(value) => {
-              setSmiles(value);
-              generation.setRequest({ ...generation.request, smiles: value });
-            }}
-          />
+      <section className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(380px,0.82fr)]">
+        <div className="grid min-w-0 gap-6">
+          <CurrentStructurePanel structure={structure} onEditStructure={onEditStructure} />
+          {smiles.trim() ? (
+            <StructurePreview3D
+              smiles={smiles}
+              className="xl:flex xl:flex-1 xl:flex-col"
+              contentClassName="xl:flex xl:flex-1 xl:flex-col"
+              previewClassName="h-[320px] xl:h-auto xl:min-h-[360px] xl:flex-1"
+            />
+          ) : (
+            <MissingStructurePanel
+              title="请先设置生成种子结构"
+              description="条件聚合物生成会使用结构工作台中的共享 SMILES。先绘制、导入或输入结构后，再回到这里设置 Tg 变化。"
+              onEditStructure={onEditStructure}
+            />
+          )}
         </div>
 
         <div className="flex min-w-0 flex-col gap-6">
-          <StructurePreview3D
-            smiles={smiles}
-            className="xl:flex xl:flex-1 xl:flex-col"
-            contentClassName="xl:flex xl:flex-1 xl:flex-col"
-            previewClassName="h-[320px] xl:h-auto xl:min-h-[360px] xl:flex-1"
-          />
           <Card className="overflow-hidden rounded-[30px] border-white/70">
             <CardHeader className="gap-3 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(244,248,249,0.86)_100%)]">
               <div className="flex items-center justify-between gap-4">
@@ -291,6 +294,11 @@ export function ConditionalGenerationPage({ onBackHome }: ConditionalGenerationP
                   {generation.isLoading ? "Generating..." : "Run Generation"}
                 </Button>
               </div>
+              {structureError ? (
+                <div className="rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700">
+                  {structureError}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
         </div>

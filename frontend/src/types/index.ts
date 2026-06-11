@@ -1,7 +1,17 @@
+import type { RefObject } from "react";
+
 export type MatchMode = "structure" | "property";
 export type WorkspaceMode = "query" | "predict";
 export type ResultsTab = "query" | "predict";
 export type SmilesLookupTable = "polymers" | "properties" | "pi_candidates";
+
+export type StructureWorkspaceContext = {
+  smiles: string;
+  setSmiles: (value: string) => void;
+  iframeRef: RefObject<HTMLIFrameElement | null>;
+  setIsReady: (ready: boolean) => void;
+  getCurrentSmiles: () => Promise<string>;
+};
 
 export type SmilesQueryRequest = {
   smiles: string;

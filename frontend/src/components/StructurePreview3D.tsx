@@ -152,7 +152,7 @@ export function StructurePreview3D({
   const previewFrame = (
     <div
       className={cn(
-        "relative overflow-hidden bg-white",
+        "relative w-full overflow-hidden bg-white",
         variant === "bare" ? "min-h-[260px] flex-1" : "h-[280px] rounded-[24px] border border-slate-200",
         previewClassName
       )}
