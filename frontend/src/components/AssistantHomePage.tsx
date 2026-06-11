@@ -439,7 +439,7 @@ function PredictionSkillResultPanel({ result }: { result: AssistantPredictionSki
           <div className="mt-1 break-all font-mono text-[11px] text-slate-500">{result.smiles}</div>
         </div>
         <div className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-          {result.properties.length} 项 · {result.query_time_ms.toFixed(1)} ms
+          {result.properties.length} 项
         </div>
       </div>
       <div className="max-h-[320px] overflow-y-auto">

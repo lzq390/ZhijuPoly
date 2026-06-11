@@ -90,7 +90,7 @@ export function PredictionResults({
         <CardContent className="pt-5">
           <EmptyPanel
             title="Prediction Panel Ready"
-            description="Switch to prediction mode, select properties, and submit to view predicted values, units, and calculation time."
+            description="Switch to prediction mode, select properties, and submit to view predicted values and units."
           />
         </CardContent>
       </Card>
@@ -121,7 +121,6 @@ export function PredictionResults({
               <Sparkles className="mr-1 h-3.5 w-3.5" />
               {`${predictionEntries.length} properties`}
             </Badge>
-            <Badge className="text-slate-700">{`${data.query_time_ms.toFixed(1)} ms`}</Badge>
           </div>
         </div>
       </CardHeader>
