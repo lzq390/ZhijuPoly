@@ -351,6 +351,14 @@ export function KetcherEditor({
     }
 
     function handlePaste(event: ClipboardEvent) {
+      const target = event.target;
+      const isEditorPasteTarget =
+        document.activeElement === iframeRef.current ||
+        (target instanceof Element && target.closest('[data-ketcher-editor-root="true"]') !== null);
+      if (!isEditorPasteTarget) {
+        return;
+      }
+
       const imageFile = findImageFile(event);
       if (!imageFile) {
         return;
@@ -362,7 +370,7 @@ export function KetcherEditor({
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [importImageFile]);
+  }, [iframeRef, importImageFile]);
 
   async function syncSmilesFromKetcher() {
     const ketcher = iframeRef.current?.contentWindow?.ketcher;
@@ -781,11 +789,14 @@ export function KetcherEditor({
     );
 
     if (!showSmilesPanel) {
-      return <div className={className}>{canvasPanel}</div>;
+      return <div className={className} data-ketcher-editor-root="true">{canvasPanel}</div>;
     }
 
     return (
-      <div className={cn("grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)] xl:items-stretch", className)}>
+      <div
+        className={cn("grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)] xl:items-stretch", className)}
+        data-ketcher-editor-root="true"
+      >
         {canvasPanel}
         {smilesPanel}
       </div>
@@ -799,6 +810,7 @@ export function KetcherEditor({
         isDarkTone ? "border-cyan-200/10 bg-slate-950/70 text-slate-100 shadow-none" : "border-white/70",
         className
       )}
+      data-ketcher-editor-root="true"
     >
       <CardHeader
         className={cn(

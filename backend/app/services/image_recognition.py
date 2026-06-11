@@ -170,10 +170,12 @@ def _cuda_is_usable(torch_module: Any) -> bool:
     if not torch_module.cuda.is_available():
         return False
     try:
-        # Prefer a real allocation probe over architecture-list matching:
-        # PyTorch can run on GPUs whose exact compute capability is absent from
-        # get_arch_list() when compatible PTX/runtime support is available.
+        # Allocation can succeed even when the installed CUDA build cannot run
+        # convolution kernels for the local GPU architecture.
         torch_module.empty(1, device="cuda")
+        sample = torch_module.empty((1, 1, 3, 3), device="cuda")
+        kernel = torch_module.ones((1, 1, 1, 1), device="cuda")
+        torch_module.nn.functional.conv2d(sample, kernel)
         torch_module.cuda.synchronize()
     except Exception:
         return False

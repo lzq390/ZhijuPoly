@@ -15,14 +15,20 @@ const STOPPED_MESSAGE = "已停止生成。";
 type StoredAssistantMessage = AssistantChatMessage & {
   id: string;
   createdAt: string;
+  requestContent?: string;
   skillCalls?: AssistantSkillCall[];
 };
 
-function createMessage(role: AssistantChatMessage["role"], content: string): StoredAssistantMessage {
+function createMessage(
+  role: AssistantChatMessage["role"],
+  content: string,
+  requestContent?: string
+): StoredAssistantMessage {
   return {
     id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now() + Math.random()),
     role,
     content,
+    ...(requestContent && requestContent !== content ? { requestContent } : {}),
     createdAt: new Date().toISOString()
   };
 }
@@ -45,7 +51,8 @@ function loadStoredMessages(): StoredAssistantMessage[] {
         typeof item?.id === "string" &&
         (item.role === "user" || item.role === "assistant") &&
         typeof item.content === "string" &&
-        typeof item.createdAt === "string"
+        typeof item.createdAt === "string" &&
+        (item.requestContent === undefined || typeof item.requestContent === "string")
     );
   } catch {
     return [];
@@ -136,18 +143,22 @@ export function useAssistantChat() {
   }, [stopStreaming]);
 
   const sendMessage = useCallback(
-    async (content: string, context: AssistantChatContext) => {
+    async (content: string, context: AssistantChatContext, requestContent?: string) => {
       const text = content.trim();
-      if (!text || isStreaming) {
+      const requestText = (requestContent ?? content).trim();
+      if (!text || !requestText || isStreaming) {
         return;
       }
 
-      const userMessage = createMessage("user", text);
+      const userMessage = createMessage("user", text, requestText);
       const assistantMessage = createMessage("assistant", "");
       const nextMessages = [...messages, userMessage, assistantMessage];
       const requestMessages = [...messages, userMessage]
         .filter((message) => message.role === "user" || message.content.trim())
-        .map(({ role, content }) => ({ role, content }));
+        .map((message) => ({
+          role: message.role,
+          content: message.requestContent?.trim() || message.content
+        }));
       const controller = new AbortController();
 
       abortRef.current = controller;

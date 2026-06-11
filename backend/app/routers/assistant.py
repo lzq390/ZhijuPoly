@@ -34,6 +34,8 @@ def stream_chat(
                 model=settings.assistant_model,
                 model_enabled=settings.model_enabled,
                 model_dir=settings.model_dir_path,
+                iupac_lookup_db_path=settings.pi_reverse_db_file,
+                sqlite_connection_factory=request.app.state.sqlite_connection_factory,
             ):
                 yield _sse(event.event, event.payload)
         except AssistantChatConfigError as exc:

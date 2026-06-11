@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from app.import_pi_candidates import import_pi_candidates_to_sqlite
-from app.services.smiles_to_iupac import lookup_iupac_name
+from app.pi_database import ensure_pi_schema
+from app.services.smiles_to_iupac import (
+    IupacNameLookupAmbiguousError,
+    find_iupac_smiles_matches,
+    lookup_iupac_name,
+    lookup_smiles_by_iupac_name,
+)
 
 
 def write_pi_csv(path: Path) -> None:
@@ -123,5 +129,73 @@ def test_import_pi_candidates_caches_optional_iupac_names(tmp_path: Path) -> Non
         assert lookup_iupac_name(connection, "CCO") == "ethanol"
         assert lookup_iupac_name(connection, "CCN") == "ethanamine"
         assert lookup_iupac_name(connection, "CCC") == "propane"
+    finally:
+        connection.close()
+
+
+def test_lookup_smiles_by_iupac_name_supports_normalized_matching(tmp_path: Path) -> None:
+    db_path = tmp_path / "pi.db"
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        ensure_pi_schema(connection)
+        connection.execute(
+            "INSERT INTO smiles_iupac_cache (smiles, iupac_name) VALUES (?, ?)",
+            ("C=C(C#N)c1c(C)cc(N)cc1N", "2-(2,4-diamino-6-methyl-phenyl)acrylonitrile"),
+        )
+
+        assert (
+            lookup_smiles_by_iupac_name(
+                connection,
+                " 2 \u2013 (2,4-DIAMINO-6-METHYL-PHENYL)ACRYLONITRILE ",
+            )
+            == "C=C(C#N)c1c(C)cc(N)cc1N"
+        )
+        assert lookup_smiles_by_iupac_name(connection, "not in cache") is None
+    finally:
+        connection.close()
+
+
+def test_find_iupac_smiles_matches_scans_text_and_deduplicates_overlaps(tmp_path: Path) -> None:
+    db_path = tmp_path / "pi.db"
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        ensure_pi_schema(connection)
+        connection.execute(
+            "INSERT INTO smiles_iupac_cache (smiles, iupac_name) VALUES (?, ?)",
+            ("C=C(C#N)c1c(C)cc(N)cc1N", "2-(2,4-diamino-6-methyl-phenyl)acrylonitrile"),
+        )
+
+        matches = find_iupac_smiles_matches(
+            connection,
+            "请预测 2-(2,4-diamino-6-methyl-phenyl)acrylonitrile 的 Tg",
+        )
+
+        assert len(matches) == 1
+        assert matches[0].iupac_name == "2-(2,4-diamino-6-methyl-phenyl)acrylonitrile"
+        assert matches[0].smiles == "C=C(C#N)c1c(C)cc(N)cc1N"
+    finally:
+        connection.close()
+
+
+def test_lookup_smiles_by_iupac_name_rejects_ambiguous_cache_entries(tmp_path: Path) -> None:
+    db_path = tmp_path / "pi.db"
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        ensure_pi_schema(connection)
+        connection.executemany(
+            "INSERT INTO smiles_iupac_cache (smiles, iupac_name) VALUES (?, ?)",
+            [
+                ("CCO", "ethanol"),
+                ("OCC", "Ethanol"),
+            ],
+        )
+
+        with pytest.raises(IupacNameLookupAmbiguousError):
+            lookup_smiles_by_iupac_name(connection, "ethanol")
+        with pytest.raises(IupacNameLookupAmbiguousError):
+            find_iupac_smiles_matches(connection, "预测 ethanol 的 Tg")
     finally:
         connection.close()

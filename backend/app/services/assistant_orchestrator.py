@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -29,6 +31,14 @@ from app.services.assistant_skills.property_resolver import (
     PropertyResolutionUnsupported,
     normalize_prediction_property_arguments,
 )
+from app.services.smiles_to_iupac import (
+    IupacNameLookupAmbiguousError,
+    IupacSmilesMatch,
+    find_iupac_smiles_matches,
+)
+
+
+SQLiteConnectionFactory = Callable[[str | Path], AbstractContextManager[sqlite3.Connection]]
 
 
 @dataclass(frozen=True)
@@ -47,7 +57,19 @@ def stream_assistant_events(
     model: str,
     model_enabled: bool,
     model_dir: Path,
+    iupac_lookup_db_path: Path | None = None,
+    sqlite_connection_factory: SQLiteConnectionFactory | None = None,
 ) -> Iterable[AssistantStreamEvent]:
+    normalized_messages, input_clarification = _normalize_iupac_structure_input(
+        messages=messages,
+        iupac_lookup_db_path=iupac_lookup_db_path,
+        sqlite_connection_factory=sqlite_connection_factory,
+    )
+    if input_clarification:
+        yield from _emit_text(input_clarification)
+        return
+    messages = normalized_messages
+
     registry = build_default_skill_registry()
     context = AssistantSkillContext(model_enabled=model_enabled, model_dir=model_dir)
     direct_info_skill = _detect_skill_info_request(messages[-1].content)
@@ -169,26 +191,93 @@ def stream_assistant_events(
     )
 
     summary_tokens: list[str] = []
-    try:
-        token_stream = assistant_chat.stream_assistant_skill_summary(
-            messages=messages,
-            modules=modules,
-            active_module=active_module,
-            skill_name=skill.name,
-            skill_result=result,
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-        )
-        for token in token_stream:
-            summary_tokens.append(token)
-            yield AssistantStreamEvent("token", {"content": token})
-    except assistant_chat.AssistantChatModelError:
-        fallback = _fallback_skill_summary(result)
-        summary_tokens = [fallback]
-        yield AssistantStreamEvent("token", {"content": fallback})
+    if skill.name == PREDICT_POLYMER_PROPERTIES_SKILL:
+        summary = _format_predict_properties_summary(result, messages[-1].content)
+        summary_tokens = [summary]
+        yield AssistantStreamEvent("token", {"content": summary})
+    else:
+        try:
+            token_stream = assistant_chat.stream_assistant_skill_summary(
+                messages=messages,
+                modules=modules,
+                active_module=active_module,
+                skill_name=skill.name,
+                skill_result=result,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+            )
+            for token in token_stream:
+                summary_tokens.append(token)
+                yield AssistantStreamEvent("token", {"content": token})
+        except assistant_chat.AssistantChatModelError:
+            fallback = _fallback_skill_summary(result)
+            summary_tokens = [fallback]
+            yield AssistantStreamEvent("token", {"content": fallback})
 
     yield AssistantStreamEvent("done", {"message": "".join(summary_tokens)})
+
+
+def _normalize_iupac_structure_input(
+    *,
+    messages: Sequence[AssistantChatMessage],
+    iupac_lookup_db_path: Path | None,
+    sqlite_connection_factory: SQLiteConnectionFactory | None,
+) -> tuple[list[AssistantChatMessage], str | None]:
+    normalized_messages = list(messages)
+    if not normalized_messages or iupac_lookup_db_path is None or sqlite_connection_factory is None:
+        return normalized_messages, None
+
+    latest_message = normalized_messages[-1]
+    if _has_resolved_structure_input(latest_message.content):
+        return normalized_messages, None
+
+    if not iupac_lookup_db_path.exists():
+        return normalized_messages, _clarification_for_unmatched_iupac(latest_message.content)
+
+    try:
+        with sqlite_connection_factory(iupac_lookup_db_path) as connection:
+            matches = find_iupac_smiles_matches(connection, latest_message.content)
+    except IupacNameLookupAmbiguousError as exc:
+        return normalized_messages, f"IUPAC 名称解析存在歧义：{exc}。请提供对应 SMILES。"
+    except Exception as exc:
+        return normalized_messages, f"IUPAC 缓存读取失败：{exc}。请提供对应 SMILES。"
+
+    if len(matches) > 1:
+        names = "、".join(match.iupac_name for match in matches)
+        return normalized_messages, f"识别到多个 IUPAC 名称：{names}。请指定要操作的一个 IUPAC 名称。"
+
+    if not matches:
+        return normalized_messages, _clarification_for_unmatched_iupac(latest_message.content)
+
+    enhanced_message = latest_message.model_copy(
+        update={"content": _append_resolved_iupac_context(latest_message.content, matches[0])}
+    )
+    normalized_messages[-1] = enhanced_message
+    return normalized_messages, None
+
+
+def _clarification_for_unmatched_iupac(content: str) -> str | None:
+    if _looks_like_missing_iupac_name(content):
+        return "请提供需要操作的 IUPAC 名称或 SMILES。"
+    if _looks_like_unresolved_iupac_request(content):
+        return "当前 IUPAC 缓存中没有找到该名称，请提供对应 SMILES 或确认名称完全一致。"
+    return None
+
+
+def _append_resolved_iupac_context(content: str, match: IupacSmilesMatch) -> str:
+    return (
+        f"{content}\n\n"
+        "[Resolved structure input]\n"
+        f"Original IUPAC name: {match.iupac_name}\n"
+        f"Resolved SMILES: {match.smiles}\n"
+        "Resolved SMILES source: smiles_iupac_cache\n"
+        "Use the resolved SMILES as the structure input for any downstream task."
+    )
+
+
+def _has_resolved_structure_input(content: str) -> bool:
+    return "[Resolved structure input]" in content and "Resolved SMILES:" in content
 
 
 def _stream_skill_info(
@@ -247,6 +336,61 @@ def _detect_skill_info_request(content: str) -> str | None:
     return None
 
 
+def _looks_like_missing_iupac_name(content: str) -> bool:
+    text = content.casefold()
+    return "iupac" in text and _looks_like_structure_task(text) and not _looks_like_iupac_name_text(text)
+
+
+def _looks_like_unresolved_iupac_request(content: str) -> bool:
+    text = content.casefold()
+    return _looks_like_structure_task(text) and _looks_like_iupac_name_text(text)
+
+
+def _looks_like_structure_task(text: str) -> bool:
+    return any(
+        keyword in text
+        for keyword in (
+            "预测",
+            "估算",
+            "计算",
+            "性质",
+            "属性",
+            "predict",
+            "prediction",
+            "estimate",
+            "property",
+            "properties",
+            "smiles",
+            "结构",
+            "3d",
+            "画板",
+            "查询",
+            "相似",
+        )
+    )
+
+
+def _looks_like_iupac_name_text(text: str) -> bool:
+    if not any(term in text for term in ("-", "(", ")", ",")):
+        return False
+    return any(
+        term in text
+        for term in (
+            "acrylonitrile",
+            "phenyl",
+            "pyrimidin",
+            "pyridyl",
+            "benzene",
+            "amine",
+            "amino",
+            "methyl",
+            "ethyl",
+            "isopropenyl",
+            "prop-",
+        )
+    )
+
+
 def _stream_plain_chat(
     *,
     messages: Sequence[AssistantChatMessage],
@@ -280,7 +424,7 @@ def _clarification_for_validation(skill_name: str, exc: ValidationError) -> str 
         return None
     for error in exc.errors():
         if tuple(error.get("loc", ())) == ("smiles",):
-            return "请提供需要预测的 SMILES。"
+            return "请提供需要预测的 SMILES 或 IUPAC 名称。"
     return None
 
 
@@ -294,7 +438,42 @@ def _validation_detail(exc: ValidationError) -> str:
 def _fallback_skill_summary(result: dict[str, Any]) -> str:
     if result.get("type") == "predict_polymer_properties":
         count = len(result.get("properties") or [])
-        elapsed = result.get("query_time_ms")
-        elapsed_text = f"，耗时 {float(elapsed):.1f} ms" if isinstance(elapsed, (int, float)) else ""
-        return f"已完成性质预测，共返回 {count} 个性质{elapsed_text}。"
+        return f"已完成性质预测，共返回 {count} 个性质。"
     return "已完成技能调用，结构化结果已显示。"
+
+
+def _format_predict_properties_summary(result: dict[str, Any], latest_user_message: str) -> str:
+    smiles = str(result.get("smiles") or "").strip()
+    resolved_source = _extract_resolved_structure_source(latest_user_message)
+    if resolved_source == "molscribe_image_recognition":
+        original_image_file = _extract_original_image_file(latest_user_message)
+        heading = (
+            f"对图片 **{original_image_file}** 识别得到的 SMILES："
+            if original_image_file
+            else "图片识别得到的 SMILES："
+        )
+    elif original_iupac_name := _extract_original_iupac_name(latest_user_message):
+        heading = f"对 **{original_iupac_name}** 的解析 SMILES："
+    else:
+        heading = "已解析 SMILES："
+    return "\n\n".join((heading, f"`{smiles}`", "预测结果如下："))
+
+
+def _extract_line_value(content: str, prefix: str) -> str | None:
+    for line in content.splitlines():
+        if line.startswith(prefix):
+            value = line.removeprefix(prefix).strip()
+            return value or None
+    return None
+
+
+def _extract_original_iupac_name(content: str) -> str | None:
+    return _extract_line_value(content, "Original IUPAC name:")
+
+
+def _extract_original_image_file(content: str) -> str | None:
+    return _extract_line_value(content, "Original image file:")
+
+
+def _extract_resolved_structure_source(content: str) -> str | None:
+    return _extract_line_value(content, "Resolved SMILES source:")

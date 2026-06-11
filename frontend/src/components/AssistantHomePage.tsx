@@ -1,10 +1,16 @@
-import { type KeyboardEvent, type WheelEvent, useEffect, useRef, useState } from "react";
-import { ArrowUp, Bot, Eraser, Loader2, MessageSquare, OctagonX, Sparkles, UserRound } from "lucide-react";
+import { type ClipboardEvent, type KeyboardEvent, type WheelEvent, useEffect, useRef, useState } from "react";
+import { ArrowUp, Bot, Eraser, ImagePlus, Loader2, MessageSquare, OctagonX, Sparkles, UserRound, X } from "lucide-react";
 import type { AppShellModuleGroup } from "./AppShell";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { useAssistantChat } from "../hooks/useAssistantChat";
-import type { AssistantModuleContext, AssistantPredictionSkillResult, AssistantSkillCall } from "../types";
+import { recognizeStructureImage } from "../services/api";
+import type {
+  AssistantModuleContext,
+  AssistantPredictionSkillResult,
+  AssistantSkillCall,
+  StructureImageRecognitionResponse
+} from "../types";
 
 type AssistantHomePageProps = {
   activeModule: string;
@@ -20,9 +26,21 @@ const starterPrompts = [
   "给定 SMILES，如何判断它更适合做性能探索还是逆向设计？"
 ];
 
+const MAX_STRUCTURE_IMAGE_BYTES = 5 * 1024 * 1024;
+const SUPPORTED_STRUCTURE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+type AttachedStructureImage = {
+  file: File;
+  previewUrl: string;
+};
+
 export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenModule }: AssistantHomePageProps) {
   const [draft, setDraft] = useState("");
+  const [attachedImage, setAttachedImage] = useState<AttachedStructureImage | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [isRecognizingImage, setIsRecognizingImage] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const attachedImagePreviewRef = useRef<string | null>(null);
   const { messages, isStreaming, error, sendMessage, stopStreaming, clearMessages } = useAssistantChat();
   const trimmedDraft = draft.trim();
   const moduleItems = moduleGroups.flatMap((group) => group.items);
@@ -34,16 +52,51 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, isStreaming]);
 
+  useEffect(() => {
+    return () => {
+      if (attachedImagePreviewRef.current) {
+        URL.revokeObjectURL(attachedImagePreviewRef.current);
+      }
+    };
+  }, []);
+
   async function submitMessage(text: string) {
     const value = text.trim();
-    if (!value || isStreaming) {
+    if ((!value && !attachedImage) || isStreaming || isRecognizingImage) {
       return;
     }
-    setDraft("");
-    await sendMessage(value, {
-      active_module: activeModule,
-      modules
-    });
+
+    if (!attachedImage) {
+      setDraft("");
+      await sendMessage(value, {
+        active_module: activeModule,
+        modules
+      });
+      return;
+    }
+
+    setImageError(null);
+    setIsRecognizingImage(true);
+    try {
+      const result = await recognizeStructureImage(attachedImage.file);
+      const displayText = buildImageMessageDisplayText(value, attachedImage.file.name);
+      const requestText = buildImageResolvedRequestContent(value, attachedImage.file.name, result);
+      setIsRecognizingImage(false);
+      setDraft("");
+      clearAttachedImage();
+      await sendMessage(
+        displayText,
+        {
+          active_module: activeModule,
+          modules
+        },
+        requestText
+      );
+    } catch (caught) {
+      setImageError(caught instanceof Error ? caught.message : "图片识别失败。");
+    } finally {
+      setIsRecognizingImage(false);
+    }
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -53,6 +106,47 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
     event.preventDefault();
     void submitMessage(draft);
   }
+
+  function attachImage(file: File) {
+    const contentType = file.type.trim().toLowerCase();
+    if (contentType && !SUPPORTED_STRUCTURE_IMAGE_TYPES.has(contentType)) {
+      setImageError("仅支持 PNG、JPEG、GIF 或 WebP 图片。");
+      return;
+    }
+    if (file.size > MAX_STRUCTURE_IMAGE_BYTES) {
+      setImageError("图片不能超过 5 MB。");
+      return;
+    }
+
+    if (attachedImagePreviewRef.current) {
+      URL.revokeObjectURL(attachedImagePreviewRef.current);
+    }
+    const previewUrl = URL.createObjectURL(file);
+    attachedImagePreviewRef.current = previewUrl;
+    setAttachedImage({ file, previewUrl });
+    setImageError(null);
+  }
+
+  function clearAttachedImage() {
+    if (attachedImagePreviewRef.current) {
+      URL.revokeObjectURL(attachedImagePreviewRef.current);
+      attachedImagePreviewRef.current = null;
+    }
+    setAttachedImage(null);
+    setImageError(null);
+  }
+
+  function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const imageFile = findClipboardImageFile(event);
+    if (!imageFile) {
+      return;
+    }
+
+    event.preventDefault();
+    attachImage(imageFile);
+  }
+
+  const canSubmitComposer = Boolean(trimmedDraft || attachedImage) && !isRecognizingImage;
 
   return (
     <section className="relative h-full min-h-0 bg-[#f8f9fb]">
@@ -96,10 +190,17 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
               draft={draft}
               trimmedDraft={trimmedDraft}
               isStreaming={isStreaming}
+              isRecognizingImage={isRecognizingImage}
+              canSubmit={canSubmitComposer}
+              attachedImage={attachedImage}
+              imageError={imageError}
               onChange={setDraft}
               onSubmit={() => void submitMessage(draft)}
               onStop={stopStreaming}
               onKeyDown={handleKeyDown}
+              onPaste={handleComposerPaste}
+              onImageSelected={attachImage}
+              onClearImage={clearAttachedImage}
             />
           </div>
         </div>
@@ -168,10 +269,17 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
                 draft={draft}
                 trimmedDraft={trimmedDraft}
                 isStreaming={isStreaming}
+                isRecognizingImage={isRecognizingImage}
+                canSubmit={canSubmitComposer}
+                attachedImage={attachedImage}
+                imageError={imageError}
                 onChange={setDraft}
                 onSubmit={() => void submitMessage(draft)}
                 onStop={stopStreaming}
                 onKeyDown={handleKeyDown}
+                onPaste={handleComposerPaste}
+                onImageSelected={attachImage}
+                onClearImage={clearAttachedImage}
               />
               {isStreaming ? <StreamingStatus /> : null}
             </div>
@@ -180,6 +288,53 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
       )}
     </section>
   );
+}
+
+function findClipboardImageFile(event: ClipboardEvent<HTMLTextAreaElement>): File | null {
+  const files = Array.from(event.clipboardData.files);
+  const directFile = files.find((file) => file.type.startsWith("image/"));
+  if (directFile) {
+    return directFile;
+  }
+
+  const items = Array.from(event.clipboardData.items);
+  const imageItem = items.find((item) => item.type.startsWith("image/"));
+  return imageItem?.getAsFile() ?? null;
+}
+
+function buildImageMessageDisplayText(content: string, fileName: string) {
+  const baseContent = content.trim() || "请基于这张分子结构图进行后续操作。";
+  const imageName = fileName.trim() || "粘贴的图片";
+  return `${baseContent}（已附加图片：${imageName}）`;
+}
+
+function buildImageResolvedRequestContent(
+  content: string,
+  fileName: string,
+  result: StructureImageRecognitionResponse
+) {
+  const baseContent = content.trim() || "请基于这张分子结构图进行后续操作。";
+  const lines = [
+    baseContent,
+    "",
+    "[Resolved structure input]",
+    `Original image file: ${fileName.trim() || "uploaded image"}`,
+    `Resolved SMILES: ${result.smiles.trim()}`,
+    "Resolved SMILES source: molscribe_image_recognition"
+  ];
+
+  if (result.confidence !== null) {
+    lines.push(`Recognition confidence: ${result.confidence.toFixed(4)}`);
+  }
+  for (const warning of result.warnings) {
+    const normalizedWarning = warning.trim();
+    if (normalizedWarning) {
+      lines.push(`Recognition warning: ${normalizedWarning}`);
+    }
+  }
+
+  lines.push("Use the resolved SMILES as the structure input for any downstream task.");
+  return lines.join("\n");
 }
 type ModuleShortcutItem = AppShellModuleGroup["items"][number];
 
@@ -405,13 +560,37 @@ type ChatComposerProps = {
   draft: string;
   trimmedDraft: string;
   isStreaming: boolean;
+  isRecognizingImage: boolean;
+  canSubmit: boolean;
+  attachedImage: AttachedStructureImage | null;
+  imageError: string | null;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onStop: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  onImageSelected: (file: File) => void;
+  onClearImage: () => void;
 };
 
-function ChatComposer({ className, draft, trimmedDraft, isStreaming, onChange, onSubmit, onStop, onKeyDown }: ChatComposerProps) {
+function ChatComposer({
+  className,
+  draft,
+  isStreaming,
+  isRecognizingImage,
+  canSubmit,
+  attachedImage,
+  imageError,
+  onChange,
+  onSubmit,
+  onStop,
+  onKeyDown,
+  onPaste,
+  onImageSelected,
+  onClearImage
+}: ChatComposerProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   return (
     <div
       data-assistant-composer="true"
@@ -419,6 +598,54 @@ function ChatComposer({ className, draft, trimmedDraft, isStreaming, onChange, o
         .filter(Boolean)
         .join(" ")}
     >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          if (file) {
+            onImageSelected(file);
+          }
+          event.currentTarget.value = "";
+        }}
+      />
+      {attachedImage || imageError ? (
+        <div className="mb-1 flex flex-col gap-2 px-2 pt-1">
+          {attachedImage ? (
+            <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-teal-100 bg-teal-50/80 px-2.5 py-2">
+              <img
+                src={attachedImage.previewUrl}
+                alt={attachedImage.file.name || "已附加图片"}
+                className="h-10 w-12 flex-none rounded-xl border border-white bg-white object-contain"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-semibold text-teal-900">
+                  {attachedImage.file.name || "粘贴的图片"}
+                </div>
+                <div className="mt-0.5 text-[11px] text-teal-700">
+                  {(attachedImage.file.size / 1024).toFixed(1)} KB
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="移除已附加图片"
+                className="flex h-8 w-8 flex-none items-center justify-center rounded-full text-teal-700 transition hover:bg-white hover:text-teal-950"
+                onClick={onClearImage}
+                disabled={isRecognizingImage}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : null}
+          {imageError ? (
+            <div className="rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700">
+              {imageError}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <Textarea
         value={draft}
         rows={2}
@@ -426,17 +653,32 @@ function ChatComposer({ className, draft, trimmedDraft, isStreaming, onChange, o
         placeholder="向智聚万物提问：聚合物数据、性能预测、知识检索、逆向设计..."
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
       />
       <div className="flex items-center justify-between gap-3 px-2 pb-1">
-        <div className="text-xs text-slate-400">智聚万物</div>
+        <div className="flex min-w-0 items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            aria-label="附加分子结构图片"
+            className="h-9 w-9 rounded-xl p-0"
+            disabled={isStreaming || isRecognizingImage}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <ImagePlus className="h-4 w-4" />
+          </Button>
+          <div className="truncate text-xs text-slate-400">
+            {isRecognizingImage ? "正在识别结构图片" : "智聚万物"}
+          </div>
+        </div>
         {isStreaming ? (
           <Button type="button" variant="outline" className="h-10 rounded-xl px-3" onClick={onStop}>
             <OctagonX className="mr-2 h-4 w-4" />
             停止生成
           </Button>
         ) : (
-          <Button type="button" className="h-10 w-10 rounded-xl p-0" disabled={!trimmedDraft} onClick={onSubmit}>
-            <ArrowUp className="h-4 w-4" />
+          <Button type="button" className="h-10 w-10 rounded-xl p-0" disabled={!canSubmit} onClick={onSubmit}>
+            {isRecognizingImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
           </Button>
         )}
       </div>

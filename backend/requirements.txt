@@ -6,6 +6,8 @@ python-dotenv==1.0.1
 MolScribe
 numpy<2
 pandas==2.2.3
+pytz>=2020.1
+tzdata>=2022.7
 requests==2.32.5
 openai==2.36.0
 psycopg[binary]>=3.2,<4

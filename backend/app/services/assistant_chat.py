@@ -278,9 +278,10 @@ Available modules for navigation context:
 Current active module: {active_module or "home"}
 
 Your task:
+- If the latest user message includes a [Resolved structure input] block, treat its Resolved SMILES as the user's structure input for downstream tasks.
 - If the latest user message asks which properties the prediction skill/API/model supports, return skill_info for predict_polymer_properties.
-- If the latest user message asks to predict, estimate, calculate, or evaluate polymer properties from a SMILES string, return a skill_call for predict_polymer_properties.
-- If the latest user message asks for property prediction but no SMILES is present, return clarify with a short Chinese message asking for SMILES.
+- If the latest user message asks to predict, estimate, calculate, or evaluate polymer properties from a SMILES string or resolved structure input, return a skill_call for predict_polymer_properties.
+- If the latest user message asks for property prediction but no SMILES or resolved structure input is present, return clarify with a short Chinese message asking for SMILES.
 - If the user asks for all properties, nine properties, or 9 properties, set all_properties=true.
 - If the user asks for a property group, such as thermal/热学性质, mechanical/力学性质, or permeability/渗透性, set all_properties=false and put that group wording in properties.
 - If the user asks for one or more specific properties, set all_properties=false and put the requested property names in properties. Use the user's wording if needed.
@@ -289,7 +290,7 @@ Your task:
 Allowed response shapes:
 {{"type":"skill_call","skill_name":"predict_polymer_properties","arguments":{{"smiles":"CCO","all_properties":true}}}}
 {{"type":"skill_info","skill_name":"predict_polymer_properties"}}
-{{"type":"clarify","message":"请提供需要预测的 SMILES。"}}
+{{"type":"clarify","message":"请提供需要预测的 SMILES 或 IUPAC 名称。"}}
 {{"type":"chat","message":"普通科研问答或模块建议。"}}
 """.strip()
 
