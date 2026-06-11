@@ -19,6 +19,7 @@ from app.routers.database_browser import router as database_browser_router
 from app.routers.dft import router as dft_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.lab_data import router as lab_data_router
+from app.routers.md_demo import router as md_demo_router
 from app.routers.online_knowledge import router as online_knowledge_router
 from app.routers.predict import router as predict_router
 from app.routers.query import router as query_router
@@ -94,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(conditional_generation_router)
     app.include_router(knowledge_router)
     app.include_router(lab_data_router)
+    app.include_router(md_demo_router)
     app.include_router(online_knowledge_router)
     app.include_router(dft_router)
     app.include_router(database_browser_router)

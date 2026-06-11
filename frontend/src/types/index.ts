@@ -84,6 +84,136 @@ export type PredictResponse = {
   query_time_ms: number;
 };
 
+export type MdDemoRunRequest = {
+  smiles: string;
+  temperature: number;
+  pressure: number;
+  n_atom: number;
+  n_chain: number;
+  forcefield: string;
+};
+
+export type MdDemoStageSummary = {
+  stage_id: "eq1" | "eq2" | "eq3" | string;
+  label: string;
+  description: string;
+  n_atoms: number;
+  n_frames: number;
+  dt_ps: number;
+  n_chains: number;
+  data_file_size_bytes: number;
+  trajectory_file_size_bytes: number;
+  log_file_size_bytes: number | null;
+  box: {
+    lx: number;
+    ly: number;
+    lz: number;
+  };
+};
+
+export type MdDemoSeriesPoint = {
+  step?: number;
+  frame?: number;
+  time_ps: number;
+  value: number;
+};
+
+export type MdDemoSeries = {
+  key: string;
+  label: string;
+  unit: string;
+  points: MdDemoSeriesPoint[];
+};
+
+export type MdDemoTrajectoryPoint = {
+  atom_id: number;
+  chain_id: number;
+  atom_type: string;
+  x: number;
+  y: number;
+  z: number;
+};
+
+export type MdDemoTrajectoryPreview = {
+  stage_id: string;
+  frame_index: number;
+  time_ps: number;
+  sampled_points: number;
+  points: MdDemoTrajectoryPoint[];
+  box: {
+    lx: number;
+    ly: number;
+    lz: number;
+  };
+};
+
+export type MdDemoAtomSelection = Pick<MdDemoTrajectoryPoint, "atom_id" | "chain_id" | "atom_type">;
+
+export type MdDemoAtomDistanceRequest = {
+  atom_id_1: number;
+  atom_id_2: number;
+  use_pbc: boolean;
+};
+
+export type MdDemoAtomDistanceResponse = {
+  atom_1: MdDemoAtomSelection;
+  atom_2: MdDemoAtomSelection;
+  frames: number[];
+  time_ps: number[];
+  distance: number[];
+  series: MdDemoSeries;
+  stats: {
+    n_atoms: number;
+    n_frames: number;
+    source_n_frames: number;
+    n_chains: number;
+    use_pbc: boolean;
+    min_distance: number;
+    max_distance: number;
+  };
+};
+
+export type MdDemoSummary = {
+  primary_stage: string;
+  elapsed_seconds: number;
+  n_atoms: number;
+  n_frames: number;
+  n_chains: number;
+  final_density_g_cm3: number;
+  mean_temperature_k: number;
+  mean_total_energy_kcal_mol: number;
+};
+
+export type MdDemoFixtureMetadata = {
+  fixture_version: number;
+  source: {
+    label: string;
+    data_root_hint: string;
+    generated_from: string[];
+  };
+};
+
+export type MdDemoDefaultsResponse = {
+  default_request: MdDemoRunRequest;
+  available_stages: MdDemoStageSummary[];
+  summary: MdDemoSummary;
+  fixture_metadata: MdDemoFixtureMetadata;
+};
+
+export type MdDemoRunResponse = {
+  input: MdDemoRunRequest;
+  run_id: string;
+  status: "completed";
+  query_time_ms: number;
+  stages: MdDemoStageSummary[];
+  summary: MdDemoSummary;
+  density_series: MdDemoSeries;
+  thermo_series: MdDemoSeries[];
+  trajectory_preview: MdDemoTrajectoryPreview;
+  atom_distance_series: MdDemoAtomDistanceResponse | null;
+  fixture_metadata: MdDemoFixtureMetadata;
+};
+
 export type StructureImageRecognitionResponse = {
   smiles: string;
   molfile: string | null;
@@ -91,6 +221,7 @@ export type StructureImageRecognitionResponse = {
   warnings: string[];
   query_time_ms: number;
 };
+
 
 export type SmilesLookupRequest = {
   smiles: string;

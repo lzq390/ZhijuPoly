@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
+  Activity,
   Atom,
   BarChart3,
   BookOpen,
@@ -21,6 +22,7 @@ import { ExperimentWorkflowDemoPage } from "./components/ExperimentWorkflowDemoP
 import { KetcherEditor } from "./components/KetcherEditor";
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { LabDataPage, type LabDataView } from "./components/LabDataPage";
+import { MdSimulationDemoPage } from "./components/MdSimulationDemoPage";
 import { QueryPanel } from "./components/QueryPanel";
 import { ResultsDisplay } from "./components/ResultsDisplay";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
@@ -44,6 +46,7 @@ type ActiveModule =
   | "home"
   | "structureWorkbench"
   | "explorer"
+  | "mdSimulationDemo"
   | "reverseDesign"
   | "conditionalGeneration"
   | "databaseQuery"
@@ -86,6 +89,10 @@ function routeFromPath(pathname: string): AppRoute {
 
   if (path === "/explorer") {
     return { module: "explorer", datasetKey: null };
+  }
+
+  if (path === "/md-simulation") {
+    return { module: "mdSimulationDemo", datasetKey: null };
   }
 
   if (path === "/reverse-design") {
@@ -135,6 +142,10 @@ function pathFromRoute(route: AppRoute) {
 
   if (route.module === "explorer") {
     return "/explorer";
+  }
+
+  if (route.module === "mdSimulationDemo") {
+    return "/md-simulation";
   }
 
   if (route.module === "reverseDesign") {
@@ -384,6 +395,10 @@ export default function App() {
     navigate({ module: "structureWorkbench", datasetKey: null });
   }
 
+  function openMdSimulationDemo() {
+    navigate({ module: "mdSimulationDemo", datasetKey: null });
+  }
+
   function openReverseDesign() {
     navigate({ module: "reverseDesign", datasetKey: null });
   }
@@ -458,6 +473,9 @@ export default function App() {
         break;
       case "explorer":
         openExplorer();
+        break;
+      case "mdSimulationDemo":
+        openMdSimulationDemo();
         break;
       case "reverseDesign":
         openReverseDesign();
@@ -538,6 +556,15 @@ export default function App() {
           icon: <Atom className="h-4 w-4" />,
           isActive: activeModule === "explorer",
           onClick: openExplorer
+        },
+        {
+          id: "mdSimulationDemo",
+          label: "MD 模拟",
+          description: "输入 SMILES 和默认参数，演示分子动力学流程与轨迹结果。",
+          route: "/md-simulation",
+          icon: <Activity className="h-4 w-4" />,
+          isActive: activeModule === "mdSimulationDemo",
+          onClick: openMdSimulationDemo
         }
       ]
     },
@@ -586,7 +613,8 @@ export default function App() {
   const isFullBleedModule =
     activeModule === "structureWorkbench" ||
     activeModule === "reverseDesign" ||
-    activeModule === "experimentWorkflowDemo";
+    activeModule === "experimentWorkflowDemo" ||
+    activeModule === "mdSimulationDemo";
 
   return (
     <AppShell
@@ -647,6 +675,10 @@ export default function App() {
 
       {activeModule === "experimentWorkflowDemo" ? (
         <ExperimentWorkflowDemoPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+      ) : null}
+
+      {activeModule === "mdSimulationDemo" ? (
+        <MdSimulationDemoPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
       ) : null}
 
       {activeModule === "conditionalGeneration" ? (

@@ -20,6 +20,11 @@ import type {
   LabDataSampleMeasurementPayload,
   LabDataSummary,
   LabDataTestProject,
+  MdDemoAtomDistanceRequest,
+  MdDemoAtomDistanceResponse,
+  MdDemoDefaultsResponse,
+  MdDemoRunRequest,
+  MdDemoRunResponse,
   OnlineKnowledgeExportResponse,
   OnlineKnowledgeDefaultConfigResponse,
   OnlineKnowledgeHistoryResponse,
@@ -183,6 +188,18 @@ export function predictSmiles(payload: PredictRequest): Promise<PredictResponse>
   return postJSON("/predict", payload);
 }
 
+export function fetchMdDemoDefaults(): Promise<MdDemoDefaultsResponse> {
+  return getJSON("/md-demo/defaults");
+}
+
+export function runMdDemo(payload: MdDemoRunRequest): Promise<MdDemoRunResponse> {
+  return postJSON("/md-demo/run", payload);
+}
+
+export function calculateMdDemoAtomDistance(payload: MdDemoAtomDistanceRequest): Promise<MdDemoAtomDistanceResponse> {
+  return postJSON("/md-demo/atom-distance", payload);
+}
+
 export function searchKnowledge(payload: KnowledgeSearchRequest): Promise<KnowledgeSearchResponse> {
   return postJSON("/knowledge/search", payload);
 }
@@ -265,6 +282,7 @@ export function fetchStructure3D(
 ): Promise<{ molblock: string; capped_smiles: string; format: "mol" }> {
   return postJSON("/structure/3d", { smiles });
 }
+
 
 export function recognizeStructureImage(file: File): Promise<StructureImageRecognitionResponse> {
   const body = new FormData();
