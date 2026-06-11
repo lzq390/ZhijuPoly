@@ -33,6 +33,7 @@ import { Button } from "./components/ui/button";
 import { useKetcher } from "./hooks/useKetcher";
 import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
+import { standardizeSmiles } from "./services/api";
 import {
   type AssistantModuleContext,
   type KnowledgeNavigationRequest,
@@ -312,20 +313,33 @@ export default function App() {
 
   async function getCurrentSmiles() {
     const fallbackSmiles = smiles.trim();
+    let currentSmiles = fallbackSmiles;
     const ketcher = iframeRef.current?.contentWindow?.ketcher;
-    if (!ketcher || typeof ketcher.getSmiles !== "function") {
-      return fallbackSmiles;
+    if (ketcher && typeof ketcher.getSmiles === "function") {
+      try {
+        const editorSmiles = (await ketcher.getSmiles()).trim();
+        if (editorSmiles !== fallbackSmiles) {
+          setSmiles(editorSmiles);
+        }
+        currentSmiles = editorSmiles;
+      } catch (syncError) {
+        console.error("Failed to read SMILES from Ketcher", syncError);
+      }
+    }
+
+    if (!currentSmiles) {
+      return currentSmiles;
     }
 
     try {
-      const editorSmiles = (await ketcher.getSmiles()).trim();
-      if (editorSmiles !== fallbackSmiles) {
-        setSmiles(editorSmiles);
+      const result = await standardizeSmiles({ smiles: currentSmiles });
+      if (result.standardized_smiles !== smiles.trim()) {
+        setSmiles(result.standardized_smiles);
       }
-      return editorSmiles;
-    } catch (syncError) {
-      console.error("Failed to read SMILES from Ketcher", syncError);
-      return fallbackSmiles;
+      return result.standardized_smiles;
+    } catch (standardizeError) {
+      console.error("Failed to standardize current SMILES", standardizeError);
+      return currentSmiles;
     }
   }
 

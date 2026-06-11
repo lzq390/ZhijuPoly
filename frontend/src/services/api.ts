@@ -40,6 +40,8 @@ import type {
   ReverseDesignTgResponse,
   SmilesLookupRequest,
   SmilesLookupResponse,
+  SmilesStandardizeRequest,
+  SmilesStandardizeResponse,
   StructureImageRecognitionResponse,
   SmilesQueryRequest,
   SmilesQueryResponse,
@@ -283,6 +285,9 @@ export function fetchStructure3D(
   return postJSON("/structure/3d", { smiles });
 }
 
+export function standardizeSmiles(payload: SmilesStandardizeRequest): Promise<SmilesStandardizeResponse> {
+  return postJSON("/structure/standardize-smiles", payload);
+}
 
 export function recognizeStructureImage(file: File): Promise<StructureImageRecognitionResponse> {
   const body = new FormData();

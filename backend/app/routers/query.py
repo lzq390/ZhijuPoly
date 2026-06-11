@@ -8,6 +8,8 @@ from app.models import (
     PolymerResult,
     SmilesQueryRequest,
     SmilesQueryResponse,
+    SmilesStandardizeRequest,
+    SmilesStandardizeResponse,
     Structure3DRequest,
     Structure3DResponse,
     StructureImageRecognitionResponse,
@@ -16,6 +18,7 @@ from app.services.aggregator import load_polymer_result, load_polymer_results
 from app.services.image_recognition import recognize_structure_image_from_bytes
 from app.services.property_similarity import property_similarity_search
 from app.services.similarity import similarity_search
+from app.services.smiles_utils import standardize_smiles
 from app.services.structure_3d import generate_3d_molblock
 from app.utils.exceptions import (
     InvalidImageError,
@@ -118,6 +121,23 @@ async def generate_structure_3d(request_body: Structure3DRequest, request: Reque
         molblock=molblock,
         capped_smiles=capped_smiles,
         format="mol",
+    )
+
+
+@router.post("/structure/standardize-smiles", response_model=SmilesStandardizeResponse)
+async def standardize_structure_smiles(request_body: SmilesStandardizeRequest) -> SmilesStandardizeResponse:
+    started_at = perf_counter()
+    try:
+        standardized_smiles = standardize_smiles(request_body.smiles)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    elapsed_ms = (perf_counter() - started_at) * 1000
+    return SmilesStandardizeResponse(
+        input_smiles=request_body.smiles,
+        standardized_smiles=standardized_smiles,
+        changed=standardized_smiles != request_body.smiles,
+        query_time_ms=elapsed_ms,
     )
 
 

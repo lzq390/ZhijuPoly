@@ -17,6 +17,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { REVERSE_DESIGN_DEMO_SMILES } from "../constants/reverseDesignDefaults";
 import { cn } from "../lib/utils";
+import { standardizeSmiles } from "../services/api";
 import type { StructureWorkspaceContext } from "../types";
 
 type StructureWorkbenchPageProps = {
@@ -121,22 +122,72 @@ export function MissingStructurePanel({
 
 export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: StructureWorkbenchPageProps) {
   const [isTextDirty, setIsTextDirty] = useState(false);
+  const [isStandardizingSmiles, setIsStandardizingSmiles] = useState(false);
   const [isLoadingTextIntoCanvas, setIsLoadingTextIntoCanvas] = useState(false);
   const [structureSyncError, setStructureSyncError] = useState<string | null>(null);
+  const [structureSyncMessage, setStructureSyncMessage] = useState<string | null>(null);
   const hasStructure = structure.smiles.trim().length > 0;
+
+  async function standardizeWorkbenchSmiles(
+    rawSmiles = structure.smiles,
+    options: { markDirty?: boolean; showSuccess?: boolean } = {}
+  ) {
+    const nextStructure = rawSmiles.trim();
+    if (!nextStructure) {
+      setStructureSyncError("请先输入 SMILES，再进行 RDKit 标准化。");
+      setStructureSyncMessage(null);
+      return null;
+    }
+
+    setIsStandardizingSmiles(true);
+    setStructureSyncError(null);
+    setStructureSyncMessage(null);
+    try {
+      const result = await standardizeSmiles({ smiles: nextStructure });
+      structure.setSmiles(result.standardized_smiles);
+      if (options.markDirty !== undefined) {
+        setIsTextDirty(options.markDirty);
+      }
+      if (options.showSuccess !== false) {
+        setStructureSyncMessage(
+          result.changed
+            ? "已使用 RDKit 转换为 canonical SMILES。"
+            : "当前 SMILES 已是 RDKit canonical 形式。"
+        );
+      }
+      return result.standardized_smiles;
+    } catch (error) {
+      console.error("Failed to standardize workbench SMILES", error);
+      setStructureSyncError(error instanceof Error ? error.message : "RDKit 无法标准化当前 SMILES。");
+      return null;
+    } finally {
+      setIsStandardizingSmiles(false);
+    }
+  }
 
   async function openModuleWithSyncedStructure(moduleId: string) {
     setStructureSyncError(null);
+    setStructureSyncMessage(null);
+    let currentSmiles = structure.smiles.trim();
     if (!isTextDirty) {
-      await structure.getCurrentSmiles();
+      currentSmiles = (await structure.getCurrentSmiles()).trim();
+    }
+    const standardizedSmiles = await standardizeWorkbenchSmiles(currentSmiles, {
+      markDirty: false,
+      showSuccess: false
+    });
+    if (!standardizedSmiles) {
+      return;
     }
     onOpenModule(moduleId);
   }
 
   async function loadSmilesTextIntoCanvas() {
-    const nextStructure = structure.smiles.trim();
-    if (!nextStructure) {
-      setStructureSyncError("请先输入 SMILES，再加载到画布。");
+    const standardizedSmiles = await standardizeWorkbenchSmiles(structure.smiles, {
+      markDirty: true,
+      showSuccess: false
+    });
+    if (!standardizedSmiles) {
       return;
     }
 
@@ -149,16 +200,23 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
 
     setIsLoadingTextIntoCanvas(true);
     setStructureSyncError(null);
+    setStructureSyncMessage(null);
     try {
-      await ketcher.setMolecule(nextStructure);
+      await ketcher.setMolecule(standardizedSmiles);
       await new Promise((resolve) => window.setTimeout(resolve, 80));
       const editorSmiles =
         typeof ketcher.getSmiles === "function"
           ? (await ketcher.getSmiles()).trim()
-          : nextStructure;
-      structure.setSmiles(editorSmiles || nextStructure);
+          : standardizedSmiles;
+      const nextSmiles = (await standardizeWorkbenchSmiles(editorSmiles || standardizedSmiles, {
+        markDirty: false,
+        showSuccess: false
+      })) ?? standardizedSmiles;
+      structure.setSmiles(nextSmiles);
+      setStructureSyncError(null);
       setIsTextDirty(false);
       structure.setIsReady(true);
+      setStructureSyncMessage("已使用 RDKit 标准化并加载到画布。");
     } catch (error) {
       console.error("Failed to load workbench SMILES into Ketcher", error);
       setStructureSyncError(error instanceof Error ? error.message : "无法将 SMILES 加载到画布。");
@@ -269,8 +327,22 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
                       <Button
                         type="button"
                         variant="outline"
+                        onClick={() => void standardizeWorkbenchSmiles(structure.smiles, { markDirty: true })}
+                        disabled={!structure.smiles.trim() || isStandardizingSmiles || isLoadingTextIntoCanvas}
+                        className="min-h-[38px] min-w-[138px] border-sky-100 bg-white px-3 text-slate-700 shadow-[0_10px_24px_rgba(37,99,235,0.08)] hover:border-blue-200 hover:bg-blue-50"
+                      >
+                        {isStandardizingSmiles ? (
+                          <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="mr-2 h-3.5 w-3.5" />
+                        )}
+                        RDKit 标准化
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
                         onClick={() => void loadSmilesTextIntoCanvas()}
-                        disabled={!structure.smiles.trim() || isLoadingTextIntoCanvas}
+                        disabled={!structure.smiles.trim() || isLoadingTextIntoCanvas || isStandardizingSmiles}
                         className="min-h-[38px] min-w-[132px] border-sky-100 bg-white px-3 text-slate-700 shadow-[0_10px_24px_rgba(37,99,235,0.08)] hover:border-blue-200 hover:bg-blue-50"
                       >
                         {isLoadingTextIntoCanvas ? (
@@ -291,6 +363,7 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
                       structure.setSmiles(event.target.value);
                       setIsTextDirty(true);
                       setStructureSyncError(null);
+                      setStructureSyncMessage(null);
                     }}
                     placeholder="例如：*CC*、CCO，或用于相似匹配的其他 SMILES"
                     spellCheck={false}
@@ -299,6 +372,11 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
                   {structureSyncError ? (
                     <div className="mt-3 rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700">
                       {structureSyncError}
+                    </div>
+                  ) : null}
+                  {structureSyncMessage ? (
+                    <div className="mt-3 rounded-2xl border border-cyan-100 bg-cyan-50 px-3 py-2 text-xs leading-5 text-cyan-700">
+                      {structureSyncMessage}
                     </div>
                   ) : null}
                   {isTextDirty ? (

@@ -222,6 +222,16 @@ export type StructureImageRecognitionResponse = {
   query_time_ms: number;
 };
 
+export type SmilesStandardizeRequest = {
+  smiles: string;
+};
+
+export type SmilesStandardizeResponse = {
+  input_smiles: string;
+  standardized_smiles: string;
+  changed: boolean;
+  query_time_ms: number;
+};
 
 export type SmilesLookupRequest = {
   smiles: string;

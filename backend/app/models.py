@@ -127,6 +127,21 @@ class Structure3DResponse(BaseModel):
     format: Literal["mol"]
 
 
+class SmilesStandardizeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str = Field(min_length=1)
+
+
+class SmilesStandardizeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    input_smiles: str
+    standardized_smiles: str
+    changed: bool
+    query_time_ms: float = Field(ge=0.0)
+
+
 class StructureImageRecognitionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
