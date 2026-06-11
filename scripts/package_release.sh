@@ -32,6 +32,42 @@ if [[ "$missing_data" == "1" ]]; then
   exit 1
 fi
 
+REQUIRED_MODEL_FILES=(
+  "model/rf_Glass transition temperature_exp.pkl"
+  "model/rf_Melting temperature_exp.pkl"
+  "model/rf_Thermal decomposition temperature_exp.pkl"
+  "model/rf_Thermal decomposition weight loss_exp.pkl"
+  "model/rf_Elongation at break_exp.pkl"
+  "model/rf_Tensile stress strength at break_exp.pkl"
+  "model/rf_O2 Permeability Barrer_exp.pkl"
+  "model/rf_Co2 Permeability Barrer_exp.pkl"
+  "model/rf_H2 Permeability Barrer_exp.pkl"
+  "model/ocsr/swin_base_char_aux_1m.pth"
+  "model/conditional_generation/generator_best_40.pth"
+  "model/conditional_generation/best_chemberta_tg.pth"
+  "model/conditional_generation/top10_desc_names.pkl"
+  "model/conditional_generation/tg_scaler.pkl"
+  "model/conditional_generation/ChemBerta/config.json"
+  "model/conditional_generation/ChemBerta/model.safetensors"
+  "model/conditional_generation/ChemBerta/tokenizer.json"
+  "model/conditional_generation/ChemBerta/tokenizer_config.json"
+  "model/conditional_generation/ChemBerta/special_tokens_map.json"
+  "model/conditional_generation/ChemBerta/vocab.json"
+  "model/conditional_generation/ChemBerta/merges.txt"
+)
+
+missing_model=0
+for model_file in "${REQUIRED_MODEL_FILES[@]}"; do
+  if [[ ! -s "$model_file" ]]; then
+    echo "Missing required model artifact for deployment package: $model_file" >&2
+    missing_model=1
+  fi
+done
+
+if [[ "$missing_model" == "1" ]]; then
+  exit 1
+fi
+
 npm --prefix frontend run build
 
 mkdir -p "$RELEASE_DIR"
@@ -52,6 +88,8 @@ EXCLUDES=(
   --exclude=frontend/vite.config.d.ts
   --exclude=__pycache__
   --exclude=.pytest_cache
+  --exclude=*.log
+  --exclude=*.pid
   --exclude=online_retrieval/data/search_history.json
   --exclude=release
   --exclude=database
@@ -63,9 +101,10 @@ if [[ "$INCLUDE_DATA" != "1" ]]; then
   EXCLUDES+=(--exclude=backend/data)
 fi
 
-tar -czf "$BUNDLE" "${EXCLUDES[@]}" .
+tar --dereference -czf "$BUNDLE" "${EXCLUDES[@]}" .
 
 echo "Created $BUNDLE"
+echo "Model artifacts under model/ were bundled; symlinks were dereferenced into real files."
 if [[ "$INCLUDE_DATA" != "1" ]]; then
   echo "Database files were not bundled. Copy backend/data/polyprop.db and backend/data/fumol.db to the deployment host."
 fi

@@ -19,7 +19,21 @@ backend/data/polyprop.db
 backend/data/fumol.db
 ```
 
-The model files under `model/` are copied into the backend image during build.
+The model files under `model/` are copied into the backend image during build. Local checkouts may keep large
+model artifacts as symlinks, but `scripts/package_release.sh` dereferences those symlinks so the release bundle
+contains real model files for server deployment.
+
+Required model artifacts:
+
+```text
+model/rf_*.pkl
+model/ocsr/swin_base_char_aux_1m.pth
+model/conditional_generation/generator_best_40.pth
+model/conditional_generation/best_chemberta_tg.pth
+model/conditional_generation/top10_desc_names.pkl
+model/conditional_generation/tg_scaler.pkl
+model/conditional_generation/ChemBerta/
+```
 
 ## Start
 
@@ -62,6 +76,7 @@ INCLUDE_DATA=1 scripts/package_release.sh
 ```
 
 The package is written to `release/polyprop-release-*.tar.gz`.
+Model artifacts are included by default. Database files are included only when `INCLUDE_DATA=1`.
 
 ## Configuration
 

@@ -15,8 +15,8 @@ backend/.env
 *.sqlite
 *.sqlite3
 
-# Local conditional-generation model artifacts
-/model/conditional_generation/
+# Local conditional-generation model artifacts, including local symlinks.
+/model/conditional_generation
 /model/ocsr/*.ckpt
 /model/ocsr/*.pth
 /model/ocsr/*.pt
