@@ -333,6 +333,17 @@ def browse_experimental_process_records(
 ) -> ExperimentalProcessBrowseResponse:
     started_at = perf_counter()
     query = q.strip()
+    if not EXPERIMENTAL_PROCESS_CSV.exists():
+        return ExperimentalProcessBrowseResponse(
+            query=query,
+            page=page,
+            page_size=page_size,
+            query_time_ms=(perf_counter() - started_at) * 1000,
+            total_records=0,
+            matched_records=0,
+            results=[],
+        )
+
     total_records, matched_records, rows = _browse_csv_or_raise(
         EXPERIMENTAL_PROCESS_CSV,
         query=query,
@@ -364,12 +375,43 @@ def browse_experimental_process_records(
 
 @router.get("/experimental-property", response_model=ExperimentalPropertyBrowseResponse)
 def browse_experimental_property_records(
+    request: Request,
     q: str = Query(default="", max_length=200),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
 ) -> ExperimentalPropertyBrowseResponse:
     started_at = perf_counter()
     query = q.strip()
+    if not EXPERIMENTAL_PROPERTY_CSV.exists():
+        settings = request.app.state.settings
+        with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
+            total_records, matched_records, rows = browse_structure_property_records(
+                connection,
+                query=query,
+                page=page,
+                page_size=page_size,
+            )
+
+        return ExperimentalPropertyBrowseResponse(
+            query=query,
+            page=page,
+            page_size=page_size,
+            query_time_ms=(perf_counter() - started_at) * 1000,
+            total_records=total_records,
+            matched_records=matched_records,
+            results=[
+                ExperimentalPropertyRecord(
+                    source_file="sqlite:properties",
+                    source_row_number=int(row["property_id"]),
+                    polymer_id=str(row["polymer_id"]),
+                    polymer_name="",
+                    property_name_en=row["property_name"],
+                    value=row["property_value"],
+                )
+                for row in rows
+            ],
+        )
+
     total_records, matched_records, rows = _browse_csv_or_raise(
         EXPERIMENTAL_PROPERTY_CSV,
         query=query,
