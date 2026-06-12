@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
 from app.models import MonomerRetrosynthesisResponse
-from app.services.monomer_retrosynthesis import _resolve_device
+from app.services.monomer_retrosynthesis import _get_runtime, _resolve_device
 from app.utils.exceptions import ModelArtifactError
 
 
@@ -120,3 +121,47 @@ def test_monomer_retrosynthesis_auto_device_falls_back_for_unsupported_cuda(monk
     monkeypatch.setattr("builtins.__import__", fake_import)
 
     assert _resolve_device("auto") == "cpu"
+
+
+def test_reaction_t5_runtime_uses_local_model_files_only(monkeypatch) -> None:
+    import sys
+
+    from app.services import monomer_retrosynthesis
+
+    calls = []
+
+    class FakeTokenizer:
+        @classmethod
+        def from_pretrained(cls, model_id: str, **kwargs):
+            calls.append(("tokenizer", model_id, kwargs))
+            return cls()
+
+    class FakeModel:
+        @classmethod
+        def from_pretrained(cls, model_id: str, **kwargs):
+            calls.append(("model", model_id, kwargs))
+            return cls()
+
+        def to(self, device: str) -> None:
+            self.device = device
+
+        def eval(self) -> None:
+            self.eval_called = True
+
+    fake_torch = SimpleNamespace()
+    fake_transformers = SimpleNamespace(
+        AutoModelForSeq2SeqLM=FakeModel,
+        AutoTokenizer=FakeTokenizer,
+    )
+    monomer_retrosynthesis._RUNTIME_CACHE.clear()
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    runtime = _get_runtime("local-reactiont5", "cpu")
+
+    assert runtime.device == "cpu"
+    assert calls == [
+        ("tokenizer", "local-reactiont5", {"local_files_only": True}),
+        ("model", "local-reactiont5", {"local_files_only": True}),
+    ]
+    monomer_retrosynthesis._RUNTIME_CACHE.clear()

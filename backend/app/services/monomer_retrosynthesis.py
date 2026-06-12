@@ -97,13 +97,17 @@ def _get_runtime(model_id: str, device: str) -> _ReactionT5Runtime:
         except ImportError as exc:  # pragma: no cover - dependency guard for partial installs
             raise ModelArtifactError("ReactionT5 dependencies are not installed") from exc
 
+        load_kwargs = {"local_files_only": True}
         try:
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+            tokenizer = AutoTokenizer.from_pretrained(model_id, **load_kwargs)
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_id, **load_kwargs)
             model.to(device)
             model.eval()
         except Exception as exc:  # pragma: no cover - depends on local model cache/network
-            raise ModelArtifactError(f"failed to load retrosynthesis model: {exc}") from exc
+            raise ModelArtifactError(
+                "retrosynthesis model files are not available locally; "
+                "pre-download the ReactionT5 model or set RETRO_MODEL_ID to a local model directory"
+            ) from exc
 
         runtime = _ReactionT5Runtime(tokenizer=tokenizer, model=model, torch=torch, device=device)
         _RUNTIME_CACHE[cache_key] = runtime
