@@ -18,6 +18,9 @@ services:
       GEN_MODEL_DIR: /app/model/conditional_generation
       GEN_DEVICE: "${GEN_DEVICE:-auto}"
       GEN_JOB_WORKERS: "${GEN_JOB_WORKERS:-1}"
+      RETRO_MODEL_ENABLED: "${RETRO_MODEL_ENABLED:-true}"
+      RETRO_MODEL_ID: "${RETRO_MODEL_ID:-/app/model/reactiont5-retrosynthesis}"
+      RETRO_DEVICE: "${RETRO_DEVICE:-auto}"
       PI_REVERSE_BACKEND: "${PI_REVERSE_BACKEND:-sqlite}"
       PI_REVERSE_DB_PATH: "${PI_REVERSE_DB_PATH:-/app/backend/data/pi_reverse_design.db}"
       PI_POSTGRES_DSN: "${PI_POSTGRES_DSN:-postgresql://polyprop:polyprop@host.docker.internal:55432/polyprop_pi}"
@@ -32,7 +35,10 @@ services:
       ALLOWED_ORIGINS: "http://localhost:${POLYPROP_WEB_PORT:-9000},http://127.0.0.1:${POLYPROP_WEB_PORT:-9000}"
     volumes:
       - ./backend/data:/app/backend/data
+      - ./database:/app/database:ro
       - ./model/ocsr:/app/model/ocsr:ro
+      - ./model/conditional_generation:/app/model/conditional_generation:ro
+      - ./model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
