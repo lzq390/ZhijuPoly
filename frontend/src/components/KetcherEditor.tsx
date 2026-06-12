@@ -198,6 +198,74 @@ export function KetcherEditor({
     [waitForKetcherCommit],
   );
 
+  const hydrateEmptyEditorFromSmiles = useCallback(
+    async (ketcher: KetcherApi, sourceSmiles: string, shouldApply: () => boolean = () => true) => {
+      if (typeof ketcher.getSmiles !== "function" || typeof ketcher.setMolecule !== "function") {
+        return;
+      }
+
+      const editorSmiles = (await ketcher.getSmiles()).trim();
+      if (editorSmiles) {
+        return;
+      }
+
+      const loadedSmiles = await writeStructureToEditor(ketcher, sourceSmiles, sourceSmiles);
+      if (!shouldApply()) {
+        return;
+      }
+      onReadyChange(true);
+      if (loadedSmiles && loadedSmiles !== sourceSmiles) {
+        onChange(loadedSmiles);
+      }
+    },
+    [onChange, onReadyChange, writeStructureToEditor],
+  );
+
+  useEffect(() => {
+    const sourceSmiles = smiles.trim();
+    if (!sourceSmiles) {
+      return;
+    }
+
+    let cancelled = false;
+    let attempts = 0;
+    let isChecking = false;
+
+    const timer = window.setInterval(() => {
+      if (isChecking) {
+        return;
+      }
+
+      const ketcher = iframeRef.current?.contentWindow?.ketcher;
+      attempts += 1;
+      if (!ketcher) {
+        if (attempts >= 40) {
+          window.clearInterval(timer);
+        }
+        return;
+      }
+
+      isChecking = true;
+      void hydrateEmptyEditorFromSmiles(ketcher, sourceSmiles, () => !cancelled)
+        .then(() => {
+          window.clearInterval(timer);
+        })
+        .catch((error) => {
+          console.error("Failed to hydrate empty Ketcher editor from shared SMILES", error);
+          if (attempts >= 40) {
+            window.clearInterval(timer);
+            return;
+          }
+          isChecking = false;
+        });
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [hydrateEmptyEditorFromSmiles, iframeRef, smiles]);
+
   const loadRecognizedStructureIntoEditor = useCallback(
     async (
       payload: RecognizedStructurePayload,

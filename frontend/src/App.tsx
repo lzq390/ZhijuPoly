@@ -231,6 +231,9 @@ export default function App() {
     return getKnowledgeTermsFromSearch(window.location.search);
   });
   const [preserveReverseDesignForKnowledge, setPreserveReverseDesignForKnowledge] = useState(false);
+  const [hasMountedStructureWorkbench, setHasMountedStructureWorkbench] = useState(
+    () => getInitialRoute().module === "structureWorkbench"
+  );
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const predict = usePredict();
@@ -318,10 +321,17 @@ export default function App() {
     if (ketcher && typeof ketcher.getSmiles === "function") {
       try {
         const editorSmiles = (await ketcher.getSmiles()).trim();
-        if (editorSmiles !== fallbackSmiles) {
+        if (editorSmiles) {
+          if (editorSmiles !== fallbackSmiles) {
+            setSmiles(editorSmiles);
+          }
+          currentSmiles = editorSmiles;
+        } else if (fallbackSmiles) {
+          currentSmiles = fallbackSmiles;
+        } else {
           setSmiles(editorSmiles);
+          currentSmiles = editorSmiles;
         }
-        currentSmiles = editorSmiles;
       } catch (syncError) {
         console.error("Failed to read SMILES from Ketcher", syncError);
       }
@@ -386,6 +396,12 @@ export default function App() {
 
     applyRoute(route);
   }
+
+  useEffect(() => {
+    if (activeModule === "structureWorkbench") {
+      setHasMountedStructureWorkbench(true);
+    }
+  }, [activeModule]);
 
   useEffect(() => {
     function handlePopState() {
@@ -629,6 +645,7 @@ export default function App() {
     activeModule === "reverseDesign" ||
     activeModule === "experimentWorkflowDemo" ||
     activeModule === "mdSimulationDemo";
+  const shouldKeepStructureWorkbenchMounted = hasMountedStructureWorkbench && activeModule !== "explorer";
 
   return (
     <AppShell
@@ -654,12 +671,17 @@ export default function App() {
         />
       ) : null}
 
-      {activeModule === "structureWorkbench" ? (
-        <StructureWorkbenchPage
-          structure={structureWorkspace}
-          onBackHome={() => navigate({ module: "home", datasetKey: null })}
-          onOpenModule={openModuleById}
-        />
+      {shouldKeepStructureWorkbenchMounted ? (
+        <div
+          className={activeModule === "structureWorkbench" ? "contents" : "hidden"}
+          aria-hidden={activeModule !== "structureWorkbench"}
+        >
+          <StructureWorkbenchPage
+            structure={structureWorkspace}
+            onBackHome={() => navigate({ module: "home", datasetKey: null })}
+            onOpenModule={openModuleById}
+          />
+        </div>
       ) : null}
 
       {activeModule === "database" ? (
