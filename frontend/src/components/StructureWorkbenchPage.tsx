@@ -1,14 +1,18 @@
-import { useState, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowLeft,
   Atom,
+  Copy,
   Database,
   FlaskConical,
   LoaderCircle,
   Microscope,
+  Network,
   Orbit,
+  Route,
   Search,
   Sparkles,
+  TriangleAlert,
   Upload
 } from "lucide-react";
 import { KetcherEditor } from "./KetcherEditor";
@@ -17,8 +21,12 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { REVERSE_DESIGN_DEMO_SMILES } from "../constants/reverseDesignDefaults";
 import { cn } from "../lib/utils";
-import { standardizeSmiles } from "../services/api";
-import type { StructureWorkspaceContext } from "../types";
+import { predictMonomerPrecursors, standardizeSmiles } from "../services/api";
+import type {
+  MonomerRetrosynthesisResponse,
+  MonomerRetrosynthesisTargetRole,
+  StructureWorkspaceContext
+} from "../types";
 
 type StructureWorkbenchPageProps = {
   structure: StructureWorkspaceContext;
@@ -33,6 +41,33 @@ type WorkbenchAction = {
   icon: ReactNode;
   onClick: () => void;
 };
+
+type WorkbenchTabId = "structure" | "retrosynthesis";
+
+const TARGET_ROLE_OPTIONS: { value: MonomerRetrosynthesisTargetRole; label: string }[] = [
+  { value: "auto", label: "自动识别" },
+  { value: "diamine", label: "二胺" },
+  { value: "dianhydride", label: "二酐" },
+  { value: "other", label: "其他单体" }
+];
+
+const TARGET_ROLE_LABEL: Record<MonomerRetrosynthesisTargetRole, string> = {
+  auto: "自动",
+  diamine: "二胺",
+  dianhydride: "二酐",
+  other: "其他"
+};
+
+function clampInteger(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function formatModelScore(score: number | null): string {
+  return score === null ? "未返回" : score.toFixed(3);
+}
 
 export function WorkbenchPanel({ children, className, id }: { children: ReactNode; className?: string; id?: string }) {
   return (
@@ -121,11 +156,19 @@ export function MissingStructurePanel({
 }
 
 export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: StructureWorkbenchPageProps) {
+  const [activeTab, setActiveTab] = useState<WorkbenchTabId>("structure");
   const [isTextDirty, setIsTextDirty] = useState(false);
   const [isStandardizingSmiles, setIsStandardizingSmiles] = useState(false);
   const [isLoadingTextIntoCanvas, setIsLoadingTextIntoCanvas] = useState(false);
   const [structureSyncError, setStructureSyncError] = useState<string | null>(null);
   const [structureSyncMessage, setStructureSyncMessage] = useState<string | null>(null);
+  const [retroSmiles, setRetroSmiles] = useState("");
+  const [retroTargetRole, setRetroTargetRole] = useState<MonomerRetrosynthesisTargetRole>("auto");
+  const [retroReturnCount, setRetroReturnCount] = useState(5);
+  const [retroBeamCount, setRetroBeamCount] = useState(5);
+  const [retroData, setRetroData] = useState<MonomerRetrosynthesisResponse | null>(null);
+  const [retroError, setRetroError] = useState<string | null>(null);
+  const [isRetrosynthesizing, setIsRetrosynthesizing] = useState(false);
   const hasStructure = structure.smiles.trim().length > 0;
 
   async function standardizeWorkbenchSmiles(
@@ -225,6 +268,58 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
     }
   }
 
+  function copyCurrentStructureToRetrosynthesis() {
+    const currentSmiles = structure.smiles.trim();
+    setActiveTab("retrosynthesis");
+    setRetroError(null);
+    if (!currentSmiles) {
+      setRetroError("当前结构为空，请先在结构页签绘制、导入或输入一个二胺/二酐单体。");
+      return;
+    }
+    setRetroSmiles(currentSmiles);
+  }
+
+  async function submitRetrosynthesis(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const targetSmiles = retroSmiles.trim() || structure.smiles.trim();
+    if (!targetSmiles) {
+      setRetroError("请输入目标二胺、二酐或其他单体的 SMILES。");
+      setRetroData(null);
+      return;
+    }
+
+    const numReturnSequences = clampInteger(retroReturnCount, 1, 10);
+    const numBeams = Math.max(clampInteger(retroBeamCount, 1, 20), numReturnSequences);
+    setRetroReturnCount(numReturnSequences);
+    setRetroBeamCount(numBeams);
+    setIsRetrosynthesizing(true);
+    setRetroError(null);
+    try {
+      const data = await predictMonomerPrecursors({
+        smiles: targetSmiles,
+        target_role: retroTargetRole,
+        num_beams: numBeams,
+        num_return_sequences: numReturnSequences,
+        max_new_tokens: 128
+      });
+      setRetroData(data);
+      setActiveTab("retrosynthesis");
+    } catch (error) {
+      console.error("Failed to run monomer retrosynthesis", error);
+      setRetroError(error instanceof Error ? error.message : "单体上游反推失败。");
+      setRetroData(null);
+    } finally {
+      setIsRetrosynthesizing(false);
+    }
+  }
+
+  function copyText(value: string | null | undefined) {
+    if (!value) {
+      return;
+    }
+    void navigator.clipboard?.writeText(value);
+  }
+
   const actions: WorkbenchAction[] = [
     {
       id: "databaseQuery",
@@ -255,6 +350,14 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
       onClick: () => void openModuleWithSyncedStructure("conditionalGeneration")
     }
   ];
+
+  const tabs: { id: WorkbenchTabId; label: string; icon: ReactNode }[] = [
+    { id: "structure", label: "结构", icon: <Atom className="h-4 w-4" /> },
+    { id: "retrosynthesis", label: "反推", icon: <Route className="h-4 w-4" /> }
+  ];
+
+  const currentRetroTarget = retroSmiles.trim() || structure.smiles.trim();
+  const validCandidateCount = retroData?.candidates.filter((candidate) => candidate.valid_smiles).length ?? 0;
 
   return (
     <div className="relative -mx-4 -my-5 w-auto overflow-x-clip bg-[#f5fbff] text-slate-900 md:-mx-8 md:-my-8">
@@ -289,8 +392,41 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
         </div>
       </header>
 
+      <nav className="relative z-20 border-b border-sky-100 bg-[#eaf6ff] px-4 py-3 md:px-6">
+        <div className="flex w-full gap-2 overflow-x-auto rounded-[22px] bg-sky-50/90 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)] md:w-fit">
+          {tabs.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "inline-flex min-h-[46px] min-w-[112px] flex-none items-center justify-center gap-2 rounded-[18px] px-4 text-sm font-semibold transition",
+                  isActive
+                    ? "border border-blue-200 bg-white text-blue-700 shadow-[0_14px_30px_rgba(37,99,235,0.18)]"
+                    : "border border-transparent text-slate-500 hover:bg-white/70 hover:text-slate-900"
+                )}
+                aria-pressed={isActive}
+              >
+                <span
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-[14px]",
+                    isActive ? "bg-blue-50 text-blue-600" : "bg-white/70 text-slate-500"
+                  )}
+                >
+                  {tab.icon}
+                </span>
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
       <div className="relative z-10 overflow-x-clip bg-[#f7f9fc]">
         <main className="relative min-w-0 overflow-x-clip bg-[#f7f9fc] px-4 py-4 md:px-6 md:py-6">
+          {activeTab === "structure" ? (
           <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(520px,0.92fr)_minmax(0,1fr)] 2xl:items-stretch">
             <KetcherEditor
               smiles={structure.smiles}
@@ -443,6 +579,257 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
               </div>
             </div>
           </div>
+          ) : null}
+
+          {activeTab === "retrosynthesis" ? (
+            <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(340px,0.62fr)_minmax(0,1fr)]">
+              <WorkbenchPanel>
+                <form onSubmit={(event) => void submitRetrosynthesis(event)} className="p-5">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h2 className="font-heading text-lg font-semibold text-slate-950">二胺/二酐上游反推</h2>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        输入目标单体 SMILES，ReactionT5 会生成可能的更小前体组合。
+                      </p>
+                    </div>
+                    <Route className="h-5 w-5 text-violet-600" />
+                  </div>
+
+                  <label className="mt-5 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Target monomer SMILES
+                  </label>
+                  <textarea
+                    value={retroSmiles}
+                    onChange={(event) => {
+                      setRetroSmiles(event.target.value);
+                      setRetroError(null);
+                    }}
+                    placeholder="例如：Nc1ccc(N)cc1，或二酐单体 SMILES"
+                    spellCheck={false}
+                    className="mt-2 min-h-[132px] w-full resize-none rounded-[16px] border border-violet-100 bg-violet-50/70 px-3 py-2 font-mono-ui text-sm leading-6 text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)] placeholder:text-violet-700/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                  />
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">单体类型</span>
+                      <select
+                        value={retroTargetRole}
+                        onChange={(event) => setRetroTargetRole(event.target.value as MonomerRetrosynthesisTargetRole)}
+                        className="mt-2 h-11 w-full rounded-2xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-800 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                      >
+                        {TARGET_ROLE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">候选数</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={retroReturnCount}
+                        onChange={(event) => setRetroReturnCount(clampInteger(Number(event.target.value), 1, 10))}
+                        className="mt-2 h-11 w-full rounded-2xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-800 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">Beam</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={retroBeamCount}
+                        onChange={(event) => setRetroBeamCount(clampInteger(Number(event.target.value), 1, 20))}
+                        className="mt-2 h-11 w-full rounded-2xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-800 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                      />
+                    </label>
+                  </div>
+
+                  {retroError ? (
+                    <div className="mt-4 flex gap-3 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+                      <TriangleAlert className="mt-0.5 h-4 w-4 flex-none" />
+                      <span>{retroError}</span>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                    <Button
+                      type="submit"
+                      disabled={isRetrosynthesizing || !currentRetroTarget}
+                      className="min-h-[46px] bg-violet-600 text-white shadow-[0_18px_42px_rgba(124,58,237,0.28)] hover:bg-violet-500"
+                    >
+                      {isRetrosynthesizing ? (
+                        <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-2 h-4 w-4" />
+                      )}
+                      运行反推
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={copyCurrentStructureToRetrosynthesis}
+                      className="min-h-[46px] border-sky-100 bg-white text-slate-700"
+                    >
+                      <Atom className="mr-2 h-4 w-4" />
+                      使用当前结构
+                    </Button>
+                  </div>
+
+                  <div className="mt-5 rounded-[18px] border border-sky-100 bg-sky-50/80 px-4 py-3 text-xs leading-5 text-slate-600">
+                    首次运行会下载并加载 ReactionT5 权重；输出为模型候选，需要结合 RDKit 合法性和实验可行性继续筛选。
+                  </div>
+                </form>
+              </WorkbenchPanel>
+
+              <WorkbenchPanel>
+                <div className="p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h2 className="font-heading text-lg font-semibold text-slate-950">反推结果</h2>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        合法 SMILES、反应提示和模型分数会在这里汇总。
+                      </p>
+                    </div>
+                    {retroData ? (
+                      <Badge className="border border-violet-200 bg-violet-50 text-violet-800">
+                        {retroData.total} candidates
+                      </Badge>
+                    ) : null}
+                  </div>
+
+                  {isRetrosynthesizing ? (
+                    <div className="mt-5 flex min-h-[360px] flex-col items-center justify-center rounded-[24px] border border-dashed border-violet-100 bg-violet-50/60 px-6 text-center text-sm text-violet-800">
+                      <LoaderCircle className="mb-4 h-7 w-7 animate-spin" />
+                      正在生成上游反应物候选...
+                    </div>
+                  ) : retroData ? (
+                    <div className="mt-5 space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-[18px] border border-sky-100 bg-white px-4 py-3 shadow-sm">
+                          <div className="text-xs font-semibold text-slate-500">识别类型</div>
+                          <div className="mt-1 text-base font-semibold text-slate-950">
+                            {TARGET_ROLE_LABEL[retroData.inferred_target_role]}
+                          </div>
+                        </div>
+                        <div className="rounded-[18px] border border-sky-100 bg-white px-4 py-3 shadow-sm">
+                          <div className="text-xs font-semibold text-slate-500">合法候选</div>
+                          <div className="mt-1 text-base font-semibold text-slate-950">
+                            {validCandidateCount}/{retroData.total}
+                          </div>
+                        </div>
+                        <div className="rounded-[18px] border border-sky-100 bg-white px-4 py-3 shadow-sm">
+                          <div className="text-xs font-semibold text-slate-500">设备</div>
+                          <div className="mt-1 text-base font-semibold text-slate-950">{retroData.device}</div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[18px] border border-sky-100 bg-sky-50/70 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold text-slate-500">Canonical target</div>
+                            <div className="mt-1 break-all font-mono-ui text-sm leading-6 text-slate-950">
+                              {retroData.canonical_smiles}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => copyText(retroData.canonical_smiles)}
+                            className="flex h-9 w-9 flex-none items-center justify-center rounded-[14px] text-slate-500 transition hover:bg-white hover:text-blue-600"
+                            aria-label="复制目标 SMILES"
+                          >
+                            <Copy className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        {retroData.candidates.map((candidate) => (
+                          <article
+                            key={`${candidate.rank}-${candidate.reactants_smiles}`}
+                            className="rounded-[20px] border border-sky-100 bg-white p-4 shadow-[0_12px_28px_rgba(37,99,235,0.08)]"
+                          >
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge className="border border-slate-200 bg-slate-50 text-slate-700">
+                                    Rank {candidate.rank}
+                                  </Badge>
+                                  <Badge
+                                    className={
+                                      candidate.valid_smiles
+                                        ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                                        : "border border-rose-200 bg-rose-50 text-rose-700"
+                                    }
+                                  >
+                                    {candidate.valid_smiles ? "合法 SMILES" : "需人工校验"}
+                                  </Badge>
+                                  {candidate.all_reactants_smaller_than_target !== null ? (
+                                    <Badge className="border border-blue-200 bg-blue-50 text-blue-700">
+                                      {candidate.all_reactants_smaller_than_target ? "更小前体" : "含较大前体"}
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                                <h3 className="mt-3 font-heading text-base font-semibold text-slate-950">
+                                  {candidate.reaction_hint}
+                                </h3>
+                              </div>
+                              <div className="rounded-[16px] border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                score {formatModelScore(candidate.model_score)}
+                              </div>
+                            </div>
+
+                            <div className="mt-4 space-y-2">
+                              {candidate.reactants.map((reactant, index) => (
+                                <div
+                                  key={`${candidate.rank}-${index}-${reactant.input_smiles}`}
+                                  className="grid gap-2 rounded-[16px] border border-slate-100 bg-slate-50/80 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto]"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                      Reactant {index + 1}
+                                    </div>
+                                    <div className="mt-1 break-all font-mono-ui text-sm leading-6 text-slate-950">
+                                      {reactant.canonical_smiles ?? reactant.input_smiles}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 sm:justify-end">
+                                    <Badge className="border border-white bg-white text-slate-600">
+                                      {reactant.heavy_atom_count ?? "-"} heavy atoms
+                                    </Badge>
+                                    <button
+                                      type="button"
+                                      onClick={() => copyText(reactant.canonical_smiles ?? reactant.input_smiles)}
+                                      className="flex h-9 w-9 items-center justify-center rounded-[14px] text-slate-500 transition hover:bg-white hover:text-blue-600"
+                                      aria-label="复制反应物 SMILES"
+                                    >
+                                      <Copy className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-5 flex min-h-[360px] flex-col items-center justify-center rounded-[24px] border border-dashed border-sky-100 bg-sky-50/70 px-6 text-center">
+                      <Network className="h-8 w-8 text-slate-400" />
+                      <h3 className="mt-4 font-heading text-lg font-semibold text-slate-950">等待反推</h3>
+                      <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
+                        输入二胺、二酐或其他目标单体后，候选上游反应物会显示在这里。
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </WorkbenchPanel>
+            </div>
+          ) : null}
+
         </main>
       </div>
     </div>

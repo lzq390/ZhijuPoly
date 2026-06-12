@@ -6,6 +6,7 @@ import type {
   ConditionalGenerationJobCreateResponse,
   ConditionalGenerationJobStatusResponse,
   ConditionalGenerationTgRequest,
+  ConditionalGenerationTgStatusResponse,
   DftEnergyStepBrowseResponse,
   DftMoleculeDetail,
   DftMoleculeBrowseResponse,
@@ -25,6 +26,8 @@ import type {
   MdDemoDefaultsResponse,
   MdDemoRunRequest,
   MdDemoRunResponse,
+  MonomerRetrosynthesisRequest,
+  MonomerRetrosynthesisResponse,
   OnlineKnowledgeExportResponse,
   OnlineKnowledgeDefaultConfigResponse,
   OnlineKnowledgeHistoryResponse,
@@ -279,6 +282,10 @@ export function fetchConditionalGenerationTgJob(
   return getJSON(`/conditional-generation/tg/jobs/${encodeURIComponent(jobId)}`);
 }
 
+export function fetchConditionalGenerationTgStatus(): Promise<ConditionalGenerationTgStatusResponse> {
+  return getJSON("/conditional-generation/tg/status");
+}
+
 export function fetchStructure3D(
   smiles: string
 ): Promise<{ molblock: string; capped_smiles: string; format: "mol" }> {
@@ -293,6 +300,12 @@ export function recognizeStructureImage(file: File): Promise<StructureImageRecog
   const body = new FormData();
   body.append("image", file);
   return postForm("/structure/recognize-image", body);
+}
+
+export function predictMonomerPrecursors(
+  payload: MonomerRetrosynthesisRequest
+): Promise<MonomerRetrosynthesisResponse> {
+  return postJSON("/monomer-retrosynthesis", payload);
 }
 
 export function fetchDftPcaSample(limit = 200): Promise<DftPcaSampleResponse> {

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 MatchMode = Literal["structure", "property"]
 SmilesLookupTable = Literal["polymers", "properties", "pi_candidates"]
+RetrosynthesisTargetRole = Literal["auto", "diamine", "dianhydride", "other"]
 
 
 class SmilesQueryRequest(BaseModel):
@@ -158,6 +159,59 @@ class StructureImageRecognitionResponse(BaseModel):
         if not normalized:
             raise ValueError("smiles must not be empty")
         return normalized
+
+
+class MonomerRetrosynthesisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str = Field(min_length=1)
+    target_role: RetrosynthesisTargetRole = "auto"
+    num_beams: int = Field(default=5, ge=1, le=20)
+    num_return_sequences: int = Field(default=5, ge=1, le=10)
+    max_new_tokens: int = Field(default=128, ge=16, le=256)
+
+    @model_validator(mode="after")
+    def validate_generation_shape(self) -> "MonomerRetrosynthesisRequest":
+        if self.num_return_sequences > self.num_beams:
+            raise ValueError("num_return_sequences must be less than or equal to num_beams")
+        return self
+
+
+class RetrosynthesisReactant(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    input_smiles: str
+    canonical_smiles: str | None = None
+    valid_smiles: bool
+    heavy_atom_count: int | None = Field(default=None, ge=0)
+
+
+class MonomerRetrosynthesisCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    rank: int = Field(ge=1)
+    raw_output: str
+    reactants_smiles: str
+    canonical_reactants_smiles: str | None = None
+    reactants: list[RetrosynthesisReactant] = Field(default_factory=list)
+    valid_smiles: bool
+    all_reactants_smaller_than_target: bool | None = None
+    reaction_hint: str
+    model_score: float | None = None
+
+
+class MonomerRetrosynthesisResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    input_smiles: str
+    canonical_smiles: str
+    target_role: RetrosynthesisTargetRole
+    inferred_target_role: Literal["diamine", "dianhydride", "other"]
+    model_id: str
+    device: str
+    query_time_ms: float = Field(ge=0.0)
+    total: int = Field(ge=0)
+    candidates: list[MonomerRetrosynthesisCandidate] = Field(default_factory=list)
 
 
 class SmilesLookupRequest(BaseModel):
@@ -714,6 +768,16 @@ class ConditionalGenerationTgResponse(BaseModel):
     attempts: int = Field(ge=0)
     filter_counter: dict[str, int] = Field(default_factory=dict)
     results: list[ConditionalGenerationCandidate] = Field(default_factory=list)
+
+
+class ConditionalGenerationTgStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    enabled: bool
+    available: bool
+    model_dir: str
+    missing_artifacts: list[str] = Field(default_factory=list)
+    message: str
 
 
 ConditionalGenerationJobStatus = Literal["pending", "running", "completed", "failed", "cancelled"]

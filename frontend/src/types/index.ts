@@ -4,6 +4,7 @@ export type MatchMode = "structure" | "property";
 export type WorkspaceMode = "query" | "predict";
 export type ResultsTab = "query" | "predict";
 export type SmilesLookupTable = "polymers" | "properties" | "pi_candidates";
+export type MonomerRetrosynthesisTargetRole = "auto" | "diamine" | "dianhydride" | "other";
 
 export type StructureWorkspaceContext = {
   smiles: string;
@@ -220,6 +221,45 @@ export type StructureImageRecognitionResponse = {
   confidence: number | null;
   warnings: string[];
   query_time_ms: number;
+};
+
+export type MonomerRetrosynthesisRequest = {
+  smiles: string;
+  target_role: MonomerRetrosynthesisTargetRole;
+  num_beams: number;
+  num_return_sequences: number;
+  max_new_tokens?: number;
+};
+
+export type RetrosynthesisReactant = {
+  input_smiles: string;
+  canonical_smiles: string | null;
+  valid_smiles: boolean;
+  heavy_atom_count: number | null;
+};
+
+export type MonomerRetrosynthesisCandidate = {
+  rank: number;
+  raw_output: string;
+  reactants_smiles: string;
+  canonical_reactants_smiles: string | null;
+  reactants: RetrosynthesisReactant[];
+  valid_smiles: boolean;
+  all_reactants_smaller_than_target: boolean | null;
+  reaction_hint: string;
+  model_score: number | null;
+};
+
+export type MonomerRetrosynthesisResponse = {
+  input_smiles: string;
+  canonical_smiles: string;
+  target_role: MonomerRetrosynthesisTargetRole;
+  inferred_target_role: Exclude<MonomerRetrosynthesisTargetRole, "auto">;
+  model_id: string;
+  device: string;
+  query_time_ms: number;
+  total: number;
+  candidates: MonomerRetrosynthesisCandidate[];
 };
 
 export type SmilesStandardizeRequest = {
@@ -637,6 +677,14 @@ export type ConditionalGenerationTgResponse = {
   attempts: number;
   filter_counter: Record<string, number>;
   results: ConditionalGenerationCandidate[];
+};
+
+export type ConditionalGenerationTgStatusResponse = {
+  enabled: boolean;
+  available: boolean;
+  model_dir: string;
+  missing_artifacts: string[];
+  message: string;
 };
 
 export type ConditionalGenerationJobStatus = "pending" | "running" | "completed" | "failed" | "cancelled";

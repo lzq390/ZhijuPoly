@@ -75,6 +75,9 @@ class Settings:
         gen_model_dir: str | None = None,
         gen_device: str | None = None,
         gen_job_workers: int | None = None,
+        retro_model_enabled: bool | None = None,
+        retro_model_id: str | None = None,
+        retro_device: str | None = None,
     ) -> None:
         env_values = dotenv_values(DEFAULT_ENV_FILE) if DEFAULT_ENV_FILE.exists() else {}
 
@@ -274,11 +277,30 @@ class Settings:
                 str(env_values.get("GEN_JOB_WORKERS", "1")),
             )
         )
+        raw_retro_model_id = retro_model_id or os.getenv(
+            "RETRO_MODEL_ID",
+            env_values.get("RETRO_MODEL_ID", "sagawa/ReactionT5v2-retrosynthesis-USPTO_50k"),
+        )
+        raw_retro_device = retro_device or os.getenv(
+            "RETRO_DEVICE",
+            env_values.get("RETRO_DEVICE", "auto"),
+        )
         raw_gen_model_enabled = gen_model_enabled
         if raw_gen_model_enabled is None:
             raw_gen_model_enabled = os.getenv(
                 "GEN_MODEL_ENABLED",
                 str(env_values.get("GEN_MODEL_ENABLED", "false")),
+            ).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        raw_retro_model_enabled = retro_model_enabled
+        if raw_retro_model_enabled is None:
+            raw_retro_model_enabled = os.getenv(
+                "RETRO_MODEL_ENABLED",
+                str(env_values.get("RETRO_MODEL_ENABLED", "true")),
             ).strip().lower() in {
                 "1",
                 "true",
@@ -350,6 +372,9 @@ class Settings:
         self.gen_model_dir = _resolve_from_root(raw_gen_model_dir)
         self.gen_device = raw_gen_device.strip().lower()
         self.gen_job_workers = max(1, int(raw_gen_job_workers))
+        self.retro_model_enabled = bool(raw_retro_model_enabled)
+        self.retro_model_id = raw_retro_model_id.strip()
+        self.retro_device = raw_retro_device.strip().lower()
 
     @property
     def sqlite_db_file(self) -> Path:

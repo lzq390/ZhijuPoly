@@ -1,13 +1,19 @@
-import { ArrowLeft, Atom, LoaderCircle, Microscope, Sparkles } from "lucide-react";
+import { ArrowLeft, Atom, LoaderCircle, Microscope, Sparkles, TriangleAlert } from "lucide-react";
 import { StructurePreview3D } from "./StructurePreview3D";
 import { CurrentStructurePanel, MissingStructurePanel } from "./StructureWorkbenchPage";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useConditionalGeneration } from "../hooks/useConditionalGeneration";
-import type { ConditionalGenerationCandidate, ConditionalGenerationTgRequest, StructureWorkspaceContext } from "../types";
+import { fetchConditionalGenerationTgStatus } from "../services/api";
+import type {
+  ConditionalGenerationCandidate,
+  ConditionalGenerationTgRequest,
+  ConditionalGenerationTgStatusResponse,
+  StructureWorkspaceContext
+} from "../types";
 
 type ConditionalGenerationPageProps = {
   structure: StructureWorkspaceContext;
@@ -77,6 +83,32 @@ export function ConditionalGenerationPage({ structure, onEditStructure, onBackHo
   const smiles = structure.smiles;
   const generation = useConditionalGeneration();
   const [structureError, setStructureError] = useState<string | null>(null);
+  const [serviceStatus, setServiceStatus] = useState<ConditionalGenerationTgStatusResponse | null>(null);
+  const [serviceStatusError, setServiceStatusError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    fetchConditionalGenerationTgStatus()
+      .then((status) => {
+        if (!isMounted) {
+          return;
+        }
+        setServiceStatus(status);
+        setServiceStatusError(null);
+      })
+      .catch((error) => {
+        if (!isMounted) {
+          return;
+        }
+        setServiceStatus(null);
+        setServiceStatusError(error instanceof Error ? error.message : "Failed to check generation service.");
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   function updateRequest(partial: Partial<ConditionalGenerationTgRequest>) {
     generation.setRequest({
@@ -94,10 +126,15 @@ export function ConditionalGenerationPage({ structure, onEditStructure, onBackHo
     generation.request.top_k >= 1 &&
     generation.request.top_k <= 20 &&
     generation.request.temperature >= 0.1 &&
-    generation.request.temperature <= 2.0;
+    generation.request.temperature <= 2.0 &&
+    serviceStatus?.available === true;
 
   async function handleSubmit() {
     setStructureError(null);
+    if (serviceStatus && !serviceStatus.available) {
+      setStructureError(serviceStatus.message);
+      return;
+    }
     const currentSmiles = (await structure.getCurrentSmiles()).trim();
     if (!currentSmiles) {
       setStructureError("请先在结构工作台绘制或输入种子结构。");
@@ -277,12 +314,34 @@ export function ConditionalGenerationPage({ structure, onEditStructure, onBackHo
                 </div>
               </div>
 
+              {serviceStatus && !serviceStatus.available ? (
+                <div className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+                  <TriangleAlert className="mt-0.5 h-4 w-4 flex-none" />
+                  <div className="min-w-0">
+                    <div className="font-semibold">{serviceStatus.message}</div>
+                    {serviceStatus.missing_artifacts.length ? (
+                      <div className="mt-1 break-all font-mono-ui text-xs">
+                        Missing: {serviceStatus.missing_artifacts.join(", ")}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {serviceStatusError ? (
+                <div className="flex gap-3 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+                  <TriangleAlert className="mt-0.5 h-4 w-4 flex-none" />
+                  <span>{serviceStatusError}</span>
+                </div>
+              ) : null}
+
               <div className="flex flex-col gap-3 border-t border-slate-200/70 pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-sm leading-6 text-mutedForeground">
                   {generation.job
                     ? `${generation.job.status} | attempts ${generation.job.attempts} | accepted ${generation.job.accepted_count}`
                     : canSubmit
                       ? "Structure and ΔTg settings are ready."
+                      : serviceStatus && !serviceStatus.available
+                        ? "Generation model artifacts are not available."
                       : "Enter a seed structure and valid ΔTg settings."}
                 </div>
                 <Button type="button" className="min-h-[44px] min-w-[190px]" onClick={handleSubmit} disabled={!canSubmit}>

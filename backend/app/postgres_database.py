@@ -17,7 +17,7 @@ def postgres_connection(dsn: str) -> Iterator[object]:
         raise PostgresUnavailableError("Postgres driver is not installed") from exc
 
     try:
-        with psycopg.connect(dsn, row_factory=dict_row) as connection:
+        with psycopg.connect(dsn, row_factory=dict_row, connect_timeout=3) as connection:
             yield connection
     except psycopg.OperationalError as exc:  # pragma: no cover - requires live Postgres failure
         raise PostgresUnavailableError("PI Postgres database is not reachable") from exc

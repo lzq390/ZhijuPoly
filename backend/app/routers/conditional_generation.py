@@ -11,6 +11,7 @@ from app.models import (
     ConditionalGenerationJobStatusResponse,
     ConditionalGenerationTgRequest,
     ConditionalGenerationTgResponse,
+    ConditionalGenerationTgStatusResponse,
 )
 from app.services.conditional_generation import (
     ConditionalGenerationResult,
@@ -18,7 +19,7 @@ from app.services.conditional_generation import (
     run_conditional_generation,
     to_model_smiles,
 )
-from app.services.conditional_generation_runtime import TorchConditionalGenerationRuntime
+from app.services.conditional_generation_runtime import TorchConditionalGenerationRuntime, missing_artifact_paths
 from app.services.structure_2d import generate_2d_svg
 from app.utils.exceptions import ModelArtifactError
 
@@ -45,6 +46,30 @@ def _runtime_for_app(app) -> TorchConditionalGenerationRuntime:
         )
         app.state.conditional_generation_runtime = runtime
     return runtime
+
+
+def _generation_status_for_app(app) -> ConditionalGenerationTgStatusResponse:
+    settings = app.state.settings
+    missing = []
+    for path in missing_artifact_paths(settings.gen_model_dir_path):
+        if path.parent == settings.gen_model_dir_path:
+            missing.append(path.name)
+        else:
+            missing.append(str(path.relative_to(settings.gen_model_dir_path)))
+    available = settings.gen_model_enabled and not missing
+    if available:
+        message = "conditional generation service is available"
+    elif not settings.gen_model_enabled:
+        message = "conditional generation service is disabled"
+    else:
+        message = "conditional generation artifacts are missing"
+    return ConditionalGenerationTgStatusResponse(
+        enabled=settings.gen_model_enabled,
+        available=available,
+        model_dir=str(settings.gen_model_dir_path),
+        missing_artifacts=missing,
+        message=message,
+    )
 
 
 def _build_response(
@@ -101,6 +126,11 @@ def _run_generation_response(request_body: ConditionalGenerationTgRequest, app) 
     return _build_response(request_body, result, (perf_counter() - started_at) * 1000)
 
 
+@router.get("/tg/status", response_model=ConditionalGenerationTgStatusResponse)
+async def get_tg_generation_status(request: Request) -> ConditionalGenerationTgStatusResponse:
+    return _generation_status_for_app(request.app)
+
+
 @router.post(
     "/tg/jobs",
     response_model=ConditionalGenerationJobCreateResponse,
@@ -110,9 +140,14 @@ async def create_tg_generation_job(
     request_body: ConditionalGenerationTgRequest,
     request: Request,
 ) -> ConditionalGenerationJobCreateResponse:
-    settings = request.app.state.settings
-    if not settings.gen_model_enabled:
-        raise HTTPException(status_code=503, detail="conditional generation service is disabled")
+    service_status = _generation_status_for_app(request.app)
+    if not service_status.enabled:
+        raise HTTPException(status_code=503, detail=service_status.message)
+    if not service_status.available:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{service_status.message}: {', '.join(service_status.missing_artifacts)}",
+        )
 
     _validate_generation_input(request_body)
     manager = request.app.state.conditional_generation_job_manager

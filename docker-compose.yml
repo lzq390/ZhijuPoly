@@ -21,7 +21,7 @@ services:
       PI_REVERSE_BACKEND: "${PI_REVERSE_BACKEND:-sqlite}"
       PI_REVERSE_DB_PATH: "${PI_REVERSE_DB_PATH:-/app/backend/data/pi_reverse_design.db}"
       PI_POSTGRES_DSN: "${PI_POSTGRES_DSN:-postgresql://polyprop:polyprop@host.docker.internal:55432/polyprop_pi}"
-      LAB_DATA_POSTGRES_DSN: ${LAB_DATA_POSTGRES_DSN:-}
+      LAB_DATA_POSTGRES_DSN: "${LAB_DATA_POSTGRES_DSN:-postgresql://polyprop:polyprop@lab-postgres:5432/polyprop_pi}"
       PI_REVERSE_TG_WINDOW_CELSIUS: "50"
       PI_REVERSE_TG_MAX_WINDOW_CELSIUS: "200"
       PI_REVERSE_MAX_SCAN_ROWS: "500000"
@@ -47,6 +47,22 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  lab-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: polyprop
+      POSTGRES_PASSWORD: polyprop
+      POSTGRES_DB: polyprop_pi
+    volumes:
+      - lab_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polyprop -d polyprop_pi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   online-retrieval:
     build:
@@ -83,3 +99,6 @@ services:
         condition: service_healthy
       online-retrieval:
         condition: service_healthy
+
+volumes:
+  lab_postgres_data:

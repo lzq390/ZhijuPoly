@@ -282,6 +282,50 @@ def test_conditional_generation_job_api_reports_disabled_service(tmp_path: Path)
     assert response.json()["detail"] == "conditional generation service is disabled"
 
 
+def test_conditional_generation_status_reports_missing_artifacts(tmp_path: Path) -> None:
+    settings = Settings(
+        sqlite_db_path=str(tmp_path / "polyprop.db"),
+        csv_source_path=str(tmp_path / "source.csv"),
+        allowed_origins="http://localhost:5173",
+        model_enabled=False,
+        gen_model_enabled=True,
+        gen_model_dir=str(tmp_path / "missing-generation-model"),
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.get("/api/v1/conditional-generation/tg/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["available"] is False
+    assert "generator_best_40.pth" in payload["missing_artifacts"]
+    assert "ChemBerta/config.json" in payload["missing_artifacts"]
+
+
+def test_conditional_generation_job_api_rejects_missing_artifacts_before_job(tmp_path: Path) -> None:
+    settings = Settings(
+        sqlite_db_path=str(tmp_path / "polyprop.db"),
+        csv_source_path=str(tmp_path / "source.csv"),
+        allowed_origins="http://localhost:5173",
+        model_enabled=False,
+        gen_model_enabled=True,
+        gen_model_dir=str(tmp_path / "missing-generation-model"),
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/api/v1/conditional-generation/tg/jobs",
+        json={
+            "smiles": "*CC*",
+            "delta_tg": 30,
+        },
+    )
+
+    assert response.status_code == 503
+    assert "conditional generation artifacts are missing" in response.json()["detail"]
+
+
 def test_conditional_generation_job_api_rejects_non_finite_tg_without_500(tmp_path: Path) -> None:
     settings = Settings(
         sqlite_db_path=str(tmp_path / "polyprop.db"),

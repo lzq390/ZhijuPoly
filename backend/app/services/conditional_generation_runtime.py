@@ -304,6 +304,20 @@ def _build_model_classes(
     return ChempropTransformerAE, ChemBERTaTgModel
 
 
+def required_artifact_paths(model_dir: Path) -> list[Path]:
+    return [
+        model_dir / "generator_best_40.pth",
+        model_dir / "best_chemberta_tg.pth",
+        model_dir / "top10_desc_names.pkl",
+        model_dir / "tg_scaler.pkl",
+        model_dir / "ChemBerta" / "config.json",
+    ]
+
+
+def missing_artifact_paths(model_dir: Path) -> list[Path]:
+    return [path for path in required_artifact_paths(model_dir) if not path.exists()]
+
+
 class TorchConditionalGenerationRuntime:
     def __init__(self, *, model_dir: Path, device: str = "auto") -> None:
         self.model_dir = model_dir
@@ -319,14 +333,7 @@ class TorchConditionalGenerationRuntime:
         self._load_lock = Lock()
 
     def _assert_artifacts(self) -> None:
-        required = [
-            self.model_dir / "generator_best_40.pth",
-            self.model_dir / "best_chemberta_tg.pth",
-            self.model_dir / "top10_desc_names.pkl",
-            self.model_dir / "tg_scaler.pkl",
-            self.model_dir / "ChemBerta" / "config.json",
-        ]
-        missing = [str(path) for path in required if not path.exists()]
+        missing = [str(path) for path in missing_artifact_paths(self.model_dir)]
         if missing:
             raise ModelArtifactError("conditional generation artifacts are missing: " + ", ".join(missing))
 
