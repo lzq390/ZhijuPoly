@@ -880,13 +880,13 @@ export const PREDICT_PROPERTY_META: Record<
   PredictableProperty,
   { label: string; unit: string }
 > = {
-  "Glass transition temperature": { label: "Glass transition temperature", unit: "°C" },
-  "Melting temperature": { label: "Melting temperature", unit: "°C" },
-  "Thermal decomposition temperature": { label: "Thermal decomposition temperature", unit: "°C" },
-  "Thermal decomposition weight loss": { label: "Thermal decomposition weight loss", unit: "%" },
-  "Elongation at break": { label: "Elongation at break", unit: "%" },
-  "Tensile stress strength at break": { label: "Tensile stress strength at break", unit: "MPa" },
-  "O2 Permeability Barrer": { label: "O2 permeability", unit: "Barrer" },
-  "Co2 Permeability Barrer": { label: "CO2 permeability", unit: "Barrer" },
-  "H2 Permeability Barrer": { label: "H2 permeability", unit: "Barrer" }
+  "Glass transition temperature": { label: "玻璃化转变温度", unit: "°C" },
+  "Melting temperature": { label: "熔融温度", unit: "°C" },
+  "Thermal decomposition temperature": { label: "热分解温度", unit: "°C" },
+  "Thermal decomposition weight loss": { label: "热分解失重", unit: "%" },
+  "Elongation at break": { label: "断裂伸长率", unit: "%" },
+  "Tensile stress strength at break": { label: "断裂拉伸强度", unit: "MPa" },
+  "O2 Permeability Barrer": { label: "O2 渗透率", unit: "Barrer" },
+  "Co2 Permeability Barrer": { label: "CO2 渗透率", unit: "Barrer" },
+  "H2 Permeability Barrer": { label: "H2 渗透率", unit: "Barrer" }
 };

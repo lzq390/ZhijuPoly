@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>nexpoly 演示实例</title>
+  <style>
+    :root {
+      --bg: #1d1c1b;
+      --panel: #242321;
+      --line: #5d5a54;
+      --text: #f7f3ea;
+      --muted: #c8c1b5;
+      --dim: #8f887d;
+      --accent: #f4d365;
+      --cyan: #67d6cd;
+      --blue: #8fb8ff;
+      --paper: #eaf1f5;
+      --ink: #11100f;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family:
+        "Noto Sans SC",
+        "Microsoft YaHei",
+        Arial,
+        sans-serif;
+      letter-spacing: 0;
+    }
+
+    .page {
+      width: min(1460px, calc(100vw - 48px));
+      margin: 0 auto;
+      padding: 18px 0 46px;
+    }
+
+    header {
+      width: 290px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+      margin-left: 12px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 28px;
+      line-height: 1.2;
+      font-weight: 500;
+    }
+
+    .meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 12px;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .stage {
+      display: grid;
+      grid-template-columns: 452px 1fr;
+      gap: 48px;
+      margin-top: 82px;
+      align-items: stretch;
+    }
+
+    .script {
+      position: relative;
+      min-height: 675px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(31, 30, 29, 0.78);
+      padding: 17px 14px 28px;
+    }
+
+    .script::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 8px;
+      border-top: 6px solid rgba(255, 255, 255, 0.16);
+      background: repeating-linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.34) 0 2px,
+        transparent 2px 6px
+      );
+      opacity: 0.5;
+    }
+
+    .script h2 {
+      margin: 0 0 6px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .script-section {
+      margin-top: 16px;
+    }
+
+    .script-section:first-of-type {
+      margin-top: 8px;
+    }
+
+    .script-section h3 {
+      margin-bottom: 8px;
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--text);
+    }
+
+    .qa {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 8px;
+      margin: 8px 0;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .qa .mark {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .qa .question {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .qa .answer {
+      color: var(--text);
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .highlight {
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .visual {
+      min-height: 675px;
+      position: relative;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: 36px 0 0;
+    }
+
+    .smiles {
+      justify-self: end;
+      max-width: 600px;
+      color: var(--text);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 13px;
+      line-height: 1.45;
+      word-break: break-all;
+    }
+
+    .example-row {
+      display: grid;
+      grid-template-columns: 120px minmax(260px, 460px);
+      gap: 72px;
+      align-self: center;
+      justify-self: center;
+      align-items: start;
+      margin-top: 22px;
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .example-title {
+      font-weight: 700;
+      text-align: right;
+    }
+
+    .iupac-list {
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .image-card {
+      justify-self: center;
+      width: 320px;
+      margin: 34px 0 0 120px;
+      background: var(--paper);
+      padding: 0;
+      box-shadow: 0 22px 50px rgba(0, 0, 0, 0.28);
+    }
+
+    .image-card img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .workflow {
+      margin-top: 34px;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .step {
+      min-height: 120px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.045);
+      padding: 14px 12px;
+    }
+
+    .step-num {
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .step h3 {
+      margin-top: 9px;
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    .step p {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .details {
+      margin-top: 28px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(31, 30, 29, 0.78);
+      padding: 22px 24px 26px;
+    }
+
+    .details h2 {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .detail-card {
+      min-height: 150px;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      background: rgba(255, 255, 255, 0.045);
+      padding: 16px;
+    }
+
+    .detail-card h3 {
+      color: var(--accent);
+      font-size: 16px;
+      line-height: 1.4;
+    }
+
+    .detail-card p {
+      margin-top: 10px;
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .property-list {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .property-list span {
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.18);
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .footer-note {
+      margin-top: 18px;
+      color: var(--dim);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    @media (max-width: 1180px) {
+      .stage {
+        grid-template-columns: 1fr;
+        gap: 26px;
+        margin-top: 42px;
+      }
+
+      .script,
+      .visual {
+        min-height: auto;
+      }
+
+      .workflow,
+      .detail-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .image-card {
+        margin-left: 0;
+      }
+    }
+
+    @media (max-width: 700px) {
+      .page {
+        width: calc(100vw - 24px);
+      }
+
+      header {
+        width: auto;
+        margin-left: 0;
+      }
+
+      .workflow,
+      .detail-grid,
+      .property-list,
+      .example-row {
+        grid-template-columns: 1fr;
+      }
+
+      .example-title {
+        text-align: left;
+      }
+
+      .image-card {
+        width: min(100%, 320px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <h1>nexpoly演示实例</h1>
+      <div class="meta">
+        <span>2026年6月12日</span>
+        <span>演示流程说明</span>
+      </div>
+    </header>
+
+    <section class="stage" aria-label="演示流程总览">
+      <article class="script">
+        <h2>演示流程</h2>
+
+        <section class="script-section">
+          <h3>（1）预测功能 / 意图识别 / IUPAC2SMILES</h3>
+          <div class="qa">
+            <div class="mark">Q</div>
+            <div class="question">当前平台能预测哪些性质？</div>
+          </div>
+          <div class="qa">
+            <div class="mark">A</div>
+            <div class="answer">9项性质：热学4项、力学2项、气体3项。</div>
+          </div>
+        </section>
+
+        <section class="script-section">
+          <div class="qa">
+            <div class="mark">Q</div>
+            <div class="question">&lt;smiles&gt;，预测这个 smiles 的（热学 / 力学 / 气体）性质。</div>
+          </div>
+          <div class="qa">
+            <div class="mark">A</div>
+            <div class="answer">热学4项 / 力学2项 / 气体3项。</div>
+          </div>
+        </section>
+
+        <section class="script-section">
+          <div class="qa">
+            <div class="mark">Q</div>
+            <div class="question">（预测性质）模块在哪？</div>
+          </div>
+          <div class="qa">
+            <div class="mark">A</div>
+            <div class="answer">给出“聚合物性能探索”模块入口。</div>
+          </div>
+        </section>
+
+        <section class="script-section">
+          <div class="qa">
+            <div class="mark">Q</div>
+            <div class="question">5-ethyl-2-prop-1-en-2-ylbenzene-1,3-diamine，预测xx性质。</div>
+          </div>
+          <div class="qa">
+            <div class="mark">A</div>
+            <div class="answer">转成 smiles，调用预测性质接口。</div>
+          </div>
+        </section>
+
+        <section class="script-section">
+          <div class="qa">
+            <div class="mark">Q</div>
+            <div class="question">（上传图片），预测这个分子的性质。</div>
+          </div>
+          <div class="qa">
+            <div class="mark">A</div>
+            <div class="answer">图片识别得到 smiles &lt;xxx&gt;，预测性质结果。</div>
+          </div>
+        </section>
+
+        <section class="script-section">
+          <h3>MD模拟演示</h3>
+          <p class="muted">单击运行MD模拟。</p>
+          <p class="muted">几秒后出现结果。</p>
+          <p class="muted">单击结果中两个原子分布，计算距离曲线。</p>
+        </section>
+      </article>
+
+      <article class="visual" aria-label="演示示例输入">
+        <div class="smiles">
+          *c1ccc(C(=O)OCc2ccc(-c3ccc(COC(=O)c4ccc(N5C(=O)c6ccc(OC(=O)c7ccc(C)C)c8ccc(C(=O)Oc9ccc%10c(c9)C(=O)N(*)C%10=O)o8)o7)c6C5=O)cc4)o3)o2)cc1
+        </div>
+
+        <div class="example-row">
+          <div class="example-title">例如</div>
+          <div class="iupac-list">
+            2-(2,4-diamino-6-methyl-phenyl)acrylonitrile<br />
+            5-ethyl-2-prop-1-en-2-ylbenzene-1,3-diamine<br />
+            (3-amino-5-ethyl-4-isopropenyl-phenyl)amine
+          </div>
+        </div>
+
+        <div class="image-card">
+          <img src="assets/demo-upload-structure.png" alt="上传图片识别预测示例分子结构" />
+        </div>
+      </article>
+    </section>
+
+    <section class="workflow" aria-label="只包含截图中的演示项">
+      <article class="step">
+        <div class="step-num">01</div>
+        <h3>问平台能力</h3>
+        <p>回答当前可预测 9 项性质。</p>
+      </article>
+      <article class="step">
+        <div class="step-num">02</div>
+        <h3>SMILES 预测</h3>
+        <p>输入 SMILES，指定热学、力学或气体性质。</p>
+      </article>
+      <article class="step">
+        <div class="step-num">03</div>
+        <h3>模块入口</h3>
+        <p>说明预测性质在聚合物性能探索模块中。</p>
+      </article>
+      <article class="step">
+        <div class="step-num">04</div>
+        <h3>IUPAC 转换</h3>
+        <p>输入 IUPAC 名称，先转 SMILES，再预测。</p>
+      </article>
+      <article class="step">
+        <div class="step-num">05</div>
+        <h3>图片识别</h3>
+        <p>上传结构图，识别 SMILES 后预测性质。</p>
+      </article>
+      <article class="step">
+        <div class="step-num">06</div>
+        <h3>MD 模拟</h3>
+        <p>运行模拟，展示结果和原子距离曲线。</p>
+      </article>
+    </section>
+
+    <section class="details" aria-label="预测性质明细">
+      <h2>预测性质明细</h2>
+      <div class="property-list">
+        <span>热学：玻璃化转变温度 Tg</span>
+        <span>热学：熔融温度 Tm</span>
+        <span>热学：热分解温度 Td</span>
+        <span>热学：热分解失重率</span>
+        <span>力学：断裂伸长率</span>
+        <span>力学：断裂拉伸强度</span>
+        <span>气体：O2 渗透性</span>
+        <span>气体：CO2 渗透性</span>
+        <span>气体：H2 渗透性</span>
+      </div>
+      <p class="footer-note">
+        本页只保留截图中说明的演示项，便于按固定顺序进行现场演示。
+      </p>
+    </section>
+
+    <section class="details" aria-label="演示话术拆分">
+      <h2>演示话术拆分</h2>
+      <div class="detail-grid">
+        <article class="detail-card">
+          <h3>1. 预测能力问答</h3>
+          <p>先问“当前平台能预测哪些性质？”，回答 9 项，并按热学、力学、气体三类说明。</p>
+        </article>
+        <article class="detail-card">
+          <h3>2. SMILES 直接预测</h3>
+          <p>输入一个 SMILES，并要求预测热学、力学或气体性质。平台返回对应类别的预测结果。</p>
+        </article>
+        <article class="detail-card">
+          <h3>3. 模块入口说明</h3>
+          <p>用户问预测模块在哪时，指向“聚合物性能探索”，说明该模块可做结构输入和性质预测。</p>
+        </article>
+        <article class="detail-card">
+          <h3>4. IUPAC2SMILES</h3>
+          <p>输入 IUPAC 名称后，先解析为 SMILES，再调用预测接口返回指定性质。</p>
+        </article>
+        <article class="detail-card">
+          <h3>5. 上传图片预测</h3>
+          <p>上传分子结构图，平台识别结构并得到 SMILES，再继续执行性质预测。</p>
+        </article>
+        <article class="detail-card">
+          <h3>6. MD 模拟</h3>
+          <p>点击运行 MD 模拟，等待结果出现后，选择两个原子分布并计算距离曲线。</p>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -8,11 +8,11 @@ export function PropertyItem({ item }: PropertyItemProps) {
   const normalizedSource = item.label_source?.trim().toLowerCase();
   const sourceLabel =
     normalizedSource === "exp" || normalizedSource === "experimental"
-      ? "Experimental"
+      ? "实验"
       : normalizedSource === "sim" || normalizedSource === "simulated"
-        ? "Simulated"
+        ? "模拟"
         : normalizedSource === "n/a" || normalizedSource === "na"
-          ? "Not labeled"
+          ? "未标注"
           : item.label_source;
 
   return (

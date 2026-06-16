@@ -65,9 +65,9 @@ function QueryResultsPanel({
         <CardHeader className="min-h-[112px] border-b border-destructive/10 bg-destructiveForeground">
           <CardTitle className="flex items-center gap-2 text-lg text-destructive">
             <TriangleAlert className="h-5 w-5" />
-            Match Failed
+            匹配失败
           </CardTitle>
-          <CardDescription>The request did not complete. Check the structure input, match mode, or service status.</CardDescription>
+          <CardDescription>请求未完成。请检查结构输入、匹配模式或服务状态。</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <Alert variant="destructive">{error}</Alert>
@@ -80,13 +80,13 @@ function QueryResultsPanel({
     return (
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Similarity Matching Results</CardTitle>
-          <CardDescription>Finding similar polymer records and preparing their property summaries.</CardDescription>
+          <CardTitle className="text-xl">相似匹配结果</CardTitle>
+          <CardDescription>正在查找相似聚合物记录并准备性能摘要。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 pt-5">
           <div className="flex items-center gap-3 rounded-[20px] border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700">
             <LoaderCircle className="h-4 w-4 animate-spin" />
-            Loading results. This panel will refresh when the response returns.
+            正在加载结果。响应返回后此面板会自动刷新。
           </div>
           <div className="grid gap-4">
             {[0, 1].map((index) => (
@@ -113,14 +113,14 @@ function QueryResultsPanel({
     return (
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Similarity Matching Results</CardTitle>
-          <CardDescription>No similarity match results yet.</CardDescription>
+          <CardTitle className="text-xl">相似匹配结果</CardTitle>
+          <CardDescription>暂无相似匹配结果。</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <EmptyState
             icon={<Database className="h-6 w-6" />}
-            title="Results Panel Ready"
-            description="Run similarity matching to see summaries, matching records, and property groups."
+            title="结果面板已就绪"
+            description="运行相似匹配后，可查看摘要、匹配记录和性能分组。"
           />
         </CardContent>
       </Card>
@@ -131,14 +131,14 @@ function QueryResultsPanel({
     return (
       <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
         <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Similarity Matching Results</CardTitle>
-          <CardDescription>The match completed successfully, but no displayable records were found.</CardDescription>
+          <CardTitle className="text-xl">相似匹配结果</CardTitle>
+          <CardDescription>匹配已完成，但未找到可展示的记录。</CardDescription>
         </CardHeader>
         <CardContent className="pt-5">
           <EmptyState
             icon={<SearchX className="h-6 w-6" />}
-            title="No Matches Found"
-            description="Check the current SMILES or switch to another similarity matching mode."
+            title="未找到匹配结果"
+            description="请检查当前 SMILES，或切换到其他相似匹配模式。"
           />
         </CardContent>
       </Card>
@@ -154,7 +154,7 @@ function QueryResultsPanel({
         }`.trim()
       : null;
   const predictedPropertyLabel =
-    predictedPropertyMeta?.label || data.predicted_property_name || "Selected property";
+    predictedPropertyMeta?.label || data.predicted_property_name || "所选性能";
 
   return (
     <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
@@ -162,21 +162,21 @@ function QueryResultsPanel({
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-2">
             <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
-              Similarity Dataset
+              相似数据集
             </div>
-            <CardTitle className="text-[1.4rem] tracking-tight">Similarity Matching Results</CardTitle>
+            <CardTitle className="text-[1.4rem] tracking-tight">相似匹配结果</CardTitle>
             <CardDescription>
               {data.match_type === "property"
-                ? "Summaries, 2D structures, SMILES, and selected property values are shown here."
-                : "Summaries, 2D structures, SMILES, and similarity scores are shown here."}
+                ? "这里展示摘要、2D 结构、SMILES 和所选性能值。"
+                : "这里展示摘要、2D 结构、SMILES 和相似度分数。"}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Badge>{data.match_type === "property" ? "Property Similarity" : "Structural Similarity"}</Badge>
+            <Badge>{data.match_type === "property" ? "性能相似" : "结构相似"}</Badge>
             {data.match_type === "property" && predictedPropertyText ? (
               <Badge className="text-slate-700">{`${predictedPropertyLabel} ${predictedPropertyText}`}</Badge>
             ) : null}
-            <Badge className="text-slate-700">{`${data.total} results`}</Badge>
+            <Badge className="text-slate-700">{`${data.total} 条结果`}</Badge>
             <Badge className="text-slate-700">{`${data.query_time_ms.toFixed(1)} ms`}</Badge>
           </div>
         </div>
@@ -184,18 +184,18 @@ function QueryResultsPanel({
         <div className="grid auto-rows-fr gap-3 md:grid-cols-2 xl:grid-cols-4">
           <SummaryMetric
             icon={<ScanSearch className="h-4 w-4 text-teal-600" />}
-            label="Match Mode"
-            value={data.match_type === "property" ? "Property Similarity" : "Structural Similarity"}
-            detail="Current similarity matching mode."
+            label="匹配模式"
+            value={data.match_type === "property" ? "性能相似" : "结构相似"}
+            detail="当前相似匹配模式。"
           />
-          <SummaryMetric label="Result Count" value={String(data.total)} detail="Total matched polymer records." />
+          <SummaryMetric label="结果数量" value={String(data.total)} detail="匹配到的聚合物记录总数。" />
           <SummaryMetric
             icon={<Timer className="h-4 w-4 text-teal-600" />}
-            label="Elapsed Time"
+            label="耗时"
             value={`${data.query_time_ms.toFixed(1)} ms`}
-            detail="Time spent finding and preparing results."
+            detail="查找并准备结果所用时间。"
           />
-          <SummaryMetric label="Input SMILES" value={request.smiles || "Not available"} detail="Current structure input." mono />
+          <SummaryMetric label="输入 SMILES" value={request.smiles || "暂无"} detail="当前结构输入。" mono />
         </div>
       </CardHeader>
 
@@ -237,7 +237,7 @@ export function ResultsDisplay({
               : "border-white/80 bg-white/80 text-slate-600 hover:border-slate-200"
           )}
         >
-          Similarity Results
+          相似结果
         </button>
         <button
           type="button"
@@ -249,7 +249,7 @@ export function ResultsDisplay({
               : "border-white/80 bg-white/80 text-slate-600 hover:border-slate-200"
           )}
         >
-          Prediction Results
+          预测结果
         </button>
       </div>
 

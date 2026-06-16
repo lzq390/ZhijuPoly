@@ -10,21 +10,21 @@ type PolymerCardProps = {
 
 function formatMeasurementOrigin(value: string | null | undefined) {
   const normalized = value?.trim().toLowerCase();
-  if (!normalized || normalized === "n/a" || normalized === "na") return "Not labeled";
-  if (normalized === "exp" || normalized === "experimental") return "Experimental";
-  if (normalized === "sim" || normalized === "simulated") return "Simulated";
-  return value?.trim() || "Not labeled";
+  if (!normalized || normalized === "n/a" || normalized === "na") return "未标注";
+  if (normalized === "exp" || normalized === "experimental") return "实验";
+  if (normalized === "sim" || normalized === "simulated") return "模拟";
+  return value?.trim() || "未标注";
 }
 
 export function PolymerCard({ result, matchType, selectedProperty }: PolymerCardProps) {
   const displaySmiles = result.canonical_smiles || result.smiles;
-  const similarityText = result.similarity_score !== null ? result.similarity_score.toFixed(3) : "Not available";
+  const similarityText = result.similarity_score !== null ? result.similarity_score.toFixed(3) : "暂无";
   const propertyMeta = selectedProperty ? PREDICT_PROPERTY_META[selectedProperty] : null;
   const propertyValueText =
     result.matched_property_value !== null
       ? `${Number(result.matched_property_value).toPrecision(6)} ${result.matched_property_unit || propertyMeta?.unit || ""}`.trim()
-      : "Not available";
-  const metricLabel = matchType === "property" ? propertyMeta?.label || "Selected property value" : "Similarity";
+      : "暂无";
+  const metricLabel = matchType === "property" ? propertyMeta?.label || "所选性能值" : "相似度";
   const metricValue = matchType === "property" ? propertyValueText : similarityText;
   const propertyGroups = Object.values(result.properties);
   const sourceText =
@@ -36,16 +36,16 @@ export function PolymerCard({ result, matchType, selectedProperty }: PolymerCard
               .flat()
               .map((item) => item.label_source)
               .map(formatMeasurementOrigin)
-              .filter((source) => source !== "Not labeled")
+              .filter((source) => source !== "未标注")
           )
-        ).join(" / ") || "Not labeled";
+        ).join(" / ") || "未标注";
 
   return (
     <Card className="overflow-hidden rounded-[24px] border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)] p-3">
       <div className="overflow-hidden rounded-[18px] border border-white/80 bg-white/90 p-2.5 shadow-sm">
         <div className="mb-1.5 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.18em] text-mutedForeground">
           <Atom className="h-3.5 w-3.5 text-teal-600" />
-          2D Structure
+          2D 结构
         </div>
         {result.structure_svg ? (
           <div
@@ -66,7 +66,7 @@ export function PolymerCard({ result, matchType, selectedProperty }: PolymerCard
           <span className="text-right font-semibold text-teal-700">{metricValue}</span>
         </div>
         <div className="mt-1.5 flex items-center justify-between gap-3 text-xs">
-          <span className="text-mutedForeground">Measurement Origin</span>
+          <span className="text-mutedForeground">数据来源</span>
           <span className="text-right font-semibold text-slate-700">{sourceText}</span>
         </div>
       </div>

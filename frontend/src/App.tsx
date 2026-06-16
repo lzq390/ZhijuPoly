@@ -249,16 +249,16 @@ export default function App() {
 
   const activeMode =
     panelMode === "predict"
-      ? "Property prediction"
+      ? "性能预测"
       : request.match_mode === "property"
-        ? "Property similarity"
-        : "Structural similarity";
+        ? "性能相似"
+        : "结构相似";
   const activeModeLabel =
     panelMode === "predict"
-      ? "Property Prediction"
+      ? "性能预测"
       : request.match_mode === "property"
-        ? "Property Similarity"
-        : "Structural Similarity";
+        ? "性能相似"
+        : "结构相似";
 
   const resultCount =
     activeResultsTab === "predict" ? Object.keys(predict.data?.predictions ?? {}).length : data?.total ?? 0;
@@ -267,11 +267,11 @@ export default function App() {
   const latestResultDescription =
     activeResultsTab === "predict"
       ? predict.data
-        ? "Prediction values returned."
-        : "Prediction count appears after execution."
+        ? "已返回预测值。"
+        : "执行后显示预测数量。"
       : resultTiming
-        ? `${resultTiming.toFixed(1)} ms returned`
-        : "Result count and latency appear after execution.";
+        ? `${resultTiming.toFixed(1)} ms 完成`
+        : "执行后显示结果数量和耗时。";
 
   async function handleQuerySubmit() {
     setActiveResultsTab("query");
@@ -292,27 +292,27 @@ export default function App() {
     }
   }
 
-  const resultPanelTitle = activeResultsTab === "predict" ? "Prediction Results" : "Similarity Matching Results";
+  const resultPanelTitle = activeResultsTab === "predict" ? "预测结果" : "相似匹配结果";
   const resultPanelDescription =
     activeResultsTab === "predict"
-      ? "After prediction finishes, selected property values appear here."
-      : "After similarity matching runs, summaries, 2D structures, SMILES, and similarity scores appear here.";
+      ? "预测完成后，这里会展示所选性能的预测值。"
+      : "相似匹配完成后，这里会展示摘要、2D 结构、SMILES 和相似度分数。";
   const resultPrimaryBadge =
     activeResultsTab === "predict"
       ? predict.data
-        ? `${Object.keys(predict.data.predictions).length} predictions`
-        : "No predictions"
+        ? `${Object.keys(predict.data.predictions).length} 项预测`
+        : "暂无预测"
       : data
-        ? `${data.total} records`
-        : "No results";
+        ? `${data.total} 条记录`
+        : "暂无结果";
   const resultSecondaryBadge =
     activeResultsTab === "predict"
       ? predict.isLoading
-        ? "Predicting"
-        : "Prediction mode"
+        ? "预测中"
+        : "预测模式"
       : request.match_mode === "property"
-        ? "Property similarity"
-        : "Structural similarity";
+        ? "性能相似"
+        : "结构相似";
 
   async function getCurrentSmiles() {
     const fallbackSmiles = smiles.trim();
@@ -744,16 +744,16 @@ export default function App() {
             <div className="flex items-center gap-3">
               <Button type="button" variant="outline" onClick={() => navigate({ module: "home", datasetKey: null })}>
                 <ArrowLeft className="mr-2 h-4 w-4" />
-                Home
+                首页
               </Button>
               <div>
-                <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">Current Module</div>
+                <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">当前模块</div>
                 <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-                  Polymer Property Explorer
+                  聚合物性能探索
                 </div>
               </div>
             </div>
-            <Badge className="bg-teal-50 text-teal-800">Explorer</Badge>
+            <Badge className="bg-teal-50 text-teal-800">探索页</Badge>
           </nav>
 
           <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-6 md:px-8 md:py-8">
@@ -766,15 +766,15 @@ export default function App() {
                 <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
                   NEXPOLY
                 </div>
-                <Badge>Polymer Similarity Matching & Property Prediction</Badge>
+                <Badge>聚合物相似匹配与性能预测</Badge>
               </div>
 
               <div className="mt-6 overflow-x-auto">
                 <h1 className="font-heading whitespace-nowrap text-[2.5rem] font-semibold tracking-[-0.04em] text-slate-950 md:text-[4rem] md:leading-[0.95]">
-                  Polymer Property Explorer
+                  聚合物性能探索
                 </h1>
                 <p className="mt-4 whitespace-nowrap text-base leading-7 text-slate-600 md:text-lg">
-                  Bring structure editing, similarity matching, 3D review, and property prediction into one focused research workspace.
+                  将结构编辑、相似匹配、3D 预览和性能预测整合到一个研究工作台。
                 </p>
               </div>
 
@@ -782,35 +782,35 @@ export default function App() {
                 <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
                   <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
                     {panelMode === "predict" ? <Sparkles className="h-4 w-4 text-teal-600" /> : <Atom className="h-4 w-4 text-teal-600" />}
-                    Current Mode
+                    当前模式
                   </div>
                   <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
                     {activeModeLabel}
                   </div>
                   <div className="mt-2 text-sm leading-6 text-mutedForeground">
                     {panelMode === "predict"
-                      ? "Select target properties in the control card and run prediction for the current structure."
-                      : "Switch between structural similarity and property similarity matching in the control card."}
+                      ? "在控制卡片中选择目标性能，并对当前结构运行预测。"
+                      : "在控制卡片中切换结构相似或性能相似匹配。"}
                   </div>
                 </div>
 
                 <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
                   <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
                     <Microscope className="h-4 w-4 text-sky-600" />
-                    Structure Input
+                    结构输入
                   </div>
                   <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                    {smiles.trim().length > 0 ? "Ready" : "Waiting"}
+                    {smiles.trim().length > 0 ? "已就绪" : "等待输入"}
                   </div>
                   <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                    The structure editor keeps the SMILES input updated for matching or prediction.
+                    结构编辑器会同步更新 SMILES，用于匹配或预测。
                   </div>
                 </div>
 
                 <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-slate-950 p-5 text-center text-slate-50 shadow-[0_22px_50px_rgba(8,17,31,0.2)]">
                   <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">
                     <Database className="h-4 w-4 text-teal-300" />
-                    Latest Results
+                    最新结果
                   </div>
                   <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">{resultCount}</div>
                   <div className="mt-2 text-sm leading-6 text-slate-300">
@@ -863,7 +863,7 @@ export default function App() {
                 <div className="border-b border-slate-200/80 px-6 py-5 md:px-8">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                     <div>
-                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-teal-700/70">Results</div>
+                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-teal-700/70">结果</div>
                       <h2 className="font-heading mt-2 text-[1.8rem] font-semibold tracking-tight text-slate-950">
                         {resultPanelTitle}
                       </h2>
