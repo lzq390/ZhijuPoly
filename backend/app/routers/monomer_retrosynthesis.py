@@ -32,4 +32,4 @@ async def monomer_retrosynthesis(
     except InvalidSmilesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ModelArtifactError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="retrosynthesis service is unavailable") from exc

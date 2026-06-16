@@ -247,7 +247,6 @@ export type MonomerRetrosynthesisCandidate = {
   valid_smiles: boolean;
   all_reactants_smaller_than_target: boolean | null;
   reaction_hint: string;
-  model_score: number | null;
 };
 
 export type MonomerRetrosynthesisResponse = {
@@ -255,8 +254,6 @@ export type MonomerRetrosynthesisResponse = {
   canonical_smiles: string;
   target_role: MonomerRetrosynthesisTargetRole;
   inferred_target_role: Exclude<MonomerRetrosynthesisTargetRole, "auto">;
-  model_id: string;
-  device: string;
   query_time_ms: number;
   total: number;
   candidates: MonomerRetrosynthesisCandidate[];

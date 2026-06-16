@@ -59,7 +59,6 @@ def predict_monomer_precursors(
                 num_return_sequences=num_return_sequences,
                 max_new_tokens=max_new_tokens,
                 return_dict_in_generate=True,
-                output_scores=True,
             )
     except Exception as exc:  # pragma: no cover - depends on accelerator/runtime state
         raise ModelArtifactError(f"retrosynthesis inference failed: {exc}") from exc
@@ -76,8 +75,6 @@ def predict_monomer_precursors(
         canonical_smiles=canonical_smiles,
         target_role=target_role,
         inferred_target_role=_resolve_target_role(target_role, target_mol),
-        model_id=model_id,
-        device=runtime.device,
         query_time_ms=(perf_counter() - started_at) * 1000,
         total=len(candidates),
         candidates=candidates,
@@ -95,7 +92,7 @@ def _get_runtime(model_id: str, device: str) -> _ReactionT5Runtime:
             import torch
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
         except ImportError as exc:  # pragma: no cover - dependency guard for partial installs
-            raise ModelArtifactError("ReactionT5 dependencies are not installed") from exc
+            raise ModelArtifactError("retrosynthesis dependencies are not installed") from exc
 
         load_kwargs = {"local_files_only": True}
         try:
@@ -106,7 +103,7 @@ def _get_runtime(model_id: str, device: str) -> _ReactionT5Runtime:
         except Exception as exc:  # pragma: no cover - depends on local model cache/network
             raise ModelArtifactError(
                 "retrosynthesis model files are not available locally; "
-                "pre-download the ReactionT5 model or set RETRO_MODEL_ID to a local model directory"
+                "please prepare the model files before running this feature"
             ) from exc
 
         runtime = _ReactionT5Runtime(tokenizer=tokenizer, model=model, torch=torch, device=device)
@@ -120,7 +117,7 @@ def _resolve_device(device: str) -> str:
         try:
             import torch
         except ImportError as exc:  # pragma: no cover - dependency guard for partial installs
-            raise ModelArtifactError("PyTorch is required for ReactionT5 inference") from exc
+            raise ModelArtifactError("retrosynthesis dependencies are not installed") from exc
         return "cpu" if _cuda_support_error(torch) else "cuda"
     if normalized not in {"cpu", "cuda", "mps"}:
         raise ModelArtifactError("RETRO_DEVICE must be one of auto, cpu, cuda, or mps")
@@ -128,7 +125,7 @@ def _resolve_device(device: str) -> str:
         try:
             import torch
         except ImportError as exc:  # pragma: no cover - dependency guard for partial installs
-            raise ModelArtifactError("PyTorch is required for ReactionT5 inference") from exc
+            raise ModelArtifactError("retrosynthesis dependencies are not installed") from exc
         support_error = _cuda_support_error(torch)
         if support_error:
             raise ModelArtifactError(support_error)
@@ -163,7 +160,6 @@ def _decode_candidates(
     target_mol: Chem.Mol,
     inferred_role: str,
 ) -> list[MonomerRetrosynthesisCandidate]:
-    sequence_scores = getattr(output, "sequences_scores", None)
     seen: set[str] = set()
     candidates: list[MonomerRetrosynthesisCandidate] = []
 
@@ -196,7 +192,6 @@ def _decode_candidates(
                 if valid_smiles
                 else None,
                 reaction_hint=_reaction_hint(inferred_role, reactants),
-                model_score=_sequence_score(sequence_scores, index),
             )
         )
 
@@ -271,14 +266,4 @@ def _reaction_hint(inferred_role: str, reactants: list[RetrosynthesisReactant]) 
         return "二酐上游反应物候选"
     if inferred_role == "diamine":
         return "二胺上游反应物候选"
-    return "ReactionT5 反合成候选"
-
-
-def _sequence_score(sequence_scores: Any, index: int) -> float | None:
-    if sequence_scores is None or index >= len(sequence_scores):
-        return None
-    score = sequence_scores[index]
-    try:
-        return float(score.detach().cpu().item())
-    except AttributeError:
-        return float(score)
+    return "逆合成候选"

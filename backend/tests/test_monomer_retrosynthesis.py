@@ -60,7 +60,7 @@ def test_monomer_retrosynthesis_route_returns_model_unavailable_as_503(
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "retrosynthesis model is unavailable"
+    assert response.json()["detail"] == "retrosynthesis service is unavailable"
 
 
 def test_monomer_retrosynthesis_route_returns_candidates(tmp_path: Path, monkeypatch) -> None:
@@ -70,8 +70,6 @@ def test_monomer_retrosynthesis_route_returns_candidates(tmp_path: Path, monkeyp
             canonical_smiles="Nc1ccc(N)cc1",
             target_role="auto",
             inferred_target_role="diamine",
-            model_id="fake",
-            device="cpu",
             query_time_ms=1.0,
             total=0,
             candidates=[],

@@ -197,7 +197,6 @@ class MonomerRetrosynthesisCandidate(BaseModel):
     valid_smiles: bool
     all_reactants_smaller_than_target: bool | None = None
     reaction_hint: str
-    model_score: float | None = None
 
 
 class MonomerRetrosynthesisResponse(BaseModel):
@@ -207,8 +206,6 @@ class MonomerRetrosynthesisResponse(BaseModel):
     canonical_smiles: str
     target_role: RetrosynthesisTargetRole
     inferred_target_role: Literal["diamine", "dianhydride", "other"]
-    model_id: str
-    device: str
     query_time_ms: float = Field(ge=0.0)
     total: int = Field(ge=0)
     candidates: list[MonomerRetrosynthesisCandidate] = Field(default_factory=list)
