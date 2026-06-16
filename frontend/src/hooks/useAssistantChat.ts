@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { streamAssistantChat } from "../services/api";
+import { streamAssistantChat, streamAssistantImageChat } from "../services/api";
 import type {
   AssistantChatContext,
   AssistantChatMessage,
@@ -239,11 +239,109 @@ export function useAssistantChat() {
     [isStreaming, messages]
   );
 
+  const sendImageMessage = useCallback(
+    async (content: string, context: AssistantChatContext, image: File) => {
+      const text = content.trim();
+      if (!text || isStreaming) {
+        return;
+      }
+
+      const userMessage = createMessage("user", text);
+      const assistantMessage = createMessage("assistant", "");
+      const nextMessages = [...messages, userMessage, assistantMessage];
+      const requestMessages = [...messages, userMessage]
+        .filter((message) => message.role === "user" || message.content.trim())
+        .map((message) => ({
+          role: message.role,
+          content: message.requestContent?.trim() || message.content
+        }));
+      const controller = new AbortController();
+
+      abortRef.current = controller;
+      setError(null);
+      setIsStreaming(true);
+      setMessages(nextMessages);
+
+      const updateAssistantMessage = (updater: (message: StoredAssistantMessage) => StoredAssistantMessage) => {
+        setMessages((current) =>
+          current.map((message) => (message.id === assistantMessage.id ? updater(message) : message))
+        );
+      };
+
+      try {
+        await streamAssistantImageChat(
+          {
+            messages: requestMessages,
+            context
+          },
+          image,
+          {
+            signal: controller.signal,
+            onToken: (token) => {
+              updateAssistantMessage((message) => ({ ...message, content: message.content + token }));
+            },
+            onDone: (message) => {
+              if (!message) {
+                return;
+              }
+              updateAssistantMessage((item) => ({ ...item, content: message }));
+            },
+            onError: (detail) => {
+              setError(detail);
+            },
+            onSkillStart: (payload) => {
+              updateAssistantMessage((message) => applySkillStart(message, payload));
+            },
+            onSkillResult: (payload) => {
+              updateAssistantMessage((message) => applySkillResult(message, payload));
+            },
+            onSkillError: (payload) => {
+              updateAssistantMessage((message) => applySkillError(message, payload));
+            }
+          }
+        );
+      } catch (caught) {
+        if (isAbortError(caught)) {
+          setMessages((current) =>
+            current.map((message) => {
+              if (message.id !== assistantMessage.id) {
+                return message;
+              }
+              const nextMessage = !message.content ? { ...message, content: STOPPED_MESSAGE } : message;
+              return failRunningSkillCalls(nextMessage, STOPPED_MESSAGE);
+            })
+          );
+          return;
+        }
+        const detail = caught instanceof Error ? caught.message : "Assistant image chat failed.";
+        setError(detail);
+        setMessages((current) =>
+          current.map((message) => {
+            if (message.id !== assistantMessage.id) {
+              return message;
+            }
+            const nextMessage = !message.content
+              ? { ...message, content: "抱歉，助手暂时无法分析图片。" }
+              : message;
+            return failRunningSkillCalls(nextMessage, detail);
+          })
+        );
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+        setIsStreaming(false);
+      }
+    },
+    [isStreaming, messages]
+  );
+
   return {
     messages,
     isStreaming,
     error,
     sendMessage,
+    sendImageMessage,
     stopStreaming,
     clearMessages
   };

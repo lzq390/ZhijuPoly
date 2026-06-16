@@ -343,6 +343,7 @@ export type KnowledgeNavigationRequest = {
   terms?: string[];
 };
 export type AssistantChatRole = "user" | "assistant";
+export type AssistantImageMode = "analysis" | "structure";
 
 export type AssistantChatMessage = {
   role: AssistantChatRole;

@@ -137,6 +137,51 @@ export async function streamAssistantChat(
   }
 }
 
+export async function streamAssistantImageChat(
+  payload: AssistantChatStreamRequest,
+  image: File,
+  handlers: AssistantStreamHandlers
+): Promise<void> {
+  const body = new FormData();
+  body.append("payload", JSON.stringify(payload));
+  body.append("image", image);
+
+  const response = await fetch(API_BASE_URL + "/assistant/chat/image-stream", {
+    method: "POST",
+    body,
+    signal: handlers.signal
+  });
+
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
+  }
+  if (!response.body) {
+    throw new Error("Assistant image response stream is not available");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      handleAssistantStreamEvent(part, handlers);
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    handleAssistantStreamEvent(buffer, handlers);
+  }
+}
+
 function handleAssistantStreamEvent(rawEvent: string, handlers: AssistantStreamHandlers): void {
   const lines = rawEvent.split(/\r?\n/);
   let eventName = "message";

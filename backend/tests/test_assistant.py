@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
@@ -33,6 +34,7 @@ def make_assistant_app(
     api_key: str = "test-key",
     model_enabled: bool = False,
     pi_reverse_db_path: Path | None = None,
+    assistant_image_max_bytes: int = 1024,
 ):
     return create_app(
         Settings(
@@ -45,6 +47,7 @@ def make_assistant_app(
             assistant_api_key=api_key,
             assistant_base_url="https://example.test/v1",
             assistant_model="test-model",
+            assistant_image_max_bytes=assistant_image_max_bytes,
         )
     )
 
@@ -118,6 +121,40 @@ def post_assistant_message(client: TestClient, content: str = "hello"):
                 ],
             },
         },
+    )
+
+
+def post_assistant_image_message(
+    client: TestClient,
+    *,
+    content: str = "analyze this image",
+    image_bytes: bytes = PNG_BYTES,
+    content_type: str = "image/png",
+):
+    return client.post(
+        "/api/v1/assistant/chat/image-stream",
+        data={
+            "payload": json.dumps(
+                {
+                    "messages": [
+                        {"role": "user", "content": content},
+                    ],
+                    "context": {
+                        "active_module": "home",
+                        "modules": [
+                            {
+                                "id": "knowledge",
+                                "title": "Knowledge Search",
+                                "route": "/knowledge",
+                                "group": "Data & Knowledge",
+                                "description": "Search polymer literature.",
+                            }
+                        ],
+                    },
+                }
+            )
+        },
+        files={"image": ("sample.png", image_bytes, content_type)},
     )
 
 
@@ -292,6 +329,77 @@ def test_assistant_chat_stream_emits_config_error_event(tmp_path: Path) -> None:
     assert "Assistant API Key is required" in response.text
 
 
+def test_assistant_image_chat_streams_token_and_done_events(tmp_path: Path, monkeypatch) -> None:
+    def fake_stream_assistant_image_chat(**kwargs):
+        assert kwargs["messages"][-1].content == "analyze this image"
+        assert kwargs["modules"][0].title == "Knowledge Search"
+        assert kwargs["active_module"] == "home"
+        assert kwargs["image_bytes"] == PNG_BYTES
+        assert kwargs["content_type"] == "image/png"
+        assert kwargs["api_key"] == "test-key"
+        assert kwargs["base_url"] == "https://example.test/v1"
+        assert kwargs["model"] == "test-model"
+        yield "Image"
+        yield " analysis"
+
+    monkeypatch.setattr(assistant_router, "stream_assistant_image_chat", fake_stream_assistant_image_chat)
+    client = TestClient(make_assistant_app(tmp_path))
+
+    response = post_assistant_image_message(client)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: token" in response.text
+    assert "Image analysis" in response.text
+    assert "event: done" in response.text
+
+
+def test_assistant_image_chat_rejects_unsupported_image_type(tmp_path: Path) -> None:
+    client = TestClient(make_assistant_app(tmp_path))
+
+    response = post_assistant_image_message(
+        client,
+        image_bytes=b"not an image",
+        content_type="text/plain",
+    )
+
+    assert response.status_code == 415
+    assert response.json()["detail"] == "unsupported image type"
+
+
+def test_assistant_image_chat_rejects_large_image(tmp_path: Path) -> None:
+    client = TestClient(make_assistant_app(tmp_path, assistant_image_max_bytes=8))
+
+    response = post_assistant_image_message(client)
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "image file is too large"
+
+
+def test_assistant_image_chat_stream_emits_config_error_event(tmp_path: Path) -> None:
+    client = TestClient(make_assistant_app(tmp_path, api_key=""))
+
+    response = post_assistant_image_message(client)
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert "Assistant API Key is required" in response.text
+
+
+def test_assistant_image_chat_stream_emits_model_error_event(tmp_path: Path, monkeypatch) -> None:
+    def fake_stream_assistant_image_chat(**_kwargs):
+        raise assistant_chat_service.AssistantChatModelError("vision model unavailable")
+
+    monkeypatch.setattr(assistant_router, "stream_assistant_image_chat", fake_stream_assistant_image_chat)
+    client = TestClient(make_assistant_app(tmp_path))
+
+    response = post_assistant_image_message(client)
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert "vision model unavailable" in response.text
+
+
 def test_assistant_chat_requires_latest_user_message(tmp_path: Path) -> None:
     client = TestClient(make_assistant_app(tmp_path))
 
@@ -336,6 +444,50 @@ def test_assistant_chat_ignores_stream_chunks_without_delta_content(monkeypatch)
     )
 
     assert tokens == ["OK"]
+
+
+def test_assistant_image_chat_sends_multimodal_latest_message(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return iter([SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="OK"))])])
+
+    class FakeOpenAI:
+        def __init__(self, *, api_key: str, base_url: str) -> None:
+            assert api_key == "test-key"
+            assert base_url == "https://example.test/v1"
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(assistant_chat_service, "OpenAI", FakeOpenAI)
+
+    tokens = list(
+        assistant_chat_service.stream_assistant_image_chat(
+            messages=[
+                AssistantChatMessage(role="user", content="previous question"),
+                AssistantChatMessage(role="assistant", content="previous answer"),
+                AssistantChatMessage(role="user", content="analyze this image"),
+            ],
+            modules=[],
+            active_module=None,
+            image_bytes=PNG_BYTES,
+            content_type="image/png",
+            api_key="test-key",
+            base_url="https://example.test/v1",
+            model="test-model",
+        )
+    )
+
+    assert tokens == ["OK"]
+    assert captured["model"] == "test-model"
+    messages = captured["messages"]
+    assert messages[1] == {"role": "user", "content": "previous question"}
+    assert messages[2] == {"role": "assistant", "content": "previous answer"}
+    latest_content = messages[-1]["content"]
+    assert latest_content[0] == {"type": "text", "text": "analyze this image"}
+    assert latest_content[1]["type"] == "image_url"
+    assert latest_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 def test_assistant_plain_chat_does_not_trigger_skill(tmp_path: Path, monkeypatch) -> None:

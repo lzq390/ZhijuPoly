@@ -67,6 +67,7 @@ class Settings:
         assistant_api_key: str | None = None,
         assistant_base_url: str | None = None,
         assistant_model: str | None = None,
+        assistant_image_max_bytes: int | None = None,
         ocsr_enabled: bool | None = None,
         ocsr_model_dir: str | None = None,
         ocsr_device: str | None = None,
@@ -241,6 +242,14 @@ class Settings:
             env_values.get("ASSISTANT_MODEL"),
             default="gpt-5.5",
         )
+        raw_assistant_image_max_bytes = (
+            str(assistant_image_max_bytes)
+            if assistant_image_max_bytes is not None
+            else os.getenv(
+                "ASSISTANT_IMAGE_MAX_BYTES",
+                str(env_values.get("ASSISTANT_IMAGE_MAX_BYTES", "5242880")),
+            )
+        )
         raw_ocsr_model_dir = ocsr_model_dir
         if raw_ocsr_model_dir is None:
             raw_ocsr_model_dir = (
@@ -364,6 +373,7 @@ class Settings:
         self.assistant_api_key = raw_assistant_api_key.strip()
         self.assistant_base_url = raw_assistant_base_url.strip()
         self.assistant_model = raw_assistant_model.strip()
+        self.assistant_image_max_bytes = max(1, int(raw_assistant_image_max_bytes))
         self.ocsr_enabled = bool(raw_ocsr_enabled)
         self.ocsr_model_dir = _resolve_from_root(raw_ocsr_model_dir)
         self.ocsr_device = raw_ocsr_device.strip().lower()

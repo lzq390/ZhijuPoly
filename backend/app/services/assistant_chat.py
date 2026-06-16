@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 from collections.abc import Iterable, Sequence
@@ -111,6 +112,62 @@ def stream_assistant_chat(
             messages=[
                 {"role": "system", "content": build_assistant_system_prompt(modules, active_module)},
                 *[{"role": message.role, "content": message.content} for message in messages],
+            ],
+            temperature=0.2,
+            max_tokens=1400,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = getattr(chunk.choices[0], "delta", None)
+            content = getattr(delta, "content", None) if delta is not None else None
+            if content:
+                yield content
+    except AssistantChatConfigError:
+        raise
+    except Exception as exc:
+        raise AssistantChatModelError(str(exc)) from exc
+
+
+def stream_assistant_image_chat(
+    *,
+    messages: Sequence[AssistantChatMessage],
+    modules: Sequence[AssistantModuleContext],
+    active_module: str | None,
+    image_bytes: bytes,
+    content_type: str,
+    api_key: str,
+    base_url: str,
+    model: str,
+) -> Iterable[str]:
+    validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
+    if not messages or messages[-1].role != "user":
+        raise AssistantChatModelError("latest assistant image chat message must be from the user")
+
+    client = OpenAI(api_key=api_key, base_url=base_url.rstrip("/"))
+    image_data_url = f"data:{content_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+    prior_messages = [{"role": message.role, "content": message.content} for message in messages[:-1]]
+    latest_message = messages[-1]
+
+    try:
+        stream = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": build_assistant_image_system_prompt(modules, active_module)},
+                *prior_messages,
+                {
+                    "role": latest_message.role,
+                    "content": [
+                        {"type": "text", "text": latest_message.content},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_data_url,
+                            },
+                        },
+                    ],
+                },
             ],
             temperature=0.2,
             max_tokens=1400,
@@ -338,4 +395,19 @@ Current active module: {active_module_text}
 
 Available modules:
 {module_lines or "- No module context was provided."}
+""".strip()
+
+
+def build_assistant_image_system_prompt(
+    modules: Sequence[AssistantModuleContext],
+    active_module: str | None,
+) -> str:
+    return f"""{build_assistant_system_prompt(modules, active_module)}
+
+Image analysis rules:
+- The latest user message includes one uploaded image. Analyze only visible image evidence and the user's text.
+- Focus on polymer/materials research context when relevant: morphology, plots, spectra, instruments, documents, screenshots, or experimental observations.
+- Distinguish observations from hypotheses. Do not present visual guesses as confirmed experimental conclusions.
+- Do not invent SMILES, property values, units, database results, or executed tool outputs from the image.
+- If the user wants to extract SMILES from a molecular structure image, predict properties from a structure, or search by structure, tell them to use the structure recognition mode.
 """.strip()
