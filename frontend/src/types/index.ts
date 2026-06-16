@@ -342,9 +342,18 @@ export type KnowledgeNavigationRequest = {
 export type AssistantChatRole = "user" | "assistant";
 export type AssistantImageMode = "analysis" | "structure";
 
+export type AssistantMessageAttachment = {
+  type: "image";
+  name: string;
+  previewUrl: string;
+  mode: AssistantImageMode;
+  sizeBytes: number;
+};
+
 export type AssistantChatMessage = {
   role: AssistantChatRole;
   content: string;
+  attachments?: AssistantMessageAttachment[];
 };
 
 export type AssistantModuleContext = {

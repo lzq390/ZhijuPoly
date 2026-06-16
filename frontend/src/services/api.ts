@@ -72,10 +72,11 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function postForm<T>(path: string, body: FormData): Promise<T> {
+async function postForm<T>(path: string, body: FormData, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
-    body
+    body,
+    signal
   });
 
   if (!response.ok) {
@@ -341,10 +342,10 @@ export function standardizeSmiles(payload: SmilesStandardizeRequest): Promise<Sm
   return postJSON("/structure/standardize-smiles", payload);
 }
 
-export function recognizeStructureImage(file: File): Promise<StructureImageRecognitionResponse> {
+export function recognizeStructureImage(file: File, signal?: AbortSignal): Promise<StructureImageRecognitionResponse> {
   const body = new FormData();
   body.append("image", file);
-  return postForm("/structure/recognize-image", body);
+  return postForm("/structure/recognize-image", body, signal);
 }
 
 export function predictMonomerPrecursors(

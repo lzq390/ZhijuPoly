@@ -1,5 +1,5 @@
 import { type ClipboardEvent, type KeyboardEvent, type WheelEvent, useEffect, useRef, useState } from "react";
-import { ArrowUp, Bot, Eraser, ImagePlus, Loader2, MessageSquare, OctagonX, Sparkles, UserRound, X } from "lucide-react";
+import { ArrowUp, Bot, Eraser, Image as ImageIcon, Loader2, MessageSquare, OctagonX, Plus, Search, Sparkles, UserRound, X } from "lucide-react";
 import type { AppShellModuleGroup } from "./AppShell";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
@@ -7,6 +7,7 @@ import { useAssistantChat } from "../hooks/useAssistantChat";
 import { recognizeStructureImage } from "../services/api";
 import type {
   AssistantImageMode,
+  AssistantMessageAttachment,
   AssistantModuleContext,
   AssistantPredictionSkillResult,
   AssistantSkillCall,
@@ -29,6 +30,9 @@ const starterPrompts = [
 
 const MAX_STRUCTURE_IMAGE_BYTES = 5 * 1024 * 1024;
 const SUPPORTED_STRUCTURE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const IMAGE_THUMBNAIL_MAX_WIDTH = 320;
+const IMAGE_THUMBNAIL_MAX_HEIGHT = 220;
+const IMAGE_THUMBNAIL_JPEG_QUALITY = 0.82;
 
 type AttachedStructureImage = {
   file: File;
@@ -40,10 +44,18 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
   const [attachedImage, setAttachedImage] = useState<AttachedStructureImage | null>(null);
   const [imageMode, setImageMode] = useState<AssistantImageMode>("analysis");
   const [imageError, setImageError] = useState<string | null>(null);
-  const [isRecognizingImage, setIsRecognizingImage] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const attachedImagePreviewRef = useRef<string | null>(null);
-  const { messages, isStreaming, error, sendMessage, sendImageMessage, stopStreaming, clearMessages } = useAssistantChat();
+  const {
+    messages,
+    isStreaming,
+    error,
+    sendMessage,
+    sendImageMessage,
+    sendPreparedMessage,
+    stopStreaming,
+    clearMessages
+  } = useAssistantChat();
   const trimmedDraft = draft.trim();
   const moduleItems = moduleGroups.flatMap((group) => group.items);
   const streamingAssistantMessageId = isStreaming
@@ -64,7 +76,7 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
 
   async function submitMessage(text: string) {
     const value = text.trim();
-    if ((!value && !attachedImage) || isStreaming || isRecognizingImage) {
+    if ((!value && !attachedImage) || isStreaming) {
       return;
     }
 
@@ -78,39 +90,54 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
     }
 
     if (imageMode === "analysis") {
-      const displayText = buildImageAnalysisMessageDisplayText(value, attachedImage.file.name);
+      const displayText = buildImageAnalysisMessageDisplayText(value);
       const imageFile = attachedImage.file;
+      let imageAttachment: AssistantMessageAttachment;
+      try {
+        imageAttachment = await createImageMessageAttachment(imageFile, imageMode);
+      } catch {
+        setImageError("图片预览生成失败，请重新选择图片。");
+        return;
+      }
       setDraft("");
       clearAttachedImage();
-      await sendImageMessage(displayText, {
-        active_module: activeModule,
-        modules
-      }, imageFile);
-      return;
-    }
-
-    setImageError(null);
-    setIsRecognizingImage(true);
-    try {
-      const result = await recognizeStructureImage(attachedImage.file);
-      const displayText = buildImageMessageDisplayText(value, attachedImage.file.name);
-      const requestText = buildImageResolvedRequestContent(value, attachedImage.file.name, result);
-      setIsRecognizingImage(false);
-      setDraft("");
-      clearAttachedImage();
-      await sendMessage(
+      await sendImageMessage(
         displayText,
         {
           active_module: activeModule,
           modules
         },
-        requestText
+        imageFile,
+        [imageAttachment]
       );
-    } catch (caught) {
-      setImageError(caught instanceof Error ? caught.message : "图片识别失败。");
-    } finally {
-      setIsRecognizingImage(false);
+      return;
     }
+
+    const imageFile = attachedImage.file;
+    let imageAttachment: AssistantMessageAttachment;
+    try {
+      imageAttachment = await createImageMessageAttachment(imageFile, imageMode);
+    } catch {
+      setImageError("图片预览生成失败，请重新选择图片。");
+      return;
+    }
+    const displayText = buildImageMessageDisplayText(value);
+    setImageError(null);
+    setDraft("");
+    clearAttachedImage();
+    await sendPreparedMessage(
+      displayText,
+      {
+        active_module: activeModule,
+        modules
+      },
+      async (signal) => {
+        const result = await recognizeStructureImage(imageFile, signal);
+        return buildImageResolvedRequestContent(value, imageFile.name, result);
+      },
+      [imageAttachment],
+      "正在识别结构图片..."
+    );
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -121,7 +148,7 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
     void submitMessage(draft);
   }
 
-  function attachImage(file: File) {
+  function attachImage(file: File, mode: AssistantImageMode = "analysis") {
     const contentType = file.type.trim().toLowerCase();
     if (contentType && !SUPPORTED_STRUCTURE_IMAGE_TYPES.has(contentType)) {
       setImageError("仅支持 PNG、JPEG、GIF 或 WebP 图片。");
@@ -138,7 +165,7 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
     const previewUrl = URL.createObjectURL(file);
     attachedImagePreviewRef.current = previewUrl;
     setAttachedImage({ file, previewUrl });
-    setImageMode("analysis");
+    setImageMode(mode);
     setImageError(null);
   }
 
@@ -159,10 +186,10 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
     }
 
     event.preventDefault();
-    attachImage(imageFile);
+    attachImage(imageFile, "analysis");
   }
 
-  const canSubmitComposer = Boolean(trimmedDraft || attachedImage) && !isRecognizingImage;
+  const canSubmitComposer = Boolean(trimmedDraft || attachedImage);
 
   return (
     <section className="relative h-full min-h-0 bg-[#f8f9fb]">
@@ -206,7 +233,6 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
               draft={draft}
               trimmedDraft={trimmedDraft}
               isStreaming={isStreaming}
-              isRecognizingImage={isRecognizingImage}
               canSubmit={canSubmitComposer}
               attachedImage={attachedImage}
               imageMode={imageMode}
@@ -260,15 +286,15 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
                         <div className="min-w-0 flex-1">
                           {message.content || message.id === streamingAssistantMessageId ? (
                             <AssistantMessageContent
-                              content={message.content || "正在生成..."}
+                              content={message.content || "正在思考..."}
                               moduleItems={moduleItems}
                               onOpenModule={onOpenModule}
                             />
                           ) : null}
                           {message.skillCalls?.length ? <AssistantSkillPanels skillCalls={message.skillCalls} /> : null}
                         </div>
-                      ) : message.content ? (
-                        <div className="min-w-0 whitespace-pre-wrap break-words">{message.content}</div>
+                      ) : message.content || message.attachments?.length ? (
+                        <UserMessageContent content={message.content} attachments={message.attachments} />
                       ) : null}
                     </div>
                   </article>
@@ -287,7 +313,6 @@ export function AssistantHomePage({ activeModule, modules, moduleGroups, onOpenM
                 draft={draft}
                 trimmedDraft={trimmedDraft}
                 isStreaming={isStreaming}
-                isRecognizingImage={isRecognizingImage}
                 canSubmit={canSubmitComposer}
                 attachedImage={attachedImage}
                 imageMode={imageMode}
@@ -322,16 +347,73 @@ function findClipboardImageFile(event: ClipboardEvent<HTMLTextAreaElement>): Fil
   return imageItem?.getAsFile() ?? null;
 }
 
-function buildImageMessageDisplayText(content: string, fileName: string) {
-  const baseContent = content.trim() || "请基于这张分子结构图进行后续操作。";
-  const imageName = fileName.trim() || "粘贴的图片";
-  return `${baseContent}（已附加图片：${imageName}）`;
+function buildImageMessageDisplayText(content: string) {
+  return content.trim() || "请基于这张分子结构图进行后续操作。";
 }
 
-function buildImageAnalysisMessageDisplayText(content: string, fileName: string) {
-  const baseContent = content.trim() || "请分析这张图片。";
-  const imageName = fileName.trim() || "粘贴的图片";
-  return `${baseContent}（已附加图片：${imageName}，模式：图片分析）`;
+function buildImageAnalysisMessageDisplayText(content: string) {
+  return content.trim() || "请分析这张图片。";
+}
+
+function formatImageModeLabel(mode: AssistantImageMode) {
+  return mode === "analysis" ? "图片分析" : "结构识别";
+}
+
+async function createImageMessageAttachment(
+  file: File,
+  mode: AssistantImageMode
+): Promise<AssistantMessageAttachment> {
+  return {
+    type: "image",
+    name: file.name || "粘贴的图片",
+    previewUrl: await createImageThumbnailDataUrl(file),
+    mode,
+    sizeBytes: file.size
+  };
+}
+
+function createImageThumbnailDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new window.Image();
+
+    image.onload = () => {
+      try {
+        const sourceWidth = image.naturalWidth || image.width || IMAGE_THUMBNAIL_MAX_WIDTH;
+        const sourceHeight = image.naturalHeight || image.height || IMAGE_THUMBNAIL_MAX_HEIGHT;
+        const scale = Math.min(
+          IMAGE_THUMBNAIL_MAX_WIDTH / sourceWidth,
+          IMAGE_THUMBNAIL_MAX_HEIGHT / sourceHeight,
+          1
+        );
+        const targetWidth = Math.max(1, Math.round(sourceWidth * scale));
+        const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          throw new Error("Canvas is not available");
+        }
+
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, targetWidth, targetHeight);
+        context.drawImage(image, 0, 0, targetWidth, targetHeight);
+        resolve(canvas.toDataURL("image/jpeg", IMAGE_THUMBNAIL_JPEG_QUALITY));
+      } catch (caught) {
+        reject(caught);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Failed to load image preview"));
+    };
+
+    image.src = objectUrl;
+  });
 }
 
 function buildImageResolvedRequestContent(
@@ -398,6 +480,32 @@ function AssistantMessageContent({ content, moduleItems, onOpenModule }: Assista
           />
         );
       })}
+    </div>
+  );
+}
+
+function UserMessageContent({
+  content,
+  attachments
+}: {
+  content: string;
+  attachments?: AssistantMessageAttachment[];
+}) {
+  return (
+    <div className="min-w-0 flex flex-col gap-2">
+      {attachments?.map((attachment, index) => (
+        <div
+          key={`${attachment.type}-${attachment.name}-${index}`}
+          className="w-fit max-w-full overflow-hidden rounded-2xl border border-white/15 bg-white p-2"
+        >
+          <img
+            src={attachment.previewUrl}
+            alt={attachment.name || "图片预览"}
+            className="max-h-[180px] max-w-[240px] object-contain"
+          />
+        </div>
+      ))}
+      {content ? <div className="min-w-0 whitespace-pre-wrap break-words">{content}</div> : null}
     </div>
   );
 }
@@ -586,7 +694,6 @@ type ChatComposerProps = {
   draft: string;
   trimmedDraft: string;
   isStreaming: boolean;
-  isRecognizingImage: boolean;
   canSubmit: boolean;
   attachedImage: AttachedStructureImage | null;
   imageMode: AssistantImageMode;
@@ -596,7 +703,7 @@ type ChatComposerProps = {
   onStop: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
-  onImageSelected: (file: File) => void;
+  onImageSelected: (file: File, mode: AssistantImageMode) => void;
   onImageModeChange: (mode: AssistantImageMode) => void;
   onClearImage: () => void;
 };
@@ -605,7 +712,6 @@ function ChatComposer({
   className,
   draft,
   isStreaming,
-  isRecognizingImage,
   canSubmit,
   attachedImage,
   imageMode,
@@ -620,6 +726,43 @@ function ChatComposer({
   onClearImage
 }: ChatComposerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageMenuRef = useRef<HTMLDivElement | null>(null);
+  const pendingImageModeRef = useRef<AssistantImageMode>("analysis");
+  const [isImageMenuOpen, setIsImageMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isImageMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target;
+      if (target instanceof Node && imageMenuRef.current?.contains(target)) {
+        return;
+      }
+      setIsImageMenuOpen(false);
+    }
+
+    function handleWindowKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsImageMenuOpen(false);
+      }
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleWindowKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleWindowKeyDown);
+    };
+  }, [isImageMenuOpen]);
+
+  function handleImageMenuSelection(mode: AssistantImageMode) {
+    pendingImageModeRef.current = mode;
+    onImageModeChange(mode);
+    setIsImageMenuOpen(false);
+    fileInputRef.current?.click();
+  }
 
   return (
     <div
@@ -636,7 +779,7 @@ function ChatComposer({
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           if (file) {
-            onImageSelected(file);
+            onImageSelected(file, pendingImageModeRef.current);
           }
           event.currentTarget.value = "";
         }}
@@ -648,7 +791,7 @@ function ChatComposer({
               <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-teal-100 bg-teal-50/80 px-2.5 py-2">
                 <img
                   src={attachedImage.previewUrl}
-                  alt={attachedImage.file.name || "已附加图片"}
+                  alt={attachedImage.file.name || "图片预览"}
                   className="h-10 w-12 flex-none rounded-xl border border-white bg-white object-contain"
                 />
                 <div className="min-w-0 flex-1">
@@ -656,45 +799,17 @@ function ChatComposer({
                     {attachedImage.file.name || "粘贴的图片"}
                   </div>
                   <div className="mt-0.5 text-[11px] text-teal-700">
-                    {(attachedImage.file.size / 1024).toFixed(1)} KB
+                    {formatImageModeLabel(imageMode)} · {(attachedImage.file.size / 1024).toFixed(1)} KB
                   </div>
                 </div>
                 <button
                   type="button"
-                  aria-label="移除已附加图片"
+                  aria-label="移除图片"
                   className="flex h-8 w-8 flex-none items-center justify-center rounded-full text-teal-700 transition hover:bg-white hover:text-teal-950"
                   onClick={onClearImage}
-                  disabled={isRecognizingImage}
+                  disabled={isStreaming}
                 >
                   <X className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-1 rounded-2xl border border-slate-200 bg-slate-50 p-1">
-                <button
-                  type="button"
-                  className={[
-                    "rounded-xl px-3 py-1.5 text-xs font-semibold transition",
-                    imageMode === "analysis"
-                      ? "bg-white text-teal-800 shadow-sm"
-                      : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
-                  ].join(" ")}
-                  onClick={() => onImageModeChange("analysis")}
-                  disabled={isRecognizingImage}
-                >
-                  图片分析
-                </button>
-                <button
-                  type="button"
-                  className={[
-                    "rounded-xl px-3 py-1.5 text-xs font-semibold transition",
-                    imageMode === "structure"
-                      ? "bg-white text-teal-800 shadow-sm"
-                      : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
-                  ].join(" ")}
-                  onClick={() => onImageModeChange("structure")}
-                  disabled={isRecognizingImage}
-                >
-                  结构识别
                 </button>
               </div>
             </>
@@ -717,24 +832,41 @@ function ChatComposer({
       />
       <div className="flex items-center justify-between gap-3 px-2 pb-1">
         <div className="flex min-w-0 items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            aria-label="附加图片"
-            className="h-9 w-9 rounded-xl p-0"
-            disabled={isStreaming || isRecognizingImage}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <ImagePlus className="h-4 w-4" />
-          </Button>
+          <div ref={imageMenuRef} className="relative">
+            <Button
+              type="button"
+              variant="outline"
+              aria-label="打开图片菜单"
+              aria-expanded={isImageMenuOpen}
+              className="h-9 w-9 rounded-xl p-0"
+              disabled={isStreaming}
+              onClick={() => setIsImageMenuOpen((current) => !current)}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+            {isImageMenuOpen ? (
+              <div className="absolute bottom-11 left-0 z-30 w-44 overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 p-1.5 text-white shadow-2xl">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium transition hover:bg-white/10"
+                  onClick={() => handleImageMenuSelection("analysis")}
+                >
+                  <ImageIcon className="h-4 w-4" />
+                  <span>图片分析</span>
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium transition hover:bg-white/10"
+                  onClick={() => handleImageMenuSelection("structure")}
+                >
+                  <Search className="h-4 w-4" />
+                  <span>结构识别</span>
+                </button>
+              </div>
+            ) : null}
+          </div>
           <div className="truncate text-xs text-slate-400">
-            {isRecognizingImage
-              ? "正在识别结构图片"
-              : attachedImage
-                ? imageMode === "analysis"
-                  ? "图片分析"
-                  : "结构识别"
-                : "智聚万物"}
+            {attachedImage ? formatImageModeLabel(imageMode) : "智聚万物"}
           </div>
         </div>
         {isStreaming ? (
@@ -744,7 +876,7 @@ function ChatComposer({
           </Button>
         ) : (
           <Button type="button" className="h-10 w-10 rounded-xl p-0" disabled={!canSubmit} onClick={onSubmit}>
-            {isRecognizingImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+            <ArrowUp className="h-4 w-4" />
           </Button>
         )}
       </div>
@@ -841,7 +973,7 @@ function StreamingStatus() {
   return (
     <div className="mt-2 flex items-center gap-2 px-2 text-xs text-slate-500">
       <Loader2 className="h-3.5 w-3.5 animate-spin" />
-      正在生成回复
+      正在思考
     </div>
   );
 }
