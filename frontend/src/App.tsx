@@ -19,6 +19,7 @@ import { ConditionalGenerationPage } from "./components/ConditionalGenerationPag
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
 import { ExperimentWorkflowDemoPage } from "./components/ExperimentWorkflowDemoPage";
+import { HighThroughputWorkflowDemoPage } from "./components/HighThroughputWorkflowDemoPage";
 import { KetcherEditor } from "./components/KetcherEditor";
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { LabDataPage, type LabDataView } from "./components/LabDataPage";
@@ -54,7 +55,8 @@ type ActiveModule =
   | "database"
   | "knowledge"
   | "labData"
-  | "experimentWorkflowDemo";
+  | "experimentWorkflowDemo"
+  | "highThroughputWorkflowDemo";
 
 type AppRoute = {
   module: ActiveModule;
@@ -116,6 +118,10 @@ function routeFromPath(pathname: string): AppRoute {
     return { module: "experimentWorkflowDemo", datasetKey: null };
   }
 
+  if (path === "/high-throughput-workflow-demo") {
+    return { module: "highThroughputWorkflowDemo", datasetKey: null };
+  }
+
   if (path === "/lab-data" || path === "/lab-data/collect") {
     return { module: "labData", datasetKey: null, labDataView: "collect" };
   }
@@ -167,6 +173,10 @@ function pathFromRoute(route: AppRoute) {
 
   if (route.module === "experimentWorkflowDemo") {
     return "/experiment-workflow-demo";
+  }
+
+  if (route.module === "highThroughputWorkflowDemo") {
+    return "/high-throughput-workflow-demo";
   }
 
   if (route.module === "labData") {
@@ -441,6 +451,10 @@ export default function App() {
     navigate({ module: "experimentWorkflowDemo", datasetKey: null });
   }
 
+  function openHighThroughputWorkflowDemo() {
+    navigate({ module: "highThroughputWorkflowDemo", datasetKey: null });
+  }
+
   function openDatabaseQuery() {
     navigate({ module: "databaseQuery", datasetKey: null });
   }
@@ -515,6 +529,9 @@ export default function App() {
         break;
       case "experimentWorkflowDemo":
         openExperimentWorkflowDemo();
+        break;
+      case "highThroughputWorkflowDemo":
+        openHighThroughputWorkflowDemo();
         break;
     }
   }
@@ -627,6 +644,15 @@ export default function App() {
           icon: <BarChart3 className="h-4 w-4" />,
           isActive: activeModule === "experimentWorkflowDemo",
           onClick: openExperimentWorkflowDemo
+        },
+        {
+          id: "highThroughputWorkflowDemo",
+          label: "高通量优化演示",
+          description: "用模拟数据展示 PI 候选空间、单目标 Agent 和配方混合优化闭环。",
+          route: "/high-throughput-workflow-demo",
+          icon: <BarChart3 className="h-4 w-4" />,
+          isActive: activeModule === "highThroughputWorkflowDemo",
+          onClick: openHighThroughputWorkflowDemo
         }
       ]
     }
@@ -644,6 +670,7 @@ export default function App() {
     activeModule === "structureWorkbench" ||
     activeModule === "reverseDesign" ||
     activeModule === "experimentWorkflowDemo" ||
+    activeModule === "highThroughputWorkflowDemo" ||
     activeModule === "mdSimulationDemo";
   const shouldKeepStructureWorkbenchMounted = hasMountedStructureWorkbench && activeModule !== "explorer";
 
@@ -711,6 +738,10 @@ export default function App() {
 
       {activeModule === "experimentWorkflowDemo" ? (
         <ExperimentWorkflowDemoPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+      ) : null}
+
+      {activeModule === "highThroughputWorkflowDemo" ? (
+        <HighThroughputWorkflowDemoPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
       ) : null}
 
       {activeModule === "mdSimulationDemo" ? (
