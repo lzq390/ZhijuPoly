@@ -1,5 +1,4 @@
 import {
-  ArrowLeft,
   BadgeInfo,
   Bot,
   BrainCircuit,
@@ -33,8 +32,22 @@ type WeightState = Record<HighThroughputTargetKey, number>;
 
 const PLAY_INTERVAL_MS = 2600;
 const MAX_RENDERED_STAGE_DOTS = 2400;
+const MATERIAL_MAP_WIDTH = 100;
+const MATERIAL_MAP_HEIGHT = 48;
 const AGENT_DISPLAY_COLORS = ["#2563eb", "#16a34a", "#7c3aed", "#f97316"] as const;
 const AGENT_ACTION_LABELS = ["下一轮 3 个样本", "追加 3 个验证点", "筛选候选 Top-k", "更新局部推荐"] as const;
+const TARGET_HEATMAP_COLORS: Record<HighThroughputTargetKey, { center: string; mid: string; edge: string }> = {
+  tg: { center: "#1d4ed8", mid: "#93c5fd", edge: "#dbeafe" },
+  cte: { center: "#15803d", mid: "#86efac", edge: "#dcfce7" },
+  elongation: { center: "#6d28d9", mid: "#c4b5fd", edge: "#ede9fe" },
+  modulus: { center: "#ea580c", mid: "#fdba74", edge: "#ffedd5" },
+};
+const TARGET_HEATMAP_ANCHORS: Record<HighThroughputTargetKey, { x: number; y: number }> = {
+  tg: { x: 30, y: 15 },
+  cte: { x: 30, y: 33 },
+  elongation: { x: 70, y: 15 },
+  modulus: { x: 70, y: 33 },
+};
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -86,6 +99,101 @@ function projectMaterialPoint(
   };
 }
 
+function propertyPotential(
+  candidate: HighThroughputCandidate,
+  target: HighThroughputTarget,
+  range: { min: number; max: number },
+) {
+  const span = range.max - range.min || 1;
+  const value = candidate.scores[target.key];
+  const normalized = (value - range.min) / span;
+  return target.direction === "lower" ? 1 - normalized : normalized;
+}
+
+type ProjectedCandidate = {
+  candidate: HighThroughputCandidate;
+  index: number;
+  point: { x: number; y: number };
+};
+
+function pointDistance(a: { x: number; y: number }, b: { x: number; y: number }) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function buildHeatmapBlobs(
+  projectedCandidates: ProjectedCandidate[],
+  target: HighThroughputTarget,
+  range: { min: number; max: number },
+) {
+  const anchor = TARGET_HEATMAP_ANCHORS[target.key];
+  const rankedCandidates = projectedCandidates
+    .map((item) => ({
+      ...item,
+      potential: propertyPotential(item.candidate, target, range),
+    }))
+    .filter((item) => item.potential >= 0.58)
+    .sort((a, b) => {
+      const aAnchorScore = 1 / (1 + pointDistance(a.point, anchor) * 0.08);
+      const bAnchorScore = 1 / (1 + pointDistance(b.point, anchor) * 0.08);
+      return b.potential * 0.62 + bAnchorScore * 0.38 - (a.potential * 0.62 + aAnchorScore * 0.38);
+    })
+    .slice(0, 360);
+
+  if (rankedCandidates.length === 0) {
+    return [];
+  }
+
+  const centers: typeof rankedCandidates = [];
+  for (const item of rankedCandidates) {
+    if (centers.every((center) => pointDistance(center.point, item.point) > 12)) {
+      centers.push(item);
+    }
+    if (centers.length >= 2) {
+      break;
+    }
+  }
+
+  const palette = TARGET_HEATMAP_COLORS[target.key];
+  return centers.map((seed, blobIndex) => {
+    const influenceRadius = 18 + blobIndex * 2;
+    const neighbors = rankedCandidates.filter((item) => pointDistance(seed.point, item.point) <= influenceRadius);
+    const weightedCenter = neighbors.reduce(
+      (total, item) => {
+        const distance = pointDistance(seed.point, item.point);
+        const anchorDistance = pointDistance(item.point, anchor);
+        const weight = (Math.pow(item.potential, 3) / (1 + distance * 0.12)) * (1 / (1 + anchorDistance * 0.04));
+        return {
+          x: total.x + item.point.x * weight,
+          y: total.y + item.point.y * weight,
+          weight: total.weight + weight,
+        };
+      },
+      { x: 0, y: 0, weight: 0 },
+    );
+    const normalizedStrength =
+      neighbors.reduce((total, item) => total + item.potential, 0) / Math.max(neighbors.length, 1);
+    const dataCenter = {
+      x: weightedCenter.weight > 0 ? weightedCenter.x / weightedCenter.weight : seed.point.x,
+      y: weightedCenter.weight > 0 ? weightedCenter.y / weightedCenter.weight : seed.point.y,
+    };
+    const anchorWeight = blobIndex === 0 ? 0.82 : 0.68;
+    const spread = 10.6 + Math.min(neighbors.length / 22, 5.4) - blobIndex * 1.4;
+
+    return {
+      blobId: `${target.key}-${blobIndex}`,
+      target,
+      x: anchor.x * anchorWeight + dataCenter.x * (1 - anchorWeight),
+      y: anchor.y * anchorWeight + dataCenter.y * (1 - anchorWeight),
+      rx: clamp(spread * 1.52, 13, 20),
+      ry: clamp(spread * 0.96, 8.8, 14),
+      opacity: clamp(0.5 + normalizedStrength * 0.16 - blobIndex * 0.1, 0.34, 0.62),
+      ...palette,
+    };
+  });
+}
+
 function weightedAchievement(weights: WeightState) {
   const formulation = highThroughputDemoScenario.formulation;
   const totalWeight = Object.values(weights).reduce((total, value) => total + value, 0) || 1;
@@ -96,20 +204,14 @@ function weightedAchievement(weights: WeightState) {
   return Math.round(score / totalWeight);
 }
 
-export function HighThroughputWorkflowDemoPage({ onBackHome }: HighThroughputWorkflowDemoPageProps) {
+export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDemoPageProps) {
   const scenario = highThroughputDemoScenario;
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [activeTargetKey, setActiveTargetKey] = useState<HighThroughputTargetKey>(scenario.stages[0].activeTargetKey);
   const [weights, setWeights] = useState<WeightState>(() => buildInitialWeights());
   const currentStage = scenario.stages[currentStageIndex];
-  const activeTarget = getTarget(activeTargetKey);
   const maxStageIndex = scenario.stages.length - 1;
   const computedScore = weightedAchievement(weights);
-
-  useEffect(() => {
-    setActiveTargetKey(currentStage.activeTargetKey);
-  }, [currentStage.activeTargetKey]);
 
   useEffect(() => {
     if (!isPlaying) {
@@ -148,35 +250,12 @@ export function HighThroughputWorkflowDemoPage({ onBackHome }: HighThroughputWor
 
   function resetDemo() {
     setCurrentStageIndex(0);
-    setActiveTargetKey(scenario.stages[0].activeTargetKey);
     setWeights(buildInitialWeights());
     setIsPlaying(false);
   }
 
   return (
     <div className="high-throughput-demo">
-      <header className="ht-header">
-        <div className="ht-header-left">
-          <button type="button" className="ht-back-button" onClick={onBackHome}>
-            <ArrowLeft aria-hidden="true" size={16} />
-            Home
-          </button>
-          <div>
-            <div className="ht-kicker">High-throughput polymer experiment platform</div>
-            <h1>高通量优化演示</h1>
-          </div>
-        </div>
-        <div className="ht-header-actions">
-          <span className="ht-simulation-badge">
-            <BadgeInfo aria-hidden="true" size={15} />
-            Simulation Mode / 演示数据
-          </span>
-          <button type="button" className="ht-icon-button" onClick={resetDemo} aria-label="重置演示">
-            <RotateCcw aria-hidden="true" size={16} />
-          </button>
-        </div>
-      </header>
-
       <main className="ht-shell">
         <section className="ht-docx-board">
           <ScenarioHeader onConfirmSetup={() => goToStage(1)} isConfirmed={currentStageIndex > 0} />
@@ -197,14 +276,12 @@ export function HighThroughputWorkflowDemoPage({ onBackHome }: HighThroughputWor
             <div className="ht-map-column">
               <MaterialMap
                 stageIndex={currentStageIndex}
-                activeTarget={activeTarget}
-                activeTargetKey={activeTargetKey}
-                onActiveTargetChange={setActiveTargetKey}
               />
-              <NarrationPanel stageIndex={currentStageIndex} />
             </div>
 
             <AgentOrbitPanel stageIndex={currentStageIndex} side="right" />
+
+            <NarrationPanel stageIndex={currentStageIndex} />
           </div>
 
           <FormulationPanel stageIndex={currentStageIndex} weights={weights} onWeightsChange={setWeights} computedScore={computedScore} />
@@ -547,20 +624,16 @@ function NarrationPanel({ stageIndex }: { stageIndex: number }) {
 
 function MaterialMap({
   stageIndex,
-  activeTarget,
-  activeTargetKey,
-  onActiveTargetChange,
 }: {
   stageIndex: number;
-  activeTarget: HighThroughputTarget;
-  activeTargetKey: HighThroughputTargetKey;
-  onActiveTargetChange: (targetKey: HighThroughputTargetKey) => void;
 }) {
   const scenario = highThroughputDemoScenario;
   const visibleCandidates = stageIndex === 0 ? [] : scenario.candidates.slice(0, MAX_RENDERED_STAGE_DOTS);
   const generatedCount = visibleCandidates.length;
   const generatedComplete = generatedCount === scenario.candidateTotal;
-  const mapTitle = "统一 a x b 候选空间";
+  const showMaterialTerrain = stageIndex >= 2;
+  const showOptimizationMarkers = stageIndex >= 3;
+  const mapTitle = showMaterialTerrain ? "四目标模拟性能地形" : "统一 a x b 候选空间";
   const pointBounds = visibleCandidates.reduce(
     (bounds, candidate) => ({
       minX: Math.min(bounds.minX, candidate.x),
@@ -579,29 +652,93 @@ function MaterialMap({
     index,
     point: projectMaterialPoint(candidate, normalizedBounds),
   }));
-
-  void activeTarget;
-  void activeTargetKey;
-  void onActiveTargetChange;
+  const targetRanges = new Map(
+    scenario.targets.map((target) => {
+      const values = visibleCandidates.map((candidate) => candidate.scores[target.key]);
+      return [
+        target.key,
+        {
+          min: Math.min(...values),
+          max: Math.max(...values),
+        },
+      ];
+    }),
+  );
+  const heatmapBlobs = showMaterialTerrain
+    ? scenario.targets.flatMap((target) => {
+        const range = targetRanges.get(target.key) ?? { min: 0, max: 1 };
+        return buildHeatmapBlobs(projectedCandidates, target, range);
+      })
+    : [];
+  const projectedCandidateMap = new Map(projectedCandidates.map((item) => [item.candidate.id, item.point]));
+  const batchIndex = clamp(stageIndex - 3, 0, scenario.batches.length - 1);
+  const visibleBatches = showOptimizationMarkers ? scenario.batches.slice(0, batchIndex + 1) : [];
+  const testedIds = new Set(visibleBatches.flatMap((batch) => batch.testedIds));
+  const recommendedIds = new Set(showOptimizationMarkers ? scenario.batches[batchIndex]?.recommendedIds ?? [] : []);
 
   return (
     <section className="ht-material-map-panel">
       <div className="ht-panel-header">
         <div>
-          <span className="ht-kicker">2D PolyBERT Material Space</span>
+          <span className="ht-kicker">{showMaterialTerrain ? "2D PolyBERT Material Map" : "2D PolyBERT Material Space"}</span>
           <h2>{mapTitle}</h2>
         </div>
         <div className="ht-space-status-group">
           <span className="ht-unified-space-badge">40 x 60 candidates</span>
-          <span className={cn("ht-generation-status", generatedComplete ? "complete" : "pending")}>
-            已生成 {formatNumber(generatedCount)} / {formatNumber(scenario.candidateTotal)}
-          </span>
+          {showMaterialTerrain ? (
+            <span className="ht-map-layer-badge">Map layer: mock property terrain</span>
+          ) : (
+            <span className={cn("ht-generation-status", generatedComplete ? "complete" : "pending")}>
+              已生成 {formatNumber(generatedCount)} / {formatNumber(scenario.candidateTotal)}
+            </span>
+          )}
         </div>
       </div>
 
       <div className="ht-map-canvas">
-        <svg viewBox="0 0 100 48" role="img" aria-label="PolyBERT candidate space point cloud">
-          <rect x="0" y="0" width="100" height="48" rx="3" fill="#fbfdff" />
+        <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role="img" aria-label="PolyBERT candidate space point cloud">
+          <defs>
+            <filter id="ht-terrain-blur" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="1.65" />
+            </filter>
+            {scenario.targets.map((target) => {
+              const palette = TARGET_HEATMAP_COLORS[target.key];
+              return (
+                <radialGradient key={target.key} id={`ht-heatmap-gradient-${target.key}`} cx="50%" cy="50%" r="55%">
+                  <stop offset="0%" stopColor={palette.center} stopOpacity="0.82" />
+                  <stop offset="32%" stopColor={palette.center} stopOpacity="0.4" />
+                  <stop offset="64%" stopColor={palette.mid} stopOpacity="0.24" />
+                  <stop offset="84%" stopColor={palette.edge} stopOpacity="0.18" />
+                  <stop offset="100%" stopColor={palette.edge} stopOpacity="0" />
+                </radialGradient>
+              );
+            })}
+          </defs>
+          <rect x="0" y="0" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT} rx="3" fill="#fbfdff" />
+          <g className="ht-material-grid" aria-hidden="true">
+            {Array.from({ length: 7 }, (_, index) => (
+              <line key={`x-${index}`} x1={(index + 1) * 12.5} y1="0" x2={(index + 1) * 12.5} y2={MATERIAL_MAP_HEIGHT} />
+            ))}
+            {Array.from({ length: 5 }, (_, index) => (
+              <line key={`y-${index}`} x1="0" y1={(index + 1) * 8} x2={MATERIAL_MAP_WIDTH} y2={(index + 1) * 8} />
+            ))}
+          </g>
+          {showMaterialTerrain ? (
+            <g className="ht-heatmap-layers" aria-label="mock property heatmap layers">
+              {heatmapBlobs.map(({ blobId, target, x, y, rx, ry, opacity }) => (
+                <ellipse
+                  key={blobId}
+                  className="ht-heatmap-blob"
+                  cx={x}
+                  cy={y}
+                  rx={rx}
+                  ry={ry}
+                  fill={`url(#ht-heatmap-gradient-${target.key})`}
+                  opacity={opacity}
+                />
+              ))}
+            </g>
+          ) : null}
           {projectedCandidates.map(({ candidate, index, point }) => {
             const radius = index % 9 === 0 ? 0.42 : 0.31;
             const opacity = 0.36 + (index % 5) * 0.052;
@@ -613,6 +750,24 @@ function MaterialMap({
               </circle>
             );
           })}
+          {showOptimizationMarkers ? (
+            <g className="ht-sample-marker-layer" aria-label="mock tested and recommended samples">
+              {Array.from(testedIds).map((candidateId) => {
+                const point = projectedCandidateMap.get(candidateId);
+                if (!point) {
+                  return null;
+                }
+                return <circle key={`tested-${candidateId}`} className="ht-tested-sample" cx={point.x} cy={point.y} r="0.88" />;
+              })}
+              {Array.from(recommendedIds).map((candidateId) => {
+                const point = projectedCandidateMap.get(candidateId);
+                if (!point) {
+                  return null;
+                }
+                return <circle key={`recommended-${candidateId}`} className="ht-recommended-sample" cx={point.x} cy={point.y} r="1.1" />;
+              })}
+            </g>
+          ) : null}
         </svg>
       </div>
     </section>
@@ -647,17 +802,44 @@ function AgentOptimizationCard({
   const displayColor = AGENT_DISPLAY_COLORS[Math.min(displayIndex - 1, AGENT_DISPLAY_COLORS.length - 1)];
   const actionLabel = AGENT_ACTION_LABELS[Math.min(displayIndex - 1, AGENT_ACTION_LABELS.length - 1)];
   const agentTitle = `${target.shortLabel} Agent`;
+  const directionLabel = `${target.direction === "higher" ? "最大化" : "最小化"} ${target.shortLabel}`;
+  const thresholdLabel = `${target.direction === "higher" ? "≥" : "≤"} ${target.target}${target.unit}`;
   const candidateStatus =
-    stageIndex === 0 ? "等待任务设置" : stageIndex === 1 ? "已接收 2,400 候选" : stageIndex < 4 ? "候选更新中" : agent.topCandidateIds.join(" / ");
-  const objectiveLabel = `${target.direction === "higher" ? "最大化" : "最小化"} ${target.shortLabel}`;
-  const evidenceLabel = stageIndex < 3 ? "等待实验回流" : "已测样本更新";
-  const outputLabel = stageIndex < 4 ? "推荐下一批" : "输出 Top-k";
-  const actionStatus = stageIndex === 0 ? "等待确认" : stageIndex === 1 ? "等待材料地图" : actionLabel;
+    stageIndex === 0
+      ? "等待任务设置"
+      : stageIndex === 1
+        ? "已接收 2,400 候选"
+        : stageIndex === 2
+          ? "定位目标热点"
+          : stageIndex < 4
+            ? "候选更新中"
+            : agent.topCandidateIds.join(" / ");
+  const actionStatus = stageIndex === 0 ? "等待确认" : stageIndex === 1 ? "等待材料地图" : stageIndex === 2 ? "读取材料地图" : actionLabel;
+  const explanationBadge = stageIndex === 0 ? "待配置" : stageIndex === 1 ? "候选空间" : target.shortLabel;
+  const explanationText =
+    stageIndex === 0
+      ? "等待任务设置确认。"
+      : stageIndex === 1
+        ? "候选空间已生成，等待地形层。"
+        : target.description;
+  const explanationMeta =
+    stageIndex === 0
+      ? ["输入未确认", "未启动优化"]
+      : stageIndex === 1
+        ? ["候选空间已生成", "等待地形层"]
+        : [directionLabel, `目标 ${thresholdLabel}`];
 
   return (
     <article className="ht-agent-card" style={{ "--target-color": displayColor } as CSSProperties}>
+      <div className="ht-agent-identity">
+        <span>AGENT-{String(displayIndex).padStart(2, "0")}</span>
+        <i aria-hidden="true" />
+        <em>autonomous node</em>
+      </div>
       <div className="ht-agent-card-head">
-        <Bot aria-hidden="true" size={22} strokeWidth={2.4} />
+        <span className="ht-agent-avatar">
+          <Bot aria-hidden="true" size={19} strokeWidth={2.4} />
+        </span>
         <div>
           <h3>{agentTitle}</h3>
           <span>single-objective optimizer</span>
@@ -667,30 +849,20 @@ function AgentOptimizationCard({
       <div className="ht-agent-progress" aria-label={`${agentTitle} progress ${progress}%`}>
         <b style={{ width: `${progress}%` }} />
       </div>
-      <div className="ht-agent-meaning">
-        <div className="ht-agent-objective-line">
-          <span>目标函数</span>
-          <b>{objectiveLabel}</b>
+      <div className="ht-agent-meaning" aria-label={`${agentTitle} property interpretation`}>
+        <div className="ht-agent-explanation-head">
+          <span>当前解释</span>
+          <b>{explanationBadge}</b>
         </div>
-        <div className="ht-agent-loop" aria-label={`${agentTitle} optimization loop`}>
-          <span>
-            <em>输入</em>
-            <b>候选空间</b>
-          </span>
-          <i>→</i>
-          <span>
-            <em>学习</em>
-            <b>{evidenceLabel}</b>
-          </span>
-          <i>→</i>
-          <span>
-            <em>输出</em>
-            <b>{outputLabel}</b>
-          </span>
+        <p>{explanationText}</p>
+        <div className="ht-agent-explanation-meta">
+          {explanationMeta.map((item) => (
+            <span key={item}>{item}</span>
+          ))}
         </div>
       </div>
       <div className="ht-agent-info-grid">
-        <span>目标: <b>{target.direction === "higher" ? "≥" : "≤"} {target.target}{target.unit}</b></span>
+        <span>目标: <b>{thresholdLabel}</b></span>
         <span>当前: <b>{candidateValue(candidate, target)}</b></span>
         <span>候选: <b>{candidateStatus}</b></span>
         <span>动作: <b>{actionStatus}</b></span>
