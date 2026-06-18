@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  FileCheck2,
   FlaskConical,
   Layers3,
   Pause,
@@ -13,11 +14,14 @@ import {
   SlidersHorizontal,
   Target,
   TestTube2,
+  UploadCloud,
 } from "lucide-react";
-import { type CSSProperties, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ChangeEvent, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   highThroughputDemoScenario,
   type HighThroughputCandidate,
+  type HighThroughputPropertySpace,
+  type HighThroughputSurfaceSnapshot,
   type HighThroughputTarget,
   type HighThroughputTargetKey,
 } from "../constants/highThroughputDemoScenario";
@@ -30,8 +34,28 @@ type HighThroughputWorkflowDemoPageProps = {
 
 type WeightState = Record<HighThroughputTargetKey, number>;
 
+type ConfirmedSetup = {
+  materialType: string;
+  monomerSystem: string;
+  representation: string;
+  monomerACount: number;
+  monomerBCount: number;
+  candidateTotal: number;
+  selectedTargetKeys: HighThroughputTargetKey[];
+  targetValues: Record<HighThroughputTargetKey, number>;
+};
+
+type PriorDataUploadState = {
+  fileName: string;
+  fileType: string;
+  sampleCount: number;
+  fieldCount: number;
+  uploadedAt: string;
+};
+
 const PLAY_INTERVAL_MS = 2600;
 const MAX_RENDERED_STAGE_DOTS = 2400;
+const MAX_RENDERED_PROPERTY_DOTS = 2200;
 const MATERIAL_MAP_WIDTH = 100;
 const MATERIAL_MAP_HEIGHT = 48;
 const AGENT_DISPLAY_COLORS = ["#2563eb", "#16a34a", "#7c3aed", "#f97316"] as const;
@@ -59,6 +83,18 @@ function formatNumber(value: number, digits = 0) {
   }).format(value);
 }
 
+function targetValueDigits(target: HighThroughputTarget) {
+  return target.key === "modulus" ? 1 : 0;
+}
+
+function formatTargetValue(target: HighThroughputTarget, value: number) {
+  return formatNumber(value, targetValueDigits(target));
+}
+
+function targetThresholdLabel(target: HighThroughputTarget) {
+  return `${target.direction === "higher" ? "≥" : "≤"} ${formatTargetValue(target, target.target)}${target.unit}`;
+}
+
 function candidateValue(candidate: HighThroughputCandidate | undefined, target: HighThroughputTarget) {
   if (!candidate) {
     return "--";
@@ -73,8 +109,52 @@ function buildInitialWeights(): WeightState {
   ) as WeightState;
 }
 
+function buildDefaultConfirmedSetup(): ConfirmedSetup {
+  const scenario = highThroughputDemoScenario;
+
+  return {
+    materialType: scenario.materialType,
+    monomerSystem: "Diamine + Dianhydride",
+    representation: "PolyBERT",
+    monomerACount: scenario.monomerACount,
+    monomerBCount: scenario.monomerBCount,
+    candidateTotal: scenario.candidateTotal,
+    selectedTargetKeys: scenario.targets.map((target) => target.key),
+    targetValues: Object.fromEntries(
+      scenario.targets.map((target) => [target.key, target.target]),
+    ) as Record<HighThroughputTargetKey, number>,
+  };
+}
+
+function buildTargetValueInputs(targetValues: Record<HighThroughputTargetKey, number>) {
+  return Object.fromEntries(
+    highThroughputDemoScenario.targets.map((target) => [
+      target.key,
+      formatTargetValue(target, targetValues[target.key] ?? target.target),
+    ]),
+  ) as Record<HighThroughputTargetKey, string>;
+}
+
+function parseCandidateCount(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
+}
+
+function parseTargetInput(value: string, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function getTarget(targetKey: HighThroughputTargetKey) {
   return highThroughputDemoScenario.targets.find((target) => target.key === targetKey) ?? highThroughputDemoScenario.targets[0];
+}
+
+function getConfiguredTarget(targetKey: HighThroughputTargetKey, setup: ConfirmedSetup) {
+  const target = getTarget(targetKey);
+  return {
+    ...target,
+    target: setup.targetValues[targetKey] ?? target.target,
+  };
 }
 
 function getCandidate(candidateId: string) {
@@ -104,6 +184,57 @@ function projectMaterialPoint(
   return {
     x: 2.8 + ((point.x - bounds.minX) / xRange) * 94.4,
     y: 3 + ((point.y - bounds.minY) / yRange) * 42,
+  };
+}
+
+function buildDisplayBounds(points: Array<{ x: number; y: number }>) {
+  if (points.length === 0) {
+    return { minX: 0, maxX: 1, minY: 0, maxY: 1 };
+  }
+
+  return points.reduce(
+    (bounds, point) => ({
+      minX: Math.min(bounds.minX, point.x),
+      maxX: Math.max(bounds.maxX, point.x),
+      minY: Math.min(bounds.minY, point.y),
+      maxY: Math.max(bounds.maxY, point.y),
+    }),
+    {
+      minX: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY,
+    },
+  );
+}
+
+function projectPropertyDisplayPoint(
+  point: { x: number; y: number },
+  bounds: { minX: number; maxX: number; minY: number; maxY: number },
+) {
+  const xRange = bounds.maxX - bounds.minX || 1;
+  const yRange = bounds.maxY - bounds.minY || 1;
+
+  return {
+    x: 4 + ((point.x - bounds.minX) / xRange) * 92,
+    y: 3.4 + ((point.y - bounds.minY) / yRange) * 41.2,
+  };
+}
+
+function projectPropertyDisplayBlob(
+  blob: { x: number; y: number; rx: number; ry: number; opacity: number },
+  bounds: { minX: number; maxX: number; minY: number; maxY: number },
+) {
+  const xRange = bounds.maxX - bounds.minX || 1;
+  const yRange = bounds.maxY - bounds.minY || 1;
+  const point = projectPropertyDisplayPoint(blob, bounds);
+
+  return {
+    ...blob,
+    x: point.x,
+    y: point.y,
+    rx: clamp(blob.rx * (92 / xRange), 8, 24),
+    ry: clamp(blob.ry * (41.2 / yRange), 5, 16),
   };
 }
 
@@ -261,11 +392,100 @@ function weightedAchievement(weights: WeightState) {
   return Math.round(score / totalWeight);
 }
 
+function getPropertySpace(targetKey: HighThroughputTargetKey) {
+  return highThroughputDemoScenario.propertySpaces[targetKey];
+}
+
+function bestCandidateId(candidateIds: string[], target: HighThroughputTarget) {
+  return candidateIds.reduce<string | null>((bestId, candidateId) => {
+    const candidate = getCandidate(candidateId);
+    const bestCandidate = bestId ? getCandidate(bestId) : undefined;
+    if (!candidate) {
+      return bestId;
+    }
+    if (!bestCandidate) {
+      return candidateId;
+    }
+
+    const value = candidate.scores[target.key];
+    const bestValue = bestCandidate.scores[target.key];
+    return target.direction === "lower"
+      ? value < bestValue ? candidateId : bestId
+      : value > bestValue ? candidateId : bestId;
+  }, null) ?? candidateIds[0];
+}
+
+function targetGapLabel(candidate: HighThroughputCandidate | undefined, target: HighThroughputTarget) {
+  if (!candidate) {
+    return "--";
+  }
+  const value = candidate.scores[target.key];
+  const gap = target.direction === "lower" ? target.target - value : value - target.target;
+  const sign = gap > 0 ? "+" : "";
+  return `${sign}${formatNumber(gap, targetValueDigits(target))}${target.unit}`;
+}
+
+function propertySurfaceForStage(
+  stageIndex: number,
+  space: HighThroughputPropertySpace,
+  iterationRoundIndex = 2,
+): HighThroughputSurfaceSnapshot | null {
+  if (stageIndex < 2) {
+    return null;
+  }
+  const rounds = highThroughputDemoScenario.roundsByTarget[space.targetKey];
+  const activeRound = rounds[clamp(iterationRoundIndex, 0, rounds.length - 1)] ?? rounds[rounds.length - 1];
+  const snapshotId = stageIndex === 2
+    ? "prior"
+    : stageIndex === 3
+      ? activeRound.surfaceSnapshotId
+      : "converged";
+  return space.surfaceSnapshots.find((snapshot) => snapshot.id === snapshotId) ?? null;
+}
+
+function propertyRoundIds(targetKey: HighThroughputTargetKey, stageIndex: number, iterationRoundIndex = 2) {
+  const rounds = highThroughputDemoScenario.roundsByTarget[targetKey];
+  const visibleRounds = stageIndex >= 3
+    ? rounds.slice(0, clamp(iterationRoundIndex, 0, rounds.length - 1) + 1)
+    : [];
+  const activeRound = visibleRounds[visibleRounds.length - 1];
+  return {
+    visibleRounds,
+    testedIds: visibleRounds.flatMap((round) => round.testedIds),
+    currentTestedIds: activeRound?.testedIds ?? [],
+    recommendedIds: activeRound?.recommendedIds ?? [],
+  };
+}
+
+function propertySpaceCurrentBestId(
+  stageIndex: number,
+  space: HighThroughputPropertySpace,
+  target: HighThroughputTarget,
+  iterationRoundIndex = 2,
+) {
+  if (stageIndex === 3) {
+    const rounds = highThroughputDemoScenario.roundsByTarget[space.targetKey];
+    const activeRound = rounds[clamp(iterationRoundIndex, 0, rounds.length - 1)] ?? rounds[rounds.length - 1];
+    return activeRound.currentBestId;
+  }
+  if (stageIndex > 3) {
+    return space.currentBestId;
+  }
+  if (stageIndex >= 2) {
+    return bestCandidateId(space.priorCandidateIds, target);
+  }
+  return "";
+}
+
 export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDemoPageProps) {
   const scenario = highThroughputDemoScenario;
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [weights, setWeights] = useState<WeightState>(() => buildInitialWeights());
+  const [confirmedSetup, setConfirmedSetup] = useState<ConfirmedSetup>(() => buildDefaultConfirmedSetup());
+  const [activeSpaceTargetKey, setActiveSpaceTargetKey] = useState<HighThroughputTargetKey>("tg");
+  const [activeIterationRoundIndex, setActiveIterationRoundIndex] = useState(0);
+  const [priorDataUpload, setPriorDataUpload] = useState<PriorDataUploadState | null>(null);
   const mapStageRef = useRef<HTMLDivElement | null>(null);
   const maxStageIndex = scenario.stages.length - 1;
   const computedScore = weightedAchievement(weights);
@@ -282,7 +502,11 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
           setIsPlaying(false);
           return index;
         }
-        return index + 1;
+        const nextIndex = index + 1;
+        if (nextIndex === 3) {
+          setActiveIterationRoundIndex(0);
+        }
+        return nextIndex;
       });
     }, PLAY_INTERVAL_MS);
 
@@ -290,7 +514,11 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }, [isPlaying, maxStageIndex]);
 
   function goToStage(index: number) {
-    setCurrentStageIndex(clamp(index, 0, maxStageIndex));
+    const nextIndex = clamp(index, 0, maxStageIndex);
+    setCurrentStageIndex(nextIndex);
+    if (nextIndex === 3) {
+      setActiveIterationRoundIndex(0);
+    }
     setIsPlaying(false);
   }
 
@@ -308,14 +536,42 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   function resetDemo() {
     setCurrentStageIndex(0);
     setWeights(buildInitialWeights());
+    setConfirmedSetup(buildDefaultConfirmedSetup());
+    setActiveSpaceTargetKey("tg");
+    setActiveIterationRoundIndex(0);
+    setPriorDataUpload(null);
     setIsPlaying(false);
+  }
+
+  function confirmSetup(setup: ConfirmedSetup) {
+    setConfirmedSetup(setup);
+    goToStage(1);
+  }
+
+  function handlePriorDataUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    setPriorDataUpload({
+      fileName: file.name,
+      fileType: file.name.split(".").pop()?.toUpperCase() || "DATA",
+      sampleCount: scenario.orthogonalPrior.candidateIds.length,
+      fieldCount: scenario.targets.length + 1,
+      uploadedAt: new Intl.DateTimeFormat("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(new Date()),
+    });
   }
 
   return (
     <div className="high-throughput-demo">
       <main className="ht-shell">
         <section className="ht-docx-board">
-          <ScenarioHeader onConfirmSetup={() => goToStage(1)} isConfirmed={currentStageIndex > 0} />
+          <ScenarioHeader confirmedSetup={confirmedSetup} onConfirmSetup={confirmSetup} isConfirmed={currentStageIndex > 0} />
 
           <FlowControlBar
             currentStageIndex={currentStageIndex}
@@ -328,20 +584,63 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
           />
 
           <div className="ht-docx-map-stage" ref={mapStageRef}>
-            <AgentOrbitPanel stageIndex={currentStageIndex} side="left" />
+            <AgentOrbitPanel
+              stageIndex={currentStageIndex}
+              side="left"
+              confirmedSetup={confirmedSetup}
+              activeTargetKey={activeSpaceTargetKey}
+              onSelectTarget={setActiveSpaceTargetKey}
+              iterationRoundIndex={activeIterationRoundIndex}
+              priorDataUpload={priorDataUpload}
+              onPriorDataUpload={handlePriorDataUpload}
+            />
 
             <div className="ht-map-column">
-              <MaterialMap stageIndex={currentStageIndex} />
+              {currentStageIndex <= 3 ? (
+                <PropertySpaceBoard
+                  stageIndex={currentStageIndex}
+                  confirmedSetup={confirmedSetup}
+                  activeTargetKey={activeSpaceTargetKey}
+                  onActiveTargetChange={setActiveSpaceTargetKey}
+                  iterationRoundIndex={activeIterationRoundIndex}
+                  onIterationRoundChange={setActiveIterationRoundIndex}
+                />
+              ) : (
+                <MaterialMap stageIndex={currentStageIndex} confirmedSetup={confirmedSetup} />
+              )}
             </div>
 
-            <AgentOrbitPanel stageIndex={currentStageIndex} side="right" />
+            <AgentOrbitPanel
+              stageIndex={currentStageIndex}
+              side="right"
+              confirmedSetup={confirmedSetup}
+              activeTargetKey={activeSpaceTargetKey}
+              onSelectTarget={setActiveSpaceTargetKey}
+              iterationRoundIndex={activeIterationRoundIndex}
+              priorDataUpload={priorDataUpload}
+              onPriorDataUpload={handlePriorDataUpload}
+            />
 
-            <NarrationPanel stageIndex={currentStageIndex} />
+            <NarrationPanel stageIndex={currentStageIndex} confirmedSetup={confirmedSetup} />
 
             <AgentAttentionOverlay stageIndex={currentStageIndex} stageRef={mapStageRef} />
           </div>
 
-          <FormulationPanel stageIndex={currentStageIndex} weights={weights} onWeightsChange={setWeights} computedScore={computedScore} />
+          {currentStageIndex <= 3 ? (
+            <ExperimentPriorPanel
+              stageIndex={currentStageIndex}
+              priorDataUpload={priorDataUpload}
+              iterationRoundIndex={activeIterationRoundIndex}
+            />
+          ) : (
+            <FormulationPanel
+              stageIndex={currentStageIndex}
+              weights={weights}
+              onWeightsChange={setWeights}
+              computedScore={computedScore}
+              confirmedSetup={confirmedSetup}
+            />
+          )}
         </section>
       </main>
     </div>
@@ -349,30 +648,37 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
 }
 
 function ScenarioHeader({
+  confirmedSetup,
   onConfirmSetup,
   isConfirmed,
 }: {
-  onConfirmSetup: () => void;
+  confirmedSetup: ConfirmedSetup;
+  onConfirmSetup: (setup: ConfirmedSetup) => void;
   isConfirmed: boolean;
 }) {
   const scenario = highThroughputDemoScenario;
-  const [materialType, setMaterialType] = useState(scenario.materialType);
-  const [monomerSystem, setMonomerSystem] = useState("Diamine + Dianhydride");
-  const [representation, setRepresentation] = useState("PolyBERT");
-  const [candidateA, setCandidateA] = useState(String(scenario.monomerACount));
-  const [candidateB, setCandidateB] = useState(String(scenario.monomerBCount));
-  const [selectedTargetKeys, setSelectedTargetKeys] = useState<HighThroughputTargetKey[]>(
-    scenario.targets.map((target) => target.key),
-  );
+  const [materialType, setMaterialType] = useState(confirmedSetup.materialType);
+  const [monomerSystem, setMonomerSystem] = useState(confirmedSetup.monomerSystem);
+  const [representation, setRepresentation] = useState(confirmedSetup.representation);
+  const [candidateA, setCandidateA] = useState(String(confirmedSetup.monomerACount));
+  const [candidateB, setCandidateB] = useState(String(confirmedSetup.monomerBCount));
+  const [selectedTargetKeys, setSelectedTargetKeys] = useState<HighThroughputTargetKey[]>(confirmedSetup.selectedTargetKeys);
   const [focusedTargetKey, setFocusedTargetKey] = useState<HighThroughputTargetKey>("tg");
-  const [targetValues, setTargetValues] = useState<Record<HighThroughputTargetKey, string>>({
-    tg: "250",
-    cte: "35",
-    elongation: "15",
-    modulus: "3.0",
-  });
+  const [targetValues, setTargetValues] = useState<Record<HighThroughputTargetKey, string>>(
+    () => buildTargetValueInputs(confirmedSetup.targetValues),
+  );
   const selectedTargets = scenario.targets.filter((target) => selectedTargetKeys.includes(target.key));
-  const candidateTotalPreview = Math.max(0, Math.round(Number(candidateA) || 0)) * Math.max(0, Math.round(Number(candidateB) || 0));
+  const candidateTotalPreview = parseCandidateCount(candidateA) * parseCandidateCount(candidateB);
+
+  useEffect(() => {
+    setMaterialType(confirmedSetup.materialType);
+    setMonomerSystem(confirmedSetup.monomerSystem);
+    setRepresentation(confirmedSetup.representation);
+    setCandidateA(String(confirmedSetup.monomerACount));
+    setCandidateB(String(confirmedSetup.monomerBCount));
+    setSelectedTargetKeys(confirmedSetup.selectedTargetKeys);
+    setTargetValues(buildTargetValueInputs(confirmedSetup.targetValues));
+  }, [confirmedSetup]);
 
   function handleTargetClick(targetKey: HighThroughputTargetKey) {
     setFocusedTargetKey(targetKey);
@@ -382,6 +688,32 @@ function ScenarioHeader({
       }
       return [...current, targetKey];
     });
+  }
+
+  function handleConfirmSetup() {
+    const monomerACount = parseCandidateCount(candidateA);
+    const monomerBCount = parseCandidateCount(candidateB);
+    const nextTargetValues = Object.fromEntries(
+      scenario.targets.map((target) => [
+        target.key,
+        parseTargetInput(targetValues[target.key], target.target),
+      ]),
+    ) as Record<HighThroughputTargetKey, number>;
+    const nextSetup: ConfirmedSetup = {
+      materialType,
+      monomerSystem,
+      representation,
+      monomerACount,
+      monomerBCount,
+      candidateTotal: monomerACount * monomerBCount,
+      selectedTargetKeys,
+      targetValues: nextTargetValues,
+    };
+
+    setCandidateA(String(monomerACount));
+    setCandidateB(String(monomerBCount));
+    setTargetValues(buildTargetValueInputs(nextTargetValues));
+    onConfirmSetup(nextSetup);
   }
 
   return (
@@ -474,6 +806,9 @@ function ScenarioHeader({
                     <span>{target.shortLabel}</span>
                     <input
                       aria-label={`${target.shortLabel} target value`}
+                      inputMode="decimal"
+                      step={target.key === "modulus" ? "0.1" : "1"}
+                      type="number"
                       value={targetValues[target.key]}
                       onFocus={() => setFocusedTargetKey(target.key)}
                       onChange={(event) =>
@@ -499,7 +834,7 @@ function ScenarioHeader({
           </strong>
           <em>{selectedTargets.length} target properties selected</em>
         </div>
-        <button type="button" className="ht-confirm-setup-button" onClick={onConfirmSetup}>
+        <button type="button" className="ht-confirm-setup-button" onClick={handleConfirmSetup}>
           {isConfirmed ? <CheckCircle2 aria-hidden="true" size={17} /> : <ChevronRight aria-hidden="true" size={17} />}
           {isConfirmed ? "已确认，重新进入候选空间生成" : "确认任务设置，生成候选空间"}
         </button>
@@ -653,16 +988,26 @@ function StageStepper({
   );
 }
 
-function NarrationPanel({ stageIndex }: { stageIndex: number }) {
+function NarrationPanel({
+  stageIndex,
+  confirmedSetup,
+}: {
+  stageIndex: number;
+  confirmedSetup: ConfirmedSetup;
+}) {
   const stage = highThroughputDemoScenario.stages[stageIndex];
   const progress = Math.round((stageIndex / (highThroughputDemoScenario.stages.length - 1)) * 100);
+  const body =
+    stage.id === "S1"
+      ? `${formatNumber(confirmedSetup.monomerACount)} 个二胺与 ${formatNumber(confirmedSetup.monomerBCount)} 个二酐形成 ${formatNumber(confirmedSetup.candidateTotal)} 个理论候选。当前阶段只展示统一候选空间点云：每个点代表一个二胺 x 二酐组合，尚未叠加性能地形、已测样本或 Agent 推荐。`
+      : stage.body;
 
   return (
     <section className="ht-narration-panel">
       <div>
         <span className="ht-kicker">当前阶段说明</span>
         <h2>{stage.title}</h2>
-        <p>{stage.body}</p>
+        <p>{body}</p>
       </div>
       <div className="ht-stage-progress">
         <span>{stage.id}</span>
@@ -805,15 +1150,352 @@ function AgentAttentionOverlay({
   );
 }
 
-function MaterialMap({
+function PropertySpaceBoard({
   stageIndex,
+  confirmedSetup,
+  activeTargetKey,
+  onActiveTargetChange,
+  iterationRoundIndex,
+  onIterationRoundChange,
 }: {
   stageIndex: number;
+  confirmedSetup: ConfirmedSetup;
+  activeTargetKey: HighThroughputTargetKey;
+  onActiveTargetChange: (targetKey: HighThroughputTargetKey) => void;
+  iterationRoundIndex: number;
+  onIterationRoundChange: (roundIndex: number) => void;
+}) {
+  const scenario = highThroughputDemoScenario;
+  const activeTarget = getConfiguredTarget(activeTargetKey, confirmedSetup);
+  const generatedComplete = stageIndex > 0;
+  const activeRounds = scenario.roundsByTarget[activeTargetKey];
+  const boardTitle =
+    stageIndex === 0
+      ? `${activeTarget.shortLabel} 单性质候选空间待启动`
+      : stageIndex === 1
+        ? `${activeTarget.shortLabel} 候选空间 + 正交实验样本`
+        : stageIndex === 2
+          ? `${activeTarget.shortLabel} 正交先验初始热点图`
+          : `${activeTarget.shortLabel} 单性质空间迭代更新`;
+
+  return (
+    <section className="ht-property-space-board-panel">
+      <div className="ht-panel-header">
+        <div>
+          <span className="ht-kicker">Single-property Candidate Space</span>
+          <h2>{boardTitle}</h2>
+        </div>
+        <div className="ht-space-status-group">
+          <div className="ht-property-space-switcher" role="tablist" aria-label="切换单性质候选空间">
+            {scenario.targets.map((target) => (
+              <button
+                key={target.key}
+                type="button"
+                role="tab"
+                aria-selected={target.key === activeTargetKey}
+                aria-pressed={target.key === activeTargetKey}
+                onClick={() => onActiveTargetChange(target.key)}
+                style={{ "--target-color": target.color } as CSSProperties}
+              >
+                {target.shortLabel}
+              </button>
+            ))}
+          </div>
+          <span className={cn("ht-candidate-space-status", generatedComplete ? "complete" : "pending")}>
+            {stageIndex === 0
+              ? `${formatNumber(confirmedSetup.monomerACount)} x ${formatNumber(confirmedSetup.monomerBCount)} candidates pending`
+              : `${formatNumber(confirmedSetup.monomerACount)} x ${formatNumber(confirmedSetup.monomerBCount)} = ${formatNumber(confirmedSetup.candidateTotal)} candidates ready`}
+          </span>
+          {stageIndex === 3 ? (
+            <div className="ht-round-switcher" role="tablist" aria-label="切换 S3 迭代轮次">
+              {activeRounds.map((round, index) => (
+                <button
+                  key={round.surfaceSnapshotId}
+                  type="button"
+                  role="tab"
+                  aria-selected={iterationRoundIndex === index}
+                  aria-pressed={iterationRoundIndex === index}
+                  onClick={() => onIterationRoundChange(index)}
+                >
+                  {index < activeRounds.length - 1 ? `Round ${round.round}` : "Converged"}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="ht-property-space-grid single">
+        <PropertySpaceCard
+          key={activeTarget.key}
+        stageIndex={stageIndex}
+        target={activeTarget}
+        variant="large"
+        iterationRoundIndex={iterationRoundIndex}
+      />
+      </div>
+    </section>
+  );
+}
+
+function PropertySpaceCard({
+  stageIndex,
+  target,
+  variant = "compact",
+  iterationRoundIndex = 2,
+}: {
+  stageIndex: number;
+  target: HighThroughputTarget;
+  variant?: "compact" | "large";
+  iterationRoundIndex?: number;
+}) {
+  const space = getPropertySpace(target.key);
+  const surface = propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
+  const roundIds = propertyRoundIds(target.key, stageIndex, iterationRoundIndex);
+  const priorIds = stageIndex >= 1 ? space.priorCandidateIds : [];
+  const measuredPriorIds = stageIndex >= 2 ? space.priorCandidateIds : [];
+  const currentBestId = propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex);
+  const currentBest = currentBestId ? getCandidate(currentBestId) : undefined;
+  const specialIds = new Set([
+    ...priorIds,
+    ...measuredPriorIds,
+    ...roundIds.testedIds,
+    ...roundIds.recommendedIds,
+    currentBestId,
+  ].filter(Boolean));
+  const renderedPoints = stageIndex >= 1
+    ? space.candidatePoints.filter((point, index) => index < MAX_RENDERED_PROPERTY_DOTS || specialIds.has(point.candidateId))
+    : [];
+  const displayBounds = buildDisplayBounds(renderedPoints.length > 0 ? renderedPoints : space.candidatePoints);
+  const projectedRenderedPoints = renderedPoints.map((point) => ({
+    ...point,
+    ...projectPropertyDisplayPoint(point, displayBounds),
+  }));
+  const projectedSurfaceBlobs = surface?.blobs.map((blob) => projectPropertyDisplayBlob(blob, displayBounds)) ?? [];
+  const projectSpacePoint = (point: { x: number; y: number }) => projectPropertyDisplayPoint(point, displayBounds);
+  const measuredSet = new Set([...measuredPriorIds, ...roundIds.testedIds]);
+  const currentTestedSet = new Set(stageIndex === 2 ? measuredPriorIds : roundIds.currentTestedIds);
+  const priorSet = new Set(priorIds);
+  const recommendedSet = new Set(roundIds.recommendedIds);
+  const surfaceLabel = surface?.label ?? "No surface yet";
+  const stageLabel =
+    stageIndex === 0
+      ? "待生成"
+      : stageIndex === 1
+        ? "DOE selected"
+        : stageIndex === 2
+          ? "Prior DOE Surface"
+          : surface?.label ?? "Round surface";
+
+  return (
+    <article className={cn("ht-property-space-card", variant)} style={{ "--target-color": target.color } as CSSProperties}>
+      <div className="ht-property-space-head">
+        <div>
+          <span>{target.shortLabel} Space</span>
+          <strong>{target.label}</strong>
+        </div>
+        <b>{stageLabel}</b>
+      </div>
+
+      <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role="img" aria-label={`${target.shortLabel} single-property optimization space`}>
+        <defs>
+          <radialGradient id={`ht-property-gradient-${target.key}-${surface?.id ?? "none"}`} cx="50%" cy="50%" r="55%">
+            <stop offset="0%" stopColor={target.color} stopOpacity="0.82" />
+            <stop offset="46%" stopColor={target.color} stopOpacity="0.32" />
+            <stop offset="100%" stopColor={target.color} stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <rect x="0" y="0" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT} rx="3" fill="#fbfdff" />
+        <g className="ht-material-grid" aria-hidden="true">
+          {Array.from({ length: 5 }, (_, index) => (
+            <line key={`x-${index}`} x1={(index + 1) * 16} y1="0" x2={(index + 1) * 16} y2={MATERIAL_MAP_HEIGHT} />
+          ))}
+          {Array.from({ length: 3 }, (_, index) => (
+            <line key={`y-${index}`} x1="0" y1={(index + 1) * 12} x2={MATERIAL_MAP_WIDTH} y2={(index + 1) * 12} />
+          ))}
+        </g>
+        {surface ? (
+          <g className="ht-property-heatmap-layer">
+            {projectedSurfaceBlobs.map((blob, index) => (
+              <ellipse
+                key={`${surface.id}-${index}`}
+                cx={blob.x}
+                cy={blob.y}
+                rx={blob.rx}
+                ry={blob.ry}
+                fill={`url(#ht-property-gradient-${target.key}-${surface.id})`}
+                opacity={blob.opacity}
+              />
+            ))}
+          </g>
+        ) : null}
+        {projectedRenderedPoints.map((point, index) => (
+          <circle
+            key={point.candidateId}
+            cx={point.x}
+            cy={point.y}
+            r={index % 11 === 0 ? "0.38" : "0.28"}
+            fill="#b9c5d6"
+            opacity="0.34"
+          >
+            <title>{point.candidateId}</title>
+          </circle>
+        ))}
+        {space.candidatePoints
+          .filter((point) => priorSet.has(point.candidateId))
+          .map((point) => {
+            const projectedPoint = projectSpacePoint(point);
+            return (
+              <rect
+                key={`prior-${point.candidateId}`}
+                className={cn("ht-doe-sample", measuredSet.has(point.candidateId) && "measured")}
+                x={projectedPoint.x - 0.82}
+                y={projectedPoint.y - 0.82}
+                width="1.64"
+                height="1.64"
+                rx="0.2"
+              >
+                <title>{point.candidateId} DOE prior</title>
+              </rect>
+            );
+          })}
+        {space.candidatePoints
+          .filter((point) => measuredSet.has(point.candidateId) && !priorSet.has(point.candidateId))
+          .map((point) => {
+            const projectedPoint = projectSpacePoint(point);
+            return (
+              <circle
+                key={`tested-${point.candidateId}`}
+                className={cn("ht-tested-sample", currentTestedSet.has(point.candidateId) && "current")}
+                cx={projectedPoint.x}
+                cy={projectedPoint.y}
+                r={currentTestedSet.has(point.candidateId) ? "1.02" : "0.78"}
+              />
+            );
+          })}
+        {space.candidatePoints
+          .filter((point) => recommendedSet.has(point.candidateId))
+          .map((point) => {
+            const projectedPoint = projectSpacePoint(point);
+            return (
+              <circle
+                key={`recommended-${point.candidateId}`}
+                className="ht-recommended-sample"
+                cx={projectedPoint.x}
+                cy={projectedPoint.y}
+                r="1.04"
+              />
+            );
+          })}
+        {currentBestId ? (
+          space.candidatePoints
+            .filter((point) => point.candidateId === currentBestId)
+            .map((point) => {
+              const projectedPoint = projectSpacePoint(point);
+              return (
+                <g key={`best-${point.candidateId}`} className="ht-current-best-marker" transform={`translate(${projectedPoint.x} ${projectedPoint.y})`}>
+                  <circle r="1.65" />
+                  <path d="M 0 -2.2 L 0.56 -0.64 L 2.15 -0.64 L 0.86 0.28 L 1.34 1.86 L 0 0.9 L -1.34 1.86 L -0.86 0.28 L -2.15 -0.64 L -0.56 -0.64 Z" />
+                </g>
+              );
+            })
+        ) : null}
+      </svg>
+
+      <div className="ht-property-space-meta">
+        <span>DOE <b>{space.priorCandidateIds.length}</b></span>
+        <span>已测 <b>{measuredSet.size}</b></span>
+        <span>推荐 <b>{recommendedSet.size}</b></span>
+        <span>热点 <b>{surfaceLabel}</b></span>
+      </div>
+      <div className="ht-property-space-best">
+        <span>当前最优</span>
+        <strong>{currentBestId || "--"}</strong>
+        <em>{candidateValue(currentBest, target)} / gap {targetGapLabel(currentBest, target)}</em>
+      </div>
+    </article>
+  );
+}
+
+function ExperimentPriorPanel({
+  stageIndex,
+  priorDataUpload,
+  iterationRoundIndex,
+}: {
+  stageIndex: number;
+  priorDataUpload: PriorDataUploadState | null;
+  iterationRoundIndex: number;
+}) {
+  const scenario = highThroughputDemoScenario;
+  const prior = scenario.orthogonalPrior;
+  const iterationActive = stageIndex >= 3;
+
+  return (
+    <section className="ht-prior-workflow-panel">
+      <div className="ht-panel-header">
+        <div>
+          <span className="ht-kicker">DOE = Design of Experiments</span>
+          <h2>正交实验先验与单性质迭代状态</h2>
+        </div>
+        <span className="ht-simulation-badge compact">Simulation Mode / DOE prior drives surfaces</span>
+      </div>
+
+      <div className="ht-prior-workflow-grid">
+        <article className={cn("ht-prior-step-card", stageIndex >= 1 && "active")}>
+          <span>S1</span>
+          <strong>上传先验实验数据</strong>
+          <p>DOE 是 Design of Experiments，这里指正交实验先验数据。S1 从 Agent 卡片右上角的“上传先验数据”按钮导入测量值，作为 S2 初始热点图的已测输入。</p>
+          {priorDataUpload ? (
+            <div className="ht-prior-upload-result">
+              <strong>{priorDataUpload.fileName}</strong>
+              <span>{priorDataUpload.fileType} / {priorDataUpload.sampleCount} samples / {priorDataUpload.fieldCount} fields / {priorDataUpload.uploadedAt}</span>
+            </div>
+          ) : (
+            <b>{prior.candidateIds.length} 个正交样本已选定，等待从 Agent 卡片上传测量值</b>
+          )}
+        </article>
+        <article className={cn("ht-prior-step-card", stageIndex >= 2 && "active")}>
+          <span>S2</span>
+          <strong>Prior DOE Surface</strong>
+          <p>上传的四项先验测量值进入四个属性空间，形成每个单性质模型的初始热点图。</p>
+          <b>{stageIndex >= 2 ? "initial surfaces ready" : priorDataUpload ? "prior data uploaded" : "waiting for prior data upload"}</b>
+        </article>
+        <article className={cn("ht-prior-step-card", iterationActive && "active")}>
+          <span>S3</span>
+          <strong>Agent rounds update surfaces</strong>
+          <p>每个 Agent 只在自己的属性空间内推荐、回流和更新热点图，不做多目标配方折中。</p>
+          <b>{iterationActive ? "3 rounds scripted" : "waiting for prior surface"}</b>
+        </article>
+      </div>
+
+      <div className="ht-round-summary-grid">
+        {scenario.targets.map((target) => {
+          const rounds = scenario.roundsByTarget[target.key];
+          const activeRound = rounds[clamp(iterationRoundIndex, 0, rounds.length - 1)] ?? rounds[rounds.length - 1];
+          return (
+            <article key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
+              <span>{target.shortLabel}</span>
+              <strong>{iterationActive ? activeRound.currentBestId : "pending"}</strong>
+              <p>{iterationActive ? activeRound.explanation : "等待正交先验输入后启动单性质 Agent。"}</p>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function MaterialMap({
+  stageIndex,
+  confirmedSetup,
+}: {
+  stageIndex: number;
+  confirmedSetup: ConfirmedSetup;
 }) {
   const scenario = highThroughputDemoScenario;
   const visibleCandidates = stageIndex === 0 ? [] : scenario.candidates.slice(0, MAX_RENDERED_STAGE_DOTS);
-  const generatedCount = visibleCandidates.length;
-  const generatedComplete = generatedCount === scenario.candidateTotal;
+  const displayedGeneratedCount = stageIndex === 0 ? 0 : confirmedSetup.candidateTotal;
+  const generatedComplete = displayedGeneratedCount === confirmedSetup.candidateTotal && stageIndex > 0;
   const showMaterialTerrain = stageIndex >= 2;
   const showOptimizationMarkers = stageIndex >= 3;
   const isIterationStage = stageIndex === 3;
@@ -889,12 +1571,14 @@ function MaterialMap({
           <h2>{mapTitle}</h2>
         </div>
         <div className="ht-space-status-group">
-          <span className="ht-unified-space-badge">40 x 60 candidates</span>
+          <span className="ht-unified-space-badge">
+            {formatNumber(confirmedSetup.monomerACount)} x {formatNumber(confirmedSetup.monomerBCount)} candidates
+          </span>
           {showMaterialTerrain ? (
             <span className="ht-map-layer-badge">Map layer: mock property terrain</span>
           ) : (
             <span className={cn("ht-generation-status", generatedComplete ? "complete" : "pending")}>
-              已生成 {formatNumber(generatedCount)} / {formatNumber(scenario.candidateTotal)}
+              已生成 {formatNumber(displayedGeneratedCount)} / {formatNumber(confirmedSetup.candidateTotal)}
             </span>
           )}
         </div>
@@ -1024,9 +1708,21 @@ function MaterialMap({
 function AgentOrbitPanel({
   stageIndex,
   side,
+  confirmedSetup,
+  activeTargetKey,
+  onSelectTarget,
+  iterationRoundIndex = 2,
+  priorDataUpload,
+  onPriorDataUpload,
 }: {
   stageIndex: number;
   side: "left" | "right";
+  confirmedSetup: ConfirmedSetup;
+  activeTargetKey?: HighThroughputTargetKey;
+  onSelectTarget?: (targetKey: HighThroughputTargetKey) => void;
+  iterationRoundIndex?: number;
+  priorDataUpload?: PriorDataUploadState | null;
+  onPriorDataUpload?: (file: File | null) => void;
 }) {
   const agents = highThroughputDemoScenario.agents;
   const visibleAgents = side === "left" ? agents.slice(0, 2) : agents.slice(2);
@@ -1039,6 +1735,12 @@ function AgentOrbitPanel({
           agent={agent}
           stageIndex={stageIndex}
           displayIndex={side === "left" ? index + 1 : index + 3}
+          confirmedSetup={confirmedSetup}
+          isActive={agent.targetKey === activeTargetKey}
+          onSelectTarget={onSelectTarget}
+          iterationRoundIndex={iterationRoundIndex}
+          priorDataUpload={priorDataUpload}
+          onPriorDataUpload={onPriorDataUpload}
         />
       ))}
     </aside>
@@ -1049,46 +1751,84 @@ function AgentOptimizationCard({
   agent,
   stageIndex,
   displayIndex,
+  confirmedSetup,
+  isActive = false,
+  onSelectTarget,
+  iterationRoundIndex = 2,
+  priorDataUpload,
+  onPriorDataUpload,
 }: {
   agent: (typeof highThroughputDemoScenario.agents)[number];
   stageIndex: number;
   displayIndex: number;
+  confirmedSetup: ConfirmedSetup;
+  isActive?: boolean;
+  onSelectTarget?: (targetKey: HighThroughputTargetKey) => void;
+  iterationRoundIndex?: number;
+  priorDataUpload?: PriorDataUploadState | null;
+  onPriorDataUpload?: (file: File | null) => void;
 }) {
-  const target = getTarget(agent.targetKey);
-  const candidate = getCandidate(agent.currentBestId);
+  const target = getConfiguredTarget(agent.targetKey, confirmedSetup);
+  const space = getPropertySpace(agent.targetKey);
+  const roundIds = propertyRoundIds(agent.targetKey, stageIndex, iterationRoundIndex);
+  const rounds = highThroughputDemoScenario.roundsByTarget[agent.targetKey];
+  const activeRound = stageIndex === 3
+    ? rounds[clamp(iterationRoundIndex, 0, rounds.length - 1)] ?? rounds[rounds.length - 1]
+    : rounds[rounds.length - 1];
+  const priorBestId = bestCandidateId(space.priorCandidateIds, target);
+  const surface = propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
+  const stageBestId =
+    stageIndex === 3
+      ? activeRound.currentBestId
+      : stageIndex > 3
+      ? space.currentBestId
+      : stageIndex >= 2
+        ? priorBestId
+        : "";
+  const candidate = stageBestId ? getCandidate(stageBestId) : undefined;
   const progress = agent.progressByStage[stageIndex] ?? 0;
   const displayColor = AGENT_DISPLAY_COLORS[Math.min(displayIndex - 1, AGENT_DISPLAY_COLORS.length - 1)];
   const actionLabel = AGENT_ACTION_LABELS[Math.min(displayIndex - 1, AGENT_ACTION_LABELS.length - 1)];
   const agentTitle = `${target.shortLabel} Agent`;
   const directionLabel = `${target.direction === "higher" ? "最大化" : "最小化"} ${target.shortLabel}`;
-  const thresholdLabel = `${target.direction === "higher" ? "≥" : "≤"} ${target.target}${target.unit}`;
-  const explorationSummary = `${agent.currentBestId} + 迭代样本 ${agent.explorationCandidateIds.length} 点`;
+  const thresholdLabel = targetThresholdLabel(target);
   const candidateStatus =
     stageIndex === 0
       ? "等待任务设置"
       : stageIndex === 1
-        ? "已接收 2,400 候选"
+        ? `DOE ${space.priorCandidateIds.length} / ${formatNumber(confirmedSetup.candidateTotal)}`
         : stageIndex === 2
-          ? "定位目标热点"
+          ? `先验最优 ${priorBestId}`
           : stageIndex < 4
-            ? explorationSummary
-            : agent.topCandidateIds.join(" / ");
+            ? `${activeRound.currentBestId} / ${surface?.label ?? "Round surface"}`
+            : `${space.currentBestId} + Top-k ${agent.topCandidateIds.length}`;
   const actionStatus =
     stageIndex === 0
       ? "等待确认"
       : stageIndex === 1
-        ? "等待材料地图"
+        ? "标记正交样本"
         : stageIndex === 2
-          ? "读取材料地图"
+          ? "DOE 回流→初始热点"
           : stageIndex === 3
-            ? "回流→拟合→推荐"
+            ? "推荐→回流→更新热点"
             : actionLabel;
-  const explanationBadge = stageIndex === 0 ? "待配置" : stageIndex === 1 ? "候选空间" : target.shortLabel;
+  const explanationBadge =
+    stageIndex === 0
+      ? "待配置"
+      : stageIndex === 1
+        ? "DOE prior"
+        : stageIndex === 2
+          ? "Prior surface"
+          : stageIndex === 3
+            ? "Single-property"
+            : target.shortLabel;
   const explanationText =
     stageIndex === 0
       ? "等待任务设置确认。"
       : stageIndex === 1
-        ? "候选空间已生成，等待地形层。"
+        ? "同一批正交实验样本投影到该属性空间，尚不生成热点图。"
+        : stageIndex === 2
+          ? `${target.shortLabel} 空间使用 DOE 测量值生成第一版热点图。`
         : stageIndex >= 3
           ? agent.recommendation
           : target.description;
@@ -1096,15 +1836,48 @@ function AgentOptimizationCard({
     stageIndex === 0
       ? ["输入未确认", "未启动优化"]
       : stageIndex === 1
-        ? ["候选空间已生成", "等待地形层"]
+        ? [`DOE ${space.priorCandidateIds.length}`, "无热点图"]
+        : stageIndex === 2
+          ? [`已测 ${space.priorCandidateIds.length}`, surface?.label ?? "Prior DOE Surface"]
         : stageIndex === 3
-          ? [directionLabel, "当前验证 + 下一轮推荐"]
-          : [directionLabel, `目标 ${thresholdLabel}`];
+          ? [`已测 ${space.priorCandidateIds.length + roundIds.testedIds.length}`, `推荐 ${roundIds.recommendedIds.length}`]
+          : [directionLabel, `${space.currentBestId} from S3`];
+  const canSwitchSpace = stageIndex <= 3 && Boolean(onSelectTarget);
+
+  function handleSelectSpace() {
+    if (canSwitchSpace) {
+      onSelectTarget?.(agent.targetKey);
+    }
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (!canSwitchSpace) {
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelectTarget?.(agent.targetKey);
+    }
+  }
+
+  function handleUploadClick(event: MouseEvent<HTMLLabelElement>) {
+    event.stopPropagation();
+  }
+
+  function handlePriorUploadChange(event: ChangeEvent<HTMLInputElement>) {
+    event.stopPropagation();
+    onPriorDataUpload?.(event.currentTarget.files?.[0] ?? null);
+  }
 
   return (
     <article
-      className={cn("ht-agent-card", stageIndex === 3 && "iterating")}
+      className={cn("ht-agent-card", stageIndex === 3 && "iterating", canSwitchSpace && "selectable", isActive && "active")}
       data-agent-id={agent.id}
+      role={canSwitchSpace ? "button" : undefined}
+      tabIndex={canSwitchSpace ? 0 : undefined}
+      aria-pressed={canSwitchSpace ? isActive : undefined}
+      onClick={handleSelectSpace}
+      onKeyDown={handleKeyDown}
       style={{ "--target-color": displayColor } as CSSProperties}
     >
       <div className="ht-agent-identity">
@@ -1120,7 +1893,23 @@ function AgentOptimizationCard({
           <h3>{agentTitle}</h3>
           <span>single-objective optimizer</span>
         </div>
-        <strong>{agent.statusByStage[stageIndex]}</strong>
+        {stageIndex === 1 && onPriorDataUpload ? (
+          <label
+            className={cn("ht-agent-upload-button", priorDataUpload && "complete")}
+            title={priorDataUpload ? priorDataUpload.fileName : "上传先验数据文件"}
+            onClick={handleUploadClick}
+          >
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls,.json"
+              onChange={handlePriorUploadChange}
+            />
+            {priorDataUpload ? <FileCheck2 aria-hidden="true" size={13} /> : <UploadCloud aria-hidden="true" size={13} />}
+            <span>{priorDataUpload ? "已上传先验" : agent.statusByStage[stageIndex]}</span>
+          </label>
+        ) : (
+          <strong>{agent.statusByStage[stageIndex]}</strong>
+        )}
       </div>
       <div className="ht-agent-progress" aria-label={`${agentTitle} progress ${progress}%`}>
         <b style={{ width: `${progress}%` }} />
@@ -1147,7 +1936,13 @@ function AgentOptimizationCard({
   );
 }
 
-function AgentPanel({ stageIndex }: { stageIndex: number }) {
+function AgentPanel({
+  stageIndex,
+  confirmedSetup,
+}: {
+  stageIndex: number;
+  confirmedSetup: ConfirmedSetup;
+}) {
   const scenario = highThroughputDemoScenario;
 
   return (
@@ -1162,7 +1957,15 @@ function AgentPanel({ stageIndex }: { stageIndex: number }) {
       <div className="ht-agent-list">
         {scenario.agents.map((agent) => {
           const index = scenario.agents.indexOf(agent);
-          return <AgentOptimizationCard key={agent.id} agent={agent} stageIndex={stageIndex} displayIndex={index + 1} />;
+          return (
+            <AgentOptimizationCard
+              key={agent.id}
+              agent={agent}
+              stageIndex={stageIndex}
+              displayIndex={index + 1}
+              confirmedSetup={confirmedSetup}
+            />
+          );
         })}
       </div>
     </aside>
@@ -1174,11 +1977,13 @@ function FormulationPanel({
   weights,
   onWeightsChange,
   computedScore,
+  confirmedSetup,
 }: {
   stageIndex: number;
   weights: WeightState;
   onWeightsChange: (weights: WeightState) => void;
   computedScore: number;
+  confirmedSetup: ConfirmedSetup;
 }) {
   const scenario = highThroughputDemoScenario;
   const formulation = scenario.formulation;
@@ -1205,12 +2010,13 @@ function FormulationPanel({
           <div className="ht-component-list">
             {formulation.components.map((component) => {
               const target = getTarget(component.sourceTargetKey);
+              const convergedCandidateId = getPropertySpace(component.sourceTargetKey).currentBestId;
               return (
                 <article key={component.id} className={cn("ht-component-row", stageIndex >= 4 && "active")} style={{ "--target-color": component.color } as CSSProperties}>
                   <span>{component.id}</span>
                   <div>
                     <strong>{component.label}</strong>
-                    <em>{component.candidateId} / {target.shortLabel}</em>
+                    <em>{convergedCandidateId} / {target.shortLabel} from S3 space</em>
                   </div>
                   <b>{component.description}</b>
                 </article>
@@ -1258,22 +2064,28 @@ function FormulationPanel({
         <div className="ht-weight-panel">
           <SectionTitle icon={<SlidersHorizontal aria-hidden="true" size={17} />} title="目标权重" />
           <div className="ht-weight-list">
-            {scenario.targets.map((target) => (
-              <label key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
-                <span>
-                  {target.shortLabel}
-                  <b>{weights[target.key]}</b>
-                </span>
-                <input
-                  type="range"
-                  min="0"
-                  max="50"
-                  step="5"
-                  value={weights[target.key]}
-                  onChange={(event) => updateWeight(target.key, Number(event.currentTarget.value))}
-                />
-              </label>
-            ))}
+            {scenario.targets.map((baseTarget) => {
+              const target = getConfiguredTarget(baseTarget.key, confirmedSetup);
+              return (
+                <label key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
+                  <div className="ht-weight-label">
+                    <span>
+                      {target.shortLabel}
+                      <em>{targetThresholdLabel(target)}</em>
+                    </span>
+                    <b>{weights[target.key]}</b>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="50"
+                    step="5"
+                    value={weights[target.key]}
+                    onChange={(event) => updateWeight(target.key, Number(event.currentTarget.value))}
+                  />
+                </label>
+              );
+            })}
           </div>
         </div>
       </div>
