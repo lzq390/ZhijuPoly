@@ -81,7 +81,6 @@
 .ht-scenario-title,
 .ht-stage-progress,
 .ht-callout,
-.ht-legend-dot,
 .ht-section-title {
   align-items: center;
   display: flex;
@@ -585,6 +584,7 @@
   display: grid;
   gap: 18px;
   grid-template-columns: 320px minmax(0, 1fr) 320px;
+  position: relative;
 }
 
 .ht-agent-orbit {
@@ -888,49 +888,124 @@
   mix-blend-mode: multiply;
 }
 
+#ht-iteration-arrow path {
+  fill: #2563eb;
+}
+
+.ht-iteration-loop {
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+.ht-iteration-loop path {
+  fill: none;
+  marker-end: url("#ht-iteration-arrow");
+  stroke: #2563eb;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 0.42;
+}
+
+.ht-iteration-loop text {
+  fill: #1d4ed8;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.88);
+  stroke-linejoin: round;
+  text-anchor: middle;
+}
+
+.ht-iteration-loop-title {
+  font-size: 1.55px;
+  font-weight: 950;
+  stroke-width: 0.48;
+}
+
+.ht-agent-attention-overlay {
+  height: 100%;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+  width: 100%;
+  z-index: 8;
+}
+
+.ht-agent-attention-overlay-line {
+  fill: none;
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.88));
+  opacity: 0.86;
+  stroke: var(--target-color);
+  stroke-dasharray: 8 7;
+  stroke-linecap: round;
+  stroke-width: 2.4;
+}
+
 .ht-tested-sample {
-  fill: #4c1d95;
-  opacity: 0.9;
+  fill: var(--target-color, #64748b);
+  opacity: 0.7;
+  stroke: transparent;
+  stroke-width: 0;
+}
+
+.ht-tested-sample.current {
+  opacity: 1;
   stroke: #ffffff;
-  stroke-width: 0.34;
+  stroke-width: 0.72;
 }
 
 .ht-recommended-sample {
-  fill: #f97316;
+  animation: ht-recommended-sample-pulse 1.55s ease-in-out infinite;
+  fill: var(--target-color, #f97316);
   opacity: 0.96;
+  stroke: var(--target-color, #f97316);
+  stroke-width: 0.58;
+  filter: drop-shadow(0 0 2px var(--target-color, #f97316));
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.ht-output-sample {
+  fill: var(--target-color, #f97316);
+  opacity: 0.95;
   stroke: #ffffff;
-  stroke-width: 0.4;
+  stroke-width: 0.56;
 }
 
-.ht-map-footer {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px 16px;
-  justify-content: flex-start;
+.ht-sample-state-key {
+  opacity: 0.78;
+  pointer-events: none;
 }
 
-.ht-legend-dot {
-  color: var(--ht-muted-strong);
-  font-size: 0.78rem;
-  font-weight: 800;
-  gap: 6px;
+.ht-sample-state-key circle {
+  fill: #64748b;
 }
 
-.ht-legend-dot i {
-  border-radius: 999px;
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08);
-  display: inline-block;
-  height: 10px;
-  width: 10px;
+.ht-sample-state-key .current {
+  fill: #2563eb;
+  stroke: #ffffff;
+  stroke-width: 0.58;
 }
 
-.ht-map-note {
-  color: var(--ht-muted);
-  flex: 1 1 240px;
-  font-size: 0.78rem;
-  font-weight: 750;
-  line-height: 1.45;
+.ht-sample-state-key .current-outline {
+  fill: none;
+  stroke: #9fb6d8;
+  stroke-width: 0.18;
+}
+
+.ht-sample-state-key .next {
+  fill: #2563eb;
+  filter: drop-shadow(0 0 1.4px rgba(37, 99, 235, 0.75));
+  stroke: #2563eb;
+  stroke-width: 0.34;
+}
+
+.ht-sample-state-key text {
+  fill: #1f2a44;
+  font-size: 1.48px;
+  font-weight: 900;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 0.5;
 }
 
 .ht-space-grid line {
@@ -980,6 +1055,10 @@
   right: 14px;
   top: 38px;
   z-index: 0;
+}
+
+.ht-agent-card.iterating .ht-agent-progress b {
+  animation: ht-agent-progress-pulse 1.45s ease-in-out infinite;
 }
 
 .ht-agent-card > * {
@@ -1166,6 +1245,7 @@
 
 .ht-agent-meaning p {
   color: #0f172a;
+  display: -webkit-box;
   font-size: 0.74rem;
   font-weight: 850;
   line-height: 1.38;
@@ -1173,7 +1253,9 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .ht-agent-explanation-meta {
@@ -1419,6 +1501,30 @@
   width: 100%;
 }
 
+@keyframes ht-recommended-sample-pulse {
+  0%,
+  100% {
+    opacity: 0.88;
+    transform: scale(0.94);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.22);
+  }
+}
+
+@keyframes ht-agent-progress-pulse {
+  0%,
+  100% {
+    filter: saturate(1);
+  }
+
+  50% {
+    filter: saturate(1.35) brightness(1.08);
+  }
+}
+
 @media (min-width: 768px) {
   .high-throughput-demo {
     margin: -2rem;
@@ -1464,6 +1570,10 @@
   .ht-docx-map-stage {
     align-items: stretch;
     grid-template-columns: 1fr;
+  }
+
+  .ht-agent-attention-overlay {
+    display: none;
   }
 
   .ht-material-map-panel {

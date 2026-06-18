@@ -14,7 +14,7 @@ import {
   Target,
   TestTube2,
 } from "lucide-react";
-import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
+import { type CSSProperties, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   highThroughputDemoScenario,
   type HighThroughputCandidate,
@@ -43,12 +43,11 @@ const TARGET_HEATMAP_COLORS: Record<HighThroughputTargetKey, { center: string; m
   modulus: { center: "#ea580c", mid: "#fdba74", edge: "#ffedd5" },
 };
 const TARGET_HEATMAP_ANCHORS: Record<HighThroughputTargetKey, { x: number; y: number }> = {
-  tg: { x: 30, y: 15 },
-  cte: { x: 30, y: 33 },
-  elongation: { x: 70, y: 15 },
-  modulus: { x: 70, y: 33 },
+  tg: { x: 77, y: 21 },
+  cte: { x: 22, y: 26 },
+  elongation: { x: 35, y: 41 },
+  modulus: { x: 81, y: 42 },
 };
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -80,6 +79,15 @@ function getTarget(targetKey: HighThroughputTargetKey) {
 
 function getCandidate(candidateId: string) {
   return highThroughputDemoScenario.candidates.find((candidate) => candidate.id === candidateId);
+}
+
+function getAgentForCandidate(candidateId: string) {
+  return highThroughputDemoScenario.agents.find(
+    (agent) =>
+      agent.currentBestId === candidateId ||
+      agent.topCandidateIds.includes(candidateId) ||
+      agent.explorationCandidateIds.includes(candidateId),
+  );
 }
 
 function buildSvgPath(points: Array<{ x: number; y: number }>) {
@@ -114,6 +122,18 @@ type ProjectedCandidate = {
   candidate: HighThroughputCandidate;
   index: number;
   point: { x: number; y: number };
+};
+
+type AgentAttentionOverlayLink = {
+  id: string;
+  color: string;
+  path: string;
+};
+
+type AgentAttentionOverlayLayout = {
+  width: number;
+  height: number;
+  links: AgentAttentionOverlayLink[];
 };
 
 function pointDistance(a: { x: number; y: number }, b: { x: number; y: number }) {
@@ -194,6 +214,43 @@ function buildHeatmapBlobs(
   });
 }
 
+function buildProjectedCandidateMap(stageIndex: number) {
+  const visibleCandidates = stageIndex === 0 ? [] : highThroughputDemoScenario.candidates.slice(0, MAX_RENDERED_STAGE_DOTS);
+  const pointBounds = visibleCandidates.reduce(
+    (bounds, candidate) => ({
+      minX: Math.min(bounds.minX, candidate.x),
+      maxX: Math.max(bounds.maxX, candidate.x),
+      minY: Math.min(bounds.minY, candidate.y),
+      maxY: Math.max(bounds.maxY, candidate.y),
+    }),
+    { minX: Number.POSITIVE_INFINITY, maxX: Number.NEGATIVE_INFINITY, minY: Number.POSITIVE_INFINITY, maxY: Number.NEGATIVE_INFINITY },
+  );
+  const normalizedBounds =
+    visibleCandidates.length > 0
+      ? pointBounds
+      : { minX: 0, maxX: 1, minY: 0, maxY: 1 };
+
+  return new Map(
+    visibleCandidates.map((candidate) => [candidate.id, projectMaterialPoint(candidate, normalizedBounds)]),
+  );
+}
+
+function mapPointToRenderedPosition(
+  point: { x: number; y: number },
+  mapRect: DOMRect,
+) {
+  const scale = Math.min(mapRect.width / MATERIAL_MAP_WIDTH, mapRect.height / MATERIAL_MAP_HEIGHT);
+  const renderedWidth = MATERIAL_MAP_WIDTH * scale;
+  const renderedHeight = MATERIAL_MAP_HEIGHT * scale;
+  const offsetX = (mapRect.width - renderedWidth) / 2;
+  const offsetY = (mapRect.height - renderedHeight) / 2;
+
+  return {
+    x: offsetX + point.x * scale,
+    y: offsetY + point.y * scale,
+  };
+}
+
 function weightedAchievement(weights: WeightState) {
   const formulation = highThroughputDemoScenario.formulation;
   const totalWeight = Object.values(weights).reduce((total, value) => total + value, 0) || 1;
@@ -209,7 +266,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [weights, setWeights] = useState<WeightState>(() => buildInitialWeights());
-  const currentStage = scenario.stages[currentStageIndex];
+  const mapStageRef = useRef<HTMLDivElement | null>(null);
   const maxStageIndex = scenario.stages.length - 1;
   const computedScore = weightedAchievement(weights);
 
@@ -270,18 +327,18 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
             onSelectStage={goToStage}
           />
 
-          <div className="ht-docx-map-stage">
+          <div className="ht-docx-map-stage" ref={mapStageRef}>
             <AgentOrbitPanel stageIndex={currentStageIndex} side="left" />
 
             <div className="ht-map-column">
-              <MaterialMap
-                stageIndex={currentStageIndex}
-              />
+              <MaterialMap stageIndex={currentStageIndex} />
             </div>
 
             <AgentOrbitPanel stageIndex={currentStageIndex} side="right" />
 
             <NarrationPanel stageIndex={currentStageIndex} />
+
+            <AgentAttentionOverlay stageIndex={currentStageIndex} stageRef={mapStageRef} />
           </div>
 
           <FormulationPanel stageIndex={currentStageIndex} weights={weights} onWeightsChange={setWeights} computedScore={computedScore} />
@@ -622,6 +679,132 @@ function NarrationPanel({ stageIndex }: { stageIndex: number }) {
   );
 }
 
+function AgentAttentionOverlay({
+  stageIndex,
+  stageRef,
+}: {
+  stageIndex: number;
+  stageRef: RefObject<HTMLDivElement | null>;
+}) {
+  const [layout, setLayout] = useState<AgentAttentionOverlayLayout>({ width: 0, height: 0, links: [] });
+
+  useLayoutEffect(() => {
+    if (stageIndex !== 3) {
+      setLayout({ width: 0, height: 0, links: [] });
+      return;
+    }
+
+    const stageElement = stageRef.current;
+    if (!stageElement) {
+      return;
+    }
+
+    const mapElement = stageElement.querySelector<HTMLElement>("[data-ht-map-canvas='true']");
+    if (!mapElement) {
+      return;
+    }
+
+    let animationFrame = 0;
+    const scenario = highThroughputDemoScenario;
+    const projectedCandidateMap = buildProjectedCandidateMap(stageIndex);
+
+    const updateLayout = () => {
+      const stage = stageRef.current;
+      const map = stage?.querySelector<HTMLElement>("[data-ht-map-canvas='true']");
+      if (!stage || !map) {
+        setLayout({ width: 0, height: 0, links: [] });
+        return;
+      }
+
+      const stageRect = stage.getBoundingClientRect();
+      const mapRect = map.getBoundingClientRect();
+      if (stageRect.width <= 0 || stageRect.height <= 0 || mapRect.width <= 0 || mapRect.height <= 0) {
+        setLayout({ width: 0, height: 0, links: [] });
+        return;
+      }
+
+      const mapCenterX = mapRect.left + mapRect.width / 2;
+      const links = scenario.agents.flatMap((agent) => {
+        const card = stage.querySelector<HTMLElement>(`[data-agent-id="${agent.id}"]`);
+        const point = projectedCandidateMap.get(agent.currentBestId);
+        if (!card || !point) {
+          return [];
+        }
+
+        const cardRect = card.getBoundingClientRect();
+        const cardCenterX = cardRect.left + cardRect.width / 2;
+        const isLeftSide = cardCenterX < mapCenterX;
+        const sourceX = (isLeftSide ? cardRect.right : cardRect.left) - stageRect.left;
+        const sourceY = cardRect.top - stageRect.top + cardRect.height * 0.46 + 6;
+        const renderedPoint = mapPointToRenderedPosition(point, mapRect);
+        const targetX = mapRect.left - stageRect.left + renderedPoint.x;
+        const targetY = mapRect.top - stageRect.top + renderedPoint.y;
+        const handleOffset = clamp(Math.abs(targetX - sourceX) * 0.36, 32, 110);
+        const path = [
+          `M ${sourceX.toFixed(2)} ${sourceY.toFixed(2)}`,
+          `C ${(sourceX + (isLeftSide ? handleOffset : -handleOffset)).toFixed(2)} ${sourceY.toFixed(2)}`,
+          `${(targetX + (isLeftSide ? -handleOffset : handleOffset)).toFixed(2)} ${targetY.toFixed(2)}`,
+          `${targetX.toFixed(2)} ${targetY.toFixed(2)}`,
+        ].join(" ");
+        const target = getTarget(agent.targetKey);
+
+        return [
+          {
+            id: agent.id,
+            color: target.color,
+            path,
+          },
+        ];
+      });
+
+      setLayout({ width: stageRect.width, height: stageRect.height, links });
+    };
+
+    const scheduleLayout = () => {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(updateLayout);
+    };
+
+    scheduleLayout();
+    window.addEventListener("resize", scheduleLayout);
+
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleLayout);
+    resizeObserver?.observe(stageElement);
+    resizeObserver?.observe(mapElement);
+    scenario.agents.forEach((agent) => {
+      const card = stageElement.querySelector<HTMLElement>(`[data-agent-id="${agent.id}"]`);
+      if (card) {
+        resizeObserver?.observe(card);
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("resize", scheduleLayout);
+      resizeObserver?.disconnect();
+    };
+  }, [stageIndex, stageRef]);
+
+  if (stageIndex !== 3 || layout.width <= 0 || layout.height <= 0 || layout.links.length === 0) {
+    return null;
+  }
+
+  return (
+    <svg
+      className="ht-agent-attention-overlay"
+      viewBox={`0 0 ${layout.width} ${layout.height}`}
+      aria-hidden="true"
+      preserveAspectRatio="none"
+    >
+      {layout.links.map((link) => (
+        <g key={link.id} style={{ "--target-color": link.color } as CSSProperties}>
+          <path className="ht-agent-attention-overlay-line" d={link.path} />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 function MaterialMap({
   stageIndex,
 }: {
@@ -633,6 +816,7 @@ function MaterialMap({
   const generatedComplete = generatedCount === scenario.candidateTotal;
   const showMaterialTerrain = stageIndex >= 2;
   const showOptimizationMarkers = stageIndex >= 3;
+  const isIterationStage = stageIndex === 3;
   const mapTitle = showMaterialTerrain ? "四目标模拟性能地形" : "统一 a x b 候选空间";
   const pointBounds = visibleCandidates.reduce(
     (bounds, candidate) => ({
@@ -671,11 +855,32 @@ function MaterialMap({
       })
     : [];
   const projectedCandidateMap = new Map(projectedCandidates.map((item) => [item.candidate.id, item.point]));
-  const batchIndex = clamp(stageIndex - 3, 0, scenario.batches.length - 1);
+  const batchIndex = showOptimizationMarkers ? scenario.batches.length - 1 : clamp(stageIndex - 3, 0, scenario.batches.length - 1);
+  const currentBatch = showOptimizationMarkers ? scenario.batches[batchIndex] : null;
   const visibleBatches = showOptimizationMarkers ? scenario.batches.slice(0, batchIndex + 1) : [];
   const testedIds = new Set(visibleBatches.flatMap((batch) => batch.testedIds));
-  const recommendedIds = new Set(showOptimizationMarkers ? scenario.batches[batchIndex]?.recommendedIds ?? [] : []);
+  const currentTestedIds = new Set(isIterationStage ? currentBatch?.testedIds ?? [] : []);
+  const recommendedIds = new Set(currentBatch?.recommendedIds ?? []);
+  const targetForCandidate = (candidateId: string) => {
+    const agent = getAgentForCandidate(candidateId);
+    if (agent) {
+      return getTarget(agent.targetKey);
+    }
 
+    const candidate = getCandidate(candidateId);
+    if (!candidate) {
+      return scenario.targets[0];
+    }
+
+    return scenario.targets.reduce(
+      (best, target) => {
+        const range = targetRanges.get(target.key) ?? { min: 0, max: 1 };
+        const potential = propertyPotential(candidate, target, range);
+        return potential > best.potential ? { target, potential } : best;
+      },
+      { target: scenario.targets[0], potential: Number.NEGATIVE_INFINITY },
+    ).target;
+  };
   return (
     <section className="ht-material-map-panel">
       <div className="ht-panel-header">
@@ -695,12 +900,15 @@ function MaterialMap({
         </div>
       </div>
 
-      <div className="ht-map-canvas">
+      <div className="ht-map-canvas" data-ht-map-canvas="true">
         <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role="img" aria-label="PolyBERT candidate space point cloud">
           <defs>
             <filter id="ht-terrain-blur" x="-20%" y="-20%" width="140%" height="140%">
               <feGaussianBlur stdDeviation="1.65" />
             </filter>
+            <marker id="ht-iteration-arrow" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="3.2" markerHeight="3.2" orient="auto">
+              <path d="M 1 1 L 5 3 L 1 5 Z" />
+            </marker>
             {scenario.targets.map((target) => {
               const palette = TARGET_HEATMAP_COLORS[target.key];
               return (
@@ -750,6 +958,13 @@ function MaterialMap({
               </circle>
             );
           })}
+          {stageIndex === 3 ? (
+            <g className="ht-iteration-loop" transform="translate(50 25)" aria-label="Agent iterative optimization loop">
+              <path d="M -4.6 -1.15 A 4.75 4.75 0 0 1 4.6 -1.15" />
+              <path d="M 4.6 1.15 A 4.75 4.75 0 0 1 -4.6 1.15" />
+              <text className="ht-iteration-loop-title" x="0" y="0.2">Loop</text>
+            </g>
+          ) : null}
           {showOptimizationMarkers ? (
             <g className="ht-sample-marker-layer" aria-label="mock tested and recommended samples">
               {Array.from(testedIds).map((candidateId) => {
@@ -757,15 +972,47 @@ function MaterialMap({
                 if (!point) {
                   return null;
                 }
-                return <circle key={`tested-${candidateId}`} className="ht-tested-sample" cx={point.x} cy={point.y} r="0.88" />;
+                const target = targetForCandidate(candidateId);
+                const isCurrentTested = currentTestedIds.has(candidateId);
+                return (
+                  <g key={`tested-${candidateId}`} style={{ "--target-color": target.color } as CSSProperties}>
+                    <circle
+                      className={cn("ht-tested-sample", isCurrentTested && "current")}
+                      cx={point.x}
+                      cy={point.y}
+                      r={isCurrentTested ? "1.04" : "0.82"}
+                    />
+                  </g>
+                );
               })}
               {Array.from(recommendedIds).map((candidateId) => {
                 const point = projectedCandidateMap.get(candidateId);
                 if (!point) {
                   return null;
                 }
-                return <circle key={`recommended-${candidateId}`} className="ht-recommended-sample" cx={point.x} cy={point.y} r="1.1" />;
+                const target = targetForCandidate(candidateId);
+                return (
+                  <circle
+                    key={`recommended-${candidateId}`}
+                    className={cn(isIterationStage ? "ht-recommended-sample" : "ht-output-sample")}
+                    cx={point.x}
+                    cy={point.y}
+                    r={isIterationStage ? "1.12" : "1"}
+                    style={{ "--target-color": target.color } as CSSProperties}
+                  />
+                );
               })}
+            </g>
+          ) : null}
+          {isIterationStage ? (
+            <g className="ht-sample-state-key" transform="translate(75.2 1)" aria-label="sample state legend">
+              <circle className="history" cx="0" cy="0" r="0.66" />
+              <text x="1.45" y="0.45">回流</text>
+              <circle className="current-outline" cx="8.1" cy="0" r="1.24" />
+              <circle className="current" cx="8.1" cy="0" r="0.9" />
+              <text x="9.65" y="0.45">验证</text>
+              <circle className="next" cx="16.2" cy="0" r="0.82" />
+              <text x="17.85" y="0.45">推荐</text>
             </g>
           ) : null}
         </svg>
@@ -774,14 +1021,25 @@ function MaterialMap({
   );
 }
 
-function AgentOrbitPanel({ stageIndex, side }: { stageIndex: number; side: "left" | "right" }) {
+function AgentOrbitPanel({
+  stageIndex,
+  side,
+}: {
+  stageIndex: number;
+  side: "left" | "right";
+}) {
   const agents = highThroughputDemoScenario.agents;
   const visibleAgents = side === "left" ? agents.slice(0, 2) : agents.slice(2);
 
   return (
     <aside className={cn("ht-agent-orbit", side)}>
       {visibleAgents.map((agent, index) => (
-        <AgentOptimizationCard key={agent.id} agent={agent} stageIndex={stageIndex} displayIndex={side === "left" ? index + 1 : index + 3} />
+        <AgentOptimizationCard
+          key={agent.id}
+          agent={agent}
+          stageIndex={stageIndex}
+          displayIndex={side === "left" ? index + 1 : index + 3}
+        />
       ))}
     </aside>
   );
@@ -804,6 +1062,7 @@ function AgentOptimizationCard({
   const agentTitle = `${target.shortLabel} Agent`;
   const directionLabel = `${target.direction === "higher" ? "最大化" : "最小化"} ${target.shortLabel}`;
   const thresholdLabel = `${target.direction === "higher" ? "≥" : "≤"} ${target.target}${target.unit}`;
+  const explorationSummary = `${agent.currentBestId} + 迭代样本 ${agent.explorationCandidateIds.length} 点`;
   const candidateStatus =
     stageIndex === 0
       ? "等待任务设置"
@@ -812,25 +1071,42 @@ function AgentOptimizationCard({
         : stageIndex === 2
           ? "定位目标热点"
           : stageIndex < 4
-            ? "候选更新中"
+            ? explorationSummary
             : agent.topCandidateIds.join(" / ");
-  const actionStatus = stageIndex === 0 ? "等待确认" : stageIndex === 1 ? "等待材料地图" : stageIndex === 2 ? "读取材料地图" : actionLabel;
+  const actionStatus =
+    stageIndex === 0
+      ? "等待确认"
+      : stageIndex === 1
+        ? "等待材料地图"
+        : stageIndex === 2
+          ? "读取材料地图"
+          : stageIndex === 3
+            ? "回流→拟合→推荐"
+            : actionLabel;
   const explanationBadge = stageIndex === 0 ? "待配置" : stageIndex === 1 ? "候选空间" : target.shortLabel;
   const explanationText =
     stageIndex === 0
       ? "等待任务设置确认。"
       : stageIndex === 1
         ? "候选空间已生成，等待地形层。"
-        : target.description;
+        : stageIndex >= 3
+          ? agent.recommendation
+          : target.description;
   const explanationMeta =
     stageIndex === 0
       ? ["输入未确认", "未启动优化"]
       : stageIndex === 1
         ? ["候选空间已生成", "等待地形层"]
-        : [directionLabel, `目标 ${thresholdLabel}`];
+        : stageIndex === 3
+          ? [directionLabel, "当前验证 + 下一轮推荐"]
+          : [directionLabel, `目标 ${thresholdLabel}`];
 
   return (
-    <article className="ht-agent-card" style={{ "--target-color": displayColor } as CSSProperties}>
+    <article
+      className={cn("ht-agent-card", stageIndex === 3 && "iterating")}
+      data-agent-id={agent.id}
+      style={{ "--target-color": displayColor } as CSSProperties}
+    >
       <div className="ht-agent-identity">
         <span>AGENT-{String(displayIndex).padStart(2, "0")}</span>
         <i aria-hidden="true" />
