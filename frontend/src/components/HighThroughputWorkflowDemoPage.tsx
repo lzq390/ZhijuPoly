@@ -464,7 +464,17 @@ function propertyRoundIds(targetKey: HighThroughputTargetKey, stageIndex: number
     };
   }
 
-  const visibleRounds = stageIndex >= 3
+  if (stageIndex > 3) {
+    const activeRound = rounds[rounds.length - 1];
+    return {
+      visibleRounds: rounds,
+      testedIds: rounds.flatMap((round) => round.testedIds),
+      currentTestedIds: activeRound?.testedIds ?? [],
+      recommendedIds: [],
+    };
+  }
+
+  const visibleRounds = stageIndex === 3
     ? rounds.slice(0, clamp(iterationRoundIndex, 0, rounds.length - 1) + 1)
     : [];
   const activeRound = visibleRounds[visibleRounds.length - 1];
@@ -525,6 +535,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
         const nextIndex = index + 1;
         if (nextIndex === 3) {
           setActiveIterationRoundIndex(0);
+        } else if (nextIndex === 4) {
+          setActiveIterationRoundIndex(2);
         }
         return nextIndex;
       });
@@ -558,6 +570,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     setCurrentStageIndex(nextIndex);
     if (nextIndex === 3) {
       setActiveIterationRoundIndex(0);
+    } else if (nextIndex === 4) {
+      setActiveIterationRoundIndex(2);
     }
     setIsPlaying(false);
   }
@@ -666,7 +680,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
             />
 
             <div className="ht-map-column">
-              {currentStageIndex <= 3 ? (
+              {currentStageIndex <= 4 ? (
                 <PropertySpaceBoard
                   stageIndex={currentStageIndex}
                   confirmedSetup={confirmedSetup}
@@ -704,6 +718,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
               priorDataUploads={priorDataUploads}
               iterationRoundIndex={activeIterationRoundIndex}
             />
+          ) : currentStageIndex === 4 ? (
+            <CandidateOutputPanel activeTargetKey={activeSpaceTargetKey} confirmedSetup={confirmedSetup} />
           ) : (
             <FormulationPanel
               stageIndex={currentStageIndex}
@@ -1242,7 +1258,6 @@ function PropertySpaceBoard({
   const scenario = highThroughputDemoScenario;
   const activeTarget = getConfiguredTarget(activeTargetKey, confirmedSetup);
   const generatedComplete = stageIndex > 0;
-  const activeRounds = scenario.roundsByTarget[activeTargetKey];
   const boardTitle =
     stageIndex === 0
       ? `${activeTarget.shortLabel} 单性质候选空间待启动`
@@ -1250,7 +1265,9 @@ function PropertySpaceBoard({
         ? `${activeTarget.shortLabel} 候选空间 + 正交实验样本`
         : stageIndex === 2
           ? `${activeTarget.shortLabel} 正交先验初始热点图`
-          : `${activeTarget.shortLabel} 单性质空间迭代更新`;
+          : stageIndex === 3
+            ? `${activeTarget.shortLabel} 单性质空间迭代更新`
+            : `${activeTarget.shortLabel} S3 收敛候选输出`;
 
   return (
     <section className="ht-property-space-board-panel">
@@ -1280,22 +1297,6 @@ function PropertySpaceBoard({
               ? `${formatNumber(confirmedSetup.monomerACount)} x ${formatNumber(confirmedSetup.monomerBCount)} candidates pending`
               : `${formatNumber(confirmedSetup.monomerACount)} x ${formatNumber(confirmedSetup.monomerBCount)} = ${formatNumber(confirmedSetup.candidateTotal)} candidates ready`}
           </span>
-          {stageIndex === 3 ? (
-            <div className="ht-round-switcher" role="tablist" aria-label="切换 S3 迭代轮次">
-              {activeRounds.map((round, index) => (
-                <button
-                  key={round.surfaceSnapshotId}
-                  type="button"
-                  role="tab"
-                  aria-selected={iterationRoundIndex === index}
-                  aria-pressed={iterationRoundIndex === index}
-                  onClick={() => onIterationRoundChange(index)}
-                >
-                  {index < activeRounds.length - 1 ? `Round ${round.round}` : "Converged"}
-                </button>
-              ))}
-            </div>
-          ) : null}
         </div>
       </div>
 
@@ -1306,6 +1307,7 @@ function PropertySpaceBoard({
           target={activeTarget}
           variant="large"
           iterationRoundIndex={iterationRoundIndex}
+          onIterationRoundChange={onIterationRoundChange}
           priorDataUpload={priorDataUploads[activeTarget.key] ?? null}
         />
       </div>
@@ -1318,15 +1320,19 @@ function PropertySpaceCard({
   target,
   variant = "compact",
   iterationRoundIndex = 2,
+  onIterationRoundChange,
   priorDataUpload = null,
 }: {
   stageIndex: number;
   target: HighThroughputTarget;
   variant?: "compact" | "large";
   iterationRoundIndex?: number;
+  onIterationRoundChange?: (roundIndex: number) => void;
   priorDataUpload?: PriorDataUploadState | null;
 }) {
   const space = getPropertySpace(target.key);
+  const activeRounds = highThroughputDemoScenario.roundsByTarget[target.key];
+  const activeRoundIndex = clamp(iterationRoundIndex, 0, activeRounds.length - 1);
   const surface = propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
   const roundIds = propertyRoundIds(target.key, stageIndex, iterationRoundIndex);
   const isPriorLoading = Boolean(priorDataUpload?.isLoading);
@@ -1370,6 +1376,13 @@ function PropertySpaceCard({
       : stageIndex === 2
           ? "Prior DOE Surface"
           : surface?.label ?? "Round surface";
+  const canStepRounds = stageIndex === 3 && Boolean(onIterationRoundChange);
+  const stepRound = (direction: -1 | 1) => {
+    if (!onIterationRoundChange) {
+      return;
+    }
+    onIterationRoundChange(clamp(activeRoundIndex + direction, 0, activeRounds.length - 1));
+  };
 
   return (
     <article className={cn("ht-property-space-card", variant)} style={{ "--target-color": target.color } as CSSProperties}>
@@ -1378,7 +1391,33 @@ function PropertySpaceCard({
           <span>{target.shortLabel} Space</span>
           <strong>{target.label}</strong>
         </div>
-        <b>{stageLabel}</b>
+        {canStepRounds ? (
+          <nav className="ht-property-round-navigator" aria-label="S3 round switcher">
+            <button
+              type="button"
+              className="ht-round-arrow-button"
+              aria-label="Previous S3 round"
+              disabled={activeRoundIndex === 0}
+              onClick={() => stepRound(-1)}
+            >
+              <ChevronLeft aria-hidden="true" size={15} />
+            </button>
+            <b className="ht-property-round-label" data-tooltip={stageLabel} tabIndex={0}>
+              <span>{stageLabel}</span>
+            </b>
+            <button
+              type="button"
+              className="ht-round-arrow-button"
+              aria-label="Next S3 round"
+              disabled={activeRoundIndex === activeRounds.length - 1}
+              onClick={() => stepRound(1)}
+            >
+              <ChevronRight aria-hidden="true" size={15} />
+            </button>
+          </nav>
+        ) : (
+          <b>{stageLabel}</b>
+        )}
       </div>
 
       <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role="img" aria-label={`${target.shortLabel} single-property optimization space`}>
@@ -1956,6 +1995,8 @@ function AgentOptimizationCard({
   const target = getConfiguredTarget(agent.targetKey, confirmedSetup);
   const space = getPropertySpace(agent.targetKey);
   const csvFile = highThroughputDemoScenario.doeCsvFiles[agent.targetKey];
+  const outputComponent = highThroughputDemoScenario.formulation.components.find((component) => component.sourceTargetKey === agent.targetKey);
+  const outputLabel = outputComponent?.id ?? target.shortLabel;
   const isPriorLoading = Boolean(priorDataUpload?.isLoading);
   const isPriorReady = Boolean(priorDataUpload && !priorDataUpload.isLoading);
   const roundIds = propertyRoundIds(agent.targetKey, stageIndex, iterationRoundIndex);
@@ -1989,7 +2030,7 @@ function AgentOptimizationCard({
           ? `先验最优 ${priorBestId}`
           : stageIndex < 4
             ? `${activeRound.currentBestId} / ${surface?.label ?? "Round surface"}`
-            : `${space.currentBestId} + Top-k ${agent.topCandidateIds.length}`;
+            : `${outputLabel} = ${space.currentBestId}`;
   const actionStatus =
     stageIndex === 0
       ? "等待确认"
@@ -2003,7 +2044,13 @@ function AgentOptimizationCard({
         ? "先验建模→推荐 Round 1"
           : stageIndex === 3
             ? "推荐→回流→更新热点"
-            : actionLabel;
+            : stageIndex === 4
+              ? `锁定 ${outputLabel} 候选`
+              : stageIndex === 5
+                ? `${outputLabel} 进入配方池`
+                : stageIndex === 6
+                  ? `${outputLabel} 参与解释`
+                  : actionLabel;
   const explanationBadge =
     stageIndex === 0
       ? "待配置"
@@ -2013,7 +2060,11 @@ function AgentOptimizationCard({
           ? "Prior surface"
           : stageIndex === 3
             ? "Single-property"
-            : target.shortLabel;
+            : stageIndex === 4
+              ? "Candidate output"
+              : stageIndex === 5
+                ? "Formula input"
+                : "Explainability";
   const explanationText =
     stageIndex === 0
       ? "等待任务设置确认。"
@@ -2025,9 +2076,15 @@ function AgentOptimizationCard({
           : `上传 ${csvFile.fileName} 后，${target.shortLabel} 空间才显示 12 个 DOE 先验方点。`
     : stageIndex === 2
         ? `${target.shortLabel} 空间使用 DOE 测量值生成第一版热点图，并标出 Round 1 待测推荐点。`
-        : stageIndex >= 3
+        : stageIndex === 3
           ? agent.recommendation
-          : target.description;
+          : stageIndex === 4
+            ? `${target.shortLabel} Agent 将 S3 末端收敛点 ${space.currentBestId} 输出为 ${outputLabel}，Top-k 备选保留给 S5 配方搜索。`
+            : stageIndex === 5
+              ? `${outputLabel} 作为 ${target.shortLabel} 单性质代表组分进入比例空间，与其他 p 候选一起做配方折中。`
+              : stageIndex === 6
+                ? `${target.shortLabel} Agent 提供 ${outputLabel} 的单性质来源和目标贡献，用于解释最终配方。`
+                : target.description;
   const explanationMeta =
     stageIndex === 0
       ? ["输入未确认", "未启动优化"]
@@ -2037,8 +2094,12 @@ function AgentOptimizationCard({
         ? [`已测 ${space.priorCandidateIds.length}`, `推荐 ${roundIds.recommendedIds.length}`]
         : stageIndex === 3
           ? [`已测 ${space.priorCandidateIds.length + roundIds.testedIds.length}`, `推荐 ${roundIds.recommendedIds.length}`]
-          : [directionLabel, `${space.currentBestId} from S3`];
-  const canSwitchSpace = stageIndex <= 3 && Boolean(onSelectTarget);
+          : stageIndex === 4
+            ? [`${outputLabel} from S3`, `Top-k ${agent.topCandidateIds.length}`]
+            : stageIndex === 5
+              ? ["ratio search input", `${outputLabel} locked`]
+              : ["source trace", `${space.currentBestId} from S3`];
+  const canSwitchSpace = stageIndex <= 4 && Boolean(onSelectTarget);
 
   function handleSelectSpace() {
     if (canSwitchSpace) {
@@ -2165,6 +2226,95 @@ function AgentPanel({
         })}
       </div>
     </aside>
+  );
+}
+
+function CandidateOutputPanel({
+  activeTargetKey,
+  confirmedSetup,
+}: {
+  activeTargetKey: HighThroughputTargetKey;
+  confirmedSetup: ConfirmedSetup;
+}) {
+  const scenario = highThroughputDemoScenario;
+  const target = getConfiguredTarget(activeTargetKey, confirmedSetup);
+  const space = getPropertySpace(activeTargetKey);
+  const component = scenario.formulation.components.find((item) => item.sourceTargetKey === activeTargetKey);
+  const agent = scenario.agents.find((item) => item.targetKey === activeTargetKey);
+  const rounds = scenario.roundsByTarget[activeTargetKey];
+  const convergedRound = rounds[rounds.length - 1];
+  const outputCandidate = getCandidate(space.currentBestId);
+  const backupIds = (agent?.topCandidateIds ?? []).filter((candidateId) => candidateId !== space.currentBestId);
+  const outputLabel = component?.id ?? "p?";
+  const outputDescription = component?.description ?? "单性质收敛候选";
+
+  return (
+    <section className="ht-candidate-output-panel" style={{ "--target-color": target.color } as CSSProperties}>
+      <div className="ht-panel-header">
+        <div>
+          <span className="ht-kicker">S4 Single-property Candidate Output</span>
+          <h2>{target.shortLabel}{" -> "}{outputLabel} 候选输出</h2>
+        </div>
+        <span className="ht-simulation-badge compact">from S3 Converged Surface</span>
+      </div>
+
+      <div className="ht-candidate-output-grid">
+        <article className="ht-candidate-output-focus">
+          <span>{outputLabel}</span>
+          <div>
+            <strong>{space.currentBestId}</strong>
+            <em>{outputDescription}</em>
+          </div>
+          <dl>
+            <div>
+              <dt>来源空间</dt>
+              <dd>{target.shortLabel} / {target.label}</dd>
+            </div>
+            <div>
+              <dt>目标</dt>
+              <dd>{targetThresholdLabel(target)}</dd>
+            </div>
+            <div>
+              <dt>当前值</dt>
+              <dd>{candidateValue(outputCandidate, target)}</dd>
+            </div>
+            <div>
+              <dt>目标差距</dt>
+              <dd>{targetGapLabel(outputCandidate, target)}</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article className="ht-candidate-output-chain">
+          <SectionTitle icon={<Layers3 aria-hidden="true" size={17} />} title="S3 到 S4 衔接" />
+          <ol>
+            <li><b>S3 Converged</b><span>{convergedRound.currentBestId} 完成最终回流验证</span></li>
+            <li><b>S4 Output</b><span>{outputLabel} 锁定为 {target.shortLabel} 的单性质候选</span></li>
+            <li><b>S5 Input</b><span>与其他 p 候选一起进入配方比例搜索</span></li>
+          </ol>
+        </article>
+
+        <article className="ht-candidate-output-backups">
+          <SectionTitle icon={<Target aria-hidden="true" size={17} />} title="Top-k 备选" />
+          <div>
+            {backupIds.map((candidateId) => {
+              const candidate = getCandidate(candidateId);
+              return (
+                <span key={candidateId}>
+                  <b>{candidateId}</b>
+                  <em>{candidateValue(candidate, target)} / {targetGapLabel(candidate, target)}</em>
+                </span>
+              );
+            })}
+          </div>
+        </article>
+
+        <article className="ht-candidate-output-note">
+          <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="当前阶段边界" />
+          <p>S4 仍按单性质空间分开查看。点击任一 Agent 或上方属性切换按钮，可以查看对应 p 候选；比例、权重和综合评分从 S5 才开始展示。</p>
+        </article>
+      </div>
+    </section>
   );
 }
 

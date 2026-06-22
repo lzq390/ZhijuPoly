@@ -802,10 +802,10 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
     {
       id: "S4",
       label: "候选输出",
-      title: "输出单目标最优候选 p1...pn",
-      body: "每个 Agent 输出当前最优候选和 Top-k 备选。它们不是最终答案，而是下一阶段配方混合优化的组分池。",
-      callout: "单目标最优不等于多目标最优，这一步为后续折中提供材料来源。",
-      activeTargetKey: "modulus",
+      title: "输出四个单性质收敛候选 p1-p4",
+      body: "每个 Agent 只输出自己属性空间的 S3 收敛候选和 Top-k 备选。页面继续按单性质切换查看，不在 S4 合并展示配方比例。",
+      callout: "S4 是从单性质优化到配方搜索的交接层：p1-p4 来自 S3 末端，S5 才开始做多目标比例折中。",
+      activeTargetKey: "tg",
     },
     {
       id: "S5",
