@@ -34,6 +34,7 @@ type HighThroughputWorkflowDemoPageProps = {
 };
 
 type WeightState = Record<HighThroughputTargetKey, number>;
+type RatioMixCandidate = (typeof highThroughputDemoScenario.formulation.mixCandidates)[number];
 
 type ConfirmedSetup = {
   materialType: string;
@@ -69,17 +70,11 @@ const MATERIAL_MAP_WIDTH = 100;
 const MATERIAL_MAP_HEIGHT = 48;
 const AGENT_DISPLAY_COLORS = ["#2563eb", "#16a34a", "#7c3aed", "#f97316"] as const;
 const AGENT_ACTION_LABELS = ["下一轮 3 个样本", "追加 3 个验证点", "筛选候选 Top-k", "更新局部推荐"] as const;
-const TARGET_HEATMAP_COLORS: Record<HighThroughputTargetKey, { center: string; mid: string; edge: string }> = {
-  tg: { center: "#1d4ed8", mid: "#93c5fd", edge: "#dbeafe" },
-  cte: { center: "#15803d", mid: "#86efac", edge: "#dcfce7" },
-  elongation: { center: "#6d28d9", mid: "#c4b5fd", edge: "#ede9fe" },
-  modulus: { center: "#ea580c", mid: "#fdba74", edge: "#ffedd5" },
-};
-const TARGET_HEATMAP_ANCHORS: Record<HighThroughputTargetKey, { x: number; y: number }> = {
-  tg: { x: 77, y: 21 },
-  cte: { x: 22, y: 26 },
-  elongation: { x: 35, y: 41 },
-  modulus: { x: 81, y: 42 },
+const RATIO_SPACE_ANCHORS: Record<string, { x: number; y: number }> = {
+  p1: { x: 20, y: 12 },
+  p2: { x: 22, y: 36 },
+  p3: { x: 78, y: 13 },
+  p4: { x: 80, y: 37 },
 };
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -179,10 +174,6 @@ function getAgentForCandidate(candidateId: string) {
   );
 }
 
-function buildSvgPath(points: Array<{ x: number; y: number }>) {
-  return points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
-}
-
 function projectMaterialPoint(
   point: { x: number; y: number },
   bounds: { minX: number; maxX: number; minY: number; maxY: number },
@@ -247,23 +238,6 @@ function projectPropertyDisplayBlob(
   };
 }
 
-function propertyPotential(
-  candidate: HighThroughputCandidate,
-  target: HighThroughputTarget,
-  range: { min: number; max: number },
-) {
-  const span = range.max - range.min || 1;
-  const value = candidate.scores[target.key];
-  const normalized = (value - range.min) / span;
-  return target.direction === "lower" ? 1 - normalized : normalized;
-}
-
-type ProjectedCandidate = {
-  candidate: HighThroughputCandidate;
-  index: number;
-  point: { x: number; y: number };
-};
-
 type AgentAttentionOverlayLink = {
   id: string;
   color: string;
@@ -275,84 +249,6 @@ type AgentAttentionOverlayLayout = {
   height: number;
   links: AgentAttentionOverlayLink[];
 };
-
-function pointDistance(a: { x: number; y: number }, b: { x: number; y: number }) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-function buildHeatmapBlobs(
-  projectedCandidates: ProjectedCandidate[],
-  target: HighThroughputTarget,
-  range: { min: number; max: number },
-) {
-  const anchor = TARGET_HEATMAP_ANCHORS[target.key];
-  const rankedCandidates = projectedCandidates
-    .map((item) => ({
-      ...item,
-      potential: propertyPotential(item.candidate, target, range),
-    }))
-    .filter((item) => item.potential >= 0.58)
-    .sort((a, b) => {
-      const aAnchorScore = 1 / (1 + pointDistance(a.point, anchor) * 0.08);
-      const bAnchorScore = 1 / (1 + pointDistance(b.point, anchor) * 0.08);
-      return b.potential * 0.62 + bAnchorScore * 0.38 - (a.potential * 0.62 + aAnchorScore * 0.38);
-    })
-    .slice(0, 360);
-
-  if (rankedCandidates.length === 0) {
-    return [];
-  }
-
-  const centers: typeof rankedCandidates = [];
-  for (const item of rankedCandidates) {
-    if (centers.every((center) => pointDistance(center.point, item.point) > 12)) {
-      centers.push(item);
-    }
-    if (centers.length >= 2) {
-      break;
-    }
-  }
-
-  const palette = TARGET_HEATMAP_COLORS[target.key];
-  return centers.map((seed, blobIndex) => {
-    const influenceRadius = 18 + blobIndex * 2;
-    const neighbors = rankedCandidates.filter((item) => pointDistance(seed.point, item.point) <= influenceRadius);
-    const weightedCenter = neighbors.reduce(
-      (total, item) => {
-        const distance = pointDistance(seed.point, item.point);
-        const anchorDistance = pointDistance(item.point, anchor);
-        const weight = (Math.pow(item.potential, 3) / (1 + distance * 0.12)) * (1 / (1 + anchorDistance * 0.04));
-        return {
-          x: total.x + item.point.x * weight,
-          y: total.y + item.point.y * weight,
-          weight: total.weight + weight,
-        };
-      },
-      { x: 0, y: 0, weight: 0 },
-    );
-    const normalizedStrength =
-      neighbors.reduce((total, item) => total + item.potential, 0) / Math.max(neighbors.length, 1);
-    const dataCenter = {
-      x: weightedCenter.weight > 0 ? weightedCenter.x / weightedCenter.weight : seed.point.x,
-      y: weightedCenter.weight > 0 ? weightedCenter.y / weightedCenter.weight : seed.point.y,
-    };
-    const anchorWeight = blobIndex === 0 ? 0.82 : 0.68;
-    const spread = 10.6 + Math.min(neighbors.length / 22, 5.4) - blobIndex * 1.4;
-
-    return {
-      blobId: `${target.key}-${blobIndex}`,
-      target,
-      x: anchor.x * anchorWeight + dataCenter.x * (1 - anchorWeight),
-      y: anchor.y * anchorWeight + dataCenter.y * (1 - anchorWeight),
-      rx: clamp(spread * 1.52, 13, 20),
-      ry: clamp(spread * 0.96, 8.8, 14),
-      opacity: clamp(0.5 + normalizedStrength * 0.16 - blobIndex * 0.1, 0.34, 0.62),
-      ...palette,
-    };
-  });
-}
 
 function buildProjectedCandidateMap(stageIndex: number) {
   const visibleCandidates = stageIndex === 0 ? [] : highThroughputDemoScenario.candidates.slice(0, MAX_RENDERED_STAGE_DOTS);
@@ -389,6 +285,29 @@ function mapPointToRenderedPosition(
     x: offsetX + point.x * scale,
     y: offsetY + point.y * scale,
   };
+}
+
+function buildSvgPath(points: Array<{ x: number; y: number }>) {
+  return points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+    .join(" ");
+}
+
+function projectRatioPointFromRatios(ratios: Record<string, number>) {
+  return Object.entries(RATIO_SPACE_ANCHORS).reduce(
+    (point, [componentId, anchor]) => {
+      const ratio = ratios[componentId] ?? 0;
+      return {
+        x: point.x + anchor.x * ratio,
+        y: point.y + anchor.y * ratio,
+      };
+    },
+    { x: 0, y: 0 },
+  );
+}
+
+function projectRatioMixPoint(mix: RatioMixCandidate) {
+  return projectRatioPointFromRatios(mix.ratios);
 }
 
 function weightedAchievement(weights: WeightState) {
@@ -514,6 +433,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const [confirmedSetup, setConfirmedSetup] = useState<ConfirmedSetup>(() => buildDefaultConfirmedSetup());
   const [activeSpaceTargetKey, setActiveSpaceTargetKey] = useState<HighThroughputTargetKey>("tg");
   const [activeIterationRoundIndex, setActiveIterationRoundIndex] = useState(0);
+  const [activeRatioSearchStepIndex, setActiveRatioSearchStepIndex] = useState(0);
   const [priorDataUploads, setPriorDataUploads] = useState<PriorDataUploadsState>({});
   const priorUploadTimersRef = useRef<Partial<Record<HighThroughputTargetKey, number>>>({});
   const mapStageRef = useRef<HTMLDivElement | null>(null);
@@ -537,6 +457,10 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
           setActiveIterationRoundIndex(0);
         } else if (nextIndex === 4) {
           setActiveIterationRoundIndex(2);
+        } else if (nextIndex === 5) {
+          setActiveRatioSearchStepIndex(0);
+        } else if (nextIndex === 6) {
+          setActiveRatioSearchStepIndex(scenario.formulation.searchSteps.length - 1);
         }
         return nextIndex;
       });
@@ -572,6 +496,10 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       setActiveIterationRoundIndex(0);
     } else if (nextIndex === 4) {
       setActiveIterationRoundIndex(2);
+    } else if (nextIndex === 5) {
+      setActiveRatioSearchStepIndex(0);
+    } else if (nextIndex === 6) {
+      setActiveRatioSearchStepIndex(scenario.formulation.searchSteps.length - 1);
     }
     setIsPlaying(false);
   }
@@ -583,6 +511,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     }
     if (currentStageIndex >= maxStageIndex) {
       setCurrentStageIndex(0);
+      setActiveRatioSearchStepIndex(0);
     }
     setIsPlaying(true);
   }
@@ -594,6 +523,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     setConfirmedSetup(buildDefaultConfirmedSetup());
     setActiveSpaceTargetKey("tg");
     setActiveIterationRoundIndex(0);
+    setActiveRatioSearchStepIndex(0);
     setPriorDataUploads({});
     setIsPlaying(false);
   }
@@ -691,7 +621,10 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                   priorDataUploads={priorDataUploads}
                 />
               ) : (
-                <MaterialMap stageIndex={currentStageIndex} confirmedSetup={confirmedSetup} />
+                <RatioAnnealingMap
+                  stageIndex={currentStageIndex}
+                  activeStepIndex={activeRatioSearchStepIndex}
+                />
               )}
             </div>
 
@@ -706,9 +639,9 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
               onPriorDataUpload={handlePriorDataUpload}
             />
 
-            <NarrationPanel stageIndex={currentStageIndex} confirmedSetup={confirmedSetup} />
-
-            <AgentAttentionOverlay stageIndex={currentStageIndex} stageRef={mapStageRef} />
+            {currentStageIndex <= 4 ? (
+              <AgentAttentionOverlay stageIndex={currentStageIndex} stageRef={mapStageRef} />
+            ) : null}
           </div>
 
           {currentStageIndex <= 3 ? (
@@ -720,9 +653,13 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
             />
           ) : currentStageIndex === 4 ? (
             <CandidateOutputPanel activeTargetKey={activeSpaceTargetKey} confirmedSetup={confirmedSetup} />
+          ) : currentStageIndex === 5 ? (
+            <RatioSearchPanel
+              activeStepIndex={activeRatioSearchStepIndex}
+              onStepChange={setActiveRatioSearchStepIndex}
+            />
           ) : (
-            <FormulationPanel
-              stageIndex={currentStageIndex}
+            <FinalFormulationPanel
               weights={weights}
               onWeightsChange={setWeights}
               computedScore={computedScore}
@@ -1073,42 +1010,6 @@ function StageStepper({
         })}
       </nav>
     </aside>
-  );
-}
-
-function NarrationPanel({
-  stageIndex,
-  confirmedSetup,
-}: {
-  stageIndex: number;
-  confirmedSetup: ConfirmedSetup;
-}) {
-  const stage = highThroughputDemoScenario.stages[stageIndex];
-  const progress = Math.round((stageIndex / (highThroughputDemoScenario.stages.length - 1)) * 100);
-  const body =
-    stage.id === "S1"
-      ? `${formatNumber(confirmedSetup.monomerACount)} 个二胺与 ${formatNumber(confirmedSetup.monomerBCount)} 个二酐形成 ${formatNumber(confirmedSetup.candidateTotal)} 个理论候选。当前阶段只展示统一候选空间点云：每个点代表一个二胺 x 二酐组合，尚未叠加性能地形、已测样本或 Agent 推荐。`
-      : stage.body;
-
-  return (
-    <section className="ht-narration-panel">
-      <div>
-        <span className="ht-kicker">当前阶段说明</span>
-        <h2>{stage.title}</h2>
-        <p>{body}</p>
-      </div>
-      <div className="ht-stage-progress">
-        <span>{stage.id}</span>
-        <div className="ht-progress-track">
-          <b style={{ width: `${progress}%` }} />
-        </div>
-        <strong>{progress}%</strong>
-      </div>
-      <div className="ht-callout">
-        <BadgeInfo aria-hidden="true" size={16} />
-        {stage.callout}
-      </div>
-    </section>
   );
 }
 
@@ -1568,14 +1469,12 @@ function ExperimentPriorPanel({
           <span className="ht-kicker">DOE = Design of Experiments</span>
           <h2>正交实验先验与单性质迭代状态</h2>
         </div>
-        <span className="ht-simulation-badge compact">Simulation Mode / DOE prior drives surfaces</span>
       </div>
 
       <div className="ht-prior-workflow-grid">
         <article className={cn("ht-prior-step-card", stageIndex >= 1 && "active")}>
           <span>S1</span>
           <strong>上传对应性质 CSV</strong>
-          <p>DOE 是 Design of Experiments。S1 中每个 Agent 上传自己的性质 CSV，上传后该属性空间才显示 12 个 DOE 方点。</p>
           {activeUpload ? (
             <div className="ht-prior-upload-result">
               <strong>{activeUpload.fileName}</strong>
@@ -1590,13 +1489,11 @@ function ExperimentPriorPanel({
         <article className={cn("ht-prior-step-card", stageIndex >= 2 && "active")}>
           <span>S2</span>
           <strong>Prior DOE Surface</strong>
-          <p>S2 继续使用同一批 12 个 DOE 样本作为模拟先验，形成每个单性质模型的初始热点图。</p>
           <b>{stageIndex >= 2 ? "initial surfaces ready" : `${uploadedCount}/4 CSV ready`}</b>
         </article>
         <article className={cn("ht-prior-step-card", iterationActive && "active")}>
           <span>S3</span>
           <strong>Agent rounds update surfaces</strong>
-          <p>每个 Agent 只在自己的属性空间内推荐、回流和更新热点图，不做多目标配方折中。</p>
           <b>{iterationActive ? "3 rounds scripted" : "waiting for prior surface"}</b>
         </article>
       </div>
@@ -1620,7 +1517,6 @@ function ExperimentPriorPanel({
             <article key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
               <span>{target.shortLabel}</span>
               <strong>{iterationActive ? activeRound.currentBestId : "pending"}</strong>
-              <p>{iterationActive ? activeRound.explanation : "等待正交先验输入后启动单性质 Agent。"}</p>
             </article>
           );
         })}
@@ -1650,13 +1546,6 @@ function DoeCsvPreviewPanel({
         <div>
           <span className="ht-kicker">{target.shortLabel} DOE CSV Preview</span>
           <h3>{csvFile.fileName}</h3>
-          <p>
-            {isLoading
-              ? "CSV 已选择，正在加载 DOE 样本点，约 1 秒后显示到当前属性空间。"
-              : isReady
-              ? "CSV 已上传，candidate_id 与当前属性空间中的 DOE 方点一一对应。"
-              : `待上传 ${csvFile.fileName}，上传前 S1 不显示 DOE 方点。`}
-          </p>
         </div>
         <a href={csvFile.href} download={csvFile.fileName}>
           下载示例 CSV
@@ -1709,221 +1598,185 @@ function DoeCsvPreviewPanel({
   );
 }
 
-function MaterialMap({
+function RatioAnnealingMap({
   stageIndex,
-  confirmedSetup,
+  activeStepIndex,
 }: {
   stageIndex: number;
-  confirmedSetup: ConfirmedSetup;
+  activeStepIndex: number;
 }) {
   const scenario = highThroughputDemoScenario;
-  const visibleCandidates = stageIndex === 0 ? [] : scenario.candidates.slice(0, MAX_RENDERED_STAGE_DOTS);
-  const displayedGeneratedCount = stageIndex === 0 ? 0 : confirmedSetup.candidateTotal;
-  const generatedComplete = displayedGeneratedCount === confirmedSetup.candidateTotal && stageIndex > 0;
-  const showMaterialTerrain = stageIndex >= 2;
-  const showOptimizationMarkers = stageIndex >= 3;
-  const isIterationStage = stageIndex === 3;
-  const mapTitle = showMaterialTerrain ? "四目标模拟性能地形" : "统一 a x b 候选空间";
-  const pointBounds = visibleCandidates.reduce(
-    (bounds, candidate) => ({
-      minX: Math.min(bounds.minX, candidate.x),
-      maxX: Math.max(bounds.maxX, candidate.x),
-      minY: Math.min(bounds.minY, candidate.y),
-      maxY: Math.max(bounds.maxY, candidate.y),
-    }),
-    { minX: Number.POSITIVE_INFINITY, maxX: Number.NEGATIVE_INFINITY, minY: Number.POSITIVE_INFINITY, maxY: Number.NEGATIVE_INFINITY },
-  );
-  const normalizedBounds =
-    visibleCandidates.length > 0
-      ? pointBounds
-      : { minX: 0, maxX: 1, minY: 0, maxY: 1 };
-  const projectedCandidates = visibleCandidates.map((candidate, index) => ({
-    candidate,
-    index,
-    point: projectMaterialPoint(candidate, normalizedBounds),
-  }));
-  const targetRanges = new Map(
-    scenario.targets.map((target) => {
-      const values = visibleCandidates.map((candidate) => candidate.scores[target.key]);
-      return [
-        target.key,
-        {
-          min: Math.min(...values),
-          max: Math.max(...values),
-        },
-      ];
-    }),
-  );
-  const heatmapBlobs = showMaterialTerrain
-    ? scenario.targets.flatMap((target) => {
-        const range = targetRanges.get(target.key) ?? { min: 0, max: 1 };
-        return buildHeatmapBlobs(projectedCandidates, target, range);
-      })
-    : [];
-  const projectedCandidateMap = new Map(projectedCandidates.map((item) => [item.candidate.id, item.point]));
-  const batchIndex = showOptimizationMarkers ? scenario.batches.length - 1 : clamp(stageIndex - 3, 0, scenario.batches.length - 1);
-  const currentBatch = showOptimizationMarkers ? scenario.batches[batchIndex] : null;
-  const visibleBatches = showOptimizationMarkers ? scenario.batches.slice(0, batchIndex + 1) : [];
-  const testedIds = new Set(visibleBatches.flatMap((batch) => batch.testedIds));
-  const currentTestedIds = new Set(isIterationStage ? currentBatch?.testedIds ?? [] : []);
-  const recommendedIds = new Set(currentBatch?.recommendedIds ?? []);
-  const targetForCandidate = (candidateId: string) => {
-    const agent = getAgentForCandidate(candidateId);
-    if (agent) {
-      return getTarget(agent.targetKey);
-    }
+  const formulation = scenario.formulation;
+  const steps = formulation.searchSteps;
+  const activeIndex = stageIndex >= 6 ? steps.length - 1 : clamp(activeStepIndex, 0, steps.length - 1);
+  const activeStep = steps[activeIndex];
+  const mixById = new Map(formulation.mixCandidates.map((mix) => [mix.id, mix]));
+  const visibleMixes = activeStep.mixCandidateIds
+    .map((mixId) => mixById.get(mixId))
+    .filter((mix): mix is RatioMixCandidate => Boolean(mix));
+  const acceptedPathMixes = activeStep.acceptedPathIds
+    .map((mixId) => mixById.get(mixId))
+    .filter((mix): mix is RatioMixCandidate => Boolean(mix));
+  const currentMix = mixById.get(activeStep.currentMixId) ?? visibleMixes[0] ?? formulation.mixCandidates[0];
+  const currentBestMix = mixById.get(activeStep.currentBestId) ?? currentMix;
+  const previousMix = mixById.get(activeStep.previousMixId) ?? currentMix;
+  const proposedMix = mixById.get(activeStep.proposedMixId) ?? currentMix;
+  const selectedMix = mixById.get(formulation.selectedMixId) ?? currentBestMix;
+  const focusMix = stageIndex >= 6 ? selectedMix : currentBestMix;
+  const focusPoint = projectRatioMixPoint(focusMix);
+  const currentPoint = projectRatioMixPoint(currentMix);
+  const previousPoint = projectRatioMixPoint(previousMix);
+  const proposedPoint = projectRatioMixPoint(proposedMix);
+  const selectedPoint = projectRatioMixPoint(selectedMix);
+  const visibleMixIdSet = new Set(visibleMixes.map((mix) => mix.id));
+  const pathPoints = acceptedPathMixes.map(projectRatioMixPoint);
+  const ratioGridPoints = [];
 
-    const candidate = getCandidate(candidateId);
-    if (!candidate) {
-      return scenario.targets[0];
+  for (let p1 = 0; p1 <= 10; p1 += 1) {
+    for (let p2 = 0; p2 <= 10 - p1; p2 += 1) {
+      for (let p3 = 0; p3 <= 10 - p1 - p2; p3 += 1) {
+        const p4 = 10 - p1 - p2 - p3;
+        ratioGridPoints.push({
+          id: `${p1}-${p2}-${p3}-${p4}`,
+          point: projectRatioPointFromRatios({
+            p1: p1 / 10,
+            p2: p2 / 10,
+            p3: p3 / 10,
+            p4: p4 / 10,
+          }),
+        });
+      }
     }
+  }
 
-    return scenario.targets.reduce(
-      (best, target) => {
-        const range = targetRanges.get(target.key) ?? { min: 0, max: 1 };
-        const potential = propertyPotential(candidate, target, range);
-        return potential > best.potential ? { target, potential } : best;
-      },
-      { target: scenario.targets[0], potential: Number.NEGATIVE_INFINITY },
-    ).target;
-  };
   return (
-    <section className="ht-material-map-panel">
+    <section className="ht-material-map-panel ht-ratio-annealing-map-panel">
       <div className="ht-panel-header">
         <div>
-          <span className="ht-kicker">{showMaterialTerrain ? "2D PolyBERT Material Map" : "2D PolyBERT Material Space"}</span>
-          <h2>{mapTitle}</h2>
+          <span className="ht-kicker">4-component Ratio Performance Surface</span>
+          <h2>{stageIndex >= 6 ? "最终配方比例性能地形" : "模拟退火比例性能地形"}</h2>
         </div>
         <div className="ht-space-status-group">
           <span className="ht-unified-space-badge">
-            {formatNumber(confirmedSetup.monomerACount)} x {formatNumber(confirmedSetup.monomerBCount)} candidates
+            step = {formulation.ratioGrid.step.toFixed(1)} / {formulation.ratioGrid.candidateCount} mixes
           </span>
-          {showMaterialTerrain ? (
-            <span className="ht-map-layer-badge">Map layer: mock property terrain</span>
-          ) : (
-            <span className={cn("ht-generation-status", generatedComplete ? "complete" : "pending")}>
-              已生成 {formatNumber(displayedGeneratedCount)} / {formatNumber(confirmedSetup.candidateTotal)}
-            </span>
-          )}
+          <span className="ht-generated-space-badge">
+            {stageIndex >= 6 ? `selected ${selectedMix.id}` : "annealing path"}
+          </span>
         </div>
       </div>
 
-      <div className="ht-map-canvas" data-ht-map-canvas="true">
-        <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role="img" aria-label="PolyBERT candidate space point cloud">
+      <div className="ht-map-canvas ht-ratio-annealing-canvas" aria-label="S5 ratio simulated annealing map">
+        <svg viewBox="0 0 100 48" role="img">
+          <title>{stageIndex >= 6 ? "S6 final formulation ratio performance terrain" : "S5 simulated annealing ratio performance terrain"}</title>
           <defs>
-            <filter id="ht-terrain-blur" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="1.65" />
+            <filter id="ht-ratio-terrain-blur" x="-25%" y="-25%" width="150%" height="150%">
+              <feGaussianBlur stdDeviation="2.9" />
             </filter>
-            <marker id="ht-iteration-arrow" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="3.2" markerHeight="3.2" orient="auto">
-              <path d="M 1 1 L 5 3 L 1 5 Z" />
+            <radialGradient id="ht-ratio-performance-gradient" cx="50%" cy="50%" r="58%">
+              <stop offset="0%" stopColor="#0891b2" stopOpacity="0.58" />
+              <stop offset="48%" stopColor="#67e8f9" stopOpacity="0.3" />
+              <stop offset="100%" stopColor="#ecfeff" stopOpacity="0" />
+            </radialGradient>
+            <marker id="ht-ratio-path-arrow" markerHeight="5" markerWidth="5" orient="auto" refX="4.2" refY="2.5">
+              <path d="M0,0 L5,2.5 L0,5 z" />
             </marker>
-            {scenario.targets.map((target) => {
-              const palette = TARGET_HEATMAP_COLORS[target.key];
-              return (
-                <radialGradient key={target.key} id={`ht-heatmap-gradient-${target.key}`} cx="50%" cy="50%" r="55%">
-                  <stop offset="0%" stopColor={palette.center} stopOpacity="0.82" />
-                  <stop offset="32%" stopColor={palette.center} stopOpacity="0.4" />
-                  <stop offset="64%" stopColor={palette.mid} stopOpacity="0.24" />
-                  <stop offset="84%" stopColor={palette.edge} stopOpacity="0.18" />
-                  <stop offset="100%" stopColor={palette.edge} stopOpacity="0" />
-                </radialGradient>
-              );
-            })}
           </defs>
-          <rect x="0" y="0" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT} rx="3" fill="#fbfdff" />
+
+          <rect className="ht-ratio-map-bg" x="0.6" y="0.8" width="98.8" height="46.4" rx="2.3" />
           <g className="ht-material-grid" aria-hidden="true">
-            {Array.from({ length: 7 }, (_, index) => (
-              <line key={`x-${index}`} x1={(index + 1) * 12.5} y1="0" x2={(index + 1) * 12.5} y2={MATERIAL_MAP_HEIGHT} />
-            ))}
-            {Array.from({ length: 5 }, (_, index) => (
-              <line key={`y-${index}`} x1="0" y1={(index + 1) * 8} x2={MATERIAL_MAP_WIDTH} y2={(index + 1) * 8} />
+            {[18, 34, 50, 66, 82].map((x) => <line key={`v-${x}`} x1={x} y1="5" x2={x} y2="43" />)}
+            {[10, 19, 28, 37].map((y) => <line key={`h-${y}`} x1="8" y1={y} x2="92" y2={y} />)}
+          </g>
+
+          <g className="ht-ratio-grid-points" aria-label="0.1 ratio grid candidates">
+            {ratioGridPoints.map(({ id, point }) => (
+              <circle key={id} cx={point.x} cy={point.y} r="0.34" />
             ))}
           </g>
-          {showMaterialTerrain ? (
-            <g className="ht-heatmap-layers" aria-label="mock property heatmap layers">
-              {heatmapBlobs.map(({ blobId, target, x, y, rx, ry, opacity }) => (
-                <ellipse
-                  key={blobId}
-                  className="ht-heatmap-blob"
-                  cx={x}
-                  cy={y}
-                  rx={rx}
-                  ry={ry}
-                  fill={`url(#ht-heatmap-gradient-${target.key})`}
-                  opacity={opacity}
-                />
-              ))}
-            </g>
+
+          <g className="ht-ratio-performance-layer" aria-label="simulated objective surface">
+            <ellipse cx={focusPoint.x} cy={focusPoint.y} rx="24" ry="13.5" />
+            <ellipse cx={focusPoint.x + 2.2} cy={focusPoint.y - 0.8} rx="13.2" ry="7.2" />
+          </g>
+
+          <g className="ht-ratio-anchor-layer" aria-label="p1-p4 ratio anchors">
+            {formulation.components.map((component) => {
+              const anchor = RATIO_SPACE_ANCHORS[component.id];
+              if (!anchor) {
+                return null;
+              }
+
+              return (
+                <g key={component.id} className="ht-ratio-anchor" style={{ "--component-color": component.color } as CSSProperties}>
+                  <circle cx={anchor.x} cy={anchor.y} r="1.75" />
+                  <text x={anchor.x} y={anchor.y - 3.1} textAnchor="middle">{component.id}</text>
+                </g>
+              );
+            })}
+          </g>
+
+          {pathPoints.length > 1 ? (
+            <path className="ht-ratio-annealing-path" d={buildSvgPath(pathPoints)} markerEnd="url(#ht-ratio-path-arrow)" />
           ) : null}
-          {projectedCandidates.map(({ candidate, index, point }) => {
-            const radius = index % 9 === 0 ? 0.42 : 0.31;
-            const opacity = 0.36 + (index % 5) * 0.052;
-            return (
-              <circle key={candidate.id} cx={point.x} cy={point.y} r={radius} fill="#b9c5d6" opacity={opacity}>
-                <title>
-                  {candidate.id} / {candidate.monomerA} + {candidate.monomerB}
-                </title>
-              </circle>
-            );
-          })}
-          {stageIndex === 3 ? (
-            <g className="ht-iteration-loop" transform="translate(50 25)" aria-label="Agent iterative optimization loop">
-              <path d="M -4.6 -1.15 A 4.75 4.75 0 0 1 4.6 -1.15" />
-              <path d="M 4.6 1.15 A 4.75 4.75 0 0 1 -4.6 1.15" />
-              <text className="ht-iteration-loop-title" x="0" y="0.2">Loop</text>
-            </g>
+
+          {previousMix.id !== proposedMix.id ? (
+            <path
+              className={cn("ht-ratio-proposal-line", activeStep.accepted ? "accepted" : "rejected")}
+              d={buildSvgPath([previousPoint, proposedPoint])}
+            />
           ) : null}
-          {showOptimizationMarkers ? (
-            <g className="ht-sample-marker-layer" aria-label="mock tested and recommended samples">
-              {Array.from(testedIds).map((candidateId) => {
-                const point = projectedCandidateMap.get(candidateId);
-                if (!point) {
-                  return null;
-                }
-                const target = targetForCandidate(candidateId);
-                const isCurrentTested = currentTestedIds.has(candidateId);
-                return (
-                  <g key={`tested-${candidateId}`} style={{ "--target-color": target.color } as CSSProperties}>
-                    <circle
-                      className={cn("ht-tested-sample", isCurrentTested && "current")}
-                      cx={point.x}
-                      cy={point.y}
-                      r={isCurrentTested ? "1.04" : "0.82"}
-                    />
-                  </g>
-                );
-              })}
-              {Array.from(recommendedIds).map((candidateId) => {
-                const point = projectedCandidateMap.get(candidateId);
-                if (!point) {
-                  return null;
-                }
-                const target = targetForCandidate(candidateId);
-                return (
-                  <circle
-                    key={`recommended-${candidateId}`}
-                    className={cn(isIterationStage ? "ht-recommended-sample" : "ht-output-sample")}
-                    cx={point.x}
-                    cy={point.y}
-                    r={isIterationStage ? "1.12" : "1"}
-                    style={{ "--target-color": target.color } as CSSProperties}
-                  />
-                );
-              })}
+
+          <g className="ht-ratio-mix-layer" aria-label="annealing mix candidates">
+            {formulation.mixCandidates.map((mix) => {
+              const point = projectRatioMixPoint(mix);
+              const isVisible = visibleMixIdSet.has(mix.id);
+              const isCurrent = mix.id === currentMix.id;
+              const isBest = mix.id === currentBestMix.id;
+              const isProposed = mix.id === proposedMix.id;
+              const isRejected = isProposed && !activeStep.accepted;
+              const isSelected = stageIndex >= 6 && mix.id === selectedMix.id;
+
+              return (
+                <g
+                  key={mix.id}
+                  className={cn(
+                    "ht-ratio-mix-node",
+                    isVisible && "visible",
+                    isProposed && "proposed",
+                    isRejected && "rejected",
+                    isCurrent && "current",
+                    isBest && "best",
+                    isSelected && "selected",
+                  )}
+                >
+                  <circle cx={point.x} cy={point.y} r={isSelected ? 1.95 : isCurrent || isBest ? 1.65 : 1.05} />
+                  {isCurrent || isBest || isSelected || isProposed ? (
+                    <text x={point.x + 2.1} y={point.y - 1.8}>{mix.id}</text>
+                  ) : null}
+                  <title>{`${mix.id} score ${mix.score} / p1 ${ratioPercent(mix.ratios.p1 ?? 0)}, p2 ${ratioPercent(mix.ratios.p2 ?? 0)}, p3 ${ratioPercent(mix.ratios.p3 ?? 0)}, p4 ${ratioPercent(mix.ratios.p4 ?? 0)}`}</title>
+                </g>
+              );
+            })}
+          </g>
+
+          {stageIndex >= 6 ? (
+            <g className="ht-ratio-selected-star" transform={`translate(${selectedPoint.x} ${selectedPoint.y})`} aria-label="selected final mix">
+              <path d="M0 -3.3 L0.76 -1 L3.14 -1 L1.2 0.42 L1.92 2.74 L0 1.35 L-1.92 2.74 L-1.2 0.42 L-3.14 -1 L-0.76 -1 Z" />
             </g>
-          ) : null}
-          {isIterationStage ? (
-            <g className="ht-sample-state-key" transform="translate(75.2 1)" aria-label="sample state legend">
-              <circle className="history" cx="0" cy="0" r="0.66" />
-              <text x="1.45" y="0.45">回流</text>
-              <circle className="current-outline" cx="8.1" cy="0" r="1.24" />
-              <circle className="current" cx="8.1" cy="0" r="0.9" />
-              <text x="9.65" y="0.45">验证</text>
-              <circle className="next" cx="16.2" cy="0" r="0.82" />
-              <text x="17.85" y="0.45">推荐</text>
+          ) : (
+            <g className="ht-ratio-current-ring" transform={`translate(${currentPoint.x} ${currentPoint.y})`} aria-label="current annealing mix">
+              <circle r="3.2" />
             </g>
-          ) : null}
+          )}
         </svg>
+
+        <div className="ht-ratio-map-summary">
+          <span><b>温度</b>{activeStep.coolingLabel}</span>
+          <span><b>扰动</b>{previousMix.id} {"->"} {proposedMix.id}</span>
+          <span><b>决策</b>{activeStep.decisionLabel}</span>
+          <span><b>当前最优</b>{currentBestMix.id} / {currentBestMix.score}</span>
+        </div>
       </div>
     </section>
   );
@@ -2055,36 +1908,34 @@ function AgentOptimizationCard({
     stageIndex === 0
       ? "待配置"
       : stageIndex === 1
-        ? isPriorLoading ? "Loading DOE" : "DOE prior"
+        ? isPriorLoading ? "加载 DOE" : "DOE 先验"
         : stageIndex === 2
-          ? "Prior surface"
+          ? "先验热点"
           : stageIndex === 3
-            ? "Single-property"
+            ? "单性质迭代"
             : stageIndex === 4
-              ? "Candidate output"
-              : stageIndex === 5
-                ? "Formula input"
-                : "Explainability";
-  const explanationText =
+            ? "候选输出"
+            : stageIndex === 5
+              ? "配方输入"
+              : "来源解释";
+  const stageStatusText =
     stageIndex === 0
-      ? "等待任务设置确认。"
+      ? "等待任务设置确认"
       : stageIndex === 1
         ? isPriorLoading
-          ? `${csvFile.fileName} 已选择，正在加载 DOE 样本点，约 1 秒后显示到 ${target.shortLabel} 空间。`
+          ? "正在加载 DOE 样本点"
           : isPriorReady
-          ? `${csvFile.fileName} 已作为 ${target.shortLabel} 空间的 DOE 先验表，地图方点与 polybert_x/y 对应。`
-          : `上传 ${csvFile.fileName} 后，${target.shortLabel} 空间才显示 12 个 DOE 先验方点。`
-    : stageIndex === 2
-        ? `${target.shortLabel} 空间使用 DOE 测量值生成第一版热点图，并标出 Round 1 待测推荐点。`
-        : stageIndex === 3
-          ? agent.recommendation
-          : stageIndex === 4
-            ? `${target.shortLabel} Agent 将 S3 末端收敛点 ${space.currentBestId} 输出为 ${outputLabel}，Top-k 备选保留给 S5 配方搜索。`
-            : stageIndex === 5
-              ? `${outputLabel} 作为 ${target.shortLabel} 单性质代表组分进入比例空间，与其他 p 候选一起做配方折中。`
-              : stageIndex === 6
-                ? `${target.shortLabel} Agent 提供 ${outputLabel} 的单性质来源和目标贡献，用于解释最终配方。`
-                : target.description;
+            ? `${target.shortLabel} CSV 已上传`
+            : `等待上传 ${target.shortLabel} CSV`
+        : stageIndex === 2
+          ? "DOE 先验热点已生成"
+          : stageIndex === 3
+            ? `第 ${activeRound.round} 轮回流更新`
+            : stageIndex === 4
+              ? `${outputLabel} 候选已输出`
+              : stageIndex === 5
+                ? `${outputLabel} 进入比例搜索`
+                : `${outputLabel} 参与最终解释`;
   const explanationMeta =
     stageIndex === 0
       ? ["输入未确认", "未启动优化"]
@@ -2173,10 +2024,10 @@ function AgentOptimizationCard({
       </div>
       <div className="ht-agent-meaning" aria-label={`${agentTitle} property interpretation`}>
         <div className="ht-agent-explanation-head">
-          <span>当前解释</span>
+          <span>当前状态</span>
           <b>{explanationBadge}</b>
         </div>
-        <p>{explanationText}</p>
+        <p className="ht-agent-status-line" title={stageStatusText}>{stageStatusText}</p>
         <div className="ht-agent-explanation-meta">
           {explanationMeta.map((item) => (
             <span key={item}>{item}</span>
@@ -2309,23 +2160,167 @@ function CandidateOutputPanel({
           </div>
         </article>
 
-        <article className="ht-candidate-output-note">
-          <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="当前阶段边界" />
-          <p>S4 仍按单性质空间分开查看。点击任一 Agent 或上方属性切换按钮，可以查看对应 p 候选；比例、权重和综合评分从 S5 才开始展示。</p>
-        </article>
       </div>
     </section>
   );
 }
 
-function FormulationPanel({
-  stageIndex,
+function RatioSearchPanel({
+  activeStepIndex,
+  onStepChange,
+}: {
+  activeStepIndex: number;
+  onStepChange: (stepIndex: number) => void;
+}) {
+  const scenario = highThroughputDemoScenario;
+  const formulation = scenario.formulation;
+  const steps = formulation.searchSteps;
+  const activeIndex = clamp(activeStepIndex, 0, steps.length - 1);
+  const activeStep = steps[activeIndex];
+  const mixById = new Map(formulation.mixCandidates.map((mix) => [mix.id, mix]));
+  const visibleMixes = activeStep.mixCandidateIds
+    .map((mixId) => mixById.get(mixId))
+    .filter((mix): mix is NonNullable<typeof mix> => Boolean(mix));
+  const currentMix = mixById.get(activeStep.currentMixId) ?? visibleMixes[0] ?? formulation.mixCandidates[0];
+  const currentBestMix = mixById.get(activeStep.currentBestId) ?? currentMix;
+  const previousMix = mixById.get(activeStep.previousMixId) ?? currentMix;
+  const proposedMix = mixById.get(activeStep.proposedMixId) ?? currentMix;
+  const selectedMix = mixById.get(formulation.selectedMixId) ?? currentBestMix;
+  const deltaLabel = `${activeStep.deltaScore > 0 ? "+" : ""}${activeStep.deltaScore}`;
+  const acceptanceLabel = `${Math.round(activeStep.acceptanceProbability * 100)}%`;
+
+  function stepRatioSearch(direction: -1 | 1) {
+    onStepChange(clamp(activeIndex + direction, 0, steps.length - 1));
+  }
+
+  return (
+    <section className="ht-ratio-search-panel">
+      <div className="ht-panel-header">
+        <div>
+          <span className="ht-kicker">S5 Formulation Ratio Search</span>
+          <h2>四组分模拟退火比例搜索</h2>
+        </div>
+        <span className="ht-simulation-badge compact">p1-p4 from S4 output</span>
+      </div>
+
+      <div className="ht-ratio-search-grid">
+        <div className="ht-component-pool">
+          <SectionTitle icon={<Target aria-hidden="true" size={17} />} title="S4 输入组分池" />
+          <div className="ht-component-list">
+            {formulation.components.map((component) => {
+              const target = getTarget(component.sourceTargetKey);
+              const convergedCandidateId = getPropertySpace(component.sourceTargetKey).currentBestId;
+              return (
+                <article key={component.id} className="ht-component-row active locked" style={{ "--target-color": component.color } as CSSProperties}>
+                  <span>{component.id}</span>
+                  <div>
+                    <strong>{component.label}</strong>
+                    <em>{convergedCandidateId} / {target.shortLabel} from S4 output</em>
+                  </div>
+                  <b>{component.description}</b>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="ht-mix-candidate-panel">
+          <div className="ht-ratio-step-control" aria-label="S5 ratio search step switcher">
+            <button type="button" className="ht-round-arrow-button" aria-label="Previous ratio search step" disabled={activeIndex === 0} onClick={() => stepRatioSearch(-1)}>
+              <ChevronLeft aria-hidden="true" size={16} />
+            </button>
+            <div>
+              <span>{activeStep.label}</span>
+              <strong>{activeStep.title}</strong>
+            </div>
+            <button type="button" className="ht-round-arrow-button" aria-label="Next ratio search step" disabled={activeIndex === steps.length - 1} onClick={() => stepRatioSearch(1)}>
+              <ChevronRight aria-hidden="true" size={16} />
+            </button>
+          </div>
+          <div className="ht-annealing-step-timeline" role="tablist" aria-label="Simulated annealing event timeline">
+            {steps.map((step, index) => (
+              <button
+                key={step.id}
+                type="button"
+                role="tab"
+                aria-selected={index === activeIndex}
+                className={cn(step.accepted ? "accepted" : "rejected")}
+                onClick={() => onStepChange(index)}
+              >
+                <span>{step.label}</span>
+                <b>{step.coolingLabel}</b>
+              </button>
+            ))}
+          </div>
+
+          <article className={cn("ht-annealing-decision-card", activeStep.accepted ? "accepted" : "rejected")}>
+            <div className="ht-annealing-move-grid">
+              <div className="ht-annealing-mix-card">
+                <span>当前解</span>
+                <strong>{previousMix.id}</strong>
+                <RatioStackedBar mix={previousMix} components={formulation.components} />
+                <em>score {previousMix.score}</em>
+              </div>
+              <div className="ht-annealing-mix-card proposed">
+                <span>邻域扰动</span>
+                <strong>{proposedMix.id}</strong>
+                <RatioStackedBar mix={proposedMix} components={formulation.components} />
+                <em>score {proposedMix.score}</em>
+              </div>
+              <div className="ht-annealing-mix-card">
+                <span>决策后当前解</span>
+                <strong>{currentMix.id}</strong>
+                <RatioStackedBar mix={currentMix} components={formulation.components} />
+                <em>{activeStep.accepted ? "accepted" : "kept previous"}</em>
+              </div>
+            </div>
+
+            <div className="ht-annealing-metrics">
+              <span><b>温度 T</b>{activeStep.temperature.toFixed(2)}</span>
+              <span><b>Δscore</b>{deltaLabel}</span>
+              <span><b>接受概率</b>{acceptanceLabel}</span>
+              <span><b>结果</b>{activeStep.decisionLabel}</span>
+            </div>
+
+          </article>
+        </div>
+
+        <div className="ht-mix-preview-panel ht-annealing-status-panel">
+          <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="退火状态回流" />
+          <div className={cn("ht-current-mix-card", activeStep.accepted ? "accepted" : "rejected")}>
+            <span>{activeStep.actionLabel}</span>
+            <strong>{activeStep.accepted ? currentMix.id : `${proposedMix.id} rejected`}</strong>
+            <RatioStackedBar mix={activeStep.accepted ? currentMix : proposedMix} components={formulation.components} showLabels />
+          </div>
+          <div className="ht-mix-score-grid">
+            <span>已评估 <b>{activeStep.evaluatedCount}/{formulation.ratioGrid.candidateCount}</b></span>
+            <span>当前解 <b>{currentMix.id}</b></span>
+            <span>当前最优 <b>{currentBestMix.id}</b></span>
+          </div>
+          <div className="ht-achievement-preview" aria-label={`${currentMix.id} property achievement`}>
+            {scenario.targets.map((target) => {
+              const value = currentMix.achievement[target.key];
+              return (
+                <div key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
+                  <span>{target.shortLabel}</span>
+                  <b>{value}%</b>
+                  <i><em style={{ width: `${value}%` }} /></i>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FinalFormulationPanel({
   weights,
   onWeightsChange,
   computedScore,
   confirmedSetup,
 }: {
-  stageIndex: number;
   weights: WeightState;
   onWeightsChange: (weights: WeightState) => void;
   computedScore: number;
@@ -2333,32 +2328,31 @@ function FormulationPanel({
 }) {
   const scenario = highThroughputDemoScenario;
   const formulation = scenario.formulation;
-  const showFormulation = stageIndex >= 5;
-  const pathPoints = showFormulation ? formulation.ratioPath : formulation.ratioPath.slice(0, 1);
+  const selectedMix = formulation.mixCandidates.find((mix) => mix.id === formulation.selectedMixId) ?? formulation.mixCandidates[formulation.mixCandidates.length - 1];
 
   function updateWeight(targetKey: HighThroughputTargetKey, value: number) {
     onWeightsChange({ ...weights, [targetKey]: value });
   }
 
   return (
-    <section className={cn("ht-formulation-panel", showFormulation && "active")}>
+    <section className="ht-final-formulation-panel ht-formulation-panel active">
       <div className="ht-panel-header">
         <div>
-          <span className="ht-kicker">Formulation Mixture Optimizer</span>
-          <h2>配方混合优化演示</h2>
+          <span className="ht-kicker">S6 Final Formulation Explanation</span>
+          <h2>最终推荐配方解释</h2>
         </div>
-        <span className="ht-simulation-badge compact">ratio step = 0.1 / mock path</span>
+        <span className="ht-simulation-badge compact">from S5 selected {selectedMix.id}</span>
       </div>
 
       <div className="ht-formulation-grid">
         <div className="ht-component-pool">
-          <SectionTitle icon={<Target aria-hidden="true" size={17} />} title="单目标候选池" />
+          <SectionTitle icon={<Target aria-hidden="true" size={17} />} title="S4 单目标候选池" />
           <div className="ht-component-list">
             {formulation.components.map((component) => {
               const target = getTarget(component.sourceTargetKey);
               const convergedCandidateId = getPropertySpace(component.sourceTargetKey).currentBestId;
               return (
-                <article key={component.id} className={cn("ht-component-row", stageIndex >= 4 && "active")} style={{ "--target-color": component.color } as CSSProperties}>
+                <article key={component.id} className="ht-component-row active" style={{ "--target-color": component.color } as CSSProperties}>
                   <span>{component.id}</span>
                   <div>
                     <strong>{component.label}</strong>
@@ -2371,26 +2365,19 @@ function FormulationPanel({
           </div>
         </div>
 
-        <div className="ht-simplex-panel">
-          <SectionTitle icon={<Layers3 aria-hidden="true" size={17} />} title="比例空间搜索路径" />
-          <svg viewBox="0 0 100 86" role="img" aria-label="mock formulation search path">
-            <polygon points="50,6 8,80 92,80" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1.2" />
-            <text x="50" y="4" textAnchor="middle">p1</text>
-            <text x="6" y="85" textAnchor="middle">p2</text>
-            <text x="94" y="85" textAnchor="middle">p4</text>
-            <path d={buildSvgPath(pathPoints)} fill="none" stroke="#f97316" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" />
-            {pathPoints.map((point, index) => (
-              <circle key={point.id} cx={point.x} cy={point.y} r={index === pathPoints.length - 1 ? 3.3 : 2.1} fill={index === pathPoints.length - 1 ? "#f97316" : "#ffffff"} stroke="#f97316" strokeWidth="1.4">
-                <title>{point.id} score {point.score}</title>
-              </circle>
-            ))}
-          </svg>
+        <div className="ht-selected-mix-panel">
+          <SectionTitle icon={<Layers3 aria-hidden="true" size={17} />} title="S5 锁定比例" />
+          <article className="ht-selected-mix-card">
+            <span>Selected for S6</span>
+            <strong>{selectedMix.id}</strong>
+            <RatioStackedBar mix={selectedMix} components={formulation.components} showLabels />
+          </article>
           <div className="ht-ratio-bars">
             {formulation.components.map((component) => (
               <div key={component.id}>
                 <span>{component.id}</span>
-                <b style={{ width: `${(formulation.finalRatio[component.id] ?? 0) * 100}%`, background: component.color }} />
-                <strong>{Math.round((formulation.finalRatio[component.id] ?? 0) * 100)}%</strong>
+                <b style={{ width: `${(selectedMix.ratios[component.id] ?? 0) * 100}%`, background: component.color }} />
+                <strong>{ratioPercent(selectedMix.ratios[component.id] ?? 0)}</strong>
               </div>
             ))}
           </div>
@@ -2400,11 +2387,10 @@ function FormulationPanel({
           <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="目标达成与解释" />
           <div className="ht-score-box">
             <span>综合达成率</span>
-            <strong>{showFormulation ? `${computedScore}%` : "--"}</strong>
-            <em>权重调整只影响演示评分，不触发真实计算。</em>
+            <strong>{`${computedScore}%`}</strong>
           </div>
-          <RadarChart />
-          <p>{showFormulation ? formulation.rationale : "配方优化会在 S5 阶段展开，当前先展示单目标候选如何进入组分池。"}</p>
+          <RadarChart achievement={selectedMix.achievement} />
+          <p>{formulation.rationale}</p>
         </div>
 
         <div className="ht-weight-panel">
@@ -2439,6 +2425,37 @@ function FormulationPanel({
   );
 }
 
+function ratioPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function RatioStackedBar({
+  mix,
+  components,
+  showLabels = false,
+}: {
+  mix: (typeof highThroughputDemoScenario.formulation.mixCandidates)[number];
+  components: typeof highThroughputDemoScenario.formulation.components;
+  showLabels?: boolean;
+}) {
+  return (
+    <div className="ht-stacked-ratio-bar" aria-label={`${mix.id} component ratios`}>
+      {components.map((component) => {
+        const ratio = mix.ratios[component.id] ?? 0;
+        return (
+          <span
+            key={component.id}
+            style={{ "--component-color": component.color, width: ratioPercent(ratio) } as CSSProperties}
+            title={`${component.id} ${ratioPercent(ratio)}`}
+          >
+            {showLabels && ratio > 0 ? <b>{component.id} {ratioPercent(ratio)}</b> : null}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function SectionTitle({ icon, title }: { icon: ReactNode; title: string }) {
   return (
     <div className="ht-section-title">
@@ -2448,13 +2465,17 @@ function SectionTitle({ icon, title }: { icon: ReactNode; title: string }) {
   );
 }
 
-function RadarChart() {
+function RadarChart({
+  achievement = highThroughputDemoScenario.formulation.achievement,
+}: {
+  achievement?: Record<HighThroughputTargetKey, number>;
+}) {
   const scenario = highThroughputDemoScenario;
   const center = { x: 50, y: 50 };
   const radius = 34;
   const axes = scenario.targets.map((target, index) => {
     const angle = -Math.PI / 2 + (index / scenario.targets.length) * Math.PI * 2;
-    const value = scenario.formulation.achievement[target.key] / 100;
+    const value = achievement[target.key] / 100;
     return {
       target,
       outer: {

@@ -108,8 +108,6 @@ export type HighThroughputStage = {
   id: string;
   label: string;
   title: string;
-  body: string;
-  callout: string;
   activeTargetKey: HighThroughputTargetKey;
 };
 
@@ -122,13 +120,40 @@ export type HighThroughputFormulation = {
     description: string;
     color: string;
   }>;
-  ratioPath: Array<{
+  ratioGrid: {
+    step: number;
+    candidateCount: number;
+    description: string;
+  };
+  mixCandidates: Array<{
     id: string;
-    x: number;
-    y: number;
     score: number;
     ratios: Record<string, number>;
+    achievement: Record<HighThroughputTargetKey, number>;
+    status: "sampled" | "evaluated" | "selected";
+    note: string;
   }>;
+  searchSteps: Array<{
+    id: "seed" | "accept1" | "accept2" | "reject" | "selected";
+    label: string;
+    title: string;
+    description: string;
+    mixCandidateIds: string[];
+    acceptedPathIds: string[];
+    previousMixId: string;
+    proposedMixId: string;
+    currentMixId: string;
+    currentBestId: string;
+    evaluatedCount: number;
+    temperature: number;
+    deltaScore: number;
+    acceptanceProbability: number;
+    accepted: boolean;
+    coolingLabel: string;
+    decisionLabel: string;
+    actionLabel: string;
+  }>;
+  selectedMixId: string;
   finalRatio: Record<string, number>;
   achievement: Record<HighThroughputTargetKey, number>;
   finalScore: number;
@@ -771,56 +796,42 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
       id: "S0",
       label: "任务设置",
       title: "配置材料体系与四个单性质优化任务",
-      body: "系统从材料体系和目标性质开始：选择聚酰亚胺薄膜、二胺 x 二酐单体库，并把 Tg、CTE、断裂伸长率和杨氏模量拆分为四个单性质优化空间。",
-      callout: "S0 只说明优化任务和实验设计边界，不展示热点图，也不进入配方折中。",
       activeTargetKey: "tg",
     },
     {
       id: "S1",
       label: "正交先验",
       title: "生成四个单性质空间并选择正交实验样本",
-      body: "120 个二胺与 80 个二酐形成 9,600 个理论候选。系统为 Tg、CTE、伸长率和模量分别生成单性质空间，并在每个空间标出同一批正交实验样本。",
-      callout: "S1 只有候选点云和 DOE 样本位置，热点图尚未出现，因为还没有先验测量结果输入模型。",
       activeTargetKey: "tg",
     },
     {
       id: "S2",
       label: "先验热点",
       title: "正交实验结果回流，生成第一版单性质热点图",
-      body: "正交实验样本的模拟测量值进入四个属性空间，形成每个单性质模型的第一版热点图，并据此标出 Round 1 待测推荐点。此时热点图只代表基于 DOE 先验的初始认知。",
-      callout: "S2 的推荐点尚未计入已测样本；进入 S3 Round 1 后，推荐点完成实验回流，才会变成已测点并可能更新当前最优。",
       activeTargetKey: "tg",
     },
     {
       id: "S3",
       label: "单性质迭代",
       title: "四个 Agent 在各自属性空间中独立迭代",
-      body: "四个 Agent 不做多目标折中，而是分别在 Tg、CTE、伸长率和模量空间内推进单性质优化。推荐样本回流后，对应空间的热点图、当前最优和目标差距同步更新。",
-      callout: "S3 的重点是单性质闭环：正交先验 -> 推荐 -> 实验回流 -> 热点图更新 -> 继续推荐。",
       activeTargetKey: "tg",
     },
     {
       id: "S4",
       label: "候选输出",
       title: "输出四个单性质收敛候选 p1-p4",
-      body: "每个 Agent 只输出自己属性空间的 S3 收敛候选和 Top-k 备选。页面继续按单性质切换查看，不在 S4 合并展示配方比例。",
-      callout: "S4 是从单性质优化到配方搜索的交接层：p1-p4 来自 S3 末端，S5 才开始做多目标比例折中。",
       activeTargetKey: "tg",
     },
     {
       id: "S5",
       label: "配方搜索",
-      title: "在比例空间中演示配方混合优化",
-      body: "系统把 p1...pn 作为组分，按 0.1 的比例步长构建配方空间。页面播放预设搜索路径，不运行真实模拟退火。",
-      callout: "搜索轨迹用于说明折中过程，所有数值均为 mock data。",
+      title: "四组分模拟退火比例搜索",
       activeTargetKey: "tg",
     },
     {
       id: "S6",
       label: "最终解释",
       title: "输出可解释的多目标推荐配方",
-      body: "最终结果展示推荐比例、综合达成率、雷达图和解释文本，说明为什么该配方在多个性能之间取得平衡。",
-      callout: "演示目标是让观众理解闭环逻辑，而不是证明真实材料性能。",
       activeTargetKey: "tg",
     },
   ],
@@ -859,14 +870,172 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
         color: "#f97316",
       },
     ],
-    ratioPath: [
-      { id: "mix-0", x: 18, y: 78, score: 66, ratios: { p1: 0.4, p2: 0.2, p3: 0.3, p4: 0.1 } },
-      { id: "mix-1", x: 30, y: 65, score: 72, ratios: { p1: 0.4, p2: 0.3, p3: 0.2, p4: 0.1 } },
-      { id: "mix-2", x: 43, y: 56, score: 78, ratios: { p1: 0.3, p2: 0.3, p3: 0.2, p4: 0.2 } },
-      { id: "mix-3", x: 55, y: 47, score: 83, ratios: { p1: 0.3, p2: 0.2, p3: 0.2, p4: 0.3 } },
-      { id: "mix-4", x: 64, y: 36, score: 88, ratios: { p1: 0.4, p2: 0.2, p3: 0.1, p4: 0.3 } },
-      { id: "mix-5", x: 72, y: 28, score: 91, ratios: { p1: 0.4, p2: 0.2, p3: 0.2, p4: 0.2 } },
+    ratioGrid: {
+      step: 0.1,
+      candidateCount: 286,
+      description: "固定 p1-p4 后，按 0.1 步长枚举四组分比例；本页播放预设模拟退火搜索路径。",
+    },
+    mixCandidates: [
+      {
+        id: "mix-0",
+        score: 66,
+        ratios: { p1: 0.4, p2: 0.2, p3: 0.3, p4: 0.1 },
+        achievement: { tg: 82, cte: 70, elongation: 78, modulus: 62 },
+        status: "sampled",
+        note: "初始比例偏向韧性补偿，模量达成偏低。",
+      },
+      {
+        id: "mix-1",
+        score: 72,
+        ratios: { p1: 0.4, p2: 0.3, p3: 0.2, p4: 0.1 },
+        achievement: { tg: 84, cte: 82, elongation: 70, modulus: 66 },
+        status: "sampled",
+        note: "提高 p2 后尺寸稳定性改善，但刚性仍不足。",
+      },
+      {
+        id: "mix-2",
+        score: 78,
+        ratios: { p1: 0.3, p2: 0.3, p3: 0.2, p4: 0.2 },
+        achievement: { tg: 79, cte: 86, elongation: 74, modulus: 78 },
+        status: "evaluated",
+        note: "四目标更均衡，但 Tg 余量被压缩。",
+      },
+      {
+        id: "mix-3",
+        score: 83,
+        ratios: { p1: 0.3, p2: 0.2, p3: 0.2, p4: 0.3 },
+        achievement: { tg: 82, cte: 78, elongation: 76, modulus: 90 },
+        status: "evaluated",
+        note: "刚性提升明显，CTE 折中压力上升。",
+      },
+      {
+        id: "mix-4",
+        score: 88,
+        ratios: { p1: 0.4, p2: 0.2, p3: 0.1, p4: 0.3 },
+        achievement: { tg: 94, cte: 80, elongation: 72, modulus: 92 },
+        status: "evaluated",
+        note: "高 Tg 与高模量占优，但伸长率补偿不足。",
+      },
+      {
+        id: "mix-5",
+        score: 90,
+        ratios: { p1: 0.4, p2: 0.2, p3: 0.2, p4: 0.2 },
+        achievement: { tg: 94, cte: 88, elongation: 86, modulus: 91 },
+        status: "selected",
+        note: "保留耐热和刚性，同时用 p2/p3 补偿尺寸稳定与韧性。",
+      },
+      {
+        id: "mix-6",
+        score: 84,
+        ratios: { p1: 0.5, p2: 0.1, p3: 0.1, p4: 0.3 },
+        achievement: { tg: 96, cte: 70, elongation: 68, modulus: 94 },
+        status: "evaluated",
+        note: "耐热和刚性继续提高，但尺寸稳定与韧性损失过大，低温阶段被拒绝。",
+      },
     ],
+    searchSteps: [
+      {
+        id: "seed",
+        label: "初始化",
+        title: "初始化比例空间与起点",
+        description: "固定 S4 输出的 p1-p4 后，按 0.1 步长生成 286 个比例候选，并选择 mix-0 作为退火起点。",
+        mixCandidateIds: ["mix-0"],
+        acceptedPathIds: ["mix-0"],
+        previousMixId: "mix-0",
+        proposedMixId: "mix-0",
+        currentMixId: "mix-0",
+        currentBestId: "mix-0",
+        evaluatedCount: 1,
+        temperature: 1.0,
+        deltaScore: 0,
+        acceptanceProbability: 1,
+        accepted: true,
+        coolingLabel: "T0",
+        decisionLabel: "设为初始解",
+        actionLabel: "Seed accepted",
+      },
+      {
+        id: "accept1",
+        label: "高温接受",
+        title: "扰动 p2/p3 后接受新解",
+        description: "从 mix-0 的邻域中提出 mix-1，综合得分提升，直接接受为当前解并更新当前最优。",
+        mixCandidateIds: ["mix-0", "mix-1"],
+        acceptedPathIds: ["mix-0", "mix-1"],
+        previousMixId: "mix-0",
+        proposedMixId: "mix-1",
+        currentMixId: "mix-1",
+        currentBestId: "mix-1",
+        evaluatedCount: 2,
+        temperature: 0.78,
+        deltaScore: 6,
+        acceptanceProbability: 1,
+        accepted: true,
+        coolingLabel: "T1 = 0.78",
+        decisionLabel: "接受并更新最优",
+        actionLabel: "Accepted neighbor",
+      },
+      {
+        id: "accept2",
+        label: "继续爬升",
+        title: "提高 p4 后进入高刚性区域",
+        description: "从 mix-1 继续扰动到 mix-4，Tg 与模量贡献增加，综合得分继续提升，因此接受并刷新当前最优。",
+        mixCandidateIds: ["mix-0", "mix-1", "mix-4"],
+        acceptedPathIds: ["mix-0", "mix-1", "mix-4"],
+        previousMixId: "mix-1",
+        proposedMixId: "mix-4",
+        currentMixId: "mix-4",
+        currentBestId: "mix-4",
+        evaluatedCount: 3,
+        temperature: 0.46,
+        deltaScore: 16,
+        acceptanceProbability: 1,
+        accepted: true,
+        coolingLabel: "T2 = 0.46",
+        decisionLabel: "接受并更新最优",
+        actionLabel: "Best updated",
+      },
+      {
+        id: "reject",
+        label: "低温拒绝",
+        title: "拒绝过度偏向 p1/p4 的邻域",
+        description: "低温阶段提出 mix-6，虽然耐热和刚性更高，但 CTE 与伸长率损失导致综合得分下降，按接受概率判定为拒绝，当前解保持 mix-4。",
+        mixCandidateIds: ["mix-0", "mix-1", "mix-4", "mix-6"],
+        acceptedPathIds: ["mix-0", "mix-1", "mix-4"],
+        previousMixId: "mix-4",
+        proposedMixId: "mix-6",
+        currentMixId: "mix-4",
+        currentBestId: "mix-4",
+        evaluatedCount: 4,
+        temperature: 0.22,
+        deltaScore: -4,
+        acceptanceProbability: 0.16,
+        accepted: false,
+        coolingLabel: "T3 = 0.22",
+        decisionLabel: "拒绝，保留当前解",
+        actionLabel: "Rejected neighbor",
+      },
+      {
+        id: "selected",
+        label: "锁定候选",
+        title: "锁定进入 S6 的配方比例",
+        description: "冷却末端从 mix-4 扰动到 mix-5，补回 p3 后四项达成更均衡，接受并锁定为 S6 的固定输入。",
+        mixCandidateIds: ["mix-0", "mix-1", "mix-4", "mix-6", "mix-5"],
+        acceptedPathIds: ["mix-0", "mix-1", "mix-4", "mix-5"],
+        previousMixId: "mix-4",
+        proposedMixId: "mix-5",
+        currentMixId: "mix-5",
+        currentBestId: "mix-5",
+        evaluatedCount: 5,
+        temperature: 0.08,
+        deltaScore: 2,
+        acceptanceProbability: 1,
+        accepted: true,
+        coolingLabel: "T4 = 0.08",
+        decisionLabel: "接受并锁定",
+        actionLabel: "Selected for S6",
+      },
+    ],
+    selectedMixId: "mix-5",
     finalRatio: { p1: 0.4, p2: 0.2, p3: 0.2, p4: 0.2 },
     achievement: {
       tg: 94,
