@@ -20,6 +20,7 @@ import { type ChangeEvent, type CSSProperties, type KeyboardEvent, type MouseEve
 import {
   highThroughputDemoScenario,
   type HighThroughputCandidate,
+  type HighThroughputDoeCsvFile,
   type HighThroughputPropertySpace,
   type HighThroughputSurfaceSnapshot,
   type HighThroughputTarget,
@@ -46,14 +47,22 @@ type ConfirmedSetup = {
 };
 
 type PriorDataUploadState = {
+  targetKey: HighThroughputTargetKey;
   fileName: string;
   fileType: string;
   sampleCount: number;
   fieldCount: number;
+  expectedFileName: string;
+  propertyColumn: string;
   uploadedAt: string;
+  uploadToken: string;
+  isLoading: boolean;
 };
 
+type PriorDataUploadsState = Partial<Record<HighThroughputTargetKey, PriorDataUploadState>>;
+
 const PLAY_INTERVAL_MS = 2600;
+const DOE_PRIOR_LOAD_MS = 1000;
 const MAX_RENDERED_STAGE_DOTS = 2400;
 const MAX_RENDERED_PROPERTY_DOTS = 2200;
 const MATERIAL_MAP_WIDTH = 100;
@@ -445,6 +454,16 @@ function propertySurfaceForStage(
 
 function propertyRoundIds(targetKey: HighThroughputTargetKey, stageIndex: number, iterationRoundIndex = 2) {
   const rounds = highThroughputDemoScenario.roundsByTarget[targetKey];
+  if (stageIndex === 2) {
+    const firstRound = rounds[0];
+    return {
+      visibleRounds: [],
+      testedIds: [],
+      currentTestedIds: [],
+      recommendedIds: firstRound?.testedIds ?? [],
+    };
+  }
+
   const visibleRounds = stageIndex >= 3
     ? rounds.slice(0, clamp(iterationRoundIndex, 0, rounds.length - 1) + 1)
     : [];
@@ -485,7 +504,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const [confirmedSetup, setConfirmedSetup] = useState<ConfirmedSetup>(() => buildDefaultConfirmedSetup());
   const [activeSpaceTargetKey, setActiveSpaceTargetKey] = useState<HighThroughputTargetKey>("tg");
   const [activeIterationRoundIndex, setActiveIterationRoundIndex] = useState(0);
-  const [priorDataUpload, setPriorDataUpload] = useState<PriorDataUploadState | null>(null);
+  const [priorDataUploads, setPriorDataUploads] = useState<PriorDataUploadsState>({});
+  const priorUploadTimersRef = useRef<Partial<Record<HighThroughputTargetKey, number>>>({});
   const mapStageRef = useRef<HTMLDivElement | null>(null);
   const maxStageIndex = scenario.stages.length - 1;
   const computedScore = weightedAchievement(weights);
@@ -513,6 +533,26 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     return () => window.clearInterval(timer);
   }, [isPlaying, maxStageIndex]);
 
+  useEffect(() => () => {
+    Object.values(priorUploadTimersRef.current).forEach((timerId) => {
+      if (timerId !== undefined) {
+        window.clearTimeout(timerId);
+      }
+    });
+  }, []);
+
+  function clearPriorUploadTimer(targetKey: HighThroughputTargetKey) {
+    const timerId = priorUploadTimersRef.current[targetKey];
+    if (timerId !== undefined) {
+      window.clearTimeout(timerId);
+      delete priorUploadTimersRef.current[targetKey];
+    }
+  }
+
+  function clearPriorUploadTimers() {
+    scenario.targets.forEach((target) => clearPriorUploadTimer(target.key));
+  }
+
   function goToStage(index: number) {
     const nextIndex = clamp(index, 0, maxStageIndex);
     setCurrentStageIndex(nextIndex);
@@ -534,12 +574,13 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function resetDemo() {
+    clearPriorUploadTimers();
     setCurrentStageIndex(0);
     setWeights(buildInitialWeights());
     setConfirmedSetup(buildDefaultConfirmedSetup());
     setActiveSpaceTargetKey("tg");
     setActiveIterationRoundIndex(0);
-    setPriorDataUpload(null);
+    setPriorDataUploads({});
     setIsPlaying(false);
   }
 
@@ -548,23 +589,52 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     goToStage(1);
   }
 
-  function handlePriorDataUpload(file: File | null) {
+  function handlePriorDataUpload(targetKey: HighThroughputTargetKey, file: File | null) {
     if (!file) {
       return;
     }
 
-    setPriorDataUpload({
-      fileName: file.name,
-      fileType: file.name.split(".").pop()?.toUpperCase() || "DATA",
-      sampleCount: scenario.orthogonalPrior.candidateIds.length,
-      fieldCount: scenario.targets.length + 1,
-      uploadedAt: new Intl.DateTimeFormat("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      }).format(new Date()),
-    });
+    clearPriorUploadTimer(targetKey);
+    const csvFile = scenario.doeCsvFiles[targetKey];
+    const uploadToken = `${targetKey}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setPriorDataUploads((uploads) => ({
+      ...uploads,
+      [targetKey]: {
+        targetKey,
+        fileName: file.name,
+        fileType: file.name.split(".").pop()?.toUpperCase() || "CSV",
+        sampleCount: csvFile.rows.length,
+        fieldCount: 8,
+        expectedFileName: csvFile.fileName,
+        propertyColumn: csvFile.propertyColumn,
+        uploadedAt: new Intl.DateTimeFormat("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        }).format(new Date()),
+        uploadToken,
+        isLoading: true,
+      },
+    }));
+
+    priorUploadTimersRef.current[targetKey] = window.setTimeout(() => {
+      setPriorDataUploads((uploads) => {
+        const upload = uploads[targetKey];
+        if (!upload || upload.uploadToken !== uploadToken) {
+          return uploads;
+        }
+
+        return {
+          ...uploads,
+          [targetKey]: {
+            ...upload,
+            isLoading: false,
+          },
+        };
+      });
+      delete priorUploadTimersRef.current[targetKey];
+    }, DOE_PRIOR_LOAD_MS);
   }
 
   return (
@@ -591,7 +661,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
               activeTargetKey={activeSpaceTargetKey}
               onSelectTarget={setActiveSpaceTargetKey}
               iterationRoundIndex={activeIterationRoundIndex}
-              priorDataUpload={priorDataUpload}
+              priorDataUploads={priorDataUploads}
               onPriorDataUpload={handlePriorDataUpload}
             />
 
@@ -604,6 +674,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                   onActiveTargetChange={setActiveSpaceTargetKey}
                   iterationRoundIndex={activeIterationRoundIndex}
                   onIterationRoundChange={setActiveIterationRoundIndex}
+                  priorDataUploads={priorDataUploads}
                 />
               ) : (
                 <MaterialMap stageIndex={currentStageIndex} confirmedSetup={confirmedSetup} />
@@ -617,7 +688,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
               activeTargetKey={activeSpaceTargetKey}
               onSelectTarget={setActiveSpaceTargetKey}
               iterationRoundIndex={activeIterationRoundIndex}
-              priorDataUpload={priorDataUpload}
+              priorDataUploads={priorDataUploads}
               onPriorDataUpload={handlePriorDataUpload}
             />
 
@@ -629,7 +700,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
           {currentStageIndex <= 3 ? (
             <ExperimentPriorPanel
               stageIndex={currentStageIndex}
-              priorDataUpload={priorDataUpload}
+              activeTargetKey={activeSpaceTargetKey}
+              priorDataUploads={priorDataUploads}
               iterationRoundIndex={activeIterationRoundIndex}
             />
           ) : (
@@ -1157,6 +1229,7 @@ function PropertySpaceBoard({
   onActiveTargetChange,
   iterationRoundIndex,
   onIterationRoundChange,
+  priorDataUploads,
 }: {
   stageIndex: number;
   confirmedSetup: ConfirmedSetup;
@@ -1164,6 +1237,7 @@ function PropertySpaceBoard({
   onActiveTargetChange: (targetKey: HighThroughputTargetKey) => void;
   iterationRoundIndex: number;
   onIterationRoundChange: (roundIndex: number) => void;
+  priorDataUploads: PriorDataUploadsState;
 }) {
   const scenario = highThroughputDemoScenario;
   const activeTarget = getConfiguredTarget(activeTargetKey, confirmedSetup);
@@ -1228,11 +1302,12 @@ function PropertySpaceBoard({
       <div className="ht-property-space-grid single">
         <PropertySpaceCard
           key={activeTarget.key}
-        stageIndex={stageIndex}
-        target={activeTarget}
-        variant="large"
-        iterationRoundIndex={iterationRoundIndex}
-      />
+          stageIndex={stageIndex}
+          target={activeTarget}
+          variant="large"
+          iterationRoundIndex={iterationRoundIndex}
+          priorDataUpload={priorDataUploads[activeTarget.key] ?? null}
+        />
       </div>
     </section>
   );
@@ -1243,16 +1318,21 @@ function PropertySpaceCard({
   target,
   variant = "compact",
   iterationRoundIndex = 2,
+  priorDataUpload = null,
 }: {
   stageIndex: number;
   target: HighThroughputTarget;
   variant?: "compact" | "large";
   iterationRoundIndex?: number;
+  priorDataUpload?: PriorDataUploadState | null;
 }) {
   const space = getPropertySpace(target.key);
   const surface = propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
   const roundIds = propertyRoundIds(target.key, stageIndex, iterationRoundIndex);
-  const priorIds = stageIndex >= 1 ? space.priorCandidateIds : [];
+  const isPriorLoading = Boolean(priorDataUpload?.isLoading);
+  const isPriorReady = Boolean(priorDataUpload && !priorDataUpload.isLoading);
+  const showPriorDoe = stageIndex >= 2 || (stageIndex === 1 && isPriorReady);
+  const priorIds = showPriorDoe ? space.priorCandidateIds : [];
   const measuredPriorIds = stageIndex >= 2 ? space.priorCandidateIds : [];
   const currentBestId = propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex);
   const currentBest = currentBestId ? getCandidate(currentBestId) : undefined;
@@ -1282,8 +1362,12 @@ function PropertySpaceCard({
     stageIndex === 0
       ? "待生成"
       : stageIndex === 1
-        ? "DOE selected"
-        : stageIndex === 2
+        ? isPriorLoading
+          ? "Loading DOE"
+          : isPriorReady
+          ? "DOE uploaded"
+          : "Waiting CSV"
+      : stageIndex === 2
           ? "Prior DOE Surface"
           : surface?.label ?? "Round surface";
 
@@ -1403,7 +1487,7 @@ function PropertySpaceCard({
       </svg>
 
       <div className="ht-property-space-meta">
-        <span>DOE <b>{space.priorCandidateIds.length}</b></span>
+        <span>DOE <b>{priorSet.size}</b></span>
         <span>已测 <b>{measuredSet.size}</b></span>
         <span>推荐 <b>{recommendedSet.size}</b></span>
         <span>热点 <b>{surfaceLabel}</b></span>
@@ -1419,15 +1503,23 @@ function PropertySpaceCard({
 
 function ExperimentPriorPanel({
   stageIndex,
-  priorDataUpload,
+  activeTargetKey,
+  priorDataUploads,
   iterationRoundIndex,
 }: {
   stageIndex: number;
-  priorDataUpload: PriorDataUploadState | null;
+  activeTargetKey: HighThroughputTargetKey;
+  priorDataUploads: PriorDataUploadsState;
   iterationRoundIndex: number;
 }) {
   const scenario = highThroughputDemoScenario;
   const prior = scenario.orthogonalPrior;
+  const activeTarget = getTarget(activeTargetKey);
+  const activeCsvFile = scenario.doeCsvFiles[activeTargetKey];
+  const activeUpload = priorDataUploads[activeTargetKey] ?? null;
+  const activeUploadLoading = Boolean(activeUpload?.isLoading);
+  const activeUploadReady = Boolean(activeUpload && !activeUpload.isLoading);
+  const uploadedCount = Object.values(priorDataUploads).filter((upload) => upload && !upload.isLoading).length;
   const iterationActive = stageIndex >= 3;
 
   return (
@@ -1443,22 +1535,24 @@ function ExperimentPriorPanel({
       <div className="ht-prior-workflow-grid">
         <article className={cn("ht-prior-step-card", stageIndex >= 1 && "active")}>
           <span>S1</span>
-          <strong>上传先验实验数据</strong>
-          <p>DOE 是 Design of Experiments，这里指正交实验先验数据。S1 从 Agent 卡片右上角的“上传先验数据”按钮导入测量值，作为 S2 初始热点图的已测输入。</p>
-          {priorDataUpload ? (
+          <strong>上传对应性质 CSV</strong>
+          <p>DOE 是 Design of Experiments。S1 中每个 Agent 上传自己的性质 CSV，上传后该属性空间才显示 12 个 DOE 方点。</p>
+          {activeUpload ? (
             <div className="ht-prior-upload-result">
-              <strong>{priorDataUpload.fileName}</strong>
-              <span>{priorDataUpload.fileType} / {priorDataUpload.sampleCount} samples / {priorDataUpload.fieldCount} fields / {priorDataUpload.uploadedAt}</span>
+              <strong>{activeUpload.fileName}</strong>
+              <span>
+                {activeUploadLoading ? "loading DOE samples" : "ready"} / {activeUpload.fileType} / {activeUpload.sampleCount} samples / {activeUpload.fieldCount} fields / {activeUpload.propertyColumn} / {activeUpload.uploadedAt}
+              </span>
             </div>
           ) : (
-            <b>{prior.candidateIds.length} 个正交样本已选定，等待从 Agent 卡片上传测量值</b>
+            <b>等待上传 {activeCsvFile.fileName}</b>
           )}
         </article>
         <article className={cn("ht-prior-step-card", stageIndex >= 2 && "active")}>
           <span>S2</span>
           <strong>Prior DOE Surface</strong>
-          <p>上传的四项先验测量值进入四个属性空间，形成每个单性质模型的初始热点图。</p>
-          <b>{stageIndex >= 2 ? "initial surfaces ready" : priorDataUpload ? "prior data uploaded" : "waiting for prior data upload"}</b>
+          <p>S2 继续使用同一批 12 个 DOE 样本作为模拟先验，形成每个单性质模型的初始热点图。</p>
+          <b>{stageIndex >= 2 ? "initial surfaces ready" : `${uploadedCount}/4 CSV ready`}</b>
         </article>
         <article className={cn("ht-prior-step-card", iterationActive && "active")}>
           <span>S3</span>
@@ -1467,6 +1561,17 @@ function ExperimentPriorPanel({
           <b>{iterationActive ? "3 rounds scripted" : "waiting for prior surface"}</b>
         </article>
       </div>
+
+      {stageIndex === 1 ? (
+        <DoeCsvPreviewPanel
+          target={activeTarget}
+          csvFile={activeCsvFile}
+          upload={activeUpload}
+          isLoading={activeUploadLoading}
+          isReady={activeUploadReady}
+          selectedCount={prior.candidateIds.length}
+        />
+      ) : null}
 
       <div className="ht-round-summary-grid">
         {scenario.targets.map((target) => {
@@ -1480,6 +1585,86 @@ function ExperimentPriorPanel({
             </article>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+function DoeCsvPreviewPanel({
+  target,
+  csvFile,
+  upload,
+  isLoading,
+  isReady,
+  selectedCount,
+}: {
+  target: HighThroughputTarget;
+  csvFile: HighThroughputDoeCsvFile;
+  upload: PriorDataUploadState | null;
+  isLoading: boolean;
+  isReady: boolean;
+  selectedCount: number;
+}) {
+  return (
+    <section className={cn("ht-doe-csv-preview-panel", isLoading && "loading", isReady && "uploaded")} style={{ "--target-color": target.color } as CSSProperties}>
+      <div className="ht-doe-csv-preview-head">
+        <div>
+          <span className="ht-kicker">{target.shortLabel} DOE CSV Preview</span>
+          <h3>{csvFile.fileName}</h3>
+          <p>
+            {isLoading
+              ? "CSV 已选择，正在加载 DOE 样本点，约 1 秒后显示到当前属性空间。"
+              : isReady
+              ? "CSV 已上传，candidate_id 与当前属性空间中的 DOE 方点一一对应。"
+              : `待上传 ${csvFile.fileName}，上传前 S1 不显示 DOE 方点。`}
+          </p>
+        </div>
+        <a href={csvFile.href} download={csvFile.fileName}>
+          下载示例 CSV
+        </a>
+      </div>
+
+      <div className="ht-doe-csv-status-row">
+        <span>{isLoading ? "loading samples" : isReady ? "uploaded" : "waiting upload"}</span>
+        <b>{upload ? upload.fileName : csvFile.displayName}</b>
+        <em>{selectedCount} DOE rows / {csvFile.propertyColumn}</em>
+      </div>
+
+      <div className="ht-doe-csv-table-wrap">
+        <table className="ht-doe-csv-table">
+          <thead>
+            <tr>
+              <th>doe_run</th>
+              <th>candidate_id</th>
+              <th>monomer_a</th>
+              <th>monomer_b</th>
+              <th>polybert_x</th>
+              <th>polybert_y</th>
+              <th>{csvFile.propertyColumn}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isReady ? (
+              csvFile.rows.map((row) => (
+                <tr key={row.candidateId}>
+                  <td>{row.doeRun}</td>
+                  <td><strong>{row.candidateId}</strong></td>
+                  <td>{row.monomerA}</td>
+                  <td>{row.monomerB}</td>
+                  <td>{row.polybertX.toFixed(2)}</td>
+                  <td>{row.polybertY.toFixed(2)}</td>
+                  <td>{row.propertyValue}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td className="ht-doe-csv-placeholder" colSpan={7}>
+                  {isLoading ? "正在加载 DOE 样本点..." : `上传 ${csvFile.fileName} 后显示 DOE 表格数据`}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </section>
   );
@@ -1712,7 +1897,7 @@ function AgentOrbitPanel({
   activeTargetKey,
   onSelectTarget,
   iterationRoundIndex = 2,
-  priorDataUpload,
+  priorDataUploads,
   onPriorDataUpload,
 }: {
   stageIndex: number;
@@ -1721,8 +1906,8 @@ function AgentOrbitPanel({
   activeTargetKey?: HighThroughputTargetKey;
   onSelectTarget?: (targetKey: HighThroughputTargetKey) => void;
   iterationRoundIndex?: number;
-  priorDataUpload?: PriorDataUploadState | null;
-  onPriorDataUpload?: (file: File | null) => void;
+  priorDataUploads?: PriorDataUploadsState;
+  onPriorDataUpload?: (targetKey: HighThroughputTargetKey, file: File | null) => void;
 }) {
   const agents = highThroughputDemoScenario.agents;
   const visibleAgents = side === "left" ? agents.slice(0, 2) : agents.slice(2);
@@ -1739,7 +1924,7 @@ function AgentOrbitPanel({
           isActive={agent.targetKey === activeTargetKey}
           onSelectTarget={onSelectTarget}
           iterationRoundIndex={iterationRoundIndex}
-          priorDataUpload={priorDataUpload}
+          priorDataUpload={priorDataUploads?.[agent.targetKey] ?? null}
           onPriorDataUpload={onPriorDataUpload}
         />
       ))}
@@ -1766,10 +1951,13 @@ function AgentOptimizationCard({
   onSelectTarget?: (targetKey: HighThroughputTargetKey) => void;
   iterationRoundIndex?: number;
   priorDataUpload?: PriorDataUploadState | null;
-  onPriorDataUpload?: (file: File | null) => void;
+  onPriorDataUpload?: (targetKey: HighThroughputTargetKey, file: File | null) => void;
 }) {
   const target = getConfiguredTarget(agent.targetKey, confirmedSetup);
   const space = getPropertySpace(agent.targetKey);
+  const csvFile = highThroughputDemoScenario.doeCsvFiles[agent.targetKey];
+  const isPriorLoading = Boolean(priorDataUpload?.isLoading);
+  const isPriorReady = Boolean(priorDataUpload && !priorDataUpload.isLoading);
   const roundIds = propertyRoundIds(agent.targetKey, stageIndex, iterationRoundIndex);
   const rounds = highThroughputDemoScenario.roundsByTarget[agent.targetKey];
   const activeRound = stageIndex === 3
@@ -1796,7 +1984,7 @@ function AgentOptimizationCard({
     stageIndex === 0
       ? "等待任务设置"
       : stageIndex === 1
-        ? `DOE ${space.priorCandidateIds.length} / ${formatNumber(confirmedSetup.candidateTotal)}`
+        ? `DOE ${isPriorReady ? space.priorCandidateIds.length : 0} / ${formatNumber(confirmedSetup.candidateTotal)}`
         : stageIndex === 2
           ? `先验最优 ${priorBestId}`
           : stageIndex < 4
@@ -1806,9 +1994,13 @@ function AgentOptimizationCard({
     stageIndex === 0
       ? "等待确认"
       : stageIndex === 1
-        ? "标记正交样本"
-        : stageIndex === 2
-          ? "DOE 回流→初始热点"
+        ? isPriorLoading
+          ? "加载 DOE 点..."
+          : isPriorReady
+            ? "CSV 已上传"
+            : `等待 ${target.shortLabel} CSV`
+      : stageIndex === 2
+        ? "先验建模→推荐 Round 1"
           : stageIndex === 3
             ? "推荐→回流→更新热点"
             : actionLabel;
@@ -1816,7 +2008,7 @@ function AgentOptimizationCard({
     stageIndex === 0
       ? "待配置"
       : stageIndex === 1
-        ? "DOE prior"
+        ? isPriorLoading ? "Loading DOE" : "DOE prior"
         : stageIndex === 2
           ? "Prior surface"
           : stageIndex === 3
@@ -1826,9 +2018,13 @@ function AgentOptimizationCard({
     stageIndex === 0
       ? "等待任务设置确认。"
       : stageIndex === 1
-        ? "同一批正交实验样本投影到该属性空间，尚不生成热点图。"
-        : stageIndex === 2
-          ? `${target.shortLabel} 空间使用 DOE 测量值生成第一版热点图。`
+        ? isPriorLoading
+          ? `${csvFile.fileName} 已选择，正在加载 DOE 样本点，约 1 秒后显示到 ${target.shortLabel} 空间。`
+          : isPriorReady
+          ? `${csvFile.fileName} 已作为 ${target.shortLabel} 空间的 DOE 先验表，地图方点与 polybert_x/y 对应。`
+          : `上传 ${csvFile.fileName} 后，${target.shortLabel} 空间才显示 12 个 DOE 先验方点。`
+    : stageIndex === 2
+        ? `${target.shortLabel} 空间使用 DOE 测量值生成第一版热点图，并标出 Round 1 待测推荐点。`
         : stageIndex >= 3
           ? agent.recommendation
           : target.description;
@@ -1836,9 +2032,9 @@ function AgentOptimizationCard({
     stageIndex === 0
       ? ["输入未确认", "未启动优化"]
       : stageIndex === 1
-        ? [`DOE ${space.priorCandidateIds.length}`, "无热点图"]
-        : stageIndex === 2
-          ? [`已测 ${space.priorCandidateIds.length}`, surface?.label ?? "Prior DOE Surface"]
+        ? [`DOE ${isPriorReady ? space.priorCandidateIds.length : 0}`, isPriorLoading ? "loading samples" : csvFile.propertyColumn]
+    : stageIndex === 2
+        ? [`已测 ${space.priorCandidateIds.length}`, `推荐 ${roundIds.recommendedIds.length}`]
         : stageIndex === 3
           ? [`已测 ${space.priorCandidateIds.length + roundIds.testedIds.length}`, `推荐 ${roundIds.recommendedIds.length}`]
           : [directionLabel, `${space.currentBestId} from S3`];
@@ -1866,7 +2062,7 @@ function AgentOptimizationCard({
 
   function handlePriorUploadChange(event: ChangeEvent<HTMLInputElement>) {
     event.stopPropagation();
-    onPriorDataUpload?.(event.currentTarget.files?.[0] ?? null);
+    onPriorDataUpload?.(agent.targetKey, event.currentTarget.files?.[0] ?? null);
   }
 
   return (
@@ -1895,17 +2091,17 @@ function AgentOptimizationCard({
         </div>
         {stageIndex === 1 && onPriorDataUpload ? (
           <label
-            className={cn("ht-agent-upload-button", priorDataUpload && "complete")}
-            title={priorDataUpload ? priorDataUpload.fileName : "上传先验数据文件"}
+            className={cn("ht-agent-upload-button", isPriorLoading && "loading", isPriorReady && "complete")}
+            title={priorDataUpload ? priorDataUpload.fileName : `上传 ${csvFile.fileName}`}
             onClick={handleUploadClick}
           >
             <input
               type="file"
-              accept=".csv,.xlsx,.xls,.json"
+              accept=".csv"
               onChange={handlePriorUploadChange}
             />
-            {priorDataUpload ? <FileCheck2 aria-hidden="true" size={13} /> : <UploadCloud aria-hidden="true" size={13} />}
-            <span>{priorDataUpload ? "已上传先验" : agent.statusByStage[stageIndex]}</span>
+            {isPriorReady ? <FileCheck2 aria-hidden="true" size={13} /> : <UploadCloud aria-hidden="true" size={13} />}
+            <span>{isPriorLoading ? "加载 DOE 点..." : isPriorReady ? `已上传 ${target.shortLabel} CSV` : `上传 ${target.shortLabel} CSV`}</span>
           </label>
         ) : (
           <strong>{agent.statusByStage[stageIndex]}</strong>

@@ -83,6 +83,27 @@ export type HighThroughputOrthogonalPrior = {
   measurements: Record<string, Record<HighThroughputTargetKey, number>>;
 };
 
+export type HighThroughputDoeCsvRow = {
+  doeRun: string;
+  candidateId: string;
+  monomerA: string;
+  monomerB: string;
+  cluster: string;
+  polybertX: number;
+  polybertY: number;
+  propertyValue: number;
+};
+
+export type HighThroughputDoeCsvFile = {
+  targetKey: HighThroughputTargetKey;
+  fileName: string;
+  displayName: string;
+  href: string;
+  propertyColumn: string;
+  propertyLabel: string;
+  rows: HighThroughputDoeCsvRow[];
+};
+
 export type HighThroughputStage = {
   id: string;
   label: string;
@@ -129,6 +150,7 @@ export type HighThroughputDemoScenario = {
   candidates: HighThroughputCandidate[];
   orthogonalPrior: HighThroughputOrthogonalPrior;
   propertySpaces: Record<HighThroughputTargetKey, HighThroughputPropertySpace>;
+  doeCsvFiles: Record<HighThroughputTargetKey, HighThroughputDoeCsvFile>;
   roundsByTarget: Record<HighThroughputTargetKey, HighThroughputTargetRound[]>;
   agents: HighThroughputAgent[];
   batches: HighThroughputBatch[];
@@ -301,6 +323,33 @@ const TARGET_SPACE_CENTERS: Record<HighThroughputTargetKey, { x: number; y: numb
   cte: { x: 28, y: 19 },
   elongation: { x: 34, y: 34 },
   modulus: { x: 78, y: 35 },
+};
+
+const DOE_CSV_FILE_META: Record<HighThroughputTargetKey, {
+  fileName: string;
+  propertyColumn: string;
+  propertyLabel: string;
+}> = {
+  tg: {
+    fileName: "doe_prior_tg.csv",
+    propertyColumn: "tg_c",
+    propertyLabel: "Tg (C)",
+  },
+  cte: {
+    fileName: "doe_prior_cte.csv",
+    propertyColumn: "cte_ppm_k",
+    propertyLabel: "CTE (ppm/K)",
+  },
+  elongation: {
+    fileName: "doe_prior_elongation.csv",
+    propertyColumn: "elongation_percent",
+    propertyLabel: "Elongation (%)",
+  },
+  modulus: {
+    fileName: "doe_prior_modulus.csv",
+    propertyColumn: "modulus_gpa",
+    propertyLabel: "Modulus (GPa)",
+  },
 };
 
 function propertyPoint(
@@ -549,6 +598,56 @@ function buildPropertySpaces(
   ) as Record<HighThroughputTargetKey, HighThroughputPropertySpace>;
 }
 
+function buildDoeCsvFiles(
+  candidates: HighThroughputCandidate[],
+  orthogonalPrior: HighThroughputOrthogonalPrior,
+  propertySpaces: Record<HighThroughputTargetKey, HighThroughputPropertySpace>,
+): Record<HighThroughputTargetKey, HighThroughputDoeCsvFile> {
+  const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+
+  return Object.fromEntries(
+    targetDefinitions.map((target) => {
+      const meta = DOE_CSV_FILE_META[target.key];
+      const pointByCandidateId = new Map(
+        propertySpaces[target.key].candidatePoints.map((point) => [point.candidateId, point]),
+      );
+      const rows = orthogonalPrior.candidateIds
+        .map((candidateId, index) => {
+          const candidate = candidateById.get(candidateId);
+          const point = pointByCandidateId.get(candidateId);
+          if (!candidate || !point) {
+            return null;
+          }
+
+          return {
+            doeRun: `DOE-${String(index + 1).padStart(2, "0")}`,
+            candidateId,
+            monomerA: candidate.monomerA,
+            monomerB: candidate.monomerB,
+            cluster: candidate.cluster,
+            polybertX: Number(point.x.toFixed(2)),
+            polybertY: Number(point.y.toFixed(2)),
+            propertyValue: candidate.scores[target.key],
+          };
+        })
+        .filter((row): row is HighThroughputDoeCsvRow => Boolean(row));
+
+      return [
+        target.key,
+        {
+          targetKey: target.key,
+          fileName: meta.fileName,
+          displayName: `${target.shortLabel} DOE prior CSV`,
+          href: `/demo-data/${meta.fileName}`,
+          propertyColumn: meta.propertyColumn,
+          propertyLabel: meta.propertyLabel,
+          rows,
+        },
+      ];
+    }),
+  ) as Record<HighThroughputTargetKey, HighThroughputDoeCsvFile>;
+}
+
 function buildRoundsByTarget(): Record<HighThroughputTargetKey, HighThroughputTargetRound[]> {
   return {
     tg: [
@@ -578,6 +677,7 @@ const demoCandidates = buildCandidates();
 const demoOrthogonalPrior = buildOrthogonalPrior(demoCandidates);
 const demoRoundsByTarget = buildRoundsByTarget();
 const demoPropertySpaces = buildPropertySpaces(demoCandidates, demoOrthogonalPrior, demoRoundsByTarget);
+const demoDoeCsvFiles = buildDoeCsvFiles(demoCandidates, demoOrthogonalPrior, demoPropertySpaces);
 
 export const highThroughputDemoScenario: HighThroughputDemoScenario = {
   materialType: "Polyimide",
@@ -594,6 +694,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
   candidates: demoCandidates,
   orthogonalPrior: demoOrthogonalPrior,
   propertySpaces: demoPropertySpaces,
+  doeCsvFiles: demoDoeCsvFiles,
   roundsByTarget: demoRoundsByTarget,
   agents: [
     {
@@ -686,8 +787,8 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
       id: "S2",
       label: "先验热点",
       title: "正交实验结果回流，生成第一版单性质热点图",
-      body: "正交实验样本的模拟测量值进入四个属性空间，形成每个单性质模型的第一版热点图。此时热点图只代表基于 DOE 先验的初始认知。",
-      callout: "热点图来自已测先验样本，不是凭空生成；后续每轮回流都会更新这一层。",
+      body: "正交实验样本的模拟测量值进入四个属性空间，形成每个单性质模型的第一版热点图，并据此标出 Round 1 待测推荐点。此时热点图只代表基于 DOE 先验的初始认知。",
+      callout: "S2 的推荐点尚未计入已测样本；进入 S3 Round 1 后，推荐点完成实验回流，才会变成已测点并可能更新当前最优。",
       activeTargetKey: "tg",
     },
     {

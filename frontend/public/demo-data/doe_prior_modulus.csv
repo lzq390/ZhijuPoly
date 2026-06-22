@@ -1,0 +1,13 @@
+doe_run,candidate_id,monomer_a,monomer_b,cluster,polybert_x,polybert_y,modulus_gpa
+DOE-01,PI-084,DA-84,DM-01,mixed-backbone,43.78,29.10,2.7
+DOE-02,PI-106,DA-106,DM-01,fluorinated,66.10,23.55,2.6
+DOE-03,PI-122,DA-02,DM-02,soft-segment,58.03,40.49,3.2
+DOE-04,PI-259,DA-19,DM-03,flexible-bridge,30.11,27.54,2.1
+DOE-05,PI-339,DA-99,DM-03,rigid-aromatic,79.27,35.66,1.5
+DOE-06,PI-478,DA-118,DM-04,high-rigidity,26.75,23.03,2.3
+DOE-07,PI-532,DA-52,DM-05,mixed-backbone,43.06,38.94,2.4
+DOE-08,PI-708,DA-108,DM-06,rigid-aromatic,84.61,23.34,1.7
+DOE-09,PI-1016,DA-56,DM-09,mixed-backbone,41.51,41.43,2.9
+DOE-10,PI-1072,DA-112,DM-09,fluorinated,58.88,27.93,2.7
+DOE-11,PI-1247,DA-47,DM-11,imide-rich,79.08,17.78,1.5
+DOE-12,PI-1784,DA-104,DM-15,ether-linked,27.39,32.35,2.1
