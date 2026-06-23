@@ -1,3 +1,5 @@
+import { PI_DOE_SOURCE_ROWS, type HighThroughputDoePiSourceRow } from "./highThroughputDoePiRows";
+
 export type HighThroughputTargetKey = "tg" | "cte" | "elongation" | "modulus";
 
 export type HighThroughputTarget = {
@@ -21,6 +23,10 @@ export type HighThroughputCandidate = {
   monomerB: string;
   cluster: string;
   scores: Record<HighThroughputTargetKey, number>;
+  sourcePiId?: number;
+  polymerSmiles?: string;
+  monomerASmiles?: string;
+  monomerBSmiles?: string;
 };
 
 export type HighThroughputAgent = {
@@ -80,17 +86,22 @@ export type HighThroughputOrthogonalPrior = {
   label: string;
   description: string;
   candidateIds: string[];
+  candidateIdsByTarget: Record<HighThroughputTargetKey, string[]>;
   measurements: Record<string, Record<HighThroughputTargetKey, number>>;
 };
 
 export type HighThroughputDoeCsvRow = {
   doeRun: string;
   candidateId: string;
+  sourcePiId: number | null;
   monomerA: string;
   monomerB: string;
   cluster: string;
   polybertX: number;
   polybertY: number;
+  polymerSmiles: string;
+  monomerASmiles: string;
+  monomerBSmiles: string;
   propertyValue: number;
 };
 
@@ -350,26 +361,6 @@ function buildCandidates(): HighThroughputCandidate[] {
   });
 }
 
-const ORTHOGONAL_PRIOR_IDS = [
-  "PI-084", "PI-106", "PI-122", "PI-259",
-  "PI-339", "PI-478", "PI-532", "PI-708",
-  "PI-1016", "PI-1072", "PI-1247", "PI-1784",
-];
-
-const TARGET_INDEX: Record<HighThroughputTargetKey, number> = {
-  tg: 0,
-  cte: 1,
-  elongation: 2,
-  modulus: 3,
-};
-
-const TARGET_SPACE_CENTERS: Record<HighThroughputTargetKey, { x: number; y: number }> = {
-  tg: { x: 73, y: 15 },
-  cte: { x: 28, y: 19 },
-  elongation: { x: 34, y: 34 },
-  modulus: { x: 78, y: 35 },
-};
-
 const DOE_CSV_FILE_META: Record<HighThroughputTargetKey, {
   fileName: string;
   propertyColumn: string;
@@ -397,28 +388,71 @@ const DOE_CSV_FILE_META: Record<HighThroughputTargetKey, {
   },
 };
 
-function propertyPoint(
-  candidate: HighThroughputCandidate,
-  index: number,
-  target: HighThroughputTarget,
-): HighThroughputPropertyPoint {
-  const targetIndex = TARGET_INDEX[target.key];
-  const center = TARGET_SPACE_CENTERS[target.key];
-  const normalizedScore = target.direction === "lower"
-    ? clamp((target.target + 28 - candidate.scores[target.key]) / 54, 0, 1)
-    : clamp((candidate.scores[target.key] - target.target + 36) / 78, 0, 1);
-  const pull = 0.18 + normalizedScore * 0.34;
-  const orbital = (index % 19) / 19;
-  const warpX = Math.sin(index * (0.17 + targetIndex * 0.03)) * (8 + targetIndex * 1.3);
-  const warpY = Math.cos(index * (0.11 + targetIndex * 0.05)) * (5 + targetIndex);
-  const chemistryX = ((candidate.x + targetIndex * 17 + orbital * 23) % 92) + 4;
-  const chemistryY = ((candidate.y * (0.72 + targetIndex * 0.08) + targetIndex * 9 + orbital * 11) % 40) + 4;
-
+function propertyPoint(candidate: HighThroughputCandidate): HighThroughputPropertyPoint {
   return {
     candidateId: candidate.id,
-    x: softBound(chemistryX * (1 - pull) + center.x * pull + warpX, 3, 97),
-    y: softBound(chemistryY * (1 - pull) + center.y * pull + warpY, 3, 45),
+    x: candidate.x,
+    y: candidate.y,
   };
+}
+
+function piDoeCandidateId(row: HighThroughputDoePiSourceRow) {
+  return `PI-${row.piId}`;
+}
+
+function piDoeTargetKey(row: HighThroughputDoePiSourceRow): HighThroughputTargetKey {
+  return row.targetKey as HighThroughputTargetKey;
+}
+
+function piDoeCoordinate(row: HighThroughputDoePiSourceRow, index: number) {
+  return {
+    x: softBound(8 + pseudoRandom(row.piId + index * 17 + 31) * 84, 5, 95),
+    y: softBound(7 + pseudoRandom(row.piId + index * 19 + 47) * 50, 7, 57),
+  };
+}
+
+function piDoeScores(row: HighThroughputDoePiSourceRow): Record<HighThroughputTargetKey, number> {
+  const linearExpansion = row.linearExpansion ?? 0.000045;
+  const hardness = Math.abs(row.hardness ?? 8);
+  const refractiveIndex = row.refractiveIndex ?? 1.7;
+
+  return {
+    tg: Math.round(row.tgCelsius),
+    cte: Math.round(clamp(Math.abs(linearExpansion) * 1_000_000, 18, 68)),
+    elongation: Math.round(clamp(9 + pseudoRandom(row.piId + 89) * 13 + clamp(refractiveIndex, 0.8, 4) * 1.5, 8, 32)),
+    modulus: Math.round(clamp(1.5 + clamp(hardness / 18, 0, 2.2) + pseudoRandom(row.piId + 131) * 0.8, 1.2, 4.8) * 10) / 10,
+  };
+}
+
+function buildPiDoeCandidates(rows: readonly HighThroughputDoePiSourceRow[]): HighThroughputCandidate[] {
+  return rows.map((row, index) => {
+    const point = piDoeCoordinate(row, index);
+
+    return {
+      id: piDoeCandidateId(row),
+      x: point.x,
+      y: point.y,
+      monomerA: `${piDoeCandidateId(row)}-A`,
+      monomerB: `${piDoeCandidateId(row)}-B`,
+      cluster: `pi-doe-${piDoeTargetKey(row)}`,
+      scores: piDoeScores(row),
+      sourcePiId: row.piId,
+      polymerSmiles: row.polymerSmiles,
+      monomerASmiles: row.monomerASmiles,
+      monomerBSmiles: row.monomerBSmiles,
+    };
+  });
+}
+
+function buildPriorIdsByTarget(rows: readonly HighThroughputDoePiSourceRow[]) {
+  return Object.fromEntries(
+    targetDefinitions.map((target) => [
+      target.key,
+      rows
+        .filter((row) => piDoeTargetKey(row) === target.key)
+        .map((row) => piDoeCandidateId(row)),
+    ]),
+  ) as Record<HighThroughputTargetKey, string[]>;
 }
 
 function uniqueIds(ids: string[]) {
@@ -585,10 +619,14 @@ function buildSurfaceSnapshots(
   ];
 }
 
-function buildOrthogonalPrior(candidates: HighThroughputCandidate[]): HighThroughputOrthogonalPrior {
+function buildOrthogonalPrior(
+  candidates: HighThroughputCandidate[],
+  priorIdsByTarget: Record<HighThroughputTargetKey, string[]>,
+): HighThroughputOrthogonalPrior {
   const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const candidateIds = uniqueIds(Object.values(priorIdsByTarget).flat());
   const measurements = Object.fromEntries(
-    ORTHOGONAL_PRIOR_IDS.map((candidateId) => {
+    candidateIds.map((candidateId) => {
       const candidate = candidateById.get(candidateId);
       const scores = candidate?.scores ?? {
         tg: 0,
@@ -602,8 +640,9 @@ function buildOrthogonalPrior(candidates: HighThroughputCandidate[]): HighThroug
 
   return {
     label: "L12 Orthogonal DOE Prior",
-    description: "同一批正交实验样本先进入四个单性质空间，作为初始模型和热点图的先验观测。",
-    candidateIds: ORTHOGONAL_PRIOR_IDS,
+    description: "四个性质各上传一组 12 条 PI 先验样本，作为对应单性质模型和热点图的初始观测。",
+    candidateIds,
+    candidateIdsByTarget: priorIdsByTarget,
     measurements,
   };
 }
@@ -615,13 +654,13 @@ function buildPropertySpaces(
 ): Record<HighThroughputTargetKey, HighThroughputPropertySpace> {
   return Object.fromEntries(
     targetDefinitions.map((target) => {
-      const candidatePoints = candidates.map((candidate, index) => propertyPoint(candidate, index, target));
+      const candidatePoints = candidates.map((candidate) => propertyPoint(candidate));
       return [
         target.key,
         {
         targetKey: target.key,
         title: `${target.shortLabel} Space`,
-        priorCandidateIds: orthogonalPrior.candidateIds,
+        priorCandidateIds: orthogonalPrior.candidateIdsByTarget[target.key],
         currentBestId: target.key === "tg"
           ? "PI-1013"
           : target.key === "cte"
@@ -634,7 +673,7 @@ function buildPropertySpaces(
           target,
           candidates,
           candidatePoints,
-          orthogonalPrior.candidateIds,
+          orthogonalPrior.candidateIdsByTarget[target.key],
           roundsByTarget[target.key],
         ),
         },
@@ -645,7 +684,6 @@ function buildPropertySpaces(
 
 function buildDoeCsvFiles(
   candidates: HighThroughputCandidate[],
-  orthogonalPrior: HighThroughputOrthogonalPrior,
   propertySpaces: Record<HighThroughputTargetKey, HighThroughputPropertySpace>,
 ): Record<HighThroughputTargetKey, HighThroughputDoeCsvFile> {
   const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
@@ -656,7 +694,7 @@ function buildDoeCsvFiles(
       const pointByCandidateId = new Map(
         propertySpaces[target.key].candidatePoints.map((point) => [point.candidateId, point]),
       );
-      const rows = orthogonalPrior.candidateIds
+      const rows = propertySpaces[target.key].priorCandidateIds
         .map((candidateId, index) => {
           const candidate = candidateById.get(candidateId);
           const point = pointByCandidateId.get(candidateId);
@@ -667,11 +705,15 @@ function buildDoeCsvFiles(
           return {
             doeRun: `DOE-${String(index + 1).padStart(2, "0")}`,
             candidateId,
+            sourcePiId: candidate.sourcePiId ?? null,
             monomerA: candidate.monomerA,
             monomerB: candidate.monomerB,
             cluster: candidate.cluster,
             polybertX: Number(point.x.toFixed(2)),
             polybertY: Number(point.y.toFixed(2)),
+            polymerSmiles: candidate.polymerSmiles ?? "",
+            monomerASmiles: candidate.monomerASmiles ?? "",
+            monomerBSmiles: candidate.monomerBSmiles ?? "",
             propertyValue: candidate.scores[target.key],
           };
         })
@@ -718,11 +760,12 @@ function buildRoundsByTarget(): Record<HighThroughputTargetKey, HighThroughputTa
   };
 }
 
-const demoCandidates = buildCandidates();
-const demoOrthogonalPrior = buildOrthogonalPrior(demoCandidates);
+const demoPriorIdsByTarget = buildPriorIdsByTarget(PI_DOE_SOURCE_ROWS);
+const demoCandidates = [...buildCandidates(), ...buildPiDoeCandidates(PI_DOE_SOURCE_ROWS)];
+const demoOrthogonalPrior = buildOrthogonalPrior(demoCandidates, demoPriorIdsByTarget);
 const demoRoundsByTarget = buildRoundsByTarget();
 const demoPropertySpaces = buildPropertySpaces(demoCandidates, demoOrthogonalPrior, demoRoundsByTarget);
-const demoDoeCsvFiles = buildDoeCsvFiles(demoCandidates, demoOrthogonalPrior, demoPropertySpaces);
+const demoDoeCsvFiles = buildDoeCsvFiles(demoCandidates, demoPropertySpaces);
 
 export const highThroughputDemoScenario: HighThroughputDemoScenario = {
   materialType: "Polyimide",
@@ -821,7 +864,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
     {
       id: "S1",
       label: "正交先验",
-      title: "生成四个单性质空间并选择正交实验样本",
+      title: "在统一候选空间中切换四个单性质视图并上传正交先验",
       activeTargetKey: "tg",
     },
     {
@@ -833,7 +876,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
     {
       id: "S3",
       label: "单性质迭代",
-      title: "四个 Agent 在各自属性空间中独立迭代",
+      title: "四个 Agent 在统一候选空间中按单性质独立迭代",
       activeTargetKey: "tg",
     },
     {

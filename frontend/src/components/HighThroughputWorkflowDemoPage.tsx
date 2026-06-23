@@ -599,7 +599,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
         fileName: file.name,
         fileType: file.name.split(".").pop()?.toUpperCase() || "CSV",
         sampleCount: csvFile.rows.length,
-        fieldCount: 8,
+        fieldCount: 12,
         expectedFileName: csvFile.fileName,
         propertyColumn: csvFile.propertyColumn,
         uploadedAt,
@@ -1500,7 +1500,6 @@ function ExperimentPriorPanel({
   iterationRoundIndex: number;
 }) {
   const scenario = highThroughputDemoScenario;
-  const prior = scenario.orthogonalPrior;
   const activeTarget = getTarget(activeTargetKey);
   const activeCsvFile = scenario.doeCsvFiles[activeTargetKey];
   const activeUpload = priorDataUploads[activeTargetKey] ?? null;
@@ -1560,7 +1559,7 @@ function ExperimentPriorPanel({
           isLoading={activeUploadLoading}
           isReady={activeUploadReady}
           errorMessage={activeUploadError}
-          selectedCount={prior.candidateIds.length}
+          selectedCount={activeUploadReady ? activeCsvFile.rows.length : 0}
         />
       ) : null}
 
@@ -1627,10 +1626,14 @@ function DoeCsvPreviewPanel({
             <tr>
               <th>doe_run</th>
               <th>candidate_id</th>
+              <th>pi_source_id</th>
               <th>monomer_a</th>
               <th>monomer_b</th>
               <th>polybert_x</th>
               <th>polybert_y</th>
+              <th>polymer_smiles</th>
+              <th>monomer_a_smiles</th>
+              <th>monomer_b_smiles</th>
               <th>{csvFile.propertyColumn}</th>
             </tr>
           </thead>
@@ -1640,16 +1643,20 @@ function DoeCsvPreviewPanel({
                 <tr key={row.candidateId}>
                   <td>{row.doeRun}</td>
                   <td><strong>{row.candidateId}</strong></td>
+                  <td>{row.sourcePiId ?? "--"}</td>
                   <td>{row.monomerA}</td>
                   <td>{row.monomerB}</td>
                   <td>{row.polybertX.toFixed(2)}</td>
                   <td>{row.polybertY.toFixed(2)}</td>
+                  <td>{row.polymerSmiles}</td>
+                  <td>{row.monomerASmiles}</td>
+                  <td>{row.monomerBSmiles}</td>
                   <td>{row.propertyValue}</td>
                 </tr>
               ))
             ) : (
               <tr>
-                <td className="ht-doe-csv-placeholder" colSpan={7}>
+                <td className="ht-doe-csv-placeholder" colSpan={11}>
                   {errorMessage || (isLoading ? "正在加载 DOE 样本点..." : `上传 ${csvFile.fileName} 后显示 DOE 表格数据`)}
                 </td>
               </tr>
