@@ -158,6 +158,26 @@ export type HighThroughputFormulation = {
   achievement: Record<HighThroughputTargetKey, number>;
   finalScore: number;
   rationale: string;
+  finalExplanation: {
+    selectedMixId: string;
+    summary: string;
+    nextStep: string;
+    sourceTrace: Array<{
+      componentId: string;
+      targetKey: HighThroughputTargetKey;
+      agentLabel: string;
+      candidateId: string;
+      sourceStage: string;
+      ratio: number;
+    }>;
+    targetOutcomes: Array<{
+      targetKey: HighThroughputTargetKey;
+      targetValue: number;
+      predictedValue: number;
+      achievement: number;
+      pass: boolean;
+    }>;
+  };
 };
 
 export type HighThroughputDemoScenario = {
@@ -927,7 +947,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
       {
         id: "mix-6",
         score: 84,
-        ratios: { p1: 0.5, p2: 0.1, p3: 0.1, p4: 0.3 },
+        ratios: { p1: 0.5, p2: 0, p3: 0.1, p4: 0.4 },
         achievement: { tg: 96, cte: 70, elongation: 68, modulus: 94 },
         status: "evaluated",
         note: "耐热和刚性继续提高，但尺寸稳定与韧性损失过大，低温阶段被拒绝。",
@@ -952,7 +972,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
         accepted: true,
         coolingLabel: "T0",
         decisionLabel: "设为初始解",
-        actionLabel: "Seed accepted",
+        actionLabel: "初始解已接受",
       },
       {
         id: "accept1",
@@ -972,7 +992,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
         accepted: true,
         coolingLabel: "T1 = 0.78",
         decisionLabel: "接受并更新最优",
-        actionLabel: "Accepted neighbor",
+        actionLabel: "接受邻域",
       },
       {
         id: "accept2",
@@ -992,7 +1012,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
         accepted: true,
         coolingLabel: "T2 = 0.46",
         decisionLabel: "接受并更新最优",
-        actionLabel: "Best updated",
+        actionLabel: "最优更新",
       },
       {
         id: "reject",
@@ -1012,7 +1032,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
         accepted: false,
         coolingLabel: "T3 = 0.22",
         decisionLabel: "拒绝，保留当前解",
-        actionLabel: "Rejected neighbor",
+        actionLabel: "拒绝邻域",
       },
       {
         id: "selected",
@@ -1032,7 +1052,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
         accepted: true,
         coolingLabel: "T4 = 0.08",
         decisionLabel: "接受并锁定",
-        actionLabel: "Selected for S6",
+        actionLabel: "锁定 S6 配方",
       },
     ],
     selectedMixId: "mix-5",
@@ -1045,5 +1065,74 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
     },
     finalScore: 90,
     rationale: "推荐配方保留高 Tg 与高模量骨架，同时加入低 CTE 和高伸长组分补偿单目标冲突，适合作为下一轮真实实验验证候选。",
+    finalExplanation: {
+      selectedMixId: "mix-5",
+      summary: "推荐配方保留高 Tg 与高模量骨架，同时用低 CTE 与高伸长组分补偿冲突。",
+      nextStep: "进入下一轮真实实验验证",
+      sourceTrace: [
+        {
+          componentId: "p1",
+          targetKey: "tg",
+          agentLabel: "Tg Agent",
+          candidateId: "PI-1013",
+          sourceStage: "S3 收敛",
+          ratio: 0.4,
+        },
+        {
+          componentId: "p2",
+          targetKey: "cte",
+          agentLabel: "CTE Agent",
+          candidateId: "PI-1219",
+          sourceStage: "S3 收敛",
+          ratio: 0.2,
+        },
+        {
+          componentId: "p3",
+          targetKey: "elongation",
+          agentLabel: "Elongation Agent",
+          candidateId: "PI-734",
+          sourceStage: "S3 收敛",
+          ratio: 0.2,
+        },
+        {
+          componentId: "p4",
+          targetKey: "modulus",
+          agentLabel: "Modulus Agent",
+          candidateId: "PI-356",
+          sourceStage: "S3 收敛",
+          ratio: 0.2,
+        },
+      ],
+      targetOutcomes: [
+        {
+          targetKey: "tg",
+          targetValue: 250,
+          predictedValue: 292,
+          achievement: 94,
+          pass: true,
+        },
+        {
+          targetKey: "cte",
+          targetValue: 35,
+          predictedValue: 29,
+          achievement: 88,
+          pass: true,
+        },
+        {
+          targetKey: "elongation",
+          targetValue: 15,
+          predictedValue: 18,
+          achievement: 86,
+          pass: true,
+        },
+        {
+          targetKey: "modulus",
+          targetValue: 3,
+          predictedValue: 3.3,
+          achievement: 91,
+          pass: true,
+        },
+      ],
+    },
   },
 };

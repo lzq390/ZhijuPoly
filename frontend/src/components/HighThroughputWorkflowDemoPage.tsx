@@ -58,6 +58,7 @@ type PriorDataUploadState = {
   uploadedAt: string;
   uploadToken: string;
   isLoading: boolean;
+  errorMessage?: string;
 };
 
 type PriorDataUploadsState = Partial<Record<HighThroughputTargetKey, PriorDataUploadState>>;
@@ -310,11 +311,18 @@ function projectRatioMixPoint(mix: RatioMixCandidate) {
   return projectRatioPointFromRatios(mix.ratios);
 }
 
-function weightedAchievement(weights: WeightState) {
+function getSelectedRatioMix() {
   const formulation = highThroughputDemoScenario.formulation;
+  return formulation.mixCandidates.find((mix) => mix.id === formulation.selectedMixId) ?? formulation.mixCandidates[formulation.mixCandidates.length - 1];
+}
+
+function weightedAchievement(
+  weights: WeightState,
+  achievement: Record<HighThroughputTargetKey, number> = highThroughputDemoScenario.formulation.achievement,
+) {
   const totalWeight = Object.values(weights).reduce((total, value) => total + value, 0) || 1;
   const score = highThroughputDemoScenario.targets.reduce(
-    (total, target) => total + formulation.achievement[target.key] * weights[target.key],
+    (total, target) => total + achievement[target.key] * weights[target.key],
     0,
   );
   return Math.round(score / totalWeight);
@@ -351,6 +359,23 @@ function targetGapLabel(candidate: HighThroughputCandidate | undefined, target: 
   const gap = target.direction === "lower" ? target.target - value : value - target.target;
   const sign = gap > 0 ? "+" : "";
   return `${sign}${formatNumber(gap, targetValueDigits(target))}${target.unit}`;
+}
+
+function targetOutcomePasses(value: number, target: HighThroughputTarget) {
+  return target.direction === "lower" ? value <= target.target : value >= target.target;
+}
+
+function adjustedOutcomeAchievement(
+  outcome: { targetValue: number; achievement: number },
+  target: HighThroughputTarget,
+) {
+  const baselineTarget = outcome.targetValue || target.target || 1;
+  const configuredTarget = target.target || baselineTarget;
+  const adjustment = target.direction === "lower"
+    ? configuredTarget / baselineTarget
+    : baselineTarget / configuredTarget;
+
+  return Math.round(clamp(outcome.achievement * adjustment, 0, 100));
 }
 
 function propertySurfaceForStage(
@@ -438,7 +463,6 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const priorUploadTimersRef = useRef<Partial<Record<HighThroughputTargetKey, number>>>({});
   const mapStageRef = useRef<HTMLDivElement | null>(null);
   const maxStageIndex = scenario.stages.length - 1;
-  const computedScore = weightedAchievement(weights);
 
   useEffect(() => {
     if (!isPlaying) {
@@ -540,6 +564,33 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
 
     clearPriorUploadTimer(targetKey);
     const csvFile = scenario.doeCsvFiles[targetKey];
+    const uploadedAt = new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(new Date());
+
+    if (file.name !== csvFile.fileName) {
+      setPriorDataUploads((uploads) => ({
+        ...uploads,
+        [targetKey]: {
+          targetKey,
+          fileName: file.name,
+          fileType: file.name.split(".").pop()?.toUpperCase() || "UNKNOWN",
+          sampleCount: 0,
+          fieldCount: 0,
+          expectedFileName: csvFile.fileName,
+          propertyColumn: csvFile.propertyColumn,
+          uploadedAt,
+          uploadToken: `${targetKey}-invalid-${Date.now()}`,
+          isLoading: false,
+          errorMessage: "文件格式错误",
+        },
+      }));
+      return;
+    }
+
     const uploadToken = `${targetKey}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setPriorDataUploads((uploads) => ({
       ...uploads,
@@ -551,12 +602,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
         fieldCount: 8,
         expectedFileName: csvFile.fileName,
         propertyColumn: csvFile.propertyColumn,
-        uploadedAt: new Intl.DateTimeFormat("zh-CN", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: false,
-        }).format(new Date()),
+        uploadedAt,
         uploadToken,
         isLoading: true,
       },
@@ -661,8 +707,6 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
           ) : (
             <FinalFormulationPanel
               weights={weights}
-              onWeightsChange={setWeights}
-              computedScore={computedScore}
               confirmedSetup={confirmedSetup}
             />
           )}
@@ -1237,7 +1281,8 @@ function PropertySpaceCard({
   const surface = propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
   const roundIds = propertyRoundIds(target.key, stageIndex, iterationRoundIndex);
   const isPriorLoading = Boolean(priorDataUpload?.isLoading);
-  const isPriorReady = Boolean(priorDataUpload && !priorDataUpload.isLoading);
+  const isPriorError = Boolean(priorDataUpload?.errorMessage);
+  const isPriorReady = Boolean(priorDataUpload && !priorDataUpload.isLoading && !priorDataUpload.errorMessage);
   const showPriorDoe = stageIndex >= 2 || (stageIndex === 1 && isPriorReady);
   const priorIds = showPriorDoe ? space.priorCandidateIds : [];
   const measuredPriorIds = stageIndex >= 2 ? space.priorCandidateIds : [];
@@ -1271,6 +1316,8 @@ function PropertySpaceCard({
       : stageIndex === 1
         ? isPriorLoading
           ? "Loading DOE"
+          : isPriorError
+          ? "CSV error"
           : isPriorReady
           ? "DOE uploaded"
           : "Waiting CSV"
@@ -1458,8 +1505,9 @@ function ExperimentPriorPanel({
   const activeCsvFile = scenario.doeCsvFiles[activeTargetKey];
   const activeUpload = priorDataUploads[activeTargetKey] ?? null;
   const activeUploadLoading = Boolean(activeUpload?.isLoading);
-  const activeUploadReady = Boolean(activeUpload && !activeUpload.isLoading);
-  const uploadedCount = Object.values(priorDataUploads).filter((upload) => upload && !upload.isLoading).length;
+  const activeUploadError = activeUpload?.errorMessage ?? "";
+  const activeUploadReady = Boolean(activeUpload && !activeUpload.isLoading && !activeUpload.errorMessage);
+  const uploadedCount = Object.values(priorDataUploads).filter((upload) => upload && !upload.isLoading && !upload.errorMessage).length;
   const iterationActive = stageIndex >= 3;
 
   return (
@@ -1476,11 +1524,17 @@ function ExperimentPriorPanel({
           <span>S1</span>
           <strong>上传对应性质 CSV</strong>
           {activeUpload ? (
-            <div className="ht-prior-upload-result">
-              <strong>{activeUpload.fileName}</strong>
-              <span>
-                {activeUploadLoading ? "loading DOE samples" : "ready"} / {activeUpload.fileType} / {activeUpload.sampleCount} samples / {activeUpload.fieldCount} fields / {activeUpload.propertyColumn} / {activeUpload.uploadedAt}
-              </span>
+            <div className={cn("ht-prior-upload-result", activeUploadError && "error")}>
+              {activeUploadError ? (
+                <strong>{activeUploadError}</strong>
+              ) : (
+                <>
+                  <strong>{activeUpload.fileName}</strong>
+                  <span>
+                    {activeUploadLoading ? "loading DOE samples" : "ready"} / {activeUpload.fileType} / {activeUpload.sampleCount} samples / {activeUpload.fieldCount} fields / {activeUpload.propertyColumn} / {activeUpload.uploadedAt}
+                  </span>
+                </>
+              )}
             </div>
           ) : (
             <b>等待上传 {activeCsvFile.fileName}</b>
@@ -1505,6 +1559,7 @@ function ExperimentPriorPanel({
           upload={activeUpload}
           isLoading={activeUploadLoading}
           isReady={activeUploadReady}
+          errorMessage={activeUploadError}
           selectedCount={prior.candidateIds.length}
         />
       ) : null}
@@ -1531,6 +1586,7 @@ function DoeCsvPreviewPanel({
   upload,
   isLoading,
   isReady,
+  errorMessage,
   selectedCount,
 }: {
   target: HighThroughputTarget;
@@ -1538,10 +1594,11 @@ function DoeCsvPreviewPanel({
   upload: PriorDataUploadState | null;
   isLoading: boolean;
   isReady: boolean;
+  errorMessage: string;
   selectedCount: number;
 }) {
   return (
-    <section className={cn("ht-doe-csv-preview-panel", isLoading && "loading", isReady && "uploaded")} style={{ "--target-color": target.color } as CSSProperties}>
+    <section className={cn("ht-doe-csv-preview-panel", isLoading && "loading", isReady && "uploaded", errorMessage && "error")} style={{ "--target-color": target.color } as CSSProperties}>
       <div className="ht-doe-csv-preview-head">
         <div>
           <span className="ht-kicker">{target.shortLabel} DOE CSV Preview</span>
@@ -1552,11 +1609,17 @@ function DoeCsvPreviewPanel({
         </a>
       </div>
 
-      <div className="ht-doe-csv-status-row">
-        <span>{isLoading ? "loading samples" : isReady ? "uploaded" : "waiting upload"}</span>
-        <b>{upload ? upload.fileName : csvFile.displayName}</b>
-        <em>{selectedCount} DOE rows / {csvFile.propertyColumn}</em>
-      </div>
+      {errorMessage ? (
+        <div className="ht-doe-csv-status-row error">
+          <b>{errorMessage}</b>
+        </div>
+      ) : (
+        <div className="ht-doe-csv-status-row">
+          <span>{isLoading ? "loading samples" : isReady ? "uploaded" : "waiting upload"}</span>
+          <b>{upload ? upload.fileName : csvFile.displayName}</b>
+          <em>{selectedCount} DOE rows / {csvFile.propertyColumn}</em>
+        </div>
+      )}
 
       <div className="ht-doe-csv-table-wrap">
         <table className="ht-doe-csv-table">
@@ -1587,7 +1650,7 @@ function DoeCsvPreviewPanel({
             ) : (
               <tr>
                 <td className="ht-doe-csv-placeholder" colSpan={7}>
-                  {isLoading ? "正在加载 DOE 样本点..." : `上传 ${csvFile.fileName} 后显示 DOE 表格数据`}
+                  {errorMessage || (isLoading ? "正在加载 DOE 样本点..." : `上传 ${csvFile.fileName} 后显示 DOE 表格数据`)}
                 </td>
               </tr>
             )}
@@ -1607,8 +1670,10 @@ function RatioAnnealingMap({
 }) {
   const scenario = highThroughputDemoScenario;
   const formulation = scenario.formulation;
+  const finalExplanation = formulation.finalExplanation;
+  const isFinalStage = stageIndex >= 6;
   const steps = formulation.searchSteps;
-  const activeIndex = stageIndex >= 6 ? steps.length - 1 : clamp(activeStepIndex, 0, steps.length - 1);
+  const activeIndex = isFinalStage ? steps.length - 1 : clamp(activeStepIndex, 0, steps.length - 1);
   const activeStep = steps[activeIndex];
   const mixById = new Map(formulation.mixCandidates.map((mix) => [mix.id, mix]));
   const visibleMixes = activeStep.mixCandidateIds
@@ -1622,7 +1687,7 @@ function RatioAnnealingMap({
   const previousMix = mixById.get(activeStep.previousMixId) ?? currentMix;
   const proposedMix = mixById.get(activeStep.proposedMixId) ?? currentMix;
   const selectedMix = mixById.get(formulation.selectedMixId) ?? currentBestMix;
-  const focusMix = stageIndex >= 6 ? selectedMix : currentBestMix;
+  const focusMix = isFinalStage ? selectedMix : currentBestMix;
   const focusPoint = projectRatioMixPoint(focusMix);
   const currentPoint = projectRatioMixPoint(currentMix);
   const previousPoint = projectRatioMixPoint(previousMix);
@@ -1630,6 +1695,15 @@ function RatioAnnealingMap({
   const selectedPoint = projectRatioMixPoint(selectedMix);
   const visibleMixIdSet = new Set(visibleMixes.map((mix) => mix.id));
   const pathPoints = acceptedPathMixes.map(projectRatioMixPoint);
+  const selectedRatioLabel = formulation.components
+    .map((component) => ratioPercent(selectedMix.ratios[component.id] ?? 0))
+    .join(" / ");
+  const rejectedMixIdSet = new Set(
+    steps
+      .slice(0, activeIndex + 1)
+      .filter((step) => !step.accepted)
+      .map((step) => step.proposedMixId),
+  );
   const ratioGridPoints = [];
 
   for (let p1 = 0; p1 <= 10; p1 += 1) {
@@ -1650,25 +1724,25 @@ function RatioAnnealingMap({
   }
 
   return (
-    <section className="ht-material-map-panel ht-ratio-annealing-map-panel">
+    <section className={cn("ht-material-map-panel ht-ratio-annealing-map-panel", isFinalStage && "final")}>
       <div className="ht-panel-header">
         <div>
-          <span className="ht-kicker">4-component Ratio Performance Surface</span>
-          <h2>{stageIndex >= 6 ? "最终配方比例性能地形" : "模拟退火比例性能地形"}</h2>
+          <span className="ht-kicker">{isFinalStage ? "最终配方结果" : "四组分比例性能地形"}</span>
+          <h2>{isFinalStage ? "最终推荐配方位置" : "模拟退火比例性能地形"}</h2>
         </div>
         <div className="ht-space-status-group">
           <span className="ht-unified-space-badge">
-            step = {formulation.ratioGrid.step.toFixed(1)} / {formulation.ratioGrid.candidateCount} mixes
+            比例步长 {formulation.ratioGrid.step.toFixed(1)} / {formulation.ratioGrid.candidateCount} 个候选
           </span>
           <span className="ht-generated-space-badge">
-            {stageIndex >= 6 ? `selected ${selectedMix.id}` : "annealing path"}
+            {isFinalStage ? `最终配方 ${selectedMix.id}` : "模拟退火路径"}
           </span>
         </div>
       </div>
 
-      <div className="ht-map-canvas ht-ratio-annealing-canvas" aria-label="S5 ratio simulated annealing map">
+      <div className="ht-map-canvas ht-ratio-annealing-canvas" aria-label={isFinalStage ? "S6 最终推荐配方位置图" : "S5 模拟退火比例搜索图"}>
         <svg viewBox="0 0 100 48" role="img">
-          <title>{stageIndex >= 6 ? "S6 final formulation ratio performance terrain" : "S5 simulated annealing ratio performance terrain"}</title>
+          <title>{isFinalStage ? "S6 最终推荐配方位置" : "S5 模拟退火比例性能地形"}</title>
           <defs>
             <filter id="ht-ratio-terrain-blur" x="-25%" y="-25%" width="150%" height="150%">
               <feGaussianBlur stdDeviation="2.9" />
@@ -1689,18 +1763,18 @@ function RatioAnnealingMap({
             {[10, 19, 28, 37].map((y) => <line key={`h-${y}`} x1="8" y1={y} x2="92" y2={y} />)}
           </g>
 
-          <g className="ht-ratio-grid-points" aria-label="0.1 ratio grid candidates">
+          <g className="ht-ratio-grid-points" aria-label="0.1 比例网格候选">
             {ratioGridPoints.map(({ id, point }) => (
               <circle key={id} cx={point.x} cy={point.y} r="0.34" />
             ))}
           </g>
 
-          <g className="ht-ratio-performance-layer" aria-label="simulated objective surface">
+          <g className="ht-ratio-performance-layer" aria-label={isFinalStage ? "最终配方达成区域" : "模拟目标地形"}>
             <ellipse cx={focusPoint.x} cy={focusPoint.y} rx="24" ry="13.5" />
             <ellipse cx={focusPoint.x + 2.2} cy={focusPoint.y - 0.8} rx="13.2" ry="7.2" />
           </g>
 
-          <g className="ht-ratio-anchor-layer" aria-label="p1-p4 ratio anchors">
+          <g className="ht-ratio-anchor-layer" aria-label="p1-p4 比例锚点">
             {formulation.components.map((component) => {
               const anchor = RATIO_SPACE_ANCHORS[component.id];
               if (!anchor) {
@@ -1709,33 +1783,41 @@ function RatioAnnealingMap({
 
               return (
                 <g key={component.id} className="ht-ratio-anchor" style={{ "--component-color": component.color } as CSSProperties}>
-                  <circle cx={anchor.x} cy={anchor.y} r="1.75" />
-                  <text x={anchor.x} y={anchor.y - 3.1} textAnchor="middle">{component.id}</text>
+                  <rect x={anchor.x - 4.35} y={anchor.y - 2.25} width="8.7" height="4.5" rx="1.1" />
+                  <text x={anchor.x} y={anchor.y + 0.58} textAnchor="middle">{component.id}</text>
+                  <title>{`${component.id} 组分锚点，不是退火候选点`}</title>
                 </g>
               );
             })}
           </g>
 
           {pathPoints.length > 1 ? (
-            <path className="ht-ratio-annealing-path" d={buildSvgPath(pathPoints)} markerEnd="url(#ht-ratio-path-arrow)" />
+            <path
+              className={cn("ht-ratio-annealing-path", isFinalStage && "final")}
+              d={buildSvgPath(pathPoints)}
+              markerEnd={isFinalStage ? undefined : "url(#ht-ratio-path-arrow)"}
+            />
           ) : null}
 
-          {previousMix.id !== proposedMix.id ? (
+          {!isFinalStage && previousMix.id !== proposedMix.id ? (
             <path
               className={cn("ht-ratio-proposal-line", activeStep.accepted ? "accepted" : "rejected")}
               d={buildSvgPath([previousPoint, proposedPoint])}
             />
           ) : null}
 
-          <g className="ht-ratio-mix-layer" aria-label="annealing mix candidates">
-            {formulation.mixCandidates.map((mix) => {
+          <g className="ht-ratio-mix-layer" aria-label={isFinalStage ? "最终配方候选" : "退火搜索候选"}>
+            {visibleMixes.map((mix) => {
               const point = projectRatioMixPoint(mix);
               const isVisible = visibleMixIdSet.has(mix.id);
               const isCurrent = mix.id === currentMix.id;
               const isBest = mix.id === currentBestMix.id;
-              const isProposed = mix.id === proposedMix.id;
-              const isRejected = isProposed && !activeStep.accepted;
-              const isSelected = stageIndex >= 6 && mix.id === selectedMix.id;
+              const isProposed = !isFinalStage && mix.id === proposedMix.id;
+              const isRejected = rejectedMixIdSet.has(mix.id);
+              const isSelected = isFinalStage && mix.id === selectedMix.id;
+              const mixTitle = isFinalStage
+                ? `${mix.id} / p1 ${ratioPercent(mix.ratios.p1 ?? 0)}, p2 ${ratioPercent(mix.ratios.p2 ?? 0)}, p3 ${ratioPercent(mix.ratios.p3 ?? 0)}, p4 ${ratioPercent(mix.ratios.p4 ?? 0)}`
+                : `${mix.id} 综合 ${mix.score} / p1 ${ratioPercent(mix.ratios.p1 ?? 0)}, p2 ${ratioPercent(mix.ratios.p2 ?? 0)}, p3 ${ratioPercent(mix.ratios.p3 ?? 0)}, p4 ${ratioPercent(mix.ratios.p4 ?? 0)}`;
 
               return (
                 <g
@@ -1750,33 +1832,42 @@ function RatioAnnealingMap({
                     isSelected && "selected",
                   )}
                 >
-                  <circle cx={point.x} cy={point.y} r={isSelected ? 1.95 : isCurrent || isBest ? 1.65 : 1.05} />
-                  {isCurrent || isBest || isSelected || isProposed ? (
+                  <circle cx={point.x} cy={point.y} r={isSelected ? 1.95 : isRejected ? 1.45 : isCurrent || isBest ? 1.65 : 1.05} />
+                  {isCurrent || isBest || isSelected || isProposed || isRejected ? (
                     <text x={point.x + 2.1} y={point.y - 1.8}>{mix.id}</text>
                   ) : null}
-                  <title>{`${mix.id} score ${mix.score} / p1 ${ratioPercent(mix.ratios.p1 ?? 0)}, p2 ${ratioPercent(mix.ratios.p2 ?? 0)}, p3 ${ratioPercent(mix.ratios.p3 ?? 0)}, p4 ${ratioPercent(mix.ratios.p4 ?? 0)}`}</title>
+                  <title>{mixTitle}</title>
                 </g>
               );
             })}
           </g>
 
-          {stageIndex >= 6 ? (
-            <g className="ht-ratio-selected-star" transform={`translate(${selectedPoint.x} ${selectedPoint.y})`} aria-label="selected final mix">
+          {isFinalStage ? (
+            <g className="ht-ratio-selected-star" transform={`translate(${selectedPoint.x} ${selectedPoint.y})`} aria-label="最终推荐配方">
               <path d="M0 -3.3 L0.76 -1 L3.14 -1 L1.2 0.42 L1.92 2.74 L0 1.35 L-1.92 2.74 L-1.2 0.42 L-3.14 -1 L-0.76 -1 Z" />
             </g>
           ) : (
-            <g className="ht-ratio-current-ring" transform={`translate(${currentPoint.x} ${currentPoint.y})`} aria-label="current annealing mix">
+            <g className="ht-ratio-current-ring" transform={`translate(${currentPoint.x} ${currentPoint.y})`} aria-label="当前退火配方">
               <circle r="3.2" />
             </g>
           )}
         </svg>
 
-        <div className="ht-ratio-map-summary">
-          <span><b>温度</b>{activeStep.coolingLabel}</span>
-          <span><b>扰动</b>{previousMix.id} {"->"} {proposedMix.id}</span>
-          <span><b>决策</b>{activeStep.decisionLabel}</span>
-          <span><b>当前最优</b>{currentBestMix.id} / {currentBestMix.score}</span>
-        </div>
+        {isFinalStage ? (
+          <div className="ht-ratio-map-summary final">
+            <span><b>最终配方</b>{selectedMix.id}</span>
+            <span><b>综合达成</b>{selectedMix.score}%</span>
+            <span><b>配方比例</b>{selectedRatioLabel}</span>
+            <span><b>下一步</b>{finalExplanation.nextStep}</span>
+          </div>
+        ) : (
+          <div className="ht-ratio-map-summary">
+            <span><b>温度</b>{activeStep.coolingLabel}</span>
+            <span><b>扰动</b>{previousMix.id} {"->"} {proposedMix.id}</span>
+            <span><b>决策</b>{activeStep.decisionLabel}</span>
+            <span><b>当前最优</b>{currentBestMix.id} / {currentBestMix.score}</span>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -1851,7 +1942,8 @@ function AgentOptimizationCard({
   const outputComponent = highThroughputDemoScenario.formulation.components.find((component) => component.sourceTargetKey === agent.targetKey);
   const outputLabel = outputComponent?.id ?? target.shortLabel;
   const isPriorLoading = Boolean(priorDataUpload?.isLoading);
-  const isPriorReady = Boolean(priorDataUpload && !priorDataUpload.isLoading);
+  const isPriorError = Boolean(priorDataUpload?.errorMessage);
+  const isPriorReady = Boolean(priorDataUpload && !priorDataUpload.isLoading && !priorDataUpload.errorMessage);
   const roundIds = propertyRoundIds(agent.targetKey, stageIndex, iterationRoundIndex);
   const rounds = highThroughputDemoScenario.roundsByTarget[agent.targetKey];
   const activeRound = stageIndex === 3
@@ -1946,10 +2038,10 @@ function AgentOptimizationCard({
         : stageIndex === 3
           ? [`已测 ${space.priorCandidateIds.length + roundIds.testedIds.length}`, `推荐 ${roundIds.recommendedIds.length}`]
           : stageIndex === 4
-            ? [`${outputLabel} from S3`, `Top-k ${agent.topCandidateIds.length}`]
+            ? [`${outputLabel} 来自 S3`, `备选 ${agent.topCandidateIds.length}`]
             : stageIndex === 5
-              ? ["ratio search input", `${outputLabel} locked`]
-              : ["source trace", `${space.currentBestId} from S3`];
+              ? ["比例搜索输入", `${outputLabel} 锁定`]
+              : ["来源追踪", `${space.currentBestId} 来自 S3`];
   const canSwitchSpace = stageIndex <= 4 && Boolean(onSelectTarget);
 
   function handleSelectSpace() {
@@ -1975,6 +2067,7 @@ function AgentOptimizationCard({
   function handlePriorUploadChange(event: ChangeEvent<HTMLInputElement>) {
     event.stopPropagation();
     onPriorDataUpload?.(agent.targetKey, event.currentTarget.files?.[0] ?? null);
+    event.currentTarget.value = "";
   }
 
   return (
@@ -2003,8 +2096,8 @@ function AgentOptimizationCard({
         </div>
         {stageIndex === 1 && onPriorDataUpload ? (
           <label
-            className={cn("ht-agent-upload-button", isPriorLoading && "loading", isPriorReady && "complete")}
-            title={priorDataUpload ? priorDataUpload.fileName : `上传 ${csvFile.fileName}`}
+            className={cn("ht-agent-upload-button", isPriorLoading && "loading", isPriorReady && "complete", isPriorError && "error")}
+            title={priorDataUpload?.errorMessage || (priorDataUpload ? priorDataUpload.fileName : `上传 ${csvFile.fileName}`)}
             onClick={handleUploadClick}
           >
             <input
@@ -2013,7 +2106,7 @@ function AgentOptimizationCard({
               onChange={handlePriorUploadChange}
             />
             {isPriorReady ? <FileCheck2 aria-hidden="true" size={13} /> : <UploadCloud aria-hidden="true" size={13} />}
-            <span>{isPriorLoading ? "加载 DOE 点..." : isPriorReady ? `已上传 ${target.shortLabel} CSV` : `上传 ${target.shortLabel} CSV`}</span>
+            <span>{isPriorLoading ? "加载 DOE 点..." : isPriorError ? "文件错误" : isPriorReady ? `已上传 ${target.shortLabel} CSV` : `上传 ${target.shortLabel} CSV`}</span>
           </label>
         ) : (
           <strong>{agent.statusByStage[stageIndex]}</strong>
@@ -2106,7 +2199,7 @@ function CandidateOutputPanel({
           <span className="ht-kicker">S4 Single-property Candidate Output</span>
           <h2>{target.shortLabel}{" -> "}{outputLabel} 候选输出</h2>
         </div>
-        <span className="ht-simulation-badge compact">from S3 Converged Surface</span>
+        <span className="ht-simulation-badge compact">来自 S3 收敛空间</span>
       </div>
 
       <div className="ht-candidate-output-grid">
@@ -2259,13 +2352,13 @@ function RatioSearchPanel({
                 <span>当前解</span>
                 <strong>{previousMix.id}</strong>
                 <RatioStackedBar mix={previousMix} components={formulation.components} />
-                <em>score {previousMix.score}</em>
+                <em>综合 {previousMix.score}</em>
               </div>
               <div className="ht-annealing-mix-card proposed">
                 <span>邻域扰动</span>
                 <strong>{proposedMix.id}</strong>
                 <RatioStackedBar mix={proposedMix} components={formulation.components} />
-                <em>score {proposedMix.score}</em>
+                <em>综合 {proposedMix.score}</em>
               </div>
               <div className="ht-annealing-mix-card">
                 <span>决策后当前解</span>
@@ -2317,58 +2410,44 @@ function RatioSearchPanel({
 
 function FinalFormulationPanel({
   weights,
-  onWeightsChange,
-  computedScore,
   confirmedSetup,
 }: {
   weights: WeightState;
-  onWeightsChange: (weights: WeightState) => void;
-  computedScore: number;
   confirmedSetup: ConfirmedSetup;
 }) {
   const scenario = highThroughputDemoScenario;
   const formulation = scenario.formulation;
-  const selectedMix = formulation.mixCandidates.find((mix) => mix.id === formulation.selectedMixId) ?? formulation.mixCandidates[formulation.mixCandidates.length - 1];
-
-  function updateWeight(targetKey: HighThroughputTargetKey, value: number) {
-    onWeightsChange({ ...weights, [targetKey]: value });
-  }
+  const finalExplanation = formulation.finalExplanation;
+  const selectedMix = getSelectedRatioMix();
+  const targetOutcomes = finalExplanation.targetOutcomes.map((outcome) => {
+    const target = getConfiguredTarget(outcome.targetKey, confirmedSetup);
+    return {
+      ...outcome,
+      target,
+      achievement: adjustedOutcomeAchievement(outcome, target),
+      pass: targetOutcomePasses(outcome.predictedValue, target),
+    };
+  });
+  const displayedAchievement = Object.fromEntries(
+    targetOutcomes.map((outcome) => [outcome.targetKey, outcome.achievement]),
+  ) as Record<HighThroughputTargetKey, number>;
+  const computedScore = weightedAchievement(weights, displayedAchievement);
 
   return (
     <section className="ht-final-formulation-panel ht-formulation-panel active">
       <div className="ht-panel-header">
         <div>
-          <span className="ht-kicker">S6 Final Formulation Explanation</span>
+          <span className="ht-kicker">S6 最终解释</span>
           <h2>最终推荐配方解释</h2>
         </div>
-        <span className="ht-simulation-badge compact">from S5 selected {selectedMix.id}</span>
+        <span className="ht-simulation-badge compact">来自 S5 锁定结果 {selectedMix.id}</span>
       </div>
 
       <div className="ht-formulation-grid">
-        <div className="ht-component-pool">
-          <SectionTitle icon={<Target aria-hidden="true" size={17} />} title="S4 单目标候选池" />
-          <div className="ht-component-list">
-            {formulation.components.map((component) => {
-              const target = getTarget(component.sourceTargetKey);
-              const convergedCandidateId = getPropertySpace(component.sourceTargetKey).currentBestId;
-              return (
-                <article key={component.id} className="ht-component-row active" style={{ "--target-color": component.color } as CSSProperties}>
-                  <span>{component.id}</span>
-                  <div>
-                    <strong>{component.label}</strong>
-                    <em>{convergedCandidateId} / {target.shortLabel} from S3 space</em>
-                  </div>
-                  <b>{component.description}</b>
-                </article>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="ht-selected-mix-panel">
-          <SectionTitle icon={<Layers3 aria-hidden="true" size={17} />} title="S5 锁定比例" />
+        <div className="ht-selected-mix-panel ht-final-ratio-panel">
+          <SectionTitle icon={<Layers3 aria-hidden="true" size={17} />} title="最终配方比例" />
           <article className="ht-selected-mix-card">
-            <span>Selected for S6</span>
+            <span>S6 最终配方</span>
             <strong>{selectedMix.id}</strong>
             <RatioStackedBar mix={selectedMix} components={formulation.components} showLabels />
           </article>
@@ -2381,41 +2460,68 @@ function FinalFormulationPanel({
               </div>
             ))}
           </div>
+
+          <SectionTitle icon={<Target aria-hidden="true" size={17} />} title="来源追踪" />
+          <div className="ht-source-trace-list">
+            {finalExplanation.sourceTrace.map((trace) => {
+              const component = formulation.components.find((item) => item.id === trace.componentId);
+              const target = getTarget(trace.targetKey);
+              return (
+                <article key={trace.componentId} className="ht-source-trace-row" style={{ "--target-color": component?.color ?? target.color } as CSSProperties}>
+                  <span>{trace.componentId}</span>
+                  <div>
+                    <strong>{trace.componentId} ← {trace.agentLabel} ← {trace.candidateId}</strong>
+                    <em>{target.shortLabel} / {trace.sourceStage} / {ratioPercent(trace.ratio)}</em>
+                  </div>
+                  <b>{component?.description ?? target.shortLabel}</b>
+                </article>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="ht-result-panel">
-          <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="目标达成与解释" />
+        <div className="ht-result-panel ht-final-outcome-panel">
+          <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="目标达成" />
           <div className="ht-score-box">
             <span>综合达成率</span>
             <strong>{`${computedScore}%`}</strong>
           </div>
-          <RadarChart achievement={selectedMix.achievement} />
-          <p>{formulation.rationale}</p>
+          <div className="ht-target-outcome-grid">
+            {targetOutcomes.map((outcome) => {
+              const target = outcome.target;
+              return (
+                <article key={outcome.targetKey} style={{ "--target-color": target.color } as CSSProperties}>
+                  <div>
+                    <span>{target.shortLabel}</span>
+                    <b>{outcome.pass ? "达标" : "待优化"}</b>
+                  </div>
+                  <strong>{formatTargetValue(target, outcome.predictedValue)} {target.unit}</strong>
+                  <em>目标 {targetThresholdLabel(target)} / 达成 {outcome.achievement}%</em>
+                </article>
+              );
+            })}
+          </div>
+          <RadarChart achievement={displayedAchievement} />
         </div>
 
-        <div className="ht-weight-panel">
-          <SectionTitle icon={<SlidersHorizontal aria-hidden="true" size={17} />} title="目标权重" />
-          <div className="ht-weight-list">
+        <div className="ht-final-summary-panel">
+          <SectionTitle icon={<CheckCircle2 aria-hidden="true" size={17} />} title="推荐结论" />
+          <article className="ht-final-summary-card">
+            <strong>{finalExplanation.summary}</strong>
+            <span>{finalExplanation.nextStep}</span>
+            <p>推荐配方作为下一轮真实实验验证候选。</p>
+          </article>
+
+          <SectionTitle icon={<SlidersHorizontal aria-hidden="true" size={17} />} title="解释权重 / 目标约束" />
+          <div className="ht-constraint-list">
             {scenario.targets.map((baseTarget) => {
               const target = getConfiguredTarget(baseTarget.key, confirmedSetup);
               return (
-                <label key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
-                  <div className="ht-weight-label">
-                    <span>
-                      {target.shortLabel}
-                      <em>{targetThresholdLabel(target)}</em>
-                    </span>
-                    <b>{weights[target.key]}</b>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="50"
-                    step="5"
-                    value={weights[target.key]}
-                    onChange={(event) => updateWeight(target.key, Number(event.currentTarget.value))}
-                  />
-                </label>
+                <article key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
+                  <span>{target.shortLabel}</span>
+                  <b>{weights[target.key]}</b>
+                  <em>{targetThresholdLabel(target)}</em>
+                </article>
               );
             })}
           </div>
@@ -2439,7 +2545,7 @@ function RatioStackedBar({
   showLabels?: boolean;
 }) {
   return (
-    <div className="ht-stacked-ratio-bar" aria-label={`${mix.id} component ratios`}>
+    <div className="ht-stacked-ratio-bar" aria-label={`${mix.id} 组分比例`}>
       {components.map((component) => {
         const ratio = mix.ratios[component.id] ?? 0;
         return (
@@ -2491,7 +2597,7 @@ function RadarChart({
   const polygonPoints = axes.map((axis) => `${axis.value.x},${axis.value.y}`).join(" ");
 
   return (
-    <svg className="ht-radar" viewBox="0 0 100 100" role="img" aria-label="target achievement radar">
+    <svg className="ht-radar" viewBox="0 0 100 100" role="img" aria-label="目标达成雷达图">
       {[0.35, 0.7, 1].map((scale) => (
         <polygon
           key={scale}
