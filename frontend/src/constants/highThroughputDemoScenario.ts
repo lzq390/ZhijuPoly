@@ -297,6 +297,28 @@ function distanceScore(x: number, y: number, center: { x: number; y: number }) {
   return clamp(1 - distance / 70, 0, 1);
 }
 
+const S3_SCORE_OVERRIDES: Record<string, Partial<Record<HighThroughputTargetKey, number>>> = {
+  "PI-1973": { tg: 540 },
+  "PI-699": { tg: 548 },
+  "PI-2326": { tg: 552 },
+  "PI-2842": { tg: 556 },
+  "PI-1013": { tg: 562 },
+  "PI-1121": { cte: 27 },
+  "PI-029": { cte: 29 },
+  "PI-085": { cte: 26 },
+  "PI-575": { cte: 27 },
+  "PI-1219": { cte: 25 },
+  "PI-099": { elongation: 28 },
+  "PI-104": { elongation: 26 },
+  "PI-799": { elongation: 29 },
+  "PI-1309": { elongation: 30 },
+  "PI-734": { elongation: 31, modulus: 3.0 },
+  "PI-834": { modulus: 3.1 },
+  "PI-1452": { modulus: 3.3 },
+  "PI-1490": { modulus: 3.2 },
+  "PI-356": { modulus: 3.5 },
+};
+
 function buildCandidates(): HighThroughputCandidate[] {
   const kernels = [
     { cx: 17, cy: 21, sx: 5.8, sy: 3.8, rotation: -0.18, weight: 0.09, label: "rigid-aromatic" },
@@ -343,9 +365,11 @@ function buildCandidates(): HighThroughputCandidate[] {
     const cteScore = Math.round(62 - distanceScore(x, y, targetDefinitions[1].heatCenter) * 33 + ((index * 5) % 7));
     const elongationScore = Math.round(6 + distanceScore(x, y, targetDefinitions[2].heatCenter) * 18 + ((index * 3) % 5));
     const modulusScore = Math.round((1.5 + distanceScore(x, y, targetDefinitions[3].heatCenter) * 2.25 + ((index * 4) % 8) / 20) * 10) / 10;
+    const candidateId = `PI-${String(index + 1).padStart(3, "0")}`;
+    const scoreOverrides = S3_SCORE_OVERRIDES[candidateId] ?? {};
 
     return {
-      id: `PI-${String(index + 1).padStart(3, "0")}`,
+      id: candidateId,
       x,
       y,
       monomerA: `DA-${String(monomerAIndex).padStart(2, "0")}`,
@@ -356,6 +380,7 @@ function buildCandidates(): HighThroughputCandidate[] {
         cte: cteScore,
         elongation: elongationScore,
         modulus: modulusScore,
+        ...scoreOverrides,
       },
     };
   });
@@ -790,7 +815,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
       targetKey: "tg",
       objective: "maximize Tg",
       currentBestId: "PI-1013",
-      bestValue: 296,
+      bestValue: 562,
       topCandidateIds: ["PI-1013", "PI-2842", "PI-2326"],
       explorationCandidateIds: ["PI-1973", "PI-699", "PI-2326", "PI-2842"],
       recommendation: "Tg Agent 只读取 Tg 空间的正交先验和回流样本，持续更新耐热热点并收敛到 p1。",
@@ -802,7 +827,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
       targetKey: "cte",
       objective: "minimize CTE",
       currentBestId: "PI-1219",
-      bestValue: 29,
+      bestValue: 25,
       topCandidateIds: ["PI-1219", "PI-1121", "PI-029"],
       explorationCandidateIds: ["PI-1121", "PI-029", "PI-085", "PI-575"],
       recommendation: "CTE Agent 只在低热膨胀空间内用 DOE 先验建立低值区域，再通过回流样本更新边界。",
@@ -814,7 +839,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
       targetKey: "elongation",
       objective: "maximize elongation",
       currentBestId: "PI-734",
-      bestValue: 22,
+      bestValue: 31,
       topCandidateIds: ["PI-734", "PI-1309", "PI-799"],
       explorationCandidateIds: ["PI-099", "PI-104", "PI-799", "PI-1309"],
       recommendation: "Elongation Agent 根据正交样本识别柔性桥连区域，迭代加密高伸长候选。",
@@ -826,7 +851,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
       targetKey: "modulus",
       objective: "maximize modulus",
       currentBestId: "PI-356",
-      bestValue: 3.3,
+      bestValue: 3.5,
       topCandidateIds: ["PI-356", "PI-1452", "PI-1490"],
       explorationCandidateIds: ["PI-734", "PI-834", "PI-1452", "PI-1490"],
       recommendation: "Modulus Agent 基于正交先验建立高刚性空间，回流后更新刚性热点并收敛到 p4。",

@@ -3,13 +3,10 @@ import {
   Bot,
   BrainCircuit,
   CheckCircle2,
-  ChevronLeft,
   ChevronRight,
   FileCheck2,
   FlaskConical,
   Layers3,
-  Pause,
-  Play,
   RotateCcw,
   SlidersHorizontal,
   Target,
@@ -62,8 +59,21 @@ type PriorDataUploadState = {
 };
 
 type PriorDataUploadsState = Partial<Record<HighThroughputTargetKey, PriorDataUploadState>>;
+type RecommendationSelection = {
+  targetKey: HighThroughputTargetKey;
+  candidateId: string;
+};
+type RecommendationValidationValues = Record<string, string>;
+type RecommendationValidationRequirement = {
+  targetKey: HighThroughputTargetKey;
+  candidateId: string;
+};
+type NextStepState = {
+  canAdvance: boolean;
+  label: string;
+  hint: string;
+};
 
-const PLAY_INTERVAL_MS = 2600;
 const DOE_PRIOR_LOAD_MS = 1000;
 const MAX_RENDERED_STAGE_DOTS = 2400;
 const MAX_RENDERED_PROPERTY_DOTS = 2200;
@@ -164,6 +174,64 @@ function getConfiguredTarget(targetKey: HighThroughputTargetKey, setup: Confirme
 
 function getCandidate(candidateId: string) {
   return highThroughputDemoScenario.candidates.find((candidate) => candidate.id === candidateId);
+}
+
+function recommendationValidationKey(targetKey: HighThroughputTargetKey, candidateId: string) {
+  return `${targetKey}:${candidateId}`;
+}
+
+function uniqueItems<T>(items: T[]) {
+  return Array.from(new Set(items));
+}
+
+function validationNumber(
+  validationValues: RecommendationValidationValues,
+  targetKey: HighThroughputTargetKey,
+  candidateId: string,
+) {
+  const rawValue = validationValues[recommendationValidationKey(targetKey, candidateId)];
+  if (rawValue === undefined || rawValue.trim() === "") {
+    return null;
+  }
+  const parsedValue = Number(rawValue);
+  return Number.isFinite(parsedValue) ? parsedValue : null;
+}
+
+function hasValidationValue(
+  validationValues: RecommendationValidationValues,
+  targetKey: HighThroughputTargetKey,
+  candidateId: string,
+) {
+  return validationNumber(validationValues, targetKey, candidateId) !== null;
+}
+
+function isTargetCsvReady(upload: PriorDataUploadState | null | undefined) {
+  return Boolean(upload && !upload.isLoading && !upload.errorMessage);
+}
+
+function fallbackCandidateSmiles(candidate: HighThroughputCandidate | undefined) {
+  if (!candidate) {
+    return {
+      polymerSmiles: "--",
+      monomerASmiles: "--",
+      monomerBSmiles: "--",
+    };
+  }
+
+  const monomerANumber = Number(candidate.monomerA.replace(/\D/g, "")) || 1;
+  const monomerBNumber = Number(candidate.monomerB.replace(/\D/g, "")) || 1;
+  const daSideChain = "C".repeat((monomerANumber % 10) + 1);
+  const daSecondChain = "C".repeat(Math.floor(monomerANumber / 10) + 1);
+  const dmSpacer = "C".repeat((monomerBNumber % 10) + 1);
+  const dmMethylPattern = "C".repeat(Math.floor(monomerBNumber / 10) + 1);
+  const aromaticBridge = `c1ccc(C(${daSideChain})(${daSecondChain})c2ccc(O)cc2)cc1`;
+  const diamineTail = `Nc1ccc(${dmSpacer}Oc2ccc(N)c(${dmMethylPattern})c2)cc1`;
+
+  return {
+    polymerSmiles: candidate.polymerSmiles ?? `*N(C(=O)c1ccc(${aromaticBridge})cc1C(=O)*)${diamineTail}`,
+    monomerASmiles: candidate.monomerASmiles ?? `O=C1OC(=O)c2ccc(${aromaticBridge})cc21`,
+    monomerBSmiles: candidate.monomerBSmiles ?? diamineTail,
+  };
 }
 
 function getAgentForCandidate(candidateId: string) {
@@ -351,11 +419,60 @@ function bestCandidateId(candidateIds: string[], target: HighThroughputTarget) {
   }, null) ?? candidateIds[0];
 }
 
+function bestCandidateIdWithValidation(
+  candidateIds: string[],
+  target: HighThroughputTarget,
+  validationValues: RecommendationValidationValues,
+) {
+  return candidateIds.reduce<string | null>((bestId, candidateId) => {
+    const candidate = getCandidate(candidateId);
+    const bestCandidate = bestId ? getCandidate(bestId) : undefined;
+    if (!candidate) {
+      return bestId;
+    }
+    if (!bestId || !bestCandidate) {
+      return candidateId;
+    }
+
+    const value = validationNumber(validationValues, target.key, candidateId) ?? candidate.scores[target.key];
+    const bestValue = validationNumber(validationValues, target.key, bestId) ?? bestCandidate.scores[target.key];
+    return target.direction === "lower"
+      ? value < bestValue ? candidateId : bestId
+      : value > bestValue ? candidateId : bestId;
+  }, null) ?? candidateIds[0];
+}
+
 function targetGapLabel(candidate: HighThroughputCandidate | undefined, target: HighThroughputTarget) {
   if (!candidate) {
     return "--";
   }
   const value = candidate.scores[target.key];
+  const gap = target.direction === "lower" ? target.target - value : value - target.target;
+  const sign = gap > 0 ? "+" : "";
+  return `${sign}${formatNumber(gap, targetValueDigits(target))}${target.unit}`;
+}
+
+function candidateValueWithValidation(
+  candidate: HighThroughputCandidate | undefined,
+  target: HighThroughputTarget,
+  validationValues: RecommendationValidationValues,
+) {
+  if (!candidate) {
+    return "--";
+  }
+  const value = validationNumber(validationValues, target.key, candidate.id) ?? candidate.scores[target.key];
+  return `${formatNumber(value, targetValueDigits(target))} ${target.unit}`;
+}
+
+function targetGapLabelWithValidation(
+  candidate: HighThroughputCandidate | undefined,
+  target: HighThroughputTarget,
+  validationValues: RecommendationValidationValues,
+) {
+  if (!candidate) {
+    return "--";
+  }
+  const value = validationNumber(validationValues, target.key, candidate.id) ?? candidate.scores[target.key];
   const gap = target.direction === "lower" ? target.target - value : value - target.target;
   const sign = gap > 0 ? "+" : "";
   return `${sign}${formatNumber(gap, targetValueDigits(target))}${target.unit}`;
@@ -430,16 +547,70 @@ function propertyRoundIds(targetKey: HighThroughputTargetKey, stageIndex: number
   };
 }
 
+function recommendationValidationIds(targetKey: HighThroughputTargetKey, stageIndex: number, iterationRoundIndex = 2) {
+  if (stageIndex === 2) {
+    return propertyRoundIds(targetKey, stageIndex).recommendedIds.slice(0, 2);
+  }
+  if (stageIndex === 3) {
+    return propertyRoundIds(targetKey, stageIndex, iterationRoundIndex).recommendedIds;
+  }
+  return [];
+}
+
+function getRequiredValidationIds(stageIndex: number, iterationRoundIndex = 0): RecommendationValidationRequirement[] {
+  if (stageIndex !== 2 && stageIndex !== 3) {
+    return [];
+  }
+
+  return highThroughputDemoScenario.targets.flatMap((target) =>
+    recommendationValidationIds(target.key, stageIndex, iterationRoundIndex).map((candidateId) => ({
+      targetKey: target.key,
+      candidateId,
+    })),
+  );
+}
+
+function missingValidationCount(
+  requirements: RecommendationValidationRequirement[],
+  validationValues: RecommendationValidationValues,
+) {
+  return requirements.filter((requirement) =>
+    !hasValidationValue(validationValues, requirement.targetKey, requirement.candidateId),
+  ).length;
+}
+
+function buildInitialRecommendationValidationValues(): RecommendationValidationValues {
+  const requirements = [
+    ...getRequiredValidationIds(2),
+    ...getRequiredValidationIds(3, 0),
+    ...getRequiredValidationIds(3, 1),
+  ];
+
+  return Object.fromEntries(
+    requirements.map((requirement) => {
+      const target = getTarget(requirement.targetKey);
+      const candidate = getCandidate(requirement.candidateId);
+      const value = candidate ? formatTargetValue(target, candidate.scores[requirement.targetKey]) : "";
+      return [recommendationValidationKey(requirement.targetKey, requirement.candidateId), value];
+    }),
+  );
+}
+
 function propertySpaceCurrentBestId(
   stageIndex: number,
   space: HighThroughputPropertySpace,
   target: HighThroughputTarget,
   iterationRoundIndex = 2,
+  validationValues: RecommendationValidationValues = {},
 ) {
   if (stageIndex === 3) {
     const rounds = highThroughputDemoScenario.roundsByTarget[space.targetKey];
-    const activeRound = rounds[clamp(iterationRoundIndex, 0, rounds.length - 1)] ?? rounds[rounds.length - 1];
-    return activeRound.currentBestId;
+    const visibleRounds = rounds.slice(0, clamp(iterationRoundIndex, 0, rounds.length - 1) + 1);
+    const measuredIds = uniqueItems([
+      ...space.priorCandidateIds,
+      ...visibleRounds.flatMap((round) => round.testedIds),
+    ]);
+    return bestCandidateIdWithValidation(measuredIds, target, validationValues);
   }
   if (stageIndex > 3) {
     return space.currentBestId;
@@ -450,48 +621,116 @@ function propertySpaceCurrentBestId(
   return "";
 }
 
+function getStageCompletionState({
+  currentStageIndex,
+  activeIterationRoundIndex,
+  activeRatioSearchStepIndex,
+  priorDataUploads,
+  validationValues,
+}: {
+  currentStageIndex: number;
+  activeIterationRoundIndex: number;
+  activeRatioSearchStepIndex: number;
+  priorDataUploads: PriorDataUploadsState;
+  validationValues: RecommendationValidationValues;
+}): NextStepState {
+  const scenario = highThroughputDemoScenario;
+  const readyCsvCount = scenario.targets.filter((target) => isTargetCsvReady(priorDataUploads[target.key])).length;
+  const searchStepCount = scenario.formulation.searchSteps.length;
+
+  if (currentStageIndex === 0) {
+    return {
+      canAdvance: false,
+      label: "确认",
+      hint: "请先确认任务设置",
+    };
+  }
+
+  if (currentStageIndex === 1) {
+    const remainingCsvCount = scenario.targets.length - readyCsvCount;
+    return {
+      canAdvance: remainingCsvCount === 0,
+      label: "S2",
+      hint: remainingCsvCount === 0 ? "四个 CSV 已就绪" : `请先上传 ${remainingCsvCount} 个 CSV`,
+    };
+  }
+
+  if (currentStageIndex === 2) {
+    const requirements = getRequiredValidationIds(2, activeIterationRoundIndex);
+    const missingCount = missingValidationCount(requirements, validationValues);
+    return {
+      canAdvance: missingCount === 0,
+      label: "S3",
+      hint: missingCount === 0 ? "S2 推荐点实测值已录入" : `请录入 ${missingCount} 个推荐点实测值`,
+    };
+  }
+
+  if (currentStageIndex === 3) {
+    if (activeIterationRoundIndex >= 2) {
+      return {
+        canAdvance: true,
+        label: "S4",
+        hint: "单性质空间已收敛",
+      };
+    }
+
+    const requirements = getRequiredValidationIds(3, activeIterationRoundIndex);
+    const missingCount = missingValidationCount(requirements, validationValues);
+    const nextLabel = activeIterationRoundIndex === 0 ? "R2" : "收敛";
+    return {
+      canAdvance: missingCount === 0,
+      label: nextLabel,
+      hint: missingCount === 0 ? "当前轮推荐点实测值已录入" : `请录入 ${missingCount} 个推荐点实测值`,
+    };
+  }
+
+  if (currentStageIndex === 4) {
+    return {
+      canAdvance: true,
+      label: "S5",
+      hint: "p1-p4 候选已输出",
+    };
+  }
+
+  if (currentStageIndex === 5) {
+    const lastStepIndex = Math.max(searchStepCount - 1, 0);
+    return {
+      canAdvance: true,
+      label: activeRatioSearchStepIndex < lastStepIndex
+        ? `T${activeRatioSearchStepIndex + 1}`
+        : "S6",
+      hint: activeRatioSearchStepIndex < lastStepIndex ? "继续比例搜索" : "S5 最终配方已锁定",
+    };
+  }
+
+  return {
+    canAdvance: false,
+    label: "完成",
+    hint: "最终结果已生成",
+  };
+}
+
 export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDemoPageProps) {
   const scenario = highThroughputDemoScenario;
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [weights, setWeights] = useState<WeightState>(() => buildInitialWeights());
   const [confirmedSetup, setConfirmedSetup] = useState<ConfirmedSetup>(() => buildDefaultConfirmedSetup());
+  const [setupResetToken, setSetupResetToken] = useState(0);
   const [activeSpaceTargetKey, setActiveSpaceTargetKey] = useState<HighThroughputTargetKey>("tg");
   const [activeIterationRoundIndex, setActiveIterationRoundIndex] = useState(0);
   const [activeRatioSearchStepIndex, setActiveRatioSearchStepIndex] = useState(0);
   const [priorDataUploads, setPriorDataUploads] = useState<PriorDataUploadsState>({});
+  const [selectedRecommendation, setSelectedRecommendation] = useState<RecommendationSelection | null>(null);
+  const [recommendationValidationValues, setRecommendationValidationValues] = useState<RecommendationValidationValues>(() => buildInitialRecommendationValidationValues());
   const priorUploadTimersRef = useRef<Partial<Record<HighThroughputTargetKey, number>>>({});
   const mapStageRef = useRef<HTMLDivElement | null>(null);
-  const maxStageIndex = scenario.stages.length - 1;
-
-  useEffect(() => {
-    if (!isPlaying) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      setCurrentStageIndex((index) => {
-        if (index >= maxStageIndex) {
-          window.clearInterval(timer);
-          setIsPlaying(false);
-          return index;
-        }
-        const nextIndex = index + 1;
-        if (nextIndex === 3) {
-          setActiveIterationRoundIndex(0);
-        } else if (nextIndex === 4) {
-          setActiveIterationRoundIndex(2);
-        } else if (nextIndex === 5) {
-          setActiveRatioSearchStepIndex(0);
-        } else if (nextIndex === 6) {
-          setActiveRatioSearchStepIndex(scenario.formulation.searchSteps.length - 1);
-        }
-        return nextIndex;
-      });
-    }, PLAY_INTERVAL_MS);
-
-    return () => window.clearInterval(timer);
-  }, [isPlaying, maxStageIndex]);
+  const nextStepState = getStageCompletionState({
+    currentStageIndex,
+    activeIterationRoundIndex,
+    activeRatioSearchStepIndex,
+    priorDataUploads,
+    validationValues: recommendationValidationValues,
+  });
 
   useEffect(() => () => {
     Object.values(priorUploadTimersRef.current).forEach((timerId) => {
@@ -501,6 +740,26 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     });
   }, []);
 
+  useEffect(() => {
+    if (currentStageIndex !== 2 && currentStageIndex !== 3) {
+      return;
+    }
+
+    const recommendedIds = recommendationValidationIds(activeSpaceTargetKey, currentStageIndex, activeIterationRoundIndex);
+    setSelectedRecommendation((selection) => {
+      if (
+        selection &&
+        selection.targetKey === activeSpaceTargetKey &&
+        recommendedIds.includes(selection.candidateId)
+      ) {
+        return selection;
+      }
+
+      const candidateId = recommendedIds[0];
+      return candidateId ? { targetKey: activeSpaceTargetKey, candidateId } : null;
+    });
+  }, [activeIterationRoundIndex, activeSpaceTargetKey, currentStageIndex]);
+
   function clearPriorUploadTimer(targetKey: HighThroughputTargetKey) {
     const timerId = priorUploadTimersRef.current[targetKey];
     if (timerId !== undefined) {
@@ -509,12 +768,12 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     }
   }
 
-  function clearPriorUploadTimers() {
+  function clearAllPriorUploadTimers() {
     scenario.targets.forEach((target) => clearPriorUploadTimer(target.key));
   }
 
-  function goToStage(index: number) {
-    const nextIndex = clamp(index, 0, maxStageIndex);
+  function enterStage(index: number) {
+    const nextIndex = clamp(index, 0, scenario.stages.length - 1);
     setCurrentStageIndex(nextIndex);
     if (nextIndex === 3) {
       setActiveIterationRoundIndex(0);
@@ -525,36 +784,82 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     } else if (nextIndex === 6) {
       setActiveRatioSearchStepIndex(scenario.formulation.searchSteps.length - 1);
     }
-    setIsPlaying(false);
   }
 
-  function togglePlayback() {
-    if (isPlaying) {
-      setIsPlaying(false);
+  function handleNextStep() {
+    if (!nextStepState.canAdvance) {
       return;
     }
-    if (currentStageIndex >= maxStageIndex) {
-      setCurrentStageIndex(0);
-      setActiveRatioSearchStepIndex(0);
+
+    if (currentStageIndex === 3) {
+      if (activeIterationRoundIndex < 2) {
+        setActiveIterationRoundIndex((roundIndex) => clamp(roundIndex + 1, 0, 2));
+        return;
+      }
+      enterStage(4);
+      return;
     }
-    setIsPlaying(true);
+
+    if (currentStageIndex === 5) {
+      const lastStepIndex = scenario.formulation.searchSteps.length - 1;
+      if (activeRatioSearchStepIndex < lastStepIndex) {
+        setActiveRatioSearchStepIndex((stepIndex) => clamp(stepIndex + 1, 0, lastStepIndex));
+        return;
+      }
+      enterStage(6);
+      return;
+    }
+
+    enterStage(currentStageIndex + 1);
   }
 
-  function resetDemo() {
-    clearPriorUploadTimers();
-    setCurrentStageIndex(0);
-    setWeights(buildInitialWeights());
-    setConfirmedSetup(buildDefaultConfirmedSetup());
-    setActiveSpaceTargetKey("tg");
-    setActiveIterationRoundIndex(0);
-    setActiveRatioSearchStepIndex(0);
-    setPriorDataUploads({});
-    setIsPlaying(false);
+  function resetValidationValues(requirements: RecommendationValidationRequirement[]) {
+    const defaultValues = buildInitialRecommendationValidationValues();
+    setRecommendationValidationValues((values) => {
+      const nextValues = { ...values };
+      requirements.forEach((requirement) => {
+        const key = recommendationValidationKey(requirement.targetKey, requirement.candidateId);
+        nextValues[key] = defaultValues[key] ?? "";
+      });
+      return nextValues;
+    });
+  }
+
+  function resetCurrentStageActions() {
+    if (currentStageIndex === 0) {
+      setConfirmedSetup(buildDefaultConfirmedSetup());
+      setSetupResetToken((token) => token + 1);
+      setActiveSpaceTargetKey("tg");
+      return;
+    }
+
+    if (currentStageIndex === 1) {
+      clearAllPriorUploadTimers();
+      setPriorDataUploads({});
+      setSelectedRecommendation(null);
+      return;
+    }
+
+    if (currentStageIndex === 2) {
+      resetValidationValues(getRequiredValidationIds(2));
+      setSelectedRecommendation(null);
+      return;
+    }
+
+    if (currentStageIndex === 3) {
+      resetValidationValues(getRequiredValidationIds(3, activeIterationRoundIndex));
+      setSelectedRecommendation(null);
+      return;
+    }
+
+    if (currentStageIndex === 5) {
+      setActiveRatioSearchStepIndex(0);
+    }
   }
 
   function confirmSetup(setup: ConfirmedSetup) {
     setConfirmedSetup(setup);
-    goToStage(1);
+    enterStage(1);
   }
 
   function handlePriorDataUpload(targetKey: HighThroughputTargetKey, file: File | null) {
@@ -627,20 +932,30 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     }, DOE_PRIOR_LOAD_MS);
   }
 
+  function handleRecommendationValidationValueChange(targetKey: HighThroughputTargetKey, candidateId: string, value: string) {
+    setRecommendationValidationValues((values) => ({
+      ...values,
+      [recommendationValidationKey(targetKey, candidateId)]: value,
+    }));
+  }
+
   return (
     <div className="high-throughput-demo">
       <main className="ht-shell">
         <section className="ht-docx-board">
-          <ScenarioHeader confirmedSetup={confirmedSetup} onConfirmSetup={confirmSetup} isConfirmed={currentStageIndex > 0} />
+          <ScenarioHeader
+            confirmedSetup={confirmedSetup}
+            onConfirmSetup={confirmSetup}
+            isConfirmed={currentStageIndex > 0}
+            resetToken={setupResetToken}
+          />
 
           <FlowControlBar
             currentStageIndex={currentStageIndex}
-            isPlaying={isPlaying}
-            onTogglePlayback={togglePlayback}
-            onPrevious={() => goToStage(currentStageIndex - 1)}
-            onNext={() => goToStage(currentStageIndex + 1)}
-            onReset={resetDemo}
-            onSelectStage={goToStage}
+            nextStepState={nextStepState}
+            onNextStep={handleNextStep}
+            onResetStage={resetCurrentStageActions}
+            canResetStage={[0, 1, 2, 3, 5].includes(currentStageIndex)}
           />
 
           <div className="ht-docx-map-stage" ref={mapStageRef}>
@@ -663,8 +978,10 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                   activeTargetKey={activeSpaceTargetKey}
                   onActiveTargetChange={setActiveSpaceTargetKey}
                   iterationRoundIndex={activeIterationRoundIndex}
-                  onIterationRoundChange={setActiveIterationRoundIndex}
                   priorDataUploads={priorDataUploads}
+                  validationValues={recommendationValidationValues}
+                  selectedRecommendation={selectedRecommendation}
+                  onSelectRecommendation={setSelectedRecommendation}
                 />
               ) : (
                 <RatioAnnealingMap
@@ -686,7 +1003,11 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
             />
 
             {currentStageIndex <= 4 ? (
-              <AgentAttentionOverlay stageIndex={currentStageIndex} stageRef={mapStageRef} />
+              <AgentAttentionOverlay
+                stageIndex={currentStageIndex}
+                iterationRoundIndex={activeIterationRoundIndex}
+                stageRef={mapStageRef}
+              />
             ) : null}
           </div>
 
@@ -696,13 +1017,16 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
               activeTargetKey={activeSpaceTargetKey}
               priorDataUploads={priorDataUploads}
               iterationRoundIndex={activeIterationRoundIndex}
+              selectedRecommendation={selectedRecommendation}
+              onSelectRecommendation={setSelectedRecommendation}
+              validationValues={recommendationValidationValues}
+              onValidationValueChange={handleRecommendationValidationValueChange}
             />
           ) : currentStageIndex === 4 ? (
             <CandidateOutputPanel activeTargetKey={activeSpaceTargetKey} confirmedSetup={confirmedSetup} />
           ) : currentStageIndex === 5 ? (
             <RatioSearchPanel
               activeStepIndex={activeRatioSearchStepIndex}
-              onStepChange={setActiveRatioSearchStepIndex}
             />
           ) : (
             <FinalFormulationPanel
@@ -720,10 +1044,12 @@ function ScenarioHeader({
   confirmedSetup,
   onConfirmSetup,
   isConfirmed,
+  resetToken,
 }: {
   confirmedSetup: ConfirmedSetup;
   onConfirmSetup: (setup: ConfirmedSetup) => void;
   isConfirmed: boolean;
+  resetToken: number;
 }) {
   const scenario = highThroughputDemoScenario;
   const [materialType, setMaterialType] = useState(confirmedSetup.materialType);
@@ -747,7 +1073,7 @@ function ScenarioHeader({
     setCandidateB(String(confirmedSetup.monomerBCount));
     setSelectedTargetKeys(confirmedSetup.selectedTargetKeys);
     setTargetValues(buildTargetValueInputs(confirmedSetup.targetValues));
-  }, [confirmedSetup]);
+  }, [confirmedSetup, resetToken]);
 
   function handleTargetClick(targetKey: HighThroughputTargetKey) {
     setFocusedTargetKey(targetKey);
@@ -903,9 +1229,9 @@ function ScenarioHeader({
           </strong>
           <em>{selectedTargets.length} target properties selected</em>
         </div>
-        <button type="button" className="ht-confirm-setup-button" onClick={handleConfirmSetup}>
+        <button type="button" className="ht-confirm-setup-button" onClick={handleConfirmSetup} disabled={isConfirmed}>
           {isConfirmed ? <CheckCircle2 aria-hidden="true" size={17} /> : <ChevronRight aria-hidden="true" size={17} />}
-          {isConfirmed ? "已确认，重新进入候选空间生成" : "确认任务设置，生成候选空间"}
+          {isConfirmed ? "任务设置已确认" : "确认任务设置，生成候选空间"}
         </button>
       </div>
     </section>
@@ -936,132 +1262,75 @@ function MetricBlock({ label, value, detail }: { label: string; value: string; d
 
 function FlowControlBar({
   currentStageIndex,
-  isPlaying,
-  onTogglePlayback,
-  onPrevious,
-  onNext,
-  onReset,
-  onSelectStage,
+  nextStepState,
+  onNextStep,
+  onResetStage,
+  canResetStage,
 }: {
   currentStageIndex: number;
-  isPlaying: boolean;
-  onTogglePlayback: () => void;
-  onPrevious: () => void;
-  onNext: () => void;
-  onReset: () => void;
-  onSelectStage: (index: number) => void;
+  nextStepState: NextStepState;
+  onNextStep: () => void;
+  onResetStage: () => void;
+  canResetStage: boolean;
 }) {
   const stages = highThroughputDemoScenario.stages;
-  const isFirst = currentStageIndex === 0;
-  const isLast = currentStageIndex === stages.length - 1;
 
   return (
     <section className="ht-flow-control-bar" aria-label="演示播放控制">
-      <div className="ht-flow-controls">
-        <button type="button" className="ht-primary-control" onClick={onTogglePlayback}>
-          {isPlaying ? <Pause aria-hidden="true" size={16} /> : <Play aria-hidden="true" size={16} />}
-          {isPlaying ? "暂停" : "播放"}
-        </button>
-        <button type="button" className="ht-icon-button" onClick={onPrevious} disabled={isFirst} aria-label="上一步">
-          <ChevronLeft aria-hidden="true" size={16} />
-        </button>
-        <button type="button" className="ht-icon-button" onClick={onNext} disabled={isLast} aria-label="下一步">
-          <ChevronRight aria-hidden="true" size={16} />
-        </button>
-        <button type="button" className="ht-icon-button" onClick={onReset} aria-label="重置">
-          <RotateCcw aria-hidden="true" size={16} />
-        </button>
+      <div className="ht-flow-next">
+        <div className="ht-flow-next-actions">
+          <button
+            type="button"
+            className="ht-primary-control ht-next-step-control"
+            onClick={onNextStep}
+            disabled={!nextStepState.canAdvance}
+          >
+            {nextStepState.label}
+            <ChevronRight aria-hidden="true" size={16} />
+          </button>
+          <button
+            type="button"
+            className="ht-icon-button ht-stage-reset-button"
+            onClick={onResetStage}
+            aria-label="重置当前阶段"
+            title={canResetStage ? "重置当前阶段" : "当前阶段无可重置动作"}
+            disabled={!canResetStage}
+          >
+            <RotateCcw aria-hidden="true" size={15} />
+          </button>
+        </div>
+        <span>{nextStepState.hint}</span>
       </div>
       <nav className="ht-flow-steps" aria-label="S0 到 S6 演示阶段">
-        {stages.map((stage, index) => (
-          <button
-            key={stage.id}
-            type="button"
-            aria-pressed={index === currentStageIndex}
-            className={cn(index < currentStageIndex && "complete")}
-            onClick={() => onSelectStage(index)}
-          >
-            <span>{stage.id}</span>
-            <b>{stage.label}</b>
-          </button>
-        ))}
+        {stages.map((stage, index) => {
+          const state = index < currentStageIndex
+            ? "complete"
+            : index === currentStageIndex
+              ? "active"
+              : "locked";
+          return (
+            <div
+              key={stage.id}
+              aria-current={index === currentStageIndex ? "step" : undefined}
+              className={cn("ht-flow-step", state)}
+            >
+              <span>{stage.id}</span>
+              <b>{stage.label}</b>
+            </div>
+          );
+        })}
       </nav>
     </section>
   );
 }
 
-function StageStepper({
-  currentStageIndex,
-  isPlaying,
-  onTogglePlayback,
-  onPrevious,
-  onNext,
-  onReset,
-  onSelectStage,
-}: {
-  currentStageIndex: number;
-  isPlaying: boolean;
-  onTogglePlayback: () => void;
-  onPrevious: () => void;
-  onNext: () => void;
-  onReset: () => void;
-  onSelectStage: (index: number) => void;
-}) {
-  const stages = highThroughputDemoScenario.stages;
-  const isFirst = currentStageIndex === 0;
-  const isLast = currentStageIndex === stages.length - 1;
-
-  return (
-    <aside className="ht-stepper-panel">
-      <div className="ht-stepper-heading">
-        <span className="ht-kicker">Guided demo</span>
-        <h2>流程步骤</h2>
-      </div>
-      <div className="ht-play-controls">
-        <button type="button" className="ht-primary-control" onClick={onTogglePlayback}>
-          {isPlaying ? <Pause aria-hidden="true" size={16} /> : <Play aria-hidden="true" size={16} />}
-          {isPlaying ? "暂停" : "播放"}
-        </button>
-        <button type="button" className="ht-icon-button" onClick={onPrevious} disabled={isFirst} aria-label="上一步">
-          <ChevronLeft aria-hidden="true" size={16} />
-        </button>
-        <button type="button" className="ht-icon-button" onClick={onNext} disabled={isLast} aria-label="下一步">
-          <ChevronRight aria-hidden="true" size={16} />
-        </button>
-        <button type="button" className="ht-icon-button" onClick={onReset} aria-label="重置">
-          <RotateCcw aria-hidden="true" size={16} />
-        </button>
-      </div>
-      <nav className="ht-stage-list" aria-label="高通量演示阶段">
-        {stages.map((stage, index) => {
-          const state = index < currentStageIndex ? "done" : index === currentStageIndex ? "active" : "pending";
-          return (
-            <button
-              key={stage.id}
-              type="button"
-              className={cn("ht-stage-button", state)}
-              aria-pressed={index === currentStageIndex}
-              onClick={() => onSelectStage(index)}
-            >
-              <span className="ht-stage-index">{stage.id}</span>
-              <span>
-                <strong>{stage.label}</strong>
-                <em>{stage.title}</em>
-              </span>
-              {state === "done" ? <CheckCircle2 aria-hidden="true" size={15} /> : null}
-            </button>
-          );
-        })}
-      </nav>
-    </aside>
-  );
-}
-
 function AgentAttentionOverlay({
   stageIndex,
+  iterationRoundIndex,
   stageRef,
 }: {
   stageIndex: number;
+  iterationRoundIndex: number;
   stageRef: RefObject<HTMLDivElement | null>;
 }) {
   const [layout, setLayout] = useState<AgentAttentionOverlayLayout>({ width: 0, height: 0, links: [] });
@@ -1104,7 +1373,9 @@ function AgentAttentionOverlay({
       const mapCenterX = mapRect.left + mapRect.width / 2;
       const links = scenario.agents.flatMap((agent) => {
         const card = stage.querySelector<HTMLElement>(`[data-agent-id="${agent.id}"]`);
-        const point = projectedCandidateMap.get(agent.currentBestId);
+        const rounds = scenario.roundsByTarget[agent.targetKey];
+        const activeRound = rounds[clamp(iterationRoundIndex, 0, rounds.length - 1)] ?? rounds[rounds.length - 1];
+        const point = projectedCandidateMap.get(activeRound.currentBestId);
         if (!card || !point) {
           return [];
         }
@@ -1161,7 +1432,7 @@ function AgentAttentionOverlay({
       window.removeEventListener("resize", scheduleLayout);
       resizeObserver?.disconnect();
     };
-  }, [stageIndex, stageRef]);
+  }, [iterationRoundIndex, stageIndex, stageRef]);
 
   if (stageIndex !== 3 || layout.width <= 0 || layout.height <= 0 || layout.links.length === 0) {
     return null;
@@ -1189,16 +1460,20 @@ function PropertySpaceBoard({
   activeTargetKey,
   onActiveTargetChange,
   iterationRoundIndex,
-  onIterationRoundChange,
   priorDataUploads,
+  validationValues,
+  selectedRecommendation,
+  onSelectRecommendation,
 }: {
   stageIndex: number;
   confirmedSetup: ConfirmedSetup;
   activeTargetKey: HighThroughputTargetKey;
   onActiveTargetChange: (targetKey: HighThroughputTargetKey) => void;
   iterationRoundIndex: number;
-  onIterationRoundChange: (roundIndex: number) => void;
   priorDataUploads: PriorDataUploadsState;
+  validationValues: RecommendationValidationValues;
+  selectedRecommendation: RecommendationSelection | null;
+  onSelectRecommendation: (selection: RecommendationSelection) => void;
 }) {
   const scenario = highThroughputDemoScenario;
   const activeTarget = getConfiguredTarget(activeTargetKey, confirmedSetup);
@@ -1252,8 +1527,10 @@ function PropertySpaceBoard({
           target={activeTarget}
           variant="large"
           iterationRoundIndex={iterationRoundIndex}
-          onIterationRoundChange={onIterationRoundChange}
           priorDataUpload={priorDataUploads[activeTarget.key] ?? null}
+          validationValues={validationValues}
+          selectedRecommendation={selectedRecommendation}
+          onSelectRecommendation={onSelectRecommendation}
         />
       </div>
     </section>
@@ -1265,15 +1542,19 @@ function PropertySpaceCard({
   target,
   variant = "compact",
   iterationRoundIndex = 2,
-  onIterationRoundChange,
   priorDataUpload = null,
+  validationValues = {},
+  selectedRecommendation = null,
+  onSelectRecommendation,
 }: {
   stageIndex: number;
   target: HighThroughputTarget;
   variant?: "compact" | "large";
   iterationRoundIndex?: number;
-  onIterationRoundChange?: (roundIndex: number) => void;
   priorDataUpload?: PriorDataUploadState | null;
+  validationValues?: RecommendationValidationValues;
+  selectedRecommendation?: RecommendationSelection | null;
+  onSelectRecommendation?: (selection: RecommendationSelection) => void;
 }) {
   const space = getPropertySpace(target.key);
   const activeRounds = highThroughputDemoScenario.roundsByTarget[target.key];
@@ -1286,7 +1567,7 @@ function PropertySpaceCard({
   const showPriorDoe = stageIndex >= 2 || (stageIndex === 1 && isPriorReady);
   const priorIds = showPriorDoe ? space.priorCandidateIds : [];
   const measuredPriorIds = stageIndex >= 2 ? space.priorCandidateIds : [];
-  const currentBestId = propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex);
+  const currentBestId = propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex, validationValues);
   const currentBest = currentBestId ? getCandidate(currentBestId) : undefined;
   const specialIds = new Set([
     ...priorIds,
@@ -1324,12 +1605,23 @@ function PropertySpaceCard({
       : stageIndex === 2
           ? "Prior DOE Surface"
           : surface?.label ?? "Round surface";
-  const canStepRounds = stageIndex === 3 && Boolean(onIterationRoundChange);
-  const stepRound = (direction: -1 | 1) => {
-    if (!onIterationRoundChange) {
+  const canInspectRecommendation =
+    (stageIndex === 2 || stageIndex === 3) &&
+    recommendedSet.size > 0 &&
+    Boolean(onSelectRecommendation);
+  const selectRecommendation = (candidateId: string) => {
+    if (canInspectRecommendation) {
+      onSelectRecommendation?.({ targetKey: target.key, candidateId });
+    }
+  };
+  const handleRecommendationKeyDown = (event: KeyboardEvent<SVGGElement>, candidateId: string) => {
+    if (!canInspectRecommendation) {
       return;
     }
-    onIterationRoundChange(clamp(activeRoundIndex + direction, 0, activeRounds.length - 1));
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectRecommendation(candidateId);
+    }
   };
 
   return (
@@ -1339,33 +1631,9 @@ function PropertySpaceCard({
           <span>{target.shortLabel} Space</span>
           <strong>{target.label}</strong>
         </div>
-        {canStepRounds ? (
-          <nav className="ht-property-round-navigator" aria-label="S3 round switcher">
-            <button
-              type="button"
-              className="ht-round-arrow-button"
-              aria-label="Previous S3 round"
-              disabled={activeRoundIndex === 0}
-              onClick={() => stepRound(-1)}
-            >
-              <ChevronLeft aria-hidden="true" size={15} />
-            </button>
-            <b className="ht-property-round-label" data-tooltip={stageLabel} tabIndex={0}>
-              <span>{stageLabel}</span>
-            </b>
-            <button
-              type="button"
-              className="ht-round-arrow-button"
-              aria-label="Next S3 round"
-              disabled={activeRoundIndex === activeRounds.length - 1}
-              onClick={() => stepRound(1)}
-            >
-              <ChevronRight aria-hidden="true" size={15} />
-            </button>
-          </nav>
-        ) : (
-          <b>{stageLabel}</b>
-        )}
+        <b className={cn(stageIndex === 3 && "ht-property-round-label")} data-tooltip={stageLabel} tabIndex={stageIndex === 3 ? 0 : undefined}>
+          <span>{stageLabel}</span>
+        </b>
       </div>
 
       <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role="img" aria-label={`${target.shortLabel} single-property optimization space`}>
@@ -1448,14 +1716,39 @@ function PropertySpaceCard({
           .filter((point) => recommendedSet.has(point.candidateId))
           .map((point) => {
             const projectedPoint = projectSpacePoint(point);
+            const isSelected = selectedRecommendation?.targetKey === target.key && selectedRecommendation.candidateId === point.candidateId;
             return (
-              <circle
+              <g
                 key={`recommended-${point.candidateId}`}
-                className="ht-recommended-sample"
-                cx={projectedPoint.x}
-                cy={projectedPoint.y}
-                r="1.04"
-              />
+                className={cn("ht-recommended-sample-node", canInspectRecommendation && "selectable", isSelected && "selected")}
+                role={canInspectRecommendation ? "button" : undefined}
+                tabIndex={canInspectRecommendation ? 0 : undefined}
+                aria-label={canInspectRecommendation ? `查看 ${point.candidateId} SMILES 并录入 ${target.shortLabel} 实测值` : undefined}
+                onClick={() => selectRecommendation(point.candidateId)}
+                onKeyDown={(event) => handleRecommendationKeyDown(event, point.candidateId)}
+              >
+                <circle
+                  className="ht-recommended-sample-hit-area"
+                  cx={projectedPoint.x}
+                  cy={projectedPoint.y}
+                  r="2.65"
+                />
+                <circle
+                  className="ht-recommended-sample"
+                  cx={projectedPoint.x}
+                  cy={projectedPoint.y}
+                  r="1.04"
+                />
+                {isSelected ? (
+                  <circle
+                    className="ht-recommended-sample-selected"
+                    cx={projectedPoint.x}
+                    cy={projectedPoint.y}
+                    r="1.88"
+                  />
+                ) : null}
+                <title>{point.candidateId} 推荐验证点</title>
+              </g>
             );
           })}
         {currentBestId ? (
@@ -1482,7 +1775,7 @@ function PropertySpaceCard({
       <div className="ht-property-space-best">
         <span>当前最优</span>
         <strong>{currentBestId || "--"}</strong>
-        <em>{candidateValue(currentBest, target)} / gap {targetGapLabel(currentBest, target)}</em>
+        <em>{candidateValueWithValidation(currentBest, target, validationValues)} / gap {targetGapLabelWithValidation(currentBest, target, validationValues)}</em>
       </div>
     </article>
   );
@@ -1493,11 +1786,19 @@ function ExperimentPriorPanel({
   activeTargetKey,
   priorDataUploads,
   iterationRoundIndex,
+  selectedRecommendation,
+  onSelectRecommendation,
+  validationValues,
+  onValidationValueChange,
 }: {
   stageIndex: number;
   activeTargetKey: HighThroughputTargetKey;
   priorDataUploads: PriorDataUploadsState;
   iterationRoundIndex: number;
+  selectedRecommendation: RecommendationSelection | null;
+  onSelectRecommendation: (selection: RecommendationSelection) => void;
+  validationValues: RecommendationValidationValues;
+  onValidationValueChange: (targetKey: HighThroughputTargetKey, candidateId: string, value: string) => void;
 }) {
   const scenario = highThroughputDemoScenario;
   const activeTarget = getTarget(activeTargetKey);
@@ -1508,6 +1809,7 @@ function ExperimentPriorPanel({
   const activeUploadReady = Boolean(activeUpload && !activeUpload.isLoading && !activeUpload.errorMessage);
   const uploadedCount = Object.values(priorDataUploads).filter((upload) => upload && !upload.isLoading && !upload.errorMessage).length;
   const iterationActive = stageIndex >= 3;
+  const activeRecommendationIds = recommendationValidationIds(activeTargetKey, stageIndex, iterationRoundIndex);
 
   return (
     <section className="ht-prior-workflow-panel">
@@ -1563,6 +1865,19 @@ function ExperimentPriorPanel({
         />
       ) : null}
 
+      {(stageIndex === 2 || stageIndex === 3) && activeRecommendationIds.length > 0 ? (
+        <RecommendationValidationPanel
+          stageIndex={stageIndex}
+          iterationRoundIndex={iterationRoundIndex}
+          target={activeTarget}
+          recommendedIds={activeRecommendationIds}
+          selectedCandidateId={selectedRecommendation?.targetKey === activeTargetKey ? selectedRecommendation.candidateId : ""}
+          validationValues={validationValues}
+          onSelectCandidate={(candidateId) => onSelectRecommendation({ targetKey: activeTargetKey, candidateId })}
+          onValidationValueChange={(candidateId, value) => onValidationValueChange(activeTargetKey, candidateId, value)}
+        />
+      ) : null}
+
       <div className="ht-round-summary-grid">
         {scenario.targets.map((target) => {
           const rounds = scenario.roundsByTarget[target.key];
@@ -1574,6 +1889,121 @@ function ExperimentPriorPanel({
             </article>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+function RecommendationValidationPanel({
+  stageIndex,
+  iterationRoundIndex,
+  target,
+  recommendedIds,
+  selectedCandidateId,
+  validationValues,
+  onSelectCandidate,
+  onValidationValueChange,
+}: {
+  stageIndex: number;
+  iterationRoundIndex: number;
+  target: HighThroughputTarget;
+  recommendedIds: string[];
+  selectedCandidateId: string;
+  validationValues: RecommendationValidationValues;
+  onSelectCandidate: (candidateId: string) => void;
+  onValidationValueChange: (candidateId: string, value: string) => void;
+}) {
+  const activeCandidateId = recommendedIds.includes(selectedCandidateId)
+    ? selectedCandidateId
+    : recommendedIds[0] ?? "";
+  const candidate = activeCandidateId ? getCandidate(activeCandidateId) : undefined;
+  const smiles = fallbackCandidateSmiles(candidate);
+  const validationValue = activeCandidateId ? validationValues[recommendationValidationKey(target.key, activeCandidateId)] ?? "" : "";
+  const panelLabel = stageIndex === 2 ? "S2 推荐验证" : `S3 Round ${iterationRoundIndex + 1} 推荐验证`;
+  const savedMessage = stageIndex === 2
+    ? "验证值已记录，进入 S3 后作为回流样本更新热点图。"
+    : "验证值已记录，切换到下一轮后作为回流样本更新热点图。";
+  const pendingMessage = stageIndex === 2
+    ? "输入实验验证值后，本演示会保留该点的回流记录状态。"
+    : "输入该轮推荐点的实测值后，本演示会保留为下一轮回流记录。";
+
+  if (recommendedIds.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="ht-s2-validation-panel" style={{ "--target-color": target.color } as CSSProperties}>
+      <div className="ht-s2-validation-head">
+        <div>
+          <span className="ht-kicker">{panelLabel}</span>
+          <h3>点击推荐点查看 SMILES，并录入实际验证值</h3>
+        </div>
+        <b>{target.shortLabel} / {targetThresholdLabel(target)}</b>
+      </div>
+
+      <div className="ht-s2-validation-grid">
+        <div className="ht-s2-recommendation-list" aria-label={`${target.shortLabel} 推荐验证点`}>
+          {recommendedIds.map((candidateId, index) => {
+            const recommendedCandidate = getCandidate(candidateId);
+            const savedValue = validationValues[recommendationValidationKey(target.key, candidateId)] ?? "";
+            return (
+              <button
+                key={candidateId}
+                type="button"
+                className={cn("ht-s2-recommendation-card", candidateId === activeCandidateId && "active", savedValue && "saved")}
+                onClick={() => onSelectCandidate(candidateId)}
+                aria-pressed={candidateId === activeCandidateId}
+              >
+                <span>推荐 {index + 1}</span>
+                <strong>{candidateId}</strong>
+                <em>预测 {candidateValue(recommendedCandidate, target)}</em>
+                {savedValue ? <i>已录入 {savedValue}{target.unit}</i> : <i>待验证</i>}
+              </button>
+            );
+          })}
+        </div>
+
+        <article className="ht-s2-smiles-card">
+          <div className="ht-s2-candidate-summary">
+            <span>{activeCandidateId || "--"}</span>
+            <strong>{candidate?.monomerA ?? "--"} + {candidate?.monomerB ?? "--"}</strong>
+            <em>{candidate?.cluster ?? "--"} / 预测 {candidateValue(candidate, target)}</em>
+          </div>
+          <div className="ht-s2-smiles-grid">
+            <label>
+              <span>polymer_smiles</span>
+              <code>{smiles.polymerSmiles}</code>
+            </label>
+            <label>
+              <span>monomer_a_smiles</span>
+              <code>{smiles.monomerASmiles}</code>
+            </label>
+            <label>
+              <span>monomer_b_smiles</span>
+              <code>{smiles.monomerBSmiles}</code>
+            </label>
+          </div>
+        </article>
+
+        <article className="ht-s2-measurement-card">
+          <label htmlFor={`s2-validation-${target.key}-${activeCandidateId}`}>
+            <span>实际验证 {target.shortLabel}</span>
+            <div>
+              <input
+                id={`s2-validation-${target.key}-${activeCandidateId}`}
+                type="number"
+                inputMode="decimal"
+                step={target.key === "modulus" ? "0.1" : "1"}
+                placeholder={candidate ? formatTargetValue(target, candidate.scores[target.key]) : ""}
+                value={validationValue}
+                onChange={(event) => onValidationValueChange(activeCandidateId, event.currentTarget.value)}
+                disabled={!activeCandidateId}
+              />
+              <b>{target.unit}</b>
+            </div>
+          </label>
+          <p>{validationValue ? savedMessage : pendingMessage}</p>
+        </article>
       </div>
     </section>
   );
@@ -2267,10 +2697,8 @@ function CandidateOutputPanel({
 
 function RatioSearchPanel({
   activeStepIndex,
-  onStepChange,
 }: {
   activeStepIndex: number;
-  onStepChange: (stepIndex: number) => void;
 }) {
   const scenario = highThroughputDemoScenario;
   const formulation = scenario.formulation;
@@ -2288,10 +2716,6 @@ function RatioSearchPanel({
   const selectedMix = mixById.get(formulation.selectedMixId) ?? currentBestMix;
   const deltaLabel = `${activeStep.deltaScore > 0 ? "+" : ""}${activeStep.deltaScore}`;
   const acceptanceLabel = `${Math.round(activeStep.acceptanceProbability * 100)}%`;
-
-  function stepRatioSearch(direction: -1 | 1) {
-    onStepChange(clamp(activeIndex + direction, 0, steps.length - 1));
-  }
 
   return (
     <section className="ht-ratio-search-panel">
@@ -2325,31 +2749,22 @@ function RatioSearchPanel({
         </div>
 
         <div className="ht-mix-candidate-panel">
-          <div className="ht-ratio-step-control" aria-label="S5 ratio search step switcher">
-            <button type="button" className="ht-round-arrow-button" aria-label="Previous ratio search step" disabled={activeIndex === 0} onClick={() => stepRatioSearch(-1)}>
-              <ChevronLeft aria-hidden="true" size={16} />
-            </button>
+          <div className="ht-ratio-step-control readonly" aria-label="S5 ratio search step">
             <div>
               <span>{activeStep.label}</span>
               <strong>{activeStep.title}</strong>
             </div>
-            <button type="button" className="ht-round-arrow-button" aria-label="Next ratio search step" disabled={activeIndex === steps.length - 1} onClick={() => stepRatioSearch(1)}>
-              <ChevronRight aria-hidden="true" size={16} />
-            </button>
           </div>
-          <div className="ht-annealing-step-timeline" role="tablist" aria-label="Simulated annealing event timeline">
+          <div className="ht-annealing-step-timeline" aria-label="Simulated annealing event timeline">
             {steps.map((step, index) => (
-              <button
+              <span
                 key={step.id}
-                type="button"
-                role="tab"
-                aria-selected={index === activeIndex}
-                className={cn(step.accepted ? "accepted" : "rejected")}
-                onClick={() => onStepChange(index)}
+                aria-current={index === activeIndex ? "step" : undefined}
+                className={cn(step.accepted ? "accepted" : "rejected", index === activeIndex && "active")}
               >
                 <span>{step.label}</span>
                 <b>{step.coolingLabel}</b>
-              </button>
+              </span>
             ))}
           </div>
 
