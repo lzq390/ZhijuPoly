@@ -98,35 +98,15 @@ def _cuda_support_error(torch_module) -> str | None:
         return "CUDA is not available"
 
     try:
-        device_major, device_minor = torch_module.cuda.get_device_capability()
-        supported_arches = torch_module.cuda.get_arch_list()
-    except Exception:
-        return None
+        torch_module.empty(1, device="cuda")
+        sample = torch_module.empty((1, 1, 3, 3), device="cuda")
+        kernel = torch_module.ones((1, 1, 1, 1), device="cuda")
+        torch_module.nn.functional.conv2d(sample, kernel)
+        torch_module.cuda.synchronize()
+    except Exception as exc:
+        return f"CUDA smoke test failed: {exc}"
 
-    supported_capabilities: list[tuple[int, int]] = []
-    for arch in supported_arches:
-        if not isinstance(arch, str) or not arch.startswith("sm_"):
-            continue
-        code = arch.removeprefix("sm_")
-        if len(code) < 2 or not code.isdigit():
-            continue
-        supported_capabilities.append((int(code[:-1]), int(code[-1])))
-
-    if not supported_capabilities:
-        return None
-
-    device_supported = any(
-        device_major == supported_major and device_minor >= supported_minor
-        for supported_major, supported_minor in supported_capabilities
-    )
-    if device_supported:
-        return None
-
-    supported_text = ", ".join(f"sm_{major}{minor}" for major, minor in supported_capabilities)
-    return (
-        f"CUDA device capability sm_{device_major}{device_minor} is not supported by "
-        f"this PyTorch build ({supported_text})"
-    )
+    return None
 
 
 def _resolve_device(torch_module, device_setting: str) -> str:

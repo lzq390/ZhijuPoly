@@ -29,12 +29,15 @@ RUN apt-get update \
 
 COPY backend/requirements.txt /tmp/requirements.txt
 RUN grep -vE '^MolScribe([[:space:]=<>].*)?$' /tmp/requirements.txt > /tmp/requirements-base.txt \
-    && pip install --no-cache-dir -r /tmp/requirements-base.txt \
+    && grep -vE '^torch([[:space:]=<>].*)?$' /tmp/requirements-base.txt > /tmp/requirements-no-torch.txt \
+    && pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 \
+        torch==2.5.1+cu121 \
+        torchvision==0.20.1+cu121 \
+    && pip install --no-cache-dir -r /tmp/requirements-no-torch.txt \
     && pip install --no-cache-dir \
         'numpy<2' \
         albumentations==1.1.0 \
         opencv-python-headless==4.10.0.84 \
-        torchvision==0.27.0 \
     && pip install --no-cache-dir --no-deps \
         MolScribe==1.1.1 \
         OpenNMT-py==2.2.0 \

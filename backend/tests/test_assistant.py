@@ -17,6 +17,8 @@ from app.pi_database import ensure_pi_schema
 from app.routers import assistant as assistant_router
 from app.routers import query as query_router
 from app.services import image_recognition
+from app.services import conditional_generation_runtime
+from app.services import monomer_retrosynthesis
 from app.services import assistant_chat as assistant_chat_service
 from app.services import assistant_orchestrator
 from app.services.assistant_chat import build_assistant_system_prompt
@@ -248,6 +250,37 @@ def test_ocsr_auto_device_rejects_cuda_without_conv_engine() -> None:
     )
 
     assert image_recognition._cuda_is_usable(fake_torch) is False
+
+
+def test_torch_model_auto_devices_reject_cuda_without_conv_engine() -> None:
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        @staticmethod
+        def synchronize() -> None:
+            return None
+
+    class FakeFunctional:
+        @staticmethod
+        def conv2d(*_args, **_kwargs):
+            raise RuntimeError("GET was unable to find an engine to execute this computation")
+
+    fake_torch = SimpleNamespace(
+        cuda=FakeCuda(),
+        nn=SimpleNamespace(functional=FakeFunctional()),
+        empty=lambda *_args, **_kwargs: object(),
+        ones=lambda *_args, **_kwargs: object(),
+    )
+
+    conditional_error = conditional_generation_runtime._cuda_support_error(fake_torch)
+    retro_error = monomer_retrosynthesis._cuda_support_error(fake_torch)
+
+    assert conditional_error is not None
+    assert "GET was unable to find an engine" in conditional_error
+    assert retro_error is not None
+    assert "GET was unable to find an engine" in retro_error
 
 
 def test_assistant_settings_reuses_online_knowledge_config_for_blank_assistant_values(tmp_path: Path, monkeypatch) -> None:

@@ -75,6 +75,8 @@ def predict_monomer_precursors(
         canonical_smiles=canonical_smiles,
         target_role=target_role,
         inferred_target_role=_resolve_target_role(target_role, target_mol),
+        model_id=model_id,
+        device=resolved_device,
         query_time_ms=(perf_counter() - started_at) * 1000,
         total=len(candidates),
         candidates=candidates,
@@ -136,13 +138,13 @@ def _cuda_support_error(torch_module: Any) -> str | None:
     if not torch_module.cuda.is_available():
         return "CUDA is not available"
     try:
-        device_major, device_minor = torch_module.cuda.get_device_capability()
-        supported_arches = torch_module.cuda.get_arch_list()
+        torch_module.empty(1, device="cuda")
+        sample = torch_module.empty((1, 1, 3, 3), device="cuda")
+        kernel = torch_module.ones((1, 1, 1, 1), device="cuda")
+        torch_module.nn.functional.conv2d(sample, kernel)
+        torch_module.cuda.synchronize()
     except Exception as exc:  # pragma: no cover - depends on CUDA runtime
         return f"CUDA capability check failed: {exc}"
-    device_arch = f"sm_{device_major}{device_minor}"
-    if supported_arches and device_arch not in supported_arches:
-        return f"CUDA device capability {device_arch} is not supported by this PyTorch build"
     return None
 
 

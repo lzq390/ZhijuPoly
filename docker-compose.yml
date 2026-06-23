@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    gpus: all
     restart: unless-stopped
     env_file:
       - path: .env.ai
