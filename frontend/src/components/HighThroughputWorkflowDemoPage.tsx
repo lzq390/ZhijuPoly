@@ -68,13 +68,20 @@ type RecommendationValidationRequirement = {
   targetKey: HighThroughputTargetKey;
   candidateId: string;
 };
+type ValidationConfirmationState = Record<string, boolean>;
 type NextStepState = {
   canAdvance: boolean;
   label: string;
   hint: string;
 };
+type StageTransitionState = {
+  message: string;
+};
 
 const DOE_PRIOR_LOAD_MS = 1000;
+const STAGE_TRANSITION_MS = 900;
+const VALIDATION_FEEDBACK_MS = 1400;
+const RATIO_SEARCH_FEEDBACK_MS = 700;
 const MAX_RENDERED_STAGE_DOTS = 2400;
 const MAX_RENDERED_PROPERTY_DOTS = 2200;
 const MATERIAL_MAP_WIDTH = 100;
@@ -571,6 +578,16 @@ function getRequiredValidationIds(stageIndex: number, iterationRoundIndex = 0): 
   );
 }
 
+function validationConfirmationKey(stageIndex: number, iterationRoundIndex = 0) {
+  if (stageIndex === 2) {
+    return "s2-validation";
+  }
+  if (stageIndex === 3 && iterationRoundIndex < 2) {
+    return `s3-round-${iterationRoundIndex + 1}`;
+  }
+  return "";
+}
+
 function missingValidationCount(
   requirements: RecommendationValidationRequirement[],
   validationValues: RecommendationValidationValues,
@@ -628,12 +645,14 @@ function getStageCompletionState({
   activeRatioSearchStepIndex,
   priorDataUploads,
   validationValues,
+  validationConfirmations,
 }: {
   currentStageIndex: number;
   activeIterationRoundIndex: number;
   activeRatioSearchStepIndex: number;
   priorDataUploads: PriorDataUploadsState;
   validationValues: RecommendationValidationValues;
+  validationConfirmations: ValidationConfirmationState;
 }): NextStepState {
   const scenario = highThroughputDemoScenario;
   const readyCsvCount = scenario.targets.filter((target) => isTargetCsvReady(priorDataUploads[target.key])).length;
@@ -659,10 +678,16 @@ function getStageCompletionState({
   if (currentStageIndex === 2) {
     const requirements = getRequiredValidationIds(2, activeIterationRoundIndex);
     const missingCount = missingValidationCount(requirements, validationValues);
+    const groupKey = validationConfirmationKey(2);
+    const confirmed = Boolean(validationConfirmations[groupKey]);
     return {
-      canAdvance: missingCount === 0,
+      canAdvance: missingCount === 0 && confirmed,
       label: "S3",
-      hint: missingCount === 0 ? "S2 推荐点实测值已录入" : `请录入 ${missingCount} 个推荐点实测值`,
+      hint: missingCount > 0
+        ? `请录入 ${missingCount} 个推荐点实测值`
+        : confirmed
+          ? "S2 推荐点实测值已确认"
+          : "请确认 S2 实测值回流",
     };
   }
 
@@ -677,11 +702,17 @@ function getStageCompletionState({
 
     const requirements = getRequiredValidationIds(3, activeIterationRoundIndex);
     const missingCount = missingValidationCount(requirements, validationValues);
+    const groupKey = validationConfirmationKey(3, activeIterationRoundIndex);
+    const confirmed = Boolean(validationConfirmations[groupKey]);
     const nextLabel = activeIterationRoundIndex === 0 ? "R2" : "收敛";
     return {
-      canAdvance: missingCount === 0,
+      canAdvance: missingCount === 0 && confirmed,
       label: nextLabel,
-      hint: missingCount === 0 ? "当前轮推荐点实测值已录入" : `请录入 ${missingCount} 个推荐点实测值`,
+      hint: missingCount > 0
+        ? `请录入 ${missingCount} 个推荐点实测值`
+        : confirmed
+          ? "当前轮实测值已确认"
+          : "请确认本轮实测值回流",
     };
   }
 
@@ -723,7 +754,10 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const [priorDataUploads, setPriorDataUploads] = useState<PriorDataUploadsState>({});
   const [selectedRecommendation, setSelectedRecommendation] = useState<RecommendationSelection | null>(null);
   const [recommendationValidationValues, setRecommendationValidationValues] = useState<RecommendationValidationValues>(() => buildInitialRecommendationValidationValues());
+  const [validationConfirmations, setValidationConfirmations] = useState<ValidationConfirmationState>({});
+  const [stageTransition, setStageTransition] = useState<StageTransitionState | null>(null);
   const priorUploadTimersRef = useRef<Partial<Record<HighThroughputTargetKey, number>>>({});
+  const stageTransitionTimerRef = useRef<number | null>(null);
   const mapStageRef = useRef<HTMLDivElement | null>(null);
   const nextStepState = getStageCompletionState({
     currentStageIndex,
@@ -731,7 +765,15 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     activeRatioSearchStepIndex,
     priorDataUploads,
     validationValues: recommendationValidationValues,
+    validationConfirmations,
   });
+  const activeValidationRequirements = getRequiredValidationIds(currentStageIndex, activeIterationRoundIndex);
+  const activeValidationMissingCount = missingValidationCount(activeValidationRequirements, recommendationValidationValues);
+  const activeValidationGroupKey = validationConfirmationKey(currentStageIndex, activeIterationRoundIndex);
+  const activeValidationConfirmed = activeValidationGroupKey ? Boolean(validationConfirmations[activeValidationGroupKey]) : false;
+  const displayedNextStepState = stageTransition
+    ? { canAdvance: false, label: "处理中", hint: stageTransition.message }
+    : nextStepState;
 
   useEffect(() => () => {
     Object.values(priorUploadTimersRef.current).forEach((timerId) => {
@@ -739,6 +781,9 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
         window.clearTimeout(timerId);
       }
     });
+    if (stageTransitionTimerRef.current !== null) {
+      window.clearTimeout(stageTransitionTimerRef.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -787,31 +832,65 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     }
   }
 
+  function runStageTransition(message: string, duration: number, onComplete: () => void) {
+    if (stageTransitionTimerRef.current !== null) {
+      window.clearTimeout(stageTransitionTimerRef.current);
+    }
+    setStageTransition({ message });
+    stageTransitionTimerRef.current = window.setTimeout(() => {
+      onComplete();
+      setStageTransition(null);
+      stageTransitionTimerRef.current = null;
+    }, duration);
+  }
+
   function handleNextStep() {
-    if (!nextStepState.canAdvance) {
+    if (!nextStepState.canAdvance || stageTransition) {
+      return;
+    }
+
+    if (currentStageIndex === 1) {
+      runStageTransition("正在导入 DOE 先验并生成初始热点图...", STAGE_TRANSITION_MS, () => enterStage(2));
+      return;
+    }
+
+    if (currentStageIndex === 2) {
+      runStageTransition("实验结果回流中，正在生成第一轮单性质模型...", VALIDATION_FEEDBACK_MS, () => enterStage(3));
       return;
     }
 
     if (currentStageIndex === 3) {
       if (activeIterationRoundIndex < 2) {
-        setActiveIterationRoundIndex((roundIndex) => clamp(roundIndex + 1, 0, 2));
+        const message = activeIterationRoundIndex === 0
+          ? "回流本轮实测值，正在更新单性质模型与热点图..."
+          : "验证最终推荐点，正在确认当前最优稳定...";
+        runStageTransition(message, VALIDATION_FEEDBACK_MS, () =>
+          setActiveIterationRoundIndex((roundIndex) => clamp(roundIndex + 1, 0, 2)),
+        );
         return;
       }
-      enterStage(4);
+      runStageTransition("汇总四个收敛候选，正在生成 p1-p4 输出...", STAGE_TRANSITION_MS, () => enterStage(4));
+      return;
+    }
+
+    if (currentStageIndex === 4) {
+      runStageTransition("汇总 p1-p4 组分池，正在进入比例搜索...", STAGE_TRANSITION_MS, () => enterStage(5));
       return;
     }
 
     if (currentStageIndex === 5) {
       const lastStepIndex = scenario.formulation.searchSteps.length - 1;
       if (activeRatioSearchStepIndex < lastStepIndex) {
-        setActiveRatioSearchStepIndex((stepIndex) => clamp(stepIndex + 1, 0, lastStepIndex));
+        runStageTransition("评估邻域比例，正在更新模拟退火路径...", RATIO_SEARCH_FEEDBACK_MS, () =>
+          setActiveRatioSearchStepIndex((stepIndex) => clamp(stepIndex + 1, 0, lastStepIndex)),
+        );
         return;
       }
-      enterStage(6);
+      runStageTransition("锁定最终配方，正在生成解释结果...", STAGE_TRANSITION_MS, () => enterStage(6));
       return;
     }
 
-    enterStage(currentStageIndex + 1);
+    runStageTransition("正在推进实验流程...", STAGE_TRANSITION_MS, () => enterStage(currentStageIndex + 1));
   }
 
   function resetValidationValues(requirements: RecommendationValidationRequirement[]) {
@@ -826,11 +905,33 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     });
   }
 
+  function clearValidationConfirmation(stageIndex: number, iterationRoundIndex = 0) {
+    const groupKey = validationConfirmationKey(stageIndex, iterationRoundIndex);
+    if (!groupKey) {
+      return;
+    }
+    setValidationConfirmations((confirmations) => ({
+      ...confirmations,
+      [groupKey]: false,
+    }));
+  }
+
+  function confirmCurrentValidationGroup() {
+    if (!activeValidationGroupKey || activeValidationMissingCount > 0) {
+      return;
+    }
+    setValidationConfirmations((confirmations) => ({
+      ...confirmations,
+      [activeValidationGroupKey]: true,
+    }));
+  }
+
   function resetCurrentStageActions() {
     if (currentStageIndex === 0) {
       setConfirmedSetup(buildDefaultConfirmedSetup());
       setSetupResetToken((token) => token + 1);
       setActiveSpaceTargetKey("tg");
+      setValidationConfirmations({});
       return;
     }
 
@@ -838,17 +939,20 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       clearAllPriorUploadTimers();
       setPriorDataUploads({});
       setSelectedRecommendation(null);
+      setValidationConfirmations({});
       return;
     }
 
     if (currentStageIndex === 2) {
       resetValidationValues(getRequiredValidationIds(2));
+      clearValidationConfirmation(2);
       setSelectedRecommendation(null);
       return;
     }
 
     if (currentStageIndex === 3) {
       resetValidationValues(getRequiredValidationIds(3, activeIterationRoundIndex));
+      clearValidationConfirmation(3, activeIterationRoundIndex);
       setSelectedRecommendation(null);
       return;
     }
@@ -938,6 +1042,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       ...values,
       [recommendationValidationKey(targetKey, candidateId)]: value,
     }));
+    clearValidationConfirmation(currentStageIndex, activeIterationRoundIndex);
   }
 
   return (
@@ -953,10 +1058,10 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
 
           <FlowControlBar
             currentStageIndex={currentStageIndex}
-            nextStepState={nextStepState}
+            nextStepState={displayedNextStepState}
             onNextStep={handleNextStep}
             onResetStage={resetCurrentStageActions}
-            canResetStage={[0, 1, 2, 3, 5].includes(currentStageIndex)}
+            canResetStage={!stageTransition && [0, 1, 2, 3, 5].includes(currentStageIndex)}
           />
 
           <div className="ht-docx-map-stage" ref={mapStageRef}>
@@ -1011,6 +1116,12 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                 stageRef={mapStageRef}
               />
             ) : null}
+            {stageTransition ? (
+              <div className="ht-stage-transition-overlay" role="status" aria-live="polite">
+                <span>实验流程处理中</span>
+                <strong>{stageTransition.message}</strong>
+              </div>
+            ) : null}
           </div>
 
           {currentStageIndex <= 3 ? (
@@ -1023,6 +1134,10 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
               onSelectRecommendation={setSelectedRecommendation}
               validationValues={recommendationValidationValues}
               onValidationValueChange={handleRecommendationValidationValueChange}
+              validationConfirmed={activeValidationConfirmed}
+              validationMissingCount={activeValidationMissingCount}
+              validationRequiredCount={activeValidationRequirements.length}
+              onConfirmValidationGroup={confirmCurrentValidationGroup}
             />
           ) : currentStageIndex === 4 ? (
             <CandidateOutputPanel activeTargetKey={activeSpaceTargetKey} confirmedSetup={confirmedSetup} />
@@ -1792,6 +1907,10 @@ function ExperimentPriorPanel({
   onSelectRecommendation,
   validationValues,
   onValidationValueChange,
+  validationConfirmed,
+  validationMissingCount,
+  validationRequiredCount,
+  onConfirmValidationGroup,
 }: {
   stageIndex: number;
   activeTargetKey: HighThroughputTargetKey;
@@ -1801,6 +1920,10 @@ function ExperimentPriorPanel({
   onSelectRecommendation: (selection: RecommendationSelection) => void;
   validationValues: RecommendationValidationValues;
   onValidationValueChange: (targetKey: HighThroughputTargetKey, candidateId: string, value: string) => void;
+  validationConfirmed: boolean;
+  validationMissingCount: number;
+  validationRequiredCount: number;
+  onConfirmValidationGroup: () => void;
 }) {
   const scenario = highThroughputDemoScenario;
   const activeTarget = getTarget(activeTargetKey);
@@ -1877,6 +2000,10 @@ function ExperimentPriorPanel({
           validationValues={validationValues}
           onSelectCandidate={(candidateId) => onSelectRecommendation({ targetKey: activeTargetKey, candidateId })}
           onValidationValueChange={(candidateId, value) => onValidationValueChange(activeTargetKey, candidateId, value)}
+          validationConfirmed={validationConfirmed}
+          validationMissingCount={validationMissingCount}
+          validationRequiredCount={validationRequiredCount}
+          onConfirmValidationGroup={onConfirmValidationGroup}
         />
       ) : null}
 
@@ -1905,6 +2032,10 @@ function RecommendationValidationPanel({
   validationValues,
   onSelectCandidate,
   onValidationValueChange,
+  validationConfirmed,
+  validationMissingCount,
+  validationRequiredCount,
+  onConfirmValidationGroup,
 }: {
   stageIndex: number;
   iterationRoundIndex: number;
@@ -1914,6 +2045,10 @@ function RecommendationValidationPanel({
   validationValues: RecommendationValidationValues;
   onSelectCandidate: (candidateId: string) => void;
   onValidationValueChange: (candidateId: string, value: string) => void;
+  validationConfirmed: boolean;
+  validationMissingCount: number;
+  validationRequiredCount: number;
+  onConfirmValidationGroup: () => void;
 }) {
   const activeCandidateId = recommendedIds.includes(selectedCandidateId)
     ? selectedCandidateId
@@ -1928,6 +2063,16 @@ function RecommendationValidationPanel({
   const pendingMessage = stageIndex === 2
     ? "输入实验验证值后，本演示会保留该点的回流记录状态。"
     : "输入该轮推荐点的实测值后，本演示会保留为下一轮回流记录。";
+  const confirmationStatus = validationMissingCount > 0
+    ? `待补 ${validationMissingCount} / ${validationRequiredCount}`
+    : validationConfirmed
+      ? "已确认回流"
+      : "待确认回流";
+  const confirmationHint = validationConfirmed
+    ? "下一步会进入实验回流与模型更新。"
+    : validationMissingCount > 0
+      ? "所有推荐点都有实测值后才能确认。"
+      : "确认后才允许进入下一步，模拟实验结果完成回流。";
 
   if (recommendedIds.length === 0) {
     return null;
@@ -2005,6 +2150,18 @@ function RecommendationValidationPanel({
             </div>
           </label>
           <p>{validationValue ? savedMessage : pendingMessage}</p>
+          <div className={cn("ht-validation-confirm-box", validationConfirmed && "confirmed")}>
+            <span>本轮闭环</span>
+            <strong>{confirmationStatus}</strong>
+            <button
+              type="button"
+              onClick={onConfirmValidationGroup}
+              disabled={validationMissingCount > 0 || validationConfirmed}
+            >
+              {validationConfirmed ? "已确认" : "确认本轮实测值"}
+            </button>
+            <em>{confirmationHint}</em>
+          </div>
         </article>
       </div>
     </section>
@@ -2394,6 +2551,7 @@ function AgentOptimizationCard({
   const activeRound = stageIndex === 3
     ? rounds[clamp(iterationRoundIndex, 0, rounds.length - 1)] ?? rounds[rounds.length - 1]
     : rounds[rounds.length - 1];
+  const isConvergedRound = stageIndex === 3 && iterationRoundIndex >= 2;
   const priorBestId = bestCandidateId(space.priorCandidateIds, target);
   const surface = propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
   const stageBestId =
@@ -2433,7 +2591,9 @@ function AgentOptimizationCard({
       : stageIndex === 2
         ? "先验建模→推荐 Round 1"
           : stageIndex === 3
-            ? "推荐→回流→更新热点"
+            ? isConvergedRound
+              ? "最终回流→最优稳定"
+              : "推荐→回流→更新热点"
             : stageIndex === 4
               ? `锁定 ${outputLabel} 候选`
               : stageIndex === 5
@@ -2467,7 +2627,9 @@ function AgentOptimizationCard({
         : stageIndex === 2
           ? "DOE 先验热点已生成"
           : stageIndex === 3
-            ? `第 ${activeRound.round} 轮回流更新`
+            ? isConvergedRound
+              ? "最终实测回流完成"
+              : `第 ${activeRound.round} 轮回流更新`
             : stageIndex === 4
               ? `${outputLabel} 候选已输出`
               : stageIndex === 5
@@ -2481,7 +2643,9 @@ function AgentOptimizationCard({
     : stageIndex === 2
         ? [`已测 ${space.priorCandidateIds.length}`, `推荐 ${roundIds.recommendedIds.length}`]
         : stageIndex === 3
-          ? [`已测 ${space.priorCandidateIds.length + roundIds.testedIds.length}`, `推荐 ${roundIds.recommendedIds.length}`]
+          ? isConvergedRound
+            ? [`已测 ${space.priorCandidateIds.length + roundIds.testedIds.length}`, "当前最优稳定"]
+            : [`已测 ${space.priorCandidateIds.length + roundIds.testedIds.length}`, `推荐 ${roundIds.recommendedIds.length}`]
           : stageIndex === 4
             ? [`${outputLabel} 来自 S3`, `备选 ${agent.topCandidateIds.length}`]
             : stageIndex === 5

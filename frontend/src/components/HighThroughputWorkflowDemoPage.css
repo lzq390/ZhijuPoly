@@ -635,6 +635,56 @@
   gap: var(--ht-agent-stack-gap);
 }
 
+.ht-stage-transition-overlay {
+  align-items: center;
+  backdrop-filter: blur(4px);
+  background: rgba(248, 250, 252, 0.74);
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.14);
+  display: grid;
+  gap: 7px;
+  justify-items: center;
+  left: calc(50% - 190px);
+  min-height: 92px;
+  padding: 16px 20px;
+  pointer-events: auto;
+  position: absolute;
+  top: 34%;
+  width: 380px;
+  z-index: 12;
+}
+
+.ht-stage-transition-overlay::before {
+  animation: ht-spin 0.9s linear infinite;
+  border: 3px solid rgba(15, 118, 110, 0.18);
+  border-top-color: var(--ht-primary);
+  border-radius: 999px;
+  content: "";
+  height: 24px;
+  width: 24px;
+}
+
+.ht-stage-transition-overlay span {
+  color: var(--ht-primary);
+  font-size: 0.72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.ht-stage-transition-overlay strong {
+  color: var(--ht-text);
+  font-size: 0.9rem;
+  font-weight: 950;
+  text-align: center;
+}
+
+@keyframes ht-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .ht-stepper-panel,
 .ht-agent-panel {
   align-self: start;
@@ -1428,6 +1478,51 @@
   font-size: 0.72rem;
   font-weight: 850;
   line-height: 1.45;
+}
+
+.ht-validation-confirm-box {
+  background: #f8fafc;
+  border: 1px solid color-mix(in srgb, var(--target-color, var(--ht-primary)) 18%, #dbe4ee);
+  border-radius: 8px;
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+}
+
+.ht-validation-confirm-box.confirmed {
+  background: color-mix(in srgb, #22c55e 8%, #ffffff);
+  border-color: #bbf7d0;
+}
+
+.ht-validation-confirm-box span,
+.ht-validation-confirm-box em {
+  color: #64748b;
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.ht-validation-confirm-box strong {
+  color: var(--ht-text);
+  font-size: 0.86rem;
+  font-weight: 950;
+}
+
+.ht-validation-confirm-box button {
+  background: var(--target-color, var(--ht-primary));
+  border: 1px solid var(--target-color, var(--ht-primary));
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 0.76rem;
+  font-weight: 950;
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+.ht-validation-confirm-box button:disabled {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+  color: #64748b;
 }
 
 .ht-doe-csv-preview-panel {
