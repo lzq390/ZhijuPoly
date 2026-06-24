@@ -69,6 +69,8 @@ type RecommendationValidationRequirement = {
   candidateId: string;
 };
 type ValidationConfirmationState = Record<string, boolean>;
+type RatioValidationValues = Record<string, Partial<Record<HighThroughputTargetKey, string>>>;
+type RatioValidationConfirmationState = Record<string, boolean>;
 type NextStepState = {
   canAdvance: boolean;
   label: string;
@@ -210,6 +212,28 @@ function hasValidationValue(
   candidateId: string,
 ) {
   return validationNumber(validationValues, targetKey, candidateId) !== null;
+}
+
+function ratioValidationNumber(
+  validationValues: RatioValidationValues,
+  mixId: string,
+  targetKey: HighThroughputTargetKey,
+) {
+  const rawValue = validationValues[mixId]?.[targetKey];
+  if (rawValue === undefined || rawValue.trim() === "") {
+    return null;
+  }
+  const parsedValue = Number(rawValue);
+  return Number.isFinite(parsedValue) ? parsedValue : null;
+}
+
+function ratioValidationMissingCount(mixId: string, validationValues: RatioValidationValues) {
+  if (!mixId) {
+    return highThroughputDemoScenario.targets.length;
+  }
+  return highThroughputDemoScenario.targets.filter((target) =>
+    ratioValidationNumber(validationValues, mixId, target.key) === null,
+  ).length;
 }
 
 function isTargetCsvReady(upload: PriorDataUploadState | null | undefined) {
@@ -389,6 +413,41 @@ function projectRatioMixPoint(mix: RatioMixCandidate) {
 function getSelectedRatioMix() {
   const formulation = highThroughputDemoScenario.formulation;
   return formulation.mixCandidates.find((mix) => mix.id === formulation.selectedMixId) ?? formulation.mixCandidates[formulation.mixCandidates.length - 1];
+}
+
+function defaultRatioMeasurementValue(mix: RatioMixCandidate, target: HighThroughputTarget) {
+  const formulation = highThroughputDemoScenario.formulation;
+  const finalOutcome = formulation.finalExplanation.targetOutcomes.find((outcome) => outcome.targetKey === target.key);
+  if (mix.id === formulation.selectedMixId && finalOutcome) {
+    return finalOutcome.predictedValue;
+  }
+
+  const achievement = mix.achievement[target.key] ?? 0;
+  const normalizedAchievement = clamp(achievement / 100, 0, 1);
+  const factor = target.direction === "lower"
+    ? 1.7 - normalizedAchievement * 0.85
+    : 0.58 + normalizedAchievement * 0.62;
+  return target.target * factor;
+}
+
+function buildInitialRatioValidationValues(): RatioValidationValues {
+  const scenario = highThroughputDemoScenario;
+  return Object.fromEntries(
+    scenario.formulation.mixCandidates.map((mix) => [
+      mix.id,
+      Object.fromEntries(
+        scenario.targets.map((target) => [
+          target.key,
+          formatTargetValue(target, defaultRatioMeasurementValue(mix, target)),
+        ]),
+      ) as Partial<Record<HighThroughputTargetKey, string>>,
+    ]),
+  );
+}
+
+function buildInitialRatioValidationConfirmations(): RatioValidationConfirmationState {
+  const seedMixId = highThroughputDemoScenario.formulation.searchSteps[0]?.proposedMixId;
+  return seedMixId ? { [seedMixId]: true } : {};
 }
 
 function getPropertySpace(targetKey: HighThroughputTargetKey) {
@@ -646,6 +705,8 @@ function getStageCompletionState({
   priorDataUploads,
   validationValues,
   validationConfirmations,
+  ratioValidationValues,
+  ratioValidationConfirmations,
 }: {
   currentStageIndex: number;
   activeIterationRoundIndex: number;
@@ -653,6 +714,8 @@ function getStageCompletionState({
   priorDataUploads: PriorDataUploadsState;
   validationValues: RecommendationValidationValues;
   validationConfirmations: ValidationConfirmationState;
+  ratioValidationValues: RatioValidationValues;
+  ratioValidationConfirmations: RatioValidationConfirmationState;
 }): NextStepState {
   const scenario = highThroughputDemoScenario;
   const readyCsvCount = scenario.targets.filter((target) => isTargetCsvReady(priorDataUploads[target.key])).length;
@@ -726,12 +789,21 @@ function getStageCompletionState({
 
   if (currentStageIndex === 5) {
     const lastStepIndex = Math.max(searchStepCount - 1, 0);
+    const activeStep = scenario.formulation.searchSteps[clamp(activeRatioSearchStepIndex, 0, lastStepIndex)];
+    const measurementRequired = activeRatioSearchStepIndex > 0;
+    const proposedMixId = activeStep?.proposedMixId ?? "";
+    const missingCount = measurementRequired ? ratioValidationMissingCount(proposedMixId, ratioValidationValues) : 0;
+    const confirmed = !measurementRequired || Boolean(ratioValidationConfirmations[proposedMixId]);
     return {
-      canAdvance: true,
+      canAdvance: missingCount === 0 && confirmed,
       label: activeRatioSearchStepIndex < lastStepIndex
         ? `T${activeRatioSearchStepIndex + 1}`
         : "S6",
-      hint: activeRatioSearchStepIndex < lastStepIndex ? "继续比例搜索" : "S5 最终配方已锁定",
+      hint: missingCount > 0
+        ? `请录入 ${proposedMixId} 的 ${missingCount} 个实测值`
+        : confirmed
+          ? activeRatioSearchStepIndex < lastStepIndex ? "实测值已回流，继续比例搜索" : "S5 最终配方已锁定"
+          : `请确认 ${proposedMixId} 实测值回流`,
     };
   }
 
@@ -755,6 +827,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const [selectedRecommendation, setSelectedRecommendation] = useState<RecommendationSelection | null>(null);
   const [recommendationValidationValues, setRecommendationValidationValues] = useState<RecommendationValidationValues>(() => buildInitialRecommendationValidationValues());
   const [validationConfirmations, setValidationConfirmations] = useState<ValidationConfirmationState>({});
+  const [ratioValidationValues, setRatioValidationValues] = useState<RatioValidationValues>(() => buildInitialRatioValidationValues());
+  const [ratioValidationConfirmations, setRatioValidationConfirmations] = useState<RatioValidationConfirmationState>(() => buildInitialRatioValidationConfirmations());
   const [stageTransition, setStageTransition] = useState<StageTransitionState | null>(null);
   const priorUploadTimersRef = useRef<Partial<Record<HighThroughputTargetKey, number>>>({});
   const stageTransitionTimerRef = useRef<number | null>(null);
@@ -766,11 +840,21 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     priorDataUploads,
     validationValues: recommendationValidationValues,
     validationConfirmations,
+    ratioValidationValues,
+    ratioValidationConfirmations,
   });
   const activeValidationRequirements = getRequiredValidationIds(currentStageIndex, activeIterationRoundIndex);
   const activeValidationMissingCount = missingValidationCount(activeValidationRequirements, recommendationValidationValues);
   const activeValidationGroupKey = validationConfirmationKey(currentStageIndex, activeIterationRoundIndex);
   const activeValidationConfirmed = activeValidationGroupKey ? Boolean(validationConfirmations[activeValidationGroupKey]) : false;
+  const ratioSearchSteps = scenario.formulation.searchSteps;
+  const activeRatioSearchStep = ratioSearchSteps[clamp(activeRatioSearchStepIndex, 0, Math.max(ratioSearchSteps.length - 1, 0))];
+  const activeRatioMixId = activeRatioSearchStep?.proposedMixId ?? "";
+  const activeRatioMeasurementRequired = currentStageIndex === 5 && activeRatioSearchStepIndex > 0;
+  const activeRatioValidationMissingCount = activeRatioMeasurementRequired
+    ? ratioValidationMissingCount(activeRatioMixId, ratioValidationValues)
+    : 0;
+  const activeRatioValidationConfirmed = !activeRatioMeasurementRequired || Boolean(ratioValidationConfirmations[activeRatioMixId]);
   const displayedNextStepState = stageTransition
     ? { canAdvance: false, label: "处理中", hint: stageTransition.message }
     : nextStepState;
@@ -926,12 +1010,45 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     }));
   }
 
+  function resetRatioValidationState() {
+    setRatioValidationValues(buildInitialRatioValidationValues());
+    setRatioValidationConfirmations(buildInitialRatioValidationConfirmations());
+  }
+
+  function handleRatioValidationValueChange(targetKey: HighThroughputTargetKey, value: string) {
+    if (!activeRatioMixId) {
+      return;
+    }
+    setRatioValidationValues((values) => ({
+      ...values,
+      [activeRatioMixId]: {
+        ...values[activeRatioMixId],
+        [targetKey]: value,
+      },
+    }));
+    setRatioValidationConfirmations((confirmations) => ({
+      ...confirmations,
+      [activeRatioMixId]: false,
+    }));
+  }
+
+  function confirmCurrentRatioValidation() {
+    if (!activeRatioMeasurementRequired || !activeRatioMixId || activeRatioValidationMissingCount > 0) {
+      return;
+    }
+    setRatioValidationConfirmations((confirmations) => ({
+      ...confirmations,
+      [activeRatioMixId]: true,
+    }));
+  }
+
   function resetCurrentStageActions() {
     if (currentStageIndex === 0) {
       setConfirmedSetup(buildDefaultConfirmedSetup());
       setSetupResetToken((token) => token + 1);
       setActiveSpaceTargetKey("tg");
       setValidationConfirmations({});
+      resetRatioValidationState();
       return;
     }
 
@@ -959,6 +1076,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
 
     if (currentStageIndex === 5) {
       setActiveRatioSearchStepIndex(0);
+      resetRatioValidationState();
     }
   }
 
@@ -1094,6 +1212,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                   stageIndex={currentStageIndex}
                   activeStepIndex={activeRatioSearchStepIndex}
                   confirmedSetup={confirmedSetup}
+                  activeStepValidationConfirmed={activeRatioValidationConfirmed}
                 />
               )}
             </div>
@@ -1144,6 +1263,12 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
           ) : currentStageIndex === 5 ? (
             <RatioSearchPanel
               activeStepIndex={activeRatioSearchStepIndex}
+              confirmedSetup={confirmedSetup}
+              ratioValidationValues={ratioValidationValues}
+              validationConfirmed={activeRatioValidationConfirmed}
+              validationMissingCount={activeRatioValidationMissingCount}
+              onValidationValueChange={handleRatioValidationValueChange}
+              onConfirmValidation={confirmCurrentRatioValidation}
             />
           ) : (
             <FinalFormulationPanel
@@ -2261,10 +2386,12 @@ function RatioAnnealingMap({
   stageIndex,
   activeStepIndex,
   confirmedSetup,
+  activeStepValidationConfirmed = true,
 }: {
   stageIndex: number;
   activeStepIndex: number;
   confirmedSetup: ConfirmedSetup;
+  activeStepValidationConfirmed?: boolean;
 }) {
   const scenario = highThroughputDemoScenario;
   const formulation = scenario.formulation;
@@ -2274,16 +2401,24 @@ function RatioAnnealingMap({
   const activeIndex = isFinalStage ? steps.length - 1 : clamp(activeStepIndex, 0, steps.length - 1);
   const activeStep = steps[activeIndex];
   const mixById = new Map(formulation.mixCandidates.map((mix) => [mix.id, mix]));
+  const decisionVisible = isFinalStage || activeIndex === 0 || activeStepValidationConfirmed;
   const visibleMixes = activeStep.mixCandidateIds
     .map((mixId) => mixById.get(mixId))
     .filter((mix): mix is RatioMixCandidate => Boolean(mix));
-  const acceptedPathMixes = activeStep.acceptedPathIds
+  const pathMixIds = decisionVisible
+    ? activeStep.acceptedPathIds
+    : steps[Math.max(activeIndex - 1, 0)]?.acceptedPathIds ?? activeStep.acceptedPathIds;
+  const acceptedPathMixes = pathMixIds
     .map((mixId) => mixById.get(mixId))
     .filter((mix): mix is RatioMixCandidate => Boolean(mix));
-  const currentMix = mixById.get(activeStep.currentMixId) ?? visibleMixes[0] ?? formulation.mixCandidates[0];
-  const currentBestMix = mixById.get(activeStep.currentBestId) ?? currentMix;
-  const previousMix = mixById.get(activeStep.previousMixId) ?? currentMix;
-  const proposedMix = mixById.get(activeStep.proposedMixId) ?? currentMix;
+  const previousStep = steps[Math.max(activeIndex - 1, 0)] ?? activeStep;
+  const rawCurrentMix = mixById.get(activeStep.currentMixId) ?? visibleMixes[0] ?? formulation.mixCandidates[0];
+  const previousMix = mixById.get(activeStep.previousMixId) ?? rawCurrentMix;
+  const proposedMix = mixById.get(activeStep.proposedMixId) ?? rawCurrentMix;
+  const rawBestMix = mixById.get(activeStep.currentBestId) ?? rawCurrentMix;
+  const previousBestMix = mixById.get(previousStep.currentBestId) ?? rawCurrentMix;
+  const currentMix = decisionVisible ? rawCurrentMix : previousMix;
+  const currentBestMix = decisionVisible ? rawBestMix : previousBestMix;
   const selectedMix = mixById.get(formulation.selectedMixId) ?? currentBestMix;
   const focusMix = isFinalStage ? selectedMix : currentBestMix;
   const focusPoint = projectRatioMixPoint(focusMix);
@@ -2302,7 +2437,7 @@ function RatioAnnealingMap({
   const finalTargetStatus = `${finalPassCount}/${finalExplanation.targetOutcomes.length} 达标`;
   const rejectedMixIdSet = new Set(
     steps
-      .slice(0, activeIndex + 1)
+      .slice(0, decisionVisible ? activeIndex + 1 : activeIndex)
       .filter((step) => !step.accepted)
       .map((step) => step.proposedMixId),
   );
@@ -2403,7 +2538,10 @@ function RatioAnnealingMap({
 
           {!isFinalStage && previousMix.id !== proposedMix.id ? (
             <path
-              className={cn("ht-ratio-proposal-line", activeStep.accepted ? "accepted" : "rejected")}
+              className={cn(
+                "ht-ratio-proposal-line",
+                decisionVisible ? activeStep.accepted ? "accepted" : "rejected" : "pending",
+              )}
               d={buildSvgPath([previousPoint, proposedPoint])}
             />
           ) : null}
@@ -2466,7 +2604,7 @@ function RatioAnnealingMap({
           <div className="ht-ratio-map-summary">
             <span><b>温度</b>{activeStep.coolingLabel}</span>
             <span><b>扰动</b>{previousMix.id} {"->"} {proposedMix.id}</span>
-            <span><b>决策</b>{activeStep.decisionLabel}</span>
+            <span><b>决策</b>{decisionVisible ? activeStep.decisionLabel : "等待实测回流"}</span>
             <span><b>当前最优</b>{currentBestMix.id} / {currentBestMix.score}</span>
           </div>
         )}
@@ -2861,8 +2999,20 @@ function CandidateOutputPanel({
 
 function RatioSearchPanel({
   activeStepIndex,
+  confirmedSetup,
+  ratioValidationValues,
+  validationConfirmed,
+  validationMissingCount,
+  onValidationValueChange,
+  onConfirmValidation,
 }: {
   activeStepIndex: number;
+  confirmedSetup: ConfirmedSetup;
+  ratioValidationValues: RatioValidationValues;
+  validationConfirmed: boolean;
+  validationMissingCount: number;
+  onValidationValueChange: (targetKey: HighThroughputTargetKey, value: string) => void;
+  onConfirmValidation: () => void;
 }) {
   const scenario = highThroughputDemoScenario;
   const formulation = scenario.formulation;
@@ -2878,8 +3028,24 @@ function RatioSearchPanel({
   const previousMix = mixById.get(activeStep.previousMixId) ?? currentMix;
   const proposedMix = mixById.get(activeStep.proposedMixId) ?? currentMix;
   const selectedMix = mixById.get(formulation.selectedMixId) ?? currentBestMix;
+  const measurementRequired = activeIndex > 0;
+  const decisionVisible = !measurementRequired || validationConfirmed;
+  const displayCurrentMix = decisionVisible ? currentMix : previousMix;
+  const previousBestMix = mixById.get(steps[Math.max(activeIndex - 1, 0)]?.currentBestId) ?? currentBestMix;
+  const displayBestMix = decisionVisible ? currentBestMix : previousBestMix;
+  const displayAchievementMix = decisionVisible ? currentMix : proposedMix;
+  const displayedEvaluatedCount = decisionVisible
+    ? activeStep.evaluatedCount
+    : steps[Math.max(activeIndex - 1, 0)]?.evaluatedCount ?? activeStep.evaluatedCount;
   const deltaLabel = `${activeStep.deltaScore > 0 ? "+" : ""}${activeStep.deltaScore}`;
   const acceptanceLabel = `${Math.round(activeStep.acceptanceProbability * 100)}%`;
+  const validationStatus = !measurementRequired
+    ? "初始解已知"
+    : validationMissingCount > 0
+      ? `待补 ${validationMissingCount} 项`
+      : validationConfirmed
+        ? "实测已回流"
+        : "待确认回流";
 
   return (
     <section className="ht-ratio-search-panel">
@@ -2920,19 +3086,25 @@ function RatioSearchPanel({
             </div>
           </div>
           <div className="ht-annealing-step-timeline" aria-label="Simulated annealing event timeline">
-            {steps.map((step, index) => (
-              <span
-                key={step.id}
-                aria-current={index === activeIndex ? "step" : undefined}
-                className={cn(step.accepted ? "accepted" : "rejected", index === activeIndex && "active")}
-              >
-                <span>{step.label}</span>
-                <b>{step.coolingLabel}</b>
-              </span>
-            ))}
+            {steps.map((step, index) => {
+              const stepDecisionVisible = index < activeIndex || (index === activeIndex && decisionVisible);
+              return (
+                <span
+                  key={step.id}
+                  aria-current={index === activeIndex ? "step" : undefined}
+                  className={cn(
+                    stepDecisionVisible ? step.accepted ? "accepted" : "rejected" : "pending",
+                    index === activeIndex && "active",
+                  )}
+                >
+                  <span>{step.label}</span>
+                  <b>{step.coolingLabel}</b>
+                </span>
+              );
+            })}
           </div>
 
-          <article className={cn("ht-annealing-decision-card", activeStep.accepted ? "accepted" : "rejected")}>
+          <article className={cn("ht-annealing-decision-card", decisionVisible ? activeStep.accepted ? "accepted" : "rejected" : "pending")}>
             <div className="ht-annealing-move-grid">
               <div className="ht-annealing-mix-card">
                 <span>当前解</span>
@@ -2944,21 +3116,21 @@ function RatioSearchPanel({
                 <span>邻域扰动</span>
                 <strong>{proposedMix.id}</strong>
                 <RatioStackedBar mix={proposedMix} components={formulation.components} />
-                <em>综合 {proposedMix.score}</em>
+                <em>{decisionVisible ? `综合 ${proposedMix.score}` : "待实测"}</em>
               </div>
               <div className="ht-annealing-mix-card">
                 <span>决策后当前解</span>
-                <strong>{currentMix.id}</strong>
-                <RatioStackedBar mix={currentMix} components={formulation.components} />
-                <em>{activeStep.accepted ? "accepted" : "kept previous"}</em>
+                <strong>{displayCurrentMix.id}</strong>
+                <RatioStackedBar mix={displayCurrentMix} components={formulation.components} />
+                <em>{decisionVisible ? activeStep.accepted ? "accepted" : "kept previous" : "待决策"}</em>
               </div>
             </div>
 
             <div className="ht-annealing-metrics">
               <span><b>温度 T</b>{activeStep.temperature.toFixed(2)}</span>
-              <span><b>Δscore</b>{deltaLabel}</span>
-              <span><b>接受概率</b>{acceptanceLabel}</span>
-              <span><b>结果</b>{activeStep.decisionLabel}</span>
+              <span><b>Δscore</b>{decisionVisible ? deltaLabel : "--"}</span>
+              <span><b>接受概率</b>{decisionVisible ? acceptanceLabel : "--"}</span>
+              <span><b>结果</b>{decisionVisible ? activeStep.decisionLabel : "等待实测"}</span>
             </div>
 
           </article>
@@ -2966,27 +3138,71 @@ function RatioSearchPanel({
 
         <div className="ht-mix-preview-panel ht-annealing-status-panel">
           <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="退火状态回流" />
-          <div className={cn("ht-current-mix-card", activeStep.accepted ? "accepted" : "rejected")}>
-            <span>{activeStep.actionLabel}</span>
-            <strong>{activeStep.accepted ? currentMix.id : `${proposedMix.id} rejected`}</strong>
-            <RatioStackedBar mix={activeStep.accepted ? currentMix : proposedMix} components={formulation.components} showLabels />
+          <div className="ht-ratio-status-compact">
+            <div className={cn("ht-current-mix-card", decisionVisible ? activeStep.accepted ? "accepted" : "rejected" : "pending")}>
+              <span>{decisionVisible ? activeStep.actionLabel : <>等待配方<br />实测</>}</span>
+              <strong>{decisionVisible ? activeStep.accepted ? currentMix.id : `${proposedMix.id} rejected` : proposedMix.id}</strong>
+              <RatioStackedBar mix={decisionVisible ? activeStep.accepted ? currentMix : proposedMix : proposedMix} components={formulation.components} showLabels orientation="vertical" />
+            </div>
+            <div className={cn("ht-ratio-measurement-box", validationConfirmed && "confirmed")}>
+              <div className="ht-ratio-measurement-head">
+                <span>配方实测回流</span>
+                <strong>{proposedMix.id}</strong>
+                <b>{validationStatus}</b>
+              </div>
+              {measurementRequired ? (
+                <>
+                  <div className="ht-ratio-measurement-grid">
+                    {scenario.targets.map((target) => {
+                      const configuredTarget = getConfiguredTarget(target.key, confirmedSetup);
+                      return (
+                        <label key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
+                          <span>{target.shortLabel}</span>
+                          <div>
+                            <input
+                              type="number"
+                              step={target.key === "modulus" ? "0.1" : "1"}
+                              value={ratioValidationValues[proposedMix.id]?.[target.key] ?? ""}
+                              onChange={(event) => onValidationValueChange(target.key, event.target.value)}
+                              aria-label={`${proposedMix.id} ${target.shortLabel} 实测值`}
+                            />
+                            <em>{configuredTarget.unit}</em>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onConfirmValidation}
+                    disabled={validationMissingCount > 0 || validationConfirmed}
+                  >
+                    {validationConfirmed ? "已确认" : "确认本步实测值"}
+                  </button>
+                </>
+              ) : (
+                <p>初始化 mix-0 作为已知起点，下一步开始对邻域配方做实测回流。</p>
+              )}
+            </div>
           </div>
-          <div className="ht-mix-score-grid">
-            <span>已评估 <b>{activeStep.evaluatedCount}/{formulation.ratioGrid.candidateCount}</b></span>
-            <span>当前解 <b>{currentMix.id}</b></span>
-            <span>当前最优 <b>{currentBestMix.id}</b></span>
-          </div>
-          <div className="ht-achievement-preview" aria-label={`${currentMix.id} property achievement`}>
-            {scenario.targets.map((target) => {
-              const value = currentMix.achievement[target.key];
-              return (
-                <div key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
-                  <span>{target.shortLabel}</span>
-                  <b>{value}%</b>
-                  <i><em style={{ width: `${value}%` }} /></i>
-                </div>
-              );
-            })}
+          <div className="ht-ratio-status-bottom">
+            <div className="ht-mix-score-grid">
+              <span>已评估 <b>{displayedEvaluatedCount}/{formulation.ratioGrid.candidateCount}</b></span>
+              <span>当前解 <b>{displayCurrentMix.id}</b></span>
+              <span>当前最优 <b>{displayBestMix.id}</b></span>
+            </div>
+            <div className="ht-achievement-preview" aria-label={`${displayAchievementMix.id} property achievement`}>
+              {scenario.targets.map((target) => {
+                const value = displayAchievementMix.achievement[target.key];
+                return (
+                  <div key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
+                    <span>{target.shortLabel}</span>
+                    <b>{value}%</b>
+                    <i><em style={{ width: `${value}%` }} /></i>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
@@ -3128,19 +3344,25 @@ function RatioStackedBar({
   mix,
   components,
   showLabels = false,
+  orientation = "horizontal",
 }: {
   mix: (typeof highThroughputDemoScenario.formulation.mixCandidates)[number];
   components: typeof highThroughputDemoScenario.formulation.components;
   showLabels?: boolean;
+  orientation?: "horizontal" | "vertical";
 }) {
   return (
-    <div className="ht-stacked-ratio-bar" aria-label={`${mix.id} 组分比例`}>
+    <div className={cn("ht-stacked-ratio-bar", orientation === "vertical" && "vertical")} aria-label={`${mix.id} 组分比例`}>
       {components.map((component) => {
         const ratio = mix.ratios[component.id] ?? 0;
         return (
           <span
             key={component.id}
-            style={{ "--component-color": component.color, width: ratioPercent(ratio) } as CSSProperties}
+            style={{
+              "--component-color": component.color,
+              width: orientation === "vertical" ? undefined : ratioPercent(ratio),
+              height: orientation === "vertical" ? ratioPercent(ratio) : undefined,
+            } as CSSProperties}
             title={`${component.id} ${ratioPercent(ratio)}`}
           >
             {showLabels && ratio > 0 ? <b>{component.id} {ratioPercent(ratio)}</b> : null}
