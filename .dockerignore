@@ -34,3 +34,4 @@ database/
 # Local release bundles
 release/
 polyprop-release-*.tar.gz
+nexpoly-release-*.tar.gz

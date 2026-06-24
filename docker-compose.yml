@@ -1,11 +1,17 @@
-name: polyprop
+name: nexpoly
 
 services:
   backend:
+    image: nexpoly-backend:latest
     build:
       context: .
       dockerfile: Dockerfile
-    gpus: all
+    gpus:
+      - driver: nvidia
+        device_ids:
+          - "${NEXPOLY_GPU_DEVICE:-2}"
+        capabilities:
+          - gpu
     restart: unless-stopped
     env_file:
       - path: .env.ai
@@ -33,7 +39,7 @@ services:
       PI_REVERSE_JOB_WORKERS: "1"
       PI_REVERSE_JOB_BATCH_SIZE: "20000"
       PI_REVERSE_PROGRESS_INTERVAL_ROWS: "50000"
-      ALLOWED_ORIGINS: "http://localhost:${POLYPROP_WEB_PORT:-9000},http://127.0.0.1:${POLYPROP_WEB_PORT:-9000}"
+      ALLOWED_ORIGINS: "http://localhost:${NEXPOLY_WEB_PORT:-9000},http://127.0.0.1:${NEXPOLY_WEB_PORT:-9000}"
     volumes:
       - ./backend/data:/app/backend/data
       - ./database:/app/database:ro
@@ -72,6 +78,7 @@ services:
       start_period: 10s
 
   online-retrieval:
+    image: nexpoly-online-retrieval:latest
     build:
       context: .
       dockerfile: online_retrieval/Dockerfile
@@ -95,12 +102,13 @@ services:
       start_period: 20s
 
   nginx:
+    image: nexpoly-nginx:latest
     build:
       context: .
       dockerfile: frontend/Dockerfile
     restart: unless-stopped
     ports:
-      - "${POLYPROP_WEB_PORT:-9000}:80"
+      - "${NEXPOLY_WEB_PORT:-9000}:80"
     depends_on:
       backend:
         condition: service_healthy

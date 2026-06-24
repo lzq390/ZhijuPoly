@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 INCLUDE_DATA="${INCLUDE_DATA:-0}"
 RELEASE_DIR="$ROOT_DIR/release"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-BUNDLE="$RELEASE_DIR/polyprop-release-$STAMP.tar.gz"
+BUNDLE="$RELEASE_DIR/nexpoly-release-$STAMP.tar.gz"
 
 for file in Dockerfile frontend/Dockerfile docker-compose.yml nginx.conf backend/.env.example online_retrieval/Dockerfile online_retrieval/requirements.txt online_retrieval/app.py; do
   if [[ ! -f "$file" ]]; then

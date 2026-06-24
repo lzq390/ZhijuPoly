@@ -1,27 +1,48 @@
-# PolyProp Deployment
+# nexpoly Deployment
 
-This deployment runs the application as three containers:
+This deployment runs nexpoly as a Docker Compose project named `nexpoly`.
+It is designed to run in parallel with the existing `polyprop` deployment and
+must not stop, remove, or overwrite any `polyprop` containers, images, volumes,
+or deployment directories.
+
+Default server deployment path:
+
+```text
+/data/lzq/gith/nexpoly
+```
+
+Default public URL:
+
+```text
+http://114.214.255.154:9000
+```
+
+## Services
 
 - `backend`: FastAPI service on port `8000` inside the Docker network.
+  By default it is limited to host GPU `2` through `NEXPOLY_GPU_DEVICE`.
 - `online-retrieval`: Flask/Gunicorn online literature retrieval service on port `5002` inside the Docker network.
-- `nginx`: Nginx static site on host port `9000`, with `/api` proxied to the backend.
+- `lab-postgres`: internal PostgreSQL service for lab data.
+- `nginx`: Nginx static site on host port `${NEXPOLY_WEB_PORT:-9000}`, with `/api` proxied to the backend.
 
-Runtime databases are mounted from `backend/data` and are not baked into the image.
-Online retrieval history is mounted from `online_retrieval/data`.
-The Compose project name is fixed as `polyprop`, so this deployment replaces the existing `polyprop-nginx-1` container that serves `9000:80`. It does not bind the server's port `80`.
+Local build images are named explicitly:
+
+```text
+nexpoly-backend:latest
+nexpoly-nginx:latest
+nexpoly-online-retrieval:latest
+```
 
 ## Required Runtime Files
 
-Prepare these files on the deployment host before starting Docker Compose:
+Runtime databases are mounted from `backend/data` and are not baked into the
+image. Prepare these files before starting Docker Compose:
 
 ```text
 backend/data/polyprop.db
 backend/data/fumol.db
+backend/data/pi_reverse_design.db
 ```
-
-The model files under `model/` are copied into the backend image during build. Local checkouts may keep large
-model artifacts as symlinks, but `scripts/package_release.sh` dereferences those symlinks so the release bundle
-contains real model files for server deployment.
 
 Required model artifacts:
 
@@ -33,32 +54,63 @@ model/conditional_generation/best_chemberta_tg.pth
 model/conditional_generation/top10_desc_names.pkl
 model/conditional_generation/tg_scaler.pkl
 model/conditional_generation/ChemBerta/
+model/reactiont5-retrosynthesis/
 ```
+
+For the server deployment, copy runtime assets from the currently active
+`polyprop` deployment directory into `/data/lzq/gith/nexpoly`:
+
+```text
+backend/data
+model
+online_retrieval/data
+.env.ai, if present
+```
+
+Treat the existing `polyprop` deployment as read-only during this copy.
 
 ## Start
 
+Create `/data/lzq/gith/nexpoly/.env`:
+
 ```bash
+NEXPOLY_WEB_PORT=9000
+NEXPOLY_GPU_DEVICE=2
+GEN_MODEL_ENABLED=true
+RETRO_MODEL_ENABLED=true
+RETRO_MODEL_ID=/app/model/reactiont5-retrosynthesis
+RETRO_DEVICE=auto
+```
+
+Build and start nexpoly:
+
+```bash
+cd /data/lzq/gith/nexpoly
 docker compose build
 docker compose up -d --remove-orphans
 ```
 
-Open:
-
-```text
-http://localhost:9000
-```
-
-If another local service already occupies port `9000`, choose a different host port:
+If another service occupies port `9000`, choose a different host port:
 
 ```bash
-POLYPROP_WEB_PORT=9100 docker compose up -d --remove-orphans
+NEXPOLY_WEB_PORT=9100 docker compose up -d --remove-orphans
 ```
 
-Health check:
+## Health Checks
+
+Check the new nexpoly deployment:
 
 ```bash
 docker compose ps
+docker compose config --images
 curl http://localhost:9000/health
+```
+
+Confirm the old polyprop deployment is still running separately:
+
+```bash
+docker compose ls
+curl http://localhost:10000/health
 ```
 
 ## Package
@@ -69,18 +121,20 @@ Create a release bundle:
 scripts/package_release.sh
 ```
 
-By default, database files are excluded to keep the package small. To bundle the prepared databases too:
+By default, database files are excluded to keep the package small. To bundle the
+prepared databases too:
 
 ```bash
 INCLUDE_DATA=1 scripts/package_release.sh
 ```
 
-The package is written to `release/polyprop-release-*.tar.gz`.
-Model artifacts are included by default. Database files are included only when `INCLUDE_DATA=1`.
+The package is written to `release/nexpoly-release-*.tar.gz`.
+Model artifacts are included by default. Database files are included only when
+`INCLUDE_DATA=1`.
 
 ## Configuration
 
-Runtime environment variables can be adjusted in `docker-compose.yml`:
+Runtime environment variables can be adjusted in `.env` or `docker-compose.yml`:
 
 | Variable | Purpose |
 | --- | --- |
@@ -88,8 +142,11 @@ Runtime environment variables can be adjusted in `docker-compose.yml`:
 | `FUMOL_DB_PATH` | DFT conformation database path inside the container. |
 | `MODEL_DIR` | Prediction model directory inside the container. |
 | `MODEL_ENABLED` | Enables or disables prediction endpoints. |
+| `GEN_MODEL_ENABLED` | Enables or disables conditional generation. |
+| `RETRO_MODEL_ENABLED` | Enables or disables monomer retrosynthesis. |
 | `ALLOWED_ORIGINS` | Browser origins accepted by the API. |
-| `POLYPROP_WEB_PORT` | Host port used by Nginx. Defaults to `9000`. |
+| `NEXPOLY_WEB_PORT` | Host port used by Nginx. Defaults to `9000`. |
+| `NEXPOLY_GPU_DEVICE` | Host GPU exposed to the backend. Defaults to `2`. |
 
 Online retrieval is exposed under the same origin at:
 
@@ -97,4 +154,5 @@ Online retrieval is exposed under the same origin at:
 /online-retrieval/
 ```
 
-This path is used by the knowledge search module's Online tab and is proxied by Nginx to the `online-retrieval` service.
+This path is used by the knowledge search module's Online tab and is proxied by
+Nginx to the `online-retrieval` service.

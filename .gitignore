@@ -32,6 +32,7 @@ frontend/vite.config.d.ts
 # Local deployment bundles
 release/
 polyprop-release-*.tar.gz
+nexpoly-release-*.tar.gz
 
 # Local analysis inputs and scratch artifacts
 /1.png
