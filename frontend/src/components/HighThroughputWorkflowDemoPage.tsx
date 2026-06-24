@@ -384,18 +384,6 @@ function getSelectedRatioMix() {
   return formulation.mixCandidates.find((mix) => mix.id === formulation.selectedMixId) ?? formulation.mixCandidates[formulation.mixCandidates.length - 1];
 }
 
-function weightedAchievement(
-  weights: WeightState,
-  achievement: Record<HighThroughputTargetKey, number> = highThroughputDemoScenario.formulation.achievement,
-) {
-  const totalWeight = Object.values(weights).reduce((total, value) => total + value, 0) || 1;
-  const score = highThroughputDemoScenario.targets.reduce(
-    (total, target) => total + achievement[target.key] * weights[target.key],
-    0,
-  );
-  return Math.round(score / totalWeight);
-}
-
 function getPropertySpace(targetKey: HighThroughputTargetKey) {
   return highThroughputDemoScenario.propertySpaces[targetKey];
 }
@@ -480,6 +468,19 @@ function targetGapLabelWithValidation(
 
 function targetOutcomePasses(value: number, target: HighThroughputTarget) {
   return target.direction === "lower" ? value <= target.target : value >= target.target;
+}
+
+function targetOutcomeMarginLabel(value: number, target: HighThroughputTarget) {
+  const margin = target.direction === "lower" ? target.target - value : value - target.target;
+  const formattedMargin = formatNumber(Math.abs(margin), targetValueDigits(target));
+  if (margin >= 0) {
+    return target.direction === "lower"
+      ? `低于目标 ${formattedMargin}${target.unit}`
+      : `高于目标 ${formattedMargin}${target.unit}`;
+  }
+  return target.direction === "lower"
+    ? `高于目标 ${formattedMargin}${target.unit}`
+    : `低于目标 ${formattedMargin}${target.unit}`;
 }
 
 function adjustedOutcomeAchievement(
@@ -987,6 +988,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                 <RatioAnnealingMap
                   stageIndex={currentStageIndex}
                   activeStepIndex={activeRatioSearchStepIndex}
+                  confirmedSetup={confirmedSetup}
                 />
               )}
             </div>
@@ -2101,9 +2103,11 @@ function DoeCsvPreviewPanel({
 function RatioAnnealingMap({
   stageIndex,
   activeStepIndex,
+  confirmedSetup,
 }: {
   stageIndex: number;
   activeStepIndex: number;
+  confirmedSetup: ConfirmedSetup;
 }) {
   const scenario = highThroughputDemoScenario;
   const formulation = scenario.formulation;
@@ -2135,6 +2139,10 @@ function RatioAnnealingMap({
   const selectedRatioLabel = formulation.components
     .map((component) => ratioPercent(selectedMix.ratios[component.id] ?? 0))
     .join(" / ");
+  const finalPassCount = finalExplanation.targetOutcomes.filter((outcome) =>
+    targetOutcomePasses(outcome.predictedValue, getConfiguredTarget(outcome.targetKey, confirmedSetup)),
+  ).length;
+  const finalTargetStatus = `${finalPassCount}/${finalExplanation.targetOutcomes.length} 达标`;
   const rejectedMixIdSet = new Set(
     steps
       .slice(0, activeIndex + 1)
@@ -2293,7 +2301,7 @@ function RatioAnnealingMap({
         {isFinalStage ? (
           <div className="ht-ratio-map-summary final">
             <span><b>最终配方</b>{selectedMix.id}</span>
-            <span><b>综合达成</b>{selectedMix.score}%</span>
+            <span><b>目标状态</b>{finalTargetStatus}</span>
             <span><b>配方比例</b>{selectedRatioLabel}</span>
             <span><b>下一步</b>{finalExplanation.nextStep}</span>
           </div>
@@ -2622,8 +2630,6 @@ function CandidateOutputPanel({
   const space = getPropertySpace(activeTargetKey);
   const component = scenario.formulation.components.find((item) => item.sourceTargetKey === activeTargetKey);
   const agent = scenario.agents.find((item) => item.targetKey === activeTargetKey);
-  const rounds = scenario.roundsByTarget[activeTargetKey];
-  const convergedRound = rounds[rounds.length - 1];
   const outputCandidate = getCandidate(space.currentBestId);
   const backupIds = (agent?.topCandidateIds ?? []).filter((candidateId) => candidateId !== space.currentBestId);
   const outputLabel = component?.id ?? "p?";
@@ -2666,18 +2672,12 @@ function CandidateOutputPanel({
           </dl>
         </article>
 
-        <article className="ht-candidate-output-chain">
-          <SectionTitle icon={<Layers3 aria-hidden="true" size={17} />} title="S3 到 S4 衔接" />
-          <ol>
-            <li><b>S3 Converged</b><span>{convergedRound.currentBestId} 完成最终回流验证</span></li>
-            <li><b>S4 Output</b><span>{outputLabel} 锁定为 {target.shortLabel} 的单性质候选</span></li>
-            <li><b>S5 Input</b><span>与其他 p 候选一起进入配方比例搜索</span></li>
-          </ol>
-        </article>
-
         <article className="ht-candidate-output-backups">
-          <SectionTitle icon={<Target aria-hidden="true" size={17} />} title="Top-k 备选" />
-          <div>
+          <div className="ht-candidate-output-backup-label">
+            <span><Target aria-hidden="true" size={16} /></span>
+            <strong>Top-k 备选</strong>
+          </div>
+          <div className="ht-candidate-output-backup-list">
             {backupIds.map((candidateId) => {
               const candidate = getCandidate(candidateId);
               return (
@@ -2853,7 +2853,7 @@ function FinalFormulationPanel({
   const displayedAchievement = Object.fromEntries(
     targetOutcomes.map((outcome) => [outcome.targetKey, outcome.achievement]),
   ) as Record<HighThroughputTargetKey, number>;
-  const computedScore = weightedAchievement(weights, displayedAchievement);
+  const passedOutcomeCount = targetOutcomes.filter((outcome) => outcome.pass).length;
 
   return (
     <section className="ht-final-formulation-panel ht-formulation-panel active">
@@ -2905,8 +2905,8 @@ function FinalFormulationPanel({
         <div className="ht-result-panel ht-final-outcome-panel">
           <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="目标达成" />
           <div className="ht-score-box">
-            <span>综合达成率</span>
-            <strong>{`${computedScore}%`}</strong>
+            <span>目标状态</span>
+            <strong>{`${passedOutcomeCount}/${targetOutcomes.length} 达标`}</strong>
           </div>
           <div className="ht-target-outcome-grid">
             {targetOutcomes.map((outcome) => {
@@ -2916,14 +2916,17 @@ function FinalFormulationPanel({
                   <div>
                     <span>{target.shortLabel}</span>
                     <b>{outcome.pass ? "达标" : "待优化"}</b>
-                  </div>
-                  <strong>{formatTargetValue(target, outcome.predictedValue)} {target.unit}</strong>
-                  <em>目标 {targetThresholdLabel(target)} / 达成 {outcome.achievement}%</em>
-                </article>
-              );
-            })}
+	                  </div>
+	                  <strong>{formatTargetValue(target, outcome.predictedValue)} {target.unit}</strong>
+	                  <em>目标 {targetThresholdLabel(target)} / {targetOutcomeMarginLabel(outcome.predictedValue, target)}</em>
+	                </article>
+	              );
+	            })}
           </div>
-          <RadarChart achievement={displayedAchievement} />
+          <div className="ht-radar-card">
+            <span>综合评分雷达</span>
+            <RadarChart achievement={displayedAchievement} />
+          </div>
         </div>
 
         <div className="ht-final-summary-panel">
@@ -3019,7 +3022,8 @@ function RadarChart({
   const polygonPoints = axes.map((axis) => `${axis.value.x},${axis.value.y}`).join(" ");
 
   return (
-    <svg className="ht-radar" viewBox="0 0 100 100" role="img" aria-label="目标达成雷达图">
+    <svg className="ht-radar" viewBox="0 0 100 100" role="img" aria-label="综合评分雷达图">
+      <title>综合评分雷达图</title>
       {[0.35, 0.7, 1].map((scale) => (
         <polygon
           key={scale}

@@ -2410,10 +2410,10 @@
 }
 
 .ht-candidate-output-grid {
-  align-items: stretch;
+  align-items: start;
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(270px, 1fr) minmax(240px, 0.85fr) minmax(250px, 0.85fr) minmax(240px, 0.8fr);
+  grid-template-columns: repeat(2, minmax(320px, 1fr));
 }
 
 .ht-candidate-output-grid article {
@@ -2425,9 +2425,12 @@
 }
 
 .ht-candidate-output-focus {
+  align-items: stretch;
   border-left: 4px solid var(--target-color) !important;
   display: grid;
-  gap: 12px;
+  gap: 8px 14px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-rows: repeat(2, 46px);
 }
 
 .ht-candidate-output-focus > span {
@@ -2437,9 +2440,18 @@
   color: var(--target-color);
   display: inline-flex;
   font-weight: 950;
+  grid-column: 1;
+  grid-row: 1;
   height: 36px;
   justify-content: center;
   width: 36px;
+}
+
+.ht-candidate-output-focus > div {
+  align-self: center;
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
 }
 
 .ht-candidate-output-focus strong {
@@ -2458,8 +2470,12 @@
 }
 
 .ht-candidate-output-focus dl {
+  align-self: stretch;
   display: grid;
   gap: 8px;
+  grid-column: 2;
+  grid-row: 1 / 3;
+  grid-auto-rows: 46px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
 }
@@ -2468,7 +2484,10 @@
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
-  padding: 8px;
+  display: grid;
+  gap: 2px;
+  min-height: 0;
+  padding: 6px 8px;
 }
 
 .ht-candidate-output-focus dt,
@@ -2488,43 +2507,54 @@
   font-weight: 920;
 }
 
-.ht-candidate-output-chain ol {
+.ht-candidate-output-backups {
+  align-items: stretch;
+  align-self: start;
   display: grid;
-  gap: 9px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
+  gap: 8px 14px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-rows: repeat(2, 46px);
 }
 
-.ht-candidate-output-chain li {
-  border-left: 3px solid var(--target-color);
-  padding-left: 10px;
+.ht-candidate-output-backup-label {
+  display: contents;
+  min-width: 0;
 }
 
-.ht-candidate-output-chain b,
-.ht-candidate-output-chain span {
-  display: block;
+.ht-candidate-output-backup-label > span {
+  align-items: center;
+  background: color-mix(in srgb, var(--target-color) 12%, #ffffff);
+  border-radius: 999px;
+  color: var(--target-color);
+  display: inline-flex;
+  grid-column: 1;
+  grid-row: 1;
+  height: 36px;
+  justify-content: center;
+  align-self: start;
+  width: 36px;
 }
 
-.ht-candidate-output-chain b {
+.ht-candidate-output-backup-label strong {
+  align-self: center;
   color: var(--ht-text);
-  font-size: 0.78rem;
+  font-size: 0.92rem;
   font-weight: 950;
+  grid-column: 1;
+  grid-row: 2;
+  line-height: 1.2;
 }
 
-.ht-candidate-output-chain span {
-  color: var(--ht-muted-strong);
-  font-size: 0.76rem;
-  font-weight: 780;
-  margin: 0;
-}
-
-.ht-candidate-output-backups > div {
+.ht-candidate-output-backup-list {
+  align-self: stretch;
   display: grid;
   gap: 8px;
+  grid-column: 2;
+  grid-row: 1 / 3;
+  grid-auto-rows: 46px;
 }
 
-.ht-candidate-output-backups span {
+.ht-candidate-output-backup-list > span {
   align-items: center;
   background: #ffffff;
   border: 1px solid #e2e8f0;
@@ -2532,14 +2562,17 @@
   display: flex;
   gap: 8px;
   justify-content: space-between;
+  min-height: 0;
   min-width: 0;
-  padding: 8px;
+  overflow: hidden;
+  padding: 6px 8px;
 }
 
 .ht-candidate-output-backups b {
   color: var(--target-color);
   font-size: 0.78rem;
   font-weight: 950;
+  line-height: 1.15;
 }
 
 .ht-candidate-output-backups em {
@@ -2547,6 +2580,7 @@
   font-size: 0.7rem;
   font-style: normal;
   font-weight: 850;
+  line-height: 1.15;
   min-width: 0;
   text-align: right;
 }
@@ -3183,13 +3217,25 @@
   white-space: nowrap;
 }
 
-.ht-radar {
+.ht-radar-card {
   background: var(--ht-surface-soft);
   border: 1px solid var(--ht-border);
   border-radius: 8px;
-  display: block;
-  height: 210px;
+  display: grid;
+  gap: 8px;
   margin: 12px 0;
+  padding: 10px;
+}
+
+.ht-radar-card > span {
+  color: var(--ht-muted-strong);
+  font-size: 0.76rem;
+  font-weight: 950;
+}
+
+.ht-radar {
+  display: block;
+  height: 180px;
   width: 100%;
 }
 

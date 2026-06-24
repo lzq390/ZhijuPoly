@@ -298,11 +298,11 @@ function distanceScore(x: number, y: number, center: { x: number; y: number }) {
 }
 
 const S3_SCORE_OVERRIDES: Record<string, Partial<Record<HighThroughputTargetKey, number>>> = {
-  "PI-1973": { tg: 540 },
-  "PI-699": { tg: 548 },
-  "PI-2326": { tg: 552 },
-  "PI-2842": { tg: 556 },
-  "PI-1013": { tg: 562 },
+  "PI-1973": { tg: 258 },
+  "PI-699": { tg: 266 },
+  "PI-2326": { tg: 274 },
+  "PI-2842": { tg: 282 },
+  "PI-1013": { tg: 296 },
   "PI-1121": { cte: 27 },
   "PI-029": { cte: 29 },
   "PI-085": { cte: 26 },
@@ -815,7 +815,7 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
       targetKey: "tg",
       objective: "maximize Tg",
       currentBestId: "PI-1013",
-      bestValue: 562,
+      bestValue: 296,
       topCandidateIds: ["PI-1013", "PI-2842", "PI-2326"],
       explorationCandidateIds: ["PI-1973", "PI-699", "PI-2326", "PI-2842"],
       recommendation: "Tg Agent 只读取 Tg 空间的正交先验和回流样本，持续更新耐热热点并收敛到 p1。",
