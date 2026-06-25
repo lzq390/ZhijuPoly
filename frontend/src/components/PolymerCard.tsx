@@ -1,5 +1,6 @@
 import { Atom } from "lucide-react";
 import { PREDICT_PROPERTY_META, type MatchMode, type PolymerResult, type PredictableProperty } from "../types";
+import { StructureSvg } from "./StructureSvg";
 import { Card } from "./ui/card";
 
 type PolymerCardProps = {
@@ -48,9 +49,10 @@ export function PolymerCard({ result, matchType, selectedProperty }: PolymerCard
           2D 结构
         </div>
         {result.structure_svg ? (
-          <div
-            className="[&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-h-[170px] [&_svg]:w-full [&_svg]:max-w-full"
-            dangerouslySetInnerHTML={{ __html: result.structure_svg }}
+          <StructureSvg
+            svg={result.structure_svg}
+            alt={`2D structure for ${displaySmiles}`}
+            imageClassName="max-h-[170px]"
           />
         ) : (
           <div className="flex min-h-[150px] items-center justify-center rounded-[14px] bg-slate-50 px-3 text-center font-mono-ui text-xs leading-5 text-mutedForeground">

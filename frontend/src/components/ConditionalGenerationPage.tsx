@@ -1,5 +1,6 @@
 import { ArrowLeft, Atom, LoaderCircle, Microscope, Sparkles, TriangleAlert } from "lucide-react";
 import { StructurePreview3D } from "./StructurePreview3D";
+import { StructureSvg } from "./StructureSvg";
 import { CurrentStructurePanel, MissingStructurePanel } from "./StructureWorkbenchPage";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -42,9 +43,10 @@ function CandidateCard({ candidate }: { candidate: ConditionalGenerationCandidat
           <Badge className="bg-teal-50 text-teal-800">Rank {candidate.rank}</Badge>
         </div>
         {candidate.structure_svg ? (
-          <div
-            className="[&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-h-[170px] [&_svg]:w-full [&_svg]:max-w-full"
-            dangerouslySetInnerHTML={{ __html: candidate.structure_svg }}
+          <StructureSvg
+            svg={candidate.structure_svg}
+            alt={`Generated structure rank ${candidate.rank}`}
+            imageClassName="max-h-[170px]"
           />
         ) : (
           <div className="flex min-h-[150px] items-center justify-center rounded-[14px] bg-slate-50 px-3 text-center font-mono-ui text-xs leading-5 text-mutedForeground">

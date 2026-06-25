@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
   Activity,
   Atom,
   BarChart3,
@@ -20,17 +18,12 @@ import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
 import { ExperimentWorkflowDemoPage } from "./components/ExperimentWorkflowDemoPage";
 import { HighThroughputWorkflowDemoPage } from "./components/HighThroughputWorkflowDemoPage";
-import { KetcherEditor } from "./components/KetcherEditor";
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { LabDataPage, type LabDataView } from "./components/LabDataPage";
 import { MdSimulationDemoPage } from "./components/MdSimulationDemoPage";
-import { QueryPanel } from "./components/QueryPanel";
-import { ResultsDisplay } from "./components/ResultsDisplay";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
-import { StructurePreview3D } from "./components/StructurePreview3D";
+import { PolymerExplorerDesktopPage } from "./components/PolymerExplorerDesktopPage";
 import { StructureWorkbenchPage } from "./components/StructureWorkbenchPage";
-import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
 import { useKetcher } from "./hooks/useKetcher";
 import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
@@ -39,9 +32,7 @@ import {
   type AssistantModuleContext,
   type KnowledgeNavigationRequest,
   type PredictableProperty,
-  type ResultsTab,
-  type StructureWorkspaceContext,
-  type WorkspaceMode
+  type StructureWorkspaceContext
 } from "./types";
 
 type ActiveModule =
@@ -247,82 +238,7 @@ export default function App() {
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const predict = usePredict();
-  const [panelMode, setPanelMode] = useState<WorkspaceMode>("query");
-  const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>("query");
   const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>([]);
-
-  const canQuery =
-    !isLoading &&
-    smiles.trim().length > 0 &&
-    (request.match_mode === "structure" || request.property_name !== null);
-  const canPredict = !predict.isLoading && smiles.trim().length > 0 && selectedProperties.length > 0;
-
-  const activeMode =
-    panelMode === "predict"
-      ? "性能预测"
-      : request.match_mode === "property"
-        ? "性能相似"
-        : "结构相似";
-  const activeModeLabel =
-    panelMode === "predict"
-      ? "性能预测"
-      : request.match_mode === "property"
-        ? "性能相似"
-        : "结构相似";
-
-  const resultCount =
-    activeResultsTab === "predict" ? Object.keys(predict.data?.predictions ?? {}).length : data?.total ?? 0;
-  const resultTiming =
-    activeResultsTab === "predict" ? null : data?.query_time_ms;
-  const latestResultDescription =
-    activeResultsTab === "predict"
-      ? predict.data
-        ? "已返回预测值。"
-        : "执行后显示预测数量。"
-      : resultTiming
-        ? `${resultTiming.toFixed(1)} ms 完成`
-        : "执行后显示结果数量和耗时。";
-
-  async function handleQuerySubmit() {
-    setActiveResultsTab("query");
-    const currentSmiles = await getCurrentSmiles();
-    await submit({ ...request, smiles: currentSmiles });
-  }
-
-  async function handlePredictSubmit() {
-    setActiveResultsTab("predict");
-    try {
-      const currentSmiles = await getCurrentSmiles();
-      await predict.submit({
-        smiles: currentSmiles,
-        properties: selectedProperties
-      });
-    } catch {
-      // Error state is already captured by the hook and shown in the results panel.
-    }
-  }
-
-  const resultPanelTitle = activeResultsTab === "predict" ? "预测结果" : "相似匹配结果";
-  const resultPanelDescription =
-    activeResultsTab === "predict"
-      ? "预测完成后，这里会展示所选性能的预测值。"
-      : "相似匹配完成后，这里会展示摘要、2D 结构、SMILES 和相似度分数。";
-  const resultPrimaryBadge =
-    activeResultsTab === "predict"
-      ? predict.data
-        ? `${Object.keys(predict.data.predictions).length} 项预测`
-        : "暂无预测"
-      : data
-        ? `${data.total} 条记录`
-        : "暂无结果";
-  const resultSecondaryBadge =
-    activeResultsTab === "predict"
-      ? predict.isLoading
-        ? "预测中"
-        : "预测模式"
-      : request.match_mode === "property"
-        ? "性能相似"
-        : "结构相似";
 
   async function getCurrentSmiles() {
     const fallbackSmiles = smiles.trim();
@@ -667,6 +583,7 @@ export default function App() {
     }))
   );
   const isFullBleedModule =
+    activeModule === "explorer" ||
     activeModule === "structureWorkbench" ||
     activeModule === "reverseDesign" ||
     activeModule === "experimentWorkflowDemo" ||
@@ -770,159 +687,22 @@ export default function App() {
       ) : null}
 
       {activeModule === "explorer" ? (
-        <div className={activeModule === "explorer" ? "contents" : "hidden"} aria-hidden={activeModule !== "explorer"}>
-          <nav className="flex flex-col gap-3 rounded-[26px] border border-white/70 bg-white/80 px-4 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
-            <div className="flex items-center gap-3">
-              <Button type="button" variant="outline" onClick={() => navigate({ module: "home", datasetKey: null })}>
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                首页
-              </Button>
-              <div>
-                <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">当前模块</div>
-                <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-                  聚合物性能探索
-                </div>
-              </div>
-            </div>
-            <Badge className="bg-teal-50 text-teal-800">探索页</Badge>
-          </nav>
-
-          <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-6 md:px-8 md:py-8">
-            <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-[36%] bg-[radial-gradient(circle_at_center,rgba(15,118,110,0.14),transparent_58%)] lg:block" />
-            <div className="pointer-events-none absolute -right-10 top-12 h-40 w-40 rounded-full border border-white/40 bg-white/20 blur-2xl" />
-            <div className="pointer-events-none absolute left-8 top-24 h-24 w-24 rounded-full bg-teal-300/20 blur-3xl" />
-
-            <div className="animate-fade-up">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
-                  NEXPOLY
-                </div>
-                <Badge>聚合物相似匹配与性能预测</Badge>
-              </div>
-
-              <div className="mt-6 overflow-x-auto">
-                <h1 className="font-heading whitespace-nowrap text-[2.5rem] font-semibold tracking-[-0.04em] text-slate-950 md:text-[4rem] md:leading-[0.95]">
-                  聚合物性能探索
-                </h1>
-                <p className="mt-4 whitespace-nowrap text-base leading-7 text-slate-600 md:text-lg">
-                  将结构编辑、相似匹配、3D 预览和性能预测整合到一个研究工作台。
-                </p>
-              </div>
-
-              <div className="mt-8 grid gap-3 md:grid-cols-3">
-                <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
-                  <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
-                    {panelMode === "predict" ? <Sparkles className="h-4 w-4 text-teal-600" /> : <Atom className="h-4 w-4 text-teal-600" />}
-                    当前模式
-                  </div>
-                  <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                    {activeModeLabel}
-                  </div>
-                  <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                    {panelMode === "predict"
-                      ? "在控制卡片中选择目标性能，并对当前结构运行预测。"
-                      : "在控制卡片中切换结构相似或性能相似匹配。"}
-                  </div>
-                </div>
-
-                <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
-                  <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
-                    <Microscope className="h-4 w-4 text-sky-600" />
-                    结构输入
-                  </div>
-                  <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                    {smiles.trim().length > 0 ? "已就绪" : "等待输入"}
-                  </div>
-                  <div className="mt-2 text-sm leading-6 text-mutedForeground">
-                    结构编辑器会同步更新 SMILES，用于匹配或预测。
-                  </div>
-                </div>
-
-                <div className="flex min-h-[188px] flex-col justify-center rounded-[26px] border border-white/80 bg-slate-950 p-5 text-center text-slate-50 shadow-[0_22px_50px_rgba(8,17,31,0.2)]">
-                  <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">
-                    <Database className="h-4 w-4 text-teal-300" />
-                    最新结果
-                  </div>
-                  <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">{resultCount}</div>
-                  <div className="mt-2 text-sm leading-6 text-slate-300">
-                    {latestResultDescription}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section>
-            <div className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,1.22fr)_minmax(0,0.92fr)]">
-              <div className="min-w-0">
-                <KetcherEditor
-                  smiles={smiles}
-                  iframeRef={iframeRef}
-                  onReadyChange={setIsReady}
-                  onChange={(value) => {
-                    setSmiles(value);
-                    setRequest({ ...request, smiles: value });
-                  }}
-                />
-              </div>
-
-              <div className="flex min-w-0 flex-col gap-6">
-                <StructurePreview3D smiles={smiles} />
-                <QueryPanel
-                  className="w-full self-start"
-                  mode={panelMode}
-                  onModeChange={setPanelMode}
-                  request={{ ...request, smiles }}
-                  onChange={setRequest}
-                  onQuerySubmit={handleQuerySubmit}
-                  onPredictSubmit={handlePredictSubmit}
-                  selectedProperties={selectedProperties}
-                  onSelectedPropertiesChange={setSelectedProperties}
-                  queryDisabled={!canQuery}
-                  predictDisabled={!canPredict}
-                  isQueryLoading={isLoading}
-                  isPredicting={predict.isLoading}
-                />
-              </div>
-            </div>
-          </section>
-
-          <section className="relative pt-2">
-            <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-slate-400/40 to-transparent" />
-            <div className="pt-6">
-              <div className="overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(243,248,250,0.92)_100%)] shadow-soft">
-                <div className="border-b border-slate-200/80 px-6 py-5 md:px-8">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                    <div>
-                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-teal-700/70">结果</div>
-                      <h2 className="font-heading mt-2 text-[1.8rem] font-semibold tracking-tight text-slate-950">
-                        {resultPanelTitle}
-                      </h2>
-                      <p className="mt-1 text-sm leading-6 text-mutedForeground">{resultPanelDescription}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Badge className="bg-slate-100 text-slate-700">{resultPrimaryBadge}</Badge>
-                      <Badge className="bg-slate-100 text-slate-700">{resultSecondaryBadge}</Badge>
-                    </div>
-                  </div>
-                </div>
-                <div className="px-4 py-4 md:px-5 md:py-5">
-                  <ResultsDisplay
-                    data={data}
-                    error={error}
-                    isLoading={isLoading}
-                    request={{ ...request, smiles }}
-                    predictData={predict.data}
-                    isPredicting={predict.isLoading}
-                    predictError={predict.error}
-                    activeTab={activeResultsTab}
-                    onTabChange={setActiveResultsTab}
-                  />
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
+        <PolymerExplorerDesktopPage
+          smiles={smiles}
+          setSmiles={setSmiles}
+          iframeRef={iframeRef}
+          setIsReady={setIsReady}
+          getCurrentSmiles={getCurrentSmiles}
+          request={request}
+          setRequest={setRequest}
+          isQueryLoading={isLoading}
+          queryError={error}
+          queryData={data}
+          submitQuery={submit}
+          predict={predict}
+          selectedProperties={selectedProperties}
+          setSelectedProperties={setSelectedProperties}
+        />
       ) : null}
     </AppShell>
   );

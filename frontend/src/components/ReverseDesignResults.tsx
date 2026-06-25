@@ -6,6 +6,7 @@ import type {
   ReverseDesignTgJobStatusResponse,
   ReverseDesignTgResponse
 } from "../types";
+import { StructureSvg } from "./StructureSvg";
 import { Alert } from "./ui/alert";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -155,9 +156,11 @@ function MonomerSmilesPreview({
           <span>2D</span>
         </div>
         {structureSvg ? (
-          <div
-            className="rounded-[14px] border border-slate-200/70 bg-white p-2 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-h-[180px] [&_svg]:w-full [&_svg]:max-w-full"
-            dangerouslySetInnerHTML={{ __html: structureSvg }}
+          <StructureSvg
+            svg={structureSvg}
+            alt={`2D structure for monomer ${label}`}
+            className="rounded-[14px] border border-slate-200/70 bg-white p-2"
+            imageClassName="max-h-[180px]"
           />
         ) : (
           <div className="flex min-h-28 items-center justify-center rounded-[14px] border border-slate-200/70 bg-slate-50 px-3 text-center text-xs text-mutedForeground">
@@ -305,9 +308,10 @@ function CandidateCard({
           <Badge className="bg-teal-50 text-teal-800">排名 {candidate.rank}</Badge>
         </div>
         {candidate.structure_svg ? (
-          <div
-            className="[&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-h-[170px] [&_svg]:w-full [&_svg]:max-w-full"
-            dangerouslySetInnerHTML={{ __html: candidate.structure_svg }}
+          <StructureSvg
+            svg={candidate.structure_svg}
+            alt={`PI candidate ${candidate.pi_id}`}
+            imageClassName="max-h-[170px]"
           />
         ) : (
           <div className="flex min-h-[150px] items-center justify-center rounded-[14px] bg-slate-50 px-3 text-center font-mono-ui text-xs leading-5 text-mutedForeground">

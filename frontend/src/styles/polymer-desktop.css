@@ -1,0 +1,3808 @@
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap");
+
+.polymer-desktop-page {
+  --color-primary: #4D95FF;
+  --color-primary-light: rgba(77, 149, 255, 0.06);
+  --color-success: #10b981;
+  --color-success-light: rgba(16, 185, 129, 0.08);
+  --color-danger: #ef4444;
+  --color-danger-light: rgba(239, 68, 68, 0.08);
+  --color-warning: #f59e0b;
+  --color-warning-light: rgba(245, 158, 11, 0.1);
+  --color-bg-app: #f1f5f9;
+  --color-bg-card: #ffffff;
+  --color-bg-sidebar: #f1f5f9;
+  --color-bg-hover: rgba(15, 23, 42, 0.05);
+  --color-bg-active: rgba(15, 23, 42, 0.09);
+  --color-border: rgba(15, 23, 42, 0.08);
+  --color-border-card: rgba(15, 23, 42, 0.06);
+  --color-border-divider: transparent;
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-tertiary: #94a3b8;
+  --color-text-quaternary: #cbd5e1;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.02);
+  --shadow-md: 0 8px 30px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 20px 50px rgba(15, 23, 42, 0.06);
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 9999px;
+  --transition-normal: 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: calc(100vh - 64px);
+  min-height: 720px;
+  overflow: hidden;
+  background: var(--color-bg-app);
+  color: var(--color-text-primary);
+  font-family: "Outfit", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  isolation: isolate;
+}
+
+.polymer-desktop-page *,
+.polymer-desktop-page *::before,
+.polymer-desktop-page *::after { box-sizing: border-box; }
+.polymer-desktop-page .btn { border: none; background: transparent; color: inherit; font: inherit; text-decoration: none; user-select: none; }
+.polymer-desktop-page .btn--sm { min-height: 30px; }
+.polymer-desktop-page .btn:disabled,
+.polymer-desktop-page button:disabled { cursor: not-allowed; }
+.polymer-desktop-page .app-container { border: none !important; border-radius: 0 !important; background: transparent !important; box-shadow: none !important; width: 100% !important; height: 100% !important; }
+.polymer-desktop-page .main-layout { height: 100% !important; width: 100% !important; overflow: hidden !important; }
+.polymer-desktop-page .main-content { margin: 0 8px 0 0 !important; height: 100% !important; flex: 1 !important; min-width: 0 !important; }
+/* ==========================================================================
+   玄鉴桌面客户端 - 聚合物性能探索布局样式模块 (polymer-layout.css)
+   职责说明：
+   1. 引用外部 Outfit 字体，复写并微调无边框 App 核心布局容器 app-container。
+   2. 自定义顶部无边框窗口拖拽区、操作按钮组（反馈、状态、最小化、最大化、关闭）。
+   3. 渲染左侧导航侧边栏 sidebar、历史会话列表（Hover时浮现删除图标）及个人信息卡片。
+   4. 定义左右分栏拖拽分割条 sidebar-resizer 及分析面板拖拽分割条 analysis-resizer（Hover与拖拽时保持 100% 透明隐形，符合无界设计规范）。
+   5. 定义导入图片 OCR 专属弹窗及模拟扫描动效（激光线脉冲扫描）。
+   ========================================================================== */
+
+/* 1. 继承并复写核心布局框架 (服从 UI 设计规范无投影无边框设计) */
+.polymer-desktop-page .app-container {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-bg-app);
+  border: 1px solid var(--color-border-card);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  position: relative;
+  box-sizing: border-box;
+}
+
+/* 2. 自定义无边框窗口标题栏 */
+.polymer-desktop-page .custom-titlebar {
+  height: 48px;
+  background-color: var(--color-bg-sidebar);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  flex-shrink: 0;
+  transition: background-color var(--transition-normal);
+  z-index: 10;
+}
+
+.polymer-desktop-page .titlebar-drag-area {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: drag;
+}
+
+.polymer-desktop-page .app-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.polymer-desktop-page .logo-image {
+  object-fit: contain;
+  transition: transform var(--transition-normal);
+}
+
+.polymer-desktop-page .app-logo:hover .logo-image {
+  transform: scale(1.08) rotate(4deg);
+}
+
+.polymer-desktop-page .app-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: -0.2px;
+}
+
+.polymer-desktop-page .sidebar-toggle-btn {
+  margin-left: 14px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .sidebar-toggle-btn:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .sidebar-toggle-btn svg {
+  transition: transform var(--transition-normal);
+}
+
+.polymer-desktop-page .titlebar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.polymer-desktop-page .feedback-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  border: none;
+  background-color: var(--color-bg-hover);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .feedback-btn:hover {
+  color: var(--color-primary);
+  background-color: var(--color-primary-light);
+}
+
+.polymer-desktop-page .status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background-color: var(--color-success-light);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-success);
+}
+
+.polymer-desktop-page .status-dot {
+  width: 6px;
+  height: 6px;
+  background-color: var(--color-success);
+  border-radius: 50%;
+  animation: pulse-dot 2s infinite ease-in-out;
+}
+
+@keyframes pulse-dot {
+  0% { transform: scale(0.95); opacity: 0.7; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.7; }
+}
+
+.polymer-desktop-page .control-btn,
+.polymer-desktop-page .window-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .control-btn:hover,
+.polymer-desktop-page .window-btn:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .window-btn.win-close:hover {
+  background-color: var(--color-danger);
+  color: #ffffff;
+}
+
+/* 3. 主布局与左侧栏 */
+.polymer-desktop-page .main-layout {
+  flex: 1;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+.polymer-desktop-page .sidebar {
+  width: 200px;
+  background-color: var(--color-bg-sidebar);
+  display: flex;
+  flex-direction: column;
+  padding: 8px 16px 16px 16px;
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: background-color var(--transition-normal);
+}
+
+.polymer-desktop-page .new-task-btn {
+  width: 100%;
+  height: 38px;
+  background-color: transparent;
+  border: 1px solid var(--color-border-card);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 16px;
+  gap: 10px;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .new-task-btn:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .new-task-btn:active {
+  transform: scale(0.97);
+}
+
+.polymer-desktop-page .nav-menu {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.polymer-desktop-page .nav-item {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 10px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .nav-item:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .nav-item.active {
+  background-color: var(--color-primary-light);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+/* 历史会话 */
+.polymer-desktop-page .history-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin-top: 24px;
+  overflow: hidden;
+}
+
+.polymer-desktop-page .history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.5px;
+}
+
+.polymer-desktop-page .clear-all-btn {
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .clear-all-btn:hover {
+  color: var(--color-danger);
+  background-color: var(--color-bg-hover);
+}
+
+.polymer-desktop-page .history-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.polymer-desktop-page .history-item {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 12px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  position: relative;
+  overflow: hidden;
+}
+
+.polymer-desktop-page .history-item:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .history-item-text {
+  flex: 1;
+  margin-right: 8px;
+}
+
+.polymer-desktop-page .history-delete-btn {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.8);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .history-item:hover .history-delete-btn {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.polymer-desktop-page .history-delete-btn:hover {
+  color: var(--color-danger);
+  background-color: var(--color-bg-active);
+}
+
+/* 个人卡片 */
+.polymer-desktop-page .user-profile {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  padding-top: 12px;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.polymer-desktop-page .user-profile .avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: var(--color-primary);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.polymer-desktop-page .user-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+
+.polymer-desktop-page .user-info .username {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .user-info .user-email {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.polymer-desktop-page .settings-btn {
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .settings-btn:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 4. 右侧主工作区卡片 (支持纵向平滑滚动与大圆角无边界悬浮设计) */
+.polymer-desktop-page .main-content {
+  flex: 1;
+  background-color: var(--color-bg-card); /* 默认纯白大卡片背景 */
+  border-radius: 10px; /* 写死 10px，防止 CSS 变量解析失败 */
+  margin: 0 8px 8px 0;
+  border: none;
+  box-shadow: none; /* 移除外层投影，使白色卡片与背景完全平铺过渡 */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 20px;
+  position: relative;
+  overflow-y: auto;
+  box-sizing: border-box;
+  scroll-behavior: smooth; /* 点击运行后平滑滚动到结果区 */
+  transition: background-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+/* ==========================================================================
+   左右分栏拖拽分割条 (Sidebar Resizer) 样式规范
+   ========================================================================== */
+.polymer-desktop-page .sidebar-resizer {
+  width: 6px;
+  margin: 0 -3px; /* 利用负 margin 扩大可触及区域 */
+  cursor: col-resize;
+  position: relative;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.polymer-desktop-page .resizer-line {
+  width: 2px;
+  height: 100%;
+  background-color: transparent;
+  transition: background-color var(--transition-normal);
+}
+
+/* Hover 与拖拽时完全透明，符合 UI 设计规范无界设计中隐形分割线的要求 */
+.polymer-desktop-page .sidebar-resizer:hover .resizer-line,
+.polymer-desktop-page .sidebar-resizer.is-dragging .resizer-line {
+  background-color: transparent;
+}
+
+/* 折叠状态下自动隐藏拖拽条 */
+.polymer-desktop-page .sidebar-collapsed #sidebar-resizer {
+  display: none !important;
+}
+
+/* 右侧面板左右拖拽分割条样式 */
+.polymer-desktop-page .analysis-resizer {
+  width: 8px;
+  margin-left: -8px; /* 完美重叠覆盖在 main-content 的 margin-right 上，保证 8px 视觉空隙完好 */
+  cursor: col-resize;
+  position: relative;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: calc(100% - 8px); /* 扣除底部 8px 留白空间，与 analysis-panel 保持高度对齐 */
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+}
+
+.polymer-desktop-page .analysis-resizer .resizer-line {
+  width: 2px;
+  height: 100%;
+  background-color: transparent; /* 贯彻无界设计隐形分割线规范，始终完全透明 */
+  transition: background-color var(--transition-normal);
+}
+
+/* 拖拽激活状态下的微调 */
+.polymer-desktop-page .analysis-resizer.is-dragging {
+  /* 仅保留 cursor: col-resize 提示，保持视觉上的纯净隐形 */
+}
+
+/* 导入图片 OCR 专属弹窗样式 */
+.polymer-desktop-page .ocr-modal-w {
+  width: 480px;
+}
+
+.polymer-desktop-page .ocr-upload-zone {
+  width: 100%;
+  min-height: 220px;
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-xl);
+  background-color: var(--color-bg-hover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .ocr-upload-zone:hover {
+  background-color: var(--color-bg-active);
+  border-color: var(--color-primary);
+}
+
+.polymer-desktop-page .upload-tip-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.polymer-desktop-page .upload-icon {
+  color: var(--color-text-tertiary);
+  margin-bottom: 12px;
+  stroke-width: 1.5;
+}
+
+.polymer-desktop-page .upload-tip-content h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 6px 0;
+}
+
+.polymer-desktop-page .upload-tip-content p {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  margin: 0;
+}
+
+/* 扫描状态 */
+.polymer-desktop-page .ocr-scanning-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.polymer-desktop-page .scanning-preview-box {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  background-color: #ffffff;
+  border: 1px solid var(--color-border-card);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.polymer-desktop-page .mock-molecule-img svg {
+  animation: pulse-img 2s infinite ease-in-out;
+}
+
+@keyframes pulse-img {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 0.6; }
+}
+
+/* 科技激光扫描线 */
+.polymer-desktop-page .scanner-laser {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--color-primary), transparent);
+  box-shadow: 0 0 8px var(--color-primary);
+  z-index: 5;
+  animation: laser-scan 2.5s infinite linear;
+}
+
+@keyframes laser-scan {
+  0% { top: 0%; }
+  50% { top: 100%; }
+  100% { top: 0%; }
+}
+
+.polymer-desktop-page .scanning-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 12px;
+}
+
+.polymer-desktop-page .scanning-progress {
+  width: 200px;
+  height: 4px;
+  background-color: var(--color-border);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.polymer-desktop-page .scanning-progress-bar {
+  height: 100%;
+  width: 0%;
+  background-color: var(--color-primary);
+  border-radius: var(--radius-full);
+  transition: width 0.15s linear;
+}
+
+
+/* ==========================================================================
+   玄鉴桌面客户端 - 聚合物性能探索大胶囊与配置样式模块 (polymer-capsule.css)
+   职责说明：
+   1. 渲染毛玻璃高通透材质的一体化智能输入大胶囊 smiles-smart-capsule、右上角悬浮操作组及底栏操作区。
+   2. 渲染右端拆分组合按钮 split-button-container 及高通透毛玻璃下拉模式切换菜单。
+   3. 定义计算进行中，按钮弹性收缩为三点弹跳 dots-loader 的 Loading 弹跳动效。
+   4. 渲染二级侧向配置面板 generate-submenu-panel、侧边选项列表及完成保存按钮。
+   5. 渲染性质探索模式下的参数滑动输入条（单向 Td、双向 Tg/介电常数）自定义 Range Slider 彩色轨道样式。
+   ========================================================================== */
+
+/* 一体化智能输入工作台 - 高空悬浮毛玻璃胶囊 */
+.polymer-desktop-page .smiles-smart-capsule {
+  width: 100%;
+  margin: 12px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-radius: 8px !important; /* 直接写死 8px 圆角 */
+  border: 1px solid var(--color-border-card);
+  box-shadow: none; /* 抹除默认状态阴影以去影去脏 */
+  transition: all var(--transition-normal);
+  box-sizing: border-box;
+  flex-shrink: 0;
+  position: relative; /* 允许一键复制按钮绝对定位悬浮 */
+}
+
+.polymer-desktop-page[data-theme="dark"] .smiles-smart-capsule {
+  background: rgba(17, 24, 39, 0.7);
+}
+
+.polymer-desktop-page .smiles-smart-capsule:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 16px 48px -10px rgba(49, 94, 251, 0.12);
+}
+
+/* 文本域右上角悬浮操作组 */
+.polymer-desktop-page .smiles-textarea-floating-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  z-index: 5;
+}
+
+/* 通用悬浮图标按钮 */
+.polymer-desktop-page .smiles-floating-action-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-tertiary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.9);
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .smiles-floating-action-btn svg {
+  stroke-width: 2 !important;
+}
+
+/* 当输入框有文本内容时，悬浮图标组才浮现显示 */
+.polymer-desktop-page .smiles-smart-capsule.has-content .smiles-floating-action-btn {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+/* 复制按钮 Hover 蓝光 */
+.polymer-desktop-page .smiles-floating-action-btn.btn-copy:hover {
+  background-color: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+/* 清空按钮 Hover 红光 */
+.polymer-desktop-page .smiles-floating-action-btn.btn-clear:hover {
+  background-color: var(--color-danger-light);
+  color: var(--color-danger);
+}
+
+.polymer-desktop-page .smiles-floating-action-btn:active {
+  transform: scale(0.9);
+}
+
+.polymer-desktop-page .smiles-textarea {
+  width: 100%;
+  height: 80px; /* 大约三行字高，舒适体量感 */
+  background-color: transparent;
+  border: none;
+  padding: 16px 64px 16px 20px; /* 右侧增加 padding 防止文字遮挡悬浮按钮组 */
+  font-family: "Consolas", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  resize: none;
+  box-sizing: border-box;
+  transition: all var(--transition-normal);
+  line-height: 1.6;
+}
+
+.polymer-desktop-page .smiles-textarea::placeholder {
+  color: var(--color-text-tertiary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 13.5px;
+  font-weight: 400;
+}
+
+.polymer-desktop-page .smiles-textarea:focus {
+  outline: none;
+}
+
+.polymer-desktop-page .capsule-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end; /* 所有按钮集中右对齐 */
+  padding: 8px 16px;
+  background-color: transparent;
+  border-top: none;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page[data-theme="dark"] .capsule-toolbar {
+  background-color: transparent;
+}
+
+/* 工具栏内次要操作按钮和动作按钮的大小及微调 */
+.polymer-desktop-page .capsule-toolbar .btn {
+  height: 30px;
+  font-size: 12px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+}
+
+.polymer-desktop-page .capsule-toolbar .btn svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.8 !important;
+}
+
+/* 当按钮置灰禁用时的效果 */
+.polymer-desktop-page .capsule-toolbar .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* ==========================================
+   拆分组合按钮 (Split Button 一体胶囊版)
+   ========================================== */
+.polymer-desktop-page .split-button-container {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  z-index: 20;
+  height: 30px;
+  background-color: #0f172a; /* 继承原本主要按钮的底色 */
+  color: #ffffff;
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transition: all var(--transition-normal);
+  overflow: visible; /* 保证下拉菜单正常溢出显示 */
+}
+
+.polymer-desktop-page[data-theme="dark"] .split-button-container {
+  background-color: #f3f4f6;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+}
+
+/* 整体 Hover 时的质感变化与微上浮 */
+.polymer-desktop-page .split-button-container:hover {
+  background-color: #333333;
+  transform: translateY(-0.5px);
+  box-shadow: 0 4px 8px rgba(15, 23, 42, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+}
+
+.polymer-desktop-page[data-theme="dark"] .split-button-container:hover {
+  background-color: #d9dee7;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* 整体 Active 物理按压反馈 (在二级面板或下拉菜单打开时禁用，避免抖动) */
+.polymer-desktop-page .split-button-container:not(.menu-open):not(.submenu-open):active {
+  transform: scale(0.97) translateY(0.5px);
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.02);
+}
+
+/* 主计算按钮左侧部分 (完全透明) */
+.polymer-desktop-page .btn-generate-main {
+  background: transparent !important;
+  border: none !important;
+  color: inherit !important;
+  height: 100% !important;
+  padding: 0 4px 0 14px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  font-family: inherit !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.15px !important;
+  border-top-left-radius: var(--radius-md) !important;
+  border-bottom-left-radius: var(--radius-md) !important;
+  white-space: nowrap !important;
+}
+
+/* 右侧小下拉触发器 (完全透明) */
+.polymer-desktop-page .btn-generate-dropdown {
+  background: transparent !important;
+  border: none !important;
+  color: inherit !important;
+  height: 100% !important;
+  padding: 0 10px 0 6px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  border-top-right-radius: var(--radius-md) !important;
+  border-bottom-right-radius: var(--radius-md) !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.polymer-desktop-page .btn-generate-dropdown svg {
+  transition: transform var(--transition-normal);
+}
+
+.polymer-desktop-page .split-button-container.menu-open .btn-generate-dropdown svg {
+  transform: rotate(180deg);
+}
+
+/* 下拉箭头单独 Hover 时，增加一层非常淡的背景提示其是可点击选择区 */
+.polymer-desktop-page .btn-generate-dropdown:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+/* ==========================================
+   计算进行中弹性伸缩胶囊与酷炫 Loader 样式
+   ========================================== */
+.polymer-desktop-page .split-button-container.is-calculating {
+  border-radius: var(--radius-full) !important;
+  box-shadow: 0 4px 12px rgba(49, 94, 251, 0.12) !important;
+}
+
+.polymer-desktop-page .split-button-container.is-calculating .btn-generate-main {
+  padding: 0 11px !important; /* 对称 padding 居中 loader */
+  gap: 0 !important;
+}
+
+.polymer-desktop-page .split-button-container.is-calculating .btn-generate-dropdown {
+  width: 0 !important;
+  opacity: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+}
+
+/* 科技感三点弹跳 Loader (Bouncing Dots) */
+.polymer-desktop-page .dots-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px; /* 增加一点间距 */
+  height: 14px;
+}
+
+.polymer-desktop-page .dots-loader .dot {
+  display: inline-block;
+  width: 4px; /* 微微调小圆点，让间距和弹跳更加精致 */
+  height: 4px;
+  border-radius: 50%;
+  background-color: currentColor; /* 自动适配双主题颜色 */
+  animation: dot-bounce 1.0s infinite ease-in-out both;
+  will-change: transform, opacity;
+}
+
+.polymer-desktop-page .dots-loader .dot-1 {
+  animation-delay: -0.28s;
+}
+
+.polymer-desktop-page .dots-loader .dot-2 {
+  animation-delay: -0.14s;
+}
+
+@keyframes dot-bounce {
+  0%, 80%, 100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  40% {
+    transform: translateY(-5px); /* 上下跳动 */
+    opacity: 1;
+  }
+}
+
+.polymer-desktop-page[data-theme="dark"] .btn-generate-dropdown:hover {
+  background-color: rgba(0, 0, 0, 0.06) !important;
+}
+
+/* 下拉菜单容器 (毛玻璃高通透材质) */
+.polymer-desktop-page .generate-dropdown-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-card);
+  box-shadow: var(--shadow-md);
+  min-width: 176px;
+  padding: 4px;
+  z-index: 99;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transform-origin: bottom right;
+  animation: dropdownFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.polymer-desktop-page[data-theme="dark"] .generate-dropdown-menu {
+  background: rgba(17, 24, 39, 0.85);
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* 菜单项 */
+.polymer-desktop-page .generate-dropdown-menu .dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  white-space: nowrap !important;
+}
+
+.polymer-desktop-page .generate-dropdown-menu .dropdown-item span {
+  white-space: nowrap !important;
+}
+
+.polymer-desktop-page .generate-dropdown-menu .dropdown-item svg {
+  stroke-width: 2 !important;
+  color: var(--color-text-tertiary);
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .generate-dropdown-menu .dropdown-item:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .generate-dropdown-menu .dropdown-item:hover svg {
+  color: var(--color-primary);
+}
+
+/* 激活选中态 */
+.polymer-desktop-page .generate-dropdown-menu .dropdown-item.active {
+  background-color: var(--color-primary-light);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.polymer-desktop-page .generate-dropdown-menu .dropdown-item.active svg {
+  color: var(--color-primary);
+}
+
+/* ==========================================
+   性能多选模态框样式 (Property Select Modal)
+   ========================================== */
+.polymer-desktop-page .prop-select-modal-w {
+  width: 580px !important;
+  max-width: 90% !important;
+}
+
+/* 性能选项网格 */
+.polymer-desktop-page .property-select-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 选项卡片 (白卡片，淡灰边框) */
+.polymer-desktop-page .prop-select-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background-color: var(--color-bg-card);
+  border: 1px solid var(--color-border-card);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: all var(--transition-normal);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.polymer-desktop-page[data-theme="dark"] .prop-select-card {
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Hover 微缩放与高亮 */
+.polymer-desktop-page .prop-select-card:hover {
+  background-color: var(--color-bg-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Active 物理按压反馈 */
+.polymer-desktop-page .prop-select-card:active {
+  transform: scale(0.98) translateY(0);
+}
+
+/* 选中的卡片高亮 (边框变靛蓝，半透明背景) */
+.polymer-desktop-page .prop-select-card.active {
+  border-color: var(--color-primary) !important;
+  background-color: var(--color-primary-light);
+}
+
+/* 左侧圆形复选框 */
+.polymer-desktop-page .prop-card-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--color-text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  background-color: transparent;
+  flex-shrink: 0;
+  transition: all var(--transition-normal);
+  box-sizing: border-box;
+}
+
+.polymer-desktop-page .prop-card-checkbox svg {
+  stroke-width: 3.5 !important;
+  width: 10px;
+  height: 10px;
+  transition: all var(--transition-normal);
+}
+
+/* 选中后的复选框样式 */
+.polymer-desktop-page .prop-select-card.active .prop-card-checkbox {
+  border-color: var(--color-primary) !important;
+  background-color: var(--color-primary) !important;
+  color: #ffffff !important;
+}
+
+/* 右侧信息排版 */
+.polymer-desktop-page .prop-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.polymer-desktop-page .prop-card-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .prop-card-unit {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-tertiary);
+}
+
+/* 弹窗底部说明与按钮对齐 */
+.polymer-desktop-page .prop-select-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.polymer-desktop-page .selected-summary-text {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+/* 完成按钮在未选时的置灰禁用态 */
+.polymer-desktop-page #property-select-modal-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* ==========================================
+   二级侧向毛玻璃配置面板样式 (Submenu Panel)
+   ========================================== */
+.polymer-desktop-page .generate-submenu-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: 210px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-card);
+  box-shadow: var(--shadow-lg);
+  padding: 12px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: submenuSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 性能相似探索（单选模式）下，隐藏“全选”选择框和“全选”标签文字 */
+.polymer-desktop-page .generate-submenu-panel.single-select-mode .submenu-footer-left .submenu-select-all-checkbox,
+.polymer-desktop-page .generate-submenu-panel.single-select-mode .submenu-footer-left .submenu-select-all {
+  display: none !important;
+}
+
+.polymer-desktop-page[data-theme="dark"] .generate-submenu-panel {
+  background: rgba(17, 24, 39, 0.85);
+}
+
+@keyframes submenuSlideIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.polymer-desktop-page .submenu-header {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.polymer-desktop-page .submenu-select-all {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: color var(--transition-normal);
+}
+
+.polymer-desktop-page .submenu-select-all:hover {
+  color: var(--color-primary);
+}
+
+.polymer-desktop-page .submenu-select-all:active {
+  opacity: 0.7;
+}
+
+.polymer-desktop-page .submenu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+/* 滚动条细化样式 */
+.polymer-desktop-page .submenu-list::-webkit-scrollbar {
+  width: 4px;
+}
+.polymer-desktop-page .submenu-list::-webkit-scrollbar-thumb {
+  background: var(--color-text-quaternary);
+  border-radius: 2px;
+}
+
+.polymer-desktop-page .submenu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-normal);
+}
+
+.polymer-desktop-page .submenu-item:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.polymer-desktop-page .submenu-item input[type="checkbox"] {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+  margin: 0;
+}
+
+.polymer-desktop-page .submenu-item label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.polymer-desktop-page .submenu-item:hover label {
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .submenu-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.polymer-desktop-page .submenu-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.polymer-desktop-page .submenu-select-all-checkbox {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+  margin: 0;
+}
+
+.polymer-desktop-page .submenu-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-tertiary);
+  margin-left: 2px;
+}
+
+.polymer-desktop-page #btn-submenu-save {
+  background-color: var(--color-primary) !important;
+  color: #ffffff !important;
+  border: none !important;
+  font-weight: 600 !important;
+  font-size: 11px !important;
+  height: 24px !important;
+  padding: 0 12px !important;
+  border-radius: var(--radius-sm) !important;
+  cursor: pointer !important;
+  transition: all var(--transition-normal) !important;
+  box-shadow: 0 2px 6px rgba(49, 94, 251, 0.15) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.polymer-desktop-page #btn-submenu-save:hover {
+  background-color: #1d4ed8 !important; /* Hover 时颜色略微加深 */
+  box-shadow: 0 4px 10px rgba(49, 94, 251, 0.25) !important;
+  transform: translateY(-1px) !important;
+}
+
+.polymer-desktop-page #btn-submenu-save:active {
+  transform: translateY(0) !important;
+  box-shadow: 0 2px 4px rgba(49, 94, 251, 0.15) !important;
+}
+
+.polymer-desktop-page #btn-submenu-save:disabled {
+  background-color: var(--color-text-quaternary) !important;
+  color: var(--color-text-tertiary) !important;
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* 齿轮按钮样式 */
+.polymer-desktop-page .dropdown-item-config {
+  background: transparent !important;
+  border: none !important;
+  color: var(--color-text-tertiary) !important;
+  padding: 4px !important;
+  margin-left: auto !important;
+  cursor: pointer !important;
+  outline: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 4px !important;
+  transition: all var(--transition-normal) !important;
+}
+
+.polymer-desktop-page .dropdown-item-config:hover {
+  background-color: rgba(15, 23, 42, 0.08) !important;
+  color: var(--color-primary) !important;
+}
+
+.polymer-desktop-page[data-theme="dark"] .dropdown-item-config:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: var(--color-primary) !important;
+}
+
+.polymer-desktop-page .dropdown-item-config svg {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  stroke-width: 2.2 !important;
+}
+
+.polymer-desktop-page .dropdown-item-config:hover svg {
+  transform: rotate(45deg);
+  color: var(--color-primary) !important;
+}
+
+/* 性能相似目标范围配置面板 (滑块横置) */
+.polymer-desktop-page .property-sliders-panel {
+  width: 100%;
+  margin: 8px 0 0 0;
+  padding: 18px 20px;
+  background-color: var(--color-bg-card);
+  border: 1px solid var(--color-border-card);
+  border-radius: 8px !important; /* 直接写死 8px 圆角 */
+  box-shadow: none; /* 抹除阴影去脏 */
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: slide-down 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  box-sizing: border-box;
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.polymer-desktop-page .property-sliders-title-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-primary);
+}
+
+.polymer-desktop-page .property-sliders-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .sliders-horizontal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  width: 100%;
+}
+
+.polymer-desktop-page .slider-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.polymer-desktop-page .slider-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.polymer-desktop-page .slider-value-display {
+  color: var(--color-primary);
+  font-weight: 700;
+}
+
+/* 双向滑动条 Range Slider 样式 */
+.polymer-desktop-page .double-slider-container {
+  position: relative;
+  width: 100%;
+  height: 24px;
+}
+
+.polymer-desktop-page .slider-track {
+  position: absolute;
+  top: 10px;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background-color: var(--color-border);
+  border-radius: var(--radius-full);
+  z-index: 1;
+}
+
+.polymer-desktop-page .range-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 24px;
+  -webkit-appearance: none;
+  background: transparent;
+  pointer-events: none;
+  margin: 0;
+  z-index: 2;
+}
+
+.polymer-desktop-page .range-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: var(--color-bg-card);
+  border: 2px solid var(--color-primary);
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.1s;
+}
+
+.polymer-desktop-page .range-input::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.polymer-desktop-page .range-input::-webkit-slider-thumb:active {
+  background-color: var(--color-primary);
+}
+
+/* 单向滑动条 Td 样式 */
+.polymer-desktop-page .single-slider-container {
+  position: relative;
+  width: 100%;
+  height: 24px;
+}
+
+.polymer-desktop-page .slider-track-single {
+  position: absolute;
+  top: 10px;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background-color: var(--color-border);
+  border-radius: var(--radius-full);
+  z-index: 1;
+}
+
+.polymer-desktop-page .range-input-single {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 24px;
+  -webkit-appearance: none;
+  background: transparent;
+  margin: 0;
+  z-index: 2;
+}
+
+.polymer-desktop-page .range-input-single::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: var(--color-bg-card);
+  border: 2px solid var(--color-primary);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.1s;
+}
+
+.polymer-desktop-page .range-input-single::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+
+/* ==========================================================================
+   玄鉴桌面客户端 - 聚合物性能探索卡片及图表样式模块 (polymer-cards.css)
+   职责说明：
+   1. 定义 2D/3D 大卡片翻转容器 flip-card-container、内部合成层及 Y 轴翻转透视过渡动画。
+   2. 渲染结果区 results-section 的骨架屏 shimmer 动画、空数据提示及结果内容标题栏（含排序按钮）。
+   3. 渲染结构相似度检索结果卡片列表，处理 card-3d-canvas 渲染自适应及淡入淡出加载器。
+   4. 渲染性能预测面板 pred-hero-dashboard 的半圆仪表盘进度条动画、置信区间误差光轴误差针、以及雷达图 polygon 周期性全息色彩流溢动效。
+   5. 渲染性能相似卡片的对比条形图、偏差偏差徽章 deviation-badge、Hover 浮现复制与收藏组。
+   ========================================================================== */
+
+/* 顶部操作按钮（导入图片、清空画布、生成SMILES）精致化重构 (高通透毛玻璃镜面小卡片) */
+.polymer-desktop-page .polymer-module-header .btn--outline {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px !important;
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(15, 23, 42, 0.05) !important;
+  color: var(--color-text-secondary) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.02), inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+  transition: all var(--transition-normal) !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.polymer-desktop-page[data-theme="dark"] .polymer-module-header .btn--outline {
+  background: rgba(17, 24, 39, 0.6) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+  color: var(--color-text-secondary) !important;
+}
+
+/* 按钮内图标（SVG） transition 属性声明 */
+.polymer-desktop-page .polymer-module-header .btn--outline svg {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), stroke var(--transition-normal) !important;
+  stroke-width: 1.8 !important;
+}
+
+/* “导入图片”个性化微发光与上浮 1.5px */
+.polymer-desktop-page #btn-import-img:hover {
+  color: var(--color-primary) !important;
+  background-color: var(--color-primary-light) !important;
+  border-color: rgba(49, 94, 251, 0.3) !important;
+  box-shadow: 0 4px 12px rgba(49, 94, 251, 0.08) !important;
+}
+.polymer-desktop-page #btn-import-img:hover svg {
+  transform: translateY(-1.5px) !important;
+}
+
+/* “清空画布”警告微光与旋转 -8 度 */
+.polymer-desktop-page #btn-clear-canvas:hover {
+  color: var(--color-danger) !important;
+  background-color: var(--color-danger-light) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.08) !important;
+}
+.polymer-desktop-page #btn-clear-canvas:hover svg {
+  transform: rotate(-8deg) !important;
+}
+
+/* “生成SMILES”科技绿微光与旋转 180 度 */
+.polymer-desktop-page #btn-sync-canvas:hover {
+  color: var(--color-success) !important;
+  background-color: var(--color-success-light) !important;
+  border-color: rgba(16, 185, 129, 0.3) !important;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.08) !important;
+}
+.polymer-desktop-page #btn-sync-canvas:hover svg {
+  transform: rotate(180deg) !important;
+}
+
+/* “3D构象”按钮普通状态 Hover 微光与图标三维旋转 */
+.polymer-desktop-page #btn-toggle-3d:not(.active):hover {
+  color: var(--color-primary) !important;
+  background-color: var(--color-primary-light) !important;
+  border-color: rgba(49, 94, 251, 0.3) !important;
+  box-shadow: 0 4px 12px rgba(49, 94, 251, 0.08) !important;
+}
+.polymer-desktop-page #btn-toggle-3d:not(.active):hover svg {
+  transform: rotateY(180deg) scale(1.1) !important; /* 三维 Y 轴翻转，完美对应 3D 构象翻转 */
+}
+
+/* “3D构象”按钮激活状态 Hover 微变暗与图标左偏 */
+.polymer-desktop-page #btn-toggle-3d.active:hover {
+  background-color: #1d4ed8 !important; /* 稍深的靛蓝 */
+  border-color: #1d4ed8 !important;
+  box-shadow: 0 6px 16px rgba(49, 94, 251, 0.3) !important;
+}
+.polymer-desktop-page #btn-toggle-3d.active:hover svg {
+  transform: translateX(-2px) rotate(180deg) !important; /* 图标略向左偏表示返回 */
+}
+
+
+/* 按压反馈 */
+.polymer-desktop-page .polymer-module-header .btn--outline:active {
+  transform: scale(0.97) translateY(0.5px) !important;
+}
+
+/* 原有 .btn--surface 样式单独保留 */
+.polymer-desktop-page .smiles-actions .btn--surface,
+.polymer-desktop-page .capsule-toolbar .btn--surface {
+  background-color: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.05);
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  letter-spacing: -0.15px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.02), 0 3px 12px rgba(15, 23, 42, 0.015), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page[data-theme="dark"] .smiles-actions .btn--surface,
+.polymer-desktop-page[data-theme="dark"] .capsule-toolbar .btn--surface {
+  background-color: #1a202c;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 3px 12px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.polymer-desktop-page .smiles-actions .btn--surface:hover,
+.polymer-desktop-page .capsule-toolbar .btn--surface:hover {
+  background-color: rgba(49, 94, 251, 0.04);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 6px rgba(49, 94, 251, 0.06), 0 4px 16px rgba(49, 94, 251, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.polymer-desktop-page[data-theme="dark"] .smiles-actions .btn--surface:hover,
+.polymer-desktop-page[data-theme="dark"] .capsule-toolbar .btn--surface:hover {
+  background-color: rgba(77, 118, 253, 0.08);
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.polymer-desktop-page .smiles-actions .btn--surface:active,
+.polymer-desktop-page .capsule-toolbar .btn--surface:active {
+  transform: scale(0.97) translateY(0.5px);
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.01);
+}
+
+/* 顶部操作图标及 SMILES 操作图标线宽精细化 */
+.polymer-desktop-page .polymer-module-header .btn svg,
+.polymer-desktop-page .smiles-actions .btn svg,
+.polymer-desktop-page .capsule-toolbar .btn svg {
+  stroke-width: 1.6 !important;
+}
+
+/* 主状态切换按钮（3D构象 / 2D画布）精细化 */
+.polymer-desktop-page .polymer-module-header .btn--primary {
+  background-color: #0f172a;
+  color: #ffffff;
+  border: none;
+  font-weight: 600;
+  letter-spacing: -0.15px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .polymer-module-header .btn--primary:hover {
+  background-color: #333333;
+  transform: translateY(-0.5px);
+  box-shadow: 0 4px 8px rgba(15, 23, 42, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+}
+
+.polymer-desktop-page .polymer-module-header .btn--primary:active {
+  transform: scale(0.97) translateY(0.5px);
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.02);
+}
+
+.polymer-desktop-page[data-theme="dark"] .polymer-module-header .btn--primary {
+  background-color: #f3f4f6;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+}
+
+.polymer-desktop-page[data-theme="dark"] .polymer-module-header .btn--primary:hover {
+  background-color: #d9dee7;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.polymer-desktop-page .polymer-module-header h1 {
+  font-size: 16px; /* 统一左右标题设计标准 */
+  font-weight: 600; 
+  line-height: 1.5; 
+  color: var(--color-text-primary);
+  margin: 0;
+  letter-spacing: -0.4px;
+}
+
+/* 双栏工作区布局 */
+.polymer-desktop-page .polymer-workspace {
+  display: flex;
+  gap: 16px; /* 12px ~ 16px 的底色冷灰间隙 */
+  align-items: stretch; /* 撑满高度 */
+  flex: 1; /* 弹性拉伸 */
+  min-height: 0;
+  background-color: transparent; /* 去除中间画板灰色背景，防视觉重叠 */
+  border-radius: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.polymer-desktop-page .workspace-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.polymer-desktop-page .editor-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important; /* 核心：防止父级大卡片 overflow: hidden 导致 iframe 的合成层裁剪冲突 */
+}
+
+/* 大卡片基类 (无边框，依靠极致色差悬浮，配合非常淡雅的软阴影) */
+.polymer-desktop-page .workspace-card {
+  background-color: var(--color-bg-card);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  box-sizing: border-box;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  height: 100%; /* 填满翻转容器高度 */
+}
+
+/* Ketcher 画布容器 */
+.polymer-desktop-page .editor-iframe-container {
+  padding: 0; /* 改为 0，与 Smiles 输入胶囊对齐宽度 */
+  background-color: transparent;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  box-sizing: border-box;
+}
+
+.polymer-desktop-page .ketcher-iframe {
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--color-border-card) !important; /* 保留精致的 1px 边框 */
+  border-radius: var(--radius-xl) !important; /* 对齐外层卡片 14px 圆角 */
+  background-color: #ffffff;
+  box-shadow: none;
+  box-sizing: border-box;
+  overflow: hidden !important;
+  transform: translateZ(0) !important;
+  -webkit-transform: translateZ(0) !important;
+  clip-path: inset(0 round var(--radius-xl)) !important; /* webkit 溢出裁剪保护 */
+  -webkit-clip-path: inset(0 round var(--radius-xl)) !important;
+}
+
+/* 背面 3D Canvas 容器 */
+.polymer-desktop-page .canvas-3d-container-full {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  background-color: #111827; /* 极客黑底色 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.polymer-desktop-page .canvas-3d {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.polymer-desktop-page .canvas-tip {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(10px);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ==========================================
+   结果区样式 (Results Panel)
+   ========================================== */
+.polymer-desktop-page .results-section {
+  display: none; /* 默认隐藏，在第二阶段激活时显示 */
+  margin-top: 14px;
+  background-color: transparent; /* 取消内凹冷灰底，实现白底融合去影去脏 */
+  border-radius: 0;
+  box-shadow: none;
+  border: none;
+  padding: 16px 0 0 0; /* 对齐宽度 */
+  box-sizing: border-box;
+}
+
+.polymer-desktop-page .results-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.polymer-desktop-page .empty-graphic {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.polymer-desktop-page .results-empty-state h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 6px 0;
+}
+
+.polymer-desktop-page .results-empty-state p {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin: 0;
+  max-width: 440px;
+  line-height: 1.5;
+}
+
+/* 运行中的骨架屏动画 */
+.polymer-desktop-page .results-skeleton {
+  padding: 12px 0;
+}
+
+.polymer-desktop-page .skeleton-card-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.polymer-desktop-page .skeleton-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.polymer-desktop-page .skeleton-block {
+  background-color: var(--color-border);
+  border-radius: var(--radius-xs);
+}
+
+.polymer-desktop-page .skeleton-block.title-block {
+  width: 160px;
+  height: 18px;
+}
+
+.polymer-desktop-page .skeleton-block.desc-block {
+  width: 280px;
+  height: 12px;
+}
+
+.polymer-desktop-page .skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.polymer-desktop-page .skeleton-item {
+  height: 160px;
+  background-color: var(--color-bg-hover);
+  border-radius: var(--radius-lg);
+}
+
+.polymer-desktop-page .shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.polymer-desktop-page .shimmer::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.3) 20%,
+    rgba(255, 255, 255, 0.5) 60%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: shimmer-anim 1.5s infinite;
+  content: '';
+}
+
+.polymer-desktop-page[data-theme="dark"] .shimmer::after {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.05) 20%,
+    rgba(255, 255, 255, 0.1) 60%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+@keyframes shimmer-anim {
+  100% { transform: translateX(100%); }
+}
+
+/* 真实结果承载区 */
+.polymer-desktop-page .results-content-area {
+  animation: fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.polymer-desktop-page .results-content-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.polymer-desktop-page .results-content-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.polymer-desktop-page .results-content-title h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.polymer-desktop-page .results-content-title p {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+/* 1. 结构相似度结果样式 */
+.polymer-desktop-page .similarity-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.polymer-desktop-page .similarity-result-card {
+  background-color: var(--color-bg-app); /* 默认用淡雅灰色做天然色差分区，防融色 */
+  border: 1px solid var(--color-border-card); /* 极淡描边，代替阴影 */
+  box-shadow: none; /* 抹除默认状态阴影，干净去脏 */
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  transition: all var(--transition-normal);
+  position: relative;
+}
+
+.polymer-desktop-page .result-structure-img {
+  width: 100%;
+  height: 110px;
+  background-color: #ffffff;
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+}
+
+.polymer-desktop-page .result-smiles-box {
+  background-color: var(--color-bg-sidebar);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-family: monospace;
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  overflow-x: auto;
+  white-space: nowrap;
+  margin-bottom: 12px;
+}
+
+.polymer-desktop-page .card-bottom-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border-card);
+  margin-top: auto;
+}
+
+.polymer-desktop-page[data-theme="dark"] .card-bottom-row {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.polymer-desktop-page .bottom-prop-group,
+.polymer-desktop-page .bottom-source-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.polymer-desktop-page .bottom-source-group {
+  align-items: flex-end;
+}
+
+.polymer-desktop-page .bottom-prop-label,
+.polymer-desktop-page .bottom-source-label {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+
+.polymer-desktop-page .bottom-prop-val {
+  font-size: 12px;
+  color: var(--color-success);
+  font-weight: 700;
+}
+
+.polymer-desktop-page .bottom-source-val {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+/* 2. 性能预测新版卡片网格与学术可视化微件样式 */
+.polymer-desktop-page .prediction-grid-wrapper {
+  display: grid;
+  grid-template-columns: 1fr; /* 纵向单列显示，一行显示一个卡片 */
+  gap: 14px;
+  padding: 4px 0;
+  box-sizing: border-box;
+}
+
+.polymer-desktop-page .pred-card-v2 {
+  background-color: var(--color-bg-card);
+  border: 1px solid var(--color-border-card);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+  min-height: 155px;
+  box-sizing: border-box;
+  position: relative;
+  overflow: hidden;
+}
+.polymer-desktop-page .pred-card-v2:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--color-primary-light);
+}
+
+.polymer-desktop-page .pred-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.polymer-desktop-page .pred-type-badge {
+  font-size: 10px;
+  color: var(--color-success);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.polymer-desktop-page .pred-name-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .pred-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.polymer-desktop-page .pred-val-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+.polymer-desktop-page .pred-number-val {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--color-text-primary);
+  font-family: 'Outfit', 'Inter', sans-serif;
+  line-height: 1;
+}
+.polymer-desktop-page .pred-unit-capsule {
+  font-size: 9px;
+  font-weight: 700;
+  color: #ffffff;
+  background-color: #0f172a; /* 极深灰/黑色标签胶囊 */
+  padding: 3px 8px;
+  border-radius: 999px;
+  text-transform: none;
+  letter-spacing: 0.5px;
+  line-height: 1;
+}
+.polymer-desktop-page[data-theme="dark"] .pred-unit-capsule {
+  background-color: var(--color-bg-app);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-card);
+}
+
+.polymer-desktop-page .pred-widget-area {
+  min-height: 38px;
+  margin: 4px 0;
+  box-sizing: border-box;
+}
+
+.polymer-desktop-page .pred-card-footer {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  border-top: 1px dashed var(--color-border-card);
+  padding-top: 6px;
+  display: flex;
+  justify-content: space-between;
+}
+
+/* ==========================================
+   ① 温度滑轨微件 (Tg / Tm / Td)
+   ========================================== */
+.polymer-desktop-page .pred-widget-temp {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.polymer-desktop-page .temp-track-wrapper {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background-color: var(--color-bg-app);
+  margin: 6px 0;
+}
+.polymer-desktop-page .temp-gradient-track {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(to right, #3b82f6 0%, #10b981 35%, #f59e0b 70%, #ef4444 100%);
+  opacity: 0.8;
+}
+.polymer-desktop-page .temp-highlight-band {
+  position: absolute;
+  top: -2px;
+  height: 10px;
+  background-color: rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.polymer-desktop-page[data-theme="dark"] .temp-highlight-band {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.polymer-desktop-page .temp-pointer {
+  position: absolute;
+  top: -4px;
+  width: 14px;
+  height: 14px;
+  background-color: #ffffff;
+  border: 2.5px solid var(--color-primary);
+  border-radius: 50%;
+  transform: translateX(-50%);
+  box-shadow: 0 1.5px 4px rgba(0, 0, 0, 0.22);
+  transition: left 0.8s cubic-bezier(0.25, 0.8, 0.25, 1);
+  z-index: 2;
+}
+.polymer-desktop-page[data-theme="dark"] .temp-pointer {
+  background-color: #1e293b;
+  border-color: var(--color-primary);
+}
+.polymer-desktop-page .temp-axis-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8.5px;
+  color: var(--color-text-secondary);
+  line-height: 1;
+}
+
+/* ==========================================
+   ② 热失重 TGA 微缩曲线
+   ========================================== */
+.polymer-desktop-page .pred-widget-tga {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.polymer-desktop-page .tga-mini-svg {
+  width: 100%;
+  height: 32px;
+  overflow: visible;
+}
+.polymer-desktop-page .tga-line-bg {
+  stroke: var(--color-border-card);
+}
+.polymer-desktop-page[data-theme="dark"] .tga-line-bg {
+  stroke: rgba(255, 255, 255, 0.12);
+}
+.polymer-desktop-page .tga-point {
+  animation: blinkTgaPoint 1.5s infinite alternate;
+}
+.polymer-desktop-page .tga-labels {
+  font-size: 8.5px;
+  color: var(--color-text-secondary);
+  text-align: right;
+  line-height: 1;
+}
+@keyframes blinkTgaPoint {
+  0% { r: 1.8; opacity: 0.6; }
+  100% { r: 2.8; opacity: 1; filter: drop-shadow(0 0 2px var(--color-danger)); }
+}
+
+/* ==========================================
+   ③ 力学应力-应变曲线微件 (Elongation / Tensile)
+   ========================================== */
+.polymer-desktop-page .pred-widget-strain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.polymer-desktop-page .strain-mini-svg {
+  width: 100%;
+  height: 38px;
+  overflow: visible;
+}
+.polymer-desktop-page .strain-path {
+  stroke-linecap: round;
+}
+.polymer-desktop-page .strain-point-halo {
+  animation: pulseStrainHalo 1.8s infinite ease-out;
+  transform-origin: center;
+}
+.polymer-desktop-page .strain-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8.5px;
+  color: var(--color-text-secondary);
+  line-height: 1;
+}
+@keyframes pulseStrainHalo {
+  0% { r: 2.5; opacity: 0.8; }
+  100% { r: 6.5; opacity: 0; }
+}
+
+/* ==========================================
+   ④ 气体渗透粒子微观模拟器 (O2 / CO2 / H2)
+   ========================================== */
+.polymer-desktop-page .pred-widget-barrier {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.polymer-desktop-page .barrier-flow-box {
+  position: relative;
+  height: 28px;
+  background-color: var(--color-bg-app);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--color-border-card);
+}
+.polymer-desktop-page .barrier-chain-wall {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 8px;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--color-border-card),
+    var(--color-border-card) 2px,
+    transparent 2px,
+    transparent 6px
+  );
+  border-left: 1px solid var(--color-border-card);
+  border-right: 1px solid var(--color-border-card);
+  transform: translateX(-50%);
+  z-index: 1;
+}
+.polymer-desktop-page[data-theme="dark"] .barrier-chain-wall {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.08),
+    rgba(255, 255, 255, 0.08) 2px,
+    transparent 2px,
+    transparent 6px
+  );
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.polymer-desktop-page .gas-particles {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+.polymer-desktop-page .particle {
+  position: absolute;
+  width: 3.5px;
+  height: 3.5px;
+  border-radius: 50%;
+  background-color: var(--particle-color, var(--color-primary));
+  opacity: 0.85;
+  top: 50%;
+  transform: translateY(-50%);
+  animation: particleFlowAnim var(--particle-speed, 2.5s) linear infinite;
+}
+.polymer-desktop-page .particle.p1 { animation-delay: 0s; top: 20%; }
+.polymer-desktop-page .particle.p2 { animation-delay: 0.5s; top: 45%; }
+.polymer-desktop-page .particle.p3 { animation-delay: 1.1s; top: 75%; }
+.polymer-desktop-page .particle.p4 { animation-delay: 1.6s; top: 30%; }
+.polymer-desktop-page .particle.p5 { animation-delay: 2.2s; top: 60%; }
+
+@keyframes particleFlowAnim {
+  0% {
+    left: -5%;
+    opacity: 0.8;
+  }
+  48% {
+    opacity: 0.9;
+  }
+  52% {
+    opacity: 0.35;
+  }
+  100% {
+    left: 105%;
+    opacity: 0.8;
+  }
+}
+
+.polymer-desktop-page .barrier-labels {
+  display: flex;
+  justify-content: flex-end;
+  font-size: 8.5px;
+  color: var(--color-text-secondary);
+  line-height: 1;
+}
+.polymer-desktop-page .radar-chart-svg {
+  width: 100%;
+  height: 100%;
+  max-width: 240px;
+  max-height: 240px;
+}
+
+.polymer-desktop-page .radar-axis {
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.polymer-desktop-page .radar-grid {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 0.5;
+  stroke-dasharray: 2, 2;
+}
+
+.polymer-desktop-page .radar-polygon {
+  fill: var(--color-primary-light);
+  stroke: var(--color-primary);
+  stroke-width: 1.8;
+  fill-opacity: 0.35;
+  transition: all 0.5s ease;
+}
+
+.polymer-desktop-page .radar-label {
+  font-size: 9px;
+  font-weight: 700;
+  fill: var(--color-text-secondary);
+  text-anchor: middle;
+}
+
+/* 3. 性能相似度对比条形图样式 */
+.polymer-desktop-page .bar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.polymer-desktop-page .bar-label-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.polymer-desktop-page .bar-bg {
+  height: 6px;
+  background-color: var(--color-border);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.polymer-desktop-page .bar-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width 1s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 0 4px rgba(49, 94, 251, 0.1);
+}
+
+/* 偏离度多色渐变样式定义 */
+.polymer-desktop-page .bar-fill-low {
+  background: linear-gradient(to right, #10b981, #34d399) !important;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.2);
+}
+
+.polymer-desktop-page .bar-fill-mid {
+  background: linear-gradient(to right, #f97316, #fb923c) !important;
+  box-shadow: 0 0 6px rgba(249, 115, 22, 0.2);
+}
+
+.polymer-desktop-page .bar-fill-high {
+  background: linear-gradient(to right, #ef4444, #f87171) !important;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
+}
+
+/* 极简分子摘要栏样式 */
+.polymer-desktop-page .polymer-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background-color: var(--color-primary-light);
+  border-radius: var(--radius-lg);
+  margin-bottom: 24px;
+  animation: slide-down 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.polymer-desktop-page .summary-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.polymer-desktop-page .summary-icon-box {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background-color: var(--color-primary);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.polymer-desktop-page .summary-info-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.polymer-desktop-page .summary-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.polymer-desktop-page .summary-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
+.polymer-desktop-page .summary-divider {
+  width: 1px;
+  height: 24px;
+  background-color: var(--color-border);
+}
+
+/* 右侧分析工作台面板 */
+.polymer-desktop-page .workspace-analysis-panel {
+  width: 380px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: calc(100% - 8px);               /* 显式锁定高度 */
+  background-color: var(--color-bg-card); /* 独立纯白大卡片 */
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);           /* 提升独立卡片阴影 */
+  border: none;
+  margin: 0 8px 8px 0;                    /* 外留白 */
+  box-sizing: border-box;
+  animation: slide-in-right 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  position: relative !important;
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.polymer-desktop-page .workspace-analysis-panel::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 36px;
+  background: linear-gradient(to top, var(--color-bg-card) 20%, transparent 100%);
+  pointer-events: none;
+  z-index: 10;
+  border-radius: 0 0 10px 10px;
+}
+
+.polymer-desktop-page .analysis-panel-header {
+  padding: 20px 20px 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: none;
+  flex-shrink: 0;
+}
+
+.polymer-desktop-page .panel-header-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.polymer-desktop-page .panel-tag-name {
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.polymer-desktop-page .workspace-analysis-panel h3 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.polymer-desktop-page .btn-close-analysis {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  background-color: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .btn-close-analysis:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.polymer-desktop-page .btn-close-analysis:active {
+  transform: scale(0.95);
+}
+
+/* 展开右侧分析工作台半悬浮拉手按钮 */
+.polymer-desktop-page .btn-expand-analysis {
+  position: absolute;
+  right: 8px; /* 贴紧右侧留白边缘 */
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 99;
+  width: 24px;
+  height: 52px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  background-color: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-card);
+  border-right: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .btn-expand-analysis:hover {
+  color: var(--color-primary);
+  background-color: var(--color-bg-hover);
+  box-shadow: var(--shadow-md);
+  width: 26px; /* Hover 微微向左探出 */
+  padding-right: 2px;
+}
+
+.polymer-desktop-page .btn-expand-analysis:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.polymer-desktop-page .analysis-panel-body {
+  padding: 12px 20px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px !important;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: none !important;
+}
+
+.polymer-desktop-page .analysis-panel-body::-webkit-scrollbar {
+  display: none !important;
+}
+
+/* 3D 构象渲染区域 */
+.polymer-desktop-page .analysis-3d-wrapper {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.polymer-desktop-page .analysis-3d-wrapper .canvas-3d-container-full {
+  height: 240px;
+  background-color: #111827;
+  position: relative;
+}
+
+.polymer-desktop-page .analysis-3d-tip {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: var(--color-bg-sidebar);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-border);
+}
+
+/* 分子基础理化属性摘要 */
+.polymer-desktop-page .molecule-specs-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.polymer-desktop-page .molecule-specs-section .section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-bottom: 2px;
+}
+
+.polymer-desktop-page .molecule-specs-area {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.polymer-desktop-page .spec-badge {
+  background: var(--color-primary-light);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px !important;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .spec-badge:hover {
+  transform: translateY(-1px);
+  background: rgba(49, 94, 251, 0.09);
+  box-shadow: var(--shadow-sm);
+}
+
+.polymer-desktop-page .spec-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+.polymer-desktop-page .spec-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-primary);
+  font-family: 'Outfit', sans-serif;
+}
+
+.polymer-desktop-page .btn--generate {
+  background-color: #0f172a;
+  color: #ffffff;
+  border: none;
+  font-weight: 600;
+  letter-spacing: -0.15px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .btn--generate:hover {
+  background-color: #333333;
+  transform: translateY(-0.5px);
+  box-shadow: 0 4px 8px rgba(15, 23, 42, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+}
+
+.polymer-desktop-page .btn--generate:active {
+  transform: scale(0.97) translateY(0.5px);
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.02);
+}
+
+.polymer-desktop-page .btn--generate:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.polymer-desktop-page[data-theme="dark"] .btn--generate {
+  background-color: #f3f4f6;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+}
+
+.polymer-desktop-page[data-theme="dark"] .btn--generate:hover {
+  background-color: #d9dee7;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* 迁移至主标题栏的操作工具区容器 */
+.polymer-desktop-page .polymer-module-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  width: 100%;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.polymer-desktop-page .polymer-module-header .header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.polymer-desktop-page .polymer-module-header .header-actions .actions-divider {
+  width: 1px;
+  height: 14px;
+  background-color: var(--color-border);
+  margin: 0 6px;
+}
+
+/* ==========================================
+   右侧分析面板自适应适配样式
+   ========================================== */
+.polymer-desktop-page #analysis-panel .results-content-header {
+  margin-bottom: 8px !important;
+}
+.polymer-desktop-page #analysis-panel .results-content-title h2 {
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+}
+.polymer-desktop-page #analysis-panel .results-content-title p {
+  font-size: 10px !important;
+  line-height: 1.3 !important;
+  margin-top: 2px !important;
+}
+
+.polymer-desktop-page #analysis-panel .results-section {
+  margin-top: 0;
+  padding: 0;
+  border-top: none;
+  display: block;
+}
+
+/* 分子摘要栏纵向排版 */
+.polymer-desktop-page #analysis-panel .polymer-summary-bar {
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+  padding: 12px;
+  background-color: var(--color-bg-app);
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+}
+
+.polymer-desktop-page #analysis-panel .polymer-summary-bar .summary-left {
+  width: 100%;
+}
+
+.polymer-desktop-page #analysis-panel .polymer-summary-bar .summary-right {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.polymer-desktop-page #analysis-panel .polymer-summary-bar .summary-divider {
+  width: 100%;
+  height: 1px;
+  margin: 2px 0;
+  background-color: var(--color-border-card);
+}
+
+.polymer-desktop-page #analysis-panel .polymer-summary-bar .summary-info-text {
+  align-items: flex-start !important;
+}
+
+.polymer-desktop-page #analysis-panel .polymer-summary-bar .summary-value {
+  text-align: left;
+}
+
+/* 确保列表容器在右侧大卡片折中状态恢复 */
+.polymer-desktop-page #analysis-panel .similarity-grid {
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  background-color: transparent !important;
+}
+
+.polymer-desktop-page #analysis-panel .prediction-panel {
+  flex-direction: column;
+  gap: 12px;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  background-color: transparent !important;
+}
+
+.polymer-desktop-page #analysis-panel .prediction-left {
+  flex: none !important;
+  width: 100%;
+}
+
+.polymer-desktop-page #analysis-panel .prediction-right {
+  width: 100%;
+  margin-top: 8px;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+.polymer-desktop-page #analysis-panel .property-matching-grid {
+  grid-template-columns: 1fr;
+  gap: 12px;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  background-color: transparent !important;
+}
+
+/* 彻底去掉右侧结果卡片的灰色实底 */
+.polymer-desktop-page #analysis-panel .similarity-result-card {
+  position: relative;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  perspective: 1000px;
+  overflow: visible !important;
+  height: auto !important;
+}
+.polymer-desktop-page #analysis-panel .similarity-result-card .flip-card-inner {
+  position: relative;
+  width: 100%;
+  height: auto !important;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+}
+.polymer-desktop-page #analysis-panel .similarity-result-card.is-flipped .flip-card-inner {
+  transform: rotateY(180deg);
+}
+.polymer-desktop-page #analysis-panel .similarity-result-card .flip-card-front {
+  position: relative !important;
+  width: 100%;
+  height: auto !important;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-bg-app) !important;
+  box-sizing: border-box;
+  overflow: hidden !important; /* 防止贴边图片背景溢出圆角 */
+  background-color: var(--color-bg-card);
+  display: flex;
+  flex-direction: column;
+  padding: 14px !important; /* 统一上下左右内边距为 14px */
+  z-index: 2;
+  transform: rotateY(0deg);
+}
+.polymer-desktop-page #analysis-panel .similarity-result-card .flip-card-back {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100% !important;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-bg-app) !important;
+  box-sizing: border-box;
+  overflow: hidden !important;
+  background-color: #000000 !important; /* 强制纯黑 */
+  transform: rotateY(180deg);
+  z-index: 1;
+}
+.polymer-desktop-page #analysis-panel .similarity-result-card .result-structure-img {
+  height: 140px !important; /* 右侧面板卡片从 95px 升级到 140px，显得大气 */
+  width: 100% !important; /* 图片宽度缩回 100% */
+  margin: 0 0 10px 0 !important; /* 清除负 Margin，左右和上部留有 14px 边距 */
+  border-radius: var(--radius-md) !important; /* 恢复四周圆角 */
+}
+.polymer-desktop-page #analysis-panel .result-smiles-box {
+  background-color: transparent !important;
+  padding: 10px 0 0 0 !important;
+}
+
+/* 去掉性能匹配卡片与性质预测子卡片的灰色背景 */
+.polymer-desktop-page #analysis-panel .property-match-card {
+  background-color: transparent !important;
+  box-shadow: none !important;
+  border: 1px solid var(--color-bg-app) !important;
+  border-radius: var(--radius-lg) !important;
+  padding: 14px !important;
+}
+
+.polymer-desktop-page #analysis-panel .pred-card-v2 {
+  background-color: var(--color-bg-card) !important;
+  box-shadow: none !important;
+  border: 1px solid var(--color-border-card) !important;
+  border-radius: var(--radius-lg) !important;
+  padding: 14px !important;
+}
+
+.polymer-desktop-page #analysis-panel .results-empty-state {
+  padding: 24px 16px;
+}
+
+.polymer-desktop-page #analysis-panel .results-empty-state h3 {
+  font-size: 14px;
+  margin: 8px 0 4px 0;
+}
+
+.polymer-desktop-page #analysis-panel .results-empty-state p {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ==========================================
+   结构相似匹配卡片样式 (High Fidelity Cards)
+   ========================================== */
+.polymer-desktop-page .similarity-result-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-bg-card);
+  border-radius: var(--radius-lg);
+  padding: 0 !important; /* 移除外层 Padding 以便图片贴边撑满 */
+  gap: 10px;
+  box-shadow: var(--shadow-sm);
+  border: none;
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+  overflow: hidden;
+  box-sizing: border-box;
+  cursor: default; /* 从 pointer 修改为 default，去除非必要的可点击隐喻 */
+}
+.polymer-desktop-page .similarity-result-card .flip-card-inner {
+  position: relative;
+  width: 100%;
+  height: auto !important;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+}
+.polymer-desktop-page .similarity-result-card .flip-card-front {
+  position: relative !important;
+  width: 100%;
+  height: auto !important;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-bg-app) !important;
+  box-sizing: border-box;
+  overflow: hidden !important; /* 防止贴边图片背景溢出圆角 */
+  background-color: var(--color-bg-card);
+  display: flex;
+  flex-direction: column;
+  padding: 14px !important; /* 统一上下左右内边距为 14px */
+  z-index: 2;
+  transform: rotateY(0deg);
+}
+.polymer-desktop-page .similarity-result-card .flip-card-back {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100% !important;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-bg-app) !important;
+  box-sizing: border-box;
+  overflow: hidden !important;
+  background-color: #000000 !important; /* 强制纯黑 */
+  transform: rotateY(180deg);
+  z-index: 1;
+}
+
+.polymer-desktop-page .similarity-result-card .card-top-info {
+  flex-shrink: 0;
+}
+.polymer-desktop-page .similarity-result-card .result-structure-img {
+  flex-shrink: 0;
+}
+.polymer-desktop-page .similarity-result-card .result-smiles-box {
+  flex-shrink: 0;
+}
+.polymer-desktop-page .similarity-result-card .card-bottom-row {
+  flex-shrink: 0;
+}
+
+.polymer-desktop-page .similarity-result-card .result-structure-img {
+  height: 150px !important; /* 通用卡片从 120px 升级到 150px */
+  width: 100% !important; /* 图片宽度缩回 100% */
+  background: var(--color-bg-card) !important; /* 去除灰色底，改用卡片自身背景色以融为一体 */
+  margin: 0 0 10px 0 !important; /* 清除负 Margin，左右和上部留有 14px 边距 */
+  border-radius: var(--radius-md) !important; /* 恢复四周圆角 */
+  padding: 12px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-normal);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.polymer-desktop-page[data-theme="dark"] .similarity-result-card .result-structure-img {
+  background: var(--color-bg-card) !important; /* 去除暗灰色底，改用卡片自身背景色 */
+}
+
+.polymer-desktop-page .similarity-result-card .result-structure-img svg {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 95% !important;
+  max-height: 95% !important;
+}
+
+.polymer-desktop-page .similarity-result-card .result-structure-img svg path,
+.polymer-desktop-page .similarity-result-card .result-structure-img svg polygon,
+.polymer-desktop-page .similarity-result-card .result-structure-img svg line {
+  stroke: var(--color-text-secondary) !important;
+}
+
+.polymer-desktop-page .similarity-result-card .result-structure-img svg text {
+  fill: var(--color-text-primary) !important;
+  font-family: 'Inter', -apple-system, sans-serif !important;
+  font-weight: 600 !important;
+}
+
+.polymer-desktop-page .card-title-2d {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.polymer-desktop-page .result-smiles-box {
+  position: relative;
+  font-family: 'Outfit', 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  background-color: transparent !important;
+  border-top: 1px dashed var(--color-border-card) !important; /* 顶部注入虚线分隔线，宽度自然与底部虚线一致 */
+  padding: 10px 0 0 0 !important; /* 虚线与文字间距 10px */
+  margin: 0 0 10px 0 !important;
+  height: auto !important;
+  max-height: none !important; /* 解除 18px 限制 */
+  line-height: 1.5;
+  white-space: normal !important; /* 允许折行 */
+  word-break: break-all !important; /* 字符级别强行拆行 */
+  overflow: visible !important;
+  -webkit-mask-image: none !important; /* 移除向右渐隐遮罩 */
+  mask-image: none !important;
+  cursor: text;
+  transition: color var(--transition-normal);
+}
+
+.polymer-desktop-page .result-smiles-box:hover {
+  color: var(--color-text-primary);
+}
+
+/* 悬浮操作按钮组 (绝对定位) */
+.polymer-desktop-page .similarity-result-card .card-floating-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  z-index: 10;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-normal);
+}
+.polymer-desktop-page .similarity-result-card:hover .card-floating-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 悬浮毛玻璃小按钮样式 */
+.polymer-desktop-page .similarity-result-card .card-floating-actions button {
+  background: rgba(255, 255, 255, 0.85) !important;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--color-border-card) !important;
+  color: var(--color-text-secondary);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--transition-normal);
+  padding: 0;
+}
+.polymer-desktop-page[data-theme="dark"] .similarity-result-card .card-floating-actions button {
+  background: rgba(17, 24, 39, 0.85) !important;
+}
+.polymer-desktop-page .similarity-result-card .card-floating-actions button:hover {
+  background: var(--color-primary-light) !important;
+  color: var(--color-primary);
+  border-color: rgba(49, 94, 251, 0.3) !important;
+}
+.polymer-desktop-page .similarity-result-card .card-floating-actions button:active {
+  transform: scale(0.9);
+}
+.polymer-desktop-page .similarity-result-card .card-floating-actions button.copied {
+  color: var(--color-success) !important;
+  background-color: var(--color-success-light) !important;
+}
+
+/* 全局学术 Tooltip 气泡样式 */
+.polymer-desktop-page .polymer-academic-tooltip {
+  position: absolute;
+  z-index: 9999;
+  background-color: var(--color-bg-card);
+  border: 1px solid var(--color-border-card);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: 8px 12px;
+  max-width: 320px;
+  font-family: 'Outfit', monospace;
+  font-size: 11px;
+  color: var(--color-text-primary);
+  word-break: break-all;
+  line-height: 1.4;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.15s var(--transition-normal), transform 0.15s var(--transition-normal);
+}
+
+.polymer-desktop-page .polymer-academic-tooltip.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.polymer-desktop-page .polymer-academic-tooltip .tooltip-footer {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-tertiary);
+  font-size: 9px;
+  font-family: -apple-system, sans-serif;
+}
+
+.polymer-desktop-page .result-smiles-box::-webkit-scrollbar {
+  display: none;
+}
+
+/* 右上角极简复制按钮 */
+.polymer-desktop-page .card-copy-btn {
+  background: transparent;
+  border: none;
+  padding: 6px;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-normal);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.polymer-desktop-page .similarity-result-card:hover .card-copy-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.polymer-desktop-page .card-copy-btn:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-primary);
+}
+
+.polymer-desktop-page .card-copy-btn:active {
+  transform: scale(0.88);
+}
+
+.polymer-desktop-page .card-copy-btn.copied {
+  color: var(--color-success) !important;
+  background-color: var(--color-success-light) !important;
+}
+
+/* ==========================================
+   3D 卡片翻转效果 (Card Flip Animation)
+   ========================================== */
+.polymer-desktop-page .flip-card-container {
+  flex: 1;
+  min-height: 480px;
+  background-color: transparent !important;
+  box-shadow: var(--shadow-md) !important; /* 阴影提升至外层，防止 3D 渲染层在 rotate 时产生边缘裁剪 Bug */
+  border-radius: var(--radius-xl);
+  overflow: visible !important;
+  perspective: 1200px;
+  will-change: transform;
+}
+
+.polymer-desktop-page .flip-card-container.is-flipping {
+  overflow: hidden !important;
+}
+
+.polymer-desktop-page .flip-card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+}
+
+.polymer-desktop-page .flip-card-container.is-flipped .flip-card-inner {
+  transform: rotateY(180deg) translate3d(0, 0, 0);
+}
+
+.polymer-desktop-page .flip-card-front,
+.polymer-desktop-page .flip-card-back {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+}
+
+.polymer-desktop-page .flip-card-front {
+  z-index: 2;
+  transform: rotateY(0deg) translate3d(0, 0, 0);
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-bg-card);
+  visibility: visible;
+  transition: visibility 0s 0s;
+  padding: 0 !important; /* 彻底铺满模块，消除左右及下方白边 */
+}
+
+.polymer-desktop-page .flip-card-back {
+  transform: rotateY(180deg) translate3d(0, 0, 0);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: #000000 !important; /* 3D 界面强制纯黑背景 */
+  visibility: hidden;
+  transition: visibility 0s 0.6s;
+}
+
+/* 翻转激活态时的非对称延迟可见性切换 */
+.polymer-desktop-page .flip-card-container.is-flipped .flip-card-front,
+.polymer-desktop-page .similarity-result-card.is-flipped .flip-card-front {
+  visibility: hidden;
+  transition: visibility 0s 0.6s;
+}
+
+.polymer-desktop-page .flip-card-container.is-flipped .flip-card-back,
+.polymer-desktop-page .similarity-result-card.is-flipped .flip-card-back {
+  visibility: visible;
+  transition: visibility 0s 0s;
+}
+
+.polymer-desktop-page .flip-card-back .canvas-tip {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: #ffffff;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.polymer-desktop-page[data-theme="dark"] .flip-card-back .canvas-tip {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.polymer-desktop-page #btn-toggle-3d.active {
+  background-color: var(--color-primary) !important;
+  color: #ffffff !important;
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 4px 12px rgba(49, 94, 251, 0.2) !important;
+}
+
+.polymer-desktop-page #btn-toggle-3d svg {
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.polymer-desktop-page #btn-toggle-3d.active svg {
+  transform: rotate(180deg);
+}
+
+/* 相似度排序按钮样式 */
+.polymer-desktop-page .btn-sort-similarity {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px !important;
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(15, 23, 42, 0.05) !important;
+  color: var(--color-text-secondary) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.02), inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+  transition: all var(--transition-normal) !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.polymer-desktop-page[data-theme="dark"] .btn-sort-similarity {
+  background: rgba(17, 24, 39, 0.6) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+  color: var(--color-text-secondary) !important;
+}
+
+.polymer-desktop-page .btn-sort-similarity:hover {
+  color: var(--color-primary) !important;
+  background-color: var(--color-primary-light) !important;
+  border-color: rgba(49, 94, 251, 0.3) !important;
+  box-shadow: 0 4px 12px rgba(49, 94, 251, 0.08) !important;
+}
+
+.polymer-desktop-page .btn-sort-similarity:active {
+  transform: scale(0.97) translateY(0.5px) !important;
+}
+
+/* 3D 卡片上的返回 2D 按钮 */
+.polymer-desktop-page .btn-card-flip-back {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background-color: rgba(255, 255, 255, 0.15);
+  border: none;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  z-index: 20;
+}
+
+.polymer-desktop-page .btn-card-flip-back:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+  transform: scale(1.08);
+}
+
+.polymer-desktop-page .btn-card-flip-back:active {
+  transform: scale(0.95);
+}
+
+/* 卡片操作按钮组（含复制、3D）Hover 联动 */
+.polymer-desktop-page .card-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-normal);
+}
+
+.polymer-desktop-page .similarity-result-card:hover .card-actions-group {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 3D 图标按钮 */
+.polymer-desktop-page .card-3d-btn {
+  background: transparent;
+  border: none;
+  padding: 6px;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .card-3d-btn:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-primary);
+}
+
+.polymer-desktop-page .card-3d-btn:active {
+  transform: scale(0.88);
+}
+
+.polymer-desktop-page .btn-card-flip-back svg {
+  transition: transform var(--transition-normal);
+}
+
+.polymer-desktop-page .btn-card-flip-back:hover svg {
+  transform: translateX(-2px);
+}
+
+/* 右侧卡片背面专用 3D 构象加载动画样式 */
+.polymer-desktop-page .card-3d-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #000000;
+  z-index: 15;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.3s ease;
+}
+
+.polymer-desktop-page .card-3d-loading.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.polymer-desktop-page .card-3d-loading .loading-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.polymer-desktop-page .card-3d-loading .loading-dot {
+  width: 6px;
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.45);
+  border-radius: 50%;
+  animation: card3dDotJump 1.2s infinite ease-in-out both;
+}
+
+.polymer-desktop-page .card-3d-loading .loading-dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.polymer-desktop-page .card-3d-loading .loading-dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes card3dDotJump {
+  0%, 80%, 100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-5px);
+  }
+}
+
+/* 性能相似度对比条形图 Hover 及复制收藏 */
+.polymer-desktop-page .property-match-card {
+  position: relative;
+  padding-right: 50px !important;
+}
+
+.polymer-desktop-page .property-card-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-normal);
+}
+
+.polymer-desktop-page .property-match-card:hover .property-card-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.polymer-desktop-page .property-card-action-btn {
+  background: transparent !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-tertiary) !important;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.polymer-desktop-page .property-card-action-btn:hover {
+  background: var(--color-primary-light) !important;
+  color: var(--color-primary) !important;
+  border-color: rgba(49, 94, 251, 0.2) !important;
+  transform: translateY(-1px);
+}
+
+.polymer-desktop-page .property-card-action-btn:active {
+  transform: translateY(0);
+}
+
+.polymer-desktop-page .property-card-action-btn.active {
+  color: #eab308 !important;
+  border-color: rgba(234, 179, 8, 0.3) !important;
+}
+
+.polymer-desktop-page .deviation-badge {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  margin-left: auto;
+}
+
+.polymer-desktop-page .deviation-badge.low {
+  background-color: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.polymer-desktop-page .deviation-badge.mid {
+  background-color: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+.polymer-desktop-page .match-comparison-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+}
+
+/* 误差光轴 */
+.polymer-desktop-page .pred-error-bar-wrapper {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.polymer-desktop-page .error-bar-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--color-text-tertiary);
+}
+
+.polymer-desktop-page .error-bar-track {
+  position: relative;
+  height: 6px;
+  background: linear-gradient(to right, rgba(49, 94, 251, 0.05), var(--color-primary), rgba(49, 94, 251, 0.05));
+  border-radius: var(--radius-full);
+}
+
+.polymer-desktop-page .error-bar-needle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 10px;
+  height: 10px;
+  background: #ffffff;
+  border: 2px solid var(--color-primary);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--color-primary);
+  animation: needlePulse 1.8s infinite ease-in-out;
+}
+
+@keyframes needlePulse {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 4px var(--color-primary); }
+  50% { transform: translate(-50%, -50%) scale(1.15); box-shadow: 0 0 10px var(--color-primary); }
+}
+
+/* 雷达图全息色彩与发光填充 */
+.polymer-desktop-page .radar-chart-svg {
+  filter: drop-shadow(0 4px 12px rgba(49, 94, 251, 0.04));
+}
+
+.polymer-desktop-page .radar-polygon {
+  fill: rgba(49, 94, 251, 0.16) !important;
+  stroke: var(--color-primary) !important;
+  stroke-width: 2 !important;
+  stroke-linejoin: round;
+  animation: radarPulse 4s infinite ease-in-out;
+}
+
+@keyframes radarPulse {
+  0%, 100% { fill: rgba(49, 94, 251, 0.16); }
+  50% { fill: rgba(139, 92, 246, 0.22); stroke: #8b5cf6; }
+}
+
+.polymer-desktop-page .text-success {
+  color: var(--color-success) !important;
+  font-weight: 600;
+}
+
+
+.polymer-desktop-page--embedded { margin: -32px; width: calc(100% + 64px); height: 100vh; min-height: 720px; }
+.polymer-desktop-page .split-button-container.is-disabled { opacity: 0.45; pointer-events: none; }
+.polymer-desktop-page .toolbar-actions-group { display: flex; align-items: center; gap: 8px; }
+.polymer-desktop-page .spin-icon { animation: polymerSpin 0.8s linear infinite; }
+@keyframes polymerSpin { to { transform: rotate(360deg); } }
+.polymer-desktop-page .polymer-capsule-feedback { padding: 0 20px 12px; color: var(--color-text-tertiary); font-size: 11px; line-height: 1.4; }
+.polymer-desktop-page .polymer-error-graphic { color: var(--color-danger); background-color: var(--color-danger-light); }
+.polymer-desktop-page .polymer-result-svg,
+.polymer-desktop-page .polymer-result-svg svg { width: 100%; height: 100%; max-width: 100%; max-height: 100%; }
+.polymer-desktop-page .polymer-result-smiles-fallback { padding: 12px; color: var(--color-text-secondary); font-family: Consolas, monospace; font-size: 11px; line-height: 1.45; word-break: break-all; text-align: center; }
+.polymer-desktop-page #analysis-panel .similarity-grid { grid-template-columns: 1fr; gap: 12px; }
+.polymer-desktop-page #analysis-panel .prediction-grid-wrapper { grid-template-columns: 1fr; }
+.polymer-desktop-page .btn-close-analysis { width: 28px; height: 28px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all var(--transition-normal); }
+.polymer-desktop-page .btn-close-analysis:hover { background-color: var(--color-bg-hover); color: var(--color-text-primary); }
+.polymer-desktop-page #btn-toggle-3d { height: 30px !important; min-width: 92px !important; padding: 0 12px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; gap: 6px !important; white-space: nowrap !important; line-height: 1 !important; border-radius: 6px !important; flex-shrink: 0 !important; }
+.polymer-desktop-page #btn-toggle-3d span { display: inline-flex; align-items: center; white-space: nowrap; line-height: 1; }
+.polymer-desktop-page #btn-toggle-3d,
+.polymer-desktop-page #btn-toggle-3d.active { background: #ffffff !important; border: 1px solid rgba(15, 23, 42, 0.08) !important; color: var(--color-text-secondary) !important; box-shadow: var(--shadow-sm) !important; }
+.polymer-desktop-page #btn-toggle-3d:hover,
+.polymer-desktop-page #btn-toggle-3d.active:hover { background: var(--color-bg-hover) !important; border-color: rgba(77, 149, 255, 0.22) !important; color: var(--color-primary) !important; transform: translateY(-0.5px); }
+.polymer-desktop-page #btn-toggle-3d svg,
+.polymer-desktop-page #btn-toggle-3d.active svg { color: currentColor !important; stroke: currentColor !important; }
+.polymer-desktop-page .generate-submenu-panel { color: var(--color-text-secondary) !important; }
+.polymer-desktop-page .submenu-item,
+.polymer-desktop-page .submenu-item span { color: var(--color-text-secondary) !important; font-size: 11.5px; font-weight: 500; line-height: 1.35; }
+.polymer-desktop-page .submenu-item:hover,
+.polymer-desktop-page .submenu-item:hover span { color: var(--color-text-primary) !important; }
+.polymer-desktop-page .submenu-footer,
+.polymer-desktop-page .submenu-count { color: var(--color-text-secondary) !important; }
+.polymer-desktop-page .submenu-header span { color: var(--color-text-secondary) !important; }
+.polymer-desktop-page .real-3d-container { background: #ffffff !important; padding: 0 !important; }
+.polymer-desktop-page .polymer-real-3d-preview,
+.polymer-desktop-page .polymer-real-3d-content,
+.polymer-desktop-page .polymer-real-3d-frame { width: 100% !important; height: 100% !important; min-height: 0 !important; flex: 1 1 auto !important; }
+.polymer-desktop-page .polymer-real-3d-frame { border: none !important; border-radius: 0 !important; background: #ffffff !important; }
+.polymer-desktop-page .polymer-real-3d-viewer canvas { display: block; }
+@media (max-width: 900px) {
+  .polymer-desktop-page--embedded { margin: -20px -16px; width: calc(100% + 32px); height: calc(100vh - 56px); }
+  .polymer-desktop-page .main-layout { overflow: auto !important; }
+  .polymer-desktop-page .main-content { margin: 0 !important; min-height: 100vh; }
+  .polymer-desktop-page .workspace-analysis-panel,
+  .polymer-desktop-page .analysis-resizer { display: none !important; }
+  .polymer-desktop-page .polymer-module-header { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .polymer-desktop-page .polymer-module-header .header-actions { flex-wrap: wrap; }
+}
