@@ -4,6 +4,7 @@ declare global {
   interface Window {
     ketcher?: {
       getSmiles: () => Promise<string>;
+      getMolfile?: () => Promise<string>;
       setMolecule?: (molecule: string) => Promise<void>;
       clear?: () => Promise<void>;
     };

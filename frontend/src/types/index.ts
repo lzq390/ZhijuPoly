@@ -892,7 +892,7 @@ export const PREDICT_PROPERTY_META: Record<
   "Glass transition temperature": { label: "玻璃化转变温度", unit: "°C" },
   "Melting temperature": { label: "熔融温度", unit: "°C" },
   "Thermal decomposition temperature": { label: "热分解温度", unit: "°C" },
-  "Thermal decomposition weight loss": { label: "热分解失重", unit: "%" },
+  "Thermal decomposition weight loss": { label: "热分解失重率", unit: "%" },
   "Elongation at break": { label: "断裂伸长率", unit: "%" },
   "Tensile stress strength at break": { label: "断裂拉伸强度", unit: "MPa" },
   "O2 Permeability Barrer": { label: "O2 渗透率", unit: "Barrer" },

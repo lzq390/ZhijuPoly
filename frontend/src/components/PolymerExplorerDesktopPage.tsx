@@ -24,6 +24,7 @@ import "../styles/polymer-desktop.css";
 type ExplorerMode = "similarity" | "property" | "predict";
 type SortOrder = "desc" | "asc";
 type KetcherApi = NonNullable<Window["ketcher"]>;
+type KetcherSnapshot = { smiles: string; molfile: string };
 
 type PolymerExplorerDesktopPageProps = {
   smiles: string;
@@ -53,7 +54,7 @@ const PROPERTY_OPTIONS: PropertyOption[] = [
   { key: "Glass transition temperature", label: "玻璃化转变温度", unit: "°C", shortLabel: "Tg" },
   { key: "Melting temperature", label: "熔融温度", unit: "°C", shortLabel: "Tm" },
   { key: "Thermal decomposition temperature", label: "热分解温度", unit: "°C", shortLabel: "Td" },
-  { key: "Thermal decomposition weight loss", label: "热分解失重", unit: "%", shortLabel: "Td 5%" },
+  { key: "Thermal decomposition weight loss", label: "热分解失重率", unit: "%", shortLabel: "Wloss" },
   { key: "Elongation at break", label: "断裂伸长率", unit: "%", shortLabel: "ε" },
   { key: "Tensile stress strength at break", label: "断裂拉伸强度", unit: "MPa", shortLabel: "σ" },
   { key: "O2 Permeability Barrer", label: "O2 渗透率", unit: "Barrer", shortLabel: "PO2" },
@@ -338,12 +339,95 @@ export function PolymerExplorerDesktopPage({
     }
     return null;
   }
+  async function readEditorSmiles(ketcher: KetcherApi) {
+    if (typeof ketcher.getSmiles !== "function") throw new Error("结构编辑器无法返回 SMILES。");
+    const editorSmiles = (await ketcher.getSmiles()).trim();
+    return editorSmiles && editorSmiles !== "{}" ? editorSmiles : "";
+  }
+  async function readEditorMolfile(ketcher: KetcherApi) {
+    if (typeof ketcher.getMolfile !== "function") return "";
+    return (await ketcher.getMolfile()).trim();
+  }
+  async function captureEditorSnapshot(ketcher: KetcherApi): Promise<KetcherSnapshot> {
+    const fallbackSmiles = smiles.trim();
+    let editorSmiles = fallbackSmiles;
+    try {
+      editorSmiles = (await readEditorSmiles(ketcher)) || fallbackSmiles;
+    } catch {
+      editorSmiles = fallbackSmiles;
+    }
+
+    let molfile = "";
+    try {
+      molfile = await readEditorMolfile(ketcher);
+    } catch {
+      molfile = "";
+    }
+
+    return { smiles: editorSmiles, molfile };
+  }
+  async function waitForEditorSmilesState(ketcher: KetcherApi, matches: (value: string) => boolean, timeoutMs = 1200) {
+    const startedAt = Date.now();
+    let latest = await readEditorSmiles(ketcher);
+    while (Date.now() - startedAt < timeoutMs) {
+      if (matches(latest)) return latest;
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      latest = await readEditorSmiles(ketcher);
+    }
+    return latest;
+  }
   async function writeStructureToEditor(ketcher: KetcherApi, structure: string, fallbackSmiles: string) {
     if (typeof ketcher.setMolecule !== "function") throw new Error("结构编辑器无法加载分子。");
     await ketcher.setMolecule(structure);
     await waitForKetcherCommit();
     if (typeof ketcher.getSmiles !== "function") return fallbackSmiles;
     return (await ketcher.getSmiles()).trim();
+  }
+  async function clearEditorForImageImport(ketcher: KetcherApi) {
+    if (typeof ketcher.clear === "function") await ketcher.clear();
+    else if (typeof ketcher.setMolecule === "function") await ketcher.setMolecule("");
+    else throw new Error("结构编辑器无法清空画布。");
+    await waitForKetcherCommit();
+
+    let clearedSmiles = await waitForEditorSmilesState(ketcher, (value) => !value);
+    if (clearedSmiles && typeof ketcher.setMolecule === "function") {
+      await ketcher.setMolecule("");
+      await waitForKetcherCommit();
+      clearedSmiles = await waitForEditorSmilesState(ketcher, (value) => !value);
+    }
+    if (clearedSmiles) throw new Error("旧画布未能清空，图片结构未写入。保存当前结构后请手动清空画布再重试。");
+  }
+  async function writeImageStructureToEditor(ketcher: KetcherApi, structure: string) {
+    if (typeof ketcher.setMolecule !== "function") throw new Error("结构编辑器无法加载分子。因无法确认画布写入结果，本次图片导入已取消。");
+    await clearEditorForImageImport(ketcher);
+    await ketcher.setMolecule(structure);
+    await waitForKetcherCommit();
+    const editorSmiles = await waitForEditorSmilesState(ketcher, (value) => Boolean(value), 1800);
+    if (!editorSmiles) throw new Error("Ketcher 未接受识别出的结构，图片结构未写入画布。");
+    return editorSmiles;
+  }
+  async function restoreEditorSnapshot(ketcher: KetcherApi, snapshot: KetcherSnapshot) {
+    const restoreStructure = snapshot.molfile || snapshot.smiles;
+    if (!restoreStructure) {
+      if (typeof ketcher.clear === "function") await ketcher.clear();
+      else if (typeof ketcher.setMolecule === "function") await ketcher.setMolecule("");
+      await waitForKetcherCommit();
+      updateSmiles("");
+      return;
+    }
+    if (typeof ketcher.setMolecule !== "function") throw new Error("结构编辑器无法恢复原画布。");
+
+    await ketcher.setMolecule(restoreStructure);
+    await waitForKetcherCommit();
+
+    let restoredSmiles = snapshot.smiles;
+    try {
+      const editorSmiles = await waitForEditorSmilesState(ketcher, (value) => Boolean(value));
+      restoredSmiles = snapshot.smiles && !shouldAdoptEditorSmiles(snapshot.smiles, editorSmiles) ? snapshot.smiles : editorSmiles || snapshot.smiles;
+    } catch {
+      restoredSmiles = snapshot.smiles;
+    }
+    updateSmiles(restoredSmiles);
   }
   async function loadBestEffortStructureToEditor(ketcher: KetcherApi, sourceSmiles: string) {
     const normalizedSmiles = sourceSmiles.trim();
@@ -363,8 +447,8 @@ export function PolymerExplorerDesktopPage({
     }
     throw lastError instanceof Error ? lastError : new Error("Ketcher 未接受识别出的结构。");
   }
-  async function loadStructureIntoKetcher(molfile: string, smilesValue: string) {
-    const ketcher = await waitForKetcher();
+  async function loadStructureIntoKetcher(molfile: string, smilesValue: string, activeKetcher?: KetcherApi) {
+    const ketcher = activeKetcher ?? await waitForKetcher();
     if (!ketcher) {
       setIsReady(false);
       throw new Error("结构编辑器尚未就绪，请稍后重试。");
@@ -372,15 +456,23 @@ export function PolymerExplorerDesktopPage({
     const normalizedSmiles = smilesValue.trim();
     if (molfile.trim()) {
       try {
-        const editorSmiles = await writeStructureToEditor(ketcher, molfile, normalizedSmiles);
+        const editorSmiles = await writeImageStructureToEditor(ketcher, molfile);
         if (editorSmiles) return shouldAdoptEditorSmiles(normalizedSmiles, editorSmiles) ? editorSmiles : normalizedSmiles || editorSmiles;
       } catch (error) {
         console.error("Failed to load recognized molfile into Ketcher", error);
         if (!normalizedSmiles) throw error;
       }
     }
-    const { adoptedSmiles } = await loadBestEffortStructureToEditor(ketcher, normalizedSmiles);
-    return adoptedSmiles;
+    let lastError: unknown = null;
+    for (const candidate of getEditorLoadCandidates(normalizedSmiles)) {
+      try {
+        const editorSmiles = await writeImageStructureToEditor(ketcher, candidate);
+        return shouldAdoptEditorSmiles(normalizedSmiles, editorSmiles) ? editorSmiles : normalizedSmiles || editorSmiles;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("Ketcher 未接受识别出的结构。");
   }
 
   function updateSmiles(value: string) {
@@ -467,6 +559,8 @@ export function PolymerExplorerDesktopPage({
       setFeedback("请选择图片文件。");
       return;
     }
+    let previousSnapshot: KetcherSnapshot | null = null;
+    const previousFlipped = isFlipped;
     setIsImportingImage(true);
     setFeedback("正在识别结构图片...");
     try {
@@ -474,25 +568,59 @@ export function PolymerExplorerDesktopPage({
       const molfile = result.molfile?.trim() ?? "";
       const recognizedSmiles = result.smiles.trim();
       if (!molfile && !recognizedSmiles) throw new Error("识别结果未返回结构。");
+      const ketcher = await waitForKetcher();
+      if (!ketcher) {
+        setIsReady(false);
+        throw new Error("结构编辑器尚未就绪，请稍后重试。");
+      }
+      previousSnapshot = await captureEditorSnapshot(ketcher);
       setIsFlipped(false);
       setFeedback("正在写入结构画布...");
-      const nextSmiles = await loadStructureIntoKetcher(molfile, recognizedSmiles);
-      updateSmiles(nextSmiles || recognizedSmiles);
+      const nextSmiles = await loadStructureIntoKetcher(molfile, recognizedSmiles, ketcher);
+      updateSmiles(nextSmiles);
       setIsReady(true);
       setFeedback(result.warnings.length > 0 ? `图片结构已导入：${result.warnings[0]}` : "图片结构已导入。");
     } catch (error) {
       console.error("Failed to import structure image", error);
-      setFeedback(error instanceof Error ? error.message : "图片导入失败。");
+      const message = error instanceof Error ? error.message : "图片导入失败。";
+      if (previousSnapshot) {
+        const ketcher = await waitForKetcher(1000);
+        if (ketcher) {
+          try {
+            await restoreEditorSnapshot(ketcher, previousSnapshot);
+            setIsFlipped(previousFlipped);
+            setIsReady(true);
+            setFeedback(`${message} 已恢复原画布。`);
+          } catch (restoreError) {
+            console.error("Failed to restore Ketcher canvas after image import failure", restoreError);
+            setFeedback(`${message} 原画布恢复失败，请手动检查。`);
+          }
+        } else {
+          setFeedback(`${message} 结构编辑器不可用，无法恢复原画布。`);
+        }
+      } else {
+        setFeedback(message);
+      }
     } finally {
       setIsImportingImage(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
-  function toggle3D() {
+  async function toggle3D() {
+    if (isFlipping || isSyncing || isImportingImage || isClearing) return;
     setIsFlipping(true);
-    setIsFlipped((current) => !current);
-    void syncSmilesFromCanvas({ preserveExisting: true });
-    window.setTimeout(() => setIsFlipping(false), 620);
+    try {
+      if (!isFlipped) {
+        const nextSmiles = await syncSmilesFromCanvas({ preserveExisting: true });
+        if (!nextSmiles) {
+          setFeedback("请先绘制、导入或输入 SMILES 结构。");
+          return;
+        }
+      }
+      setIsFlipped((current) => !current);
+    } finally {
+      window.setTimeout(() => setIsFlipping(false), 620);
+    }
   }
   async function resolveSmilesForRun(currentSmiles: string) {
     if (wildcardCount(currentSmiles) > 0) return currentSmiles;
@@ -569,11 +697,13 @@ export function PolymerExplorerDesktopPage({
 
   return (
     <div className="polymer-desktop-page polymer-desktop-page--embedded">
-      <div className="app-container">
-        <div className="main-layout">
+      <h1 className="polymer-page-title">聚合物性能探索</h1>
+      <div className="polymer-centered-shell">
+        <div className="polymer-centered-column">
+          <div className="app-container">
+            <div className="main-layout">
           <main className="main-content">
             <div className="polymer-module-header">
-              <h1>聚合物性能探索</h1>
               <div className="header-actions" id="polymer-header-actions">
                 <input ref={fileInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void importImageFile(file); }} />
                 <button className="btn btn--outline btn--sm" id="btn-import-img" type="button" onClick={() => fileInputRef.current?.click()}>
@@ -588,7 +718,7 @@ export function PolymerExplorerDesktopPage({
                   {isSyncing ? <LoaderCircle width={14} height={14} className="spin-icon" /> : <RefreshCcw width={14} height={14} />}
                   <span>生成SMILES</span>
                 </button>
-                <button className="btn btn--outline btn--sm" id="btn-toggle-3d" type="button" title="在 2D 画布与 3D 构象之间翻转切换" onClick={toggle3D}>
+                <button className="btn btn--outline btn--sm" id="btn-toggle-3d" type="button" title="在 2D 画布与 3D 构象之间翻转切换" onClick={() => void toggle3D()} disabled={isFlipping || isSyncing || isImportingImage || isClearing}>
                   <Box width={14} height={14} />
                   <span>{isFlipped ? "2D画布" : "3D构象"}</span>
                 </button>
@@ -655,10 +785,14 @@ export function PolymerExplorerDesktopPage({
               </div>
             </div>
           </main>
+            </div>
+          </div>
+        </div>
+      </div>
 
-          <button className="btn-expand-analysis" id="btn-expand-analysis" type="button" title="展开分析面板" style={{ display: hasAnalysisRun && !isAnalysisOpen ? "flex" : "none" }} onClick={() => setIsAnalysisOpen(true)}><Sparkles width={14} height={14} /></button>
-          <div className="analysis-resizer" id="analysis-resizer" title="拖拽调整宽度" style={{ display: isAnalysisOpen ? "flex" : "none", height: "100%" }} onMouseDown={startResize}><div className="resizer-line" /></div>
-          <div className="workspace-analysis-panel workspace-card" id="analysis-panel" style={{ display: isAnalysisOpen ? "flex" : "none", height: "100%", margin: 0, width: panelWidth }}>
+      <button className="btn-expand-analysis" id="btn-expand-analysis" type="button" title="展开分析面板" style={{ display: hasAnalysisRun && !isAnalysisOpen ? "flex" : "none" }} onClick={() => setIsAnalysisOpen(true)}><Sparkles width={14} height={14} /></button>
+      <div className="analysis-resizer" id="analysis-resizer" title="拖拽调整宽度" style={{ display: isAnalysisOpen ? "flex" : "none", height: "100%", right: panelWidth }} onMouseDown={startResize}><div className="resizer-line" /></div>
+      <div className="workspace-analysis-panel workspace-card" id="analysis-panel" style={{ display: isAnalysisOpen ? "flex" : "none", height: "100%", margin: 0, width: panelWidth }}>
             <div className="analysis-panel-header"><div className="panel-header-title"><h3>分析工作台</h3>{showSort ? <button className="btn-sort-similarity" id="btn-sort-similarity" type="button" title="点击切换排序" onClick={() => setSortOrder((current) => current === "desc" ? "asc" : "desc")}><span>相似度 {sortOrder === "desc" ? "降序" : "升序"}</span></button> : null}</div><button className="btn-close-analysis" id="btn-close-analysis" type="button" title="收起分析面板" onClick={() => setIsAnalysisOpen(false)}><X width={14} height={14} /></button></div>
             <div className="analysis-panel-body"><section className="results-section" id="results-section" style={{ display: "block" }}>
               {activeRunMode === "predict" ? (
@@ -668,8 +802,6 @@ export function PolymerExplorerDesktopPage({
               ) : queryData ? <ResultsEmptyState title="未找到匹配结果" description="请检查当前 SMILES，或切换探索模式后重新运行。" /> : <ResultsEmptyState title="暂无探索数据" description="请在左侧绘制、导入或输入聚合物结构式，并点击运行按钮。" />}
             </section></div>
           </div>
-        </div>
-      </div>
     </div>
   );
 }

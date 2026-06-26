@@ -235,7 +235,7 @@ export default function App() {
   const [hasMountedStructureWorkbench, setHasMountedStructureWorkbench] = useState(
     () => getInitialRoute().module === "structureWorkbench"
   );
-  const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher("*CC*");
+  const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher();
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const predict = usePredict();
   const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>([]);

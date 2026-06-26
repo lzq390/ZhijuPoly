@@ -124,7 +124,18 @@ const header = `@import url("https://fonts.googleapis.com/css2?family=Outfit:wgh
 
 const footer = `
 
-.polymer-desktop-page--embedded { margin: -32px; width: calc(100% + 64px); height: 100vh; min-height: 720px; }
+.polymer-desktop-page--embedded { margin: 0; width: 100%; height: 100%; min-height: 0; background: var(--color-bg-app); }
+.polymer-desktop-page .polymer-page-title { position: absolute; top: 0; left: 20px; z-index: 20; margin: 0; font-size: 16px; font-weight: 600; line-height: 1.5; color: var(--color-text-primary); letter-spacing: -0.4px; }
+.polymer-desktop-page .polymer-centered-shell { width: 100%; height: 100%; display: flex; justify-content: center; align-items: stretch; overflow: hidden; padding: 0 clamp(24px, 6vw, 160px); background: var(--color-bg-app); }
+.polymer-desktop-page .polymer-centered-column { width: min(100%, 1040px); max-width: 1040px; height: 100%; min-width: 0; display: flex; background: var(--color-bg-app); }
+.polymer-desktop-page .polymer-centered-column .app-container { width: 100% !important; height: 100% !important; min-width: 0 !important; background: var(--color-bg-app) !important; }
+.polymer-desktop-page .polymer-centered-column .main-layout { background: var(--color-bg-app) !important; }
+.polymer-desktop-page .polymer-centered-column .main-content { margin: 0 !important; padding: 20px 0 !important; background: var(--color-bg-app) !important; border-radius: 0 !important; box-shadow: none !important; }
+.polymer-desktop-page .polymer-module-header { justify-content: flex-end !important; }
+.polymer-desktop-page .polymer-centered-column .polymer-workspace { width: 100%; }
+.polymer-desktop-page .workspace-analysis-panel { position: absolute !important; top: 0 !important; right: 0 !important; bottom: 0 !important; height: 100% !important; margin: 0 !important; z-index: 90; border: none !important; border-radius: 0 !important; box-shadow: none !important; }
+.polymer-desktop-page .analysis-resizer { position: absolute !important; top: 0 !important; bottom: 0 !important; height: 100% !important; margin: 0 !important; z-index: 95; }
+.polymer-desktop-page .btn-expand-analysis { right: 0 !important; z-index: 96 !important; }
 .polymer-desktop-page .split-button-container.is-disabled { opacity: 0.45; pointer-events: none; }
 .polymer-desktop-page .toolbar-actions-group { display: flex; align-items: center; gap: 8px; }
 .polymer-desktop-page .spin-icon { animation: polymerSpin 0.8s linear infinite; }
@@ -132,7 +143,8 @@ const footer = `
 .polymer-desktop-page .polymer-capsule-feedback { padding: 0 20px 12px; color: var(--color-text-tertiary); font-size: 11px; line-height: 1.4; }
 .polymer-desktop-page .polymer-error-graphic { color: var(--color-danger); background-color: var(--color-danger-light); }
 .polymer-desktop-page .polymer-result-svg,
-.polymer-desktop-page .polymer-result-svg svg { width: 100%; height: 100%; max-width: 100%; max-height: 100%; }
+.polymer-desktop-page .polymer-result-svg svg,
+.polymer-desktop-page .polymer-result-svg img { width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; }
 .polymer-desktop-page .polymer-result-smiles-fallback { padding: 12px; color: var(--color-text-secondary); font-family: Consolas, monospace; font-size: 11px; line-height: 1.45; word-break: break-all; text-align: center; }
 .polymer-desktop-page #analysis-panel .similarity-grid { grid-template-columns: 1fr; gap: 12px; }
 .polymer-desktop-page #analysis-panel .prediction-grid-wrapper { grid-template-columns: 1fr; }
@@ -161,7 +173,9 @@ const footer = `
 .polymer-desktop-page .polymer-real-3d-frame { border: none !important; border-radius: 0 !important; background: #ffffff !important; }
 .polymer-desktop-page .polymer-real-3d-viewer canvas { display: block; }
 @media (max-width: 900px) {
-  .polymer-desktop-page--embedded { margin: -20px -16px; width: calc(100% + 32px); height: calc(100vh - 56px); }
+  .polymer-desktop-page--embedded { margin: 0; width: 100%; height: 100%; min-height: 0; }
+  .polymer-desktop-page .polymer-centered-shell { padding: 0; }
+  .polymer-desktop-page .polymer-centered-column { width: 100%; max-width: none; }
   .polymer-desktop-page .main-layout { overflow: auto !important; }
   .polymer-desktop-page .main-content { margin: 0 !important; min-height: 100vh; }
   .polymer-desktop-page .workspace-analysis-panel,
