@@ -29,7 +29,7 @@ type AppShellProps = {
 export function AppShell({ activeModule, fullBleed = false, moduleGroups, onOpenHome, children }: AppShellProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const isHome = activeModule === "home";
-  const isExplorer = activeModule === "explorer";
+  const isResearchWorkbench = activeModule === "explorer" || activeModule === "databaseQuery";
 
   function handleNavigate(action: () => void) {
     action();
@@ -93,8 +93,8 @@ export function AppShell({ activeModule, fullBleed = false, moduleGroups, onOpen
           <div className="h-10 w-10" />
         </header>
 
-        <main className={isHome ? "min-h-0 flex-1 overflow-hidden" : isExplorer ? "min-h-0 flex-1 overflow-hidden py-5 md:py-8" : "flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-8"}>
-          <div className={isHome ? "h-full" : ["relative mx-auto flex flex-col", isExplorer ? "h-full gap-0" : "gap-8", fullBleed ? "max-w-none" : "max-w-[1480px]"].join(" ")}>
+        <main className={isHome ? "min-h-0 flex-1 overflow-hidden" : isResearchWorkbench ? "min-h-0 flex-1 overflow-hidden py-5 md:py-8" : "flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-8"}>
+          <div className={isHome ? "h-full" : ["relative mx-auto flex flex-col", isResearchWorkbench ? "h-full gap-0" : "gap-8", fullBleed ? "max-w-none" : "max-w-[1480px]"].join(" ")}>
             {children}
           </div>
         </main>

@@ -173,6 +173,8 @@ def test_smiles_lookup_finds_canonical_match_in_polymers(test_app: FastAPI) -> N
     assert data["results"][0]["source_column"] == "canonical_smiles"
     assert data["results"][0]["smiles"] == "CCO"
     assert data["results"][0]["canonical_smiles"] == "CCO"
+    assert data["results"][0]["structure_svg"] is not None
+    assert "<svg" in data["results"][0]["structure_svg"]
     assert data["results"][0]["fields"]["property_count"] == 3
 
 
@@ -268,6 +270,8 @@ def test_smiles_lookup_searches_pi_candidate_table(tmp_path: Path) -> None:
     assert data["total"] == 1
     assert data["results"][0]["record_id"] == "7"
     assert data["results"][0]["source_column"] == "canonical_polym"
+    assert data["results"][0]["structure_svg"] is not None
+    assert "<svg" in data["results"][0]["structure_svg"]
     assert data["results"][0]["fields"]["tg_celsius"] == 215.0
 
 

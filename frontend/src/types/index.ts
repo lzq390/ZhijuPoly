@@ -280,6 +280,7 @@ export type SmilesLookupResult = {
   source_column: string;
   smiles: string;
   canonical_smiles: string | null;
+  structure_svg: string | null;
   summary: string;
   fields: Record<string, string | number | boolean | null>;
 };

@@ -584,12 +584,13 @@ export default function App() {
   );
   const isFullBleedModule =
     activeModule === "explorer" ||
+    activeModule === "databaseQuery" ||
     activeModule === "structureWorkbench" ||
     activeModule === "reverseDesign" ||
     activeModule === "experimentWorkflowDemo" ||
     activeModule === "highThroughputWorkflowDemo" ||
     activeModule === "mdSimulationDemo";
-  const shouldKeepStructureWorkbenchMounted = hasMountedStructureWorkbench && activeModule !== "explorer";
+  const shouldKeepStructureWorkbenchMounted = hasMountedStructureWorkbench && activeModule !== "explorer" && activeModule !== "databaseQuery";
 
   return (
     <AppShell

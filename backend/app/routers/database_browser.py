@@ -32,6 +32,7 @@ from app.services.database_browser import (
     lookup_property_smiles,
 )
 from app.services.smiles_utils import normalize
+from app.services.structure_2d import generate_2d_svg
 
 
 router = APIRouter(prefix="/api/v1/database-browser", tags=["database-browser"])
@@ -76,12 +77,17 @@ def _normalize_query_smiles(smiles: str) -> str:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _lookup_structure_svg(smiles: str, canonical_smiles: str | None) -> str | None:
+    return generate_2d_svg(canonical_smiles or smiles)
+
+
 def _polymer_lookup_result(row) -> SmilesLookupResult:
     return SmilesLookupResult(
         record_id=str(row["polymer_id"]),
         source_column=row["source_column"],
         smiles=row["smiles"],
         canonical_smiles=row["canonical_smiles"],
+        structure_svg=_lookup_structure_svg(row["smiles"], row["canonical_smiles"]),
         summary=f"polymer #{row['polymer_id']}",
         fields={
             "polymer_id": int(row["polymer_id"]),
@@ -97,6 +103,7 @@ def _property_lookup_result(row) -> SmilesLookupResult:
         source_column=row["source_column"],
         smiles=row["smiles"],
         canonical_smiles=row["canonical_smiles"],
+        structure_svg=_lookup_structure_svg(row["smiles"], row["canonical_smiles"]),
         summary=row["property_name"],
         fields={
             "property_id": int(row["property_id"]),
@@ -116,6 +123,7 @@ def _pi_candidate_lookup_result(row) -> SmilesLookupResult:
         source_column=row["source_column"],
         smiles=row["matched_smiles"],
         canonical_smiles=row["canonical_polym"],
+        structure_svg=_lookup_structure_svg(row["matched_smiles"], row["canonical_polym"]),
         summary=f"PI candidate #{row['pi_id']}",
         fields={
             "pi_id": int(row["pi_id"]),

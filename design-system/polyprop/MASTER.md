@@ -1,206 +1,162 @@
-# Design System Master File
+# PolyProp UI 设计规范
 
-> **LOGIC:** When building a specific page, first check `design-system/pages/[page-name].md`.
-> If that file exists, its rules **override** this Master file.
-> If not, strictly follow the rules below.
-
----
-
-**Project:** PolyProp
-**Generated:** 2026-04-09 17:23:20
-**Category:** E-commerce Luxury
+项目：ZhijuPoly / PolyProp Web 平台
+更新时间：2026-06-26
+规范来源：当前 React 平台 UI，以“聚合物性能探索”作为高密度科研工作台的参考模块。
+使用规则：优先查看 `design-system/polyprop/pages/[page-name].md`。页面级规范优先于本 Master 文件；没有页面级规范时，遵循本文件。
 
 ---
 
-## Global Rules
+## 1. 设计方向
 
-### Color Palette
+PolyProp 是科研生产力平台，不是营销展示页。界面应当冷静、精确、可重复，适合研究人员长期高频使用。
 
-| Role | Hex | CSS Variable |
-|------|-----|--------------|
-| Primary | `#1C1917` | `--color-primary` |
-| Secondary | `#44403C` | `--color-secondary` |
-| CTA/Accent | `#CA8A04` | `--color-cta` |
-| Background | `#FAFAF9` | `--color-background` |
-| Text | `#0C0A09` | `--color-text` |
-
-**Color Notes:** Premium black + gold accent
-
-### Typography
-
-- **Heading Font:** Exo
-- **Body Font:** Roboto Mono
-- **Mood:** science, technology, research, data, futuristic, precise
-- **Google Fonts:** [Exo + Roboto Mono](https://fonts.google.com/share?selection.family=Exo:wght@300;400;500;600;700|Roboto+Mono:wght@300;400;500;700)
-
-**CSS Import:**
-```css
-@import url('https://fonts.googleapis.com/css2?family=Exo:wght@300;400;500;600;700&family=Roboto+Mono:wght@300;400;500;700&display=swap');
-```
-
-### Spacing Variables
-
-| Token | Value | Usage |
-|-------|-------|-------|
-| `--space-xs` | `4px` / `0.25rem` | Tight gaps |
-| `--space-sm` | `8px` / `0.5rem` | Icon gaps, inline spacing |
-| `--space-md` | `16px` / `1rem` | Standard padding |
-| `--space-lg` | `24px` / `1.5rem` | Section padding |
-| `--space-xl` | `32px` / `2rem` | Large gaps |
-| `--space-2xl` | `48px` / `3rem` | Section margins |
-| `--space-3xl` | `64px` / `4rem` | Hero padding |
-
-### Shadow Depths
-
-| Level | Value | Usage |
-|-------|-------|-------|
-| `--shadow-sm` | `0 1px 2px rgba(0,0,0,0.05)` | Subtle lift |
-| `--shadow-md` | `0 4px 6px rgba(0,0,0,0.1)` | Cards, buttons |
-| `--shadow-lg` | `0 10px 15px rgba(0,0,0,0.1)` | Modals, dropdowns |
-| `--shadow-xl` | `0 20px 25px rgba(0,0,0,0.15)` | Hero images, featured cards |
+- 采用固定左侧平台侧栏 + 右侧工作区的产品布局。
+- 使用冷灰平台背景、白色工作面、低饱和蓝色和青色作为主强调色。
+- 优先保证信息可扫描、布局稳定、控件高效，避免装饰性构图。
+- 视觉资产只用于表达真实科研状态，例如分子结构、3D 构象、图表、表格和工作流数据。
+- 禁止把黑金电商风、Liquid Glass 营销效果、横向滚动落地页、巨型 Hero、装饰渐变作为平台默认方向。
 
 ---
 
-## Component Specs
+## 2. 基础规范
 
-### Buttons
+### 2.1 色彩
 
-```css
-/* Primary Button */
-.btn-primary {
-  background: #CA8A04;
-  color: white;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-weight: 600;
-  transition: all 200ms ease;
-  cursor: pointer;
-}
+- 应用背景 `--color-bg-app`：`#f1f5f9`，用于平台和工作区底色。
+- 侧栏背景 `--color-bg-sidebar`：`#f7f8fa`，用于固定导航外壳。
+- 白色工作面 `--color-bg-card`：`#ffffff`，用于编辑器、卡片、面板和输入区。
+- 悬停背景 `--color-bg-hover`：`rgba(15, 23, 42, 0.05)`，用于按钮和菜单悬停。
+- 激活背景 `--color-bg-active`：`rgba(15, 23, 42, 0.09)`，用于选中导航和菜单项。
+- 主强调色 `--color-primary`：`#4d95ff`，用于主要科研操作和聚焦状态。
+- 成功和选中强调 `--color-success`：`#10b981`，用于正向状态和已选指标。
+- 危险色 `--color-danger`：`#ef4444`，用于错误和破坏性操作。
+- 主文本 `--color-text-primary`：`#0f172a`，用于标题和关键标签。
+- 次级文本 `--color-text-secondary`：`#475569`，用于正文标签和元信息。
+- 弱文本 `--color-text-tertiary`：`#94a3b8`，用于提示、时间戳和被动反馈。
+- 边框 `--color-border`：`rgba(15, 23, 42, 0.08)`，用于细分隔线和卡片轮廓。
 
-.btn-primary:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
+### 2.2 字体
 
-/* Secondary Button */
-.btn-secondary {
-  background: transparent;
-  color: #1C1917;
-  border: 2px solid #1C1917;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-weight: 600;
-  transition: all 200ms ease;
-  cursor: pointer;
-}
-```
+- 主 UI 字体：`Outfit`，回退到 `-apple-system`、`BlinkMacSystemFont`、`Segoe UI`、`PingFang SC`、`Microsoft YaHei`、sans-serif。
+- 功能型页面标题保持紧凑：页面标题约 `16px`，面板标题 `14px` 到 `18px`，控件标签 `11px` 到 `13px`。
+- 禁止用视口宽度缩放字体大小。
+- 普通文本字距保持 `0`。只有小型大写徽标可以使用轻微正字距。
+- 工具页面内部不使用 Hero 级大字号。
 
-### Cards
+### 2.3 间距和几何
 
-```css
-.card {
-  background: #FAFAF9;
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: var(--shadow-md);
-  transition: all 200ms ease;
-  cursor: pointer;
-}
+- `--space-xs`：`4px`，用于密集图标和文字间距。
+- `--space-sm`：`8px`，用于标准控件间距和灰色分隔。
+- `--space-md`：`16px`，用于紧凑卡片内边距。
+- `--space-lg`：`20px`，用于主要科研工作区内边距。
+- `--space-xl`：`32px`，用于标准 AppShell 页面内边距。
+- 平台模块默认使用 AppShell 右侧工作区，桌面端侧栏宽度为 `276px`。
+- 默认页面最大宽度为 `1480px`，页面级规范可以覆盖。
+- 全屏科研工作区可以移除水平 AppShell padding，但应保留上下呼吸空间。
+- 卡片和固定格式工具必须定义稳定尺寸，例如宽高、宽高比或明确的 flex 约束。
+- 默认圆角：按钮 `6px`，胶囊和小面板 `8px`，大型编辑器卡片 `14px`。
 
-.card:hover {
-  box-shadow: var(--shadow-lg);
-  transform: translateY(-2px);
-}
-```
+### 2.4 阴影
 
-### Inputs
+阴影应克制使用，优先用边框和轻量层级表达结构。
 
-```css
-.input {
-  padding: 12px 16px;
-  border: 1px solid #E2E8F0;
-  border-radius: 8px;
-  font-size: 16px;
-  transition: border-color 200ms ease;
-}
-
-.input:focus {
-  border-color: #1C1917;
-  outline: none;
-  box-shadow: 0 0 0 3px #1C191720;
-}
-```
-
-### Modals
-
-```css
-.modal-overlay {
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-}
-
-.modal {
-  background: white;
-  border-radius: 16px;
-  padding: 32px;
-  box-shadow: var(--shadow-xl);
-  max-width: 500px;
-  width: 90%;
-}
-```
+- `--shadow-sm`：`0 1px 2px 0 rgba(0, 0, 0, 0.02)`，用于按钮和小型浮动控件。
+- `--shadow-md`：`0 8px 30px rgba(15, 23, 42, 0.04)`，用于工作区卡片。
+- `--shadow-lg`：`0 20px 50px rgba(15, 23, 42, 0.06)`，用于抽屉和高层浮层。
 
 ---
 
-## Style Guidelines
+## 3. 布局模式
 
-**Style:** Liquid Glass
+### 3.1 AppShell
 
-**Keywords:** Flowing glass, morphing, smooth transitions, fluid effects, translucent, animated blur, iridescent, chromatic aberration
+- 桌面端采用固定左侧侧栏和右侧工作区。
+- 侧栏使用安静的导航分组、白色激活行、青蓝色选中图标和紧凑文本。
+- 标准页面使用 `px-4 py-5 md:px-8 md:py-8`，最大宽度 `1480px`。
+- 全功能科研模块可以使用页面级 full-bleed 规则，但必须保留全局侧栏。
 
-**Best For:** Premium SaaS, high-end e-commerce, creative platforms, branding experiences, luxury portfolios
+### 3.2 科研工作区
 
-**Key Effects:** Morphing elements (SVG/CSS), fluid animations (400-600ms curves), dynamic blur (backdrop-filter), color transitions
+- 第一屏直接展示真实工作面，不为工具页面制作落地页。
+- 控件应靠近它影响的对象。
+- 优先使用一个主画布或编辑器工作面，再配一个统一的结果或分析面板模式。
+- 当高密度工具需要变窄时，两侧留白必须只是背景，不放装饰圆点、渐变块或卡片。
 
-### Page Pattern
+### 3.3 右侧分析抽屉
 
-**Pattern Name:** Horizontal Scroll Journey
-
-- **Conversion Strategy:** Immersive product discovery. High engagement. Keep navigation visible.
-28,Bento Grid Showcase,bento,  grid,  features,  modular,  apple-style,  showcase", 1. Hero, 2. Bento Grid (Key Features), 3. Detail Cards, 4. Tech Specs, 5. CTA, Floating Action Button or Bottom of Grid, Card backgrounds: #F5F5F7 or Glass. Icons: Vibrant brand colors. Text: Dark., Hover card scale (1.02), video inside cards, tilt effect, staggered reveal, Scannable value props. High information density without clutter. Mobile stack.
-29,Interactive 3D Configurator,3d,  configurator,  customizer,  interactive,  product", 1. Hero (Configurator), 2. Feature Highlight (synced), 3. Price/Specs, 4. Purchase, Inside Configurator UI + Sticky Bottom Bar, Neutral studio background. Product: Realistic materials. UI: Minimal overlay., Real-time rendering, material swap animation, camera rotate/zoom, light reflection, Increases ownership feeling. 360 view reduces return rates. Direct add-to-cart.
-30,AI-Driven Dynamic Landing,ai,  dynamic,  personalized,  adaptive,  generative", 1. Prompt/Input Hero, 2. Generated Result Preview, 3. How it Works, 4. Value Prop, Input Field (Hero) + 'Try it' Buttons, Adaptive to user input. Dark mode for compute feel. Neon accents., Typing text effects, shimmering generation loaders, morphing layouts, Immediate value demonstration. 'Show, don't tell'. Low friction start.
-- **CTA Placement:** Floating Sticky CTA or End of Horizontal Track
-- **Section Order:** 1. Intro (Vertical), 2. The Journey (Horizontal Track), 3. Detail Reveal, 4. Vertical Footer
-
----
-
-## Anti-Patterns (Do NOT Use)
-
-- ❌ Vibrant & Block-based
-- ❌ Playful colors
-
-### Additional Forbidden Patterns
-
-- ❌ **Emojis as icons** — Use SVG icons (Heroicons, Lucide, Simple Icons)
-- ❌ **Missing cursor:pointer** — All clickable elements must have cursor:pointer
-- ❌ **Layout-shifting hovers** — Avoid scale transforms that shift layout
-- ❌ **Low contrast text** — Maintain 4.5:1 minimum contrast ratio
-- ❌ **Instant state changes** — Always use transitions (150-300ms)
-- ❌ **Invisible focus states** — Focus states must be visible for a11y
+- 当主画布需要居中时，结果探索使用右侧贴边抽屉。
+- 默认宽度 `380px`；实现可拖拽时范围为 `320px` 到 `560px`。
+- 抽屉应统一承载 loading、空状态、错误状态和成功结果。
+- 抽屉贴边时不额外叠加装饰性外框或重阴影。
 
 ---
 
-## Pre-Delivery Checklist
+## 4. 组件规范
 
-Before delivering any UI code, verify:
+### 4.1 按钮
 
-- [ ] No emojis used as icons (use SVG instead)
-- [ ] All icons from consistent icon set (Heroicons/Lucide)
-- [ ] `cursor-pointer` on all clickable elements
-- [ ] Hover states with smooth transitions (150-300ms)
-- [ ] Light mode: text contrast 4.5:1 minimum
-- [ ] Focus states visible for keyboard navigation
-- [ ] `prefers-reduced-motion` respected
-- [ ] Responsive: 375px, 768px, 1024px, 1440px
-- [ ] No content hidden behind fixed navbars
-- [ ] No horizontal scroll on mobile
+- 常见命令使用 Lucide 图标；不够自解释的命令使用图标 + 文本。
+- 标准小工具按钮：高度 `30px`，圆角 `6px`，白色背景，`1px` 细边框，水平内边距 `12px`，图标文字间距 `6px`。
+- 悬停状态应轻微变化，例如灰蓝边框和文本强调，不能造成布局跳动。
+- 禁用控件必须明显不可用且不可交互。组合运行按钮禁用时使用 `opacity: 0.45`。
+
+### 4.2 输入和胶囊
+
+- SMILES 等科学字符串输入区应使用适合代码阅读的排版。
+- 只有存在内容时才显示浮动复制和清空按钮。
+- 反馈文本应出现在相关胶囊内部或正下方，不把局部反馈放到全局 toast。
+- 示例值可以出现在 placeholder 中，但不能作为默认真实输入值。
+
+### 4.3 卡片和面板
+
+- 卡片只用于重复结果、编辑器工作面、模态框和确实需要框住的工具。
+- 禁止把页面大区块做成装饰性卡片，再在里面嵌套卡片。
+- 结果卡应展示结构图、关键指标、来源和可追溯数据。
+- 面板标题、指标标签和状态文本必须使用可读的深色文本，不能出现白底白字或低对比文本。
+
+### 4.4 Loading、空状态和错误状态
+
+- Loading 使用骨架屏或局部占位，不让页面整体闪烁。
+- 空状态只给出简洁下一步，不写营销文案。
+- 错误状态保留操作上下文，并提供可恢复动作。
+- 状态组件的尺寸应稳定，不能因为文案长短导致主布局跳动。
+
+### 4.5 2D 和 3D 科学媒体
+
+- Ketcher 画板是主要 2D 结构输入面，必须保留真实 iframe 能力。
+- 3D 构象必须使用真实结构预览，不使用假 Canvas 动画替代已有结构图。
+- 2D 和 3D 切换应保持输入状态，不丢失 SMILES 或画布内容。
+- 分子结构图、SVG 和 3Dmol 输出必须走安全渲染路径。
+
+---
+
+## 5. 动效和交互
+
+- 动效用于解释状态变化，不用于装饰。
+- 翻转、抽屉展开、下拉菜单和反馈出现应短促，避免影响科研操作效率。
+- 运行后才展开分析抽屉，初始状态不占据结果区域。
+- 用户输入、导入图片、生成 SMILES、切换 3D、运行查询之间的状态必须可追踪。
+
+---
+
+## 6. 禁用模式
+
+- 不使用黑金电商配色作为当前平台标准。
+- 不使用 Liquid Glass、玻璃拟态营销卡片或大面积半透明叠层作为默认风格。
+- 不制作横向滚动营销页或 Hero 优先页面来替代工具主界面。
+- 不使用装饰性渐变球、光斑、纯氛围背景图。
+- 不把右侧结果区做成全宽内容流，除非页面级规范明确要求。
+- 不牺牲真实 API、真实 Ketcher、真实 3D 结构来追求静态视觉一致。
+
+---
+
+## 7. 交付检查清单
+
+- 左侧平台侧栏和右侧工作区关系清晰。
+- 页面第一屏直接提供可用工具或数据，不是营销介绍。
+- 背景、工作面、按钮、胶囊、卡片颜色符合冷灰 + 白色 + 蓝青强调方向。
+- 控件尺寸稳定，文字不重叠、不溢出。
+- Loading、空状态、错误状态、成功状态都已覆盖。
+- 真实 API、Ketcher iframe、3D 预览和安全结构渲染不被静态 mock 替代。
+- 修改前后运行 `npm run build` 和 `git diff --check`。

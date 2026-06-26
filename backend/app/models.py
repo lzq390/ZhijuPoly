@@ -227,6 +227,7 @@ class SmilesLookupResult(BaseModel):
     source_column: str
     smiles: str
     canonical_smiles: str | None = None
+    structure_svg: str | None = None
     summary: str
     fields: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
