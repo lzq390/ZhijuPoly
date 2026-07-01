@@ -68,7 +68,6 @@ const fieldLabels: Record<string, string> = {
   polymer_id: "Polymer ID",
   property_id: "Property ID",
   property_count: "性能条目",
-  rdkit_parse_ok: "RDKit 状态",
   property_name: "性能名称",
   property_value: "性能值",
   property_value_num: "数值",
@@ -216,45 +215,61 @@ function LookupSkeleton() {
 }
 
 function LookupResultCard({ result }: { result: SmilesLookupResult }) {
-  const fields = Object.entries(result.fields).filter(([, value]) => value !== null && value !== "");
+  const detailFields = Object.entries(result.fields).filter(
+    ([key, value]) => !["rdkit_parse_ok", "polymer_id", "property_id", "pi_id", "property_count"].includes(key) && value !== null && value !== ""
+  );
   const displaySmiles = result.canonical_smiles || result.smiles;
+  const hasDistinctCanonical = Boolean(result.canonical_smiles && result.canonical_smiles !== result.smiles);
+  const propertyCount = result.fields.property_count;
+  const hasPropertyCount = propertyCount !== null && propertyCount !== undefined && propertyCount !== "";
 
   return (
     <article className="database-lookup-result-card">
-      <div className="database-lookup-structure-box">
-        {result.structure_svg ? (
-          <StructureSvg svg={result.structure_svg} alt={result.summary} className="database-lookup-structure-svg" />
-        ) : (
-          <div className="database-lookup-structure-fallback">{displaySmiles}</div>
-        )}
+      <div className="database-lookup-card-header">
+        <span className="database-lookup-record-badge">ID {result.record_id}</span>
+        <span className="database-lookup-structure-title">2D STRUCTURE</span>
       </div>
-      <div className="database-lookup-card-meta">
-        <div className="database-lookup-card-badges">
-          <span>ID {result.record_id}</span>
-          <span>{result.source_column}</span>
+      <div className="database-lookup-card-divider" />
+      <div className="database-lookup-structure-panel">
+        <div className="database-lookup-structure-box">
+          {result.structure_svg ? (
+            <StructureSvg svg={result.structure_svg} alt={result.summary} className="database-lookup-structure-svg" />
+          ) : (
+            <div className="database-lookup-structure-fallback">{displaySmiles}</div>
+          )}
         </div>
-        <h4>{result.summary}</h4>
-        <div className="database-lookup-smiles-block">
-          <span>Matched SMILES</span>
+      </div>
+      <div className="database-lookup-card-divider" />
+      <div className="database-lookup-smiles-line">
+        <code>{displaySmiles}</code>
+        {hasDistinctCanonical ? <span>规范化</span> : null}
+      </div>
+      {hasDistinctCanonical ? (
+        <div className="database-lookup-smiles-subline">
+          <span>匹配 SMILES</span>
           <code>{result.smiles}</code>
         </div>
-        {result.canonical_smiles ? (
-          <div className="database-lookup-smiles-block">
-            <span>Canonical SMILES</span>
-            <code>{result.canonical_smiles}</code>
+      ) : null}
+      {hasPropertyCount ? (
+        <div className="database-lookup-card-bottom-row">
+          <div className="database-lookup-bottom-group">
+            <span>性能条目</span>
+            <strong>{formatLookupValue(propertyCount)}</strong>
           </div>
-        ) : null}
-        {fields.length > 0 ? (
+        </div>
+      ) : null}
+      {detailFields.length > 0 ? (
+        <div className="database-lookup-card-details">
           <div className="database-lookup-field-grid">
-            {fields.map(([key, value]) => (
+            {detailFields.map(([key, value]) => (
               <div key={key} className="database-lookup-field-item">
                 <span>{fieldLabels[key] ?? key}</span>
                 <strong title={formatLookupValue(value)}>{formatLookupValue(value)}</strong>
               </div>
             ))}
           </div>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </article>
   );
 }
