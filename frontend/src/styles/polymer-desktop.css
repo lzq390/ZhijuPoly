@@ -3986,6 +3986,110 @@
   line-height: 1.45;
 }
 
+.polymer-desktop-page.database-query-page .database-lookup-property-filter {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-head div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-head span {
+  color: var(--color-text-tertiary);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-head strong {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-head em {
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px 0 10px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: var(--radius-sm);
+  background: #f8fafc;
+  color: var(--color-text-tertiary);
+  transition: border-color var(--transition-normal), background-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-control:focus-within {
+  border-color: rgba(77, 149, 255, 0.42);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(77, 149, 255, 0.08);
+  color: var(--color-primary);
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-control input {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-control input::placeholder {
+  color: var(--color-text-tertiary);
+  font-weight: 600;
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-control button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background-color var(--transition-normal), color var(--transition-normal);
+}
+
+.polymer-desktop-page.database-query-page .database-lookup-property-filter-control button:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
 .polymer-desktop-page.database-query-page .database-lookup-result-card {
   display: flex;
   position: relative;

@@ -69,7 +69,6 @@ const fieldLabels: Record<string, string> = {
   property_id: "Property ID",
   property_count: "性能条目",
   property_name: "性能名称",
-  property_value: "性能值",
   property_value_num: "数值",
   property_unit: "单位",
   label_source: "来源",
@@ -117,6 +116,10 @@ function formatLookupValue(value: string | number | boolean | null) {
   return value;
 }
 
+function getLookupPropertyName(result: SmilesLookupResult) {
+  const value = result.fields.property_name;
+  return typeof value === "string" ? value : "";
+}
 
 async function waitForKetcherCommit() {
   await new Promise((resolve) => window.setTimeout(resolve, 80));
@@ -216,7 +219,7 @@ function LookupSkeleton() {
 
 function LookupResultCard({ result }: { result: SmilesLookupResult }) {
   const detailFields = Object.entries(result.fields).filter(
-    ([key, value]) => !["rdkit_parse_ok", "polymer_id", "property_id", "pi_id", "property_count"].includes(key) && value !== null && value !== ""
+    ([key, value]) => !["rdkit_parse_ok", "polymer_id", "property_id", "property_value", "pi_id", "property_count"].includes(key) && value !== null && value !== ""
   );
   const displaySmiles = result.canonical_smiles || result.smiles;
   const hasDistinctCanonical = Boolean(result.canonical_smiles && result.canonical_smiles !== result.smiles);
@@ -278,12 +281,16 @@ function LookupDrawerContent({
   data,
   error,
   isLoading,
-  selectedTable
+  selectedTable,
+  propertyNameFilter,
+  onPropertyNameFilterChange
 }: {
   data: SmilesLookupResponse | null;
   error: string | null;
   isLoading: boolean;
   selectedTable: SmilesLookupTable;
+  propertyNameFilter: string;
+  onPropertyNameFilterChange: (value: string) => void;
 }) {
   const selectedOption = tableOptionByValue[selectedTable];
 
@@ -303,6 +310,14 @@ function LookupDrawerContent({
     return <DrawerEmptyState title="等待查询" description="输入或绘制 SMILES 后，选择数据表并运行精确查询。" />;
   }
 
+  const normalizedPropertyNameFilter = propertyNameFilter.trim().toLowerCase();
+  const isPropertyLookup = selectedTable === "properties";
+  const filteredResults =
+    isPropertyLookup && normalizedPropertyNameFilter
+      ? data.results.filter((result) => getLookupPropertyName(result).trim().toLowerCase().startsWith(normalizedPropertyNameFilter))
+      : data.results;
+  const showPropertyFilter = isPropertyLookup && data.results.length > 0;
+
   return (
     <div className="database-lookup-results-stack">
       <section className="database-lookup-result-summary">
@@ -317,8 +332,36 @@ function LookupDrawerContent({
         <code>{data.canonical_smiles}</code>
       </section>
 
-      {data.results.length > 0 ? (
-        data.results.map((result) => <LookupResultCard key={`${result.source_column}-${result.record_id}`} result={result} />)
+      {showPropertyFilter ? (
+        <section className="database-lookup-property-filter" aria-label="性能名称筛选">
+          <div className="database-lookup-property-filter-head">
+            <div>
+              <span>性能名称</span>
+              <strong>property_name</strong>
+            </div>
+            <em>显示 {filteredResults.length} / 共 {data.total} 条</em>
+          </div>
+          <div className="database-lookup-property-filter-control">
+            <Search width={13} height={13} />
+            <input
+              type="search"
+              value={propertyNameFilter}
+              placeholder="输入前缀，例如 Dynamic mechanical"
+              onChange={(event) => onPropertyNameFilterChange(event.target.value)}
+            />
+            {propertyNameFilter ? (
+              <button type="button" title="清空性能名称筛选" aria-label="清空性能名称筛选" onClick={() => onPropertyNameFilterChange("")}>
+                <X width={12} height={12} />
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {filteredResults.length > 0 ? (
+        filteredResults.map((result) => <LookupResultCard key={`${result.source_column}-${result.record_id}`} result={result} />)
+      ) : data.results.length > 0 ? (
+        <DrawerEmptyState title="没有匹配的性能名称" description="清空筛选词，或输入当前结果中已有的性能名前缀。" />
       ) : (
         <DrawerEmptyState title="未找到精确匹配" description="所选数据表中没有与 canonical SMILES 完全一致的记录。" />
       )}
@@ -338,6 +381,7 @@ export function DatabaseQueryPage({ structure }: DatabaseQueryPageProps) {
   const [isImportingImage, setIsImportingImage] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [isTableMenuOpen, setIsTableMenuOpen] = useState(false);
+  const [propertyNameFilter, setPropertyNameFilter] = useState("");
   const [isTextDirty, setIsTextDirty] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [hasAnalysisRun, setHasAnalysisRun] = useState(false);
@@ -573,6 +617,7 @@ export function DatabaseQueryPage({ structure }: DatabaseQueryPageProps) {
       structure.setSmiles("");
       setIsTextDirty(false);
       setIsFlipped(false);
+      setPropertyNameFilter("");
       clearLookupFeedback();
       setFeedback("画布、SMILES 和查询结果已清空。");
     } catch (clearError) {
@@ -678,6 +723,7 @@ export function DatabaseQueryPage({ structure }: DatabaseQueryPageProps) {
     setIsTableMenuOpen(false);
     if (nextTable !== selectedTable) {
       clearLookupFeedback();
+      if (nextTable !== "properties") setPropertyNameFilter("");
       setFeedback(`已切换到 ${tableOptionByValue[nextTable].shortLabel}。`);
     }
     setSelectedTable(nextTable);
@@ -859,7 +905,7 @@ export function DatabaseQueryPage({ structure }: DatabaseQueryPageProps) {
           </button>
         </div>
         <div className="analysis-panel-body">
-          <LookupDrawerContent data={data} error={error} isLoading={isLoading} selectedTable={selectedTable} />
+          <LookupDrawerContent data={data} error={error} isLoading={isLoading} selectedTable={selectedTable} propertyNameFilter={propertyNameFilter} onPropertyNameFilterChange={setPropertyNameFilter} />
         </div>
       </div>
     </div>

@@ -110,7 +110,6 @@ def lookup_property_smiles(
     *,
     query_smiles: str,
     canonical_smiles: str,
-    limit: int = 50,
 ) -> tuple[int, list[sqlite3.Row]]:
     match_params = _smiles_match_params(query_smiles, canonical_smiles)
     where_sql = _smiles_match_where("polymers")
@@ -148,9 +147,8 @@ def lookup_property_smiles(
         JOIN polymers ON polymers.polymer_id = properties.polymer_id
         WHERE {where_sql}
         ORDER BY properties.property_id ASC
-        LIMIT ?
         """,
-        [*match_params, *match_params, limit],
+        [*match_params, *match_params],
     ).fetchall()
 
     return total, list(rows)
