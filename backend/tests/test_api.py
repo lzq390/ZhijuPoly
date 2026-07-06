@@ -11,8 +11,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.requests import Request
 
-from app.config import PROJECT_ROOT, Settings
-from app.database import rebuild_fumol_schema, sqlite_connection
+from app.config import Settings
 from app.main import create_app, health
 from app.models import (
     ExperimentalProcessBrowseResponse,
@@ -21,9 +20,9 @@ from app.models import (
     SmilesQueryRequest,
     Structure3DRequest,
 )
-from app.pi_database import ensure_pi_schema
 from app.routers import database_browser
 from app.routers.predict import predict
+from app.postgres_database import postgres_connection
 from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles
 from app.services.database_browser import browse_csv_records
 from app.services.image_recognition import RecognizedStructure
@@ -71,6 +70,40 @@ async def test_health() -> None:
     assert await health() == {"status": "ok"}
 
 
+def _insert_experimental_process_rows(app: FastAPI, source_file: str = "process.csv") -> None:
+    with postgres_connection(app.state.settings.app_postgres_dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO experimental.process_records (
+                  source_file, source_row_number, polymer_id, polymer_name, product_name,
+                  process_flow_original_text, material_original_text
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (source_file, 2, "1", "Poly A", "Film", "heated at 80 C", ""),
+                    (source_file, 3, "2", "Poly B", "Aerogel", "washed with DMF and dried", "ODA material"),
+                ],
+            )
+
+
+def _insert_experimental_property_rows(app: FastAPI, source_file: str = "properties.csv") -> None:
+    with postgres_connection(app.state.settings.app_postgres_dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO experimental.property_records (
+                  source_file, source_row_number, polymer_id, polymer_name, property_category, property_name_en, value
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (source_file, 2, "1", "Poly A", None, "Tg", "120"),
+                    (source_file, 3, "2", "Poly B", None, "thermal conductivity", "0.33"),
+                    (source_file, 4, "3", "Poly C", None, "thermal conductivity", "0.44"),
+                ],
+            )
+
+
 def test_structure_property_browser_lists_records_with_total_count(test_app: FastAPI) -> None:
     client = TestClient(test_app)
 
@@ -89,6 +122,7 @@ def test_structure_property_browser_lists_records_with_total_count(test_app: Fas
         "polymer_id": 1,
         "smiles": "CCO",
         "canonical_smiles": "CCO",
+        "property_category": "Thermal",
         "property_name": "Tg",
         "property_value": "123.4",
         "property_value_num": 123.4,
@@ -211,52 +245,8 @@ def test_smiles_lookup_rejects_invalid_smiles(test_app: FastAPI) -> None:
     assert "invalid smiles" in response.json()["detail"]
 
 
-def test_smiles_lookup_searches_pi_candidate_table(tmp_path: Path) -> None:
-    sqlite_db_path = tmp_path / "polyprop.db"
-    pi_db_path = tmp_path / "pi_reverse.db"
-
-    with sqlite_connection(pi_db_path) as connection:
-        ensure_pi_schema(connection)
-        connection.execute(
-            """
-            INSERT INTO pi_candidates (
-              pi_id, mon1, mon2, polym, canonical_polym, rdkit_parse_ok,
-              tg_celsius, dielectric_const_dc, static_dielectric_const,
-              dipole_debye, electrophilicity_index, homo_lumo_gap_ev,
-              hardness, mulliken_electronegativity, redox_window_v,
-              linear_expansion, refractive_index, morgan_fp, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                7,
-                "NCCN",
-                "O=C=O",
-                "CCO",
-                "CCO",
-                1,
-                215.0,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                "2026-05-15",
-            ),
-        )
-
-    settings = Settings(
-        sqlite_db_path=str(sqlite_db_path),
-        pi_reverse_db_path=str(pi_db_path),
-        allowed_origins="http://localhost:5173",
-        model_enabled=False,
-    )
-    client = TestClient(create_app(settings))
+def test_smiles_lookup_searches_pi_candidate_table(test_app: FastAPI) -> None:
+    client = TestClient(test_app)
 
     response = client.post(
         "/api/v1/database-browser/smiles-lookup",
@@ -274,111 +264,25 @@ def test_smiles_lookup_searches_pi_candidate_table(tmp_path: Path) -> None:
     assert "<svg" in data["results"][0]["structure_svg"]
     assert data["results"][0]["fields"]["tg_celsius"] == 215.0
 
-
-def test_smiles_lookup_reports_missing_pi_candidate_database(tmp_path: Path) -> None:
-    sqlite_db_path = tmp_path / "polyprop.db"
-    missing_pi_db_path = tmp_path / "missing_pi_reverse.db"
-
-    settings = Settings(
-        sqlite_db_path=str(sqlite_db_path),
-        pi_reverse_db_path=str(missing_pi_db_path),
-        allowed_origins="http://localhost:5173",
-        model_enabled=False,
-    )
-    client = TestClient(create_app(settings))
-
-    response = client.post(
-        "/api/v1/database-browser/smiles-lookup",
-        json={"smiles": "OCC", "table": "pi_candidates"},
-    )
-
-    assert response.status_code == 503
-    assert "PI reverse-design database not found" in response.json()["detail"]
-
-
-def make_dft_browser_app(tmp_path: Path) -> FastAPI:
-    sqlite_db_path = tmp_path / "polyprop.db"
-    fumol_db_path = tmp_path / "fumol.db"
-
-    with sqlite_connection(fumol_db_path) as connection:
-        rebuild_fumol_schema(connection)
-        connection.executemany(
-            """
-            INSERT INTO dft_molecule_final (
-              mol_id, range_group, final_step, n_atoms, coordinates, scf_energy,
-              zero_point_energy, thermal_enthalpy, gibbs_free_energy, lowest_freq,
-              dipole_moment, homo_ev, lumo_ev, gap_ev, is_converged, pca_x, pca_y, pca_z
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    "000001_Conf01",
-                    "small",
-                    2,
-                    12,
-                    "[[6, 0, 0, 0]]",
-                    -100.1,
-                    -99.0,
-                    -98.5,
-                    -98.2,
-                    12.5,
-                    1.2,
-                    -6.1,
-                    94.1,
-                    100.2,
-                    "44",
-                    0.1,
-                    0.2,
-                    0.3,
-                ),
-                (
-                    "000002_Conf02",
-                    "large",
-                    1,
-                    24,
-                    "[[8, 0, 0, 0]]",
-                    -200.2,
-                    -198.0,
-                    -197.5,
-                    -197.2,
-                    8.5,
-                    2.4,
-                    -7.2,
-                    95.3,
-                    102.5,
-                    "34",
-                    1.1,
-                    1.2,
-                    1.3,
-                ),
-            ],
-        )
-        connection.executemany(
-            """
-            INSERT INTO dft_energy_trace (
-              mol_id, step, scf_energy, homo_ev, lumo_ev, gap_ev
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            [
-                ("000001_Conf01", 0, -99.5, -6.0, 93.8, 99.8),
-                ("000001_Conf01", 1, -100.0, -6.05, 94.0, 100.05),
-                ("000001_Conf01", 2, -100.1, -6.1, 94.1, 100.2),
-                ("000002_Conf02", 0, -199.9, -7.0, 95.0, 102.0),
-                ("000002_Conf02", 1, -200.2, -7.2, 95.3, 102.5),
-            ],
+def test_settings_rejects_sqlite_runtime_backends() -> None:
+    with pytest.raises(ValueError, match="STRUCTURED_DATA_BACKEND must be 'postgres'"):
+        Settings(
+            allowed_origins="http://localhost:5173",
+            structured_data_backend="sqlite",
+            pi_reverse_backend="postgres",
+            model_enabled=False,
         )
 
-    settings = Settings(
-        sqlite_db_path=str(sqlite_db_path),
-        fumol_db_path=str(fumol_db_path),
-        allowed_origins="http://localhost:5173",
-        model_enabled=False,
-    )
-    return create_app(settings)
+    with pytest.raises(ValueError, match="PI_REVERSE_BACKEND must be 'postgres'"):
+        Settings(
+            allowed_origins="http://localhost:5173",
+            structured_data_backend="postgres",
+            pi_reverse_backend="sqlite",
+            model_enabled=False,
+        )
 
-
-def test_dft_browser_lists_molecule_final_records(tmp_path: Path) -> None:
-    client = TestClient(make_dft_browser_app(tmp_path))
+def test_dft_browser_lists_molecule_final_records(test_app: FastAPI) -> None:
+    client = TestClient(test_app)
 
     response = client.get("/api/v1/database-browser/dft/molecules", params={"page": 1, "page_size": 1})
 
@@ -398,8 +302,8 @@ def test_dft_browser_lists_molecule_final_records(tmp_path: Path) -> None:
     assert data["results"][0]["gap_ev"] == 100.2
 
 
-def test_dft_browser_searches_molecules_by_mol_id(tmp_path: Path) -> None:
-    client = TestClient(make_dft_browser_app(tmp_path))
+def test_dft_browser_searches_molecules_by_mol_id(test_app: FastAPI) -> None:
+    client = TestClient(test_app)
 
     response = client.get(
         "/api/v1/database-browser/dft/molecules",
@@ -414,8 +318,8 @@ def test_dft_browser_searches_molecules_by_mol_id(tmp_path: Path) -> None:
     assert data["results"][0]["range_group"] == "large"
 
 
-def test_dft_browser_lists_and_filters_energy_steps(tmp_path: Path) -> None:
-    client = TestClient(make_dft_browser_app(tmp_path))
+def test_dft_browser_lists_and_filters_energy_steps(test_app: FastAPI) -> None:
+    client = TestClient(test_app)
 
     response = client.get(
         "/api/v1/database-browser/dft/steps",
@@ -447,8 +351,8 @@ def test_dft_browser_lists_and_filters_energy_steps(tmp_path: Path) -> None:
     ]
 
 
-def test_dft_browser_filters_energy_steps_by_exact_mol_id(tmp_path: Path) -> None:
-    client = TestClient(make_dft_browser_app(tmp_path))
+def test_dft_browser_filters_energy_steps_by_exact_mol_id(test_app: FastAPI) -> None:
+    client = TestClient(test_app)
 
     response = client.get(
         "/api/v1/database-browser/dft/steps",
@@ -532,23 +436,8 @@ def test_experimental_csv_routes_are_sync_for_threadpool() -> None:
     assert not inspect.iscoroutinefunction(database_browser.browse_experimental_property_records)
 
 
-def test_experimental_process_browser_endpoint_returns_typed_records(
-    monkeypatch: pytest.MonkeyPatch,
-    test_app: FastAPI,
-    tmp_path: Path,
-) -> None:
-    csv_path = tmp_path / "process.csv"
-    csv_path.write_text(
-        "\n".join(
-            [
-                "polymer_id,polymer_name,product_name,process_flow_original_text,material_original_text",
-                '1,Poly A,Film,"heated at 80 C",""',
-                '2,Poly B,Aerogel,"washed with DMF and dried","ODA material"',
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(database_browser, "EXPERIMENTAL_PROCESS_CSV", csv_path)
+def test_experimental_process_browser_endpoint_returns_typed_records(test_app: FastAPI) -> None:
+    _insert_experimental_process_rows(test_app)
 
     response = TestClient(test_app).get(
         "/api/v1/database-browser/experimental-process",
@@ -560,9 +449,10 @@ def test_experimental_process_browser_endpoint_returns_typed_records(
     assert data["query"] == "dmf"
     assert data["total_records"] == 2
     assert data["matched_records"] == 1
+    assert data["data_source"] == "postgres"
     assert data["results"] == [
         {
-            "source_file": str(csv_path),
+            "source_file": "process.csv",
             "source_row_number": 3,
             "polymer_id": "2",
             "polymer_name": "Poly B",
@@ -572,25 +462,8 @@ def test_experimental_process_browser_endpoint_returns_typed_records(
         }
     ]
 
-
-def test_experimental_property_browser_endpoint_returns_typed_records(
-    monkeypatch: pytest.MonkeyPatch,
-    test_app: FastAPI,
-    tmp_path: Path,
-) -> None:
-    csv_path = tmp_path / "properties.csv"
-    csv_path.write_text(
-        "\n".join(
-            [
-                "polymer_id,polymer_name,property_name_en,value",
-                "1,Poly A,Tg,120",
-                "2,Poly B,thermal conductivity,0.33",
-                "3,Poly C,thermal conductivity,0.44",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(database_browser, "EXPERIMENTAL_PROPERTY_CSV", csv_path)
+def test_experimental_property_browser_endpoint_returns_typed_records(test_app: FastAPI) -> None:
+    _insert_experimental_property_rows(test_app)
 
     response = TestClient(test_app).get(
         "/api/v1/database-browser/experimental-property",
@@ -602,13 +475,15 @@ def test_experimental_property_browser_endpoint_returns_typed_records(
     assert data["query"] == "thermal conductivity"
     assert data["total_records"] == 3
     assert data["matched_records"] == 2
+    assert data["data_source"] == "postgres"
     assert data["results"] == [
         {
-            "source_file": str(csv_path),
+            "source_file": "properties.csv",
             "source_row_number": 4,
             "polymer_id": "3",
             "polymer_name": "Poly C",
             "property_name_en": "thermal conductivity",
+            "property_category": None,
             "value": "0.44",
         }
     ]
@@ -649,13 +524,13 @@ async def test_query_smiles_structure_returns_top_structural_matches(test_app: F
 
     assert response.match_type == "structure"
     assert response.total == 2
-    assert response.results[0].polymer_name == ""
+    assert response.results[0].polymer_name == "polymer_a"
     assert response.results[0].similarity_score == 1.0
     assert response.results[0].similarity_score >= response.results[1].similarity_score
     assert response.results[0].structure_svg is not None
     assert "<svg" in response.results[0].structure_svg
-    assert any(item.property_name == "Tg" for item in response.results[0].properties.other)
-    assert any(item.property_name == "Conductivity" for item in response.results[0].properties.other)
+    assert any(item.property_name == "Tg" for item in response.results[0].properties.thermal)
+    assert any(item.property_name == "Conductivity" for item in response.results[0].properties.electrical)
 
 
 @pytest.mark.asyncio
@@ -704,7 +579,7 @@ async def test_query_smiles_property_returns_nearest_property_matches(predict_en
     assert response.results[0].matched_property_unit == "°C"
     assert response.results[0].matched_property_source in {"exp", "calc"}
     assert all(
-        any(item.property_name == "Glass transition temperature" for item in result.properties.other)
+        any(item.property_name == "Glass transition temperature" for item in result.properties.thermal)
         for result in response.results
     )
 
@@ -716,8 +591,8 @@ async def test_get_polymer_detail(test_app: FastAPI) -> None:
     response = await get_polymer_detail(1, request)
 
     assert response.polymer_id == "1"
-    assert response.polymer_name == ""
-    assert any(item.property_name == "Tg" for item in response.properties.other)
+    assert response.polymer_name == "polymer_a"
+    assert any(item.property_name == "Tg" for item in response.properties.thermal)
 
 
 @pytest.mark.asyncio
@@ -793,11 +668,9 @@ async def test_predict_uses_app_level_model_dir(predict_enabled_app: FastAPI) ->
     assert "Tensile stress strength at break" in response.predictions
 
 
-def test_api_uses_temporary_database(test_app: FastAPI) -> None:
-    db_path = Path(test_app.state.settings.sqlite_db_path)
-
-    assert db_path.exists()
-    assert db_path != PROJECT_ROOT / "backend" / "data" / "polyprop.db"
+def test_api_uses_temporary_postgres_database(test_app: FastAPI) -> None:
+    assert "zhijupoly_test_" in test_app.state.settings.app_postgres_dsn
+    assert test_app.state.settings.structured_data_backend == "postgres"
 
 
 @pytest.mark.asyncio

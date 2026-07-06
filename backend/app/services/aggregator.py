@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Iterable, Sequence
+from typing import Any
 
 from app.models import PolymerResult, PropertyGroups, PropertyItem
 from app.services.structure_2d import generate_2d_svg
@@ -17,18 +17,18 @@ CATEGORY_MAP = {
 }
 
 
-def fetch_property_rows(connection: sqlite3.Connection, polymer_id: int) -> list[sqlite3.Row]:
+def fetch_property_rows_postgres(connection: Any, polymer_id: int) -> list[Any]:
     rows = connection.execute(
         """
         SELECT
-            '' AS property_category,
+            property_category,
             property_name,
             property_value,
             property_value_num,
             property_unit,
             label_source
-        FROM properties
-        WHERE polymer_id = ?
+        FROM core.polymer_properties
+        WHERE polymer_id = %s
         ORDER BY property_id
         """,
         (polymer_id,),
@@ -36,7 +36,7 @@ def fetch_property_rows(connection: sqlite3.Connection, polymer_id: int) -> list
     return list(rows)
 
 
-def group_properties(property_rows: Iterable[sqlite3.Row]) -> PropertyGroups:
+def group_properties(property_rows: Iterable[Any]) -> PropertyGroups:
     grouped: dict[str, list[PropertyItem]] = {
         "thermal": [],
         "mechanical": [],
@@ -62,17 +62,23 @@ def group_properties(property_rows: Iterable[sqlite3.Row]) -> PropertyGroups:
     return PropertyGroups(**grouped)
 
 
+def _row_keys(row: Any) -> set[str]:
+    keys = row.keys() if hasattr(row, "keys") else []
+    return set(keys)
+
+
 def build_polymer_result(
-    polymer_row: sqlite3.Row,
-    property_rows: Sequence[sqlite3.Row],
+    polymer_row: Any,
+    property_rows: Sequence[Any],
     similarity_score: float | None = None,
 ) -> PolymerResult:
-    polymer_keys = polymer_row.keys()
+    polymer_keys = _row_keys(polymer_row)
     source_smiles = polymer_row["canonical_smiles"] or polymer_row["smiles"]
+    polymer_name = polymer_row["polymer_name"] if "polymer_name" in polymer_keys else ""
 
     return PolymerResult(
         polymer_id=str(polymer_row["polymer_id"]),
-        polymer_name=polymer_row["polymer_name"] if "polymer_name" in polymer_keys else "",
+        polymer_name=polymer_name or "",
         smiles=polymer_row["smiles"],
         canonical_smiles=polymer_row["canonical_smiles"],
         similarity_score=similarity_score,
@@ -85,29 +91,26 @@ def build_polymer_result(
     )
 
 
-def load_polymer_result(
-    connection: sqlite3.Connection,
-    polymer_row: sqlite3.Row,
+def load_polymer_result_postgres(
+    connection: Any,
+    polymer_row: Any,
     similarity_score: float | None = None,
 ) -> PolymerResult:
-    property_rows = fetch_property_rows(connection, int(polymer_row["polymer_id"]))
+    property_rows = fetch_property_rows_postgres(connection, int(polymer_row["polymer_id"]))
     return build_polymer_result(polymer_row, property_rows, similarity_score=similarity_score)
 
 
-def load_polymer_results(
-    connection: sqlite3.Connection,
-    polymer_rows: Sequence[sqlite3.Row],
+def load_polymer_results_postgres(
+    connection: Any,
+    polymer_rows: Sequence[Any],
     similarity_scores: dict[int, float] | None = None,
 ) -> list[PolymerResult]:
     scores = similarity_scores or {}
-    results: list[PolymerResult] = []
-    for polymer_row in polymer_rows:
-        polymer_id = int(polymer_row["polymer_id"])
-        results.append(
-            load_polymer_result(
-                connection,
-                polymer_row,
-                similarity_score=scores.get(polymer_id),
-            )
+    return [
+        load_polymer_result_postgres(
+            connection,
+            polymer_row,
+            similarity_score=scores.get(int(polymer_row["polymer_id"])),
         )
-    return results
+        for polymer_row in polymer_rows
+    ]

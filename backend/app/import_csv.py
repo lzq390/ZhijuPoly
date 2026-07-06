@@ -160,15 +160,17 @@ def import_csv_to_sqlite(csv_path: str | Path, db_path: str | Path) -> ImportSta
                     """
                     INSERT INTO properties (
                         polymer_id,
+                        property_category,
                         property_name,
                         property_value,
                         property_value_num,
                         property_unit,
                         label_source
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         polymer_id,
+                        ((row.get("property_category") or "").strip() or "Others"),
                         (row.get("property_name") or "").strip(),
                         (row.get("property_value") or "").strip(),
                         parse_float_or_none((row.get("property_value") or "").strip()),

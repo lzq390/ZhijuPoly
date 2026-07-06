@@ -20,6 +20,7 @@ CREATE TABLE polymers (
 CREATE TABLE properties (
   property_id INTEGER PRIMARY KEY AUTOINCREMENT,
   polymer_id INTEGER NOT NULL,
+  property_category TEXT NOT NULL DEFAULT 'Others',
   property_name TEXT NOT NULL,
   property_value TEXT NOT NULL,
   property_value_num REAL,

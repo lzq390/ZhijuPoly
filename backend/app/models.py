@@ -251,6 +251,7 @@ class StructurePropertyRecord(BaseModel):
     polymer_id: int
     smiles: str
     canonical_smiles: str | None = None
+    property_category: str
     property_name: str
     property_value: str
     property_value_num: float | None = None
@@ -267,6 +268,9 @@ class StructurePropertyBrowseResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     total_records: int = Field(ge=0)
     matched_records: int = Field(ge=0)
+    data_source: str = "postgres"
+    source_status: str = "ready"
+    source_message: str | None = None
     results: list[StructurePropertyRecord] = Field(default_factory=list)
 
 
@@ -302,6 +306,9 @@ class DftMoleculeBrowseResponse(BaseModel):
     total_step_records: int = Field(ge=0)
     average_steps: float = Field(ge=0.0)
     max_steps: int = Field(ge=0)
+    data_source: str = "postgres"
+    source_status: str = "ready"
+    source_message: str | None = None
     results: list[DftMoleculeBrowserRecord] = Field(default_factory=list)
 
 
@@ -325,6 +332,9 @@ class DftEnergyStepBrowseResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     total_records: int = Field(ge=0)
     matched_records: int = Field(ge=0)
+    data_source: str = "postgres"
+    source_status: str = "ready"
+    source_message: str | None = None
     results: list[DftEnergyStepRecord] = Field(default_factory=list)
 
 
@@ -349,6 +359,9 @@ class ExperimentalProcessBrowseResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     total_records: int = Field(ge=0)
     matched_records: int = Field(ge=0)
+    data_source: str = "csv"
+    source_status: str = "ready"
+    source_message: str | None = None
     results: list[ExperimentalProcessRecord] = Field(default_factory=list)
 
 
@@ -359,6 +372,7 @@ class ExperimentalPropertyRecord(BaseModel):
     source_row_number: int
     polymer_id: str
     polymer_name: str
+    property_category: str | None = None
     property_name_en: str
     value: str
 
@@ -372,7 +386,71 @@ class ExperimentalPropertyBrowseResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     total_records: int = Field(ge=0)
     matched_records: int = Field(ge=0)
+    data_source: str = "csv"
+    source_status: str = "ready"
+    source_message: str | None = None
     results: list[ExperimentalPropertyRecord] = Field(default_factory=list)
+
+
+class FormulationRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    formulation_id: int
+    knowledge_id: int
+    source_file: str
+    source_row_number: int
+    polymer_iupac: str | None = None
+    formulation: str | None = None
+    catalyst: str | None = None
+    temperature: str | None = None
+    reaction_time: str | None = None
+    solvent: str | None = None
+
+
+class FormulationBrowseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    query_time_ms: float = Field(ge=0.0)
+    total_records: int = Field(ge=0)
+    matched_records: int = Field(ge=0)
+    data_source: str = "postgres"
+    source_status: str = "ready"
+    source_message: str | None = None
+    results: list[FormulationRecord] = Field(default_factory=list)
+
+
+class DatasetSummaryItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    key: str
+    title: str
+    total_records: int = Field(ge=0)
+    data_source: str
+    source_status: str
+    source_message: str | None = None
+    latest_import_status: str | None = None
+    latest_import_finished_at: str | None = None
+
+
+class DatasetSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query_time_ms: float = Field(ge=0.0)
+    backend: str
+    datasets: list[DatasetSummaryItem] = Field(default_factory=list)
+
+
+class DatabaseAnalyticsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query_time_ms: float = Field(ge=0.0)
+    backend: str
+    source: str = "snapshot"
+    generated_at: str | None = None
+    datasets: dict[str, Any] = Field(default_factory=dict)
 
 
 class KnowledgeSearchRequest(BaseModel):

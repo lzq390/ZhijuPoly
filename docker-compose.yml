@@ -1,6 +1,55 @@
 name: nexpoly
 
+x-backend-environment: &backend-environment
+  MODEL_DIR: /app/model
+  MODEL_ENABLED: "true"
+  GEN_MODEL_ENABLED: "${GEN_MODEL_ENABLED:-false}"
+  GEN_MODEL_DIR: /app/model/conditional_generation
+  GEN_DEVICE: "${GEN_DEVICE:-auto}"
+  GEN_JOB_WORKERS: "${GEN_JOB_WORKERS:-1}"
+  RETRO_MODEL_ENABLED: "${RETRO_MODEL_ENABLED:-true}"
+  RETRO_MODEL_ID: "${RETRO_MODEL_ID:-/app/model/reactiont5-retrosynthesis}"
+  RETRO_DEVICE: "${RETRO_DEVICE:-auto}"
+  STRUCTURED_DATA_BACKEND: "${STRUCTURED_DATA_BACKEND:-postgres}"
+  APP_POSTGRES_DSN: "${APP_POSTGRES_DSN:-postgresql://polyprop:polyprop@lab-postgres:5432/nexpoly}"
+  PI_REVERSE_BACKEND: "${PI_REVERSE_BACKEND:-postgres}"
+  PI_POSTGRES_DSN: "${PI_POSTGRES_DSN:-postgresql://polyprop:polyprop@lab-postgres:5432/nexpoly}"
+  LAB_DATA_POSTGRES_DSN: "${LAB_DATA_POSTGRES_DSN:-postgresql://polyprop:polyprop@lab-postgres:5432/nexpoly}"
+  PI_REVERSE_TG_WINDOW_CELSIUS: "50"
+  PI_REVERSE_TG_MAX_WINDOW_CELSIUS: "200"
+  PI_REVERSE_MAX_SCAN_ROWS: "500000"
+  PI_REVERSE_TIMEOUT_SECONDS: "30"
+  PI_REVERSE_JOB_WORKERS: "1"
+  PI_REVERSE_JOB_BATCH_SIZE: "20000"
+  PI_REVERSE_PROGRESS_INTERVAL_ROWS: "50000"
+  ALLOWED_ORIGINS: "http://localhost:${NEXPOLY_WEB_PORT:-9000},http://127.0.0.1:${NEXPOLY_WEB_PORT:-9000}"
+
+x-backend-volumes: &backend-volumes
+  - ./backend/data:/app/backend/data:ro
+  - ./database:/app/database:ro
+  - ./model/ocsr:/app/model/ocsr:ro
+  - ./model/conditional_generation:/app/model/conditional_generation:ro
+  - ./model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
+
 services:
+  postgres-init:
+    image: nexpoly-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    env_file:
+      - path: .env.ai
+        required: false
+    environment: *backend-environment
+    volumes: *backend-volumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      lab-postgres:
+        condition: service_healthy
+    command: ["python", "-m", "app.import_postgres", "--dataset", "all", "--refresh-analytics-snapshot"]
+
   backend:
     image: nexpoly-backend:latest
     build:
@@ -16,46 +65,19 @@ services:
     env_file:
       - path: .env.ai
         required: false
-    environment:
-      SQLITE_DB_PATH: /app/backend/data/polyprop.db
-      FUMOL_DB_PATH: /app/backend/data/fumol.db
-      MODEL_DIR: /app/model
-      MODEL_ENABLED: "true"
-      GEN_MODEL_ENABLED: "${GEN_MODEL_ENABLED:-false}"
-      GEN_MODEL_DIR: /app/model/conditional_generation
-      GEN_DEVICE: "${GEN_DEVICE:-auto}"
-      GEN_JOB_WORKERS: "${GEN_JOB_WORKERS:-1}"
-      RETRO_MODEL_ENABLED: "${RETRO_MODEL_ENABLED:-true}"
-      RETRO_MODEL_ID: "${RETRO_MODEL_ID:-/app/model/reactiont5-retrosynthesis}"
-      RETRO_DEVICE: "${RETRO_DEVICE:-auto}"
-      PI_REVERSE_BACKEND: "${PI_REVERSE_BACKEND:-sqlite}"
-      PI_REVERSE_DB_PATH: "${PI_REVERSE_DB_PATH:-/app/backend/data/pi_reverse_design.db}"
-      PI_POSTGRES_DSN: "${PI_POSTGRES_DSN:-postgresql://polyprop:polyprop@host.docker.internal:55432/polyprop_pi}"
-      LAB_DATA_POSTGRES_DSN: "${LAB_DATA_POSTGRES_DSN:-postgresql://polyprop:polyprop@lab-postgres:5432/polyprop_pi}"
-      PI_REVERSE_TG_WINDOW_CELSIUS: "50"
-      PI_REVERSE_TG_MAX_WINDOW_CELSIUS: "200"
-      PI_REVERSE_MAX_SCAN_ROWS: "500000"
-      PI_REVERSE_TIMEOUT_SECONDS: "30"
-      PI_REVERSE_JOB_WORKERS: "1"
-      PI_REVERSE_JOB_BATCH_SIZE: "20000"
-      PI_REVERSE_PROGRESS_INTERVAL_ROWS: "50000"
-      ALLOWED_ORIGINS: "http://localhost:${NEXPOLY_WEB_PORT:-9000},http://127.0.0.1:${NEXPOLY_WEB_PORT:-9000}"
-    volumes:
-      - ./backend/data:/app/backend/data
-      - ./database:/app/database:ro
-      - ./model/ocsr:/app/model/ocsr:ro
-      - ./model/conditional_generation:/app/model/conditional_generation:ro
-      - ./model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
+    environment: *backend-environment
+    volumes: *backend-volumes
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import os, pathlib, sys, urllib.request; required=('SQLITE_DB_PATH','FUMOL_DB_PATH'); ok=all(pathlib.Path(os.environ[name]).is_file() and pathlib.Path(os.environ[name]).stat().st_size > 0 for name in required); sys.exit(1) if not ok else urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()",
-        ]
+        - CMD-SHELL
+        - >
+          python -m app.postgres_preflight --strict >/tmp/nexpoly-preflight.json &&
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -67,11 +89,13 @@ services:
     environment:
       POSTGRES_USER: polyprop
       POSTGRES_PASSWORD: polyprop
-      POSTGRES_DB: polyprop_pi
+      POSTGRES_DB: nexpoly
+    ports:
+      - "${NEXPOLY_POSTGRES_PORT:-55432}:5432"
     volumes:
-      - lab_postgres_data:/var/lib/postgresql/data
+      - app_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U polyprop -d polyprop_pi"]
+      test: ["CMD-SHELL", "pg_isready -U polyprop -d nexpoly"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -116,4 +140,4 @@ services:
         condition: service_healthy
 
 volumes:
-  lab_postgres_data:
+  app_postgres_data:

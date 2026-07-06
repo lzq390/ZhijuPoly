@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,8 +11,8 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.postgres_database import postgres_connection
 from app.models import AssistantChatMessage, AssistantModuleContext
-from app.pi_database import ensure_pi_schema
 from app.routers import assistant as assistant_router
 from app.routers import query as query_router
 from app.services import image_recognition
@@ -35,14 +34,16 @@ def make_assistant_app(
     *,
     api_key: str = "test-key",
     model_enabled: bool = False,
-    pi_reverse_db_path: Path | None = None,
+    postgres_dsn: str | None = None,
     assistant_image_max_bytes: int = 1024,
 ):
     return create_app(
         Settings(
             sqlite_db_path=str(tmp_path / "assistant.db"),
             csv_source_path=str(tmp_path / "sample.csv"),
-            pi_reverse_db_path=str(pi_reverse_db_path or (tmp_path / "pi_reverse.db")),
+            app_postgres_dsn=postgres_dsn,
+            pi_postgres_dsn=postgres_dsn,
+            lab_data_postgres_dsn=postgres_dsn,
             allowed_origins="http://localhost:5173",
             model_enabled=model_enabled,
             online_knowledge_api_key="",
@@ -91,18 +92,13 @@ def post_structure_image(app, image_bytes: bytes, *, content_type: str = "image/
     return asyncio.run(async_post_structure_image(app, image_bytes, content_type=content_type))
 
 
-def write_iupac_cache(db_path: Path, entries: list[tuple[str, str]]) -> None:
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    try:
-        ensure_pi_schema(connection)
-        connection.executemany(
-            "INSERT INTO smiles_iupac_cache (smiles, iupac_name) VALUES (?, ?)",
-            entries,
-        )
-        connection.commit()
-    finally:
-        connection.close()
+def write_iupac_cache(dsn: str, entries: list[tuple[str, str]]) -> None:
+    with postgres_connection(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                "INSERT INTO pi.monomer_iupac (smiles, iupac_name) VALUES (%s, %s)",
+                entries,
+            )
 
 
 def post_assistant_message(client: TestClient, content: str = "hello"):
@@ -544,11 +540,10 @@ def test_assistant_plain_chat_does_not_trigger_skill(tmp_path: Path, monkeypatch
     assert "普通回答" in response.text
 
 
-def test_assistant_resolves_cached_iupac_before_intent_routing(tmp_path: Path, monkeypatch) -> None:
+def test_assistant_resolves_cached_iupac_before_intent_routing(tmp_path: Path, postgres_dsn: str, monkeypatch) -> None:
     iupac_name = "2-(2,4-diamino-6-methyl-phenyl)acrylonitrile"
     resolved_smiles = "C=C(C#N)c1c(C)cc(N)cc1N"
-    pi_db_path = tmp_path / "pi_reverse.db"
-    write_iupac_cache(pi_db_path, [(resolved_smiles, iupac_name)])
+    write_iupac_cache(postgres_dsn, [(resolved_smiles, iupac_name)])
 
     def fake_complete_assistant_intent(**kwargs):
         latest_content = kwargs["messages"][-1].content
@@ -580,7 +575,7 @@ def test_assistant_resolves_cached_iupac_before_intent_routing(tmp_path: Path, m
 
     monkeypatch.setattr(predict_properties, "predict", fake_predict)
     client = TestClient(
-        make_assistant_app(tmp_path, model_enabled=True, pi_reverse_db_path=pi_db_path)
+        make_assistant_app(tmp_path, model_enabled=True, postgres_dsn=postgres_dsn)
     )
 
     response = post_assistant_message(client, f"预测 {iupac_name} 的 Tg")
@@ -645,7 +640,7 @@ def test_assistant_uses_image_resolved_smiles_before_intent_routing(tmp_path: Pa
     assert "预测结果如下" in response.text
 
 
-def test_assistant_unknown_iupac_clarifies_before_model_call(tmp_path: Path, monkeypatch) -> None:
+def test_assistant_unknown_iupac_clarifies_before_model_call(tmp_path: Path, postgres_dsn: str, monkeypatch) -> None:
     monkeypatch.setattr(
         assistant_orchestrator.assistant_chat,
         "complete_assistant_intent",
@@ -656,7 +651,7 @@ def test_assistant_unknown_iupac_clarifies_before_model_call(tmp_path: Path, mon
         "predict",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("predict should not run")),
     )
-    client = TestClient(make_assistant_app(tmp_path, api_key="", model_enabled=True))
+    client = TestClient(make_assistant_app(tmp_path, api_key="", model_enabled=True, postgres_dsn=postgres_dsn))
 
     response = post_assistant_message(
         client,
@@ -669,12 +664,11 @@ def test_assistant_unknown_iupac_clarifies_before_model_call(tmp_path: Path, mon
     assert "当前 IUPAC 缓存中没有找到该名称" in response.text
 
 
-def test_assistant_multiple_cached_iupac_names_clarifies_before_model_call(tmp_path: Path, monkeypatch) -> None:
+def test_assistant_multiple_cached_iupac_names_clarifies_before_model_call(tmp_path: Path, postgres_dsn: str, monkeypatch) -> None:
     first_iupac = "2-(2,4-diamino-6-methyl-phenyl)acrylonitrile"
     second_iupac = "2-(2,4-diamino-6-methyl-pyrimidin-5-yl)acrylonitrile"
-    pi_db_path = tmp_path / "pi_reverse.db"
     write_iupac_cache(
-        pi_db_path,
+        postgres_dsn,
         [
             ("C=C(C#N)c1c(C)cc(N)cc1N", first_iupac),
             ("C=C(C#N)c1c(C)nc(N)nc1N", second_iupac),
@@ -686,7 +680,7 @@ def test_assistant_multiple_cached_iupac_names_clarifies_before_model_call(tmp_p
         lambda **kwargs: (_ for _ in ()).throw(AssertionError("model router should not run")),
     )
     client = TestClient(
-        make_assistant_app(tmp_path, api_key="", model_enabled=True, pi_reverse_db_path=pi_db_path)
+        make_assistant_app(tmp_path, api_key="", model_enabled=True, postgres_dsn=postgres_dsn)
     )
 
     response = post_assistant_message(client, f"预测 {first_iupac} 和 {second_iupac} 的 Tg")

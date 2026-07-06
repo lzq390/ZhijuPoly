@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from time import perf_counter
 from typing import Any, Callable
 
@@ -16,19 +15,14 @@ from app.models import (
 from app.postgres_database import PostgresUnavailableError
 from app.services.postgres_reverse_design import search_reverse_design_by_tg_postgres
 from app.services.fingerprint import generate
-from app.services.reverse_design import search_reverse_design_by_tg
-from app.services.smiles_to_iupac import lookup_iupac_name
 from app.services.structure_2d import generate_2d_svg
 from app.utils.exceptions import InvalidSmilesError
 
 
 router = APIRouter(prefix="/api/v1/reverse-design", tags=["reverse-design"])
+POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set PI_REVERSE_BACKEND=postgres."
 ProgressCallback = Callable[..., None]
 CancellationCheck = Callable[[], bool]
-
-
-def _database_not_initialized(exc: sqlite3.OperationalError) -> bool:
-    return "no such table" in str(exc).lower()
 
 
 def _candidate_iupac_from_postgres(search_result) -> dict[int, tuple[str | None, str | None]]:
@@ -93,78 +87,54 @@ def _search_by_tg_response(
     started_at = perf_counter()
     settings = app.state.settings
 
-    try:
-        if settings.pi_reverse_backend == "postgres":
-            def forward_progress(progress) -> None:
-                if progress_callback is None:
-                    return
-                progress_callback(
-                    scanned_rows=progress.scanned_rows,
-                    matched_count=progress.matched_count,
-                    current_tg_radius=progress.current_tg_radius,
-                    best_similarity_score=progress.best_similarity_score,
-                )
+    if settings.pi_reverse_backend != "postgres":
+        raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
 
-            with app.state.postgres_connection_factory(settings.pi_postgres_dsn) as connection:
-                search_kwargs: dict[str, Any] = {
-                    "similarity_threshold": request_body.similarity_threshold,
-                    "result_limit": request_body.candidate_size,
-                }
-                if full_scan:
-                    search_kwargs.update(
-                        {
-                            "batch_size": settings.pi_reverse_job_batch_size,
-                            "max_scan_rows": None,
-                            "timeout_seconds": 0,
-                            "progress_callback": forward_progress,
-                            "progress_interval_rows": settings.pi_reverse_progress_interval_rows,
-                            "cancellation_check": cancellation_check,
-                        }
-                    )
-                else:
-                    search_kwargs.update(
-                        {
-                            "max_scan_rows": settings.pi_reverse_max_scan_rows,
-                            "timeout_seconds": settings.pi_reverse_timeout_seconds,
-                        }
-                    )
-                search_result = search_reverse_design_by_tg_postgres(
-                    connection,
-                    request_body.smiles,
-                    request_body.target_tg,
-                    **search_kwargs,
+    try:
+        def forward_progress(progress) -> None:
+            if progress_callback is None:
+                return
+            progress_callback(
+                scanned_rows=progress.scanned_rows,
+                matched_count=progress.matched_count,
+                current_tg_radius=progress.current_tg_radius,
+                best_similarity_score=progress.best_similarity_score,
+            )
+
+        with app.state.postgres_connection_factory(settings.pi_postgres_dsn) as connection:
+            search_kwargs: dict[str, Any] = {
+                "similarity_threshold": request_body.similarity_threshold,
+                "result_limit": request_body.candidate_size,
+            }
+            if full_scan:
+                search_kwargs.update(
+                    {
+                        "batch_size": settings.pi_reverse_job_batch_size,
+                        "max_scan_rows": None,
+                        "timeout_seconds": 0,
+                        "progress_callback": forward_progress,
+                        "progress_interval_rows": settings.pi_reverse_progress_interval_rows,
+                        "cancellation_check": cancellation_check,
+                    }
                 )
-                candidate_iupac = _candidate_iupac_from_postgres(search_result)
-        else:
-            with app.state.sqlite_connection_factory(settings.pi_reverse_db_file) as connection:
-                search_result = search_reverse_design_by_tg(
-                    connection,
-                    request_body.smiles,
-                    request_body.target_tg,
-                    similarity_threshold=request_body.similarity_threshold,
-                    candidate_sample_size=request_body.candidate_size,
-                    top_k=request_body.candidate_size,
-                    progress_callback=progress_callback,
-                    progress_interval_rows=settings.pi_reverse_progress_interval_rows,
-                    cancellation_check=cancellation_check,
+            else:
+                search_kwargs.update(
+                    {
+                        "max_scan_rows": settings.pi_reverse_max_scan_rows,
+                        "timeout_seconds": settings.pi_reverse_timeout_seconds,
+                    }
                 )
-                candidate_iupac = {
-                    candidate.pi_id: (
-                        candidate.monomer_a_iupac
-                        or lookup_iupac_name(connection, candidate.monomer_a_smiles),
-                        candidate.monomer_b_iupac
-                        or lookup_iupac_name(connection, candidate.monomer_b_smiles),
-                    )
-                    for candidate in search_result.results
-                }
+            search_result = search_reverse_design_by_tg_postgres(
+                connection,
+                request_body.smiles,
+                request_body.target_tg,
+                **search_kwargs,
+            )
+            candidate_iupac = _candidate_iupac_from_postgres(search_result)
     except InvalidSmilesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except sqlite3.OperationalError as exc:
-        if _database_not_initialized(exc):
-            raise HTTPException(status_code=503, detail="PI reverse-design database is not initialized") from exc
-        raise
 
     if progress_callback is not None:
         progress_callback(

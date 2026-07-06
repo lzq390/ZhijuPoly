@@ -6,13 +6,9 @@ from pathlib import Path
 import pytest
 
 from app.import_pi_candidates import import_pi_candidates_to_sqlite
-from app.pi_database import ensure_pi_schema
-from app.services.smiles_to_iupac import (
-    IupacNameLookupAmbiguousError,
-    find_iupac_smiles_matches,
-    lookup_iupac_name,
-    lookup_smiles_by_iupac_name,
-)
+from app.postgres_database import postgres_connection
+from app.services.postgres_smiles_to_iupac import find_iupac_smiles_matches_postgres, lookup_iupac_name_postgres
+from app.services.smiles_to_iupac import IupacNameLookupAmbiguousError, normalize_iupac_name
 
 
 def write_pi_csv(path: Path) -> None:
@@ -126,76 +122,59 @@ def test_import_pi_candidates_caches_optional_iupac_names(tmp_path: Path) -> Non
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     try:
-        assert lookup_iupac_name(connection, "CCO") == "ethanol"
-        assert lookup_iupac_name(connection, "CCN") == "ethanamine"
-        assert lookup_iupac_name(connection, "CCC") == "propane"
+        rows = connection.execute(
+            "SELECT smiles, iupac_name FROM smiles_iupac_cache ORDER BY smiles"
+        ).fetchall()
     finally:
         connection.close()
 
+    assert {row["smiles"]: row["iupac_name"] for row in rows} == {
+        "CCN": "ethanamine",
+        "CCO": "ethanol",
+        "CCC": "propane",
+    }
 
-def test_lookup_smiles_by_iupac_name_supports_normalized_matching(tmp_path: Path) -> None:
-    db_path = tmp_path / "pi.db"
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    try:
-        ensure_pi_schema(connection)
+
+def test_normalize_iupac_name_handles_spacing_case_and_dash_variants() -> None:
+    assert (
+        normalize_iupac_name(" 2 \u2013 (2,4-DIAMINO-6-METHYL-PHENYL) ACRYLONITRILE ")
+        == "2-(2,4-diamino-6-methyl-phenyl) acrylonitrile"
+    )
+
+
+def test_postgres_iupac_lookup_and_text_scan(postgres_dsn: str) -> None:
+    with postgres_connection(postgres_dsn) as connection:
         connection.execute(
-            "INSERT INTO smiles_iupac_cache (smiles, iupac_name) VALUES (?, ?)",
+            """
+            INSERT INTO pi.monomer_iupac (smiles, iupac_name)
+            VALUES (%s, %s)
+            ON CONFLICT (smiles) DO UPDATE SET iupac_name = EXCLUDED.iupac_name
+            """,
             ("C=C(C#N)c1c(C)cc(N)cc1N", "2-(2,4-diamino-6-methyl-phenyl)acrylonitrile"),
         )
 
-        assert (
-            lookup_smiles_by_iupac_name(
-                connection,
-                " 2 \u2013 (2,4-DIAMINO-6-METHYL-PHENYL)ACRYLONITRILE ",
-            )
-            == "C=C(C#N)c1c(C)cc(N)cc1N"
-        )
-        assert lookup_smiles_by_iupac_name(connection, "not in cache") is None
-    finally:
-        connection.close()
-
-
-def test_find_iupac_smiles_matches_scans_text_and_deduplicates_overlaps(tmp_path: Path) -> None:
-    db_path = tmp_path / "pi.db"
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    try:
-        ensure_pi_schema(connection)
-        connection.execute(
-            "INSERT INTO smiles_iupac_cache (smiles, iupac_name) VALUES (?, ?)",
-            ("C=C(C#N)c1c(C)cc(N)cc1N", "2-(2,4-diamino-6-methyl-phenyl)acrylonitrile"),
-        )
-
-        matches = find_iupac_smiles_matches(
+        assert lookup_iupac_name_postgres(connection, "NCCN") == "ethane-1,2-diamine"
+        matches = find_iupac_smiles_matches_postgres(
             connection,
             "请预测 2-(2,4-diamino-6-methyl-phenyl)acrylonitrile 的 Tg",
         )
 
-        assert len(matches) == 1
-        assert matches[0].iupac_name == "2-(2,4-diamino-6-methyl-phenyl)acrylonitrile"
-        assert matches[0].smiles == "C=C(C#N)c1c(C)cc(N)cc1N"
-    finally:
-        connection.close()
+    assert len(matches) == 1
+    assert matches[0].iupac_name == "2-(2,4-diamino-6-methyl-phenyl)acrylonitrile"
+    assert matches[0].smiles == "C=C(C#N)c1c(C)cc(N)cc1N"
 
 
-def test_lookup_smiles_by_iupac_name_rejects_ambiguous_cache_entries(tmp_path: Path) -> None:
-    db_path = tmp_path / "pi.db"
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    try:
-        ensure_pi_schema(connection)
-        connection.executemany(
-            "INSERT INTO smiles_iupac_cache (smiles, iupac_name) VALUES (?, ?)",
-            [
-                ("CCO", "ethanol"),
-                ("OCC", "Ethanol"),
-            ],
-        )
+def test_postgres_iupac_text_scan_rejects_ambiguous_names(postgres_dsn: str) -> None:
+    with postgres_connection(postgres_dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO pi.monomer_iupac (smiles, iupac_name)
+                VALUES (%s, %s)
+                ON CONFLICT (smiles) DO UPDATE SET iupac_name = EXCLUDED.iupac_name
+                """,
+                [("CCO", "ethanol"), ("OCC", "Ethanol")],
+            )
 
         with pytest.raises(IupacNameLookupAmbiguousError):
-            lookup_smiles_by_iupac_name(connection, "ethanol")
-        with pytest.raises(IupacNameLookupAmbiguousError):
-            find_iupac_smiles_matches(connection, "预测 ethanol 的 Tg")
-    finally:
-        connection.close()
+            find_iupac_smiles_matches_postgres(connection, "预测 ethanol 的 Tg")

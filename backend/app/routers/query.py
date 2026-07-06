@@ -14,10 +14,11 @@ from app.models import (
     Structure3DResponse,
     StructureImageRecognitionResponse,
 )
-from app.services.aggregator import load_polymer_result, load_polymer_results
+from app.postgres_database import PostgresUnavailableError
+from app.services.aggregator import load_polymer_result_postgres, load_polymer_results_postgres
 from app.services.image_recognition import recognize_structure_image_from_bytes
-from app.services.property_similarity import property_similarity_search
-from app.services.similarity import similarity_search
+from app.services.property_similarity import property_similarity_search_postgres
+from app.services.similarity import similarity_search_postgres
 from app.services.smiles_utils import standardize_smiles
 from app.services.structure_3d import generate_3d_molblock
 from app.utils.exceptions import (
@@ -30,6 +31,7 @@ from app.utils.exceptions import (
 
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
+POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set STRUCTURED_DATA_BACKEND=postgres."
 
 
 @router.post("/query/smiles", response_model=SmilesQueryResponse)
@@ -40,10 +42,13 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
     predicted_property_value: float | None = None
     predicted_property_unit: str | None = None
 
+    if settings.structured_data_backend != "postgres":
+        raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
+
     try:
-        with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
             if request_body.match_mode == "structure":
-                rows_with_scores = similarity_search(
+                rows_with_scores = similarity_search_postgres(
                     connection,
                     request_body.smiles,
                     similarity_threshold=0.0,
@@ -52,7 +57,7 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
             elif request_body.property_name is not None:
                 if not settings.model_enabled:
                     raise HTTPException(status_code=503, detail="prediction service is disabled")
-                predicted_property_value, predicted_property_unit, rows_with_scores = property_similarity_search(
+                predicted_property_value, predicted_property_unit, rows_with_scores = property_similarity_search_postgres(
                     connection,
                     request_body.smiles,
                     request_body.property_name,
@@ -65,12 +70,13 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
 
             polymer_rows = [row for row, _ in rows_with_scores]
             scores = {int(row["polymer_id"]): score for row, score in rows_with_scores}
-
-            results = load_polymer_results(connection, polymer_rows, similarity_scores=scores)
+            results = load_polymer_results_postgres(connection, polymer_rows, similarity_scores=scores)
     except InvalidSmilesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except UnsupportedPredictionPropertyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     except ModelArtifactError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -85,26 +91,30 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
         results=results,
     )
 
-
 @router.get("/polymer/{polymer_id}", response_model=PolymerResult)
 async def get_polymer_detail(polymer_id: int, request: Request) -> PolymerResult:
     settings = request.app.state.settings
 
-    with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-        polymer_row = connection.execute(
-            """
-            SELECT polymer_id, '' AS polymer_name, smiles, canonical_smiles, rdkit_parse_ok
-            FROM polymers
-            WHERE polymer_id = ?
-            """,
-            (polymer_id,),
-        ).fetchone()
+    if settings.structured_data_backend != "postgres":
+        raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
 
-        if polymer_row is None:
-            raise HTTPException(status_code=404, detail="polymer not found")
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            polymer_row = connection.execute(
+                """
+                SELECT polymer_id, polymer_name, smiles, canonical_smiles, rdkit_parse_ok
+                FROM core.polymers
+                WHERE polymer_id = %s
+                """,
+                (polymer_id,),
+            ).fetchone()
 
-        return load_polymer_result(connection, polymer_row)
+            if polymer_row is None:
+                raise HTTPException(status_code=404, detail="polymer not found")
 
+            return load_polymer_result_postgres(connection, polymer_row)
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
 
 @router.post("/structure/3d", response_model=Structure3DResponse)
 async def generate_structure_3d(request_body: Structure3DRequest, request: Request) -> Structure3DResponse:

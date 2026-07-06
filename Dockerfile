@@ -2,8 +2,6 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    SQLITE_DB_PATH=/app/backend/data/polyprop.db \
-    FUMOL_DB_PATH=/app/backend/data/fumol.db \
     MODEL_DIR=/app/model \
     MODEL_ENABLED=true \
     OCSR_ENABLED=true \

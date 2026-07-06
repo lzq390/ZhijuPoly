@@ -36,17 +36,37 @@ def _resolve_from_root(value: str) -> str:
     return str(path.resolve())
 
 
+def _absolute_from_root(value: str) -> str:
+    windows_drive_match = re.match(r"^([A-Za-z]):[\\/](.*)$", value)
+    if windows_drive_match and os.name != "nt":
+        drive = windows_drive_match.group(1).lower()
+        remainder = windows_drive_match.group(2).replace("\\", "/")
+        return str(Path("/mnt") / drive / remainder)
+
+    path = Path(value)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return os.path.abspath(path)
+
+
 class Settings:
     def __init__(
         self,
         sqlite_db_path: str | None = None,
         csv_source_path: str | None = None,
+        experimental_process_csv_path: str | None = None,
+        experimental_property_csv_path: str | None = None,
         knowledge_zip_path: str | None = None,
         fumol_zip_path: str | None = None,
         fumol_db_path: str | None = None,
         pi_reverse_db_path: str | None = None,
+        legacy_main_sqlite_source_path: str | None = None,
+        legacy_pi_sqlite_source_path: str | None = None,
+        legacy_dft_sqlite_source_path: str | None = None,
         pi_reverse_csv_path: str | None = None,
         pi_reverse_backend: str | None = None,
+        app_postgres_dsn: str | None = None,
+        structured_data_backend: str | None = None,
         pi_postgres_dsn: str | None = None,
         lab_data_postgres_dsn: str | None = None,
         pi_reverse_tg_window_celsius: float | None = None,
@@ -90,6 +110,14 @@ class Settings:
             "CSV_SOURCE_PATH",
             env_values.get("CSV_SOURCE_PATH", "database/data1.csv"),
         )
+        raw_experimental_process_csv_path = experimental_process_csv_path or os.getenv(
+            "EXPERIMENTAL_PROCESS_CSV_PATH",
+            env_values.get("EXPERIMENTAL_PROCESS_CSV_PATH", "database/polymer_process_material_filtered_cleaned_office_utf8_bom.csv"),
+        )
+        raw_experimental_property_csv_path = experimental_property_csv_path or os.getenv(
+            "EXPERIMENTAL_PROPERTY_CSV_PATH",
+            env_values.get("EXPERIMENTAL_PROPERTY_CSV_PATH", "database/polymer_property_detail_cleaned_office_utf8_bom.csv"),
+        )
         raw_knowledge_zip_path = knowledge_zip_path or os.getenv(
             "KNOWLEDGE_ZIP_PATH",
             env_values.get("KNOWLEDGE_ZIP_PATH", "database/data_txt.zip"),
@@ -106,6 +134,18 @@ class Settings:
             "PI_REVERSE_DB_PATH",
             env_values.get("PI_REVERSE_DB_PATH", "backend/data/pi_reverse_design.db"),
         )
+        raw_legacy_main_sqlite_source_path = legacy_main_sqlite_source_path or os.getenv(
+            "LEGACY_MAIN_SQLITE_SOURCE_PATH",
+            env_values.get("LEGACY_MAIN_SQLITE_SOURCE_PATH", raw_sqlite_db_path),
+        )
+        raw_legacy_pi_sqlite_source_path = legacy_pi_sqlite_source_path or os.getenv(
+            "LEGACY_PI_SQLITE_SOURCE_PATH",
+            env_values.get("LEGACY_PI_SQLITE_SOURCE_PATH", raw_pi_reverse_db_path),
+        )
+        raw_legacy_dft_sqlite_source_path = legacy_dft_sqlite_source_path or os.getenv(
+            "LEGACY_DFT_SQLITE_SOURCE_PATH",
+            env_values.get("LEGACY_DFT_SQLITE_SOURCE_PATH", raw_fumol_db_path),
+        )
         raw_pi_reverse_csv_path = pi_reverse_csv_path
         if raw_pi_reverse_csv_path is None:
             raw_pi_reverse_csv_path = os.getenv(
@@ -114,14 +154,22 @@ class Settings:
             )
         raw_pi_reverse_backend = pi_reverse_backend or os.getenv(
             "PI_REVERSE_BACKEND",
-            env_values.get("PI_REVERSE_BACKEND", "sqlite"),
+            env_values.get("PI_REVERSE_BACKEND", "postgres"),
+        )
+        raw_app_postgres_dsn = app_postgres_dsn or os.getenv(
+            "APP_POSTGRES_DSN",
+            env_values.get(
+                "APP_POSTGRES_DSN",
+                "postgresql://polyprop:polyprop@localhost:55432/nexpoly",
+            ),
+        )
+        raw_structured_data_backend = structured_data_backend or os.getenv(
+            "STRUCTURED_DATA_BACKEND",
+            env_values.get("STRUCTURED_DATA_BACKEND", "postgres"),
         )
         raw_pi_postgres_dsn = pi_postgres_dsn or os.getenv(
             "PI_POSTGRES_DSN",
-            env_values.get(
-                "PI_POSTGRES_DSN",
-                "postgresql://polyprop:polyprop@localhost:55432/polyprop_pi",
-            ),
+            env_values.get("PI_POSTGRES_DSN", raw_app_postgres_dsn),
         )
         raw_lab_data_postgres_dsn = lab_data_postgres_dsn
         if raw_lab_data_postgres_dsn is None:
@@ -129,7 +177,7 @@ class Settings:
                 "LAB_DATA_POSTGRES_DSN",
                 env_values.get("LAB_DATA_POSTGRES_DSN", ""),
             )
-        raw_lab_data_postgres_dsn = raw_lab_data_postgres_dsn.strip() or raw_pi_postgres_dsn
+        raw_lab_data_postgres_dsn = raw_lab_data_postgres_dsn.strip() or raw_app_postgres_dsn
         raw_pi_reverse_tg_window_celsius = (
             str(pi_reverse_tg_window_celsius)
             if pi_reverse_tg_window_celsius is not None
@@ -341,18 +389,27 @@ class Settings:
 
         self.sqlite_db_path = _resolve_from_root(raw_sqlite_db_path)
         self.csv_source_path = _resolve_from_root(raw_csv_source_path)
+        self.experimental_process_csv_path = _resolve_from_root(raw_experimental_process_csv_path)
+        self.experimental_property_csv_path = _resolve_from_root(raw_experimental_property_csv_path)
         self.knowledge_zip_path = _resolve_from_root(raw_knowledge_zip_path)
         self.fumol_zip_path = _resolve_from_root(raw_fumol_zip_path)
         self.fumol_db_path = _resolve_from_root(raw_fumol_db_path)
         self.pi_reverse_db_path = _resolve_from_root(raw_pi_reverse_db_path)
+        self.legacy_main_sqlite_source_path = _absolute_from_root(raw_legacy_main_sqlite_source_path)
+        self.legacy_pi_sqlite_source_path = _absolute_from_root(raw_legacy_pi_sqlite_source_path)
+        self.legacy_dft_sqlite_source_path = _absolute_from_root(raw_legacy_dft_sqlite_source_path)
         self.pi_reverse_csv_path = (
             _resolve_from_root(raw_pi_reverse_csv_path.strip())
             if raw_pi_reverse_csv_path.strip()
             else ""
         )
         self.pi_reverse_backend = raw_pi_reverse_backend.strip().lower()
-        if self.pi_reverse_backend not in {"sqlite", "postgres"}:
-            raise ValueError("PI_REVERSE_BACKEND must be either 'sqlite' or 'postgres'")
+        if self.pi_reverse_backend != "postgres":
+            raise ValueError("PI_REVERSE_BACKEND must be 'postgres'")
+        self.structured_data_backend = raw_structured_data_backend.strip().lower()
+        if self.structured_data_backend != "postgres":
+            raise ValueError("STRUCTURED_DATA_BACKEND must be 'postgres'")
+        self.app_postgres_dsn = raw_app_postgres_dsn.strip()
         self.pi_postgres_dsn = raw_pi_postgres_dsn.strip()
         self.lab_data_postgres_dsn = raw_lab_data_postgres_dsn.strip()
         self.pi_reverse_tg_window_celsius = float(raw_pi_reverse_tg_window_celsius)
@@ -395,6 +452,14 @@ class Settings:
         return Path(self.csv_source_path)
 
     @property
+    def experimental_process_csv_file(self) -> Path:
+        return Path(self.experimental_process_csv_path)
+
+    @property
+    def experimental_property_csv_file(self) -> Path:
+        return Path(self.experimental_property_csv_path)
+
+    @property
     def knowledge_zip_file(self) -> Path:
         return Path(self.knowledge_zip_path)
 
@@ -409,6 +474,18 @@ class Settings:
     @property
     def pi_reverse_db_file(self) -> Path:
         return Path(self.pi_reverse_db_path)
+
+    @property
+    def legacy_main_sqlite_source_file(self) -> Path:
+        return Path(self.legacy_main_sqlite_source_path)
+
+    @property
+    def legacy_pi_sqlite_source_file(self) -> Path:
+        return Path(self.legacy_pi_sqlite_source_path)
+
+    @property
+    def legacy_dft_sqlite_source_file(self) -> Path:
+        return Path(self.legacy_dft_sqlite_source_path)
 
     @property
     def pi_reverse_csv_file(self) -> Path | None:

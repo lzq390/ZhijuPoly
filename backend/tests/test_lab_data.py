@@ -39,10 +39,15 @@ class FakeLabDataConnection:
         normalized = " ".join(sql.lower().split())
         self.executed_sql.append(normalized)
 
-        if normalized.startswith("create schema") or normalized.startswith("create table"):
+        if (
+            normalized.startswith("create schema")
+            or normalized.startswith("create table")
+            or normalized.startswith("do ")
+            or normalized.startswith("select setval(")
+        ):
             return FakeCursor()
 
-        if normalized.startswith("insert into data_collection_demo.test_projects"):
+        if normalized.startswith("insert into lab.test_projects"):
             project_name, result_unit = params or ("", "")
             if not any(project["project_name"] == project_name for project in self.projects):
                 self.projects.append(
@@ -55,10 +60,10 @@ class FakeLabDataConnection:
                 self.next_project_id += 1
             return FakeCursor()
 
-        if normalized.startswith("select id, project_name, result_unit from data_collection_demo.test_projects"):
+        if normalized.startswith("select id, project_name, result_unit from lab.test_projects"):
             return FakeCursor(sorted(self.projects, key=lambda project: project["id"]))
 
-        if normalized.startswith("insert into data_collection_demo.sample_measurements"):
+        if normalized.startswith("insert into lab.sample_measurements"):
             assert params is not None
             if any(measurement["sample_id"] == params[0] for measurement in self.measurements):
                 raise UniqueViolation("duplicate sample_id")
@@ -80,11 +85,11 @@ class FakeLabDataConnection:
             self.next_measurement_id += 1
             return FakeCursor([row])
 
-        if normalized.startswith("select count(*) as count from data_collection_demo.sample_measurements"):
+        if normalized.startswith("select count(*) as count from lab.sample_measurements"):
             rows = self._filter_measurements(normalized, params)
             return FakeCursor([{"count": len(rows)}])
 
-        if normalized.startswith("select experiment_project, count(*) as count from data_collection_demo.sample_measurements"):
+        if normalized.startswith("select experiment_project, count(*) as count from lab.sample_measurements"):
             counts: dict[str, int] = {}
             for row in self.measurements:
                 counts[row["experiment_project"]] = counts.get(row["experiment_project"], 0) + 1
@@ -134,7 +139,7 @@ class SchemaCreateRaceConnection(FakeLabDataConnection):
         normalized = " ".join(sql.lower().split())
         if normalized.startswith("create schema") and not self._raised_schema_race:
             self._raised_schema_race = True
-            raise UniqueViolation("Key (nspname)=(data_collection_demo) already exists.")
+            raise UniqueViolation("Key (nspname)=(lab) already exists.")
         return super().execute(sql, params)
 
     def rollback(self) -> None:
@@ -145,7 +150,8 @@ def make_client_with_fake_lab_data(fake_connection: FakeLabDataConnection) -> Te
     settings = Settings(
         sqlite_db_path="backend/data/test-missing.db",
         pi_reverse_backend="postgres",
-        pi_postgres_dsn="postgresql://pi-user:pi-pass@example.invalid/polyprop_pi",
+        app_postgres_dsn="postgresql://pi-user:pi-pass@example.invalid/nexpoly",
+        pi_postgres_dsn="postgresql://pi-user:pi-pass@example.invalid/nexpoly",
         lab_data_postgres_dsn="",
         model_enabled=False,
     )
@@ -153,7 +159,7 @@ def make_client_with_fake_lab_data(fake_connection: FakeLabDataConnection) -> Te
 
     @contextmanager
     def fake_connection_factory(dsn: str):
-        assert dsn == "postgresql://pi-user:pi-pass@example.invalid/polyprop_pi"
+        assert dsn == "postgresql://pi-user:pi-pass@example.invalid/nexpoly"
         yield fake_connection
 
     app.state.postgres_connection_factory = fake_connection_factory
@@ -171,12 +177,12 @@ def test_lab_data_schema_initialization_tolerates_concurrent_schema_create() -> 
     ]
 
 
-def test_settings_lab_data_dsn_defaults_to_pi_postgres_dsn() -> None:
-    settings = Settings(pi_postgres_dsn="postgresql://pi/polyprop_pi", lab_data_postgres_dsn="")
-    assert settings.lab_data_postgres_dsn == "postgresql://pi/polyprop_pi"
+def test_settings_lab_data_dsn_defaults_to_app_postgres_dsn() -> None:
+    settings = Settings(app_postgres_dsn="postgresql://app/nexpoly", lab_data_postgres_dsn="")
+    assert settings.lab_data_postgres_dsn == "postgresql://app/nexpoly"
 
     dedicated_settings = Settings(
-        pi_postgres_dsn="postgresql://pi/polyprop_pi",
+        app_postgres_dsn="postgresql://app/nexpoly",
         lab_data_postgres_dsn="postgresql://lab/lab_data",
     )
     assert dedicated_settings.lab_data_postgres_dsn == "postgresql://lab/lab_data"
@@ -260,7 +266,8 @@ def test_lab_data_rejects_invalid_pagination() -> None:
 def test_lab_data_database_unavailable_is_scoped_to_lab_data_routes() -> None:
     settings = Settings(
         pi_reverse_backend="postgres",
-        pi_postgres_dsn="postgresql://pi-user:pi-pass@example.invalid/polyprop_pi",
+        app_postgres_dsn="postgresql://pi-user:pi-pass@example.invalid/nexpoly",
+        pi_postgres_dsn="postgresql://pi-user:pi-pass@example.invalid/nexpoly",
         lab_data_postgres_dsn="",
         model_enabled=False,
     )

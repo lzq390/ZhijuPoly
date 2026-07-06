@@ -21,18 +21,18 @@ from app.models import (
     OnlineKnowledgeSearchRequest,
     OnlineKnowledgeSearchResponse,
 )
-from app.database import sqlite_connection
-from app.services.online_knowledge.history_repository import (
-    clear_online_history,
-    create_online_job,
-    delete_online_history,
-    get_online_job,
-    list_online_history,
-    mark_online_job_completed,
-    mark_online_job_failed,
-    mark_online_job_running,
-    save_online_history,
-    update_online_job_progress,
+from app.postgres_database import PostgresUnavailableError, postgres_connection
+from app.services.online_knowledge.postgres_history_repository import (
+    clear_online_history_postgres,
+    create_online_job_postgres,
+    delete_online_history_postgres,
+    get_online_job_postgres,
+    list_online_history_postgres,
+    mark_online_job_completed_postgres,
+    mark_online_job_failed_postgres,
+    mark_online_job_running_postgres,
+    save_online_history_postgres,
+    update_online_job_progress_postgres,
 )
 from app.services.online_knowledge.search_service import (
     OnlineKnowledgeConfigError,
@@ -43,6 +43,12 @@ from app.services.online_knowledge.search_service import (
 
 
 router = APIRouter(prefix="/api/v1/online-knowledge", tags=["online-knowledge"])
+POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set STRUCTURED_DATA_BACKEND=postgres."
+
+
+def _require_postgres_runtime(settings: Settings) -> None:
+    if settings.structured_data_backend != "postgres":
+        raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,7 @@ def search_online_knowledge(
 ) -> OnlineKnowledgeSearchResponse:
     started_at = perf_counter()
     settings = request.app.state.settings
+    _require_postgres_runtime(settings)
 
     try:
         model_access = resolve_online_model_access(request_body, settings)
@@ -84,14 +91,17 @@ def search_online_knowledge(
     result_data["query_time_ms"] = (perf_counter() - started_at) * 1000
     response = OnlineKnowledgeSearchResponse.model_validate(result_data)
 
-    with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-        save_online_history(
-            connection,
-            material=response.material,
-            mode=response.mode,
-            max_papers=response.max_papers,
-            result_data=response.model_dump(mode="json"),
-        )
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            save_online_history_postgres(
+                connection,
+                material=response.material,
+                mode=response.mode,
+                max_papers=response.max_papers,
+                result_data=response.model_dump(mode="json"),
+            )
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
 
     return response
 
@@ -103,36 +113,43 @@ def create_online_knowledge_job(
     background_tasks: BackgroundTasks,
 ) -> OnlineKnowledgeJobCreateResponse:
     settings = request.app.state.settings
+    _require_postgres_runtime(settings)
     try:
         model_access = resolve_online_model_access(request_body, settings)
     except OnlineKnowledgeConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     job_id = uuid4().hex
-    with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-        create_online_job(
-            connection,
-            job_id=job_id,
-            material=request_body.material,
-            mode=request_body.mode,
-            max_papers=request_body.max_papers,
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            create_online_job_postgres(
+                connection,
+                job_id=job_id,
+                material=request_body.material,
+                mode=request_body.mode,
+                max_papers=request_body.max_papers,
+            )
+        background_tasks.add_task(
+            _run_online_knowledge_job,
+            job_id,
+            settings.app_postgres_dsn,
+            request_body,
+            model_access,
         )
-
-    background_tasks.add_task(
-        _run_online_knowledge_job,
-        job_id,
-        settings.sqlite_db_file,
-        request_body,
-        model_access,
-    )
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     return OnlineKnowledgeJobCreateResponse(job_id=job_id, status="pending")
 
 
 @router.get("/jobs/{job_id}", response_model=OnlineKnowledgeJobResponse)
 def get_online_knowledge_job(job_id: str, request: Request) -> OnlineKnowledgeJobResponse:
     settings = request.app.state.settings
-    with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-        job = get_online_job(connection, job_id)
+    _require_postgres_runtime(settings)
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            job = get_online_job_postgres(connection, job_id)
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return OnlineKnowledgeJobResponse.model_validate(job)
@@ -141,16 +158,24 @@ def get_online_knowledge_job(job_id: str, request: Request) -> OnlineKnowledgeJo
 @router.get("/history", response_model=OnlineKnowledgeHistoryResponse)
 def get_online_knowledge_history(request: Request) -> OnlineKnowledgeHistoryResponse:
     settings = request.app.state.settings
-    with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-        history = list_online_history(connection)
+    _require_postgres_runtime(settings)
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            history = list_online_history_postgres(connection)
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     return OnlineKnowledgeHistoryResponse(history=history)
 
 
 @router.delete("/history/{history_id}", response_model=MutationResponse)
 def delete_online_knowledge_history(history_id: int, request: Request) -> MutationResponse:
     settings = request.app.state.settings
-    with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-        deleted = delete_online_history(connection, history_id)
+    _require_postgres_runtime(settings)
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            deleted = delete_online_history_postgres(connection, history_id)
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="History item not found")
     return MutationResponse(success=True)
@@ -159,8 +184,12 @@ def delete_online_knowledge_history(history_id: int, request: Request) -> Mutati
 @router.post("/history/clear", response_model=MutationResponse)
 def clear_online_knowledge_search_history(request: Request) -> MutationResponse:
     settings = request.app.state.settings
-    with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-        clear_online_history(connection)
+    _require_postgres_runtime(settings)
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            clear_online_history_postgres(connection)
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     return MutationResponse(success=True)
 
 
@@ -226,18 +255,20 @@ def resolve_online_model_access(
 
 def _run_online_knowledge_job(
     job_id: str,
-    sqlite_db_file,
+    postgres_dsn: str,
     request_body: OnlineKnowledgeSearchRequest,
     model_access: OnlineModelAccess,
 ) -> None:
-    with sqlite_connection(sqlite_db_file) as connection:
-        mark_online_job_running(connection, job_id)
+    def run_with_connection(callback):
+        with postgres_connection(str(postgres_dsn)) as connection:
+            return callback(connection)
 
+    run_with_connection(lambda connection: mark_online_job_running_postgres(connection, job_id))
     started_at = perf_counter()
 
     def report_progress(stage: str, message: str, processed_papers: int, total_papers: int) -> None:
-        with sqlite_connection(sqlite_db_file) as connection:
-            update_online_job_progress(
+        run_with_connection(
+            lambda connection: update_online_job_progress_postgres(
                 connection,
                 job_id,
                 stage=stage,
@@ -245,6 +276,7 @@ def _run_online_knowledge_job(
                 processed_papers=processed_papers,
                 total_papers=total_papers,
             )
+        )
 
     try:
         result_data = run_online_knowledge_search(
@@ -260,18 +292,20 @@ def _run_online_knowledge_job(
         result_data["query_time_ms"] = (perf_counter() - started_at) * 1000
         response = OnlineKnowledgeSearchResponse.model_validate(result_data)
         result_json = response.model_dump(mode="json")
-        with sqlite_connection(sqlite_db_file) as connection:
-            mark_online_job_completed(connection, job_id, result_json)
-            save_online_history(
+
+        def complete(connection):
+            mark_online_job_completed_postgres(connection, job_id, result_json)
+            save_online_history_postgres(
                 connection,
                 material=response.material,
                 mode=response.mode,
                 max_papers=response.max_papers,
                 result_data=result_json,
             )
+
+        run_with_connection(complete)
     except Exception as exc:
-        with sqlite_connection(sqlite_db_file) as connection:
-            mark_online_job_failed(connection, job_id, _public_job_error_message(exc))
+        run_with_connection(lambda connection: mark_online_job_failed_postgres(connection, job_id, _public_job_error_message(exc)))
 
 
 def _safe_csv_value(value: object) -> object:

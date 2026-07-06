@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import csv
+from functools import lru_cache
 from pathlib import Path
 from time import perf_counter
 
@@ -8,6 +8,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.config import PROJECT_ROOT
 from app.models import (
+    DatabaseAnalyticsResponse,
+    DatasetSummaryItem,
+    DatasetSummaryResponse,
     DftEnergyStepBrowseResponse,
     DftEnergyStepRecord,
     DftMoleculeBrowserRecord,
@@ -16,28 +19,93 @@ from app.models import (
     ExperimentalProcessRecord,
     ExperimentalPropertyBrowseResponse,
     ExperimentalPropertyRecord,
+    FormulationBrowseResponse,
+    FormulationRecord,
     SmilesLookupRequest,
     SmilesLookupResponse,
     SmilesLookupResult,
     StructurePropertyBrowseResponse,
     StructurePropertyRecord,
 )
-from app.services.database_browser import (
-    browse_dft_energy_steps,
-    browse_dft_molecules,
-    browse_csv_records,
-    browse_structure_property_records,
-    lookup_pi_candidate_smiles,
-    lookup_polymer_smiles,
-    lookup_property_smiles,
+from app.postgres_database import PostgresUnavailableError
+from app.services.database_analytics_snapshot import (
+    STATIC_DATABASE_ANALYTICS_GENERATED_AT,
+    get_database_analytics_snapshot,
+)
+from app.services.postgres_database_browser import (
+    browse_dft_energy_steps_postgres,
+    browse_dft_molecules_postgres,
+    browse_experimental_process_records_postgres,
+    browse_experimental_property_records_postgres,
+    browse_formulation_records_postgres,
+    browse_structure_property_records_postgres,
+    get_database_analytics_postgres,
+    get_dft_browser_summary_postgres,
+    lookup_pi_candidate_smiles_postgres,
+    lookup_polymer_smiles_postgres,
+    lookup_property_smiles_postgres,
+    postgres_table_exists,
+    source_file_status,
 )
 from app.services.smiles_utils import normalize
 from app.services.structure_2d import generate_2d_svg
 
 
 router = APIRouter(prefix="/api/v1/database-browser", tags=["database-browser"])
-EXPERIMENTAL_PROCESS_CSV = PROJECT_ROOT / "database/polymer_process_material_filtered_cleaned_office_utf8_bom.csv"
-EXPERIMENTAL_PROPERTY_CSV = PROJECT_ROOT / "database/polymer_property_detail_cleaned_office_utf8_bom.csv"
+
+DATASET_TITLES = {
+    "process": "Experimental Process Data",
+    "property": "Experimental Property Data",
+    "structureEffect": "Polymer Structure-Property Data",
+    "dft": "DFT Conformation Data",
+    "formulation": "Formulation Ratio Data",
+}
+POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set STRUCTURED_DATA_BACKEND=postgres."
+
+
+def _require_postgres_browser(request: Request) -> None:
+    if request.app.state.settings.structured_data_backend != "postgres":
+        raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
+
+def _latest_import(connection, dataset_key: str) -> tuple[str | None, str | None]:
+    if not postgres_table_exists(connection, "governance", "import_batches"):
+        return None, None
+    row = connection.execute(
+        """
+        SELECT status, finished_at
+        FROM governance.import_batches
+        WHERE dataset_key = %s
+        ORDER BY started_at DESC, import_batch_id DESC
+        LIMIT 1
+        """,
+        (dataset_key,),
+    ).fetchone()
+    if row is None:
+        return None, None
+    finished_at = row["finished_at"]
+    return row["status"], finished_at.isoformat() if finished_at is not None else None
+
+
+def _summary_item(
+    *,
+    key: str,
+    total_records: int,
+    data_source: str,
+    source_status: str,
+    source_message: str | None = None,
+    latest_import_status: str | None = None,
+    latest_import_finished_at: str | None = None,
+) -> DatasetSummaryItem:
+    return DatasetSummaryItem(
+        key=key,
+        title=DATASET_TITLES[key],
+        total_records=total_records,
+        data_source=data_source,
+        source_status=source_status,
+        source_message=source_message,
+        latest_import_status=latest_import_status,
+        latest_import_finished_at=latest_import_finished_at,
+    )
 
 
 def _source_file_label(path: Path) -> str:
@@ -48,26 +116,39 @@ def _source_file_label(path: Path) -> str:
         return str(resolved_path)
 
 
-def _browse_csv_or_raise(
-    csv_path: Path,
-    *,
-    query: str,
-    page: int,
-    page_size: int,
-):
-    if not csv_path.exists():
-        raise HTTPException(status_code=503, detail=f"CSV source file not found: {_source_file_label(csv_path)}")
-
-    try:
-        return browse_csv_records(
-            csv_path,
-            source_file=_source_file_label(csv_path),
-            query=query,
-            page=page,
-            page_size=page_size,
+def _postgres_dataset_summaries(connection) -> list[DatasetSummaryItem]:
+    items: list[DatasetSummaryItem] = []
+    process_status, process_message = source_file_status(connection, "experimental_process_csv")
+    process_total = 0
+    if postgres_table_exists(connection, "experimental", "process_records"):
+        process_total = int(connection.execute("SELECT COUNT(*) AS count FROM experimental.process_records").fetchone()["count"])
+    property_status, property_message = source_file_status(connection, "experimental_property_csv")
+    property_total = 0
+    if postgres_table_exists(connection, "experimental", "property_records"):
+        property_total = int(connection.execute("SELECT COUNT(*) AS count FROM experimental.property_records").fetchone()["count"])
+    structure_total = int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_properties").fetchone()["count"])
+    _, dft_total, _, _ = get_dft_browser_summary_postgres(connection)
+    formulation_total = int(connection.execute("SELECT COUNT(*) AS count FROM knowledge.formulation_records").fetchone()["count"])
+    for key, total, status, message, import_key in [
+        ("process", process_total, process_status, process_message, "experimental_process"),
+        ("property", property_total, property_status, property_message, "experimental_property"),
+        ("structureEffect", structure_total, "ready", None, "core"),
+        ("dft", dft_total, "ready", None, "dft"),
+        ("formulation", formulation_total, "ready", "Derived from knowledge.documents.", "knowledge"),
+    ]:
+        latest_status, latest_finished = _latest_import(connection, import_key)
+        items.append(
+            _summary_item(
+                key=key,
+                total_records=total,
+                data_source="postgres",
+                source_status=status,
+                source_message=message,
+                latest_import_status=latest_status,
+                latest_import_finished_at=latest_finished,
+            )
         )
-    except (csv.Error, OSError, UnicodeDecodeError) as exc:
-        raise HTTPException(status_code=503, detail=f"Failed to read CSV source: {exc}") from exc
+    return items
 
 
 def _normalize_query_smiles(smiles: str) -> str:
@@ -77,6 +158,7 @@ def _normalize_query_smiles(smiles: str) -> str:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@lru_cache(maxsize=512)
 def _lookup_structure_svg(smiles: str, canonical_smiles: str | None) -> str | None:
     return generate_2d_svg(canonical_smiles or smiles)
 
@@ -146,43 +228,96 @@ def _pi_candidate_lookup_result(row) -> SmilesLookupResult:
     )
 
 
+@router.get("/datasets/summary", response_model=DatasetSummaryResponse)
+def get_dataset_summaries(request: Request) -> DatasetSummaryResponse:
+    started_at = perf_counter()
+    _require_postgres_browser(request)
+    settings = request.app.state.settings
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            required = [
+                ("core", "polymers"),
+                ("core", "polymer_properties"),
+                ("knowledge", "documents"),
+                ("knowledge", "formulation_records"),
+                ("dft", "molecule_final"),
+                ("dft", "energy_trace"),
+                ("experimental", "process_records"),
+                ("experimental", "property_records"),
+            ]
+            missing = [f"{schema}.{table}" for schema, table in required if not postgres_table_exists(connection, schema, table)]
+            if missing:
+                raise HTTPException(status_code=503, detail=f"Postgres governed tables are missing: {', '.join(missing)}")
+            return DatasetSummaryResponse(
+                query_time_ms=(perf_counter() - started_at) * 1000,
+                backend="postgres",
+                datasets=_postgres_dataset_summaries(connection),
+            )
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+
+
+@router.get("/datasets/analytics", response_model=DatabaseAnalyticsResponse)
+def get_dataset_analytics(request: Request, refresh: bool = Query(default=False)) -> DatabaseAnalyticsResponse:
+    started_at = perf_counter()
+    _require_postgres_browser(request)
+
+    if not refresh:
+        return DatabaseAnalyticsResponse(
+            query_time_ms=(perf_counter() - started_at) * 1000,
+            backend="postgres",
+            source="snapshot",
+            generated_at=STATIC_DATABASE_ANALYTICS_GENERATED_AT,
+            datasets=get_database_analytics_snapshot(),
+        )
+
+    settings = request.app.state.settings
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            return DatabaseAnalyticsResponse(
+                query_time_ms=(perf_counter() - started_at) * 1000,
+                backend="postgres",
+                source="live",
+                generated_at=None,
+                datasets=get_database_analytics_postgres(connection),
+            )
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+
+
 @router.post("/smiles-lookup", response_model=SmilesLookupResponse)
 async def lookup_smiles(request_body: SmilesLookupRequest, request: Request) -> SmilesLookupResponse:
     started_at = perf_counter()
     query_smiles = request_body.smiles.strip()
     canonical_smiles = _normalize_query_smiles(query_smiles)
     settings = request.app.state.settings
+    _require_postgres_browser(request)
 
-    if request_body.table == "polymers":
-        with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-            total, rows = lookup_polymer_smiles(
-                connection,
-                query_smiles=query_smiles,
-                canonical_smiles=canonical_smiles,
-            )
-        results = [_polymer_lookup_result(row) for row in rows]
-    elif request_body.table == "properties":
-        with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-            total, rows = lookup_property_smiles(
-                connection,
-                query_smiles=query_smiles,
-                canonical_smiles=canonical_smiles,
-            )
-        results = [_property_lookup_result(row) for row in rows]
-    else:
-        if not settings.pi_reverse_db_file.exists():
-            raise HTTPException(
-                status_code=503,
-                detail=f"PI reverse-design database not found: {_source_file_label(settings.pi_reverse_db_file)}",
-            )
-
-        with request.app.state.sqlite_connection_factory(settings.pi_reverse_db_file) as connection:
-            total, rows = lookup_pi_candidate_smiles(
-                connection,
-                query_smiles=query_smiles,
-                canonical_smiles=canonical_smiles,
-            )
-        results = [_pi_candidate_lookup_result(row) for row in rows]
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if request_body.table == "polymers":
+                total, rows = lookup_polymer_smiles_postgres(
+                    connection,
+                    query_smiles=query_smiles,
+                    canonical_smiles=canonical_smiles,
+                )
+                results = [_polymer_lookup_result(row) for row in rows]
+            elif request_body.table == "properties":
+                total, rows = lookup_property_smiles_postgres(
+                    connection,
+                    query_smiles=query_smiles,
+                    canonical_smiles=canonical_smiles,
+                )
+                results = [_property_lookup_result(row) for row in rows]
+            else:
+                total, rows = lookup_pi_candidate_smiles_postgres(
+                    connection,
+                    query_smiles=query_smiles,
+                    canonical_smiles=canonical_smiles,
+                )
+                results = [_pi_candidate_lookup_result(row) for row in rows]
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
 
     return SmilesLookupResponse(
         query_smiles=query_smiles,
@@ -205,14 +340,25 @@ async def browse_structure_property(
     started_at = perf_counter()
     query = q.strip()
     settings = request.app.state.settings
+    _require_postgres_browser(request)
 
-    with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-        total_records, matched_records, rows = browse_structure_property_records(
-            connection,
-            query=query,
-            page=page,
-            page_size=page_size,
-        )
+    data_source = "postgres"
+    source_status = "ready"
+    source_message: str | None = None
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if not postgres_table_exists(connection, "core", "polymer_properties"):
+                raise RuntimeError("core.polymer_properties is missing")
+            total_records, matched_records, rows = browse_structure_property_records_postgres(
+                connection,
+                query=query,
+                page=page,
+                page_size=page_size,
+            )
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return StructurePropertyBrowseResponse(
         query=query,
@@ -221,12 +367,16 @@ async def browse_structure_property(
         query_time_ms=(perf_counter() - started_at) * 1000,
         total_records=total_records,
         matched_records=matched_records,
+        data_source=data_source,
+        source_status=source_status,
+        source_message=source_message,
         results=[
             StructurePropertyRecord(
                 property_id=int(row["property_id"]),
                 polymer_id=int(row["polymer_id"]),
                 smiles=row["smiles"],
                 canonical_smiles=row["canonical_smiles"],
+                property_category=row["property_category"],
                 property_name=row["property_name"],
                 property_value=row["property_value"],
                 property_value_num=row["property_value_num"],
@@ -248,14 +398,25 @@ async def browse_dft_molecule_records(
     started_at = perf_counter()
     query = q.strip()
     settings = request.app.state.settings
+    _require_postgres_browser(request)
 
-    with request.app.state.sqlite_connection_factory(settings.fumol_db_file) as connection:
-        total_records, matched_records, total_step_records, average_steps, max_steps, rows = browse_dft_molecules(
-            connection,
-            query=query,
-            page=page,
-            page_size=page_size,
-        )
+    data_source = "postgres"
+    source_status = "ready"
+    source_message: str | None = None
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if not (postgres_table_exists(connection, "dft", "molecule_final") and postgres_table_exists(connection, "dft", "energy_trace")):
+                raise RuntimeError("dft.molecule_final or dft.energy_trace is missing")
+            total_records, matched_records, total_step_records, average_steps, max_steps, rows = browse_dft_molecules_postgres(
+                connection,
+                query=query,
+                page=page,
+                page_size=page_size,
+            )
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return DftMoleculeBrowseResponse(
         query=query,
@@ -267,6 +428,9 @@ async def browse_dft_molecule_records(
         total_step_records=total_step_records,
         average_steps=average_steps,
         max_steps=max_steps,
+        data_source=data_source,
+        source_status=source_status,
+        source_message=source_message,
         results=[
             DftMoleculeBrowserRecord(
                 mol_id=row["mol_id"],
@@ -302,15 +466,26 @@ async def browse_dft_step_records(
     exact_mol_id = mol_id.strip() if mol_id is not None else ""
     query = exact_mol_id or q.strip()
     settings = request.app.state.settings
+    _require_postgres_browser(request)
 
-    with request.app.state.sqlite_connection_factory(settings.fumol_db_file) as connection:
-        total_records, matched_records, rows = browse_dft_energy_steps(
-            connection,
-            query=q.strip(),
-            mol_id=exact_mol_id or None,
-            page=page,
-            page_size=page_size,
-        )
+    data_source = "postgres"
+    source_status = "ready"
+    source_message: str | None = None
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if not postgres_table_exists(connection, "dft", "energy_trace"):
+                raise RuntimeError("dft.energy_trace is missing")
+            total_records, matched_records, rows = browse_dft_energy_steps_postgres(
+                connection,
+                query=q.strip(),
+                mol_id=exact_mol_id or None,
+                page=page,
+                page_size=page_size,
+            )
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return DftEnergyStepBrowseResponse(
         query=query,
@@ -319,6 +494,9 @@ async def browse_dft_step_records(
         query_time_ms=(perf_counter() - started_at) * 1000,
         total_records=total_records,
         matched_records=matched_records,
+        data_source=data_source,
+        source_status=source_status,
+        source_message=source_message,
         results=[
             DftEnergyStepRecord(
                 mol_id=row["mol_id"],
@@ -333,31 +511,91 @@ async def browse_dft_step_records(
     )
 
 
+@router.get("/formulation", response_model=FormulationBrowseResponse)
+def browse_formulation_records(
+    request: Request,
+    q: str = Query(default="", max_length=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> FormulationBrowseResponse:
+    started_at = perf_counter()
+    query = q.strip()
+    settings = request.app.state.settings
+    _require_postgres_browser(request)
+    data_source = "postgres"
+    source_status = "ready"
+    source_message: str | None = None
+
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if not postgres_table_exists(connection, "knowledge", "formulation_records"):
+                raise RuntimeError("knowledge.formulation_records is missing")
+            total_records, matched_records, rows = browse_formulation_records_postgres(
+                connection,
+                query=query,
+                page=page,
+                page_size=page_size,
+            )
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return FormulationBrowseResponse(
+        query=query,
+        page=page,
+        page_size=page_size,
+        query_time_ms=(perf_counter() - started_at) * 1000,
+        total_records=total_records,
+        matched_records=matched_records,
+        data_source=data_source,
+        source_status=source_status,
+        source_message=source_message,
+        results=[
+            FormulationRecord(
+                formulation_id=int(row["formulation_id"]),
+                knowledge_id=int(row["knowledge_id"]),
+                source_file=row["source_file"],
+                source_row_number=int(row["source_row_number"]),
+                polymer_iupac=row["polymer_iupac"],
+                formulation=row["formulation"],
+                catalyst=row["catalyst"],
+                temperature=row["temperature"],
+                reaction_time=row["reaction_time"],
+                solvent=row["solvent"],
+            )
+            for row in rows
+        ],
+    )
+
+
 @router.get("/experimental-process", response_model=ExperimentalProcessBrowseResponse)
 def browse_experimental_process_records(
+    request: Request,
     q: str = Query(default="", max_length=200),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
 ) -> ExperimentalProcessBrowseResponse:
     started_at = perf_counter()
     query = q.strip()
-    if not EXPERIMENTAL_PROCESS_CSV.exists():
-        return ExperimentalProcessBrowseResponse(
-            query=query,
-            page=page,
-            page_size=page_size,
-            query_time_ms=(perf_counter() - started_at) * 1000,
-            total_records=0,
-            matched_records=0,
-            results=[],
-        )
+    settings = request.app.state.settings
+    _require_postgres_browser(request)
 
-    total_records, matched_records, rows = _browse_csv_or_raise(
-        EXPERIMENTAL_PROCESS_CSV,
-        query=query,
-        page=page,
-        page_size=page_size,
-    )
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if not postgres_table_exists(connection, "experimental", "process_records"):
+                raise RuntimeError("experimental.process_records is missing")
+            total_records, matched_records, rows = browse_experimental_process_records_postgres(
+                connection,
+                query=query,
+                page=page,
+                page_size=page_size,
+            )
+            source_status, source_message = source_file_status(connection, "experimental_process_csv")
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return ExperimentalProcessBrowseResponse(
         query=query,
@@ -366,15 +604,18 @@ def browse_experimental_process_records(
         query_time_ms=(perf_counter() - started_at) * 1000,
         total_records=total_records,
         matched_records=matched_records,
+        data_source="postgres",
+        source_status=source_status,
+        source_message=source_message,
         results=[
             ExperimentalProcessRecord(
-                source_file=row.source_file,
-                source_row_number=row.source_row_number,
-                polymer_id=row.data.get("polymer_id", ""),
-                polymer_name=row.data.get("polymer_name", ""),
-                product_name=row.data.get("product_name", ""),
-                process_flow_original_text=row.data.get("process_flow_original_text", ""),
-                material_original_text=row.data.get("material_original_text", ""),
+                source_file=row["source_file"],
+                source_row_number=int(row["source_row_number"]),
+                polymer_id=row["polymer_id"] or "",
+                polymer_name=row["polymer_name"] or "",
+                product_name=row["product_name"] or "",
+                process_flow_original_text=row["process_flow_original_text"] or "",
+                material_original_text=row["material_original_text"] or "",
             )
             for row in rows
         ],
@@ -390,42 +631,24 @@ def browse_experimental_property_records(
 ) -> ExperimentalPropertyBrowseResponse:
     started_at = perf_counter()
     query = q.strip()
-    if not EXPERIMENTAL_PROPERTY_CSV.exists():
-        settings = request.app.state.settings
-        with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-            total_records, matched_records, rows = browse_structure_property_records(
+    settings = request.app.state.settings
+    _require_postgres_browser(request)
+
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if not postgres_table_exists(connection, "experimental", "property_records"):
+                raise RuntimeError("experimental.property_records is missing")
+            total_records, matched_records, rows = browse_experimental_property_records_postgres(
                 connection,
                 query=query,
                 page=page,
                 page_size=page_size,
             )
-
-        return ExperimentalPropertyBrowseResponse(
-            query=query,
-            page=page,
-            page_size=page_size,
-            query_time_ms=(perf_counter() - started_at) * 1000,
-            total_records=total_records,
-            matched_records=matched_records,
-            results=[
-                ExperimentalPropertyRecord(
-                    source_file="sqlite:properties",
-                    source_row_number=int(row["property_id"]),
-                    polymer_id=str(row["polymer_id"]),
-                    polymer_name="",
-                    property_name_en=row["property_name"],
-                    value=row["property_value"],
-                )
-                for row in rows
-            ],
-        )
-
-    total_records, matched_records, rows = _browse_csv_or_raise(
-        EXPERIMENTAL_PROPERTY_CSV,
-        query=query,
-        page=page,
-        page_size=page_size,
-    )
+            source_status, source_message = source_file_status(connection, "experimental_property_csv")
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return ExperimentalPropertyBrowseResponse(
         query=query,
@@ -434,14 +657,18 @@ def browse_experimental_property_records(
         query_time_ms=(perf_counter() - started_at) * 1000,
         total_records=total_records,
         matched_records=matched_records,
+        data_source="postgres",
+        source_status=source_status,
+        source_message=source_message,
         results=[
             ExperimentalPropertyRecord(
-                source_file=row.source_file,
-                source_row_number=row.source_row_number,
-                polymer_id=row.data.get("polymer_id", ""),
-                polymer_name=row.data.get("polymer_name", ""),
-                property_name_en=row.data.get("property_name_en", ""),
-                value=row.data.get("value", ""),
+                source_file=row["source_file"],
+                source_row_number=int(row["source_row_number"]),
+                polymer_id=row["polymer_id"] or "",
+                polymer_name=row["polymer_name"] or "",
+                property_category=row["property_category"] or None,
+                property_name_en=row["property_name_en"] or "",
+                value=row["value"] or "",
             )
             for row in rows
         ],

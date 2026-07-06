@@ -172,7 +172,7 @@ def test_generation_device_auto_falls_back_when_cuda_arch_is_unsupported() -> No
     torch_module = FakeTorch(FakeCuda(available=True, capability=(6, 1), arches=["sm_75", "sm_80"]))
 
     assert _resolve_device(torch_module, "auto") == "cpu"
-    with pytest.raises(ModelArtifactError, match="sm_61"):
+    with pytest.raises(ModelArtifactError, match="CUDA smoke test failed"):
         _resolve_device(torch_module, "cuda")
 
 

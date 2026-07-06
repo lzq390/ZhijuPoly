@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import Settings, get_settings
-from app.database import sqlite_connection
 from app.middleware import BrowserCrossSiteProtectionMiddleware
 from app.postgres_database import postgres_connection
 from app.routers.assistant import router as assistant_router
@@ -73,7 +72,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.state.settings = app_settings
-    app.state.sqlite_connection_factory = sqlite_connection
     app.state.postgres_connection_factory = postgres_connection
     app.state.reverse_design_job_manager = ReverseDesignJobManager(max_workers=app_settings.pi_reverse_job_workers)
     app.state.conditional_generation_job_manager = ConditionalGenerationJobManager(

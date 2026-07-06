@@ -10,13 +10,16 @@ from pydantic import ValidationError
 
 from app.models import AssistantChatStreamRequest
 from app.services.assistant_chat import AssistantChatConfigError, AssistantChatModelError, stream_assistant_image_chat
+from app.postgres_database import PostgresUnavailableError
 from app.services.assistant_orchestrator import stream_assistant_events
+from app.services.postgres_smiles_to_iupac import find_iupac_smiles_matches_postgres
 from app.services.image_recognition import validate_structure_image
 from app.utils.exceptions import InvalidImageError
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
+POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set STRUCTURED_DATA_BACKEND=postgres."
 
 
 @router.post("/chat/stream")
@@ -25,9 +28,15 @@ def stream_chat(
     request: Request,
 ) -> StreamingResponse:
     settings = request.app.state.settings
+    if settings.structured_data_backend != "postgres":
+        raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
 
     def events() -> Iterable[str]:
         try:
+            def iupac_match_finder(text: str):
+                with request.app.state.postgres_connection_factory(settings.pi_postgres_dsn) as connection:
+                    return find_iupac_smiles_matches_postgres(connection, text)
+
             for event in stream_assistant_events(
                 messages=request_body.messages,
                 modules=request_body.context.modules,
@@ -37,11 +46,12 @@ def stream_chat(
                 model=settings.assistant_model,
                 model_enabled=settings.model_enabled,
                 model_dir=settings.model_dir_path,
-                iupac_lookup_db_path=settings.pi_reverse_db_file,
-                sqlite_connection_factory=request.app.state.sqlite_connection_factory,
+                iupac_match_finder=iupac_match_finder,
             ):
                 yield _sse(event.event, event.payload)
         except AssistantChatConfigError as exc:
+            yield _sse("error", {"detail": str(exc)})
+        except PostgresUnavailableError as exc:
             yield _sse("error", {"detail": str(exc)})
         except AssistantChatModelError as exc:
             yield _sse("error", {"detail": f"Assistant model call failed: {_safe_error_detail(str(exc))}"})
@@ -102,6 +112,8 @@ async def stream_image_chat(
                 yield _sse("token", {"content": token})
             yield _sse("done", {"message": "".join(full_message)})
         except AssistantChatConfigError as exc:
+            yield _sse("error", {"detail": str(exc)})
+        except PostgresUnavailableError as exc:
             yield _sse("error", {"detail": str(exc)})
         except AssistantChatModelError as exc:
             yield _sse("error", {"detail": f"Assistant model call failed: {_safe_error_detail(str(exc))}"})

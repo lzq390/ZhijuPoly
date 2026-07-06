@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Iterable, Sequence
-from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -31,14 +29,10 @@ from app.services.assistant_skills.property_resolver import (
     PropertyResolutionUnsupported,
     normalize_prediction_property_arguments,
 )
-from app.services.smiles_to_iupac import (
-    IupacNameLookupAmbiguousError,
-    IupacSmilesMatch,
-    find_iupac_smiles_matches,
-)
+from app.services.smiles_to_iupac import IupacNameLookupAmbiguousError, IupacSmilesMatch
 
 
-SQLiteConnectionFactory = Callable[[str | Path], AbstractContextManager[sqlite3.Connection]]
+IupacMatchFinder = Callable[[str], list[IupacSmilesMatch]]
 
 
 @dataclass(frozen=True)
@@ -57,13 +51,11 @@ def stream_assistant_events(
     model: str,
     model_enabled: bool,
     model_dir: Path,
-    iupac_lookup_db_path: Path | None = None,
-    sqlite_connection_factory: SQLiteConnectionFactory | None = None,
+    iupac_match_finder: IupacMatchFinder | None = None,
 ) -> Iterable[AssistantStreamEvent]:
     normalized_messages, input_clarification = _normalize_iupac_structure_input(
         messages=messages,
-        iupac_lookup_db_path=iupac_lookup_db_path,
-        sqlite_connection_factory=sqlite_connection_factory,
+        iupac_match_finder=iupac_match_finder,
     )
     if input_clarification:
         yield from _emit_text(input_clarification)
@@ -221,23 +213,22 @@ def stream_assistant_events(
 def _normalize_iupac_structure_input(
     *,
     messages: Sequence[AssistantChatMessage],
-    iupac_lookup_db_path: Path | None,
-    sqlite_connection_factory: SQLiteConnectionFactory | None,
+    iupac_match_finder: IupacMatchFinder | None = None,
 ) -> tuple[list[AssistantChatMessage], str | None]:
     normalized_messages = list(messages)
-    if not normalized_messages or iupac_lookup_db_path is None or sqlite_connection_factory is None:
+    if not normalized_messages:
         return normalized_messages, None
 
     latest_message = normalized_messages[-1]
     if _has_resolved_structure_input(latest_message.content):
         return normalized_messages, None
-
-    if not iupac_lookup_db_path.exists():
-        return normalized_messages, _clarification_for_unmatched_iupac(latest_message.content)
+    if iupac_match_finder is None:
+        return normalized_messages, None
+    if not _should_lookup_iupac_name(latest_message.content):
+        return normalized_messages, None
 
     try:
-        with sqlite_connection_factory(iupac_lookup_db_path) as connection:
-            matches = find_iupac_smiles_matches(connection, latest_message.content)
+        matches = iupac_match_finder(latest_message.content)
     except IupacNameLookupAmbiguousError as exc:
         return normalized_messages, f"IUPAC 名称解析存在歧义：{exc}。请提供对应 SMILES。"
     except Exception as exc:
@@ -344,6 +335,10 @@ def _looks_like_missing_iupac_name(content: str) -> bool:
 def _looks_like_unresolved_iupac_request(content: str) -> bool:
     text = content.casefold()
     return _looks_like_structure_task(text) and _looks_like_iupac_name_text(text)
+
+
+def _should_lookup_iupac_name(content: str) -> bool:
+    return _looks_like_missing_iupac_name(content) or _looks_like_unresolved_iupac_request(content)
 
 
 def _looks_like_structure_task(text: str) -> bool:

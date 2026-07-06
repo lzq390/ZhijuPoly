@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import sqlite3
+from typing import Any
 
 from app.services.fingerprint import generate, tanimoto
 from app.utils.exceptions import InvalidSmilesError
 
 
-def similarity_search(
-    connection: sqlite3.Connection,
+def similarity_search_postgres(
+    connection: Any,
     smiles: str,
     similarity_threshold: float = 0.7,
     top_k: int = 10,
-) -> list[tuple[sqlite3.Row, float]]:
+) -> list[tuple[Any, float]]:
     try:
         query_fp = generate(smiles.strip())
     except ValueError as exc:
@@ -19,14 +19,14 @@ def similarity_search(
 
     polymer_rows = connection.execute(
         """
-        SELECT polymer_id, '' AS polymer_name, smiles, canonical_smiles, rdkit_parse_ok
-        FROM polymers
-        WHERE rdkit_parse_ok = 1
+        SELECT polymer_id, polymer_name, smiles, canonical_smiles, rdkit_parse_ok
+        FROM core.polymers
+        WHERE rdkit_parse_ok = true
         ORDER BY polymer_id
         """
     ).fetchall()
 
-    scored_rows: list[tuple[sqlite3.Row, float]] = []
+    scored_rows: list[tuple[Any, float]] = []
     for row in polymer_rows:
         source_smiles = row["canonical_smiles"] or row["smiles"]
 

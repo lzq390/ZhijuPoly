@@ -2,19 +2,21 @@ from __future__ import annotations
 
 from time import perf_counter
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from app.models import KnowledgeDocumentResult, KnowledgeSearchRequest, KnowledgeSearchResponse
+from app.postgres_database import PostgresUnavailableError
 from app.services.knowledge_search import (
     best_abstract_snippet_query,
     build_abstract_snippet,
     get_knowledge_match_metadata,
     normalize_search_terms,
-    search_knowledge_documents,
 )
+from app.services.postgres_knowledge_search import search_knowledge_documents_postgres
 
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
+POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set STRUCTURED_DATA_BACKEND=postgres."
 
 
 @router.post("/search", response_model=KnowledgeSearchResponse)
@@ -28,14 +30,20 @@ async def search_knowledge(
     page_size = request_body.page_size or request_body.top_k
     offset = (request_body.page - 1) * page_size
 
-    with request.app.state.sqlite_connection_factory(settings.sqlite_db_file) as connection:
-        total, rows = search_knowledge_documents(
-            connection,
-            request_body.query,
-            top_k=page_size,
-            offset=offset,
-            terms=search_terms,
-        )
+    if settings.structured_data_backend != "postgres":
+        raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
+
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            total, rows = search_knowledge_documents_postgres(
+                connection,
+                request_body.query,
+                top_k=page_size,
+                offset=offset,
+                terms=search_terms,
+            )
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
 
     elapsed_ms = (perf_counter() - started_at) * 1000
     results: list[KnowledgeDocumentResult] = []

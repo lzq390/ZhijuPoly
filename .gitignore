@@ -14,6 +14,7 @@ backend/.env
 *.db
 *.sqlite
 *.sqlite3
+/backend/data/archive/
 
 # Local conditional-generation model artifacts, including local symlinks.
 /model/conditional_generation
@@ -52,13 +53,15 @@ nexpoly-release-*.tar.gz
 
 # Local one-off scripts and tests
 /scripts/build_pi_reverse_design_sqlite.py
-/scripts/import_polyprop_pi_postgres.py
+/scripts/import_nexpoly_postgres.py
 /scripts/prepare_pi_reverse_design_demo_data.py
 /scripts/prepare_pi_reverse_design_test_data.py
 /backend/tests/*
 !/backend/tests/test_assistant.py
 !/backend/tests/test_md_demo.py
 !/backend/tests/test_smiles_standardization.py
+!/backend/tests/test_postgres_governance.py
+!/backend/tests/README.md
 
 # Local dev server runtime files
 /*.log

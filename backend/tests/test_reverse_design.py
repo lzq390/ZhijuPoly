@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from time import sleep
 
 import pytest
@@ -10,9 +9,6 @@ from pydantic import ValidationError
 from starlette.requests import Request
 
 from app.config import Settings
-from app.database import sqlite_connection
-from app.import_pi_candidates import import_pi_candidates_to_sqlite
-from app.main import create_app
 from app.models import ReverseDesignTgRequest, ReverseDesignTgResponse
 from app.routers.reverse_design import _search_by_tg_response, search_by_tg
 from app.services.fingerprint import fingerprint_to_bytes, generate, tanimoto
@@ -21,7 +17,6 @@ from app.services.postgres_reverse_design import (
     search_reverse_design_by_tg_postgres,
 )
 from app.services.reverse_design_jobs import ReverseDesignJobManager
-from app.services.reverse_design import search_reverse_design_by_tg
 
 
 def make_request(app: FastAPI) -> Request:
@@ -37,137 +32,18 @@ def make_request(app: FastAPI) -> Request:
     )
 
 
-def write_pi_csv(path: Path) -> None:
-    path.write_text(
-        "\n".join(
-            [
-                "id,mon1,mon2,polym,tg_celsius",
-                "1,CCO,CCN,CCO,100",
-                "2,CCO,CCC,CCO,125",
-                "3,CCN,CCC,CCN,90",
-                "4,CCO,CCC,not-a-smiles,80",
-                "5,CCC,CCO,CCC,130",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-
-def write_pi_iupac_csv(path: Path) -> None:
-    path.write_text(
-        "\n".join(
-            [
-                "id,mon1,mon1_iupac,mon2,mon2_iupac,polym,tg_celsius",
-                "1,CCO,ethanol,CCN,ethanamine,CCO,100",
-                "2,CCO,ethanol,CCC,propane,CCO,125",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-
-def build_reverse_design_app(tmp_path: Path, *, progress_interval_rows: int | None = None) -> FastAPI:
-    csv_path = tmp_path / "pi.csv"
-    main_db_path = tmp_path / "polyprop.db"
-    pi_db_path = tmp_path / "pi.db"
-    write_pi_csv(csv_path)
-    import_pi_candidates_to_sqlite(csv_path=csv_path, db_path=pi_db_path, progress_interval=0)
-
-    settings = Settings(
-        sqlite_db_path=str(main_db_path),
-        csv_source_path=str(tmp_path / "source.csv"),
-        pi_reverse_db_path=str(pi_db_path),
-        pi_reverse_csv_path=str(csv_path),
-        pi_reverse_backend="sqlite",
-        pi_reverse_progress_interval_rows=progress_interval_rows,
-        allowed_origins="http://localhost:5173",
-        model_enabled=False,
-    )
-    return create_app(settings)
-
-
-def test_reverse_design_service_sorts_sample_by_tg_difference(tmp_path: Path) -> None:
-    csv_path = tmp_path / "pi.csv"
-    db_path = tmp_path / "pi.db"
-    write_pi_csv(csv_path)
-    import_pi_candidates_to_sqlite(csv_path=csv_path, db_path=db_path, progress_interval=0)
-
-    with sqlite_connection(db_path) as connection:
-        result = search_reverse_design_by_tg(
-            connection,
-            "CCO",
-            120,
-            similarity_threshold=0.0,
-            candidate_sample_size=10,
-            top_k=3,
-            random_seed=1,
-        )
-
-    assert result.candidate_pool_size == 4
-    assert result.sampled_candidate_count == 4
-    assert result.scanned_rows == 4
-    assert [candidate.pi_id for candidate in result.results] == [2, 5, 1]
-    assert result.results[0].tg_difference == 5
-
-
-def test_reverse_design_service_returns_top_matches_by_tg_difference(tmp_path: Path) -> None:
-    csv_path = tmp_path / "pi.csv"
-    db_path = tmp_path / "pi.db"
-    write_pi_csv(csv_path)
-    import_pi_candidates_to_sqlite(csv_path=csv_path, db_path=db_path, progress_interval=0)
-
-    with sqlite_connection(db_path) as connection:
-        result = search_reverse_design_by_tg(
-            connection,
-            "CCO",
-            120,
-            similarity_threshold=0.0,
-            candidate_sample_size=2,
-            top_k=2,
-        )
-
-    assert result.candidate_pool_size == 4
-    assert result.sampled_candidate_count == 4
-    assert [candidate.pi_id for candidate in result.results] == [2, 5]
-
-
-def test_reverse_design_service_reports_sqlite_scan_progress(tmp_path: Path) -> None:
-    csv_path = tmp_path / "pi.csv"
-    db_path = tmp_path / "pi.db"
-    write_pi_csv(csv_path)
-    import_pi_candidates_to_sqlite(csv_path=csv_path, db_path=db_path, progress_interval=0)
-    progress_events: list[dict[str, object]] = []
-
-    with sqlite_connection(db_path) as connection:
-        result = search_reverse_design_by_tg(
-            connection,
-            "CCO",
-            120,
-            similarity_threshold=0.0,
-            top_k=2,
-            progress_callback=lambda **progress: progress_events.append(progress),
-            progress_interval_rows=2,
-        )
-
-    assert result.scanned_rows == 4
-    assert [event["scanned_rows"] for event in progress_events] == [2, 4]
-    assert progress_events[-1]["matched_count"] == 4
-    assert progress_events[-1]["best_similarity_score"] is not None
-
-
-def test_reverse_design_sqlite_route_forwards_scan_progress(tmp_path: Path) -> None:
-    app = build_reverse_design_app(tmp_path, progress_interval_rows=2)
+def test_reverse_design_route_forwards_postgres_scan_progress(test_app: FastAPI) -> None:
     progress_events: list[dict[str, object]] = []
 
     response = _search_by_tg_response(
-        ReverseDesignTgRequest(smiles="CCO", target_tg=120, similarity_threshold=0.0),
-        app,
+        ReverseDesignTgRequest(smiles="CCO", target_tg=215, similarity_threshold=0.0, candidate_size=1),
+        test_app,
         progress_callback=lambda **progress: progress_events.append(progress),
     )
 
-    assert response.total == 4
-    assert [event["scanned_rows"] for event in progress_events[:2]] == [2, 4]
-    assert progress_events[-1]["scanned_rows"] == 4
+    assert response.total == 1
+    assert response.results[0].pi_id == 7
+    assert progress_events[-1]["scanned_rows"] >= 1
 
 
 class FakePostgresCursor:
@@ -371,16 +247,15 @@ def test_reverse_design_job_manager_reports_found_enough_status() -> None:
     manager.shutdown(wait=True)
 
 
-def test_reverse_design_job_api_returns_terminal_status(tmp_path: Path) -> None:
-    app = build_reverse_design_app(tmp_path)
-
-    with TestClient(app) as client:
+def test_reverse_design_job_api_returns_terminal_status(test_app: FastAPI) -> None:
+    with TestClient(test_app) as client:
         response = client.post(
             "/api/v1/reverse-design/tg/jobs",
             json={
                 "smiles": "CCO",
-                "target_tg": 120,
+                "target_tg": 215,
                 "similarity_threshold": 0.0,
+                "candidate_size": 1,
             },
         )
         assert response.status_code == 202
@@ -396,9 +271,9 @@ def test_reverse_design_job_api_returns_terminal_status(tmp_path: Path) -> None:
             sleep(0.05)
 
         assert status_payload is not None
-        assert status_payload["status"] == "exhausted"
-        assert status_payload["scanned_rows"] == 4
-        assert status_payload["result"]["total"] == 4
+        assert status_payload["status"] == "found_enough"
+        assert status_payload["scanned_rows"] >= 1
+        assert status_payload["result"]["total"] == 1
 
 
 def test_reverse_design_request_ignores_removed_client_limits() -> None:
@@ -440,26 +315,25 @@ def test_reverse_design_request_rejects_unknown_extra_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reverse_design_api_returns_candidates(tmp_path: Path) -> None:
-    app = build_reverse_design_app(tmp_path)
-    request = make_request(app)
+async def test_reverse_design_api_returns_candidates(test_app: FastAPI) -> None:
+    request = make_request(test_app)
 
     response = await search_by_tg(
         ReverseDesignTgRequest(
             smiles="CCO",
-            target_tg=120,
+            target_tg=215,
             similarity_threshold=0.0,
-            candidate_size=2,
+            candidate_size=1,
         ),
         request,
     )
 
-    assert response.target_tg == 120
-    assert response.candidate_pool_size == 4
-    assert response.sampled_candidate_count == 4
-    assert response.total == 2
+    assert response.target_tg == 215
+    assert response.candidate_pool_size == 1
+    assert response.sampled_candidate_count >= 1
+    assert response.total == 1
     assert response.results[0].rank == 1
-    assert response.results[0].pi_id == 2
+    assert response.results[0].pi_id == 7
     assert response.results[0].structure_svg is not None
     assert response.results[0].monomer_a_structure_svg is not None
     assert response.results[0].monomer_b_structure_svg is not None
@@ -468,42 +342,26 @@ async def test_reverse_design_api_returns_candidates(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reverse_design_api_returns_candidate_iupac_names(tmp_path: Path) -> None:
-    csv_path = tmp_path / "pi.csv"
-    main_db_path = tmp_path / "polyprop.db"
-    pi_db_path = tmp_path / "pi.db"
-    write_pi_iupac_csv(csv_path)
-    import_pi_candidates_to_sqlite(csv_path=csv_path, db_path=pi_db_path, progress_interval=0)
-
-    settings = Settings(
-        sqlite_db_path=str(main_db_path),
-        csv_source_path=str(tmp_path / "source.csv"),
-        pi_reverse_db_path=str(pi_db_path),
-        pi_reverse_csv_path=str(csv_path),
-        pi_reverse_backend="sqlite",
-        allowed_origins="http://localhost:5173",
-        model_enabled=False,
-    )
-    app = create_app(settings)
-    request = make_request(app)
+async def test_reverse_design_api_returns_candidate_iupac_names(test_app: FastAPI) -> None:
+    request = make_request(test_app)
 
     response = await search_by_tg(
         ReverseDesignTgRequest(
             smiles="CCO",
-            target_tg=120,
+            target_tg=215,
             similarity_threshold=0.0,
+            candidate_size=1,
         ),
         request,
     )
 
-    assert response.results[0].monomer_a_iupac == "ethanol"
-    assert response.results[0].monomer_b_iupac == "propane"
+    assert response.results[0].monomer_a_iupac == "ethane-1,2-diamine"
+    assert response.results[0].monomer_b_iupac == "carbon dioxide"
 
 
 @pytest.mark.asyncio
-async def test_reverse_design_api_rejects_invalid_smiles(tmp_path: Path) -> None:
-    app = build_reverse_design_app(tmp_path)
-    request = make_request(app)
+async def test_reverse_design_api_rejects_invalid_smiles(test_app: FastAPI) -> None:
+    request = make_request(test_app)
 
     with pytest.raises(HTTPException) as exc_info:
         await search_by_tg(
@@ -518,27 +376,10 @@ async def test_reverse_design_api_rejects_invalid_smiles(tmp_path: Path) -> None
     assert "invalid smiles" in exc_info.value.detail
 
 
-@pytest.mark.asyncio
-async def test_reverse_design_api_reports_uninitialized_database(tmp_path: Path) -> None:
-    settings = Settings(
-        sqlite_db_path=str(tmp_path / "polyprop.db"),
-        csv_source_path=str(tmp_path / "source.csv"),
-        pi_reverse_db_path=str(tmp_path / "empty_pi.db"),
-        pi_reverse_backend="sqlite",
-        allowed_origins="http://localhost:5173",
-        model_enabled=False,
-    )
-    app = create_app(settings)
-    request = make_request(app)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await search_by_tg(
-            ReverseDesignTgRequest(
-                smiles="CCO",
-                target_tg=120,
-            ),
-            request,
+def test_settings_rejects_sqlite_reverse_design_backend() -> None:
+    with pytest.raises(ValueError, match="PI_REVERSE_BACKEND must be 'postgres'"):
+        Settings(
+            pi_reverse_backend="sqlite",
+            allowed_origins="http://localhost:5173",
+            model_enabled=False,
         )
-
-    assert exc_info.value.status_code == 503
-    assert "not initialized" in exc_info.value.detail

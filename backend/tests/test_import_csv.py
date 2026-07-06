@@ -5,6 +5,8 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from app.config import PROJECT_ROOT, Settings
 from app.import_csv import import_csv_to_sqlite
 
@@ -92,6 +94,21 @@ def test_settings_load_backend_dotenv(tmp_path: Path) -> None:
     assert settings.csv_source_file == PROJECT_ROOT / "tmp" / "source.csv"
     assert settings.allowed_origins_list == ["http://localhost:9000", "http://localhost:9001"]
     assert settings.model_enabled is True
+
+
+def test_settings_default_runtime_backends_are_postgres() -> None:
+    settings = Settings()
+
+    assert settings.structured_data_backend == "postgres"
+    assert settings.pi_reverse_backend == "postgres"
+
+
+def test_settings_rejects_sqlite_runtime_backends() -> None:
+    with pytest.raises(ValueError, match="STRUCTURED_DATA_BACKEND must be 'postgres'"):
+        Settings(structured_data_backend="sqlite")
+
+    with pytest.raises(ValueError, match="PI_REVERSE_BACKEND must be 'postgres'"):
+        Settings(pi_reverse_backend="sqlite")
 
 
 def test_import_csv_creates_schema_and_imports_data(tmp_path: Path) -> None:
