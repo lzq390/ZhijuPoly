@@ -722,6 +722,7 @@ export type StructurePropertyRecord = {
   polymer_id: number;
   smiles: string;
   canonical_smiles: string | null;
+  property_category: string;
   property_name: string;
   property_value: string;
   property_value_num: number | null;
@@ -736,6 +737,9 @@ export type StructurePropertyBrowseResponse = {
   query_time_ms: number;
   total_records: number;
   matched_records: number;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
   results: StructurePropertyRecord[];
 };
 
@@ -767,6 +771,9 @@ export type DftMoleculeBrowseResponse = {
   total_step_records: number;
   average_steps: number;
   max_steps: number;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
   results: DftMoleculeBrowserRecord[];
 };
 
@@ -786,6 +793,9 @@ export type DftEnergyStepBrowseResponse = {
   query_time_ms: number;
   total_records: number;
   matched_records: number;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
   results: DftEnergyStepRecord[];
 };
 
@@ -806,6 +816,9 @@ export type ExperimentalProcessBrowseResponse = {
   query_time_ms: number;
   total_records: number;
   matched_records: number;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
   results: ExperimentalProcessRecord[];
 };
 
@@ -814,6 +827,7 @@ export type ExperimentalPropertyRecord = {
   source_row_number: number;
   polymer_id: string;
   polymer_name: string;
+  property_category: string | null;
   property_name_en: string;
   value: string;
 };
@@ -825,7 +839,61 @@ export type ExperimentalPropertyBrowseResponse = {
   query_time_ms: number;
   total_records: number;
   matched_records: number;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
   results: ExperimentalPropertyRecord[];
+};
+
+export type FormulationRecord = {
+  formulation_id: number;
+  knowledge_id: number;
+  source_file: string;
+  source_row_number: number;
+  polymer_iupac: string | null;
+  formulation: string | null;
+  catalyst: string | null;
+  temperature: string | null;
+  reaction_time: string | null;
+  solvent: string | null;
+};
+
+export type FormulationBrowseResponse = {
+  query: string;
+  page: number;
+  page_size: number;
+  query_time_ms: number;
+  total_records: number;
+  matched_records: number;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
+  results: FormulationRecord[];
+};
+
+export type DatasetSummaryItem = {
+  key: string;
+  title: string;
+  total_records: number;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
+  latest_import_status: string | null;
+  latest_import_finished_at: string | null;
+};
+
+export type DatasetSummaryResponse = {
+  query_time_ms: number;
+  backend: string;
+  datasets: DatasetSummaryItem[];
+};
+
+export type DatabaseAnalyticsResponse = {
+  query_time_ms: number;
+  backend: string;
+  source: string;
+  generated_at: string | null;
+  datasets: Record<string, unknown>;
 };
 
 export type DftPcaPoint = {

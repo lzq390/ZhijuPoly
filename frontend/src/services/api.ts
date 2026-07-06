@@ -7,12 +7,15 @@ import type {
   ConditionalGenerationJobStatusResponse,
   ConditionalGenerationTgRequest,
   ConditionalGenerationTgStatusResponse,
+  DatabaseAnalyticsResponse,
+  DatasetSummaryResponse,
   DftEnergyStepBrowseResponse,
   DftMoleculeDetail,
   DftMoleculeBrowseResponse,
   DftPcaSampleResponse,
   ExperimentalProcessBrowseResponse,
   ExperimentalPropertyBrowseResponse,
+  FormulationBrowseResponse,
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
   LabDataProjectStats,
@@ -414,6 +417,22 @@ export function browseDftEnergySteps(params: {
   page_size?: number;
 }): Promise<DftEnergyStepBrowseResponse> {
   return getJSON(`/database-browser/dft/steps${buildQueryString(params)}`);
+}
+
+export function fetchDatabaseDatasetSummary(): Promise<DatasetSummaryResponse> {
+  return getJSON("/database-browser/datasets/summary");
+}
+
+export function fetchDatabaseAnalytics(options?: { refresh?: boolean }): Promise<DatabaseAnalyticsResponse> {
+  return getJSON(`/database-browser/datasets/analytics${options?.refresh ? "?refresh=true" : ""}`);
+}
+
+export function browseFormulationRecords(params: {
+  q?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<FormulationBrowseResponse> {
+  return getJSON(`/database-browser/formulation${buildQueryString(params)}`);
 }
 
 export function browseExperimentalProcessRecords(params: {

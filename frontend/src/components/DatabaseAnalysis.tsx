@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -12,6 +12,7 @@ import {
   Network,
   Orbit,
   PieChart,
+  RefreshCw,
   Search,
   Sigma,
   TableProperties,
@@ -22,17 +23,22 @@ import {
   browseDftMolecules,
   browseExperimentalProcessRecords,
   browseExperimentalPropertyRecords,
+  browseFormulationRecords,
   browseStructurePropertyRecords,
+  fetchDatabaseAnalytics,
+  fetchDatabaseDatasetSummary,
   fetchDftMolecule,
   fetchDftPcaSample
 } from "../services/api";
 import type {
+  DatasetSummaryResponse,
   DftEnergyStepBrowseResponse,
   DftMoleculeBrowseResponse,
   DftMoleculeDetail,
   DftPcaPoint,
   ExperimentalProcessBrowseResponse,
   ExperimentalPropertyBrowseResponse,
+  FormulationBrowseResponse,
   StructurePropertyBrowseResponse
 } from "../types";
 import { Badge } from "./ui/badge";
@@ -543,6 +549,259 @@ const datasets = [
   }
 ];
 
+type DatasetDefinition = (typeof datasets)[number];
+type DisplayDataset = Omit<DatasetDefinition, "status" | "recordCount"> & {
+  status: "Ready" | "Reserved";
+  recordCount: number | null;
+  sourceStatus?: string;
+  sourceMessage?: string | null;
+  latestImportStatus?: string | null;
+  latestImportFinishedAt?: string | null;
+};
+
+type DatabaseAnalyticsPayload = Partial<{
+  process: typeof processData;
+  property: typeof propertyData;
+  structureEffect: typeof structureEffectData;
+  dft: typeof dftData;
+  formulation: typeof formulationData;
+}>;
+
+type DatasetPageProps = {
+  onBackHome: () => void;
+  onBackDatabase: () => void;
+  dataset: DisplayDataset;
+  analytics: DatabaseAnalyticsPayload | null;
+  analyticsLoading: boolean;
+  analyticsRefreshing: boolean;
+  analyticsError: string | null;
+  analyticsSource: string | null;
+  analyticsGeneratedAt: string | null;
+  onRefreshAnalytics: () => void;
+};
+
+function useDatabaseDatasetSummary() {
+  const [summary, setSummary] = useState<DatasetSummaryResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetchDatabaseDatasetSummary()
+      .then((response) => {
+        if (!cancelled) {
+          setSummary(response);
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) {
+          setSummary(null);
+          setError(nextError instanceof Error ? nextError.message : "Failed to load database source status");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return { summary, loading, error };
+}
+
+
+function useDatabaseAnalytics() {
+  const [analytics, setAnalytics] = useState<DatabaseAnalyticsPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<string | null>(null);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  const loadAnalytics = useCallback((refresh = false) => {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError(null);
+
+    return fetchDatabaseAnalytics({ refresh })
+      .then((response) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        setAnalytics(response.datasets as DatabaseAnalyticsPayload);
+        setSource(response.source);
+        setGeneratedAt(response.generated_at ?? null);
+      })
+      .catch((nextError) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        if (!refresh) {
+          setAnalytics(null);
+        }
+        setError(nextError instanceof Error ? nextError.message : "Failed to load database analytics");
+      })
+      .finally(() => {
+        if (!mountedRef.current) {
+          return;
+        }
+        if (refresh) {
+          setRefreshing(false);
+        } else {
+          setLoading(false);
+        }
+      });
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void loadAnalytics(false);
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [loadAnalytics]);
+
+  return { analytics, loading, refreshing, error, source, generatedAt, refresh: () => void loadAnalytics(true) };
+}
+
+function emptyAnalyticsValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return [] as T;
+  }
+  if (typeof value === "number") {
+    return 0 as T;
+  }
+  if (typeof value === "string") {
+    return "" as T;
+  }
+  if (typeof value === "boolean") {
+    return false as T;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [key, emptyAnalyticsValue(nestedValue)])
+    ) as T;
+  }
+  return value;
+}
+
+function mergeAnalyticsData<T extends object>(schema: T, override: Partial<T> | undefined): T {
+  const emptySchema = emptyAnalyticsValue(schema);
+  return override ? { ...emptySchema, ...override } : emptySchema;
+}
+
+function componentBucketValue(label: string) {
+  if (label === "8+") return 8;
+  const value = Number.parseInt(label, 10);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function averageComponentCount(data: typeof formulationData.componentCounts) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  if (!total) return "0";
+  const weighted = data.reduce((sum, item) => sum + componentBucketValue(item.label) * item.value, 0);
+  return formatNumber(weighted / total, 2);
+}
+
+function medianComponentCount(data: typeof formulationData.componentCounts) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  if (!total) return "0";
+  const midpoint = total / 2;
+  let running = 0;
+  for (const item of data) {
+    running += item.value;
+    if (running >= midpoint) {
+      return item.label;
+    }
+  }
+  return data[data.length - 1]?.label ?? "0";
+}
+
+function resolveDatasets(summary: DatasetSummaryResponse | null, summaryError: string | null): DisplayDataset[] {
+  if (summaryError) {
+    return datasets.map((dataset) => ({
+      ...dataset,
+      recordCount: null,
+      status: "Reserved" as const,
+      sourceStatus: "unavailable",
+      sourceMessage: summaryError
+    }));
+  }
+
+  const summaryByKey = new Map(summary?.datasets.map((item) => [item.key, item]) ?? []);
+
+  return datasets.map((dataset) => {
+    const item = summaryByKey.get(dataset.key);
+    if (!item) {
+      return summary
+        ? {
+            ...dataset,
+            recordCount: null,
+            status: "Reserved" as const,
+            sourceStatus: "unknown",
+            sourceMessage: "Dataset was not reported by the source status endpoint."
+          }
+        : {
+            ...dataset,
+            recordCount: null,
+            status: "Reserved" as const,
+            sourceStatus: "loading",
+            sourceMessage: "Checking database source status..."
+          };
+    }
+
+    return {
+      ...dataset,
+      recordCount: item.total_records,
+      status: item.source_status === "missing" ? ("Reserved" as const) : ("Ready" as const),
+      sourceStatus: item.source_status,
+      sourceMessage: item.source_message,
+      latestImportStatus: item.latest_import_status,
+      latestImportFinishedAt: item.latest_import_finished_at
+    };
+  });
+}
+
+
+function getDisplayDataset(displayDatasets: DisplayDataset[], key: DatasetKey): DisplayDataset {
+  const match = displayDatasets.find((dataset) => dataset.key === key);
+  if (match) {
+    return match;
+  }
+
+  const fallback = datasets.find((dataset) => dataset.key === key);
+  if (!fallback) {
+    throw new Error(`Unknown dataset key: ${key}`);
+  }
+
+  return {
+    ...fallback,
+    recordCount: null,
+    status: "Reserved" as const,
+    sourceStatus: "unknown",
+    sourceMessage: "Dataset was not reported by the source status endpoint."
+  };
+}
+
+function formatImportMeta(dataset: DisplayDataset) {
+  if (dataset.latestImportStatus) {
+    const importedAt = dataset.latestImportFinishedAt ? new Date(dataset.latestImportFinishedAt) : null;
+    const timeLabel = importedAt && !Number.isNaN(importedAt.getTime()) ? importedAt.toLocaleString() : null;
+    return timeLabel ? `Import ${dataset.latestImportStatus} - ${timeLabel}` : `Import ${dataset.latestImportStatus}`;
+  }
+
+  return dataset.sourceMessage ?? (dataset.status === "Reserved" ? "Source unavailable" : "Import metadata pending");
+}
+
 function formatCount(value: number | null) {
   return value === null ? "Reserved" : new Intl.NumberFormat("en-US").format(value);
 }
@@ -626,8 +885,19 @@ function ChartPanel({
   );
 }
 
+function ChartEmptyState({ message = "No chart data returned from Postgres." }: { message?: string }) {
+  return (
+    <div className="flex min-h-[180px] items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50/70 px-4 py-8 text-center text-sm leading-6 text-slate-500">
+      {message}
+    </div>
+  );
+}
+
 function HorizontalBars({ data, valueLabel = "count" }: { data: RankedItem[]; valueLabel?: string }) {
-  const max = Math.max(...data.map((item) => item.value));
+  if (!data.length) {
+    return <ChartEmptyState />;
+  }
+  const max = Math.max(1, ...data.map((item) => item.value));
 
   return (
     <div className="space-y-4">
@@ -691,7 +961,7 @@ function CoverageSignals({
     <div className="flex h-full flex-1 flex-col justify-between gap-4">
       <div className="space-y-4">
         {data.map((item, index) => {
-          const ratio = (item.value / item.total) * 100;
+          const ratio = item.total > 0 ? (item.value / item.total) * 100 : 0;
           return (
             <div key={item.label} className="grid grid-cols-[minmax(7rem,10rem)_minmax(0,1fr)_5.75rem] items-center gap-3">
               <div className="truncate text-sm font-medium text-slate-700" title={item.label}>
@@ -787,6 +1057,9 @@ function CategoryRepresentativeCards({
 
 function DonutChart({ data }: { data: DonutItem[] }) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
+  if (!data.length || total <= 0) {
+    return <ChartEmptyState />;
+  }
   let offset = 0;
 
   return (
@@ -832,6 +1105,9 @@ function DonutChart({ data }: { data: DonutItem[] }) {
 
 function DonutChartWithSummary({ data, topLabel = "top segment" }: { data: DonutItem[]; topLabel?: string }) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
+  if (!data.length || total <= 0) {
+    return <ChartEmptyState />;
+  }
   const topItem = data.reduce((current, item) => (item.value > current.value ? item : current), data[0]);
   const topThreeShare = data
     .slice(0, 3)
@@ -851,6 +1127,9 @@ function DonutChartWithSummary({ data, topLabel = "top segment" }: { data: Donut
 
 function AtomCompositionCompact({ data }: { data: DonutItem[] }) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
+  if (!data.length || total <= 0) {
+    return <ChartEmptyState />;
+  }
   const topItem = data.reduce((current, item) => (item.value > current.value ? item : current), data[0]);
   const topThreeShare = data.slice(0, 3).reduce((sum, item) => sum + item.value, 0) / total * 100;
 
@@ -897,10 +1176,13 @@ function AtomCompositionCompact({ data }: { data: DonutItem[] }) {
 }
 
 function OrbitalDistributionChart({ data }: { data: OrbitalDistribution[] }) {
+  if (!data.length) {
+    return <ChartEmptyState />;
+  }
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       {data.map((series) => {
-        const peak = Math.max(...series.bins.map((bin) => bin.value));
+        const peak = Math.max(1, ...series.bins.map((bin) => bin.value));
 
         return (
           <div key={series.label} className="flex h-full flex-col gap-4 rounded-[24px] bg-[linear-gradient(180deg,#fbfdff_0%,#eef5f6_100%)] p-4">
@@ -950,7 +1232,10 @@ function OrbitalDistributionChart({ data }: { data: OrbitalDistribution[] }) {
 }
 
 function BubbleCloud({ data }: { data: RankedItem[] }) {
-  const max = Math.max(...data.map((item) => item.value));
+  if (!data.length) {
+    return <ChartEmptyState />;
+  }
+  const max = Math.max(1, ...data.map((item) => item.value));
 
   return (
     <div className="flex min-h-[260px] flex-wrap content-center items-center justify-center gap-3 rounded-[24px] bg-[radial-gradient(circle_at_top,rgba(20,184,166,0.12),transparent_34%),linear-gradient(180deg,#f8fafc_0%,#eef5f6_100%)] p-5">
@@ -975,6 +1260,9 @@ function BubbleCloud({ data }: { data: RankedItem[] }) {
 }
 
 function CoverageGrid({ data }: { data: typeof formulationData.coverage }) {
+  if (!data.length) {
+    return <ChartEmptyState message="No field coverage returned from Postgres." />;
+  }
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       {data.map((item) => (
@@ -997,6 +1285,9 @@ function CoverageGrid({ data }: { data: typeof formulationData.coverage }) {
 
 function ComponentDistribution({ data }: { data: RankedItem[] }) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
+  if (!data.length || total <= 0) {
+    return <ChartEmptyState />;
+  }
   const peak = data.reduce((current, item) => (item.value > current.value ? item : current), data[0]);
 
   return (
@@ -1054,6 +1345,9 @@ function ComponentDistribution({ data }: { data: RankedItem[] }) {
 }
 
 function FormulaExamples({ data }: { data: typeof formulationData.examples }) {
+  if (!data.length) {
+    return <ChartEmptyState message="No formulation examples returned from Postgres." />;
+  }
   return (
     <div className="grid flex-1 grid-rows-2 gap-3">
       {data.map((item, index) => (
@@ -1076,6 +1370,9 @@ function FormulaExamples({ data }: { data: typeof formulationData.examples }) {
 }
 
 function RangePlot({ data }: { data: RangeItem[] }) {
+  if (!data.length) {
+    return <ChartEmptyState />;
+  }
   return (
     <div className="space-y-5">
       {data.map((item) => {
@@ -1114,8 +1411,8 @@ function RangePlot({ data }: { data: RangeItem[] }) {
   );
 }
 
-function SourceMatrix() {
-  const max = Math.max(...structureEffectData.sourceMatrix.flatMap((item) => [item.exp, item.sim, item.na]));
+function SourceMatrix({ data }: { data: typeof structureEffectData }) {
+  const max = Math.max(1, ...data.sourceMatrix.flatMap((item) => [item.exp, item.sim, item.na]));
   const columns = [
     { key: "exp" as const, label: "experimental" },
     { key: "sim" as const, label: "simulated" },
@@ -1133,7 +1430,7 @@ function SourceMatrix() {
             </span>
           ))}
         </div>
-        {structureEffectData.sourceMatrix.map((row) => (
+        {data.sourceMatrix.map((row) => (
           <div key={row.label} className="grid grid-cols-[9rem_repeat(3,1fr)] gap-2">
             <div className="truncate rounded-xl bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700" title={row.label}>
               {row.label}
@@ -1157,14 +1454,17 @@ function SourceMatrix() {
   );
 }
 
-function SourceMatrixWithSummary() {
-  const total = structureEffectData.sources.reduce((sum, item) => sum + item.value, 0);
-  const topSource = structureEffectData.sources.reduce((current, item) => (item.value > current.value ? item : current), structureEffectData.sources[0]);
-  const simulated = structureEffectData.sources.find((item) => item.label === "simulated");
+function SourceMatrixWithSummary({ data }: { data: typeof structureEffectData }) {
+  const total = data.sources.reduce((sum, item) => sum + item.value, 0);
+  if (!data.sources.length || total <= 0) {
+    return <ChartEmptyState />;
+  }
+  const topSource = data.sources.reduce((current, item) => (item.value > current.value ? item : current), data.sources[0]);
+  const simulated = data.sources.find((item) => item.label === "simulated");
 
   return (
     <div className="flex flex-col gap-4">
-      <SourceMatrix />
+      <SourceMatrix data={data} />
       <div className="grid gap-3 sm:grid-cols-3">
         <MetricPill label="classified records" value={formatCount(total)} />
         <MetricPill label="main origin" value={topSource.label} />
@@ -1704,7 +2004,7 @@ function DatasetTile({
   dataset,
   onOpen
 }: {
-  dataset: (typeof datasets)[number];
+  dataset: DisplayDataset;
   onOpen: (key: DatasetKey) => void;
 }) {
   const isReserved = dataset.status === "Reserved";
@@ -1746,6 +2046,7 @@ function DatasetTile({
         <div className="mt-5">
           <MetricPill label="Records" value={formatCount(dataset.recordCount)} />
         </div>
+        <div className="mt-3 min-h-10 text-xs leading-5 text-mutedForeground">{formatImportMeta(dataset)}</div>
       </div>
       <button
         type="button"
@@ -1763,9 +2064,21 @@ function DatasetTile({
   );
 }
 
-function DatabaseHome({ onBackHome, onOpenDataset }: { onBackHome: () => void; onOpenDataset: (key: DatasetKey) => void }) {
-  const readyDatasets = datasets.filter((dataset) => dataset.status === "Ready");
-  const reservedDatasets = datasets.filter((dataset) => dataset.status === "Reserved");
+function DatabaseHome({
+  onBackHome,
+  onOpenDataset,
+  displayDatasets,
+  summaryLoading,
+  summaryError
+}: {
+  onBackHome: () => void;
+  onOpenDataset: (key: DatasetKey) => void;
+  displayDatasets: DisplayDataset[];
+  summaryLoading: boolean;
+  summaryError: string | null;
+}) {
+  const readyDatasets = displayDatasets.filter((dataset) => dataset.status === "Ready");
+  const reservedDatasets = displayDatasets.filter((dataset) => dataset.status === "Reserved");
   const totalRecords = readyDatasets.reduce((sum, dataset) => sum + (dataset.recordCount ?? 0), 0);
 
   return (
@@ -1805,8 +2118,21 @@ function DatabaseHome({ onBackHome, onOpenDataset }: { onBackHome: () => void; o
         </div>
       </section>
 
+      {summaryLoading ? (
+        <section className="rounded-[28px] border border-white/80 bg-white/75 px-5 py-4 text-sm leading-6 text-slate-600 shadow-sm">
+          Checking database source status...
+        </section>
+      ) : null}
+
+      {summaryError ? (
+        <section className="rounded-[28px] border border-rose-200 bg-rose-50 px-5 py-4 text-sm leading-6 text-rose-700 shadow-sm">
+          <div className="font-semibold text-rose-800">Database source status unavailable</div>
+          <div className="mt-1">{summaryError}</div>
+        </section>
+      ) : null}
+
       <section className="grid gap-4 lg:grid-cols-2 xl:grid-cols-5">
-        {datasets.map((dataset) => (
+        {displayDatasets.map((dataset) => (
           <DatasetTile key={dataset.key} dataset={dataset} onOpen={onOpenDataset} />
         ))}
       </section>
@@ -1825,9 +2151,14 @@ function DatasetHero({
   recordLabel = "Records",
   viewLabel = "View",
   viewValue = "Charts",
-  onViewClick
+  onViewClick,
+  analyticsSource = null,
+  analyticsGeneratedAt = null,
+  analyticsRefreshing = false,
+  analyticsError = null,
+  onRefreshAnalytics
 }: {
-  dataset: (typeof datasets)[number];
+  dataset: DisplayDataset;
   onBackHome: () => void;
   onBackDatabase: () => void;
   children: ReactNode;
@@ -1838,7 +2169,22 @@ function DatasetHero({
   viewLabel?: string;
   viewValue?: string;
   onViewClick?: () => void;
+  analyticsSource?: string | null;
+  analyticsGeneratedAt?: string | null;
+  analyticsRefreshing?: boolean;
+  analyticsError?: string | null;
+  onRefreshAnalytics?: () => void;
 }) {
+  const analyticsSourceLabel =
+    analyticsSource === "live"
+      ? "Live statistics"
+      : analyticsSource === "snapshot"
+        ? "Snapshot statistics"
+        : "Statistics";
+  const analyticsTitle = analyticsGeneratedAt
+    ? `Generated at ${new Date(analyticsGeneratedAt).toLocaleString()}`
+    : undefined;
+
   return (
     <>
       <nav className="flex flex-col gap-3 rounded-[26px] border border-white/70 bg-white/80 px-4 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
@@ -1860,7 +2206,27 @@ function DatasetHero({
             {homeLabel}
           </Button>
         </div>
-        <Badge className="bg-teal-50 text-teal-800">{dataset.englishTitle}</Badge>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {analyticsError ? <Badge className="bg-rose-50 text-rose-700">Refresh failed</Badge> : null}
+          {analyticsSource ? (
+            <Badge className="bg-slate-100 text-slate-600" title={analyticsTitle}>
+              {analyticsSourceLabel}
+            </Badge>
+          ) : null}
+          {onRefreshAnalytics ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onRefreshAnalytics}
+              disabled={analyticsRefreshing}
+              className="bg-white/65 text-slate-600 hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800"
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${analyticsRefreshing ? "animate-spin" : ""}`} />
+              {analyticsRefreshing ? "Refreshing" : "Refresh statistics"}
+            </Button>
+          ) : null}
+          <Badge className="bg-teal-50 text-teal-800">{dataset.englishTitle}</Badge>
+        </div>
       </nav>
 
       <section className="hero-glow mesh-surface rounded-[36px] border border-white/70 px-6 py-7 md:px-8 md:py-9">
@@ -1894,6 +2260,32 @@ function DatasetHero({
 
       {children}
     </>
+  );
+}
+
+function DatasetUnavailableState({ dataset }: { dataset: DisplayDataset }) {
+  return (
+    <section className="rounded-[28px] border border-dashed border-slate-300 bg-white/70 px-5 py-6 shadow-sm">
+      <Badge className="bg-slate-100 text-slate-600">{dataset.sourceStatus ?? "missing"}</Badge>
+      <h2 className="font-heading mt-4 text-2xl font-semibold tracking-tight text-slate-950">Data source unavailable</h2>
+      <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+        {dataset.sourceMessage ?? "The source file for this dataset is not available in the governed database."}
+      </p>
+    </section>
+  );
+}
+
+function DatasetAnalyticsUnavailableState({ loading, error }: { loading: boolean; error: string | null }) {
+  return (
+    <section className="rounded-[28px] border border-dashed border-slate-300 bg-white/70 px-5 py-6 shadow-sm">
+      <Badge className="bg-slate-100 text-slate-600">analytics</Badge>
+      <h2 className="font-heading mt-4 text-2xl font-semibold tracking-tight text-slate-950">Analytics data unavailable</h2>
+      <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+        {loading
+          ? "Checking Postgres-backed analytics data..."
+          : error ?? "The analytics endpoint did not return this dataset. Static chart snapshots are disabled for governed runtime views."}
+      </p>
+    </section>
   );
 }
 
@@ -2982,13 +3374,17 @@ function ExperimentalCsvRecordBrowser({
   );
 }
 
-function ProcessPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
+function ProcessPage({ dataset: summaryDataset, analytics, analyticsLoading, analyticsError, ...props }: DatasetPageProps) {
   const dataset = {
-    ...datasets[0],
+    ...summaryDataset,
     title: "Experimental Process Data",
     description:
       "Summarizes process keywords, product names, material mentions, and extracted condition signals across polymer preparation records."
   };
+  const isUnavailable = dataset.status === "Reserved";
+  const analyticsUnavailable = !analytics?.process;
+  const data = mergeAnalyticsData(processData, analytics?.process);
+  const topMaterial = data.topMaterials[0] ?? { label: "-", value: 0 };
   const [recordBrowserOpen, setRecordBrowserOpen] = useState(false);
 
   return (
@@ -2997,71 +3393,84 @@ function ProcessPage(props: { onBackHome: () => void; onBackDatabase: () => void
         dataset={dataset}
         backDatabaseLabel="Database Analysis"
         homeLabel="Home"
-        viewValue="Search Records"
-        onViewClick={() => setRecordBrowserOpen(true)}
+        viewValue={isUnavailable ? "Unavailable" : analyticsUnavailable ? "Charts unavailable" : "Search Records"}
+        onViewClick={isUnavailable || analyticsUnavailable ? undefined : () => setRecordBrowserOpen(true)}
         {...props}
       >
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)] xl:items-stretch">
-          <ChartPanel
-            className="flex h-full flex-col"
-            bodyClassName="flex flex-1 flex-col"
-            icon={<BarChart3 className="h-4 w-4" />}
-            title="Process Flow Keywords"
-          >
-            <RankedBarsWithSummary data={processData.topTerms} />
-          </ChartPanel>
-          <ChartPanel
-            className="flex h-full flex-col"
-            bodyClassName="flex flex-1 flex-col"
-            icon={<Atom className="h-4 w-4" />}
-            title="Material Entity Cloud"
-          >
-            <div className="flex h-full flex-1 flex-col justify-between gap-4">
-              <BubbleCloud data={processData.topMaterials} />
-              <div className="grid gap-3 sm:grid-cols-3">
-                <MetricPill label="entities" value={formatCount(processData.topMaterials.length)} />
-                <MetricPill label="top entity" value={processData.topMaterials[0].label} />
-                <MetricPill label="top count" value={formatCount(processData.topMaterials[0].value)} />
-              </div>
-            </div>
-          </ChartPanel>
-        </section>
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:items-stretch">
-          <ChartPanel
-            className="flex h-full flex-col"
-            bodyClassName="flex flex-1 flex-col"
-            icon={<TableProperties className="h-4 w-4" />}
-            title="Product Name Ranking"
-          >
-            <RankedBarsWithSummary data={processData.topProducts} />
-          </ChartPanel>
-          <ChartPanel
-            className="flex h-full flex-col"
-            bodyClassName="flex flex-1 flex-col"
-            icon={<Layers3 className="h-4 w-4" />}
-            title="Process Condition Signals"
-          >
-            <CoverageSignals data={processData.processSignals} summary={processData.processSignalSummary} />
-          </ChartPanel>
-        </section>
+        {isUnavailable ? (
+          <DatasetUnavailableState dataset={dataset} />
+        ) : analyticsUnavailable ? (
+          <DatasetAnalyticsUnavailableState loading={analyticsLoading} error={analyticsError} />
+        ) : (
+          <>
+            <section className="grid gap-5 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)] xl:items-stretch">
+              <ChartPanel
+                className="flex h-full flex-col"
+                bodyClassName="flex flex-1 flex-col"
+                icon={<BarChart3 className="h-4 w-4" />}
+                title="Process Flow Keywords"
+              >
+                <RankedBarsWithSummary data={data.topTerms} />
+              </ChartPanel>
+              <ChartPanel
+                className="flex h-full flex-col"
+                bodyClassName="flex flex-1 flex-col"
+                icon={<Atom className="h-4 w-4" />}
+                title="Material Entity Cloud"
+              >
+                <div className="flex h-full flex-1 flex-col justify-between gap-4">
+                  <BubbleCloud data={data.topMaterials} />
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <MetricPill label="entities" value={formatCount(data.topMaterials.length)} />
+                    <MetricPill label="top entity" value={topMaterial.label} />
+                    <MetricPill label="top count" value={formatCount(topMaterial.value)} />
+                  </div>
+                </div>
+              </ChartPanel>
+            </section>
+            <section className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:items-stretch">
+              <ChartPanel
+                className="flex h-full flex-col"
+                bodyClassName="flex flex-1 flex-col"
+                icon={<TableProperties className="h-4 w-4" />}
+                title="Product Name Ranking"
+              >
+                <RankedBarsWithSummary data={data.topProducts} />
+              </ChartPanel>
+              <ChartPanel
+                className="flex h-full flex-col"
+                bodyClassName="flex flex-1 flex-col"
+                icon={<Layers3 className="h-4 w-4" />}
+                title="Process Condition Signals"
+              >
+                <CoverageSignals data={data.processSignals} summary={data.processSignalSummary} />
+              </ChartPanel>
+            </section>
+          </>
+        )}
       </DatasetHero>
-      <ExperimentalCsvRecordBrowser
-        kind="process"
-        open={recordBrowserOpen}
-        onClose={() => setRecordBrowserOpen(false)}
-        expectedTotal={processData.rows}
-      />
+      {isUnavailable || analyticsUnavailable ? null : (
+        <ExperimentalCsvRecordBrowser
+          kind="process"
+          open={recordBrowserOpen}
+          onClose={() => setRecordBrowserOpen(false)}
+          expectedTotal={dataset.recordCount ?? data.rows}
+        />
+      )}
     </>
   );
 }
 
-function PropertyPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
+function PropertyPage({ dataset: summaryDataset, analytics, analyticsLoading, analyticsError, ...props }: DatasetPageProps) {
   const dataset = {
-    ...datasets[1],
+    ...summaryDataset,
     title: "Experimental Property Data",
     description:
       "Summarizes property categories, high-frequency property names, value ranges, and representative properties across polymer records."
   };
+  const isUnavailable = dataset.status === "Reserved";
+  const analyticsUnavailable = !analytics?.property;
+  const data = mergeAnalyticsData(propertyData, analytics?.property);
   const [recordBrowserOpen, setRecordBrowserOpen] = useState(false);
 
   return (
@@ -3070,64 +3479,77 @@ function PropertyPage(props: { onBackHome: () => void; onBackDatabase: () => voi
         dataset={dataset}
         backDatabaseLabel="Database Analysis"
         homeLabel="Home"
-        viewValue="Search Records"
-        onViewClick={() => setRecordBrowserOpen(true)}
+        viewValue={isUnavailable ? "Unavailable" : analyticsUnavailable ? "Charts unavailable" : "Search Records"}
+        onViewClick={isUnavailable || analyticsUnavailable ? undefined : () => setRecordBrowserOpen(true)}
         {...props}
       >
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] xl:items-stretch">
-          <ChartPanel
-            className="flex h-full flex-col"
-            bodyClassName="flex flex-1 flex-col"
-            icon={<PieChart className="h-4 w-4" />}
-            title="Property Category Share"
-          >
-            <DonutChartWithSummary data={propertyData.categories} topLabel="top category" />
-          </ChartPanel>
-          <ChartPanel
-            className="flex h-full flex-col"
-            bodyClassName="flex flex-1 flex-col"
-            icon={<BarChart3 className="h-4 w-4" />}
-            title="High-Frequency Property Names"
-          >
-            <RankedBarsWithSummary data={propertyData.topProperties} />
-          </ChartPanel>
-        </section>
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] xl:items-stretch">
-          <ChartPanel
-            className="flex h-full flex-col"
-            bodyClassName="flex flex-1 flex-col"
-            icon={<Sigma className="h-4 w-4" />}
-            title="High-Frequency Property Ranges"
-          >
-            <RangePlot data={propertyData.ranges.slice(0, 4)} />
-          </ChartPanel>
-          <ChartPanel
-            className="flex h-full flex-col"
-            bodyClassName="flex flex-1 flex-col"
-            icon={<Search className="h-4 w-4" />}
-            title="Representative Properties"
-          >
-            <CategoryRepresentativeCards data={propertyData.categoryTop} categories={propertyData.categories} />
-          </ChartPanel>
-        </section>
+        {isUnavailable ? (
+          <DatasetUnavailableState dataset={dataset} />
+        ) : analyticsUnavailable ? (
+          <DatasetAnalyticsUnavailableState loading={analyticsLoading} error={analyticsError} />
+        ) : (
+          <>
+            <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] xl:items-stretch">
+              <ChartPanel
+                className="flex h-full flex-col"
+                bodyClassName="flex flex-1 flex-col"
+                icon={<PieChart className="h-4 w-4" />}
+                title="Property Category Share"
+              >
+                <DonutChartWithSummary data={data.categories} topLabel="top category" />
+              </ChartPanel>
+              <ChartPanel
+                className="flex h-full flex-col"
+                bodyClassName="flex flex-1 flex-col"
+                icon={<BarChart3 className="h-4 w-4" />}
+                title="High-Frequency Property Names"
+              >
+                <RankedBarsWithSummary data={data.topProperties} />
+              </ChartPanel>
+            </section>
+            <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] xl:items-stretch">
+              <ChartPanel
+                className="flex h-full flex-col"
+                bodyClassName="flex flex-1 flex-col"
+                icon={<Sigma className="h-4 w-4" />}
+                title="High-Frequency Property Ranges"
+              >
+                <RangePlot data={data.ranges.slice(0, 4)} />
+              </ChartPanel>
+              <ChartPanel
+                className="flex h-full flex-col"
+                bodyClassName="flex flex-1 flex-col"
+                icon={<Search className="h-4 w-4" />}
+                title="Representative Properties"
+              >
+                <CategoryRepresentativeCards data={data.categoryTop} categories={data.categories} />
+              </ChartPanel>
+            </section>
+          </>
+        )}
       </DatasetHero>
-      <ExperimentalCsvRecordBrowser
-        kind="property"
-        open={recordBrowserOpen}
-        onClose={() => setRecordBrowserOpen(false)}
-        expectedTotal={propertyData.rows}
-      />
+      {isUnavailable || analyticsUnavailable ? null : (
+        <ExperimentalCsvRecordBrowser
+          kind="property"
+          open={recordBrowserOpen}
+          onClose={() => setRecordBrowserOpen(false)}
+          expectedTotal={dataset.recordCount ?? data.rows}
+        />
+      )}
     </>
   );
 }
 
-function StructureEffectPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
+function StructureEffectPage({ dataset: summaryDataset, analytics, analyticsLoading, analyticsError, ...props }: DatasetPageProps) {
+  const data = mergeAnalyticsData(structureEffectData, analytics?.structureEffect);
   const dataset = {
-    ...datasets[2],
+    ...summaryDataset,
     title: "Polymer Structure-Property Data",
     description:
       "Links polymer structures with key properties, measurement origins, units, and value ranges to support structure-property comparison."
   };
+  const isUnavailable = dataset.status === "Reserved";
+  const analyticsUnavailable = !analytics?.structureEffect;
   const [recordBrowserOpen, setRecordBrowserOpen] = useState(false);
 
   return (
@@ -3136,47 +3558,59 @@ function StructureEffectPage(props: { onBackHome: () => void; onBackDatabase: ()
         dataset={dataset}
         backDatabaseLabel="Database Analysis"
         homeLabel="Home"
-        viewValue="Search Records"
-        onViewClick={() => setRecordBrowserOpen(true)}
+        viewValue={isUnavailable ? "Unavailable" : analyticsUnavailable ? "Charts unavailable" : "Search Records"}
+        onViewClick={isUnavailable || analyticsUnavailable ? undefined : () => setRecordBrowserOpen(true)}
         {...props}
       >
+        {isUnavailable ? (
+          <DatasetUnavailableState dataset={dataset} />
+        ) : analyticsUnavailable ? (
+          <DatasetAnalyticsUnavailableState loading={analyticsLoading} error={analyticsError} />
+        ) : (
+          <>
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.02fr)_minmax(0,0.98fr)] xl:items-start">
           <div className="grid gap-5">
             <ChartPanel icon={<Network className="h-4 w-4" />} title="Property Origin Matrix">
-              <SourceMatrixWithSummary />
+              <SourceMatrixWithSummary data={data} />
             </ChartPanel>
             <ChartPanel icon={<PieChart className="h-4 w-4" />} title="Unit Distribution">
-              <DonutChartWithSummary data={structureEffectData.units} topLabel="top unit" />
+              <DonutChartWithSummary data={data.units} topLabel="top unit" />
             </ChartPanel>
           </div>
           <div className="grid gap-5">
             <ChartPanel icon={<BarChart3 className="h-4 w-4" />} title="Property Record Counts">
-              <RankedBarsWithSummary data={structureEffectData.properties} limit={9} />
+              <RankedBarsWithSummary data={data.properties} limit={9} />
             </ChartPanel>
             <ChartPanel icon={<Sigma className="h-4 w-4" />} title="Structure-Property Value Ranges">
-              <StructureRangeCards data={structureEffectData.ranges.slice(0, 3)} />
+              <StructureRangeCards data={data.ranges.slice(0, 3)} />
             </ChartPanel>
           </div>
         </section>
+          </>
+        )}
       </DatasetHero>
-      <StructurePropertyRecordBrowser
-        open={recordBrowserOpen}
-        onClose={() => setRecordBrowserOpen(false)}
-        expectedTotal={structureEffectData.rows}
-      />
+      {isUnavailable || analyticsUnavailable ? null : (
+        <StructurePropertyRecordBrowser
+          open={recordBrowserOpen}
+          onClose={() => setRecordBrowserOpen(false)}
+          expectedTotal={dataset.recordCount ?? data.rows}
+        />
+      )}
     </>
   );
 }
 
-function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
+function DftPage({ dataset: summaryDataset, analytics, analyticsLoading, analyticsError, ...props }: DatasetPageProps) {
+  const data = mergeAnalyticsData(dftData, analytics?.dft);
   const dataset = {
-    ...datasets[3],
+    ...summaryDataset,
     title: "DFT Conformation Data",
     englishTitle: "DFT Conformation",
     description:
-      "Browse optimized molecular conformations, inspect the selected final 3D structure, compare energy changes during optimization, and review atom and HOMO/LUMO summaries.",
-    status: "Ready"
+      "Browse optimized molecular conformations, inspect the selected final 3D structure, compare energy changes during optimization, and review atom and HOMO/LUMO summaries."
   };
+  const isUnavailable = dataset.status === "Reserved";
+  const analyticsUnavailable = !analytics?.dft;
   const [pcaPoints, setPcaPoints] = useState<DftPcaPoint[]>([]);
   const [pcaLoading, setPcaLoading] = useState(true);
   const [pcaError, setPcaError] = useState<string | null>(null);
@@ -3186,6 +3620,14 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
   const [recordBrowserOpen, setRecordBrowserOpen] = useState(false);
 
   useEffect(() => {
+    if (isUnavailable) {
+      setPcaPoints([]);
+      setPcaLoading(false);
+      setPcaError(null);
+      setSelectedMolId(null);
+      return;
+    }
+
     let cancelled = false;
 
     async function loadPcaSample() {
@@ -3212,7 +3654,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isUnavailable]);
 
   useEffect(() => {
     if (!selectedMolId) {
@@ -3254,10 +3696,16 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
         homeLabel="Home"
         recordLabel="Records"
         viewLabel="View"
-        viewValue="Search Records"
-        onViewClick={() => setRecordBrowserOpen(true)}
+        viewValue={isUnavailable ? "Unavailable" : analyticsUnavailable ? "Charts unavailable" : "Search Records"}
+        onViewClick={isUnavailable || analyticsUnavailable ? undefined : () => setRecordBrowserOpen(true)}
         {...props}
       >
+        {isUnavailable ? (
+          <DatasetUnavailableState dataset={dataset} />
+        ) : analyticsUnavailable ? (
+          <DatasetAnalyticsUnavailableState loading={analyticsLoading} error={analyticsError} />
+        ) : (
+          <>
         <section className="grid gap-5 xl:grid-cols-3 xl:items-stretch">
           <ChartPanel
             className="flex h-full min-w-0 flex-col"
@@ -3297,7 +3745,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
             icon={<Sigma className="h-4 w-4" />}
             title="HOMO / LUMO Energy Distribution"
           >
-            <OrbitalDistributionChart data={dftData.orbitalDistributions} />
+            <OrbitalDistributionChart data={data.orbitalDistributions} />
           </ChartPanel>
         </section>
         <section className="grid gap-5 xl:grid-cols-2 xl:items-start">
@@ -3306,7 +3754,7 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
             icon={<PieChart className="h-4 w-4" />}
             title="Atom Composition"
           >
-            <AtomCompositionCompact data={dftData.atomTotals} />
+            <AtomCompositionCompact data={data.atomTotals} />
           </ChartPanel>
           <ChartPanel
             className="flex h-full flex-col"
@@ -3316,12 +3764,12 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
           >
             <div className="flex h-full flex-1 flex-col justify-between gap-4">
               <div className="grid gap-3 sm:grid-cols-2">
-                <MetricPill label="conformation groups" value={formatCount(dftData.molCount)} />
-                <MetricPill label="optimization steps" value={formatCount(dftData.rows)} />
-                <MetricPill label="median steps" value={String(dftData.stepRange.median)} />
-                <MetricPill label="longest path" value={`${dftData.stepRange.max} steps`} />
-                <MetricPill label="median atoms" value={String(dftData.atomRange.median)} />
-                <MetricPill label="median gap eV" value={formatNumber(dftData.gapRange.median, 3)} />
+                <MetricPill label="conformation groups" value={formatCount(data.molCount)} />
+                <MetricPill label="optimization steps" value={formatCount(data.rows)} />
+                <MetricPill label="median steps" value={String(data.stepRange.median)} />
+                <MetricPill label="longest path" value={`${data.stepRange.max} steps`} />
+                <MetricPill label="median atoms" value={String(data.atomRange.median)} />
+                <MetricPill label="median gap eV" value={formatNumber(data.gapRange.median, 3)} />
               </div>
               <div className="rounded-2xl border border-white/80 bg-white/75 px-4 py-3 text-sm leading-6 text-slate-600 shadow-sm">
                 Each conformation group represents one optimization path. The record count covers all optimization steps, and the step metrics help compare path length and final geometry size.
@@ -3329,41 +3777,302 @@ function DftPage(props: { onBackHome: () => void; onBackDatabase: () => void }) 
             </div>
           </ChartPanel>
         </section>
+          </>
+        )}
       </DatasetHero>
-      <DftRecordBrowser
-        open={recordBrowserOpen}
-        onClose={() => setRecordBrowserOpen(false)}
-        expectedMolecules={dftData.molCount}
-        expectedSteps={dftData.rows}
-      />
+      {isUnavailable || analyticsUnavailable ? null : (
+        <DftRecordBrowser
+          open={recordBrowserOpen}
+          onClose={() => setRecordBrowserOpen(false)}
+          expectedMolecules={data.molCount}
+          expectedSteps={dataset.recordCount ?? data.rows}
+        />
+      )}
     </>
   );
 }
 
-function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => void }) {
+function FormulationRecordBrowser({
+  open,
+  onClose,
+  expectedTotal
+}: {
+  open: boolean;
+  onClose: () => void;
+  expectedTotal: number;
+}) {
+  const [queryDraft, setQueryDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [data, setData] = useState<FormulationBrowseResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    browseFormulationRecords({ q: query, page, page_size: pageSize })
+      .then((response) => {
+        if (!cancelled) {
+          setData(response);
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) {
+          setError(nextError instanceof Error ? nextError.message : "Failed to load formulation records");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, page, pageSize, query]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const matchedRecords = data?.matched_records ?? 0;
+  const totalRecords = data?.total_records ?? expectedTotal;
+  const totalPages = Math.max(1, Math.ceil(matchedRecords / pageSize));
+  const startRecord = matchedRecords === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endRecord = Math.min(page * pageSize, matchedRecords);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm">
+      <section className="flex h-[min(88vh,760px)] w-[min(1180px,calc(100vw-2rem))] flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/95 shadow-[0_30px_100px_rgba(8,17,31,0.34)]">
+        <header className="flex flex-col gap-4 border-b border-slate-200 bg-slate-50/90 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white">
+                <TableProperties className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-teal-700">
+                  Formulation Ratios
+                </div>
+                <h2 className="font-heading truncate text-xl font-semibold tracking-tight text-slate-950">
+                  Formulation Record Search
+                </h2>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <MetricPill label="total records" value={formatCount(totalRecords)} />
+            <MetricPill label="matched" value={formatCount(matchedRecords)} />
+            {data?.source_status ? <MetricPill label="source" value={data.source_status} /> : null}
+            <button
+              type="button"
+              aria-label="Close formulation record search"
+              onClick={onClose}
+              className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className="border-b border-slate-200 bg-white px-5 py-4">
+          <form
+            className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setPage(1);
+              setQuery(queryDraft.trim());
+            }}
+          >
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                value={queryDraft}
+                onChange={(event) => setQueryDraft(event.target.value)}
+                placeholder="Search polymer, formulation, catalyst, solvent, temperature"
+                className="border-slate-200 bg-slate-50 pl-10"
+              />
+            </div>
+            <select
+              aria-label="Formulation rows per page"
+              value={pageSize}
+              onChange={(event) => {
+                setPage(1);
+                setPageSize(Number(event.target.value));
+              }}
+              className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value={25}>25 rows</option>
+              <option value={50}>50 rows</option>
+              <option value={100}>100 rows</option>
+            </select>
+            <div className="flex gap-2">
+              <Button type="submit" className="min-w-24">
+                Search
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setQueryDraft("");
+                  setQuery("");
+                  setPage(1);
+                }}
+              >
+                Clear
+              </Button>
+            </div>
+          </form>
+          {data?.source_message ? <div className="mt-3 text-xs text-slate-500">{data.source_message}</div> : null}
+        </div>
+
+        <div className="relative min-h-0 flex-1 overflow-auto bg-white">
+          {error ? (
+            <div className="m-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {error}
+            </div>
+          ) : null}
+
+          <table className="min-w-[1180px] w-full border-separate border-spacing-0 text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
+              <tr>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Record</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Polymer</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Formulation</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Catalyst</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Solvent</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Temperature</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Time</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data?.results.map((row) => (
+                <tr key={row.formulation_id} className="align-top hover:bg-teal-50/35">
+                  <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-xs text-slate-600">
+                    #{row.knowledge_id}
+                  </td>
+                  <td className="max-w-[14rem] border-b border-slate-100 px-4 py-3">
+                    <div className="truncate font-medium text-slate-900" title={row.polymer_iupac ?? undefined}>
+                      {row.polymer_iupac || <EmptyCell />}
+                    </div>
+                  </td>
+                  <td className="max-w-[28rem] border-b border-slate-100 px-4 py-3">
+                    <div className="line-clamp-3 text-xs leading-5 text-slate-700" title={row.formulation ?? undefined}>
+                      {row.formulation || <EmptyCell />}
+                    </div>
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{row.catalyst || <EmptyCell />}</td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{row.solvent || <EmptyCell />}</td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{row.temperature || <EmptyCell />}</td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{row.reaction_time || <EmptyCell />}</td>
+                  <td className="border-b border-slate-100 px-4 py-3 font-mono-ui text-[11px] text-slate-500">
+                    {row.source_file}:{row.source_row_number}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {!loading && !error && data?.results.length === 0 ? (
+            <div className="px-5 py-10 text-center text-sm text-slate-500">No matching records.</div>
+          ) : null}
+          {loading ? (
+            <div className="absolute inset-x-0 bottom-16 mx-auto w-fit rounded-full border border-white/80 bg-white px-4 py-2 text-sm text-slate-600 shadow-lg">
+              Loading formulation records...
+            </div>
+          ) : null}
+        </div>
+
+        <footer className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/95 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="font-mono-ui text-xs text-slate-500">
+            {startRecord}-{endRecord} / {formatCount(matchedRecords)}
+            {query ? ` for "${query}"` : ""}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" disabled={page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+              <ChevronLeft className="mr-2 h-4 w-4" />
+              Previous
+            </Button>
+            <div className="min-w-24 text-center font-mono-ui text-xs text-slate-500">
+              {page} / {totalPages}
+            </div>
+            <Button type="button" variant="outline" disabled={page >= totalPages || loading} onClick={() => setPage((current) => Math.min(totalPages, current + 1))}>
+              Next
+              <ChevronRight className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function FormulationPage({ dataset: summaryDataset, analytics, analyticsLoading, analyticsError, ...props }: DatasetPageProps) {
+  const [recordBrowserOpen, setRecordBrowserOpen] = useState(false);
+  const data = mergeAnalyticsData(formulationData, analytics?.formulation);
   const dataset = {
-    ...datasets[4],
+    ...summaryDataset,
     title: "Formulation Ratio Data",
     description:
       "Summarizes formulation components, ratio expressions, catalysts, solvents, temperature bands, time units, and representative formulation examples."
   };
+  const isUnavailable = dataset.status === "Reserved";
+  const analyticsUnavailable = !analytics?.formulation;
 
   return (
-    <DatasetHero dataset={dataset} backDatabaseLabel="Database Analysis" homeLabel="Home" {...props}>
+    <DatasetHero
+      dataset={dataset}
+      backDatabaseLabel="Database Analysis"
+      homeLabel="Home"
+      viewValue={isUnavailable ? "Unavailable" : analyticsUnavailable ? "Charts unavailable" : "Search Records"}
+      onViewClick={isUnavailable || analyticsUnavailable ? undefined : () => setRecordBrowserOpen(true)}
+      {...props}
+    >
+      {isUnavailable ? (
+        <DatasetUnavailableState dataset={dataset} />
+      ) : analyticsUnavailable ? (
+        <DatasetAnalyticsUnavailableState loading={analyticsLoading} error={analyticsError} />
+      ) : (
+        <>
       <section className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
         <ChartPanel icon={<Database className="h-4 w-4" />} title="Field Coverage">
           <div className="grid gap-4 sm:grid-cols-2">
-            <MetricPill label="document groups" value={formatCount(formulationData.files)} />
-            <MetricPill label="records" value={formatCount(formulationData.rows)} />
-            <MetricPill label="avg components" value="2.73" />
-            <MetricPill label="median components" value="2" />
+            <MetricPill label="document groups" value={formatCount(data.files)} />
+            <MetricPill label="records" value={formatCount(dataset.recordCount)} />
+            <MetricPill label="avg components" value={averageComponentCount(data.componentCounts)} />
+            <MetricPill label="median components" value={medianComponentCount(data.componentCounts)} />
           </div>
           <div className="mt-4">
-            <CoverageGrid data={formulationData.coverage} />
+            <CoverageGrid data={data.coverage} />
           </div>
         </ChartPanel>
         <ChartPanel icon={<Layers3 className="h-4 w-4" />} title="Formula Component Count">
-          <ComponentDistribution data={formulationData.componentCounts} />
+          <ComponentDistribution data={data.componentCounts} />
         </ChartPanel>
       </section>
 
@@ -3374,7 +4083,7 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           icon={<BarChart3 className="h-4 w-4" />}
           title="High-Frequency Formula Components"
         >
-          <RankedBarsWithSummary data={formulationData.topComponents} />
+          <RankedBarsWithSummary data={data.topComponents} />
         </ChartPanel>
         <ChartPanel
           className="flex h-full flex-col"
@@ -3382,19 +4091,19 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           icon={<PieChart className="h-4 w-4" />}
           title="Polymer Family Distribution"
         >
-          <DonutChartWithSummary data={formulationData.polymerFamilies} topLabel="top family" />
+          <DonutChartWithSummary data={data.polymerFamilies} topLabel="top family" />
         </ChartPanel>
       </section>
 
       <section className="grid gap-5 xl:grid-cols-3">
         <ChartPanel icon={<Sigma className="h-4 w-4" />} title="Formula Expression Matches">
-          <HorizontalBars data={formulationData.ratioTypes} />
+          <HorizontalBars data={data.ratioTypes} />
         </ChartPanel>
         <ChartPanel icon={<FlaskConical className="h-4 w-4" />} title="Process Temperature Bands">
-          <HorizontalBars data={formulationData.tempBands} />
+          <HorizontalBars data={data.tempBands} />
         </ChartPanel>
         <ChartPanel icon={<PieChart className="h-4 w-4" />} title="Time Expression Distribution">
-          <DonutChart data={formulationData.timeUnits} />
+          <DonutChart data={data.timeUnits} />
         </ChartPanel>
       </section>
 
@@ -3405,7 +4114,7 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           icon={<Atom className="h-4 w-4" />}
           title="Common Catalysts"
         >
-          <RankedBarsWithSummary data={formulationData.topCatalysts} />
+          <RankedBarsWithSummary data={data.topCatalysts} />
         </ChartPanel>
         <ChartPanel
           className="flex h-full flex-col"
@@ -3413,7 +4122,7 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           icon={<Search className="h-4 w-4" />}
           title="Common Solvents"
         >
-          <RankedBarsWithSummary data={formulationData.topSolvents} />
+          <RankedBarsWithSummary data={data.topSolvents} />
         </ChartPanel>
         <ChartPanel
           className="flex h-full flex-col"
@@ -3421,9 +4130,18 @@ function FormulationPage(props: { onBackHome: () => void; onBackDatabase: () => 
           icon={<TableProperties className="h-4 w-4" />}
           title="Formulation Examples"
         >
-          <FormulaExamples data={formulationData.examples} />
+          <FormulaExamples data={data.examples} />
         </ChartPanel>
       </section>
+        </>
+      )}
+      {isUnavailable || analyticsUnavailable ? null : (
+        <FormulationRecordBrowser
+          open={recordBrowserOpen}
+          onClose={() => setRecordBrowserOpen(false)}
+          expectedTotal={dataset.recordCount ?? data.rows}
+        />
+      )}
     </DatasetHero>
   );
 }
@@ -3439,16 +4157,52 @@ export function DatabaseAnalysis({
   onOpenDataset: (key: DatasetKey) => void;
   selectedKey: DatasetKey | null;
 }) {
+  const { summary, loading: summaryLoading, error: summaryError } = useDatabaseDatasetSummary();
+  const {
+    analytics,
+    loading: analyticsLoading,
+    refreshing: analyticsRefreshing,
+    error: analyticsError,
+    source: analyticsSource,
+    generatedAt: analyticsGeneratedAt,
+    refresh: refreshAnalytics
+  } = useDatabaseAnalytics();
+  const displayDatasets = useMemo(() => resolveDatasets(summary, summaryError), [summary, summaryError]);
   const commonProps = {
     onBackHome,
-    onBackDatabase
+    onBackDatabase,
+    analytics,
+    analyticsLoading,
+    analyticsRefreshing,
+    analyticsError,
+    analyticsSource,
+    analyticsGeneratedAt,
+    onRefreshAnalytics: refreshAnalytics
   };
 
-  if (selectedKey === "process") return <ProcessPage {...commonProps} />;
-  if (selectedKey === "property") return <PropertyPage {...commonProps} />;
-  if (selectedKey === "structureEffect") return <StructureEffectPage {...commonProps} />;
-  if (selectedKey === "dft") return <DftPage {...commonProps} />;
-  if (selectedKey === "formulation") return <FormulationPage {...commonProps} />;
+  if (selectedKey === "process") {
+    return <ProcessPage {...commonProps} dataset={getDisplayDataset(displayDatasets, "process")} />;
+  }
+  if (selectedKey === "property") {
+    return <PropertyPage {...commonProps} dataset={getDisplayDataset(displayDatasets, "property")} />;
+  }
+  if (selectedKey === "structureEffect") {
+    return <StructureEffectPage {...commonProps} dataset={getDisplayDataset(displayDatasets, "structureEffect")} />;
+  }
+  if (selectedKey === "dft") {
+    return <DftPage {...commonProps} dataset={getDisplayDataset(displayDatasets, "dft")} />;
+  }
+  if (selectedKey === "formulation") {
+    return <FormulationPage {...commonProps} dataset={getDisplayDataset(displayDatasets, "formulation")} />;
+  }
 
-  return <DatabaseHome onBackHome={onBackHome} onOpenDataset={onOpenDataset} />;
+  return (
+    <DatabaseHome
+      onBackHome={onBackHome}
+      onOpenDataset={onOpenDataset}
+      displayDatasets={displayDatasets}
+      summaryLoading={summaryLoading}
+      summaryError={summaryError}
+    />
+  );
 }
