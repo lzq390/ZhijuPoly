@@ -1,0 +1,193 @@
+name: nexpoly CI/CD
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy, such as main, a tag, or a commit SHA."
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexpoly-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: Frontend and compose checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
+
+  deploy:
+    name: Deploy nexpoly on server
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    environment: nexpoly-production
+    env:
+      DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || 'main' }}
+      NEXPOLY_SSH_HOST: ${{ secrets.NEXPOLY_SSH_HOST }}
+      NEXPOLY_SSH_USER: ${{ secrets.NEXPOLY_SSH_USER }}
+      NEXPOLY_SSH_PRIVATE_KEY: ${{ secrets.NEXPOLY_SSH_PRIVATE_KEY }}
+      NEXPOLY_SSH_KNOWN_HOSTS: ${{ secrets.NEXPOLY_SSH_KNOWN_HOSTS }}
+      NEXPOLY_SSH_PORT: ${{ vars.NEXPOLY_SSH_PORT }}
+      NEXPOLY_DEPLOY_PATH: ${{ vars.NEXPOLY_DEPLOY_PATH }}
+      NEXPOLY_WEB_PORT: ${{ vars.NEXPOLY_WEB_PORT }}
+    steps:
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${NEXPOLY_SSH_HOST:?Missing NEXPOLY_SSH_HOST secret}"
+          : "${NEXPOLY_SSH_USER:?Missing NEXPOLY_SSH_USER secret}"
+          : "${NEXPOLY_SSH_PRIVATE_KEY:?Missing NEXPOLY_SSH_PRIVATE_KEY secret}"
+
+          NEXPOLY_SSH_PORT="${NEXPOLY_SSH_PORT:-22}"
+          NEXPOLY_DEPLOY_PATH="${NEXPOLY_DEPLOY_PATH:-/data/lzq/gith/nexpoly}"
+          NEXPOLY_WEB_PORT="${NEXPOLY_WEB_PORT:-}"
+
+          case "$DEPLOY_REF" in
+            *[!A-Za-z0-9._/@:-]*)
+              echo "DEPLOY_REF contains unsupported characters: $DEPLOY_REF" >&2
+              exit 1
+              ;;
+          esac
+
+          case "$NEXPOLY_SSH_PORT" in
+            *[!0-9]*|"")
+              echo "NEXPOLY_SSH_PORT must be numeric." >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ -n "$NEXPOLY_WEB_PORT" ]]; then
+            case "$NEXPOLY_WEB_PORT" in
+              *[!0-9]*)
+                echo "NEXPOLY_WEB_PORT must be numeric when provided." >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$NEXPOLY_SSH_PRIVATE_KEY" > ~/.ssh/nexpoly_deploy_key
+          chmod 600 ~/.ssh/nexpoly_deploy_key
+
+          if [[ -n "${NEXPOLY_SSH_KNOWN_HOSTS:-}" ]]; then
+            printf '%s\n' "$NEXPOLY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$NEXPOLY_SSH_PORT" "$NEXPOLY_SSH_HOST" >> ~/.ssh/known_hosts
+          fi
+
+          {
+            echo "NEXPOLY_SSH_PORT=$NEXPOLY_SSH_PORT"
+            echo "NEXPOLY_DEPLOY_PATH=$NEXPOLY_DEPLOY_PATH"
+            if [[ -n "$NEXPOLY_WEB_PORT" ]]; then
+              echo "NEXPOLY_WEB_PORT=$NEXPOLY_WEB_PORT"
+            fi
+          } >> "$GITHUB_ENV"
+
+      - name: Run server deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          remote_path="$(printf '%q' "$NEXPOLY_DEPLOY_PATH")"
+          remote_ref="$(printf '%q' "$DEPLOY_REF")"
+          remote_command="cd ${remote_path} && NEXPOLY_DEPLOY_REF=${remote_ref} NEXPOLY_DEPLOY_BRANCH=main"
+          if [[ -n "${NEXPOLY_WEB_PORT:-}" ]]; then
+            remote_web_port="$(printf '%q' "$NEXPOLY_WEB_PORT")"
+            remote_command="${remote_command} NEXPOLY_WEB_PORT=${remote_web_port}"
+          fi
+          remote_command="${remote_command} bash -s"
+
+          ssh \
+            -i ~/.ssh/nexpoly_deploy_key \
+            -p "$NEXPOLY_SSH_PORT" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$NEXPOLY_SSH_USER@$NEXPOLY_SSH_HOST" \
+            "$remote_command" <<'REMOTE_BOOTSTRAP'
+          set -euo pipefail
+
+          : "${NEXPOLY_DEPLOY_REF:?Missing NEXPOLY_DEPLOY_REF}"
+          DEPLOY_BRANCH="${NEXPOLY_DEPLOY_BRANCH:-main}"
+
+          case "$NEXPOLY_DEPLOY_REF" in
+            *[!A-Za-z0-9._/@:-]*)
+              echo "NEXPOLY_DEPLOY_REF contains unsupported characters: $NEXPOLY_DEPLOY_REF" >&2
+              exit 1
+              ;;
+          esac
+
+          git diff --quiet || {
+            echo "Deployment checkout has unstaged tracked changes." >&2
+            exit 1
+          }
+          git diff --cached --quiet || {
+            echo "Deployment checkout has staged tracked changes." >&2
+            exit 1
+          }
+
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+
+          if [[ "$NEXPOLY_DEPLOY_REF" == "$DEPLOY_BRANCH" || "$NEXPOLY_DEPLOY_REF" == "refs/heads/$DEPLOY_BRANCH" || "$NEXPOLY_DEPLOY_REF" == "origin/$DEPLOY_BRANCH" ]]; then
+            target_commit="$(git rev-parse "origin/$DEPLOY_BRANCH^{commit}")"
+            if git show-ref --verify --quiet "refs/heads/$DEPLOY_BRANCH"; then
+              git checkout "$DEPLOY_BRANCH"
+            else
+              git checkout -b "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH"
+            fi
+            git pull --ff-only origin "$DEPLOY_BRANCH"
+            [[ "$(git rev-parse HEAD)" == "$target_commit" ]] || {
+              echo "Branch HEAD does not match fetched target commit." >&2
+              exit 1
+            }
+          elif git rev-parse --verify --quiet "origin/${NEXPOLY_DEPLOY_REF}^{commit}" >/dev/null; then
+            git checkout --detach "$(git rev-parse "origin/${NEXPOLY_DEPLOY_REF}^{commit}")"
+          elif git rev-parse --verify --quiet "${NEXPOLY_DEPLOY_REF}^{commit}" >/dev/null; then
+            git checkout --detach "$(git rev-parse "${NEXPOLY_DEPLOY_REF}^{commit}")"
+          else
+            echo "Cannot resolve deploy ref after fetch: $NEXPOLY_DEPLOY_REF" >&2
+            exit 1
+          fi
+
+          if [[ ! -f scripts/deploy_server.sh ]]; then
+            echo "Target ref does not contain scripts/deploy_server.sh; it cannot be deployed by this pipeline." >&2
+            exit 1
+          fi
+
+          bash scripts/deploy_server.sh
+          REMOTE_BOOTSTRAP
