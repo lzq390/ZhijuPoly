@@ -7,12 +7,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": "http://localhost:8000",
-      "/health": "http://localhost:8000",
-      "/online-retrieval": {
-        target: "http://localhost:5002",
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/online-retrieval/, "") || "/"
-      }
+      "/health": "http://localhost:8000"
     }
   }
 });
