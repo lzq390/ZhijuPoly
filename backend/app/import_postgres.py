@@ -38,7 +38,7 @@ class PostgresImportStats:
 def _sqlite_rows(db_path: Path, table: str) -> list[sqlite3.Row]:
     if not db_path.exists():
         return []
-    connection = sqlite3.connect(db_path)
+    connection = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
     connection.row_factory = sqlite3.Row
     try:
         exists = connection.execute(
@@ -54,7 +54,7 @@ def _sqlite_rows(db_path: Path, table: str) -> list[sqlite3.Row]:
 def _iter_sqlite_rows(db_path: Path, table: str):
     if not db_path.exists():
         return
-    connection = sqlite3.connect(db_path)
+    connection = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
     connection.row_factory = sqlite3.Row
     try:
         exists = connection.execute(

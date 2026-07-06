@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-STATIC_DATABASE_ANALYTICS_GENERATED_AT = '2026-07-02T08:58:46.356740+00:00'
+STATIC_DATABASE_ANALYTICS_GENERATED_AT = '2026-07-06T08:18:00.248590+00:00'
 STATIC_DATABASE_ANALYTICS: dict[str, Any] = {'dft': {'atomRange': {'count': 49301, 'max': 100.0, 'median': 52.0, 'min': 9.0},
          'atomTotals': [{'color': '#0f766e', 'label': 'C', 'value': 1099029},
                         {'color': '#2563eb', 'label': 'H', 'value': 1043640},
@@ -100,7 +100,7 @@ STATIC_DATABASE_ANALYTICS: dict[str, Any] = {'dft': {'atomRange': {'count': 4930
                                 {'label': 'range', 'value': 11181},
                                 {'label': 'not specified', 'value': 30},
                                 {'label': 'missing', 'value': 1348},
-                                {'label': 'percent', 'value': 2},
+                                {'label': 'percent', 'value': 4739},
                                 {'label': 'molar', 'value': 2578},
                                 {'label': 'parts / wt', 'value': 2140}],
                  'rows': 62440,
