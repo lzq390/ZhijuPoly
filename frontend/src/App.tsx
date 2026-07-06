@@ -4,7 +4,6 @@ import {
   Atom,
   BarChart3,
   BookOpen,
-  ClipboardList,
   Database,
   Grid2X2,
   Microscope,
@@ -471,15 +470,6 @@ export default function App() {
       title: "数据与知识",
       items: [
         {
-          id: "labData",
-          label: "实验数据采集",
-          description: "录入实验样品、测试项目和测量结果。",
-          route: "/lab-data/collect",
-          icon: <ClipboardList className="h-4 w-4" />,
-          isActive: activeModule === "labData",
-          onClick: () => openLabData("collect")
-        },
-        {
           id: "databaseQuery",
           label: "数据库查询",
           description: "用结构或 SMILES 检查数据库记录。",
@@ -551,15 +541,6 @@ export default function App() {
           icon: <Microscope className="h-4 w-4" />,
           isActive: activeModule === "conditionalGeneration",
           onClick: openConditionalGeneration
-        },
-        {
-          id: "experimentWorkflowDemo",
-          label: "实验工作流演示",
-          description: "查看从设计到实验记录的流程样例。",
-          route: "/experiment-workflow-demo",
-          icon: <BarChart3 className="h-4 w-4" />,
-          isActive: activeModule === "experimentWorkflowDemo",
-          onClick: openExperimentWorkflowDemo
         },
         {
           id: "highThroughputWorkflowDemo",
