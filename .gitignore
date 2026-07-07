@@ -16,10 +16,12 @@ backend/.env
 *.db
 *.sqlite
 *.sqlite3
+*.db.before-*
 /backend/data/archive/
 
 # Local conditional-generation model artifacts, including local symlinks.
 /model/conditional_generation
+/model/reactiont5-retrosynthesis/
 /model/ocsr/*.ckpt
 /model/ocsr/*.pth
 /model/ocsr/*.pt
@@ -36,6 +38,12 @@ frontend/vite.config.d.ts
 release/
 polyprop-release-*.tar.gz
 nexpoly-release-*.tar.gz
+
+# Server deployment runtime state
+/backups/
+/ops/incoming/
+/ops/logs/
+/ops/state/
 
 # Local analysis inputs and scratch artifacts
 /1.png
