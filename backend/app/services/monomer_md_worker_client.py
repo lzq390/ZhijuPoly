@@ -45,7 +45,7 @@ class MonomerMdWorkerClient:
                     "requests-unixsocket is required for http+unix monomer MD worker URLs"
                 ) from exc
             self.session = requests.Session()
-            self.session.mount("http+unix://", requests_unixsocket.UnixAdapter())
+            self.session.mount("http+unix://", _create_unix_socket_adapter(requests_unixsocket))
         elif parsed.scheme in {"http", "https"} and parsed.netloc:
             self.session = requests.Session()
         else:
@@ -105,6 +105,25 @@ def _safe_response_detail(response: requests.Response) -> str:
     if isinstance(detail, str) and detail.strip():
         return detail.strip()[:240]
     return f"HTTP {response.status_code}"
+
+
+def _create_unix_socket_adapter(requests_unixsocket: Any) -> requests.adapters.HTTPAdapter:
+    adapter_class = requests_unixsocket.UnixAdapter
+    if hasattr(requests.adapters.HTTPAdapter, "get_connection_with_tls_context"):
+
+        class CompatibleUnixAdapter(adapter_class):
+            def get_connection_with_tls_context(
+                self,
+                request: requests.PreparedRequest,
+                verify: bool | str,
+                proxies: dict[str, str] | None = None,
+                cert: str | tuple[str, str] | None = None,
+            ):
+                return self.get_connection(request.url, proxies)
+
+        return CompatibleUnixAdapter()
+
+    return adapter_class()
 
 
 def _response_json_object(response: requests.Response, context: str) -> dict[str, Any]:

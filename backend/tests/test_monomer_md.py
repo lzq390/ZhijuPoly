@@ -474,7 +474,9 @@ def test_monomer_md_worker_client_mounts_unix_socket_adapter(monkeypatch):
     )
 
     assert client.session is fake_session
-    assert isinstance(fake_session.mounts["http+unix://"], FakeUnixAdapter)
+    mounted_adapter = fake_session.mounts["http+unix://"]
+    assert isinstance(mounted_adapter, FakeUnixAdapter)
+    assert hasattr(mounted_adapter, "get_connection_with_tls_context")
 
 
 def test_monomer_md_worker_client_rejects_submit_response_without_job_id(monkeypatch):
