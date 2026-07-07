@@ -158,6 +158,8 @@ jobs:
             -p "$NEXPOLY_SSH_PORT" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
             "$NEXPOLY_SSH_USER@$NEXPOLY_SSH_HOST" \
             "mkdir -p $(printf '%q' "$remote_incoming")"
 
@@ -166,6 +168,8 @@ jobs:
             -P "$NEXPOLY_SSH_PORT" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
             "$NEXPOLY_BUNDLE_PATH" \
             "$NEXPOLY_SSH_USER@$NEXPOLY_SSH_HOST:$remote_bundle"
 
@@ -191,6 +195,8 @@ jobs:
             -p "$NEXPOLY_SSH_PORT" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
             "$NEXPOLY_SSH_USER@$NEXPOLY_SSH_HOST" \
             "$remote_command" <<'REMOTE_BOOTSTRAP'
           set -euo pipefail
