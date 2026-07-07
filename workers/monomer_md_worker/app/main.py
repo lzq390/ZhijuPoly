@@ -141,10 +141,32 @@ def _probe_real_runtime() -> tuple[bool, str | None]:
     except OSError as exc:
         return False, str(exc)
 
-    if completed.returncode == 0:
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip().splitlines()
+        message = detail[-1] if detail else f"runtime import probe exited {completed.returncode}"
+        return False, message[:500]
+
+    try:
+        gmx_completed = subprocess.run(
+            ["gmx", "--version"],
+            cwd=settings.byteff2_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=settings.health_probe_timeout_seconds,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False, "gmx was not found on PATH"
+    except subprocess.TimeoutExpired:
+        return False, f"gmx probe timed out after {settings.health_probe_timeout_seconds}s"
+    except OSError as exc:
+        return False, str(exc)
+
+    if gmx_completed.returncode == 0:
         return True, None
-    detail = (completed.stderr or completed.stdout or "").strip().splitlines()
-    message = detail[-1] if detail else f"runtime import probe exited {completed.returncode}"
+    detail = (gmx_completed.stderr or gmx_completed.stdout or "").strip().splitlines()
+    message = detail[-1] if detail else f"gmx probe exited {gmx_completed.returncode}"
     return False, message[:500]
 
 

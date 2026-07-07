@@ -77,6 +77,33 @@ def test_real_health_reports_runtime_probe_failure(tmp_path: Path, monkeypatch):
     assert "openmm" in (response.runtime_error or "")
 
 
+def test_real_health_reports_missing_gmx_after_import_probe(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, mode="real", app_postgres_dsn="postgresql://db/app")
+    settings.byteff2_root.mkdir()
+    monkeypatch.setattr(worker_main, "settings", settings)
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[0] == settings.byteff2_python:
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=127,
+            stdout="",
+            stderr="gmx: command not found\n",
+        )
+
+    monkeypatch.setattr(worker_main.subprocess, "run", fake_run)
+
+    response = worker_main._build_health_response()
+
+    assert response.status == "degraded"
+    assert response.runtime_ready is False
+    assert "gmx" in (response.runtime_error or "")
+    assert any(call == ["gmx", "--version"] for call in calls)
+
+
 def test_submit_rejects_real_degraded_worker(tmp_path: Path, monkeypatch):
     settings = _settings(tmp_path, mode="real", app_postgres_dsn=None)
     settings.byteff2_root.mkdir()

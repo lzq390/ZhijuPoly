@@ -12,6 +12,10 @@ export NEXPOLY_GPU_DEVICE="${NEXPOLY_GPU_DEVICE:-2}"
 export MONOMER_MD_CUDA_VISIBLE_DEVICES="${MONOMER_MD_CUDA_VISIBLE_DEVICES:-$NEXPOLY_GPU_DEVICE}"
 export BYTEFF2_PYTHON="${BYTEFF2_PYTHON:-${MONOMER_MD_PYTHON:-python}}"
 
+if [[ "$BYTEFF2_PYTHON" == */* ]]; then
+  export PATH="$(dirname "$BYTEFF2_PYTHON"):$PATH"
+fi
+
 if [[ -z "${APP_POSTGRES_DSN:-}" ]]; then
   echo "APP_POSTGRES_DSN is required for the monomer MD worker." >&2
   exit 2
