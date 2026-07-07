@@ -37,16 +37,26 @@ class MonomerMdWorkerSubmitPayload:
 class MonomerMdWorkerClient:
     def __init__(self, *, base_url: str, timeout_seconds: float) -> None:
         parsed = urlparse(base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        if parsed.scheme == "http+unix":
+            try:
+                import requests_unixsocket
+            except ImportError as exc:  # pragma: no cover - deployment dependency.
+                raise MonomerMdWorkerError(
+                    "requests-unixsocket is required for http+unix monomer MD worker URLs"
+                ) from exc
+            self.session = requests_unixsocket.Session()
+        elif parsed.scheme in {"http", "https"} and parsed.netloc:
+            self.session = requests.Session()
+        else:
             raise MonomerMdWorkerError(
-                "MONOMER_MD_WORKER_BASE_URL must be an http(s) URL"
+                "MONOMER_MD_WORKER_BASE_URL must be an http(s) or http+unix URL"
             )
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = max(1.0, float(timeout_seconds))
 
     def get_health(self) -> dict[str, Any]:
         try:
-            response = requests.get(
+            response = self.session.get(
                 f"{self.base_url}/health",
                 timeout=self.timeout_seconds,
             )
@@ -60,7 +70,7 @@ class MonomerMdWorkerClient:
 
     def submit_job(self, payload: MonomerMdWorkerSubmitPayload) -> MonomerMdWorkerSubmission:
         try:
-            response = requests.post(
+            response = self.session.post(
                 f"{self.base_url}/jobs",
                 json=payload.to_json(),
                 timeout=self.timeout_seconds,

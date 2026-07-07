@@ -33,6 +33,7 @@ x-backend-volumes: &backend-volumes
   - ./model/ocsr:/app/model/ocsr:ro
   - ./model/conditional_generation:/app/model/conditional_generation:ro
   - ./model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
+  - ${MONOMER_MD_WORKER_SOCKET_DIR:-/data/lzq/monomer-md-worker-socket}:/app/monomer-md-worker
 
 services:
   postgres-init:

@@ -22,4 +22,10 @@ if [[ "$MONOMER_MD_WORKER_MODE" == "real" && ! -d "$BYTEFF2_ROOT" ]]; then
   exit 2
 fi
 
+if [[ -n "${MONOMER_MD_WORKER_UDS:-}" ]]; then
+  mkdir -p "$(dirname "$MONOMER_MD_WORKER_UDS")"
+  rm -f "$MONOMER_MD_WORKER_UDS"
+  exec "${MONOMER_MD_PYTHON:-python}" -m uvicorn app.main:app --uds "$MONOMER_MD_WORKER_UDS"
+fi
+
 exec "${MONOMER_MD_PYTHON:-python}" -m uvicorn app.main:app --host "$MONOMER_MD_WORKER_HOST" --port "$MONOMER_MD_WORKER_PORT"

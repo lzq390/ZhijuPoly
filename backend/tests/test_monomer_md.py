@@ -221,7 +221,7 @@ def test_monomer_md_job_rejects_non_json_health_without_creating_row(postgres_ds
     def fake_get(*args, **kwargs):
         return FakeResponse(content=b"not json", json_error=ValueError("bad json"))
 
-    monkeypatch.setattr("app.services.monomer_md_worker_client.requests.get", fake_get)
+    monkeypatch.setattr("app.services.monomer_md_worker_client.requests.Session.get", fake_get)
 
     response = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"})
 
@@ -408,7 +408,7 @@ def test_monomer_md_worker_client_rejects_non_json_submit_response(monkeypatch):
             json_error=ValueError("bad json"),
         )
 
-    monkeypatch.setattr("app.services.monomer_md_worker_client.requests.post", fake_post)
+    monkeypatch.setattr("app.services.monomer_md_worker_client.requests.Session.post", fake_post)
 
     payload = MonomerMdWorkerSubmitPayload(
         job_id="job-1",
@@ -436,7 +436,7 @@ def test_monomer_md_worker_client_uses_configured_health_timeout(monkeypatch):
             json_data={"status": "ok"},
         )
 
-    monkeypatch.setattr("app.services.monomer_md_worker_client.requests.get", fake_get)
+    monkeypatch.setattr("app.services.monomer_md_worker_client.requests.Session.get", fake_get)
 
     client.get_health()
 
@@ -449,7 +449,7 @@ def test_monomer_md_worker_client_rejects_submit_response_without_job_id(monkeyp
     def fake_post(*args, **kwargs):
         return FakeResponse(status_code=202, content=b"{}", json_data={"status": "submitted"})
 
-    monkeypatch.setattr("app.services.monomer_md_worker_client.requests.post", fake_post)
+    monkeypatch.setattr("app.services.monomer_md_worker_client.requests.Session.post", fake_post)
 
     payload = MonomerMdWorkerSubmitPayload(
         job_id="job-1",

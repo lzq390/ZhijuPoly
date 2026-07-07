@@ -122,6 +122,7 @@ APP_POSTGRES_DSN=postgresql://polyprop:polyprop@127.0.0.1:55432/nexpoly
 BYTEFF2_ROOT=/data/lzq/gith/byteff2
 PYTHONPATH=/data/lzq/gith/byteff2:/data/lzq/gith/byteff2/submodules/bytemol
 MONOMER_MD_JOB_ROOT=/data/lzq/monomer-md-worker-runs
+MONOMER_MD_WORKER_UDS=/data/lzq/monomer-md-worker-socket/worker.sock
 MONOMER_MD_WORKER_MODE=real
 MONOMER_MD_WORKER_HOST=172.27.0.1
 MONOMER_MD_WORKER_HEALTH_HOST=172.27.0.1
@@ -130,9 +131,18 @@ MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS=20
 NEXPOLY_GPU_DEVICE=2
 ```
 
-On the production compose network, set `MONOMER_MD_WORKER_HOST` and the
-backend `MONOMER_MD_WORKER_BASE_URL` to the `nexpoly_default` gateway reported
-by `docker network inspect nexpoly_default --format '{{(index .IPAM.Config 0).Gateway}}'`.
+On the production server, prefer the Unix socket path:
+
+```bash
+MONOMER_MD_WORKER_SOCKET_DIR=/data/lzq/monomer-md-worker-socket
+MONOMER_MD_WORKER_BASE_URL=http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock
+```
+
+The backend container mounts `MONOMER_MD_WORKER_SOCKET_DIR` at
+`/app/monomer-md-worker`, so this avoids relying on Docker-to-host TCP routing.
+If TCP is used instead, set `MONOMER_MD_WORKER_HOST` and the backend
+`MONOMER_MD_WORKER_BASE_URL` to the `nexpoly_default` gateway reported by
+`docker network inspect nexpoly_default --format '{{(index .IPAM.Config 0).Gateway}}'`.
 
 ```bash
 cd /data/lzq/gith/nexpoly/workers/monomer_md_worker

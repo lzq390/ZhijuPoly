@@ -346,7 +346,24 @@ stop_monomer_worker() {
 wait_for_monomer_worker() {
   local port="${MONOMER_MD_WORKER_PORT:-18010}"
   local health_host="${MONOMER_MD_WORKER_HEALTH_HOST:-${MONOMER_MD_WORKER_HOST:-127.0.0.1}}"
+  local max_time="${MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS:-5}"
   local payload=""
+
+  max_time=$((max_time + 5))
+  if [[ -n "${MONOMER_MD_WORKER_UDS:-}" ]]; then
+    log "Waiting for monomer MD worker health on unix socket $MONOMER_MD_WORKER_UDS."
+    for _ in $(seq 1 90); do
+      payload="$(curl --silent --show-error --max-time "$max_time" --unix-socket "$MONOMER_MD_WORKER_UDS" "http://monomer-md-worker/health" 2>/dev/null || true)"
+      if json_field_is "$payload" status ok && json_field_is "$payload" runtime_ready true; then
+        printf '%s\n' "$payload"
+        return 0
+      fi
+      sleep 2
+    done
+
+    printf '[nexpoly-deploy] Last monomer MD worker health payload: %s\n' "$payload" >&2
+    die "Monomer MD worker did not become healthy."
+  fi
 
   if [[ "$health_host" == "0.0.0.0" || "$health_host" == "::" ]]; then
     health_host="127.0.0.1"
@@ -354,7 +371,7 @@ wait_for_monomer_worker() {
 
   log "Waiting for monomer MD worker health on $health_host:$port."
   for _ in $(seq 1 90); do
-    payload="$(curl --silent --show-error --max-time 5 "http://${health_host}:${port}/health" 2>/dev/null || true)"
+    payload="$(curl --silent --show-error --max-time "$max_time" "http://${health_host}:${port}/health" 2>/dev/null || true)"
     if json_field_is "$payload" status ok && json_field_is "$payload" runtime_ready true; then
       printf '%s\n' "$payload"
       return 0
