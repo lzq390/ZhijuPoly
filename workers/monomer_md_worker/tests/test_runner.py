@@ -133,5 +133,5 @@ def test_byteff2_adapter_adds_missing_gro_box_line(tmp_path: Path):
 
     lines = gro_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 5
-    assert lines[2].startswith("    1MONOMER")
+    assert lines[2].startswith("    1MONOM    C    1")
     assert lines[4] == "  10.00000  10.00000  10.00000"

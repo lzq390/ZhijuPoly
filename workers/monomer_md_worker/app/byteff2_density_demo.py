@@ -298,15 +298,56 @@ def _ensure_gro_box_line(gro_path: Path) -> None:
     box_index = atom_count + 2
     if len(lines) < box_index:
         return
-    if len(lines) > box_index and lines[box_index].strip():
-        return
+    fixed_lines = lines[:2]
+    for line in lines[2:box_index]:
+        fixed_lines.append(_normalize_gro_atom_line(line))
+
     box_nm = float(os.getenv("MONOMER_MD_DEMO_INPUT_BOX_NM", "10.0"))
     box_line = f"{box_nm:10.5f}{box_nm:10.5f}{box_nm:10.5f}"
-    fixed_lines = lines[:box_index]
-    fixed_lines.append(box_line)
+    if len(lines) > box_index and lines[box_index].strip():
+        fixed_lines.append(lines[box_index])
+    else:
+        fixed_lines.append(box_line)
     if len(lines) > box_index + 1:
         fixed_lines.extend(lines[box_index + 1 :])
     gro_path.write_text("\n".join(fixed_lines) + "\n", encoding="utf-8")
+
+
+def _normalize_gro_atom_line(line: str) -> str:
+    parts = line.split()
+    if len(parts) < 6:
+        return line
+    residue = parts[0]
+    residue_id_text = ""
+    residue_name = ""
+    for index, char in enumerate(residue):
+        if not char.isdigit():
+            residue_id_text = residue[:index]
+            residue_name = residue[index:]
+            break
+    if not residue_id_text or not residue_name:
+        return line
+    try:
+        residue_id = int(residue_id_text)
+        atom_name = parts[1]
+        atom_id = int(parts[2])
+        x = float(parts[3])
+        y = float(parts[4])
+        z = float(parts[5])
+        velocities = [float(value) for value in parts[6:9]]
+    except ValueError:
+        return line
+
+    normalized = (
+        f"{residue_id % 100000:5d}"
+        f"{residue_name[:5]:<5}"
+        f"{atom_name[:5]:>5}"
+        f"{atom_id % 100000:5d}"
+        f"{x:8.3f}{y:8.3f}{z:8.3f}"
+    )
+    if len(velocities) == 3:
+        normalized += f"{velocities[0]:8.4f}{velocities[1]:8.4f}{velocities[2]:8.4f}"
+    return normalized
 
 
 def _series_from_dataframe(df: Any, *, fields: tuple[str, ...], value_multiplier: float = 1.0) -> list[dict[str, Any]]:
