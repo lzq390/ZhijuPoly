@@ -19,6 +19,7 @@ backend/data/
 *.db
 *.sqlite
 *.sqlite3
+backups/
 
 # Frontend build artifacts and dependencies
 frontend/node_modules/
@@ -30,6 +31,12 @@ frontend/vite.config.d.ts
 
 # Large source datasets are imported before deployment.
 database/
+
+# Large runtime model directories are mounted through docker-compose.
+model/conditional_generation/
+model/reactiont5-retrosynthesis/
+model/ocsr/
+!model/ocsr/README.md
 
 # Local release bundles
 release/
