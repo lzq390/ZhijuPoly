@@ -345,11 +345,16 @@ stop_monomer_worker() {
 
 wait_for_monomer_worker() {
   local port="${MONOMER_MD_WORKER_PORT:-18010}"
+  local health_host="${MONOMER_MD_WORKER_HEALTH_HOST:-${MONOMER_MD_WORKER_HOST:-127.0.0.1}}"
   local payload=""
 
-  log "Waiting for monomer MD worker health on 127.0.0.1:$port."
+  if [[ "$health_host" == "0.0.0.0" || "$health_host" == "::" ]]; then
+    health_host="127.0.0.1"
+  fi
+
+  log "Waiting for monomer MD worker health on $health_host:$port."
   for _ in $(seq 1 90); do
-    payload="$(curl --silent --show-error --max-time 5 "http://127.0.0.1:${port}/health" 2>/dev/null || true)"
+    payload="$(curl --silent --show-error --max-time 5 "http://${health_host}:${port}/health" 2>/dev/null || true)"
     if json_field_is "$payload" status ok && json_field_is "$payload" runtime_ready true; then
       printf '%s\n' "$payload"
       return 0
