@@ -23,10 +23,10 @@ const TERMINAL_STATUSES = new Set<MonomerMdJobStatus>(["completed", "failed", "c
 export function getMonomerMdSmilesValidationError(smiles: string): string | null {
   const normalizedSmiles = smiles.trim();
   if (!normalizedSmiles) {
-    return "Enter a monomer SMILES.";
+    return "请输入单体 SMILES。";
   }
   if (normalizedSmiles.includes("*")) {
-    return "Monomer MD simulation accepts ordinary SMILES only; remove * repeat-unit markers.";
+    return "单体 MD 只接受普通单分子 SMILES，请去掉 * 重复单元标记。";
   }
   return null;
 }
@@ -57,9 +57,9 @@ function delay(ms: number) {
 
 function jobErrorMessage(job: MonomerMdJobResponse) {
   if (job.status === "cancelled") {
-    return job.message ?? "Monomer MD simulation was cancelled.";
+    return job.message ?? "单体 MD 模拟已取消。";
   }
-  return job.error ?? job.message ?? "Monomer MD simulation failed.";
+  return job.error ?? job.message ?? "单体 MD 模拟失败。";
 }
 
 export function useMonomerMdSimulation() {
@@ -94,7 +94,7 @@ export function useMonomerMdSimulation() {
         ...current,
         serviceStatus: null,
         isStatusLoading: false,
-        statusError: error instanceof Error ? error.message : "Failed to check monomer MD service status."
+        statusError: error instanceof Error ? error.message : "检查单体 MD 服务状态失败。"
       }));
     }
   }, []);
@@ -157,7 +157,7 @@ export function useMonomerMdSimulation() {
       setState((current) => ({
         ...current,
         isLoading: false,
-        error: error instanceof Error ? error.message : "Failed to submit monomer MD simulation."
+        error: error instanceof Error ? error.message : "提交单体 MD 模拟失败。"
       }));
     }
   }

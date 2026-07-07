@@ -40,26 +40,42 @@ type PlotPoint = {
 };
 
 const STATUS_LABELS: Record<MonomerMdJobStatus, string> = {
-  pending: "Pending",
-  submitted: "Submitted",
-  running: "Running",
-  completed: "Completed",
-  failed: "Failed",
-  cancelled: "Cancelled"
+  pending: "等待提交",
+  submitted: "已提交",
+  running: "运行中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消"
 };
 
 const STATUS_STEPS: MonomerMdJobStatus[] = ["pending", "submitted", "running", "completed"];
 const SUMMARY_LABELS: Record<string, string> = {
-  final_density_g_cm3: "Final density",
-  mean_density_g_cm3: "Mean density",
-  mean_temperature_k: "Mean temperature",
-  final_temperature_k: "Final temperature",
-  mean_total_energy_kcal_mol: "Mean total energy",
-  final_total_energy_kcal_mol: "Final total energy",
-  elapsed_seconds: "Elapsed time",
-  n_atoms: "Atoms",
-  n_frames: "Frames",
-  n_steps: "Steps"
+  final_density_g_cm3: "最终密度",
+  mean_density_g_cm3: "平均密度",
+  mean_temperature_k: "平均温度",
+  final_temperature_k: "最终温度",
+  mean_total_energy_kcal_mol: "平均总能量",
+  final_total_energy_kcal_mol: "最终总能量",
+  elapsed_seconds: "耗时",
+  n_atoms: "原子数",
+  n_frames: "帧数",
+  n_steps: "步数"
+};
+
+const RESULT_MESSAGE_TRANSLATIONS: Record<string, string> = {
+  "1000-step demo output is not equilibrated and is not a physical density estimate.": "1000 步演示结果尚未达到平衡，不能作为物理密度估计。",
+  "Density demo output is not equilibrated and is not a physical density estimate.": "密度演示输出尚未达到平衡，不能作为物理密度估计。"
+};
+
+const UI_MESSAGE_TRANSLATIONS: Record<string, string> = {
+  "Backend reports that monomer MD service is unavailable.": "后端报告单体 MD 服务当前不可用。",
+  "monomer MD worker is ready": "单体 MD worker 已就绪。",
+  "monomer MD worker is not configured": "单体 MD worker 尚未配置。",
+  "monomer MD worker is not reachable": "无法连接单体 MD worker。",
+  "monomer MD worker database is not configured": "单体 MD worker 数据库尚未配置。",
+  "monomer MD worker ByteFF2 root is not available": "单体 MD worker 找不到 ByteFF2 根目录。",
+  "monomer MD worker runtime is not ready": "单体 MD worker 运行环境尚未就绪。",
+  "Failed to fetch": "网络请求失败。"
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -78,7 +94,7 @@ function numericValue(value: unknown): number | null {
 }
 
 function formatNumber(value: number, digits = 2) {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: digits }).format(value);
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: digits }).format(value);
 }
 
 function formatValue(value: unknown) {
@@ -87,12 +103,20 @@ function formatValue(value: unknown) {
     return formatNumber(numeric, Math.abs(numeric) >= 100 ? 1 : 3);
   }
   if (typeof value === "boolean") {
-    return value ? "Yes" : "No";
+    return value ? "是" : "否";
   }
   if (typeof value === "string" && value.trim()) {
     return value;
   }
   return "--";
+}
+
+function translateResultMessage(message: string) {
+  return RESULT_MESSAGE_TRANSLATIONS[message] ?? message;
+}
+
+function translateUiMessage(message: string) {
+  return UI_MESSAGE_TRANSLATIONS[message] ?? message;
 }
 
 function normalizeSeries(series: MonomerMdSeries | undefined, valueKeys: string[]): PlotPoint[] {
@@ -215,12 +239,12 @@ function StatusBadge({ status }: { status: MonomerMdJobStatus | null }) {
       {status === "completed" ? <CheckCircle2 className="h-3.5 w-3.5" /> : null}
       {status === "failed" || status === "cancelled" ? <XCircle className="h-3.5 w-3.5" /> : null}
       {status === "pending" || status === "submitted" || status === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-      {status ? STATUS_LABELS[status] : "Not submitted"}
+      {status ? STATUS_LABELS[status] : "未提交"}
     </span>
   );
 }
 
-function SeriesCard({ title, series, unit, color, valueKeys, isLoading }: { title: string; series: MonomerMdSeries | undefined; unit: string; color: string; valueKeys: string[]; isLoading: boolean }) {
+function SeriesCard({ title, chartLabel, series, unit, color, valueKeys, isLoading }: { title: string; chartLabel: string; series: MonomerMdSeries | undefined; unit: string; color: string; valueKeys: string[]; isLoading: boolean }) {
   const points = normalizeSeries(series, valueKeys);
   const latest = points[points.length - 1];
   return (
@@ -228,7 +252,7 @@ function SeriesCard({ title, series, unit, color, valueKeys, isLoading }: { titl
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[11px] font-semibold uppercase text-slate-400">{title}</div>
-          <div className="mt-1 text-sm font-semibold text-slate-950">{title} curve</div>
+          <div className="mt-1 text-sm font-semibold text-slate-950">{chartLabel}</div>
         </div>
         <div className="text-right">
           <div className="text-lg font-semibold tabular-nums text-slate-950">{latest ? formatNumber(latest.y, Math.abs(latest.y) >= 100 ? 1 : 3) : "--"}</div>
@@ -237,18 +261,18 @@ function SeriesCard({ title, series, unit, color, valueKeys, isLoading }: { titl
       </div>
       <div className="mt-4 flex min-h-[126px] flex-1 items-center justify-center rounded-lg border border-slate-100 bg-slate-50/80">
         {points.length > 1 ? (
-          <svg viewBox="0 0 320 120" role="img" aria-label={`${title} curve`} className="h-full w-full">
+          <svg viewBox="0 0 320 120" role="img" aria-label={chartLabel} className="h-full w-full">
             <line x1="14" y1="28" x2="306" y2="28" stroke="#e2e8f0" strokeDasharray="4 5" />
             <line x1="14" y1="60" x2="306" y2="60" stroke="#e2e8f0" strokeDasharray="4 5" />
             <line x1="14" y1="92" x2="306" y2="92" stroke="#e2e8f0" strokeDasharray="4 5" />
             <polyline points={polyline(points)} fill="none" stroke={color} strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
           </svg>
         ) : (
-          <div className="px-4 text-center text-xs leading-5 text-slate-500">{isLoading ? "Waiting for series data from the backend." : "Submit a SMILES to show this curve."}</div>
+          <div className="px-4 text-center text-xs leading-5 text-slate-500">{isLoading ? "正在等待后端返回曲线数据。" : "提交一个 SMILES 后显示该曲线。"}</div>
         )}
       </div>
       <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-slate-500">
-        <span>{points.length ? `${points.length} points` : "No data"}</span>
+        <span>{points.length ? `${points.length} 个采样点` : "暂无数据"}</span>
         <span>{latest ? formatNumber(latest.x, 1) : "--"}</span>
       </div>
     </section>
@@ -259,7 +283,7 @@ function SummaryPanel({ result }: { result: MonomerMdSimulationResult | null }) 
   const entries = summaryEntries(result);
   return (
     <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Gauge className="h-4 w-4 text-sky-600" />Summary</div>
+      <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Gauge className="h-4 w-4 text-sky-600" />结果摘要</div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {entries.length ? entries.map(([key, value]) => (
           <div key={key} className="min-h-[72px] rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
@@ -267,7 +291,7 @@ function SummaryPanel({ result }: { result: MonomerMdSimulationResult | null }) 
             <div className="mt-1 break-words text-sm font-semibold text-slate-950">{formatValue(value)}</div>
           </div>
         )) : (
-          <div className="col-span-full min-h-[72px] rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-sm text-slate-500">Density, temperature, energy, and sampling summary appear after completion.</div>
+          <div className="col-span-full min-h-[72px] rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-sm text-slate-500">完成后将显示密度、温度、能量和采样摘要。</div>
         )}
       </div>
     </section>
@@ -280,12 +304,12 @@ function TrajectoryCard({ trajectory }: { trajectory: MonomerMdTrajectoryPreview
   return (
     <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Atom className="h-4 w-4 text-teal-600" />Trajectory preview</div>
-        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{trajectory?.stage_id ?? "preview"}</span>
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Atom className="h-4 w-4 text-teal-600" />轨迹预览</div>
+        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{trajectory?.stage_id ?? "预览"}</span>
       </div>
       <div className="mt-4 min-h-[220px] rounded-lg border border-slate-100 bg-slate-50">
         {visiblePoints.length ? (
-          <svg viewBox="0 0 320 180" role="img" aria-label="Trajectory projection" className="h-full min-h-[220px] w-full">
+          <svg viewBox="0 0 320 180" role="img" aria-label="轨迹投影" className="h-full min-h-[220px] w-full">
             <rect x="12" y="12" width="296" height="156" rx="10" fill="#ffffff" stroke="#e2e8f0" />
             {visiblePoints.map((point, index) => {
               const projected = projectAtom(point, visiblePoints);
@@ -293,15 +317,15 @@ function TrajectoryCard({ trajectory }: { trajectory: MonomerMdTrajectoryPreview
             })}
           </svg>
         ) : trajectory?.preview_url ? (
-          <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 px-4 text-center text-sm text-slate-600"><Database className="h-5 w-5 text-slate-400" /><a className="font-medium text-sky-700 hover:text-sky-800" href={trajectory.preview_url} target="_blank" rel="noreferrer">Open trajectory preview</a></div>
+          <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 px-4 text-center text-sm text-slate-600"><Database className="h-5 w-5 text-slate-400" /><a className="font-medium text-sky-700 hover:text-sky-800" href={trajectory.preview_url} target="_blank" rel="noreferrer">打开轨迹预览</a></div>
         ) : (
-          <div className="flex min-h-[220px] items-center justify-center px-4 text-center text-sm text-slate-500">Trajectory samples or a preview file appear after completion.</div>
+          <div className="flex min-h-[220px] items-center justify-center px-4 text-center text-sm text-slate-500">完成后将显示轨迹采样或预览文件。</div>
         )}
       </div>
       <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
-        <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">Frame</span><span className="font-semibold text-slate-900">{trajectory?.frame_index ?? "--"}</span></div>
-        <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">Time</span><span className="font-semibold text-slate-900">{trajectory?.time_ps != null ? `${formatNumber(trajectory.time_ps, 1)} ps` : "--"}</span></div>
-        <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">Sampled</span><span className="font-semibold text-slate-900">{trajectory?.sampled_points ?? (points.length || "--")}</span></div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">帧</span><span className="font-semibold text-slate-900">{trajectory?.frame_index ?? "--"}</span></div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">时间</span><span className="font-semibold text-slate-900">{trajectory?.time_ps != null ? `${formatNumber(trajectory.time_ps, 1)} ps` : "--"}</span></div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">采样点</span><span className="font-semibold text-slate-900">{trajectory?.sampled_points ?? (points.length || "--")}</span></div>
       </div>
     </section>
   );
@@ -311,7 +335,7 @@ function ArtifactsPanel({ result }: { result: MonomerMdSimulationResult | null }
   const artifacts = normalizeArtifacts(result?.artifacts);
   return (
     <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Database className="h-4 w-4 text-slate-600" />Artifacts</div>
+      <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Database className="h-4 w-4 text-slate-600" />输出文件</div>
       <div className="mt-3 space-y-2">
         {artifacts.length ? artifacts.map((artifact, index) => {
           const label = artifact.label ?? artifact.name ?? `artifact-${index + 1}`;
@@ -319,10 +343,10 @@ function ArtifactsPanel({ result }: { result: MonomerMdSimulationResult | null }
           return (
             <div key={`${label}-${index}`} className="flex min-h-[54px] items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
               <div className="min-w-0"><div className="truncate text-sm font-medium text-slate-950">{label}</div><div className="truncate text-xs text-slate-500">{detail}</div></div>
-              <div className="shrink-0 text-right text-xs text-slate-500">{artifact.url ? <a href={artifact.url} target="_blank" rel="noreferrer" className="font-medium text-sky-700 hover:text-sky-800">Open</a> : "--"}</div>
+              <div className="shrink-0 text-right text-xs text-slate-500">{artifact.url ? <a href={artifact.url} target="_blank" rel="noreferrer" className="font-medium text-sky-700 hover:text-sky-800">打开</a> : "--"}</div>
             </div>
           );
-        }) : <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-sm text-slate-500">Trajectory, log, and series artifacts appear after completion.</div>}
+        }) : <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-sm text-slate-500">完成后将显示轨迹、日志和曲线数据文件。</div>}
       </div>
     </section>
   );
@@ -334,7 +358,7 @@ function ResultNotice({ result, completedWithoutResult }: { result: MonomerMdSim
       <section className="rounded-[14px] border border-red-100 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700">
         <span className="inline-flex items-start gap-2">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-          The job completed, but the backend did not return a result payload. Check the worker logs and artifact path before using this run.
+          任务已完成，但后端没有返回结果数据。使用本次结果前，请先检查 worker 日志和输出文件路径。
         </span>
       </section>
     );
@@ -345,11 +369,11 @@ function ResultNotice({ result, completedWithoutResult }: { result: MonomerMdSim
 
   const messages = new Set<string>();
   if (result.not_equilibrated || result.physical_density_estimate === false) {
-    messages.add("1000-step demo output is not equilibrated and is not a physical density estimate.");
+    messages.add("1000 步演示结果尚未达到平衡，不能作为物理密度估计。");
   }
   for (const warning of result.warnings ?? []) {
     if (warning.trim()) {
-      messages.add(warning.trim());
+      messages.add(translateResultMessage(warning.trim()));
     }
   }
   if (!messages.size) {
@@ -392,37 +416,37 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
       <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-4">
         <nav className="flex flex-col gap-3 rounded-[14px] border border-slate-200 bg-white px-4 py-3 shadow-sm md:flex-row md:items-center md:justify-between">
           <div className="flex min-w-0 items-center gap-3">
-            <Button type="button" variant="outline" onClick={onBackHome} className="h-9 shrink-0 rounded-md border-slate-200 bg-white px-3 text-slate-700 shadow-none hover:border-slate-300 hover:bg-slate-50"><ArrowLeft className="mr-2 h-4 w-4" />Back</Button>
-            <div className="min-w-0"><div className="text-[11px] font-semibold uppercase text-slate-400">Monomer MD Workbench</div><div className="truncate text-base font-semibold text-slate-950">{"\u5355\u4f53 MD \u6a21\u62df"}</div></div>
+            <Button type="button" variant="outline" onClick={onBackHome} className="h-9 shrink-0 rounded-md border-slate-200 bg-white px-3 text-slate-700 shadow-none hover:border-slate-300 hover:bg-slate-50"><ArrowLeft className="mr-2 h-4 w-4" />返回</Button>
+            <div className="min-w-0"><div className="text-[11px] font-semibold uppercase text-slate-400">单体 MD 工作台</div><div className="truncate text-base font-semibold text-slate-950">单体 MD 模拟</div></div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className={cn("inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-medium", serviceUnavailable ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-600")}>
               {simulation.isStatusLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
-              {simulation.isStatusLoading ? "Checking worker" : simulation.statusError ? "Status check failed" : serviceUnavailable ? "Worker unavailable" : "Worker available"}
+              {simulation.isStatusLoading ? "正在检查计算服务" : simulation.statusError ? "状态检查失败" : serviceUnavailable ? "计算服务不可用" : "计算服务可用"}
             </span>
-            <Button type="button" variant="outline" onClick={() => void simulation.refreshStatus()} className="h-8 rounded-md border-slate-200 bg-white px-2.5 text-xs text-slate-600 shadow-none hover:bg-slate-50"><RotateCw className="mr-1.5 h-3.5 w-3.5" />Refresh</Button>
+            <Button type="button" variant="outline" onClick={() => void simulation.refreshStatus()} className="h-8 rounded-md border-slate-200 bg-white px-2.5 text-xs text-slate-600 shadow-none hover:bg-slate-50"><RotateCw className="mr-1.5 h-3.5 w-3.5" />刷新</Button>
           </div>
         </nav>
 
         <section className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
           <div className="flex min-w-0 flex-col gap-4">
             <form onSubmit={handleSubmit} className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] font-semibold uppercase text-slate-400">Input</div><h1 className="mt-1 text-base font-semibold text-slate-950">Monomer SMILES</h1></div><span className="rounded-md bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700">Molecule</span></div>
-              <label className="mt-4 block space-y-2"><span className="text-xs font-medium text-slate-600">SMILES</span><Textarea value={simulation.smiles} onChange={(event) => simulation.setSmiles(event.target.value)} placeholder="Example: CCOC(=O)c1ccc(N)cc1" spellCheck={false} className="min-h-[96px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200" disabled={simulation.isLoading} /></label>
-              <div className="mt-2 min-h-[20px] text-xs text-slate-500">{validationError ? <span className="text-red-600">{validationError}</span> : "Use a monomer structure without *. Repeat-unit inputs belong on the MD demo page."}</div>
-              <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">This first-phase run is a 1000-step demo. It is not equilibrated and is not a physical density estimate.</div>
-              <div className="mt-4 flex flex-wrap items-center gap-2"><Button type="submit" disabled={!canSubmit} className="h-10 rounded-md px-4 shadow-none disabled:opacity-[0.45]">{simulation.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}{simulation.isLoading ? "Running" : "Submit simulation"}</Button><Button type="button" variant="outline" onClick={simulation.reset} disabled={simulation.isLoading} className="h-10 rounded-md border-slate-200 bg-white px-4 text-slate-700 shadow-none hover:bg-slate-50">Clear results</Button></div>
-              {serviceUnavailable ? <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">{simulation.serviceStatus?.message ?? "Backend reports that monomer MD service is unavailable."}</div> : null}
-              {simulation.statusError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">Status endpoint unavailable: {simulation.statusError}</div> : null}
+              <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] font-semibold uppercase text-slate-400">输入</div><h1 className="mt-1 text-base font-semibold text-slate-950">单体 SMILES</h1></div><span className="rounded-md bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700">小分子</span></div>
+              <label className="mt-4 block space-y-2"><span className="text-xs font-medium text-slate-600">SMILES</span><Textarea value={simulation.smiles} onChange={(event) => simulation.setSmiles(event.target.value)} placeholder="示例：CCOC(=O)c1ccc(N)cc1" spellCheck={false} className="min-h-[96px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200" disabled={simulation.isLoading} /></label>
+              <div className="mt-2 min-h-[20px] text-xs text-slate-500">{validationError ? <span className="text-red-600">{validationError}</span> : "可输入任意普通单分子 SMILES；不要输入带 * 的聚合物重复单元。"}</div>
+              <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">第一阶段只运行 1000 步演示。结果尚未达到平衡，不能作为真实物理密度结论。</div>
+              <div className="mt-4 flex flex-wrap items-center gap-2"><Button type="submit" disabled={!canSubmit} className="h-10 rounded-md px-4 shadow-none disabled:opacity-[0.45]">{simulation.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}{simulation.isLoading ? "运行中" : "提交模拟"}</Button><Button type="button" variant="outline" onClick={simulation.reset} disabled={simulation.isLoading} className="h-10 rounded-md border-slate-200 bg-white px-4 text-slate-700 shadow-none hover:bg-slate-50">清空结果</Button></div>
+              {serviceUnavailable ? <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">{simulation.serviceStatus?.message ? translateUiMessage(simulation.serviceStatus.message) : "后端报告单体 MD 服务当前不可用。"}</div> : null}
+              {simulation.statusError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">状态接口不可用：{translateUiMessage(simulation.statusError)}</div> : null}
             </form>
 
             <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Timer className="h-4 w-4 text-slate-600" />Job status</div><StatusBadge status={currentStatus} /></div>
+              <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Timer className="h-4 w-4 text-slate-600" />任务状态</div><StatusBadge status={currentStatus} /></div>
               <div className="mt-4 space-y-3">
-                <label className="block space-y-1.5"><span className="text-xs font-medium text-slate-500">Job ID</span><Input value={simulation.job?.job_id ?? ""} readOnly placeholder="No job yet" className="h-9 rounded-md border-slate-200 bg-slate-50 font-mono text-xs shadow-none" /></label>
-                <div><div className="mb-1 flex items-center justify-between text-xs text-slate-500"><span>{currentStatus ? STATUS_LABELS[currentStatus] : "Submit to start polling the backend job."}</span><span className="tabular-nums">{formatNumber(progress, 0)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={cn("h-full rounded-full transition-all", currentStatus === "failed" || currentStatus === "cancelled" ? "bg-red-500" : "bg-sky-500")} style={{ width: `${progress}%` }} /></div></div>
+                <label className="block space-y-1.5"><span className="text-xs font-medium text-slate-500">任务 ID</span><Input value={simulation.job?.job_id ?? ""} readOnly placeholder="暂无任务" className="h-9 rounded-md border-slate-200 bg-slate-50 font-mono text-xs shadow-none" /></label>
+                <div><div className="mb-1 flex items-center justify-between text-xs text-slate-500"><span>{currentStatus ? STATUS_LABELS[currentStatus] : "提交后开始轮询后端任务。"}</span><span className="tabular-nums">{formatNumber(progress, 0)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={cn("h-full rounded-full transition-all", currentStatus === "failed" || currentStatus === "cancelled" ? "bg-red-500" : "bg-sky-500")} style={{ width: `${progress}%` }} /></div></div>
                 <div className="grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-1">{STATUS_STEPS.map((status) => { const active = currentStatus === status; const complete = STATUS_STEPS.indexOf(currentStatus ?? "pending") > STATUS_STEPS.indexOf(status) || currentStatus === "completed"; return <div key={status} className={cn("flex items-center justify-between rounded-lg border px-3 py-2", active ? "border-sky-200 bg-sky-50 text-sky-800" : complete ? "border-emerald-100 bg-emerald-50 text-emerald-800" : "border-slate-100 bg-slate-50 text-slate-500")}><span>{STATUS_LABELS[status]}</span>{complete ? <CheckCircle2 className="h-3.5 w-3.5" /> : active ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span className="h-3.5 w-3.5 rounded-full border border-slate-200" />}</div>; })}</div>
-                {simulation.error ? <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700"><span className="inline-flex items-start gap-2"><TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />{simulation.error}</span></div> : null}
+                {simulation.error ? <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700"><span className="inline-flex items-start gap-2"><TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />{translateUiMessage(simulation.error)}</span></div> : null}
               </div>
             </section>
           </div>
@@ -431,9 +455,9 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
             <ResultNotice result={result} completedWithoutResult={completedWithoutResult} />
             <SummaryPanel result={result} />
             <div className="grid gap-4 lg:grid-cols-3">
-              <SeriesCard title="Density" series={result?.density_series} unit="g/cm3" color="#0ea5e9" valueKeys={["density", "density_g_cm3", "rho"]} isLoading={simulation.isLoading} />
-              <SeriesCard title="Temperature" series={result?.temperature_series} unit="K" color="#10b981" valueKeys={["temperature", "temperature_k", "temp"]} isLoading={simulation.isLoading} />
-              <SeriesCard title="Energy" series={result?.energy_series} unit="kcal/mol" color="#6366f1" valueKeys={["energy", "total_energy", "total_energy_kcal_mol", "potential_energy"]} isLoading={simulation.isLoading} />
+              <SeriesCard title="密度" chartLabel="密度曲线" series={result?.density_series} unit="g/cm3" color="#0ea5e9" valueKeys={["density", "density_g_cm3", "rho"]} isLoading={simulation.isLoading} />
+              <SeriesCard title="温度" chartLabel="温度曲线" series={result?.temperature_series} unit="K" color="#10b981" valueKeys={["temperature", "temperature_k", "temp"]} isLoading={simulation.isLoading} />
+              <SeriesCard title="能量" chartLabel="能量曲线" series={result?.energy_series} unit="kcal/mol" color="#6366f1" valueKeys={["energy", "total_energy", "total_energy_kcal_mol", "potential_energy"]} isLoading={simulation.isLoading} />
             </div>
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]"><TrajectoryCard trajectory={result?.trajectory_preview} /><ArtifactsPanel result={result} /></div>
           </div>
