@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -441,6 +444,37 @@ def test_monomer_md_worker_client_uses_configured_health_timeout(monkeypatch):
     client.get_health()
 
     assert observed["timeout"] == 21
+
+
+def test_monomer_md_worker_client_mounts_unix_socket_adapter(monkeypatch):
+    class FakeUnixAdapter:
+        pass
+
+    class FakeSession:
+        def __init__(self):
+            self.mounts = {}
+
+        def mount(self, prefix, adapter):
+            self.mounts[prefix] = adapter
+
+    fake_session = FakeSession()
+    monkeypatch.setitem(
+        sys.modules,
+        "requests_unixsocket",
+        SimpleNamespace(UnixAdapter=FakeUnixAdapter),
+    )
+    monkeypatch.setattr(
+        "app.services.monomer_md_worker_client.requests.Session",
+        lambda: fake_session,
+    )
+
+    client = MonomerMdWorkerClient(
+        base_url="http+unix://%2Ftmp%2Fworker.sock",
+        timeout_seconds=1,
+    )
+
+    assert client.session is fake_session
+    assert isinstance(fake_session.mounts["http+unix://"], FakeUnixAdapter)
 
 
 def test_monomer_md_worker_client_rejects_submit_response_without_job_id(monkeypatch):

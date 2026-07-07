@@ -44,7 +44,8 @@ class MonomerMdWorkerClient:
                 raise MonomerMdWorkerError(
                     "requests-unixsocket is required for http+unix monomer MD worker URLs"
                 ) from exc
-            self.session = requests_unixsocket.Session()
+            self.session = requests.Session()
+            self.session.mount("http+unix://", requests_unixsocket.UnixAdapter())
         elif parsed.scheme in {"http", "https"} and parsed.netloc:
             self.session = requests.Session()
         else:
