@@ -109,3 +109,29 @@ def test_byteff2_adapter_series_reads_openmm_state_columns():
         {"value": 0.92, "step": 20, "time_ps": 0.04},
     ]
     assert round(energy[-1]["value"], 8) == -28.68068832
+
+
+def test_byteff2_adapter_adds_missing_gro_box_line(tmp_path: Path):
+    from workers.monomer_md_worker.app.byteff2_density_demo import _ensure_gro_box_lines
+
+    gro_path = tmp_path / "MONOMER.gro"
+    gro_path.write_text(
+        "\n".join(
+            [
+                "A Gromacs structure file written by ASE ",
+                "    2",
+                "    1MONOMER    C    1  -0.089   0.017  -0.003  0.0000  0.0000  0.0000",
+                "    1MONOMER    H    2  -0.085   0.112  -0.057  0.0000  0.0000  0.0000",
+                "",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    _ensure_gro_box_lines(tmp_path)
+
+    lines = gro_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 5
+    assert lines[2].startswith("    1MONOMER")
+    assert lines[4] == "  10.00000  10.00000  10.00000"

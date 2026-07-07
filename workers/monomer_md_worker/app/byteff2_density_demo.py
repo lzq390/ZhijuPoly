@@ -4,6 +4,7 @@ import argparse
 import copy
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -189,7 +190,14 @@ def _run_builtin_monomer_demo(byteff2_root: Path, output_dir: Path, args: argpar
     }
 
     original_npt_run = protocol.npt_run
+    original_subprocess_run = subprocess.run
     protocol.npt_run = demo_npt_run
+
+    def run_with_gro_box_fix(command, *command_args, **command_kwargs):
+        _normalize_run_gmx_inputs(command)
+        return original_subprocess_run(command, *command_args, **command_kwargs)
+
+    subprocess.run = run_with_gro_box_fix
     try:
         md_protocol = protocol.DensityProtocol(config)
         original_build_system = md_protocol.build_system
@@ -207,6 +215,7 @@ def _run_builtin_monomer_demo(byteff2_root: Path, output_dir: Path, args: argpar
         elapsed = time.perf_counter() - start
     finally:
         protocol.npt_run = original_npt_run
+        subprocess.run = original_subprocess_run
 
     state_path = output_dir / "npt_state.csv"
     df = pd.read_csv(state_path)
@@ -259,6 +268,45 @@ def _run_builtin_monomer_demo(byteff2_root: Path, output_dir: Path, args: argpar
     with (output_dir / "density_demo_results.json").open("w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2, sort_keys=True)
         handle.write("\n")
+
+
+def _normalize_run_gmx_inputs(command: Any) -> None:
+    if not isinstance(command, str) or "run_gmx.sh" not in command:
+        return
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return
+    if len(tokens) < 4 or tokens[0] != "cd" or "run_gmx.sh" not in tokens:
+        return
+    _ensure_gro_box_lines(Path(tokens[1]))
+
+
+def _ensure_gro_box_lines(working_dir: Path) -> None:
+    for gro_path in working_dir.glob("*.gro"):
+        _ensure_gro_box_line(gro_path)
+
+
+def _ensure_gro_box_line(gro_path: Path) -> None:
+    lines = gro_path.read_text(encoding="utf-8").splitlines()
+    if len(lines) < 2:
+        return
+    try:
+        atom_count = int(lines[1].strip())
+    except ValueError:
+        return
+    box_index = atom_count + 2
+    if len(lines) < box_index:
+        return
+    if len(lines) > box_index and lines[box_index].strip():
+        return
+    box_nm = float(os.getenv("MONOMER_MD_DEMO_INPUT_BOX_NM", "10.0"))
+    box_line = f"{box_nm:10.5f}{box_nm:10.5f}{box_nm:10.5f}"
+    fixed_lines = lines[:box_index]
+    fixed_lines.append(box_line)
+    if len(lines) > box_index + 1:
+        fixed_lines.extend(lines[box_index + 1 :])
+    gro_path.write_text("\n".join(fixed_lines) + "\n", encoding="utf-8")
 
 
 def _series_from_dataframe(df: Any, *, fields: tuple[str, ...], value_multiplier: float = 1.0) -> list[dict[str, Any]]:
