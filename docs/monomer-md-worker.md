@@ -117,13 +117,15 @@ of Git and put only deployment-local runtime values in it:
 
 ```bash
 MONOMER_MD_PYTHON=/home/devuser/miniconda3/envs/byteff2-repro/bin/python
+BYTEFF2_PYTHON=/home/devuser/miniconda3/envs/byteff2-repro/bin/python
 APP_POSTGRES_DSN=postgresql://polyprop:polyprop@127.0.0.1:55432/nexpoly
 BYTEFF2_ROOT=/data/lzq/gith/byteff2
-PYTHONPATH=/data/lzq/gith/byteff2/submodules/bytemol
+PYTHONPATH=/data/lzq/gith/byteff2:/data/lzq/gith/byteff2/submodules/bytemol
 MONOMER_MD_JOB_ROOT=/data/lzq/monomer-md-worker-runs
 MONOMER_MD_WORKER_MODE=real
 MONOMER_MD_WORKER_HOST=127.0.0.1
 MONOMER_MD_WORKER_PORT=18010
+MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS=20
 NEXPOLY_GPU_DEVICE=2
 ```
 
@@ -222,7 +224,9 @@ and not a physical density estimate.
 - The worker stores run artifacts under `MONOMER_MD_JOB_ROOT`.
 - `MONOMER_MD_MAX_CONCURRENT_JOBS` defaults to `1`.
 - `MONOMER_MD_MAX_STEPS` defaults to `1000`; larger requests are rejected.
-- `MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS` defaults to `5`.
+- `MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS` defaults to `5`; use a larger
+  server-local value when ByteFF2/OpenMM imports are slower on the deployment
+  host.
 - The worker logs job IDs and status errors, but not secret values.
 - In real mode, if the job row is missing or cannot be updated to `submitted`,
   the worker rejects the request and does not start the background MD task.

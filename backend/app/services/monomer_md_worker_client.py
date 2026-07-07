@@ -48,7 +48,7 @@ class MonomerMdWorkerClient:
         try:
             response = requests.get(
                 f"{self.base_url}/health",
-                timeout=min(self.timeout_seconds, 3.0),
+                timeout=self.timeout_seconds,
             )
         except requests.RequestException as exc:
             raise MonomerMdWorkerError("monomer MD worker is not reachable") from exc

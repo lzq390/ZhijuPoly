@@ -424,6 +424,25 @@ def test_monomer_md_worker_client_rejects_non_json_submit_response(monkeypatch):
         raise AssertionError("non-JSON submit responses must fail")
 
 
+def test_monomer_md_worker_client_uses_configured_health_timeout(monkeypatch):
+    client = MonomerMdWorkerClient(base_url="http://worker.test", timeout_seconds=21)
+    observed = {}
+
+    def fake_get(*args, **kwargs):
+        observed["timeout"] = kwargs.get("timeout")
+        return FakeResponse(
+            status_code=200,
+            content=b'{"status":"ok"}',
+            json_data={"status": "ok"},
+        )
+
+    monkeypatch.setattr("app.services.monomer_md_worker_client.requests.get", fake_get)
+
+    client.get_health()
+
+    assert observed["timeout"] == 21
+
+
 def test_monomer_md_worker_client_rejects_submit_response_without_job_id(monkeypatch):
     client = MonomerMdWorkerClient(base_url="http://worker.test", timeout_seconds=1)
 
