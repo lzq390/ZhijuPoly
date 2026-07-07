@@ -85,6 +85,7 @@ validate_port() {
 
 DEPLOY_REF="${NEXPOLY_DEPLOY_REF:-main}"
 DEPLOY_BRANCH="${NEXPOLY_DEPLOY_BRANCH:-main}"
+DEPLOY_BUNDLE="${NEXPOLY_DEPLOY_BUNDLE:-}"
 WEB_PORT="$(config_value NEXPOLY_WEB_PORT 9000)"
 POSTGRES_PORT="$(config_value NEXPOLY_POSTGRES_PORT 55432)"
 validate_port NEXPOLY_WEB_PORT "$WEB_PORT"
@@ -144,6 +145,19 @@ resolve_target_ref() {
   fi
 
   git rev-parse "${resolved}^{commit}"
+}
+
+fetch_deploy_refs() {
+  if [[ -n "$DEPLOY_BUNDLE" ]]; then
+    [[ -f "$DEPLOY_BUNDLE" ]] || die "Deployment bundle is missing: $DEPLOY_BUNDLE"
+    log "Fetching refs from deployment bundle $DEPLOY_BUNDLE."
+    git bundle verify "$DEPLOY_BUNDLE" >/dev/null
+    git fetch --prune "$DEPLOY_BUNDLE" '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+    return 0
+  fi
+
+  log "Fetching refs from origin."
+  git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
 }
 
 assert_tracked_worktree_clean() {
@@ -441,9 +455,9 @@ checkout_target_ref() {
     if git show-ref --verify --quiet "refs/heads/$DEPLOY_BRANCH"; then
       git checkout "$DEPLOY_BRANCH"
     else
-      git checkout -b "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH"
+      git checkout -b "$DEPLOY_BRANCH" "$TARGET_COMMIT"
     fi
-    git pull --ff-only origin "$DEPLOY_BRANCH"
+    git merge --ff-only "$TARGET_COMMIT"
     [[ "$(git rev-parse HEAD)" == "$TARGET_COMMIT" ]] || die "Branch HEAD does not match tested target commit."
   else
     git checkout --detach "$TARGET_COMMIT"
@@ -494,8 +508,7 @@ main() {
   check_compose_contract
 
   log "Using web port $WEB_PORT and Postgres host port $POSTGRES_PORT."
-  log "Fetching refs from origin."
-  git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+  fetch_deploy_refs
   TARGET_COMMIT="$(resolve_target_ref "$DEPLOY_REF")"
 
   TMP_DIR="$(mktemp -d /tmp/nexpoly-deploy.XXXXXX)"
