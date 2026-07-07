@@ -92,9 +92,14 @@ validate_port NEXPOLY_POSTGRES_PORT "$POSTGRES_PORT"
 export NEXPOLY_WEB_PORT="$WEB_PORT"
 export NEXPOLY_POSTGRES_PORT="$POSTGRES_PORT"
 
-PYTHON_BIN="${NEXPOLY_TEST_PYTHON:-/home/lzq390/miniconda3/envs/screen312/bin/python}"
+PYTHON_BIN="${NEXPOLY_TEST_PYTHON:-}"
+RUN_SERVER_TESTS="${NEXPOLY_RUN_SERVER_TESTS:-false}"
 TEST_POSTGRES_DSN="${NEXPOLY_TEST_POSTGRES_DSN:-postgresql://polyprop:polyprop@localhost:${POSTGRES_PORT}/nexpoly}"
 BACKUP_DIR="${NEXPOLY_BACKUP_DIR:-$ROOT_DIR/backups}"
+MONOMER_MD_WORKER_DEPLOY_MODE="${NEXPOLY_MONOMER_MD_WORKER_MODE:-auto}"
+MONOMER_MD_WORKER_ENV_FILE="${NEXPOLY_MONOMER_MD_WORKER_ENV_FILE:-$ROOT_DIR/.env.monomer-md-worker}"
+MONOMER_MD_WORKER_PID_FILE="${NEXPOLY_MONOMER_MD_WORKER_PID_FILE:-$ROOT_DIR/ops/state/monomer-md-worker.pid}"
+MONOMER_MD_WORKER_LOG_FILE="${NEXPOLY_MONOMER_MD_WORKER_LOG_FILE:-$ROOT_DIR/ops/logs/monomer-md-worker.log}"
 TMP_DIR=""
 TEST_WORKTREE=""
 TARGET_COMMIT=""
@@ -221,7 +226,7 @@ check_required_model_assets() {
       printf '[nexpoly-deploy] Missing model asset: %s\n' "$asset_path" >&2
       missing=1
     fi
-  done < <(cd "$TEST_WORKTREE" && PYTHONPATH=backend "$PYTHON_BIN" -m app.model_asset_manifest --format paths)
+  done < <(grep -E 'ModelAssetSpec\("model/' "$TEST_WORKTREE/backend/app/model_asset_manifest.py" | sed -E 's/.*ModelAssetSpec\("([^"]+)".*/\1/')
 
   if [[ ! -d "$ROOT_DIR/model/reactiont5-retrosynthesis" ]]; then
     printf '[nexpoly-deploy] Missing model directory: model/reactiont5-retrosynthesis\n' >&2
@@ -232,6 +237,19 @@ check_required_model_assets() {
 }
 
 run_backend_tests() {
+  case "$RUN_SERVER_TESTS" in
+    true|1|yes)
+      ;;
+    false|0|no|"")
+      log "Skipping server-side backend pytest; NEXPOLY_RUN_SERVER_TESTS is not true."
+      return 0
+      ;;
+    *)
+      die "NEXPOLY_RUN_SERVER_TESTS must be true or false."
+      ;;
+  esac
+
+  [[ -n "$PYTHON_BIN" ]] || die "NEXPOLY_TEST_PYTHON is required when NEXPOLY_RUN_SERVER_TESTS=true."
   [[ -x "$PYTHON_BIN" ]] || die "screen312 Python is not executable: $PYTHON_BIN"
 
   log "Running backend pytest in temporary worktree."
@@ -242,6 +260,144 @@ run_backend_tests() {
       LAB_DATA_POSTGRES_DSN="$TEST_POSTGRES_DSN" \
       "$PYTHON_BIN" -m pytest
   )
+}
+
+monomer_worker_enabled() {
+  case "$MONOMER_MD_WORKER_DEPLOY_MODE" in
+    true|1|yes|enabled)
+      return 0
+      ;;
+    false|0|no|disabled)
+      return 1
+      ;;
+    auto|"")
+      [[ -f "$MONOMER_MD_WORKER_ENV_FILE" ]]
+      return
+      ;;
+    *)
+      die "NEXPOLY_MONOMER_MD_WORKER_MODE must be auto, true, or false."
+      ;;
+  esac
+}
+
+json_field_is() {
+  local payload="$1"
+  local field="$2"
+  local expected="$3"
+
+  JSON_PAYLOAD="$payload" python3 - "$field" "$expected" <<'PY'
+import json
+import os
+import sys
+
+field = sys.argv[1]
+expected = sys.argv[2]
+try:
+    payload = json.loads(os.environ.get("JSON_PAYLOAD", ""))
+except Exception:
+    sys.exit(1)
+
+actual = payload.get(field) if isinstance(payload, dict) else None
+if expected == "true":
+    ok = actual is True
+elif expected == "false":
+    ok = actual is False
+else:
+    ok = actual == expected
+sys.exit(0 if ok else 1)
+PY
+}
+
+load_monomer_worker_env() {
+  [[ -f "$MONOMER_MD_WORKER_ENV_FILE" ]] || die "Monomer MD worker env file is missing: $MONOMER_MD_WORKER_ENV_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  source "$MONOMER_MD_WORKER_ENV_FILE"
+  set +a
+}
+
+validate_monomer_worker_env() {
+  : "${MONOMER_MD_PYTHON:?MONOMER_MD_PYTHON is required in $MONOMER_MD_WORKER_ENV_FILE}"
+  : "${APP_POSTGRES_DSN:?APP_POSTGRES_DSN is required in $MONOMER_MD_WORKER_ENV_FILE}"
+  : "${BYTEFF2_ROOT:?BYTEFF2_ROOT is required in $MONOMER_MD_WORKER_ENV_FILE}"
+  : "${MONOMER_MD_JOB_ROOT:?MONOMER_MD_JOB_ROOT is required in $MONOMER_MD_WORKER_ENV_FILE}"
+
+  [[ -x "$MONOMER_MD_PYTHON" ]] || die "MONOMER_MD_PYTHON is not executable: $MONOMER_MD_PYTHON"
+  [[ -d "$BYTEFF2_ROOT" ]] || die "BYTEFF2_ROOT does not exist: $BYTEFF2_ROOT"
+}
+
+stop_monomer_worker() {
+  if [[ -f "$MONOMER_MD_WORKER_PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$MONOMER_MD_WORKER_PID_FILE" || true)"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" >/dev/null 2>&1; then
+      log "Stopping existing monomer MD worker pid $pid."
+      kill "$pid" || true
+      for _ in $(seq 1 20); do
+        kill -0 "$pid" >/dev/null 2>&1 || break
+        sleep 1
+      done
+      kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" || true
+    fi
+    rm -f "$MONOMER_MD_WORKER_PID_FILE"
+  fi
+}
+
+wait_for_monomer_worker() {
+  local port="${MONOMER_MD_WORKER_PORT:-18010}"
+  local payload=""
+
+  log "Waiting for monomer MD worker health on 127.0.0.1:$port."
+  for _ in $(seq 1 90); do
+    payload="$(curl --silent --show-error --max-time 5 "http://127.0.0.1:${port}/health" 2>/dev/null || true)"
+    if json_field_is "$payload" status ok && json_field_is "$payload" runtime_ready true; then
+      printf '%s\n' "$payload"
+      return 0
+    fi
+    sleep 2
+  done
+
+  printf '[nexpoly-deploy] Last monomer MD worker health payload: %s\n' "$payload" >&2
+  die "Monomer MD worker did not become healthy."
+}
+
+restart_monomer_worker() {
+  if ! monomer_worker_enabled; then
+    log "Skipping monomer MD worker restart; $MONOMER_MD_WORKER_ENV_FILE is absent or worker mode is disabled."
+    return 0
+  fi
+
+  log "Restarting host-side monomer MD worker."
+  require_cmd python3
+  load_monomer_worker_env
+  validate_monomer_worker_env
+
+  mkdir -p "$(dirname "$MONOMER_MD_WORKER_PID_FILE")" "$(dirname "$MONOMER_MD_WORKER_LOG_FILE")" "$MONOMER_MD_JOB_ROOT"
+  "$MONOMER_MD_PYTHON" -m pip install -r "$ROOT_DIR/workers/monomer_md_worker/requirements.txt"
+
+  stop_monomer_worker
+  (
+    cd "$ROOT_DIR/workers/monomer_md_worker"
+    export MONOMER_MD_WORKER_MODE="${MONOMER_MD_WORKER_MODE:-real}"
+    export MONOMER_MD_WORKER_HOST="${MONOMER_MD_WORKER_HOST:-127.0.0.1}"
+    export MONOMER_MD_WORKER_PORT="${MONOMER_MD_WORKER_PORT:-18010}"
+    setsid ./run_host_worker.sh > "$MONOMER_MD_WORKER_LOG_FILE" 2>&1 < /dev/null &
+    printf '%s\n' "$!" > "$MONOMER_MD_WORKER_PID_FILE"
+  )
+
+  wait_for_monomer_worker
+}
+
+check_monomer_backend_status() {
+  if ! monomer_worker_enabled; then
+    return 0
+  fi
+
+  log "Checking backend monomer MD status endpoint."
+  local payload
+  payload="$(curl --fail --silent --show-error --max-time 10 "http://localhost:${WEB_PORT}/api/v1/monomer-md/status")"
+  printf '%s\n' "$payload"
+  json_field_is "$payload" available true || die "Backend monomer MD status is not available."
 }
 
 create_database_backup() {
@@ -288,6 +444,9 @@ deploy_compose_stack() {
 
   log "Running runtime Postgres preflight."
   docker compose exec -T backend python -m app.postgres_preflight --mode runtime --strict
+
+  restart_monomer_worker
+  check_monomer_backend_status
 
   log "Checking public health endpoint on localhost:$WEB_PORT."
   curl --fail --silent --show-error --max-time 10 "http://localhost:${WEB_PORT}/health"

@@ -8,6 +8,8 @@ __pycache__/
 
 # Local environment files
 .env
+.env.ai
+.env.monomer-md-worker
 backend/.env
 
 # Generated SQLite databases
@@ -59,6 +61,7 @@ nexpoly-release-*.tar.gz
 /backend/tests/*
 !/backend/tests/test_assistant.py
 !/backend/tests/test_md_demo.py
+!/backend/tests/test_monomer_md.py
 !/backend/tests/test_smiles_standardization.py
 !/backend/tests/test_postgres_governance.py
 !/backend/tests/README.md

@@ -29,6 +29,10 @@ import type {
   MdDemoDefaultsResponse,
   MdDemoRunRequest,
   MdDemoRunResponse,
+  MonomerMdJobCreateRequest,
+  MonomerMdJobCreateResponse,
+  MonomerMdJobResponse,
+  MonomerMdServiceStatusResponse,
   MonomerRetrosynthesisRequest,
   MonomerRetrosynthesisResponse,
   OnlineKnowledgeExportResponse,
@@ -252,6 +256,28 @@ export function runMdDemo(payload: MdDemoRunRequest): Promise<MdDemoRunResponse>
 
 export function calculateMdDemoAtomDistance(payload: MdDemoAtomDistanceRequest): Promise<MdDemoAtomDistanceResponse> {
   return postJSON("/md-demo/atom-distance", payload);
+}
+
+function normalizeMonomerMdJob(job: MonomerMdJobResponse): MonomerMdJobResponse {
+  return {
+    ...job,
+    smiles: job.smiles ?? job.input_smiles ?? job.canonical_smiles,
+    progress: job.progress ?? job.progress_percent ?? null,
+    message: job.message ?? job.progress_message ?? null,
+    error: job.error ?? job.error_message ?? null
+  };
+}
+export function fetchMonomerMdStatus(): Promise<MonomerMdServiceStatusResponse> {
+  return getJSON("/monomer-md/status");
+}
+
+export function createMonomerMdJob(payload: MonomerMdJobCreateRequest): Promise<MonomerMdJobCreateResponse> {
+  return postJSON("/monomer-md/jobs", payload);
+}
+
+export async function fetchMonomerMdJob(jobId: string): Promise<MonomerMdJobResponse> {
+  const job = await getJSON<MonomerMdJobResponse>(`/monomer-md/jobs/${encodeURIComponent(jobId)}`);
+  return normalizeMonomerMdJob(job);
 }
 
 export function searchKnowledge(payload: KnowledgeSearchRequest): Promise<KnowledgeSearchResponse> {

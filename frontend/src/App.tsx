@@ -20,6 +20,7 @@ import { HighThroughputWorkflowDemoPage } from "./components/HighThroughputWorkf
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { LabDataPage, type LabDataView } from "./components/LabDataPage";
 import { MdSimulationDemoPage } from "./components/MdSimulationDemoPage";
+import { MonomerMdSimulationPage } from "./components/MonomerMdSimulationPage";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
 import { PolymerExplorerDesktopPage } from "./components/PolymerExplorerDesktopPage";
 import { StructureWorkbenchPage } from "./components/StructureWorkbenchPage";
@@ -39,6 +40,7 @@ type ActiveModule =
   | "structureWorkbench"
   | "explorer"
   | "mdSimulationDemo"
+  | "monomerMdSimulation"
   | "reverseDesign"
   | "conditionalGeneration"
   | "databaseQuery"
@@ -86,6 +88,10 @@ function routeFromPath(pathname: string): AppRoute {
 
   if (path === "/md-simulation") {
     return { module: "mdSimulationDemo", datasetKey: null };
+  }
+
+  if (path === "/monomer-md-simulation") {
+    return { module: "monomerMdSimulation", datasetKey: null };
   }
 
   if (path === "/reverse-design") {
@@ -143,6 +149,10 @@ function pathFromRoute(route: AppRoute) {
 
   if (route.module === "mdSimulationDemo") {
     return "/md-simulation";
+  }
+
+  if (route.module === "monomerMdSimulation") {
+    return "/monomer-md-simulation";
   }
 
   if (route.module === "reverseDesign") {
@@ -354,6 +364,10 @@ export default function App() {
     navigate({ module: "mdSimulationDemo", datasetKey: null });
   }
 
+  function openMonomerMdSimulation() {
+    navigate({ module: "monomerMdSimulation", datasetKey: null });
+  }
+
   function openReverseDesign() {
     navigate({ module: "reverseDesign", datasetKey: null });
   }
@@ -435,6 +449,9 @@ export default function App() {
         break;
       case "mdSimulationDemo":
         openMdSimulationDemo();
+        break;
+      case "monomerMdSimulation":
+        openMonomerMdSimulation();
         break;
       case "reverseDesign":
         openReverseDesign();
@@ -518,6 +535,15 @@ export default function App() {
           icon: <Activity className="h-4 w-4" />,
           isActive: activeModule === "mdSimulationDemo",
           onClick: openMdSimulationDemo
+        },
+        {
+          id: "monomerMdSimulation",
+          label: "\u5355\u4f53 MD \u6a21\u62df",
+          description: "Submit ordinary monomer SMILES and track MD worker job results.",
+          route: "/monomer-md-simulation",
+          icon: <Microscope className="h-4 w-4" />,
+          isActive: activeModule === "monomerMdSimulation",
+          onClick: openMonomerMdSimulation
         }
       ]
     },
@@ -570,7 +596,8 @@ export default function App() {
     activeModule === "reverseDesign" ||
     activeModule === "experimentWorkflowDemo" ||
     activeModule === "highThroughputWorkflowDemo" ||
-    activeModule === "mdSimulationDemo";
+    activeModule === "mdSimulationDemo" ||
+    activeModule === "monomerMdSimulation";
   const shouldKeepStructureWorkbenchMounted = hasMountedStructureWorkbench && activeModule !== "explorer" && activeModule !== "databaseQuery";
 
   return (
@@ -645,6 +672,10 @@ export default function App() {
 
       {activeModule === "mdSimulationDemo" ? (
         <MdSimulationDemoPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+      ) : null}
+
+      {activeModule === "monomerMdSimulation" ? (
+        <MonomerMdSimulationPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
       ) : null}
 
       {activeModule === "conditionalGeneration" ? (

@@ -1,0 +1,53 @@
+name: nexpoly-monomer-md-worker
+
+services:
+  monomer-md-worker:
+    image: nexpoly-monomer-md-worker:latest
+    build:
+      context: .
+      dockerfile: workers/monomer_md_worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_POSTGRES_DSN: "${APP_POSTGRES_DSN:-postgresql://polyprop:polyprop@host.docker.internal:55432/nexpoly}"
+      MONOMER_MD_WORKER_MODE: "${MONOMER_MD_WORKER_MODE:-real}"
+      MONOMER_MD_WORKER_ID: "${MONOMER_MD_WORKER_ID:-monomer-md-worker}"
+      MONOMER_MD_WORKER_VERSION: "${MONOMER_MD_WORKER_VERSION:-0.1.0}"
+      MONOMER_MD_JOB_ROOT: "/app/worker-runs"
+      MONOMER_MD_DEFAULT_STEPS: "${MONOMER_MD_DEFAULT_STEPS:-1000}"
+      MONOMER_MD_MAX_STEPS: "${MONOMER_MD_MAX_STEPS:-1000}"
+      MONOMER_MD_REPORT_INTERVAL: "${MONOMER_MD_REPORT_INTERVAL:-10}"
+      MONOMER_MD_TIMEOUT_SECONDS: "${MONOMER_MD_TIMEOUT_SECONDS:-3600}"
+      MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS: "${MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS:-5}"
+      MONOMER_MD_CUDA_VISIBLE_DEVICES: "${NEXPOLY_GPU_DEVICE:-2}"
+      NEXPOLY_GPU_DEVICE: "${NEXPOLY_GPU_DEVICE:-2}"
+      BYTEFF2_ROOT: "${BYTEFF2_ROOT:-/data/lzq/gith/byteff2}"
+      BYTEFF2_PYTHON: "${BYTEFF2_PYTHON:-python}"
+      BYTEFF2_DENSITY_DEMO_ENTRY: "${BYTEFF2_DENSITY_DEMO_ENTRY:-}"
+      BYTEFF2_DENSITY_DEMO_ENTRY_MODE: "${BYTEFF2_DENSITY_DEMO_ENTRY_MODE:-cli}"
+    volumes:
+      - "${BYTEFF2_ROOT:-/data/lzq/gith/byteff2}:${BYTEFF2_ROOT:-/data/lzq/gith/byteff2}:ro"
+      - monomer_md_worker_runs:/app/worker-runs
+    gpus:
+      - driver: nvidia
+        device_ids:
+          - "${NEXPOLY_GPU_DEVICE:-2}"
+        capabilities:
+          - gpu
+    expose:
+      - "8010"
+    ports:
+      - "127.0.0.1:${MONOMER_MD_WORKER_HOST_PORT:-18010}:8010"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=3)); raise SystemExit(0 if data.get('status') == 'ok' else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+
+volumes:
+  monomer_md_worker_runs:

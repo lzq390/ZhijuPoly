@@ -175,6 +175,7 @@ def reset_postgres_fixture(dsn: str) -> None:
               dft.molecule_final,
               experimental.process_records,
               experimental.property_records,
+              md.monomer_md_jobs,
               model_registry.assets
             RESTART IDENTITY CASCADE
             """

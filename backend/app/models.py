@@ -999,3 +999,61 @@ class LabDataSummaryRead(BaseModel):
 
     total_count: int = Field(alias="totalCount", ge=0)
     by_project: list[LabDataProjectStatsRead] = Field(alias="byProject")
+
+MonomerMdJobStatus = Literal["pending", "submitted", "running", "completed", "failed", "cancelled"]
+
+
+class MonomerMdRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
+
+    smiles: str = Field(min_length=1, max_length=1000)
+
+
+class MonomerMdStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    available: bool
+    default_steps: int = Field(ge=1)
+    worker_base_url_configured: bool
+    worker_status: str | None = None
+    worker_mode: str | None = None
+    db_configured: bool | None = None
+    byteff2_root_exists: bool | None = None
+    runtime_ready: bool | None = None
+    runtime_error: str | None = None
+    active_jobs: int | None = Field(default=None, ge=0)
+    message: str
+
+
+class MonomerMdJobCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: MonomerMdJobStatus
+
+
+class MonomerMdJobStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: MonomerMdJobStatus
+    input_smiles: str
+    canonical_smiles: str
+    requested_steps: int = Field(ge=1)
+    completed_steps: int = Field(ge=0)
+    progress_percent: int = Field(ge=0, le=100)
+    progress_stage: str
+    progress_message: str
+    created_at: str
+    updated_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    worker_id: str | None = None
+    worker_job_id: str | None = None
+    worker_version: str | None = None
+    engine: str
+    artifact_root: str | None = None
+    artifacts: dict[str, Any] = Field(default_factory=dict)
+    error_message: str | None = None
+    result: dict[str, Any] | None = None

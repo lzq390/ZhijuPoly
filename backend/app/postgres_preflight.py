@@ -35,12 +35,14 @@ POSTGRES_TABLES = [
     ("lab", "test_projects"),
     ("lab", "sample_measurements"),
     ("model_registry", "assets"),
+    ("md", "monomer_md_jobs"),
 ]
 
 STRICT_REQUIRED_MIGRATIONS = (
     "0001_app_data_governance",
     "0002_lab_identity_defaults",
     "0003_runtime_postgres_cutover",
+    "0004_monomer_md_jobs",
 )
 STRICT_RUNTIME_TABLES = tuple(POSTGRES_TABLES)
 

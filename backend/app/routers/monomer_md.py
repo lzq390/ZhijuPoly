@@ -1,0 +1,217 @@
+from __future__ import annotations
+
+from typing import Any
+from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException, Request, status
+
+from app.models import (
+    MonomerMdJobCreateResponse,
+    MonomerMdJobStatusResponse,
+    MonomerMdRunRequest,
+    MonomerMdStatusResponse,
+)
+from app.postgres_database import postgres_connection
+from app.services.monomer_md_repository import (
+    create_monomer_md_job_postgres,
+    get_monomer_md_job_postgres,
+    mark_monomer_md_job_failed_postgres,
+    mark_monomer_md_job_submitted_postgres,
+)
+from app.services.monomer_md_worker_client import (
+    MonomerMdWorkerClient,
+    MonomerMdWorkerError,
+    MonomerMdWorkerSubmitPayload,
+)
+from app.services.smiles_utils import standardize_smiles
+
+
+router = APIRouter(prefix="/api/v1/monomer-md", tags=["monomer-md"])
+
+
+def _optional_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _validate_monomer_smiles(smiles: str) -> str:
+    if "*" in smiles:
+        raise HTTPException(status_code=422, detail="monomer MD requires a single-molecule SMILES without attachment points")
+    try:
+        canonical_smiles = standardize_smiles(smiles)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if "*" in canonical_smiles:
+        raise HTTPException(status_code=422, detail="monomer MD requires a single-molecule SMILES without attachment points")
+    return canonical_smiles
+
+
+def _worker_client_for_app(app) -> MonomerMdWorkerClient:
+    override = getattr(app.state, "monomer_md_worker_client", None)
+    if override is not None:
+        return override
+
+    settings = app.state.settings
+    if not settings.monomer_md_worker_base_url:
+        raise HTTPException(status_code=503, detail="monomer MD worker is not configured")
+    client = MonomerMdWorkerClient(
+        base_url=settings.monomer_md_worker_base_url,
+        timeout_seconds=settings.monomer_md_worker_timeout_seconds,
+    )
+    app.state.monomer_md_worker_client = client
+    return client
+
+
+def _worker_unavailable_message(health: dict[str, Any]) -> str | None:
+    worker_status = str(health.get("status") or "unknown")
+    worker_mode = str(health.get("mode") or "unknown")
+    db_configured = _optional_bool(health.get("db_configured"))
+    byteff2_root_exists = _optional_bool(health.get("byteff2_root_exists"))
+    runtime_ready = _optional_bool(health.get("runtime_ready"))
+
+    if worker_status != "ok":
+        return f"monomer MD worker health is {worker_status}"
+    if db_configured is not True:
+        return "monomer MD worker database is not configured"
+    if worker_mode == "real" and byteff2_root_exists is not True:
+        return "monomer MD worker ByteFF2 root is not available"
+    if worker_mode == "real" and runtime_ready is not True:
+        runtime_error = _optional_str(health.get("runtime_error"))
+        if runtime_error:
+            return f"monomer MD worker runtime is not ready: {runtime_error}"
+        return "monomer MD worker runtime is not ready"
+    return None
+
+
+def _status_response_from_health(
+    *,
+    settings,
+    health: dict[str, Any],
+) -> MonomerMdStatusResponse:
+    unavailable_message = _worker_unavailable_message(health)
+    available = unavailable_message is None
+    worker_status = str(health.get("status") or "unknown")
+    return MonomerMdStatusResponse(
+        enabled=True,
+        available=available,
+        default_steps=settings.monomer_md_default_steps,
+        worker_base_url_configured=bool(settings.monomer_md_worker_base_url),
+        worker_status=worker_status,
+        worker_mode=_optional_str(health.get("mode")),
+        db_configured=_optional_bool(health.get("db_configured")),
+        byteff2_root_exists=_optional_bool(health.get("byteff2_root_exists")),
+        runtime_ready=_optional_bool(health.get("runtime_ready")),
+        runtime_error=_optional_str(health.get("runtime_error")),
+        active_jobs=_optional_int(health.get("active_jobs")),
+        message=(
+            "monomer MD worker is ready"
+            if available
+            else unavailable_message
+        ),
+    )
+
+
+@router.get("/status", response_model=MonomerMdStatusResponse)
+async def get_monomer_md_status(request: Request) -> MonomerMdStatusResponse:
+    settings = request.app.state.settings
+    configured = bool(settings.monomer_md_worker_base_url) or getattr(request.app.state, "monomer_md_worker_client", None) is not None
+    if not configured:
+        return MonomerMdStatusResponse(
+            enabled=False,
+            available=False,
+            default_steps=settings.monomer_md_default_steps,
+            worker_base_url_configured=False,
+            message="monomer MD worker is disabled until MONOMER_MD_WORKER_BASE_URL is configured",
+        )
+
+    try:
+        health = _worker_client_for_app(request.app).get_health()
+    except MonomerMdWorkerError as exc:
+        return MonomerMdStatusResponse(
+            enabled=True,
+            available=False,
+            default_steps=settings.monomer_md_default_steps,
+            worker_base_url_configured=bool(settings.monomer_md_worker_base_url),
+            worker_status="unreachable",
+            message=str(exc),
+        )
+
+    return _status_response_from_health(settings=settings, health=health)
+
+
+@router.post("/jobs", response_model=MonomerMdJobCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Request) -> MonomerMdJobCreateResponse:
+    settings = request.app.state.settings
+    if not settings.monomer_md_worker_base_url and getattr(request.app.state, "monomer_md_worker_client", None) is None:
+        raise HTTPException(status_code=503, detail="monomer MD worker is not configured")
+
+    canonical_smiles = _validate_monomer_smiles(request_body.smiles)
+    try:
+        client = _worker_client_for_app(request.app)
+        health = client.get_health()
+    except MonomerMdWorkerError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    unavailable_message = _worker_unavailable_message(health)
+    if unavailable_message is not None:
+        raise HTTPException(status_code=503, detail=unavailable_message)
+
+    job_id = uuid4().hex
+    requested_steps = settings.monomer_md_default_steps
+    with postgres_connection(settings.app_postgres_dsn) as connection:
+        create_monomer_md_job_postgres(
+            connection,
+            job_id=job_id,
+            input_smiles=request_body.smiles,
+            canonical_smiles=canonical_smiles,
+            requested_steps=requested_steps,
+        )
+
+    try:
+        submission = client.submit_job(
+            MonomerMdWorkerSubmitPayload(
+                job_id=job_id,
+                smiles=request_body.smiles,
+                canonical_smiles=canonical_smiles,
+                steps=requested_steps,
+            )
+        )
+    except MonomerMdWorkerError as exc:
+        error_message = str(exc)
+        with postgres_connection(settings.app_postgres_dsn) as connection:
+            mark_monomer_md_job_failed_postgres(connection, job_id, error_message)
+        raise HTTPException(status_code=503, detail=error_message) from exc
+
+    with postgres_connection(settings.app_postgres_dsn) as connection:
+        mark_monomer_md_job_submitted_postgres(
+            connection,
+            job_id=job_id,
+            worker_id=submission.worker_id,
+            worker_job_id=submission.worker_job_id,
+            worker_version=submission.worker_version,
+        )
+        job = get_monomer_md_job_postgres(connection, job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return MonomerMdJobCreateResponse(job_id=job["job_id"], status=job["status"])
+
+
+@router.get("/jobs/{job_id}", response_model=MonomerMdJobStatusResponse)
+async def get_monomer_md_job(job_id: str, request: Request) -> MonomerMdJobStatusResponse:
+    with postgres_connection(request.app.state.settings.app_postgres_dsn) as connection:
+        job = get_monomer_md_job_postgres(connection, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return MonomerMdJobStatusResponse(**job)
