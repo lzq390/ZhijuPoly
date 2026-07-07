@@ -59,6 +59,7 @@ class WorkerSettings:
     timeout_seconds: int
     health_probe_timeout_seconds: int
     max_concurrent_jobs: int
+    max_active_jobs: int
     cuda_visible_devices: str
     worker_id: str
     worker_version: str
@@ -116,6 +117,10 @@ def load_settings() -> WorkerSettings:
         timeout_seconds=_get_int("MONOMER_MD_TIMEOUT_SECONDS", 3600),
         health_probe_timeout_seconds=_get_int("MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS", 5),
         max_concurrent_jobs=_get_int("MONOMER_MD_MAX_CONCURRENT_JOBS", 1),
+        max_active_jobs=_get_int(
+            "MONOMER_MD_MAX_ACTIVE_JOBS",
+            _get_int("MONOMER_MD_MAX_CONCURRENT_JOBS", 1),
+        ),
         cuda_visible_devices=os.getenv(
             "MONOMER_MD_CUDA_VISIBLE_DEVICES",
             os.getenv("NEXPOLY_GPU_DEVICE", "2"),

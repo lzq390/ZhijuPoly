@@ -86,7 +86,8 @@ python workers/monomer_md_worker/app/byteff2_density_demo.py
 inside the ByteFF2 environment. The adapter first honors an optional
 `BYTEFF2_DENSITY_DEMO_ENTRY`; if unset, it runs the built-in single-SMILES demo
 path. If `BYTEFF2_DENSITY_DEMO_ENTRY` is set but the path does not exist, the
-adapter exits with an explicit error instead of falling back. Use
+worker health endpoint reports `runtime_ready=false` and the adapter exits with
+an explicit error instead of falling back. Use
 `BYTEFF2_DENSITY_DEMO_ENTRY` only for a dedicated demo script that accepts
 `--job-id`, `--smiles`, `--steps`, `--report-interval`, and `--output-dir`. Set
 `BYTEFF2_DENSITY_DEMO_ENTRY_MODE=legacy-env` only for old reproduction scripts
@@ -128,6 +129,8 @@ MONOMER_MD_WORKER_HOST=172.27.0.1
 MONOMER_MD_WORKER_HEALTH_HOST=172.27.0.1
 MONOMER_MD_WORKER_PORT=18010
 MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS=20
+MONOMER_MD_MAX_CONCURRENT_JOBS=1
+MONOMER_MD_MAX_ACTIVE_JOBS=1
 NEXPOLY_GPU_DEVICE=2
 ```
 
@@ -186,7 +189,9 @@ instead of the Unix socket, check `http://127.0.0.1:18010/health` directly.
 After deploy, run a real 1000-step smoke with `CCO`, poll the returned job until
 `completed`, and confirm the artifacts `density_demo_results.json`,
 `npt_state.csv`, and `npt.dcd` exist. The result must retain warnings that the
-run is not equilibrated and is not a physical density estimate.
+run is not equilibrated and is not a physical density estimate. The deploy
+script can run this smoke automatically only when
+`NEXPOLY_MONOMER_MD_SMOKE=true` is set; it is disabled by default.
 
 Point the backend at `http://host.docker.internal:18010` if the backend stays in
 Docker, or `http://127.0.0.1:18010` if the backend runs on the host. The worker
@@ -255,6 +260,8 @@ and not a physical density estimate.
 
 - The worker stores run artifacts under `MONOMER_MD_JOB_ROOT`.
 - `MONOMER_MD_MAX_CONCURRENT_JOBS` defaults to `1`.
+- `MONOMER_MD_MAX_ACTIVE_JOBS` defaults to `MONOMER_MD_MAX_CONCURRENT_JOBS` and
+  rejects excess accepted-but-not-finished tasks with `429`.
 - `MONOMER_MD_MAX_STEPS` defaults to `1000`; larger requests are rejected.
 - `MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS` defaults to `5`; use a larger
   server-local value when ByteFF2/OpenMM imports are slower on the deployment

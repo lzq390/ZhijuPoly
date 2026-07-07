@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.main import create_app
 from app.postgres_database import postgres_connection
+from app.routers.monomer_md import router as monomer_md_router
 from app.services.monomer_md_repository import (
     create_monomer_md_job_postgres,
     mark_monomer_md_job_completed_postgres,
@@ -99,7 +100,15 @@ class FakeResponse:
         return self._json_data
 
 
-def _create_app(postgres_dsn: str, *, worker_url: str = "http://monomer-md-worker:18082"):
+def _create_app(
+    postgres_dsn: str,
+    *,
+    worker_url: str = "http://monomer-md-worker:18082",
+    monomer_md_submit_enabled: bool = True,
+    monomer_md_rate_limit_per_ip_per_minute: int = 3,
+    monomer_md_rate_limit_window_seconds: int = 60,
+    monomer_md_max_active_jobs: int = 1,
+):
     settings = Settings(
         app_postgres_dsn=postgres_dsn,
         pi_postgres_dsn=postgres_dsn,
@@ -113,8 +122,15 @@ def _create_app(postgres_dsn: str, *, worker_url: str = "http://monomer-md-worke
         model_enabled=False,
         monomer_md_worker_base_url=worker_url,
         monomer_md_default_steps=1000,
+        monomer_md_submit_enabled=monomer_md_submit_enabled,
+        monomer_md_rate_limit_per_ip_per_minute=monomer_md_rate_limit_per_ip_per_minute,
+        monomer_md_rate_limit_window_seconds=monomer_md_rate_limit_window_seconds,
+        monomer_md_max_active_jobs=monomer_md_max_active_jobs,
     )
-    return create_app(settings)
+    app = FastAPI()
+    app.state.settings = settings
+    app.include_router(monomer_md_router)
+    return app
 
 
 def _monomer_md_job_count(postgres_dsn: str) -> int:
@@ -125,8 +141,8 @@ def _monomer_md_job_count(postgres_dsn: str) -> int:
         return int(row["count"])
 
 
-def test_monomer_md_status_reports_disabled_worker(test_app):
-    client = TestClient(test_app)
+def test_monomer_md_status_reports_disabled_worker(postgres_dsn: str):
+    client = TestClient(_create_app(postgres_dsn, worker_url=""))
 
     response = client.get("/api/v1/monomer-md/status")
 
@@ -182,13 +198,31 @@ def test_monomer_md_status_reports_invalid_worker_url(postgres_dsn: str):
     assert "MONOMER_MD_WORKER_BASE_URL" in data["message"]
 
 
-def test_monomer_md_job_requires_configured_worker(test_app):
-    client = TestClient(test_app)
+def test_monomer_md_job_requires_configured_worker(postgres_dsn: str):
+    client = TestClient(_create_app(postgres_dsn, worker_url=""))
 
     response = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"})
 
     assert response.status_code == 503
     assert response.json()["detail"] == "monomer MD worker is not configured"
+
+
+def test_monomer_md_job_rejects_disabled_submit_without_creating_row(postgres_dsn: str):
+    app = _create_app(postgres_dsn, monomer_md_submit_enabled=False)
+    app.state.monomer_md_worker_client = FakeWorkerClient()
+    client = TestClient(app)
+
+    status_response = client.get("/api/v1/monomer-md/status")
+    assert status_response.status_code == 200
+    assert status_response.json()["enabled"] is False
+    assert status_response.json()["available"] is False
+    assert status_response.json()["message"] == "monomer MD submissions are disabled"
+
+    response = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "monomer MD submissions are disabled"
+    assert _monomer_md_job_count(postgres_dsn) == 0
 
 
 def test_monomer_md_job_rejects_invalid_worker_url_without_creating_row(postgres_dsn: str):
@@ -228,6 +262,44 @@ def test_monomer_md_job_rejects_non_json_health_without_creating_row(postgres_ds
     assert response.status_code == 503
     assert "invalid JSON" in response.json()["detail"]
     assert _monomer_md_job_count(postgres_dsn) == 0
+
+
+def test_monomer_md_job_rate_limits_by_forwarded_client_ip_without_creating_extra_row(postgres_dsn: str):
+    app = _create_app(
+        postgres_dsn,
+        monomer_md_rate_limit_per_ip_per_minute=1,
+        monomer_md_rate_limit_window_seconds=60,
+        monomer_md_max_active_jobs=10,
+    )
+    fake_worker = FakeWorkerClient()
+    app.state.monomer_md_worker_client = fake_worker
+    client = TestClient(app)
+    headers = {"X-Forwarded-For": "203.0.113.10, 127.0.0.1"}
+
+    first_response = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"}, headers=headers)
+    second_response = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"}, headers=headers)
+
+    assert first_response.status_code == 202
+    assert second_response.status_code == 429
+    assert "rate limit" in second_response.json()["detail"]
+    assert _monomer_md_job_count(postgres_dsn) == 1
+    assert len(fake_worker.payloads) == 1
+
+
+def test_monomer_md_job_rejects_when_active_capacity_is_full_without_creating_extra_row(postgres_dsn: str):
+    app = _create_app(postgres_dsn, monomer_md_rate_limit_per_ip_per_minute=10, monomer_md_max_active_jobs=1)
+    fake_worker = FakeWorkerClient()
+    app.state.monomer_md_worker_client = fake_worker
+    client = TestClient(app)
+
+    first_response = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"})
+    second_response = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"})
+
+    assert first_response.status_code == 202
+    assert second_response.status_code == 429
+    assert "capacity is full" in second_response.json()["detail"]
+    assert _monomer_md_job_count(postgres_dsn) == 1
+    assert len(fake_worker.payloads) == 1
 
 
 def test_monomer_md_job_rejects_polymer_attachment_smiles(postgres_dsn: str):
@@ -369,6 +441,28 @@ def test_monomer_md_repository_completed_update_does_not_override_failed(postgre
     assert row["status"] == "failed"
     assert row["error_message"] == "worker failed"
     assert row["result_data"] is None
+
+
+def test_monomer_md_repository_failed_update_does_not_override_failed(postgres_dsn: str):
+    job_id = "failed-terminal-guard-job"
+    with postgres_connection(postgres_dsn) as connection:
+        create_monomer_md_job_postgres(
+            connection,
+            job_id=job_id,
+            input_smiles="CCO",
+            canonical_smiles="CCO",
+            requested_steps=1000,
+        )
+        mark_monomer_md_job_failed_postgres(connection, job_id, "first failure")
+        mark_monomer_md_job_failed_postgres(connection, job_id, "late failure")
+        row = connection.execute(
+            "SELECT status, error_message, progress_message FROM md.monomer_md_jobs WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+
+    assert row["status"] == "failed"
+    assert row["error_message"] == "first failure"
+    assert row["progress_message"] == "first failure"
 
 
 def test_monomer_md_job_returns_404_for_unknown_job(postgres_dsn: str):

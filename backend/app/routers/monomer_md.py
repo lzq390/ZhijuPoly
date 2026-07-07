@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from app.models import (
 )
 from app.postgres_database import postgres_connection
 from app.services.monomer_md_repository import (
+    count_active_monomer_md_jobs_postgres,
     create_monomer_md_job_postgres,
     get_monomer_md_job_postgres,
     mark_monomer_md_job_failed_postgres,
@@ -27,6 +29,73 @@ from app.services.smiles_utils import standardize_smiles
 
 
 router = APIRouter(prefix="/api/v1/monomer-md", tags=["monomer-md"])
+_ACTIVE_CAPACITY_ADVISORY_LOCK_ID = 742128925057001
+
+
+def _client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",", 1)[0].strip()
+        if client_ip:
+            return client_ip
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _rate_limit_hits_for_app(app) -> dict[str, list[float]]:
+    hits = getattr(app.state, "monomer_md_rate_limit_hits", None)
+    if hits is None:
+        hits = {}
+        app.state.monomer_md_rate_limit_hits = hits
+    return hits
+
+
+def _enforce_submit_rate_limit(request: Request, settings) -> None:
+    limit = settings.monomer_md_rate_limit_per_ip_per_minute
+    window_seconds = settings.monomer_md_rate_limit_window_seconds
+    client_ip = _client_ip(request)
+    now = time.monotonic()
+    cutoff = now - window_seconds
+    hits_by_ip = _rate_limit_hits_for_app(request.app)
+    recent_hits = [hit for hit in hits_by_ip.get(client_ip, []) if hit >= cutoff]
+    if len(recent_hits) >= limit:
+        hits_by_ip[client_ip] = recent_hits
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="monomer MD submit rate limit exceeded; please wait before submitting another job",
+        )
+    recent_hits.append(now)
+    hits_by_ip[client_ip] = recent_hits
+
+
+def _raise_active_job_capacity_error() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="monomer MD job capacity is full; please wait for the current demo job to finish",
+    )
+
+
+def _create_pending_job_with_capacity_guard(
+    settings,
+    *,
+    job_id: str,
+    input_smiles: str,
+    canonical_smiles: str,
+    requested_steps: int,
+) -> None:
+    with postgres_connection(settings.app_postgres_dsn) as connection:
+        connection.execute("SELECT pg_advisory_xact_lock(%s)", (_ACTIVE_CAPACITY_ADVISORY_LOCK_ID,))
+        active_jobs = count_active_monomer_md_jobs_postgres(connection)
+        if active_jobs >= settings.monomer_md_max_active_jobs:
+            _raise_active_job_capacity_error()
+        create_monomer_md_job_postgres(
+            connection,
+            job_id=job_id,
+            input_smiles=input_smiles,
+            canonical_smiles=canonical_smiles,
+            requested_steps=requested_steps,
+        )
 
 
 def _optional_bool(value: object) -> bool | None:
@@ -126,6 +195,15 @@ def _status_response_from_health(
 @router.get("/status", response_model=MonomerMdStatusResponse)
 async def get_monomer_md_status(request: Request) -> MonomerMdStatusResponse:
     settings = request.app.state.settings
+    if not settings.monomer_md_submit_enabled:
+        return MonomerMdStatusResponse(
+            enabled=False,
+            available=False,
+            default_steps=settings.monomer_md_default_steps,
+            worker_base_url_configured=bool(settings.monomer_md_worker_base_url),
+            message="monomer MD submissions are disabled",
+        )
+
     configured = bool(settings.monomer_md_worker_base_url) or getattr(request.app.state, "monomer_md_worker_client", None) is not None
     if not configured:
         return MonomerMdStatusResponse(
@@ -154,6 +232,8 @@ async def get_monomer_md_status(request: Request) -> MonomerMdStatusResponse:
 @router.post("/jobs", response_model=MonomerMdJobCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Request) -> MonomerMdJobCreateResponse:
     settings = request.app.state.settings
+    if not settings.monomer_md_submit_enabled:
+        raise HTTPException(status_code=503, detail="monomer MD submissions are disabled")
     if not settings.monomer_md_worker_base_url and getattr(request.app.state, "monomer_md_worker_client", None) is None:
         raise HTTPException(status_code=503, detail="monomer MD worker is not configured")
 
@@ -166,17 +246,17 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
     unavailable_message = _worker_unavailable_message(health)
     if unavailable_message is not None:
         raise HTTPException(status_code=503, detail=unavailable_message)
+    _enforce_submit_rate_limit(request, settings)
 
     job_id = uuid4().hex
     requested_steps = settings.monomer_md_default_steps
-    with postgres_connection(settings.app_postgres_dsn) as connection:
-        create_monomer_md_job_postgres(
-            connection,
-            job_id=job_id,
-            input_smiles=request_body.smiles,
-            canonical_smiles=canonical_smiles,
-            requested_steps=requested_steps,
-        )
+    _create_pending_job_with_capacity_guard(
+        settings,
+        job_id=job_id,
+        input_smiles=request_body.smiles,
+        canonical_smiles=canonical_smiles,
+        requested_steps=requested_steps,
+    )
 
     try:
         submission = client.submit_job(

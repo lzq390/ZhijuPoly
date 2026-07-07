@@ -69,13 +69,28 @@ const RESULT_MESSAGE_TRANSLATIONS: Record<string, string> = {
 
 const UI_MESSAGE_TRANSLATIONS: Record<string, string> = {
   "Backend reports that monomer MD service is unavailable.": "后端报告单体 MD 服务当前不可用。",
+  "Request validation failed with status 422": "请求参数校验失败，请检查输入的 SMILES。",
+  "Request failed with status 422": "请求参数校验失败，请检查输入的 SMILES。",
+  "monomer MD submissions are disabled": "单体 MD 提交功能当前已关闭。",
   "monomer MD worker is ready": "单体 MD worker 已就绪。",
+  "monomer MD worker is disabled until MONOMER_MD_WORKER_BASE_URL is configured": "单体 MD worker 尚未启用，请配置 MONOMER_MD_WORKER_BASE_URL。",
   "monomer MD worker is not configured": "单体 MD worker 尚未配置。",
   "monomer MD worker is not reachable": "无法连接单体 MD worker。",
   "monomer MD worker database is not configured": "单体 MD worker 数据库尚未配置。",
   "monomer MD worker ByteFF2 root is not available": "单体 MD worker 找不到 ByteFF2 根目录。",
   "monomer MD worker runtime is not ready": "单体 MD worker 运行环境尚未就绪。",
+  "monomer MD submit rate limit exceeded; please wait before submitting another job": "提交过于频繁，请稍后再试。",
+  "monomer MD job capacity is full; please wait for the current demo job to finish": "当前已有单体 MD 演示任务在运行，请等待完成后再提交。",
+  "monomer MD worker active job capacity is full": "单体 MD worker 当前任务已满，请等待当前任务完成。",
   "Failed to fetch": "网络请求失败。"
+};
+
+const WORKER_STATUS_LABELS: Record<string, string> = {
+  degraded: "降级",
+  failed: "失败",
+  ok: "正常",
+  unreachable: "不可达",
+  unknown: "未知"
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -111,12 +126,61 @@ function formatValue(value: unknown) {
   return "--";
 }
 
-function translateResultMessage(message: string) {
+function translateResultMessage(message: string): string {
   return RESULT_MESSAGE_TRANSLATIONS[message] ?? message;
 }
 
-function translateUiMessage(message: string) {
-  return UI_MESSAGE_TRANSLATIONS[message] ?? message;
+function translateRuntimeDetail(message: string): string {
+  if (message.startsWith("BYTEFF2_DENSITY_DEMO_ENTRY does not exist:")) {
+    return `BYTEFF2_DENSITY_DEMO_ENTRY 指向的入口文件不存在：${message.replace("BYTEFF2_DENSITY_DEMO_ENTRY does not exist:", "").trim()}`;
+  }
+  if (message.startsWith("ByteFF2 root does not exist:")) {
+    return `ByteFF2 根目录不存在：${message.replace("ByteFF2 root does not exist:", "").trim()}`;
+  }
+  if (message.startsWith("BYTEFF2_PYTHON not found:")) {
+    return `找不到 BYTEFF2_PYTHON：${message.replace("BYTEFF2_PYTHON not found:", "").trim()}`;
+  }
+  if (message === "gmx was not found on PATH") {
+    return "PATH 中找不到 gmx 命令。";
+  }
+  if (message.startsWith("runtime import probe timed out after")) {
+    return `运行环境导入检查超时：${message.replace("runtime import probe timed out after", "").trim()}`;
+  }
+  if (message.startsWith("gmx probe timed out after")) {
+    return `gmx 检查超时：${message.replace("gmx probe timed out after", "").trim()}`;
+  }
+  return message;
+}
+
+function translateUiMessage(message: string): string {
+  const trimmed = message.trim();
+  const exact = UI_MESSAGE_TRANSLATIONS[trimmed];
+  if (exact) {
+    return exact;
+  }
+  if (trimmed.startsWith("invalid smiles:")) {
+    return "SMILES 无法解析，请检查结构格式。";
+  }
+  if (trimmed.includes("single-molecule SMILES without attachment points")) {
+    return "单体 MD 只接受普通单分子 SMILES，请不要输入带 * 的聚合物重复单元。";
+  }
+  if (trimmed.startsWith("MONOMER_MD_WORKER_BASE_URL")) {
+    return "单体 MD worker 地址配置无效，请检查 MONOMER_MD_WORKER_BASE_URL。";
+  }
+  if (trimmed.startsWith("monomer MD worker health is ")) {
+    const workerStatus = trimmed.replace("monomer MD worker health is ", "");
+    return `单体 MD worker 健康状态异常：${WORKER_STATUS_LABELS[workerStatus] ?? workerStatus}`;
+  }
+  if (trimmed.startsWith("monomer MD worker health check failed:")) {
+    return `单体 MD worker 健康检查失败：${translateUiMessage(trimmed.replace("monomer MD worker health check failed:", "").trim())}`;
+  }
+  if (trimmed.startsWith("monomer MD worker runtime is not ready:")) {
+    return `单体 MD worker 运行环境尚未就绪：${translateRuntimeDetail(trimmed.replace("monomer MD worker runtime is not ready:", "").trim())}`;
+  }
+  if (trimmed.startsWith("monomer MD worker rejected the job:")) {
+    return translateUiMessage(trimmed.replace("monomer MD worker rejected the job:", "").trim());
+  }
+  return trimmed || "单体 MD 请求失败。";
 }
 
 function normalizeSeries(series: MonomerMdSeries | undefined, valueKeys: string[]): PlotPoint[] {

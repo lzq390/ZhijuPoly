@@ -80,6 +80,10 @@ class Settings:
         monomer_md_worker_base_url: str | None = None,
         monomer_md_worker_timeout_seconds: float | None = None,
         monomer_md_default_steps: int | None = None,
+        monomer_md_submit_enabled: bool | None = None,
+        monomer_md_rate_limit_per_ip_per_minute: int | None = None,
+        monomer_md_rate_limit_window_seconds: int | None = None,
+        monomer_md_max_active_jobs: int | None = None,
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
         model_dir: str | None = None,
@@ -267,6 +271,41 @@ class Settings:
                 str(env_values.get("MONOMER_MD_DEFAULT_STEPS", "1000")),
             )
         )
+        raw_monomer_md_submit_enabled = monomer_md_submit_enabled
+        if raw_monomer_md_submit_enabled is None:
+            raw_monomer_md_submit_enabled = os.getenv(
+                "MONOMER_MD_SUBMIT_ENABLED",
+                str(env_values.get("MONOMER_MD_SUBMIT_ENABLED", "true")),
+            ).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        raw_monomer_md_rate_limit_per_ip_per_minute = (
+            str(monomer_md_rate_limit_per_ip_per_minute)
+            if monomer_md_rate_limit_per_ip_per_minute is not None
+            else os.getenv(
+                "MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE",
+                str(env_values.get("MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE", "3")),
+            )
+        )
+        raw_monomer_md_rate_limit_window_seconds = (
+            str(monomer_md_rate_limit_window_seconds)
+            if monomer_md_rate_limit_window_seconds is not None
+            else os.getenv(
+                "MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS",
+                str(env_values.get("MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS", "60")),
+            )
+        )
+        raw_monomer_md_max_active_jobs = (
+            str(monomer_md_max_active_jobs)
+            if monomer_md_max_active_jobs is not None
+            else os.getenv(
+                "MONOMER_MD_MAX_ACTIVE_JOBS",
+                str(env_values.get("MONOMER_MD_MAX_ACTIVE_JOBS", "1")),
+            )
+        )
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",
             env_values.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"),
@@ -448,6 +487,10 @@ class Settings:
         self.monomer_md_worker_base_url = raw_monomer_md_worker_base_url.strip().rstrip("/")
         self.monomer_md_worker_timeout_seconds = max(1.0, float(raw_monomer_md_worker_timeout_seconds))
         self.monomer_md_default_steps = max(1, int(raw_monomer_md_default_steps))
+        self.monomer_md_submit_enabled = bool(raw_monomer_md_submit_enabled)
+        self.monomer_md_rate_limit_per_ip_per_minute = max(1, int(raw_monomer_md_rate_limit_per_ip_per_minute))
+        self.monomer_md_rate_limit_window_seconds = max(1, int(raw_monomer_md_rate_limit_window_seconds))
+        self.monomer_md_max_active_jobs = max(1, int(raw_monomer_md_max_active_jobs))
         self.allowed_origins = raw_allowed_origins
         self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)

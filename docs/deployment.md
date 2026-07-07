@@ -100,6 +100,10 @@ GEN_MODEL_ENABLED=true
 RETRO_MODEL_ENABLED=true
 RETRO_MODEL_ID=/app/model/reactiont5-retrosynthesis
 RETRO_DEVICE=auto
+MONOMER_MD_SUBMIT_ENABLED=true
+MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE=3
+MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS=60
+MONOMER_MD_MAX_ACTIVE_JOBS=1
 ```
 
 Optional local secrets such as online knowledge or assistant API credentials can
@@ -121,9 +125,11 @@ The workflow is `.github/workflows/nexpoly-deploy.yml`.
 
 Triggers:
 
-- `pull_request` to `main`: frontend build and Compose config validation only.
+- `pull_request` to `main`: frontend build, Compose config validation, backend
+  monomer MD tests, and worker monomer MD tests.
 - `push` to `main`: CI, then SSH deployment to the server.
-- `workflow_dispatch`: CI and manual deployment of a selected Git ref.
+- `workflow_dispatch`: CI and manual deployment of a selected Git ref, with an
+  optional post-deploy monomer MD `CCO` smoke.
 
 Required GitHub Secrets:
 
@@ -141,10 +147,14 @@ Required GitHub Variables:
 | `NEXPOLY_SSH_PORT` | `22` | SSH port. |
 | `NEXPOLY_DEPLOY_PATH` | `/data/lzq/gith/nexpoly` | Server checkout path. |
 | `NEXPOLY_WEB_PORT` | optional | Optional override for the server `.env` web port. If omitted, the server `.env` value is used, then `9000`. |
+| `NEXPOLY_MONOMER_MD_SMOKE` | `false` | Optional default for running the post-deploy monomer MD `CCO` smoke on push deploys. Manual dispatch input overrides it. |
+| `NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS` | `300` | Optional timeout for the post-deploy monomer MD `CCO` smoke. Manual dispatch input overrides it. |
 
-CI on GitHub hosted runners intentionally does not run the full backend pytest
-suite. Backend tests are Postgres-only and, when enabled on the deployment
-server with `NEXPOLY_RUN_SERVER_TESTS=true`, depend on a configured
+CI on GitHub hosted runners runs the monomer MD backend test module against a
+Postgres service with `backend/requirements-monomer-md-ci.txt`, and runs the
+standalone monomer MD worker tests. It intentionally does not run the full
+backend pytest suite. Full backend tests, when enabled on the deployment server
+with `NEXPOLY_RUN_SERVER_TESTS=true`, depend on a configured
 `NEXPOLY_TEST_PYTHON` and a Postgres role that can create/drop isolated test
 databases.
 The server deployment step first bootstraps the checkout to the requested ref,
@@ -206,10 +216,42 @@ The script then performs these gates in order:
 12. Recreates `backend` and `nginx`.
 13. Restarts the monomer MD worker through user systemd or pidfile fallback when
     `.env.monomer-md-worker` exists.
-14. Verifies strict Postgres preflight and `http://localhost:$NEXPOLY_WEB_PORT/health`.
+14. Verifies strict Postgres preflight, backend monomer MD status, optional
+    `NEXPOLY_MONOMER_MD_SMOKE=true` CCO artifact smoke, and
+    `http://localhost:$NEXPOLY_WEB_PORT/health`.
 
 The script never runs `--rebuild`, never prunes Docker resources, and never
 targets the old `polyprop` compose project.
+
+## Monomer MD Public Demo Guardrails
+
+The monomer MD endpoint is a public demo entrypoint on the `9000` service, so it
+does not require login but is resource-limited before a job row is created:
+
+```bash
+MONOMER_MD_SUBMIT_ENABLED=true
+MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE=3
+MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS=60
+MONOMER_MD_MAX_ACTIVE_JOBS=1
+```
+
+`MONOMER_MD_MAX_ACTIVE_JOBS` counts `pending`, `submitted`, and `running` jobs in
+Postgres. When the service is busy or an IP exceeds the window limit, the
+backend returns `429` and does not create another `md.monomer_md_jobs` row.
+Set `MONOMER_MD_SUBMIT_ENABLED=false` to keep `/status` available while
+rejecting new submissions with `503`.
+
+To make deployment run a real 1000-step `CCO` smoke, set:
+
+```bash
+NEXPOLY_MONOMER_MD_SMOKE=true
+NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS=300
+```
+
+For GitHub Actions, use the `workflow_dispatch` inputs `monomer_md_smoke=true`
+and `monomer_md_smoke_timeout_seconds=300`, or set the GitHub Variables above
+for push deploys. The smoke is disabled by default to avoid consuming GPU time
+on every deploy.
 
 ## Health Checks
 

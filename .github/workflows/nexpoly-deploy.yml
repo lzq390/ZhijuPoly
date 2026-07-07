@@ -13,6 +13,18 @@ on:
         description: "Git ref to deploy, such as main, a tag, or a commit SHA."
         required: false
         default: main
+      monomer_md_smoke:
+        description: "Run the post-deploy monomer MD CCO smoke."
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      monomer_md_smoke_timeout_seconds:
+        description: "Timeout in seconds for the post-deploy monomer MD CCO smoke."
+        required: false
+        default: "300"
 
 permissions:
   contents: read
@@ -49,9 +61,73 @@ jobs:
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
 
+  backend-monomer-md-tests:
+    name: Backend monomer MD tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: polyprop
+          POSTGRES_PASSWORD: polyprop
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U polyprop -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      APP_POSTGRES_DSN: postgresql://polyprop:polyprop@127.0.0.1:5432/postgres
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-monomer-md-ci.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements-monomer-md-ci.txt
+
+      - name: Run backend monomer MD tests
+        working-directory: backend
+        run: python -m pytest tests/test_monomer_md.py
+
+  worker-monomer-md-tests:
+    name: Worker monomer MD tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: workers/monomer_md_worker/requirements.txt
+
+      - name: Install worker dependencies
+        run: python -m pip install -r workers/monomer_md_worker/requirements.txt pytest httpx
+
+      - name: Run worker monomer MD tests
+        run: python -m pytest workers/monomer_md_worker/tests
+
   deploy:
     name: Deploy nexpoly on server
-    needs: ci
+    needs:
+      - ci
+      - backend-monomer-md-tests
+      - worker-monomer-md-tests
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     environment: nexpoly-production
@@ -65,6 +141,8 @@ jobs:
       NEXPOLY_SSH_PORT: ${{ vars.NEXPOLY_SSH_PORT }}
       NEXPOLY_DEPLOY_PATH: ${{ vars.NEXPOLY_DEPLOY_PATH }}
       NEXPOLY_WEB_PORT: ${{ vars.NEXPOLY_WEB_PORT }}
+      NEXPOLY_MONOMER_MD_SMOKE: ${{ github.event_name == 'workflow_dispatch' && inputs.monomer_md_smoke || vars.NEXPOLY_MONOMER_MD_SMOKE }}
+      NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.monomer_md_smoke_timeout_seconds || vars.NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS }}
     steps:
       - name: Check out deployment ref
         uses: actions/checkout@v4
@@ -84,6 +162,8 @@ jobs:
           NEXPOLY_SSH_PORT="${NEXPOLY_SSH_PORT:-22}"
           NEXPOLY_DEPLOY_PATH="${NEXPOLY_DEPLOY_PATH:-/data/lzq/gith/nexpoly}"
           NEXPOLY_WEB_PORT="${NEXPOLY_WEB_PORT:-}"
+          NEXPOLY_MONOMER_MD_SMOKE="${NEXPOLY_MONOMER_MD_SMOKE:-false}"
+          NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS="${NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS:-300}"
 
           case "$DEPLOY_REF" in
             *[!A-Za-z0-9._/@:-]*)
@@ -108,6 +188,22 @@ jobs:
             esac
           fi
 
+          case "$NEXPOLY_MONOMER_MD_SMOKE" in
+            true|1|yes|enabled|false|0|no|disabled)
+              ;;
+            *)
+              echo "NEXPOLY_MONOMER_MD_SMOKE must be true or false." >&2
+              exit 1
+              ;;
+          esac
+
+          case "$NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS" in
+            *[!0-9]*|"")
+              echo "NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS must be numeric." >&2
+              exit 1
+              ;;
+          esac
+
           install -m 700 -d ~/.ssh
           printf '%s\n' "$NEXPOLY_SSH_PRIVATE_KEY" > ~/.ssh/nexpoly_deploy_key
           chmod 600 ~/.ssh/nexpoly_deploy_key
@@ -124,6 +220,8 @@ jobs:
             if [[ -n "$NEXPOLY_WEB_PORT" ]]; then
               echo "NEXPOLY_WEB_PORT=$NEXPOLY_WEB_PORT"
             fi
+            echo "NEXPOLY_MONOMER_MD_SMOKE=$NEXPOLY_MONOMER_MD_SMOKE"
+            echo "NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS=$NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS"
           } >> "$GITHUB_ENV"
 
       - name: Create deployment bundle
@@ -188,6 +286,9 @@ jobs:
             remote_web_port="$(printf '%q' "$NEXPOLY_WEB_PORT")"
             remote_command="${remote_command} NEXPOLY_WEB_PORT=${remote_web_port}"
           fi
+          remote_monomer_smoke="$(printf '%q' "$NEXPOLY_MONOMER_MD_SMOKE")"
+          remote_monomer_smoke_timeout="$(printf '%q' "$NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS")"
+          remote_command="${remote_command} NEXPOLY_MONOMER_MD_SMOKE=${remote_monomer_smoke} NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS=${remote_monomer_smoke_timeout}"
           remote_command="${remote_command} bash -s"
 
           ssh \

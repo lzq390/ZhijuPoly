@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
@@ -21,6 +22,7 @@ repository = PostgresJobRepository(settings)
 runner = MonomerMdRunner(settings)
 semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 active_jobs: dict[str, asyncio.Task[None]] = {}
+active_jobs_lock = asyncio.Lock()
 
 app = FastAPI(title="NexPoly Monomer MD Worker", version=settings.worker_version)
 
@@ -38,12 +40,6 @@ async def submit_job(request: JobRequest) -> JobAccepted:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"steps must be <= {settings.max_steps}",
         )
-    if request.job_id in active_jobs:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="job is already active on this worker",
-        )
-
     health_response = _build_health_response()
     if settings.mode == "real" and health_response.status != "ok":
         raise HTTPException(
@@ -51,22 +47,34 @@ async def submit_job(request: JobRequest) -> JobAccepted:
             detail=_health_rejection_message(health_response),
         )
 
-    initial_update_ok = await _safe_update_status(
-        request.job_id,
-        "submitted",
-        progress_percent=0,
-        progress_stage="submitted",
-        progress_message="Submitted to the monomer MD worker.",
-    )
-    if settings.db_configured and not initial_update_ok:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="monomer MD job row is not available for status updates",
-        )
+    async with active_jobs_lock:
+        if request.job_id in active_jobs:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="job is already active on this worker",
+            )
+        if len(active_jobs) >= settings.max_active_jobs:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="monomer MD worker active job capacity is full",
+            )
 
-    task = asyncio.create_task(_run_job(request, steps))
-    active_jobs[request.job_id] = task
-    task.add_done_callback(lambda _: active_jobs.pop(request.job_id, None))
+        initial_update_ok = await _safe_update_status(
+            request.job_id,
+            "submitted",
+            progress_percent=0,
+            progress_stage="submitted",
+            progress_message="Submitted to the monomer MD worker.",
+        )
+        if settings.db_configured and not initial_update_ok:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="monomer MD job row is not available for status updates",
+            )
+
+        task = asyncio.create_task(_run_job(request, steps))
+        active_jobs[request.job_id] = task
+        task.add_done_callback(lambda _: active_jobs.pop(request.job_id, None))
     return JobAccepted(
         job_id=request.job_id,
         status="submitted",
@@ -113,6 +121,10 @@ def _build_health_response() -> HealthResponse:
 
 
 def _probe_real_runtime() -> tuple[bool, str | None]:
+    demo_entry_error = _configured_density_demo_entry_error()
+    if demo_entry_error is not None:
+        return False, demo_entry_error
+
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
         [str(settings.byteff2_root), env.get("PYTHONPATH", "")]
@@ -168,6 +180,18 @@ def _probe_real_runtime() -> tuple[bool, str | None]:
     detail = (gmx_completed.stderr or gmx_completed.stdout or "").strip().splitlines()
     message = detail[-1] if detail else f"gmx probe exited {gmx_completed.returncode}"
     return False, message[:500]
+
+
+def _configured_density_demo_entry_error() -> str | None:
+    configured = os.getenv("BYTEFF2_DENSITY_DEMO_ENTRY", "").strip()
+    if not configured:
+        return None
+    path = Path(configured)
+    if not path.is_absolute():
+        path = settings.byteff2_root / path
+    if path.exists():
+        return None
+    return f"BYTEFF2_DENSITY_DEMO_ENTRY does not exist: {path}"
 
 
 def _health_rejection_message(health_response: HealthResponse) -> str:

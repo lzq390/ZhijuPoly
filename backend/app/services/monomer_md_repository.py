@@ -39,6 +39,17 @@ def create_monomer_md_job_postgres(connection: Any, *, job_id: str, input_smiles
     )
 
 
+def count_active_monomer_md_jobs_postgres(connection: Any) -> int:
+    row = connection.execute(
+        """
+        SELECT count(*) AS count
+        FROM md.monomer_md_jobs
+        WHERE status IN ('pending', 'submitted', 'running')
+        """
+    ).fetchone()
+    return int(row["count"] if row is not None else 0)
+
+
 def mark_monomer_md_job_submitted_postgres(connection: Any, *, job_id: str, worker_id: str | None = None, worker_job_id: str | None = None, worker_version: str | None = None) -> None:
     connection.execute(
         """
@@ -71,7 +82,7 @@ def mark_monomer_md_job_failed_postgres(connection: Any, job_id: str, error_mess
         """
         UPDATE md.monomer_md_jobs
         SET status = 'failed', progress_stage = 'failed', progress_message = %s, error_message = %s, updated_at = now(), finished_at = now()
-        WHERE job_id = %s AND status NOT IN ('completed', 'cancelled')
+        WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
         """,
         (error_message, error_message, job_id),
     )

@@ -62,7 +62,13 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
 async function errorMessageFromResponse(response: Response): Promise<string> {
   const data = await response.json().catch(() => null);
-  return typeof data?.detail === "string" ? data.detail : `Request failed with status ${response.status}`;
+  if (typeof data?.detail === "string") {
+    return data.detail;
+  }
+  if (Array.isArray(data?.detail)) {
+    return `Request validation failed with status ${response.status}`;
+  }
+  return `Request failed with status ${response.status}`;
 }
 
 async function postJSON<T>(path: string, body: unknown): Promise<T> {

@@ -13,7 +13,6 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from app.config import PROJECT_ROOT, Settings
-from app.main import create_app
 from app.postgres_database import postgres_connection
 from app.postgres_migrations import apply_postgres_migrations
 from app.services.fingerprint import fingerprint_to_bytes, generate
@@ -325,6 +324,8 @@ def _seed_dft(connection) -> None:
 
 @pytest.fixture
 def test_app(postgres_dsn: str):
+    from app.main import create_app
+
     settings = Settings(
         app_postgres_dsn=postgres_dsn,
         pi_postgres_dsn=postgres_dsn,
@@ -342,6 +343,8 @@ def test_app(postgres_dsn: str):
 
 @pytest.fixture
 def predict_enabled_app(postgres_dsn: str, tmp_path: Path):
+    from app.main import create_app
+
     model_dir = tmp_path / "models"
     model_dir.mkdir()
 

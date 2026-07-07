@@ -15,6 +15,7 @@ def _settings(
     *,
     mode: str = "dry-run",
     app_postgres_dsn: str | None = None,
+    max_active_jobs: int = 1,
 ) -> WorkerSettings:
     return WorkerSettings(
         mode=mode,  # type: ignore[arg-type]
@@ -46,6 +47,7 @@ def _settings(
         timeout_seconds=30,
         health_probe_timeout_seconds=5,
         max_concurrent_jobs=1,
+        max_active_jobs=max_active_jobs,
         cuda_visible_devices="2",
         worker_id="test-worker",
         worker_version="test",
@@ -102,6 +104,40 @@ def test_real_health_reports_missing_gmx_after_import_probe(tmp_path: Path, monk
     assert response.runtime_ready is False
     assert "gmx" in (response.runtime_error or "")
     assert any(call == ["gmx", "--version"] for call in calls)
+
+
+def test_real_health_reports_missing_configured_demo_entry(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, mode="real", app_postgres_dsn="postgresql://db/app")
+    settings.byteff2_root.mkdir()
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setenv("BYTEFF2_DENSITY_DEMO_ENTRY", "missing_demo.py")
+
+    def fake_run(*args, **kwargs):
+        raise AssertionError("runtime probes should not run when the configured demo entry is missing")
+
+    monkeypatch.setattr(worker_main.subprocess, "run", fake_run)
+
+    response = worker_main._build_health_response()
+
+    assert response.status == "degraded"
+    assert response.runtime_ready is False
+    assert "BYTEFF2_DENSITY_DEMO_ENTRY" in (response.runtime_error or "")
+
+
+def test_submit_rejects_when_active_capacity_is_full(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, app_postgres_dsn=None, max_active_jobs=1)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "active_jobs", {"busy-job": object()})
+
+    client = TestClient(worker_main.app)
+    response = client.post(
+        "/jobs",
+        json={"job_id": "job-1", "smiles": "CCO", "canonical_smiles": "CCO", "steps": 1000},
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == "monomer MD worker active job capacity is full"
+    assert set(worker_main.active_jobs) == {"busy-job"}
 
 
 def test_submit_rejects_real_degraded_worker(tmp_path: Path, monkeypatch):

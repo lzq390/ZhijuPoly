@@ -41,6 +41,7 @@ def _settings(tmp_path: Path) -> WorkerSettings:
         timeout_seconds=30,
         health_probe_timeout_seconds=5,
         max_concurrent_jobs=1,
+        max_active_jobs=1,
         cuda_visible_devices="2",
         worker_id="test-worker",
         worker_version="test",

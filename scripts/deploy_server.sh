@@ -463,6 +463,88 @@ check_monomer_backend_status() {
   json_field_is "$payload" available true || die "Backend monomer MD status is not available."
 }
 
+monomer_smoke_enabled() {
+  case "${NEXPOLY_MONOMER_MD_SMOKE:-false}" in
+    true|1|yes|enabled)
+      return 0
+      ;;
+    false|0|no|disabled|"")
+      return 1
+      ;;
+    *)
+      die "NEXPOLY_MONOMER_MD_SMOKE must be true or false."
+      ;;
+  esac
+}
+
+run_monomer_md_smoke() {
+  if ! monomer_worker_enabled || ! monomer_smoke_enabled; then
+    return 0
+  fi
+
+  log "Running monomer MD CCO smoke through backend."
+  require_cmd python3
+  NEXPOLY_WEB_PORT="$WEB_PORT" python3 <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import time
+import urllib.error
+import urllib.request
+
+port = os.environ["NEXPOLY_WEB_PORT"]
+timeout_seconds = int(os.environ.get("NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS", "300"))
+base_url = f"http://127.0.0.1:{port}/api/v1/monomer-md"
+
+def request_json(url: str, *, body: bytes | None = None) -> dict:
+    headers = {"Content-Type": "application/json"} if body is not None else {}
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"{url} returned HTTP {exc.code}: {detail}") from exc
+
+created = request_json(f"{base_url}/jobs", body=b'{"smiles":"CCO"}')
+job_id = created.get("job_id")
+if not isinstance(job_id, str) or not job_id:
+    raise RuntimeError(f"monomer MD smoke did not return a job_id: {created}")
+
+deadline = time.time() + timeout_seconds
+payload = {}
+while time.time() < deadline:
+    payload = request_json(f"{base_url}/jobs/{job_id}")
+    status = payload.get("status")
+    if status == "completed":
+        break
+    if status in {"failed", "cancelled"}:
+        raise RuntimeError(f"monomer MD smoke ended with {status}: {payload.get('error_message')}")
+    time.sleep(5)
+else:
+    raise RuntimeError(f"monomer MD smoke timed out waiting for job {job_id}; last payload: {payload}")
+
+result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+if payload.get("completed_steps") != 1000 or (result.get("summary") or {}).get("n_steps") != 1000:
+    raise RuntimeError(f"monomer MD smoke completed with unexpected step counts: {payload.get('completed_steps')}, {result.get('summary')}")
+if result.get("not_equilibrated") is not True or result.get("physical_density_estimate") is not False:
+    raise RuntimeError("monomer MD smoke result lost non-physical demo markers")
+if not result.get("warnings"):
+    raise RuntimeError("monomer MD smoke result did not include warnings")
+
+artifact_root = payload.get("artifact_root") or (payload.get("artifacts") or {}).get("artifact_root")
+if not artifact_root:
+    raise RuntimeError("monomer MD smoke did not return an artifact root")
+root = Path(str(artifact_root))
+missing = [name for name in ("density_demo_results.json", "npt_state.csv", "npt.dcd") if not (root / name).is_file() or (root / name).stat().st_size <= 0]
+if missing:
+    raise RuntimeError(f"monomer MD smoke artifacts are missing or empty under {root}: {', '.join(missing)}")
+
+print(json.dumps({"job_id": job_id, "artifact_root": str(root), "status": "completed"}, ensure_ascii=False))
+PY
+}
+
 create_database_backup() {
   local short_sha="${TARGET_COMMIT:0:12}"
   local backup_file="$BACKUP_DIR/nexpoly-${short_sha}.dump"
@@ -510,6 +592,7 @@ deploy_compose_stack() {
 
   restart_monomer_worker
   check_monomer_backend_status
+  run_monomer_md_smoke
 
   log "Checking public health endpoint on localhost:$WEB_PORT."
   curl --fail --silent --show-error --max-time 10 "http://localhost:${WEB_PORT}/health"
