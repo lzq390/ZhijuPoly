@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import sys
-from types import SimpleNamespace
-
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -446,37 +443,54 @@ def test_monomer_md_worker_client_uses_configured_health_timeout(monkeypatch):
     assert observed["timeout"] == 21
 
 
-def test_monomer_md_worker_client_mounts_unix_socket_adapter(monkeypatch):
-    class FakeUnixAdapter:
-        pass
+def test_monomer_md_worker_client_uses_unix_socket_connection(monkeypatch):
+    observed = {}
 
-    class FakeSession:
-        def __init__(self):
-            self.mounts = {}
+    class FakeRawResponse:
+        status = 200
+        reason = "OK"
 
-        def mount(self, prefix, adapter):
-            self.mounts[prefix] = adapter
+        def read(self):
+            return b'{"status":"ok"}'
 
-    fake_session = FakeSession()
-    monkeypatch.setitem(
-        sys.modules,
-        "requests_unixsocket",
-        SimpleNamespace(UnixAdapter=FakeUnixAdapter),
-    )
+        def getheaders(self):
+            return [("content-type", "application/json")]
+
+    class FakeUnixConnection:
+        def __init__(self, socket_path, timeout):
+            observed["socket_path"] = socket_path
+            observed["timeout"] = timeout
+
+        def request(self, method, target, body=None, headers=None):
+            observed["method"] = method
+            observed["target"] = target
+            observed["body"] = body
+            observed["headers"] = headers
+
+        def getresponse(self):
+            return FakeRawResponse()
+
+        def close(self):
+            observed["closed"] = True
+
     monkeypatch.setattr(
-        "app.services.monomer_md_worker_client.requests.Session",
-        lambda: fake_session,
+        "app.services.monomer_md_worker_client._UnixSocketHTTPConnection",
+        FakeUnixConnection,
     )
 
     client = MonomerMdWorkerClient(
         base_url="http+unix://%2Ftmp%2Fworker.sock",
-        timeout_seconds=1,
+        timeout_seconds=7,
     )
+    health = client.get_health()
 
-    assert client.session is fake_session
-    mounted_adapter = fake_session.mounts["http+unix://"]
-    assert isinstance(mounted_adapter, FakeUnixAdapter)
-    assert hasattr(mounted_adapter, "get_connection_with_tls_context")
+    assert health == {"status": "ok"}
+    assert observed["socket_path"] == "/tmp/worker.sock"
+    assert observed["timeout"] == 7
+    assert observed["method"] == "GET"
+    assert observed["target"] == "/health"
+    assert observed["headers"]["Host"] == "monomer-md-worker"
+    assert observed["closed"] is True
 
 
 def test_monomer_md_worker_client_rejects_submit_response_without_job_id(monkeypatch):

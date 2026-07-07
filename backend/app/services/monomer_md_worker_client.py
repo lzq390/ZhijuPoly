@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import http.client
+import json as json_lib
+import socket
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -37,15 +40,8 @@ class MonomerMdWorkerSubmitPayload:
 class MonomerMdWorkerClient:
     def __init__(self, *, base_url: str, timeout_seconds: float) -> None:
         parsed = urlparse(base_url)
-        if parsed.scheme == "http+unix":
-            try:
-                import requests_unixsocket
-            except ImportError as exc:  # pragma: no cover - deployment dependency.
-                raise MonomerMdWorkerError(
-                    "requests-unixsocket is required for http+unix monomer MD worker URLs"
-                ) from exc
-            self.session = requests.Session()
-            self.session.mount("http+unix://", _create_unix_socket_adapter(requests_unixsocket))
+        if parsed.scheme == "http+unix" and parsed.netloc:
+            self.session = _UnixSocketWorkerSession(socket_path=unquote(parsed.netloc))
         elif parsed.scheme in {"http", "https"} and parsed.netloc:
             self.session = requests.Session()
         else:
@@ -107,23 +103,77 @@ def _safe_response_detail(response: requests.Response) -> str:
     return f"HTTP {response.status_code}"
 
 
-def _create_unix_socket_adapter(requests_unixsocket: Any) -> requests.adapters.HTTPAdapter:
-    adapter_class = requests_unixsocket.UnixAdapter
-    if hasattr(requests.adapters.HTTPAdapter, "get_connection_with_tls_context"):
+class _UnixSocketHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: str, timeout: float) -> None:
+        super().__init__("localhost", timeout=timeout)
+        self.socket_path = socket_path
 
-        class CompatibleUnixAdapter(adapter_class):
-            def get_connection_with_tls_context(
-                self,
-                request: requests.PreparedRequest,
-                verify: bool | str,
-                proxies: dict[str, str] | None = None,
-                cert: str | tuple[str, str] | None = None,
-            ):
-                return self.get_connection(request.url, proxies)
+    def connect(self) -> None:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        sock.connect(self.socket_path)
+        self.sock = sock
 
-        return CompatibleUnixAdapter()
 
-    return adapter_class()
+class _UnixSocketWorkerSession:
+    def __init__(self, *, socket_path: str) -> None:
+        self.socket_path = socket_path
+
+    def get(self, url: str, *, timeout: float) -> requests.Response:
+        return self._request("GET", url, timeout=timeout)
+
+    def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, object],
+        timeout: float,
+    ) -> requests.Response:
+        body = json_lib.dumps(json).encode("utf-8")
+        return self._request(
+            "POST",
+            url,
+            timeout=timeout,
+            body=body,
+            headers={"Content-Type": "application/json"},
+        )
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        timeout: float,
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> requests.Response:
+        parsed = urlparse(url)
+        target = parsed.path or "/"
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+
+        request_headers = {"Host": "monomer-md-worker"}
+        request_headers.update(headers or {})
+        if body is not None:
+            request_headers["Content-Length"] = str(len(body))
+
+        connection = _UnixSocketHTTPConnection(self.socket_path, timeout=timeout)
+        try:
+            connection.request(method, target, body=body, headers=request_headers)
+            raw_response = connection.getresponse()
+            content = raw_response.read()
+        except (OSError, http.client.HTTPException) as exc:
+            raise requests.ConnectionError(str(exc)) from exc
+        finally:
+            connection.close()
+
+        response = requests.Response()
+        response.status_code = raw_response.status
+        response.reason = raw_response.reason
+        response.headers.update(dict(raw_response.getheaders()))
+        response._content = content
+        response.url = url
+        return response
 
 
 def _response_json_object(response: requests.Response, context: str) -> dict[str, Any]:
