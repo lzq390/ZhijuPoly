@@ -71,6 +71,7 @@ backend/data/pi_reverse_design.db
 model/
 .env
 .env.ai, if present
+.env.monomer-md-worker, if monomer MD real-mode worker is enabled
 ```
 
 Required model artifacts are defined by `backend/app/model_asset_manifest.py`.
@@ -110,8 +111,8 @@ Required server tools:
 git
 docker compose
 NVIDIA container runtime for GPU-backed backend workloads
-/home/lzq390/miniconda3/envs/screen312/bin/python
-Postgres role able to create and drop temporary test databases
+systemctl --user, if the host-side monomer MD worker is supervised by user systemd
+Postgres role able to create and drop temporary test databases, only when server-side pytest is enabled
 ```
 
 ## GitHub Actions Pipeline
@@ -142,11 +143,17 @@ Required GitHub Variables:
 | `NEXPOLY_WEB_PORT` | optional | Optional override for the server `.env` web port. If omitted, the server `.env` value is used, then `9000`. |
 
 CI on GitHub hosted runners intentionally does not run the full backend pytest
-suite. Backend tests are Postgres-only and depend on the server's `screen312`
-environment and a Postgres role that can create/drop isolated test databases.
+suite. Backend tests are Postgres-only and, when enabled on the deployment
+server with `NEXPOLY_RUN_SERVER_TESTS=true`, depend on a configured
+`NEXPOLY_TEST_PYTHON` and a Postgres role that can create/drop isolated test
+databases.
 The server deployment step first bootstraps the checkout to the requested ref,
 then runs the `scripts/deploy_server.sh` from that ref so first-time deployments
-and later script updates use the correct script version.
+and later script updates use the correct script version. The deploy job creates
+a Git bundle on the GitHub runner, uploads it to
+`$NEXPOLY_DEPLOY_PATH/ops/incoming/`, and fetches deployment refs from that
+bundle on the server. The normal CI/CD path therefore does not depend on the
+server being able to fetch from GitHub directly.
 
 `NEXPOLY_WEB_PORT` in GitHub Variables is optional. Leave it unset to use the
 server `.env` value. `NEXPOLY_POSTGRES_PORT` is intentionally managed on the
@@ -162,9 +169,22 @@ NEXPOLY_DEPLOY_REF=main scripts/deploy_server.sh
 ```
 
 The GitHub workflow bootstraps the deployment checkout before invoking the
-script: it verifies tracked files are clean, fetches refs, checks out the target
-commit, and fails clearly if the target ref does not contain
-`scripts/deploy_server.sh`.
+script: it verifies tracked files are clean, fetches refs from the uploaded
+bundle, checks out the target commit, and fails clearly if the target ref does
+not contain `scripts/deploy_server.sh`. Manual server deployments without
+`NEXPOLY_DEPLOY_BUNDLE` still fetch from `origin`.
+
+If real-mode monomer MD is enabled, install the user-level worker service once:
+
+```bash
+cd /data/lzq/gith/nexpoly
+scripts/install_monomer_md_worker_user_service.sh
+```
+
+The deploy script restarts `nexpoly-monomer-md-worker.service` when the user
+unit is installed. If the unit is absent or user systemd is unavailable, it
+falls back to the pidfile-managed worker and still blocks deployment unless the
+worker health endpoint reports `status=ok` and `runtime_ready=true`.
 
 The script then performs these gates in order:
 
@@ -172,17 +192,21 @@ The script then performs these gates in order:
 2. Reads `NEXPOLY_WEB_PORT` and `NEXPOLY_POSTGRES_PORT` from explicit shell env,
    then server `.env`, then defaults `9000` and `55432`.
 3. Validates the Docker Compose service contract.
-4. Fetches the requested Git ref and creates a temporary worktree for tests.
+4. Fetches the requested Git ref, from `NEXPOLY_DEPLOY_BUNDLE` when present,
+   and creates a temporary worktree for tests.
 5. Starts or confirms `lab-postgres`.
-6. Runs backend pytest with `screen312` against local Postgres.
+6. Optionally runs backend pytest against local Postgres when
+   `NEXPOLY_RUN_SERVER_TESTS=true`.
 7. Checks required data sources and model assets.
 8. Creates `backups/nexpoly-$SHA.dump` with `pg_dump -Fc`.
-9. Updates the deployment checkout using `git pull --ff-only origin main` for
-   the normal `main` deployment path.
+9. Updates the deployment checkout with a fast-forward merge to the tested
+   target commit for the normal `main` deployment path.
 10. Runs `docker compose build`.
 11. Runs `docker compose run --rm postgres-init`.
 12. Recreates `backend` and `nginx`.
-13. Verifies strict Postgres preflight and `http://localhost:$NEXPOLY_WEB_PORT/health`.
+13. Restarts the monomer MD worker through user systemd or pidfile fallback when
+    `.env.monomer-md-worker` exists.
+14. Verifies strict Postgres preflight and `http://localhost:$NEXPOLY_WEB_PORT/health`.
 
 The script never runs `--rebuild`, never prunes Docker resources, and never
 targets the old `polyprop` compose project.

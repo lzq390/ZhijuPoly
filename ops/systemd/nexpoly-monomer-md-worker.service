@@ -1,0 +1,21 @@
+[Unit]
+Description=NexPoly monomer MD worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/data/lzq/gith/nexpoly/workers/monomer_md_worker
+EnvironmentFile=/data/lzq/gith/nexpoly/.env.monomer-md-worker
+ExecStart=/data/lzq/gith/nexpoly/workers/monomer_md_worker/run_host_worker.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexpoly-monomer-md-worker
+UMask=0002
+
+[Install]
+WantedBy=default.target

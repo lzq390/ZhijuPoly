@@ -101,6 +101,7 @@ MONOMER_MD_WORKER_DEPLOY_MODE="${NEXPOLY_MONOMER_MD_WORKER_MODE:-auto}"
 MONOMER_MD_WORKER_ENV_FILE="${NEXPOLY_MONOMER_MD_WORKER_ENV_FILE:-$ROOT_DIR/.env.monomer-md-worker}"
 MONOMER_MD_WORKER_PID_FILE="${NEXPOLY_MONOMER_MD_WORKER_PID_FILE:-$ROOT_DIR/ops/state/monomer-md-worker.pid}"
 MONOMER_MD_WORKER_LOG_FILE="${NEXPOLY_MONOMER_MD_WORKER_LOG_FILE:-$ROOT_DIR/ops/logs/monomer-md-worker.log}"
+MONOMER_MD_WORKER_SYSTEMD_UNIT="${NEXPOLY_MONOMER_MD_WORKER_SYSTEMD_UNIT:-nexpoly-monomer-md-worker.service}"
 TMP_DIR=""
 TEST_WORKTREE=""
 TARGET_COMMIT=""
@@ -357,6 +358,27 @@ stop_monomer_worker() {
   fi
 }
 
+restart_monomer_worker_with_user_systemd() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
+    log "User systemd runtime directory is unavailable; falling back to pidfile worker restart."
+    return 1
+  fi
+
+  if ! systemctl --user list-unit-files "$MONOMER_MD_WORKER_SYSTEMD_UNIT" --no-legend 2>/dev/null | grep -q "^$MONOMER_MD_WORKER_SYSTEMD_UNIT"; then
+    log "User systemd unit $MONOMER_MD_WORKER_SYSTEMD_UNIT is not installed; falling back to pidfile worker restart."
+    return 1
+  fi
+
+  log "Restarting monomer MD worker with user systemd unit $MONOMER_MD_WORKER_SYSTEMD_UNIT."
+  stop_monomer_worker
+  systemctl --user daemon-reload
+  systemctl --user restart "$MONOMER_MD_WORKER_SYSTEMD_UNIT"
+  return 0
+}
+
 wait_for_monomer_worker() {
   local port="${MONOMER_MD_WORKER_PORT:-18010}"
   local health_host="${MONOMER_MD_WORKER_HEALTH_HOST:-${MONOMER_MD_WORKER_HOST:-127.0.0.1}}"
@@ -410,6 +432,11 @@ restart_monomer_worker() {
 
   mkdir -p "$(dirname "$MONOMER_MD_WORKER_PID_FILE")" "$(dirname "$MONOMER_MD_WORKER_LOG_FILE")" "$MONOMER_MD_JOB_ROOT"
   "$MONOMER_MD_PYTHON" -m pip install -r "$ROOT_DIR/workers/monomer_md_worker/requirements.txt"
+
+  if restart_monomer_worker_with_user_systemd; then
+    wait_for_monomer_worker
+    return 0
+  fi
 
   stop_monomer_worker
   (

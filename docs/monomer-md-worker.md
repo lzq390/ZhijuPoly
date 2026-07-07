@@ -131,6 +131,22 @@ MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS=20
 NEXPOLY_GPU_DEVICE=2
 ```
 
+The preferred supervisor is a user-level systemd service owned by `devuser`.
+Install it after the checkout has this repository version:
+
+```bash
+cd /data/lzq/gith/nexpoly
+scripts/install_monomer_md_worker_user_service.sh
+systemctl --user status nexpoly-monomer-md-worker
+```
+
+The service template is tracked at
+`ops/systemd/nexpoly-monomer-md-worker.service` and reads the same
+server-local `.env.monomer-md-worker`. The deploy script prefers this user unit
+when it is installed. If user systemd is unavailable or the unit is absent, the
+script falls back to the older pidfile-managed host worker and still requires
+the same `/health` gate before backend submissions are considered available.
+
 On the production server, prefer the Unix socket path:
 
 ```bash
@@ -159,17 +175,18 @@ Before enabling backend submissions, check the worker itself and then the
 backend-facing status:
 
 ```bash
-curl http://127.0.0.1:18010/health
+curl --unix-socket /data/lzq/monomer-md-worker-socket/worker.sock http://monomer-md-worker/health
 NEXPOLY_PORT=${NEXPOLY_PORT:-9000}
 curl "http://127.0.0.1:${NEXPOLY_PORT}/api/v1/monomer-md/status"
 ```
 
 Both should show the worker as available, with `db_configured=true`,
-`byteff2_root_exists=true`, and `runtime_ready=true`. After deploy, run a real
-1000-step smoke with `CCO`, poll the returned job until `completed`, and confirm
-the artifacts `density_demo_results.json`, `npt_state.csv`, and `npt.dcd`
-exist. The result must retain warnings that the run is not equilibrated and is
-not a physical density estimate.
+`byteff2_root_exists=true`, and `runtime_ready=true`. If the deployment uses TCP
+instead of the Unix socket, check `http://127.0.0.1:18010/health` directly.
+After deploy, run a real 1000-step smoke with `CCO`, poll the returned job until
+`completed`, and confirm the artifacts `density_demo_results.json`,
+`npt_state.csv`, and `npt.dcd` exist. The result must retain warnings that the
+run is not equilibrated and is not a physical density estimate.
 
 Point the backend at `http://host.docker.internal:18010` if the backend stays in
 Docker, or `http://127.0.0.1:18010` if the backend runs on the host. The worker
