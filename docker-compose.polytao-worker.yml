@@ -1,0 +1,57 @@
+name: nexpoly-polytao-worker
+
+services:
+  polytao-worker:
+    image: nexpoly-polytao-worker:latest
+    build:
+      context: .
+      dockerfile: workers/polytao_worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_POSTGRES_DSN: "${APP_POSTGRES_DSN:-postgresql://polyprop:polyprop@lab-postgres:5432/nexpoly}"
+      POLYTAO_WORKER_MODE: "${POLYTAO_WORKER_MODE:-real}"
+      POLYTAO_WORKER_ID: "${POLYTAO_WORKER_ID:-polytao-worker}"
+      POLYTAO_WORKER_VERSION: "${POLYTAO_WORKER_VERSION:-0.1.0}"
+      POLYTAO_MODEL_DIR: "/app/model/polytao"
+      POLYTAO_MODEL_ID: "${POLYTAO_MODEL_ID:-hkqiu/PolymerGenerationPretrainedModel}"
+      POLYTAO_MODEL_REVISION: "${POLYTAO_MODEL_REVISION:-}"
+      POLYTAO_DEVICE: "${POLYTAO_DEVICE:-cuda}"
+      POLYTAO_MAX_ACTIVE_JOBS: "${POLYTAO_MAX_ACTIVE_JOBS:-1}"
+      POLYTAO_MAX_CONCURRENT_JOBS: "${POLYTAO_MAX_CONCURRENT_JOBS:-1}"
+      POLYTAO_HEALTH_PROBE_TIMEOUT_SECONDS: "${POLYTAO_HEALTH_PROBE_TIMEOUT_SECONDS:-10}"
+      POLYTAO_DEFAULT_CANDIDATE_COUNT: "${POLYTAO_DEFAULT_CANDIDATE_COUNT:-10}"
+      POLYTAO_DEFAULT_TEMPERATURE: "${POLYTAO_DEFAULT_TEMPERATURE:-1.0}"
+      POLYTAO_DEFAULT_TOP_K: "${POLYTAO_DEFAULT_TOP_K:-100}"
+      POLYTAO_DEFAULT_TOP_P: "${POLYTAO_DEFAULT_TOP_P:-0.999}"
+      POLYTAO_DEFAULT_MAX_LENGTH: "${POLYTAO_DEFAULT_MAX_LENGTH:-300}"
+      NVIDIA_VISIBLE_DEVICES: "${NEXPOLY_GPU_DEVICE:-2}"
+      NEXPOLY_GPU_DEVICE: "${NEXPOLY_GPU_DEVICE:-2}"
+    volumes:
+      - "./model/polytao:/app/model/polytao:ro"
+    gpus:
+      - driver: nvidia
+        device_ids:
+          - "${NEXPOLY_GPU_DEVICE:-2}"
+        capabilities:
+          - gpu
+    expose:
+      - "8020"
+    ports:
+      - "127.0.0.1:${POLYTAO_WORKER_HOST_PORT:-18020}:8020"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - nexpoly_default
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8020/health', timeout=3)); raise SystemExit(0 if data.get('status') == 'ok' else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  nexpoly_default:
+    external: true
+    name: nexpoly_default
