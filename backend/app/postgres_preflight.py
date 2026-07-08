@@ -21,6 +21,7 @@ POSTGRES_TABLES = [
     ("governance", "import_batches"),
     ("core", "polymers"),
     ("core", "polymer_properties"),
+    ("core", "polymer_property_filter_records"),
     ("knowledge", "documents"),
     ("knowledge", "formulation_records"),
     ("online_knowledge", "history"),
@@ -44,6 +45,7 @@ STRICT_REQUIRED_MIGRATIONS = (
     "0003_runtime_postgres_cutover",
     "0004_monomer_md_jobs",
     "0005_byteff2_formal_monomer_md",
+    "0006_property_filter_records",
 )
 STRICT_RUNTIME_TABLES = tuple(POSTGRES_TABLES)
 
@@ -193,6 +195,7 @@ def run_preflight(settings: Settings, dsn: str | None = None, mode: str = "runti
 
     files = {
         "csv_source": settings.csv_source_file,
+        "property_filter_csv": settings.property_filter_csv_file,
         "knowledge_zip": settings.knowledge_zip_file,
         "experimental_process_csv": settings.experimental_process_csv_file,
         "experimental_property_csv": settings.experimental_property_csv_file,

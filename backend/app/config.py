@@ -54,6 +54,7 @@ class Settings:
         self,
         sqlite_db_path: str | None = None,
         csv_source_path: str | None = None,
+        property_filter_csv_path: str | None = None,
         experimental_process_csv_path: str | None = None,
         experimental_property_csv_path: str | None = None,
         knowledge_zip_path: str | None = None,
@@ -117,6 +118,10 @@ class Settings:
         raw_csv_source_path = csv_source_path or os.getenv(
             "CSV_SOURCE_PATH",
             env_values.get("CSV_SOURCE_PATH", "database/data1.csv"),
+        )
+        raw_property_filter_csv_path = property_filter_csv_path or os.getenv(
+            "PROPERTY_FILTER_CSV_PATH",
+            env_values.get("PROPERTY_FILTER_CSV_PATH", "database/PolymerDatabaseV2.0_reliable085_standardized.csv"),
         )
         raw_experimental_process_csv_path = experimental_process_csv_path or os.getenv(
             "EXPERIMENTAL_PROCESS_CSV_PATH",
@@ -465,6 +470,7 @@ class Settings:
 
         self.sqlite_db_path = _resolve_from_root(raw_sqlite_db_path)
         self.csv_source_path = _resolve_from_root(raw_csv_source_path)
+        self.property_filter_csv_path = _resolve_from_root(raw_property_filter_csv_path)
         self.experimental_process_csv_path = _resolve_from_root(raw_experimental_process_csv_path)
         self.experimental_property_csv_path = _resolve_from_root(raw_experimental_property_csv_path)
         self.knowledge_zip_path = _resolve_from_root(raw_knowledge_zip_path)
@@ -534,6 +540,10 @@ class Settings:
     @property
     def csv_source_file(self) -> Path:
         return Path(self.csv_source_path)
+
+    @property
+    def property_filter_csv_file(self) -> Path:
+        return Path(self.property_filter_csv_path)
 
     @property
     def experimental_process_csv_file(self) -> Path:

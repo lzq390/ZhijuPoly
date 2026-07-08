@@ -912,6 +912,99 @@ export type StructurePropertyBrowseResponse = {
   results: StructurePropertyRecord[];
 };
 
+export type PropertyFilterType = "standardized" | "raw";
+
+export type PropertyFilterOption = {
+  filter_type: PropertyFilterType;
+  option_key: string;
+  label: string;
+  property_key: string | null;
+  property_name: string | null;
+  property_unit_clean: string | null;
+  canonical_unit: string | null;
+  rows: number;
+  unique_smiles: number;
+  min_value: number | null;
+  p5_value: number | null;
+  median_value: number | null;
+  p95_value: number | null;
+  max_value: number | null;
+};
+
+export type PropertyFilterOptionsResponse = {
+  query_time_ms: number;
+  total_records: number;
+  mapped_records: number;
+  raw_records: number;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
+  options: PropertyFilterOption[];
+};
+
+export type PropertyFilterCondition = {
+  filter_type: PropertyFilterType;
+  property_key?: string | null;
+  canonical_unit?: string | null;
+  property_name?: string | null;
+  property_unit_clean?: string | null;
+  min_value?: number | null;
+  max_value?: number | null;
+};
+
+export type PropertyFilterSearchRequest = {
+  filters: PropertyFilterCondition[];
+  q?: string;
+  page?: number;
+  page_size?: number;
+};
+
+export type PropertyFilterRecord = {
+  filter_record_id: number;
+  source_row_number: number;
+  polymer_name: string | null;
+  smiles: string | null;
+  canonical_smiles: string | null;
+  property_category: string;
+  property_name: string;
+  property_value: string;
+  property_value_num: number | null;
+  property_unit_raw: string | null;
+  property_unit_clean: string | null;
+  property_key: string | null;
+  property_label: string | null;
+  canonical_value: number | null;
+  canonical_unit: string | null;
+  unit_conversion_status: string | null;
+  value_origin: string | null;
+  label_source: string | null;
+  reliable_score: number | null;
+  soft_quality_flags: string | null;
+  duplicate_flag: string | null;
+  filter_index: number;
+};
+
+export type PropertyFilterSearchResult = {
+  smiles: string | null;
+  canonical_smiles: string | null;
+  polymer_name: string | null;
+  matched_filters: number;
+  records: PropertyFilterRecord[];
+};
+
+export type PropertyFilterSearchResponse = {
+  query: string;
+  page: number;
+  page_size: number;
+  query_time_ms: number;
+  total_records: number;
+  matched_records: number;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
+  results: PropertyFilterSearchResult[];
+};
+
 export type DftMoleculeBrowserRecord = {
   mol_id: string;
   range_group: string;

@@ -71,7 +71,8 @@ WHERE version IN (
   '0002_knowledge_and_analytics',
   '0003_runtime_postgres_cutover',
   '0004_monomer_md_jobs',
-  '0005_property_filter_records'
+  '0005_byteff2_formal_monomer_md',
+  '0006_property_filter_records'
 )
 ORDER BY version;
 
