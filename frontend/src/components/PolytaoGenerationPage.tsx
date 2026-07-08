@@ -636,7 +636,9 @@ function JobProgress({ job }: { job: PolytaoJobStatusResponse }) {
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
         <div className="h-full rounded-full bg-sky-500 transition-all" style={{ width: `${progress}%` }} />
       </div>
-      <div className="mt-2 text-xs leading-5 text-slate-500">{job.progress_message}</div>
+      <div className="mt-2 min-w-0 break-words text-xs leading-5 text-slate-500 [overflow-wrap:anywhere]">
+        {job.progress_message}
+      </div>
       <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
         <MetricRow label="Returned" value={String(job.returned_count)} />
         <MetricRow label="Attempts" value={String(job.attempts)} />
@@ -772,7 +774,7 @@ function CandidateCard({ candidate }: { candidate: PolytaoCandidate }) {
           <MetricRow label="Raw output" value={candidate.raw_smiles} mono />
         </div>
         {candidate.warnings.length ? (
-          <div className="rounded-[10px] border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+          <div className="min-w-0 break-words rounded-[10px] border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 [overflow-wrap:anywhere]">
             {candidate.warnings.join(", ")}
           </div>
         ) : null}
@@ -816,7 +818,7 @@ function MetricRow({ label, value, mono = false }: { label: string; value: strin
   return (
     <div className="flex items-start justify-between gap-3">
       <span className="text-slate-500">{label}</span>
-      <span className={cn("min-w-0 text-right font-semibold text-slate-800", mono ? "break-all font-mono-ui" : "")}>
+      <span className={cn("min-w-0 text-right font-semibold text-slate-800 [overflow-wrap:anywhere]", mono ? "break-all font-mono-ui" : "break-words")}>
         {value}
       </span>
     </div>
@@ -840,7 +842,7 @@ function AlertBox({
     <div className={cn("flex gap-2 rounded-[10px] border px-3 py-2 text-xs leading-5", className)}>
       <CircleAlert className="mt-0.5 h-4 w-4 flex-none" />
       <div className="min-w-0">
-        <div className="font-semibold">{title}</div>
+        <div className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{title}</div>
         {children}
       </div>
     </div>

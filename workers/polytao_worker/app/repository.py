@@ -21,6 +21,38 @@ class PostgresJobRepository:
     def __init__(self, settings: WorkerSettings) -> None:
         self._settings = settings
 
+    def health_check(self) -> tuple[bool, str | None]:
+        if not self._settings.db_configured:
+            return False, "APP_POSTGRES_DSN is not configured"
+        if psycopg is None:
+            return False, "psycopg is required when APP_POSTGRES_DSN is configured"
+
+        try:
+            with psycopg.connect(
+                self._settings.app_postgres_dsn,
+                connect_timeout=max(1, int(self._settings.health_probe_timeout_seconds)),
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT EXISTS (
+                          SELECT 1
+                          FROM information_schema.tables
+                          WHERE table_schema = 'generation'
+                            AND table_name = 'polytao_jobs'
+                        )
+                        """
+                    )
+                    row = cur.fetchone()
+        except Exception as exc:
+            logger.warning("PolyTAO worker database health check failed: %s", exc)
+            return False, str(exc)[:240]
+
+        table_exists = bool(row and row[0])
+        if not table_exists:
+            return False, "generation.polytao_jobs table is missing"
+        return True, None
+
     def update_status(
         self,
         job_id: str,

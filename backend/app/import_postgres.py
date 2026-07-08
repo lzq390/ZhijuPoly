@@ -213,6 +213,7 @@ def truncate_governed_tables(connection: Any) -> None:
           lab.test_projects,
           experimental.process_records,
           experimental.property_records,
+          core.polymer_property_filter_records,
           model_registry.assets
         RESTART IDENTITY CASCADE
         """
@@ -312,7 +313,19 @@ IMPORT_BATCH_SOURCE_LOGICAL_NAMES = {
     "property_filter": "property_filter_csv",
 }
 
-FULL_IMPORT_DATASETS = {"sources", "assets", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "batch_backfill"}
+FULL_IMPORT_DATASETS = {
+    "sources",
+    "assets",
+    "core",
+    "knowledge",
+    "online",
+    "pi",
+    "dft",
+    "experimental",
+    "lab",
+    "property_filter",
+    "batch_backfill",
+}
 GOVERNANCE_IMPORT_DATASETS = {"sources", "assets", "batch_backfill"}
 
 
@@ -1129,11 +1142,24 @@ def import_all_to_postgres(
                 _finish_batch(connection, batch_id, dataset_stats.row_count)
                 stats.datasets.append(dataset_stats)
             if "property_filter" in requested:
-                if not settings.property_filter_csv_file.exists():
-                    raise FileNotFoundError(settings.property_filter_csv_file)
                 batch_id = _start_batch(connection, "property_filter", ensure_source_ids(connection)["property_filter_csv"])
-                dataset_stats = import_property_filter_from_csv(connection, settings.property_filter_csv_file, batch_size)
-                _finish_batch(connection, batch_id, dataset_stats.row_count)
+                if not settings.property_filter_csv_file.exists():
+                    error = f"source CSV is missing: {settings.property_filter_csv_file}"
+                    _finish_batch(connection, batch_id, 0, "missing", error)
+                    dataset_stats = DatasetImportStats(
+                        dataset_key="property_filter",
+                        row_count=0,
+                        details={"missing_source": 1},
+                    )
+                else:
+                    dataset_stats = import_property_filter_from_csv(connection, settings.property_filter_csv_file, batch_size)
+                    _finish_batch(
+                        connection,
+                        batch_id,
+                        dataset_stats.row_count,
+                        "completed" if dataset_stats.row_count else "empty",
+                        None if dataset_stats.row_count else "property filter import produced zero records",
+                    )
                 stats.datasets.append(dataset_stats)
             if "knowledge" in requested:
                 batch_id = _start_batch(connection, "knowledge", ensure_source_ids(connection)["main_sqlite"])
@@ -1183,7 +1209,7 @@ def import_all_to_postgres(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import PolyProp governed data into PostgreSQL.")
     parser.add_argument("--dsn", default=None, help="Target Postgres DSN. Defaults to APP_POSTGRES_DSN.")
-    parser.add_argument("--dataset", action="append", choices=["all", "governance", "sources", "assets", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "property_filter"], help="Dataset to import. Repeatable. Defaults to all. governance updates source/model registries and backfills batch lineage only. property_filter imports the standardized threshold-filter CSV only when requested explicitly.")
+    parser.add_argument("--dataset", action="append", choices=["all", "governance", "sources", "assets", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "property_filter"], help="Dataset to import. Repeatable. Defaults to all. governance updates source/model registries and backfills batch lineage only.")
     parser.add_argument("--refresh-analytics-snapshot", action="store_true", help="Regenerate the static database analytics snapshot after the import transaction commits.")
     parser.add_argument("--rebuild", action="store_true", help="Truncate governed target tables before importing.")
     parser.add_argument("--skip-migrations", action="store_true", help="Do not apply Postgres migrations before importing.")

@@ -90,6 +90,22 @@ class DegradedWorkerClient:
         raise AssertionError("degraded workers must not receive submitted jobs")
 
 
+class DbDegradedWorkerClient:
+    def get_health(self):
+        return {
+            "status": "degraded",
+            "mode": "real",
+            "db_configured": True,
+            "db_ready": False,
+            "db_error": "generation.polytao_jobs table is missing",
+            "runtime_ready": True,
+            "active_jobs": 0,
+        }
+
+    def submit_job(self, payload):
+        raise AssertionError("degraded workers must not receive submitted jobs")
+
+
 class SubmitFailingWorkerClient:
     def get_health(self):
         return {
@@ -127,7 +143,7 @@ class FakeResponse:
 def _create_app(
     postgres_dsn: str,
     *,
-    worker_url: str = "http://polytao-worker:18020",
+    worker_url: str = "http://polytao-worker:8020",
     polytao_submit_enabled: bool = True,
     polytao_max_active_jobs: int = 1,
     polytao_rate_limit_per_ip_per_minute: int = 5,
@@ -231,6 +247,23 @@ def test_polytao_status_reports_unreachable_worker(postgres_dsn: str):
     assert data["available"] is False
     assert data["worker_status"] == "unreachable"
     assert data["message"] == "PolyTAO worker is not reachable"
+
+
+def test_polytao_status_reports_worker_database_not_ready(postgres_dsn: str):
+    app = _create_app(postgres_dsn)
+    app.state.polytao_worker_client = DbDegradedWorkerClient()
+    client = TestClient(app)
+
+    response = client.get("/api/v1/conditional-generation/polytao/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is True
+    assert data["available"] is False
+    assert data["db_configured"] is True
+    assert data["db_ready"] is False
+    assert data["db_error"] == "generation.polytao_jobs table is missing"
+    assert data["message"] == "PolyTAO worker database is not ready: generation.polytao_jobs table is missing"
 
 
 def test_polytao_job_requires_configured_worker(postgres_dsn: str):

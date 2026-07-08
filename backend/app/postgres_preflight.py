@@ -108,6 +108,7 @@ SNAPSHOT_ROW_COMPARISONS = {
     "process": ("experimental", "process_records"),
     "property": ("experimental", "property_records"),
     "structureEffect": ("core", "polymer_properties"),
+    "propertyFilter": ("core", "polymer_property_filter_records"),
     "dft": ("dft", "energy_trace"),
     "formulation": ("knowledge", "formulation_records"),
 }
@@ -166,6 +167,15 @@ def strict_preflight_errors(report: dict[str, object]) -> list[str]:
             key = f"{schema}.{table}"
             if tables.get(key) is None:
                 errors.append(f"Required Postgres table is missing: {key}")
+        if report.get("mode") == "runtime" and tables.get("core.polymer_property_filter_records") == 0:
+            errors.append("Property filter records are empty; run the property_filter import before deployment.")
+
+    if report.get("mode") == "runtime":
+        files = report.get("files")
+        if isinstance(files, dict):
+            property_filter_file = files.get("property_filter_csv")
+            if isinstance(property_filter_file, dict) and not property_filter_file.get("exists"):
+                errors.append("Required runtime source is missing: property_filter_csv")
 
     if report.get("mode") == "migration":
         files = report.get("files")

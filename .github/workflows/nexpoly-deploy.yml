@@ -61,6 +61,9 @@ jobs:
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
 
+      - name: Validate PolyTAO Worker Docker Compose configuration
+        run: docker compose -f docker-compose.polytao-worker.yml config --quiet
+
   backend-monomer-md-tests:
     name: Backend monomer MD tests
     runs-on: ubuntu-latest
@@ -100,6 +103,45 @@ jobs:
         working-directory: backend
         run: python -m pytest tests/test_monomer_md.py
 
+  backend-polytao-postgres-tests:
+    name: Backend PolyTAO and Postgres tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: polyprop
+          POSTGRES_PASSWORD: polyprop
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U polyprop -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      APP_POSTGRES_DSN: postgresql://polyprop:polyprop@127.0.0.1:5432/postgres
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-monomer-md-ci.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements-monomer-md-ci.txt
+
+      - name: Run backend PolyTAO and Postgres tests
+        working-directory: backend
+        run: python -m pytest tests/test_polytao.py tests/test_database_browser.py tests/test_postgres_governance.py
+
   worker-monomer-md-tests:
     name: Worker monomer MD tests
     runs-on: ubuntu-latest
@@ -122,12 +164,35 @@ jobs:
       - name: Run worker monomer MD tests
         run: python -m pytest workers/monomer_md_worker/tests
 
+  worker-polytao-tests:
+    name: Worker PolyTAO tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install worker test dependencies
+        run: python -m pip install pytest==8.3.4 httpx fastapi==0.115.0 pydantic==2.10.6 "psycopg[binary]>=3.2,<4" "numpy<2" rdkit==2023.9.1 requests==2.32.5
+
+      - name: Run worker PolyTAO tests
+        run: python -m pytest workers/polytao_worker/tests
+
   deploy:
     name: Deploy nexpoly on server
     needs:
       - ci
       - backend-monomer-md-tests
+      - backend-polytao-postgres-tests
       - worker-monomer-md-tests
+      - worker-polytao-tests
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     environment: nexpoly-production
@@ -141,6 +206,7 @@ jobs:
       NEXPOLY_SSH_PORT: ${{ vars.NEXPOLY_SSH_PORT }}
       NEXPOLY_DEPLOY_PATH: ${{ vars.NEXPOLY_DEPLOY_PATH }}
       NEXPOLY_WEB_PORT: ${{ vars.NEXPOLY_WEB_PORT }}
+      NEXPOLY_POLYTAO_WORKER_MODE: ${{ vars.NEXPOLY_POLYTAO_WORKER_MODE }}
       NEXPOLY_MONOMER_MD_SMOKE: ${{ github.event_name == 'workflow_dispatch' && inputs.monomer_md_smoke || vars.NEXPOLY_MONOMER_MD_SMOKE }}
       NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.monomer_md_smoke_timeout_seconds || vars.NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS }}
     steps:
@@ -162,6 +228,7 @@ jobs:
           NEXPOLY_SSH_PORT="${NEXPOLY_SSH_PORT:-22}"
           NEXPOLY_DEPLOY_PATH="${NEXPOLY_DEPLOY_PATH:-/data/lzq/gith/nexpoly}"
           NEXPOLY_WEB_PORT="${NEXPOLY_WEB_PORT:-}"
+          NEXPOLY_POLYTAO_WORKER_MODE="${NEXPOLY_POLYTAO_WORKER_MODE:-auto}"
           NEXPOLY_MONOMER_MD_SMOKE="${NEXPOLY_MONOMER_MD_SMOKE:-false}"
           NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS="${NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS:-300}"
 
@@ -197,6 +264,15 @@ jobs:
               ;;
           esac
 
+          case "$NEXPOLY_POLYTAO_WORKER_MODE" in
+            auto|true|1|yes|enabled|false|0|no|disabled)
+              ;;
+            *)
+              echo "NEXPOLY_POLYTAO_WORKER_MODE must be auto, true, or false." >&2
+              exit 1
+              ;;
+          esac
+
           case "$NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS" in
             *[!0-9]*|"")
               echo "NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS must be numeric." >&2
@@ -220,6 +296,7 @@ jobs:
             if [[ -n "$NEXPOLY_WEB_PORT" ]]; then
               echo "NEXPOLY_WEB_PORT=$NEXPOLY_WEB_PORT"
             fi
+            echo "NEXPOLY_POLYTAO_WORKER_MODE=$NEXPOLY_POLYTAO_WORKER_MODE"
             echo "NEXPOLY_MONOMER_MD_SMOKE=$NEXPOLY_MONOMER_MD_SMOKE"
             echo "NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS=$NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS"
           } >> "$GITHUB_ENV"
@@ -286,6 +363,8 @@ jobs:
             remote_web_port="$(printf '%q' "$NEXPOLY_WEB_PORT")"
             remote_command="${remote_command} NEXPOLY_WEB_PORT=${remote_web_port}"
           fi
+          remote_polytao_worker_mode="$(printf '%q' "$NEXPOLY_POLYTAO_WORKER_MODE")"
+          remote_command="${remote_command} NEXPOLY_POLYTAO_WORKER_MODE=${remote_polytao_worker_mode}"
           remote_monomer_smoke="$(printf '%q' "$NEXPOLY_MONOMER_MD_SMOKE")"
           remote_monomer_smoke_timeout="$(printf '%q' "$NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS")"
           remote_command="${remote_command} NEXPOLY_MONOMER_MD_SMOKE=${remote_monomer_smoke} NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS=${remote_monomer_smoke_timeout}"

@@ -114,17 +114,25 @@ def _worker_client_for_app(app) -> PolytaoWorkerClient:
 def _worker_unavailable_message(health: dict[str, Any]) -> str | None:
     worker_status = str(health.get("status") or "unknown")
     db_configured = _optional_bool(health.get("db_configured"))
+    db_ready = _optional_bool(health.get("db_ready"))
+    if db_ready is None:
+        db_ready = db_configured
     runtime_ready = _optional_bool(health.get("runtime_ready"))
 
-    if worker_status != "ok":
-        return f"PolyTAO worker health is {worker_status}"
     if db_configured is not True:
         return "PolyTAO worker database is not configured"
+    if db_ready is not True:
+        db_error = _optional_str(health.get("db_error"))
+        if db_error:
+            return f"PolyTAO worker database is not ready: {db_error}"
+        return "PolyTAO worker database is not ready"
     if runtime_ready is not True:
         runtime_error = _optional_str(health.get("runtime_error"))
         if runtime_error:
             return f"PolyTAO worker runtime is not ready: {runtime_error}"
         return "PolyTAO worker runtime is not ready"
+    if worker_status != "ok":
+        return f"PolyTAO worker health is {worker_status}"
     return None
 
 
@@ -141,6 +149,8 @@ def _status_response_from_health(*, settings, health: dict[str, Any]) -> Polytao
         worker_status=str(health.get("status") or "unknown"),
         worker_mode=_optional_str(health.get("mode")),
         db_configured=_optional_bool(health.get("db_configured")),
+        db_ready=_optional_bool(health.get("db_ready")),
+        db_error=_optional_str(health.get("db_error")),
         runtime_ready=_optional_bool(health.get("runtime_ready")),
         runtime_error=_optional_str(health.get("runtime_error")),
         active_jobs=_optional_int(health.get("active_jobs")),

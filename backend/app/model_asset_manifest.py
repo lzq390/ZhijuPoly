@@ -41,6 +41,13 @@ REQUIRED_MODEL_FILE_ASSETS: tuple[ModelAssetSpec, ...] = (
     ModelAssetSpec("model/conditional_generation/ChemBerta/merges.txt", "tokenizer-vocab"),
 )
 
+POLYTAO_MODEL_FILE_ASSETS: tuple[ModelAssetSpec, ...] = (
+    ModelAssetSpec("model/polytao/config.json", "transformers-config", logical_name="polytao_config_json"),
+    ModelAssetSpec("model/polytao/pytorch_model.bin", "pytorch-checkpoint", logical_name="polytao_pytorch_model_bin"),
+    ModelAssetSpec("model/polytao/tokenizer.json", "tokenizer", logical_name="polytao_tokenizer_json"),
+    ModelAssetSpec("model/polytao/spiece.model", "sentencepiece-model", logical_name="polytao_spiece_model"),
+)
+
 MODEL_DIRECTORY_ASSETS: tuple[ModelAssetSpec, ...] = (
     ModelAssetSpec(
         "model/reactiont5-retrosynthesis",
@@ -48,13 +55,22 @@ MODEL_DIRECTORY_ASSETS: tuple[ModelAssetSpec, ...] = (
         logical_name="reactiont5-retrosynthesis_dir",
         notes="registered as filesystem asset; model files remain outside Postgres",
     ),
+    ModelAssetSpec(
+        "model/polytao",
+        "model-directory",
+        logical_name="polytao_dir",
+        notes="optional PolyTAO worker model directory; missing files should make PolyTAO unavailable, not ready",
+    ),
 )
 
 
-def iter_model_asset_specs(include_directories: bool = True) -> tuple[ModelAssetSpec, ...]:
+def iter_model_asset_specs(include_directories: bool = True, include_optional: bool = True) -> tuple[ModelAssetSpec, ...]:
+    specs = REQUIRED_MODEL_FILE_ASSETS
+    if include_optional:
+        specs += POLYTAO_MODEL_FILE_ASSETS
     if include_directories:
-        return REQUIRED_MODEL_FILE_ASSETS + MODEL_DIRECTORY_ASSETS
-    return REQUIRED_MODEL_FILE_ASSETS
+        return specs + MODEL_DIRECTORY_ASSETS
+    return specs
 
 
 def main() -> None:

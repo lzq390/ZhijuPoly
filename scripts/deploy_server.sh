@@ -102,6 +102,14 @@ MONOMER_MD_WORKER_ENV_FILE="${NEXPOLY_MONOMER_MD_WORKER_ENV_FILE:-$ROOT_DIR/.env
 MONOMER_MD_WORKER_PID_FILE="${NEXPOLY_MONOMER_MD_WORKER_PID_FILE:-$ROOT_DIR/ops/state/monomer-md-worker.pid}"
 MONOMER_MD_WORKER_LOG_FILE="${NEXPOLY_MONOMER_MD_WORKER_LOG_FILE:-$ROOT_DIR/ops/logs/monomer-md-worker.log}"
 MONOMER_MD_WORKER_SYSTEMD_UNIT="${NEXPOLY_MONOMER_MD_WORKER_SYSTEMD_UNIT:-nexpoly-monomer-md-worker.service}"
+POLYTAO_WORKER_DEPLOY_MODE="$(config_value NEXPOLY_POLYTAO_WORKER_MODE auto)"
+POLYTAO_WORKER_COMPOSE_FILE="${NEXPOLY_POLYTAO_WORKER_COMPOSE_FILE:-$ROOT_DIR/docker-compose.polytao-worker.yml}"
+POLYTAO_REQUIRED_MODEL_FILES=(
+  "model/polytao/config.json"
+  "model/polytao/pytorch_model.bin"
+  "model/polytao/tokenizer.json"
+  "model/polytao/spiece.model"
+)
 TMP_DIR=""
 TEST_WORKTREE=""
 TARGET_COMMIT=""
@@ -113,8 +121,16 @@ require_cmd() {
 dump_compose_state() {
   log "Docker Compose service state:"
   docker compose ps || true
+  if [[ -f "$POLYTAO_WORKER_COMPOSE_FILE" ]]; then
+    log "PolyTAO worker Compose service state:"
+    docker compose -f "$POLYTAO_WORKER_COMPOSE_FILE" ps || true
+  fi
   log "Recent service logs:"
   docker compose logs --tail=120 postgres-init backend nginx lab-postgres || true
+  if [[ -f "$POLYTAO_WORKER_COMPOSE_FILE" ]]; then
+    log "Recent PolyTAO worker logs:"
+    docker compose -f "$POLYTAO_WORKER_COMPOSE_FILE" logs --tail=120 polytao-worker || true
+  fi
 }
 
 cleanup() {
@@ -205,6 +221,10 @@ check_compose_contract() {
   docker compose config --services | grep -qx 'postgres-init' || die "docker-compose.yml must define postgres-init."
   docker compose config --services | grep -qx 'backend' || die "docker-compose.yml must define backend."
   docker compose config --services | grep -qx 'nginx' || die "docker-compose.yml must define nginx."
+  if [[ -f "$POLYTAO_WORKER_COMPOSE_FILE" ]]; then
+    docker compose -f "$POLYTAO_WORKER_COMPOSE_FILE" config --quiet
+    docker compose -f "$POLYTAO_WORKER_COMPOSE_FILE" config --services | grep -qx 'polytao-worker' || die "docker-compose.polytao-worker.yml must define polytao-worker."
+  fi
 }
 
 check_required_data_sources() {
@@ -241,7 +261,7 @@ check_required_model_assets() {
       printf '[nexpoly-deploy] Missing model asset: %s\n' "$asset_path" >&2
       missing=1
     fi
-  done < <(grep -E 'ModelAssetSpec\("model/' "$TEST_WORKTREE/backend/app/model_asset_manifest.py" | sed -E 's/.*ModelAssetSpec\("([^"]+)".*/\1/')
+  done < <(python3 "$TEST_WORKTREE/backend/app/model_asset_manifest.py" --format paths)
 
   if [[ ! -d "$ROOT_DIR/model/reactiont5-retrosynthesis" ]]; then
     printf '[nexpoly-deploy] Missing model directory: model/reactiont5-retrosynthesis\n' >&2
@@ -321,6 +341,96 @@ else:
     ok = actual == expected
 sys.exit(0 if ok else 1)
 PY
+}
+
+polytao_model_assets_ready() {
+  local required_path
+  for required_path in "${POLYTAO_REQUIRED_MODEL_FILES[@]}"; do
+    [[ -s "$ROOT_DIR/$required_path" ]] || return 1
+  done
+  return 0
+}
+
+polytao_worker_enabled() {
+  case "$POLYTAO_WORKER_DEPLOY_MODE" in
+    true|1|yes|enabled)
+      return 0
+      ;;
+    false|0|no|disabled)
+      return 1
+      ;;
+    auto|"")
+      [[ -f "$POLYTAO_WORKER_COMPOSE_FILE" ]] && polytao_model_assets_ready
+      return
+      ;;
+    *)
+      die "NEXPOLY_POLYTAO_WORKER_MODE must be auto, true, or false."
+      ;;
+  esac
+}
+
+check_polytao_model_assets() {
+  local missing=0
+  local required_path
+
+  log "Checking PolyTAO worker model assets."
+  for required_path in "${POLYTAO_REQUIRED_MODEL_FILES[@]}"; do
+    if [[ ! -s "$ROOT_DIR/$required_path" ]]; then
+      printf '[nexpoly-deploy] Missing PolyTAO model asset: %s\n' "$required_path" >&2
+      missing=1
+    fi
+  done
+  [[ "$missing" -eq 0 ]] || die "Required PolyTAO model assets are missing."
+}
+
+wait_for_polytao_worker() {
+  local container_id=""
+  local health=""
+
+  log "Waiting for PolyTAO worker healthcheck."
+  for _ in $(seq 1 90); do
+    container_id="$(docker compose -f "$POLYTAO_WORKER_COMPOSE_FILE" ps -q polytao-worker 2>/dev/null || true)"
+    if [[ -n "$container_id" ]]; then
+      health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$container_id" 2>/dev/null || true)"
+      if [[ "$health" == "healthy" || "$health" == "no-healthcheck" ]]; then
+        return 0
+      fi
+      if [[ "$health" == "unhealthy" ]]; then
+        die "PolyTAO worker healthcheck reported unhealthy."
+      fi
+    fi
+    sleep 2
+  done
+  die "PolyTAO worker did not become healthy."
+}
+
+deploy_polytao_worker() {
+  if ! polytao_worker_enabled; then
+    log "Skipping PolyTAO worker deployment; mode is disabled or required model files are absent."
+    return 0
+  fi
+
+  [[ -f "$POLYTAO_WORKER_COMPOSE_FILE" ]] || die "PolyTAO worker compose file is missing: $POLYTAO_WORKER_COMPOSE_FILE"
+  check_polytao_model_assets
+
+  log "Building PolyTAO worker image."
+  docker compose -f "$POLYTAO_WORKER_COMPOSE_FILE" build polytao-worker
+
+  log "Recreating PolyTAO worker."
+  docker compose -f "$POLYTAO_WORKER_COMPOSE_FILE" up -d --force-recreate polytao-worker
+  wait_for_polytao_worker
+}
+
+check_polytao_backend_status() {
+  if ! polytao_worker_enabled; then
+    return 0
+  fi
+
+  log "Checking backend PolyTAO status endpoint."
+  local payload
+  payload="$(curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${WEB_PORT}/api/v1/conditional-generation/polytao/status")"
+  printf '%s\n' "$payload"
+  json_field_is "$payload" available true || die "Backend PolyTAO status is not available."
 }
 
 load_monomer_worker_env() {
@@ -580,6 +690,8 @@ deploy_compose_stack() {
   log "Running Postgres import gate."
   docker compose run --rm postgres-init
 
+  deploy_polytao_worker
+
   log "Recreating backend."
   docker compose up -d --no-deps --force-recreate backend
   wait_for_service_healthy backend
@@ -593,9 +705,10 @@ deploy_compose_stack() {
   restart_monomer_worker
   check_monomer_backend_status
   run_monomer_md_smoke
+  check_polytao_backend_status
 
-  log "Checking public health endpoint on localhost:$WEB_PORT."
-  curl --fail --silent --show-error --max-time 10 "http://localhost:${WEB_PORT}/health"
+  log "Checking public health endpoint on 127.0.0.1:$WEB_PORT."
+  curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${WEB_PORT}/health"
   printf '\n'
 }
 
@@ -613,11 +726,12 @@ main() {
   require_cmd docker
   require_cmd curl
   require_cmd grep
+  require_cmd python3
 
   assert_tracked_worktree_clean
   check_compose_contract
 
-  log "Using web port $WEB_PORT and Postgres host port $POSTGRES_PORT."
+  log "Using web port $WEB_PORT, Postgres host port $POSTGRES_PORT, and PolyTAO worker mode $POLYTAO_WORKER_DEPLOY_MODE."
   fetch_deploy_refs
   TARGET_COMMIT="$(resolve_target_ref "$DEPLOY_REF")"
 
