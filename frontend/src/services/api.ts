@@ -34,6 +34,9 @@ import type {
   MonomerMdJobResponse,
   MonomerMdProtocolCatalogResponse,
   MonomerMdServiceStatusResponse,
+  MonomerPolymerizationRequest,
+  MonomerPolymerizationResponse,
+  MonomerPolymerizationStatusResponse,
   MonomerRetrosynthesisRequest,
   MonomerRetrosynthesisResponse,
   OnlineKnowledgeExportResponse,
@@ -404,6 +407,16 @@ export function predictMonomerPrecursors(
   payload: MonomerRetrosynthesisRequest
 ): Promise<MonomerRetrosynthesisResponse> {
   return postJSON("/monomer-retrosynthesis", payload);
+}
+
+export function fetchMonomerPolymerizationStatus(): Promise<MonomerPolymerizationStatusResponse> {
+  return getJSON("/monomer-polymerization/status");
+}
+
+export function runMonomerPolymerization(
+  payload: MonomerPolymerizationRequest
+): Promise<MonomerPolymerizationResponse> {
+  return postJSON("/monomer-polymerization", payload);
 }
 
 export function fetchDftPcaSample(limit = 200): Promise<DftPcaSampleResponse> {

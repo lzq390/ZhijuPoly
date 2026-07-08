@@ -70,6 +70,7 @@ nexpoly-release-*.tar.gz
 !/backend/tests/test_assistant.py
 !/backend/tests/test_md_demo.py
 !/backend/tests/test_monomer_md.py
+!/backend/tests/test_monomer_polymerization.py
 !/backend/tests/test_smiles_standardization.py
 !/backend/tests/test_postgres_governance.py
 !/backend/tests/README.md

@@ -13,6 +13,7 @@ requests-unixsocket==0.3.0
 openai==2.36.0
 psycopg[binary]>=3.2,<4
 rdkit==2023.9.1
+smipoly==1.1.2
 joblib==1.5.3
 scikit-learn>=1.4,<2
 torch>=2.3,<3

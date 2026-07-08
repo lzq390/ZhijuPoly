@@ -8,6 +8,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 MatchMode = Literal["structure", "property"]
 SmilesLookupTable = Literal["polymers", "properties", "pi_candidates"]
 RetrosynthesisTargetRole = Literal["auto", "diamine", "dianhydride", "other"]
+PolymerizationTargetClass = Literal[
+    "polyolefin",
+    "polyester",
+    "polyether",
+    "polyamide",
+    "polyimide",
+    "polyurethane",
+    "polyoxazolidone",
+    "all",
+]
 
 
 class SmilesQueryRequest(BaseModel):
@@ -211,6 +221,76 @@ class MonomerRetrosynthesisResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     total: int = Field(ge=0)
     candidates: list[MonomerRetrosynthesisCandidate] = Field(default_factory=list)
+
+
+class MonomerPolymerizationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    monomer_a_smiles: str = Field(min_length=1, max_length=1000)
+    monomer_b_smiles: str | None = Field(default=None, max_length=1000)
+    target_class: PolymerizationTargetClass = "polyimide"
+    max_results: int = Field(default=10, ge=1, le=20)
+
+    @field_validator("monomer_b_smiles", mode="before")
+    @classmethod
+    def normalize_optional_monomer(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class MonomerPolymerizationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    role: Literal["monomer_a", "monomer_b"]
+    input_smiles: str
+    canonical_smiles: str
+
+
+class MonomerPolymerizationCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    rank: int = Field(ge=1)
+    monomer_a_smiles: str
+    monomer_b_smiles: str | None = None
+    polymer_smiles: str
+    polymer_class: str
+    reaction_id: int | None = None
+    reaction_name: str | None = None
+    reactset: list[str] = Field(default_factory=list)
+    structure_svg: str | None = None
+
+
+class MonomerPolymerizationTargetRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_monomers: int = Field(ge=1, le=2)
+    max_monomers: int = Field(default=2, ge=1, le=2)
+    monomer_b_required: bool
+    note: str
+
+
+class MonomerPolymerizationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    input_monomers: list[MonomerPolymerizationInput] = Field(default_factory=list)
+    target_class: PolymerizationTargetClass
+    query_time_ms: float = Field(ge=0.0)
+    total: int = Field(ge=0)
+    results: list[MonomerPolymerizationCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MonomerPolymerizationStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    enabled: bool
+    available: bool
+    default_target_class: PolymerizationTargetClass = "polyimide"
+    available_target_classes: list[PolymerizationTargetClass] = Field(default_factory=list)
+    target_requirements: dict[PolymerizationTargetClass, MonomerPolymerizationTargetRequirement] = Field(default_factory=dict)
+    max_results_limit: int = Field(default=20, ge=1)
+    message: str
 
 
 class SmilesLookupRequest(BaseModel):
