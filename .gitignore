@@ -21,6 +21,7 @@ backend/.env
 
 # Local conditional-generation model artifacts, including local symlinks.
 /model/conditional_generation
+/model/polytao/
 /model/reactiont5-retrosynthesis/
 /model/ocsr/*.ckpt
 /model/ocsr/*.pth
@@ -72,6 +73,7 @@ nexpoly-release-*.tar.gz
 !/backend/tests/test_md_demo.py
 !/backend/tests/test_monomer_md.py
 !/backend/tests/test_monomer_polymerization.py
+!/backend/tests/test_polytao.py
 !/backend/tests/test_smiles_standardization.py
 !/backend/tests/test_postgres_governance.py
 !/backend/tests/README.md
