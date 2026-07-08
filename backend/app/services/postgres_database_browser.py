@@ -100,6 +100,54 @@ EXPERIMENTAL_PROPERTY_COLUMNS = (
     "value",
 )
 
+PROPERTY_FILTER_RECORD_COLUMNS = (
+    "filter_record_id",
+    "source_row_number",
+    "polymer_name",
+    "smiles",
+    "canonical_smiles",
+    "property_category",
+    "property_name",
+    "property_value",
+    "property_value_num",
+    "property_unit_raw",
+    "property_unit_clean",
+    "property_key",
+    "property_label",
+    "canonical_value",
+    "canonical_unit",
+    "unit_conversion_status",
+    "value_origin",
+    "label_source",
+    "reliable_score",
+    "soft_quality_flags",
+    "duplicate_flag",
+)
+
+PROPERTY_FILTER_SELECT_COLUMNS = """
+  filter_record_id,
+  source_row_number,
+  polymer_name,
+  smiles,
+  canonical_smiles,
+  property_category,
+  property_name,
+  property_value,
+  property_value_num,
+  property_unit_raw,
+  property_unit_clean,
+  property_key,
+  property_label,
+  canonical_value,
+  canonical_unit,
+  unit_conversion_status,
+  value_origin,
+  label_source,
+  reliable_score,
+  soft_quality_flags,
+  duplicate_flag
+"""
+
 
 def lookup_polymer_smiles_postgres(
     connection: Any,
@@ -399,6 +447,215 @@ def browse_structure_property_records_postgres(
         LIMIT %s OFFSET %s
         """,
         [*params, page_size, offset],
+    ).fetchall()
+    return total_records, matched_records, list(rows)
+
+
+def get_property_filter_options_postgres(connection: Any) -> tuple[int, int, int, list[dict[str, Any]]]:
+    summary = connection.execute(
+        """
+        SELECT
+          COUNT(*) AS total_records,
+          COUNT(*) FILTER (WHERE property_key IS NOT NULL) AS mapped_records,
+          COUNT(*) FILTER (WHERE property_key IS NULL) AS raw_records
+        FROM core.polymer_property_filter_records
+        """
+    ).fetchone()
+    rows = connection.execute(
+        """
+        WITH standardized AS (
+          SELECT
+            'standardized'::text AS filter_type,
+            'std:' || property_key || ':' || COALESCE(canonical_unit, '') AS option_key,
+            COALESCE(NULLIF(MIN(NULLIF(property_label, '')), ''), property_key) AS label,
+            property_key,
+            NULL::text AS property_name,
+            NULL::text AS property_unit_clean,
+            canonical_unit,
+            COUNT(*) AS rows,
+            COUNT(DISTINCT COALESCE(NULLIF(smiles, ''), NULLIF(canonical_smiles, ''))) AS unique_smiles,
+            MIN(canonical_value) AS min_value,
+            percentile_cont(0.05) WITHIN GROUP (ORDER BY canonical_value) AS p5_value,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY canonical_value) AS median_value,
+            percentile_cont(0.95) WITHIN GROUP (ORDER BY canonical_value) AS p95_value,
+            MAX(canonical_value) AS max_value
+          FROM core.polymer_property_filter_records
+          WHERE property_key IS NOT NULL
+            AND canonical_value IS NOT NULL
+          GROUP BY property_key, canonical_unit
+        ),
+        raw AS (
+          SELECT
+            'raw'::text AS filter_type,
+            'raw:' || md5(property_name || '|' || COALESCE(property_unit_clean, '')) AS option_key,
+            CASE
+              WHEN COALESCE(NULLIF(property_unit_clean, ''), '') = '' THEN property_name
+              ELSE property_name || ' (' || property_unit_clean || ')'
+            END AS label,
+            NULL::text AS property_key,
+            property_name,
+            property_unit_clean,
+            NULL::text AS canonical_unit,
+            COUNT(*) AS rows,
+            COUNT(DISTINCT COALESCE(NULLIF(smiles, ''), NULLIF(canonical_smiles, ''))) AS unique_smiles,
+            MIN(property_value_num) AS min_value,
+            percentile_cont(0.05) WITHIN GROUP (ORDER BY property_value_num) AS p5_value,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY property_value_num) AS median_value,
+            percentile_cont(0.95) WITHIN GROUP (ORDER BY property_value_num) AS p95_value,
+            MAX(property_value_num) AS max_value
+          FROM core.polymer_property_filter_records
+          WHERE property_key IS NULL
+            AND property_value_num IS NOT NULL
+          GROUP BY property_name, property_unit_clean
+        )
+        SELECT *
+        FROM (
+          SELECT * FROM standardized
+          UNION ALL
+          SELECT * FROM raw
+        ) options
+        ORDER BY
+          CASE filter_type WHEN 'standardized' THEN 0 ELSE 1 END,
+          rows DESC,
+          label ASC
+        """
+    ).fetchall()
+    return (
+        int(summary["total_records"] or 0),
+        int(summary["mapped_records"] or 0),
+        int(summary["raw_records"] or 0),
+        list(rows),
+    )
+
+
+def _property_filter_search_clause(query: str, params: list[Any]) -> str:
+    normalized = query.strip()
+    if not normalized:
+        return ""
+    like_value = f"%{_escape_like(normalized)}%"
+    params.extend([like_value, like_value, like_value])
+    return (
+        " AND (COALESCE(smiles, '') ILIKE %s ESCAPE '\\' "
+        "OR COALESCE(canonical_smiles, '') ILIKE %s ESCAPE '\\' "
+        "OR COALESCE(polymer_name, '') ILIKE %s ESCAPE '\\')"
+    )
+
+
+def _property_filter_condition_select(filter_index: int, condition: Any, query: str) -> tuple[str, list[Any]]:
+    params: list[Any] = []
+    where_parts: list[str] = []
+    if condition.filter_type == "standardized":
+        where_parts.append("property_key = %s")
+        params.append(condition.property_key)
+        where_parts.append("canonical_value IS NOT NULL")
+        canonical_unit = getattr(condition, "canonical_unit", None)
+        if canonical_unit is not None:
+            where_parts.append("COALESCE(canonical_unit, '') = %s")
+            params.append(canonical_unit or "")
+        if condition.min_value is not None:
+            where_parts.append("canonical_value >= %s")
+            params.append(condition.min_value)
+        if condition.max_value is not None:
+            where_parts.append("canonical_value <= %s")
+            params.append(condition.max_value)
+    else:
+        where_parts.append("property_key IS NULL")
+        where_parts.append("property_name = %s")
+        params.append(condition.property_name)
+        where_parts.append("COALESCE(property_unit_clean, '') = %s")
+        params.append(condition.property_unit_clean or "")
+        where_parts.append("property_value_num IS NOT NULL")
+        if condition.min_value is not None:
+            where_parts.append("property_value_num >= %s")
+            params.append(condition.min_value)
+        if condition.max_value is not None:
+            where_parts.append("property_value_num <= %s")
+            params.append(condition.max_value)
+    search_clause = _property_filter_search_clause(query, params)
+    where_sql = " AND ".join(where_parts)
+    return (
+        f"""
+        SELECT
+          %s::int AS filter_index,
+          COALESCE(NULLIF(smiles, ''), NULLIF(canonical_smiles, ''), 'record:' || filter_record_id::text) AS group_key,
+          {PROPERTY_FILTER_SELECT_COLUMNS}
+        FROM core.polymer_property_filter_records
+        WHERE {where_sql}
+        {search_clause}
+        """,
+        [filter_index, *params],
+    )
+
+
+def search_property_filter_records_postgres(
+    connection: Any,
+    *,
+    conditions: list[Any],
+    query: str,
+    page: int,
+    page_size: int,
+) -> tuple[int, int, list[dict[str, Any]]]:
+    total_records = int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"])
+    candidate_sql_parts: list[str] = []
+    candidate_params: list[Any] = []
+    for filter_index, condition in enumerate(conditions):
+        condition_sql, condition_params = _property_filter_condition_select(filter_index, condition, query)
+        candidate_sql_parts.append(condition_sql)
+        candidate_params.extend(condition_params)
+    candidate_sql = "\nUNION ALL\n".join(candidate_sql_parts)
+    filter_count = len(conditions)
+    matched_records = int(
+        connection.execute(
+            f"""
+            WITH candidate_matches AS (
+              {candidate_sql}
+            ),
+            matched_groups AS (
+              SELECT group_key
+              FROM candidate_matches
+              GROUP BY group_key
+              HAVING COUNT(DISTINCT filter_index) = %s
+            )
+            SELECT COUNT(*) AS count
+            FROM matched_groups
+            """,
+            [*candidate_params, filter_count],
+        ).fetchone()["count"]
+    )
+    offset = (page - 1) * page_size
+    rows = connection.execute(
+        f"""
+        WITH candidate_matches AS (
+          {candidate_sql}
+        ),
+        matched_groups AS (
+          SELECT group_key
+          FROM candidate_matches
+          GROUP BY group_key
+          HAVING COUNT(DISTINCT filter_index) = %s
+        ),
+        page_groups AS (
+          SELECT group_key
+          FROM matched_groups
+          ORDER BY group_key ASC
+          LIMIT %s OFFSET %s
+        )
+        SELECT candidate_matches.*
+        FROM candidate_matches
+        JOIN page_groups ON page_groups.group_key = candidate_matches.group_key
+        ORDER BY
+          candidate_matches.group_key ASC,
+          candidate_matches.filter_index ASC,
+          CASE lower(COALESCE(candidate_matches.value_origin, ''))
+            WHEN 'observed' THEN 0
+            WHEN 'median' THEN 1
+            WHEN 'impute' THEN 2
+            ELSE 3
+          END ASC,
+          candidate_matches.reliable_score DESC NULLS LAST,
+          candidate_matches.filter_record_id ASC
+        """,
+        [*candidate_params, filter_count, page_size, offset],
     ).fetchall()
     return total_records, matched_records, list(rows)
 

@@ -223,6 +223,14 @@ def upsert_source_registry(connection: Any, settings: Settings, target_dsn: str 
     postgres_label = _safe_postgres_schema_label(target_dsn or settings.app_postgres_dsn, "data_collection_demo")
     sources: list[tuple[str, Path | str, int | None, str, str | None, str]] = [
         ("core_property_csv", settings.csv_source_file, _csv_row_count(settings.csv_source_file), "authoritative property CSV", None, "file"),
+        (
+            "property_filter_csv",
+            settings.property_filter_csv_file,
+            _csv_row_count(settings.property_filter_csv_file),
+            "standardized high-confidence property-filter CSV",
+            None,
+            "file",
+        ),
         ("knowledge_zip", settings.knowledge_zip_file, None, "local knowledge archive", None, "file"),
         (
             "main_sqlite",
@@ -301,6 +309,7 @@ IMPORT_BATCH_SOURCE_LOGICAL_NAMES = {
     "lab": "lab_legacy_demo_postgres",
     "experimental_process": "experimental_process_csv",
     "experimental_property": "experimental_property_csv",
+    "property_filter": "property_filter_csv",
 }
 
 FULL_IMPORT_DATASETS = {"sources", "assets", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "batch_backfill"}
@@ -451,6 +460,129 @@ def import_core_from_csv(connection: Any, csv_path: Path, batch_size: int) -> Da
         dataset_key="core",
         row_count=len(property_rows),
         details={"polymers": len(polymer_rows), "polymer_properties": len(property_rows)},
+    )
+
+
+def import_property_filter_from_csv(connection: Any, csv_path: Path, batch_size: int) -> DatasetImportStats:
+    required_columns = {
+        "polymer_name",
+        "smiles",
+        "property_category",
+        "property_name",
+        "property_value",
+        "property_unit",
+        "property_unit_raw",
+        "property_unit_clean",
+        "property_key",
+        "property_label",
+        "canonical_value",
+        "canonical_unit",
+        "unit_conversion_status",
+        "value_origin",
+        "label_source",
+        "reliable_score",
+        "soft_quality_flags",
+        "duplicate_flag",
+    }
+    source_file = str(csv_path)
+
+    def clean_text(row: dict[str, str], key: str) -> str | None:
+        value = (row.get(key) or "").strip()
+        return value or None
+
+    def iter_rows():
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            missing = sorted(required_columns - set(reader.fieldnames or []))
+            if missing:
+                raise ValueError(f"property_filter CSV is missing required columns: {', '.join(missing)}")
+            for filter_record_id, row in enumerate(reader, start=1):
+                source_row_number = filter_record_id + 1
+                smiles = clean_text(row, "smiles")
+                canonical_smiles, rdkit_parse_ok = canonicalize_smiles(smiles or "")
+                yield (
+                    filter_record_id,
+                    source_file,
+                    source_row_number,
+                    clean_text(row, "polymer_name"),
+                    smiles,
+                    canonical_smiles,
+                    bool(rdkit_parse_ok),
+                    clean_text(row, "property_category") or "Others",
+                    clean_text(row, "property_name") or "",
+                    clean_text(row, "property_value") or "",
+                    parse_float_or_none(clean_text(row, "property_value") or ""),
+                    clean_text(row, "property_unit"),
+                    clean_text(row, "property_unit_raw"),
+                    clean_text(row, "property_unit_clean"),
+                    clean_text(row, "property_key"),
+                    clean_text(row, "property_label"),
+                    parse_float_or_none(clean_text(row, "canonical_value") or ""),
+                    clean_text(row, "canonical_unit"),
+                    clean_text(row, "unit_conversion_status"),
+                    clean_text(row, "value_origin"),
+                    clean_text(row, "label_source"),
+                    parse_float_or_none(clean_text(row, "reliable_score") or ""),
+                    clean_text(row, "soft_quality_flags"),
+                    clean_text(row, "duplicate_flag"),
+                )
+
+    connection.execute("TRUNCATE core.polymer_property_filter_records")
+    row_count = _execute_many(
+        connection,
+        """
+        INSERT INTO core.polymer_property_filter_records (
+          filter_record_id, source_file, source_row_number, polymer_name, smiles,
+          canonical_smiles, rdkit_parse_ok, property_category, property_name,
+          property_value, property_value_num, property_unit, property_unit_raw,
+          property_unit_clean, property_key, property_label, canonical_value,
+          canonical_unit, unit_conversion_status, value_origin, label_source,
+          reliable_score, soft_quality_flags, duplicate_flag
+        ) VALUES (
+          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        ON CONFLICT (filter_record_id) DO UPDATE SET
+          source_file = excluded.source_file,
+          source_row_number = excluded.source_row_number,
+          polymer_name = excluded.polymer_name,
+          smiles = excluded.smiles,
+          canonical_smiles = excluded.canonical_smiles,
+          rdkit_parse_ok = excluded.rdkit_parse_ok,
+          property_category = excluded.property_category,
+          property_name = excluded.property_name,
+          property_value = excluded.property_value,
+          property_value_num = excluded.property_value_num,
+          property_unit = excluded.property_unit,
+          property_unit_raw = excluded.property_unit_raw,
+          property_unit_clean = excluded.property_unit_clean,
+          property_key = excluded.property_key,
+          property_label = excluded.property_label,
+          canonical_value = excluded.canonical_value,
+          canonical_unit = excluded.canonical_unit,
+          unit_conversion_status = excluded.unit_conversion_status,
+          value_origin = excluded.value_origin,
+          label_source = excluded.label_source,
+          reliable_score = excluded.reliable_score,
+          soft_quality_flags = excluded.soft_quality_flags,
+          duplicate_flag = excluded.duplicate_flag
+        """,
+        iter_rows(),
+        batch_size,
+    )
+    mapped_count = int(
+        connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM core.polymer_property_filter_records
+            WHERE property_key IS NOT NULL
+            """
+        ).fetchone()["count"]
+    )
+    return DatasetImportStats(
+        dataset_key="property_filter",
+        row_count=row_count,
+        details={"mapped_records": mapped_count, "raw_records": row_count - mapped_count},
     )
 
 
@@ -983,7 +1115,7 @@ def import_all_to_postgres(
         with connection.transaction():
             if rebuild:
                 truncate_governed_tables(connection)
-            if requested & {"sources", "batch_backfill", "core", "knowledge", "online", "pi", "dft", "experimental", "lab"}:
+            if requested & {"sources", "batch_backfill", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "property_filter"}:
                 ensure_source_ids(connection)
             if "sources" in requested:
                 stats.datasets.append(DatasetImportStats(dataset_key="governance.source_files", row_count=len(source_ids)))
@@ -994,6 +1126,13 @@ def import_all_to_postgres(
                     raise FileNotFoundError(settings.csv_source_file)
                 batch_id = _start_batch(connection, "core", ensure_source_ids(connection)["core_property_csv"])
                 dataset_stats = import_core_from_csv(connection, settings.csv_source_file, batch_size)
+                _finish_batch(connection, batch_id, dataset_stats.row_count)
+                stats.datasets.append(dataset_stats)
+            if "property_filter" in requested:
+                if not settings.property_filter_csv_file.exists():
+                    raise FileNotFoundError(settings.property_filter_csv_file)
+                batch_id = _start_batch(connection, "property_filter", ensure_source_ids(connection)["property_filter_csv"])
+                dataset_stats = import_property_filter_from_csv(connection, settings.property_filter_csv_file, batch_size)
                 _finish_batch(connection, batch_id, dataset_stats.row_count)
                 stats.datasets.append(dataset_stats)
             if "knowledge" in requested:
@@ -1044,7 +1183,7 @@ def import_all_to_postgres(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import PolyProp governed data into PostgreSQL.")
     parser.add_argument("--dsn", default=None, help="Target Postgres DSN. Defaults to APP_POSTGRES_DSN.")
-    parser.add_argument("--dataset", action="append", choices=["all", "governance", "sources", "assets", "core", "knowledge", "online", "pi", "dft", "experimental", "lab"], help="Dataset to import. Repeatable. Defaults to all. governance updates source/model registries and backfills batch lineage only.")
+    parser.add_argument("--dataset", action="append", choices=["all", "governance", "sources", "assets", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "property_filter"], help="Dataset to import. Repeatable. Defaults to all. governance updates source/model registries and backfills batch lineage only. property_filter imports the standardized threshold-filter CSV only when requested explicitly.")
     parser.add_argument("--refresh-analytics-snapshot", action="store_true", help="Regenerate the static database analytics snapshot after the import transaction commits.")
     parser.add_argument("--rebuild", action="store_true", help="Truncate governed target tables before importing.")
     parser.add_argument("--skip-migrations", action="store_true", help="Do not apply Postgres migrations before importing.")

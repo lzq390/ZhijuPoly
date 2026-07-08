@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -7,15 +7,18 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
+  Filter,
   FlaskConical,
   Layers3,
   Network,
   Orbit,
   PieChart,
+  Plus,
   RefreshCw,
   Search,
   Sigma,
   TableProperties,
+  Trash2,
   X
 } from "lucide-react";
 import {
@@ -28,7 +31,9 @@ import {
   fetchDatabaseAnalytics,
   fetchDatabaseDatasetSummary,
   fetchDftMolecule,
-  fetchDftPcaSample
+  fetchDftPcaSample,
+  fetchPropertyFilterOptions,
+  searchPropertyFilterRecords
 } from "../services/api";
 import type {
   DatasetSummaryResponse,
@@ -39,13 +44,17 @@ import type {
   ExperimentalProcessBrowseResponse,
   ExperimentalPropertyBrowseResponse,
   FormulationBrowseResponse,
+  PropertyFilterCondition,
+  PropertyFilterOption,
+  PropertyFilterOptionsResponse,
+  PropertyFilterSearchResponse,
   StructurePropertyBrowseResponse
 } from "../types";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 
-export type DatasetKey = "process" | "property" | "structureEffect" | "dft" | "formulation";
+export type DatasetKey = "process" | "property" | "structureEffect" | "propertyFilter" | "dft" | "formulation";
 
 type RankedItem = { label: string; value: number };
 type DonutItem = { label: string; value: number; color: string };
@@ -496,6 +505,10 @@ const formulationData = {
   ]
 };
 
+const propertyFilterData = {
+  rows: 615159
+};
+
 const datasets = [
   {
     key: "process" as const,
@@ -528,8 +541,18 @@ const datasets = [
     icon: <Network className="h-5 w-5" />
   },
   {
-    key: "dft" as const,
+    key: "propertyFilter" as const,
     order: "04",
+    title: "Property Threshold Filter",
+    englishTitle: "Property Threshold",
+    description: "Search polymers by standardized and raw property thresholds from the high-confidence standardized table.",
+    status: "Ready",
+    recordCount: propertyFilterData.rows,
+    icon: <Filter className="h-5 w-5" />
+  },
+  {
+    key: "dft" as const,
+    order: "05",
     title: "DFT Conformation Data",
     englishTitle: "DFT Conformation",
     description: "Browse optimized molecular conformations, energy-change curves, atom composition, and orbital levels.",
@@ -539,7 +562,7 @@ const datasets = [
   },
   {
     key: "formulation" as const,
-    order: "05",
+    order: "06",
     title: "Formulation Ratio Data",
     englishTitle: "Formulation Ratios",
     description: "Summarizes formulation components, ratio expressions, catalysts, solvents, and conditions.",
@@ -563,6 +586,7 @@ type DatabaseAnalyticsPayload = Partial<{
   process: typeof processData;
   property: typeof propertyData;
   structureEffect: typeof structureEffectData;
+  propertyFilter: typeof propertyFilterData;
   dft: typeof dftData;
   formulation: typeof formulationData;
 }>;
@@ -3600,6 +3624,484 @@ function StructureEffectPage({ dataset: summaryDataset, analytics, analyticsLoad
   );
 }
 
+type PropertyFilterDraft = {
+  id: number;
+  optionKey: string;
+  minValue: string;
+  maxValue: string;
+};
+
+function formatOptionalFilterNumber(value: number | null, digits = 4) {
+  return value === null ? "-" : formatNumber(value, digits);
+}
+
+function parseFilterBound(value: string, label: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${label} must be numeric`);
+  }
+  return parsed;
+}
+
+function buildPropertyFilterCondition(
+  draft: PropertyFilterDraft,
+  option: PropertyFilterOption | undefined
+): PropertyFilterCondition {
+  if (!option) {
+    throw new Error("Select a property before searching");
+  }
+
+  const minValue = parseFilterBound(draft.minValue, "Min");
+  const maxValue = parseFilterBound(draft.maxValue, "Max");
+  if (minValue === null && maxValue === null) {
+    throw new Error("Each condition needs at least one threshold");
+  }
+  if (minValue !== null && maxValue !== null && minValue > maxValue) {
+    throw new Error("Min cannot be greater than max");
+  }
+
+  if (option.filter_type === "standardized") {
+    return {
+      filter_type: "standardized",
+      property_key: option.property_key,
+      canonical_unit: option.canonical_unit,
+      min_value: minValue,
+      max_value: maxValue
+    };
+  }
+
+  return {
+    filter_type: "raw",
+    property_name: option.property_name,
+    property_unit_clean: option.property_unit_clean,
+    min_value: minValue,
+    max_value: maxValue
+  };
+}
+
+function PropertyFilterPage({ dataset: summaryDataset, onBackHome, onBackDatabase }: DatasetPageProps) {
+  const dataset = {
+    ...summaryDataset,
+    title: "Property Threshold Filter",
+    englishTitle: "Property Threshold",
+    description:
+      "Threshold search over the reliable standardized polymer property table with standardized and raw property options."
+  };
+  const isUnavailable = dataset.status === "Reserved";
+  const [optionsData, setOptionsData] = useState<PropertyFilterOptionsResponse | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [conditionDrafts, setConditionDrafts] = useState<PropertyFilterDraft[]>([
+    { id: 1, optionKey: "", minValue: "", maxValue: "" }
+  ]);
+  const [nextConditionId, setNextConditionId] = useState(2);
+  const [queryDraft, setQueryDraft] = useState("");
+  const [activeQuery, setActiveQuery] = useState("");
+  const [activeFilters, setActiveFilters] = useState<PropertyFilterCondition[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [searchData, setSearchData] = useState<PropertyFilterSearchResponse | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isUnavailable) {
+      return;
+    }
+
+    let cancelled = false;
+    setOptionsLoading(true);
+    setOptionsError(null);
+    fetchPropertyFilterOptions()
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        setOptionsData(response);
+        const firstKey = response.options[0]?.option_key ?? "";
+        if (firstKey) {
+          setConditionDrafts((current) =>
+            current.map((draft) => (draft.optionKey ? draft : { ...draft, optionKey: firstKey }))
+          );
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) {
+          setOptionsError(nextError instanceof Error ? nextError.message : "Failed to load property options");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setOptionsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isUnavailable]);
+
+  useEffect(() => {
+    if (activeFilters.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    setSearchLoading(true);
+    setSearchError(null);
+    searchPropertyFilterRecords({
+      filters: activeFilters,
+      q: activeQuery,
+      page,
+      page_size: pageSize
+    })
+      .then((response) => {
+        if (!cancelled) {
+          setSearchData(response);
+        }
+      })
+      .catch((nextError) => {
+        if (!cancelled) {
+          setSearchError(nextError instanceof Error ? nextError.message : "Failed to search properties");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSearchLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFilters, activeQuery, page, pageSize]);
+
+  const options = optionsData?.options ?? [];
+  const optionsByKey = useMemo(() => new Map(options.map((option) => [option.option_key, option])), [options]);
+  const matchedRecords = searchData?.matched_records ?? 0;
+  const totalPages = Math.max(1, Math.ceil(matchedRecords / pageSize));
+  const startRecord = matchedRecords === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endRecord = Math.min(page * pageSize, matchedRecords);
+
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      const filters = conditionDrafts.map((draft) => buildPropertyFilterCondition(draft, optionsByKey.get(draft.optionKey)));
+      setSearchError(null);
+      setPage(1);
+      setActiveQuery(queryDraft.trim());
+      setActiveFilters(filters);
+    } catch (nextError) {
+      setSearchError(nextError instanceof Error ? nextError.message : "Invalid filter condition");
+    }
+  }
+
+  return (
+    <DatasetHero
+      dataset={dataset}
+      onBackHome={onBackHome}
+      onBackDatabase={onBackDatabase}
+      backDatabaseLabel="Database Analysis"
+      homeLabel="Home"
+      recordLabel="records"
+      viewLabel="options"
+      viewValue={optionsData ? formatCount(optionsData.options.length) : "Loading"}
+    >
+      {isUnavailable ? (
+        <DatasetUnavailableState dataset={dataset} />
+      ) : (
+        <section className="grid gap-5">
+          <div className="grid gap-3 md:grid-cols-4">
+            <MetricPill label="source rows" value={formatCount(optionsData?.total_records ?? dataset.recordCount)} />
+            <MetricPill label="mapped rows" value={formatCount(optionsData?.mapped_records ?? null)} />
+            <MetricPill label="raw rows" value={formatCount(optionsData?.raw_records ?? null)} />
+            <MetricPill label="matched smiles" value={formatCount(searchData?.matched_records ?? null)} />
+          </div>
+
+          <section className="rounded-[28px] border border-white/80 bg-white/85 p-5 shadow-sm">
+            <form className="grid gap-4" onSubmit={submitSearch}>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-950 text-white">
+                    <Filter className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h2 className="font-heading text-xl font-semibold tracking-tight text-slate-950">Threshold Conditions</h2>
+                    <div className="mt-1 text-xs font-medium uppercase tracking-[0.18em] text-teal-700">
+                      {optionsLoading ? "Loading options" : `${formatCount(options.length)} properties`}
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={!options.length}
+                  onClick={() => {
+                    const firstKey = options[0]?.option_key ?? "";
+                    setConditionDrafts((current) => [
+                      ...current,
+                      { id: nextConditionId, optionKey: firstKey, minValue: "", maxValue: "" }
+                    ]);
+                    setNextConditionId((current) => current + 1);
+                  }}
+                  className="bg-white"
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Condition
+                </Button>
+              </div>
+
+              {optionsError ? (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {optionsError}
+                </div>
+              ) : null}
+
+              <div className="grid gap-3">
+                {conditionDrafts.map((draft, index) => {
+                  const selectedOption = optionsByKey.get(draft.optionKey);
+                  return (
+                    <div
+                      key={draft.id}
+                      className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(120px,0.45fr)_minmax(120px,0.45fr)_auto]"
+                    >
+                      <div className="grid gap-2">
+                        <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                          Property {index + 1}
+                        </label>
+                        <select
+                          value={draft.optionKey}
+                          onChange={(event) => {
+                            const optionKey = event.target.value;
+                            setConditionDrafts((current) =>
+                              current.map((item) => (item.id === draft.id ? { ...item, optionKey } : item))
+                            );
+                          }}
+                          className="h-11 min-w-0 rounded-2xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          {options.map((option) => (
+                            <option key={option.option_key} value={option.option_key}>
+                              {option.filter_type === "standardized" ? "[std]" : "[raw]"} {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        {selectedOption ? (
+                          <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+                            <Badge className="bg-white text-slate-600">{selectedOption.filter_type}</Badge>
+                            <span>
+                              {formatOptionalFilterNumber(selectedOption.min_value)} -{" "}
+                              {formatOptionalFilterNumber(selectedOption.max_value)}
+                            </span>
+                            <span>{selectedOption.canonical_unit ?? selectedOption.property_unit_clean ?? "unitless"}</span>
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Min</label>
+                        <Input
+                          value={draft.minValue}
+                          onChange={(event) => {
+                            const minValue = event.target.value;
+                            setConditionDrafts((current) =>
+                              current.map((item) => (item.id === draft.id ? { ...item, minValue } : item))
+                            );
+                          }}
+                          placeholder="optional"
+                          className="bg-white"
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Max</label>
+                        <Input
+                          value={draft.maxValue}
+                          onChange={(event) => {
+                            const maxValue = event.target.value;
+                            setConditionDrafts((current) =>
+                              current.map((item) => (item.id === draft.id ? { ...item, maxValue } : item))
+                            );
+                          }}
+                          placeholder="optional"
+                          className="bg-white"
+                        />
+                      </div>
+                      <div className="flex items-end">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={conditionDrafts.length <= 1}
+                          aria-label={`Remove condition ${index + 1}`}
+                          onClick={() => setConditionDrafts((current) => current.filter((item) => item.id !== draft.id))}
+                          className="h-11 w-11 bg-white px-0"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    value={queryDraft}
+                    onChange={(event) => setQueryDraft(event.target.value)}
+                    placeholder="Search polymer name or SMILES"
+                    className="bg-slate-50 pl-10"
+                  />
+                </div>
+                <select
+                  aria-label="Rows per page"
+                  value={pageSize}
+                  onChange={(event) => {
+                    setPage(1);
+                    setPageSize(Number(event.target.value));
+                  }}
+                  className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value={10}>10 rows</option>
+                  <option value={25}>25 rows</option>
+                  <option value={50}>50 rows</option>
+                  <option value={100}>100 rows</option>
+                </select>
+                <Button type="submit" disabled={optionsLoading || !options.length || searchLoading}>
+                  <Search className="mr-2 h-4 w-4" />
+                  Search
+                </Button>
+              </div>
+            </form>
+          </section>
+
+          <section className="overflow-hidden rounded-[28px] border border-white/80 bg-white/90 shadow-sm">
+            <header className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/90 px-5 py-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="font-heading text-xl font-semibold tracking-tight text-slate-950">Matched Polymers</h2>
+                <div className="mt-1 font-mono-ui text-xs text-slate-500">
+                  {startRecord}-{endRecord} / {formatCount(matchedRecords)}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={page <= 1 || searchLoading}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  className="bg-white"
+                >
+                  <ChevronLeft className="mr-2 h-4 w-4" />
+                  Previous
+                </Button>
+                <div className="min-w-20 text-center font-mono-ui text-xs text-slate-500">
+                  {page} / {totalPages}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={page >= totalPages || searchLoading}
+                  onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  className="bg-white"
+                >
+                  Next
+                  <ChevronRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            </header>
+
+            {searchError ? (
+              <div className="m-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {searchError}
+              </div>
+            ) : null}
+
+            <div className="divide-y divide-slate-100">
+              {searchData?.results.map((result) => (
+                <article key={result.smiles ?? result.canonical_smiles ?? result.records[0]?.filter_record_id} className="p-5">
+                  <div className="grid gap-3 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.4fr)]">
+                    <div className="min-w-0">
+                      <div className="font-heading text-lg font-semibold text-slate-950">
+                        {result.polymer_name || "Unnamed polymer"}
+                      </div>
+                      <div className="mt-2 truncate font-mono-ui text-xs text-slate-600" title={result.smiles ?? ""}>
+                        {result.smiles ?? <EmptyCell />}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Badge className="bg-teal-50 text-teal-800">{result.matched_filters} filters</Badge>
+                        {result.canonical_smiles ? (
+                          <Badge className="bg-slate-100 text-slate-600">canonical</Badge>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="grid gap-3">
+                      {result.records.map((record) => {
+                        const displayValue =
+                          record.canonical_value !== null
+                            ? `${formatNumber(record.canonical_value, 4)} ${record.canonical_unit ?? ""}`.trim()
+                            : `${record.property_value} ${record.property_unit_clean ?? ""}`.trim();
+                        const originalValue = `${record.property_value} ${record.property_unit_raw ?? ""}`.trim();
+                        return (
+                          <div key={`${record.filter_index}-${record.filter_record_id}`} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                              <div>
+                                <div className="font-medium text-slate-950">
+                                  {record.property_label ?? record.property_name}
+                                </div>
+                                <div className="mt-1 text-sm text-slate-600">
+                                  {displayValue || <EmptyCell />}
+                                </div>
+                                <div className="mt-1 font-mono-ui text-xs text-slate-500">
+                                  raw {originalValue || "-"}
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2 lg:justify-end">
+                                {record.value_origin ? (
+                                  <Badge className="bg-white text-slate-700">{record.value_origin}</Badge>
+                                ) : null}
+                                {record.reliable_score !== null ? (
+                                  <Badge className="bg-white text-slate-700">
+                                    score {formatNumber(record.reliable_score, 2)}
+                                  </Badge>
+                                ) : null}
+                                {record.unit_conversion_status ? (
+                                  <Badge className="bg-white text-slate-700">{record.unit_conversion_status}</Badge>
+                                ) : null}
+                                {record.soft_quality_flags ? (
+                                  <Badge className="bg-amber-50 text-amber-800">{record.soft_quality_flags}</Badge>
+                                ) : null}
+                                {record.duplicate_flag ? (
+                                  <Badge className="bg-slate-100 text-slate-700">{record.duplicate_flag}</Badge>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            {searchLoading ? (
+              <div className="px-5 py-8 text-center text-sm text-slate-500">Loading matches...</div>
+            ) : null}
+            {!searchLoading && !searchError && activeFilters.length > 0 && searchData?.results.length === 0 ? (
+              <div className="px-5 py-8 text-center text-sm text-slate-500">No matching polymers.</div>
+            ) : null}
+            {!searchLoading && !searchError && activeFilters.length === 0 ? (
+              <div className="px-5 py-8 text-center text-sm text-slate-500">No threshold query submitted.</div>
+            ) : null}
+          </section>
+        </section>
+      )}
+    </DatasetHero>
+  );
+}
+
 function DftPage({ dataset: summaryDataset, analytics, analyticsLoading, analyticsError, ...props }: DatasetPageProps) {
   const data = mergeAnalyticsData(dftData, analytics?.dft);
   const dataset = {
@@ -4188,6 +4690,9 @@ export function DatabaseAnalysis({
   }
   if (selectedKey === "structureEffect") {
     return <StructureEffectPage {...commonProps} dataset={getDisplayDataset(displayDatasets, "structureEffect")} />;
+  }
+  if (selectedKey === "propertyFilter") {
+    return <PropertyFilterPage {...commonProps} dataset={getDisplayDataset(displayDatasets, "propertyFilter")} />;
   }
   if (selectedKey === "dft") {
     return <DftPage {...commonProps} dataset={getDisplayDataset(displayDatasets, "dft")} />;

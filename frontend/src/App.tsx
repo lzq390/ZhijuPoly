@@ -65,6 +65,7 @@ const datasetPathByKey: Record<DatasetKey, string> = {
   process: "/database/process",
   property: "/database/property",
   structureEffect: "/database/structure-effect",
+  propertyFilter: "/database/property-filter",
   dft: "/database/dft",
   formulation: "/database/formulation"
 };

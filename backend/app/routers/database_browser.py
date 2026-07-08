@@ -21,6 +21,12 @@ from app.models import (
     ExperimentalPropertyRecord,
     FormulationBrowseResponse,
     FormulationRecord,
+    PropertyFilterOption,
+    PropertyFilterOptionsResponse,
+    PropertyFilterRecord,
+    PropertyFilterSearchRequest,
+    PropertyFilterSearchResponse,
+    PropertyFilterSearchResult,
     SmilesLookupRequest,
     SmilesLookupResponse,
     SmilesLookupResult,
@@ -39,12 +45,14 @@ from app.services.postgres_database_browser import (
     browse_experimental_property_records_postgres,
     browse_formulation_records_postgres,
     browse_structure_property_records_postgres,
+    get_property_filter_options_postgres,
     get_database_analytics_postgres,
     get_dft_browser_summary_postgres,
     lookup_pi_candidate_smiles_postgres,
     lookup_polymer_smiles_postgres,
     lookup_property_smiles_postgres,
     postgres_table_exists,
+    search_property_filter_records_postgres,
     source_file_status,
 )
 from app.services.smiles_utils import normalize
@@ -57,6 +65,7 @@ DATASET_TITLES = {
     "process": "Experimental Process Data",
     "property": "Experimental Property Data",
     "structureEffect": "Polymer Structure-Property Data",
+    "propertyFilter": "Property Threshold Filter",
     "dft": "DFT Conformation Data",
     "formulation": "Formulation Ratio Data",
 }
@@ -127,12 +136,20 @@ def _postgres_dataset_summaries(connection) -> list[DatasetSummaryItem]:
     if postgres_table_exists(connection, "experimental", "property_records"):
         property_total = int(connection.execute("SELECT COUNT(*) AS count FROM experimental.property_records").fetchone()["count"])
     structure_total = int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_properties").fetchone()["count"])
+    property_filter_status, property_filter_message = source_file_status(connection, "property_filter_csv")
+    property_filter_total = 0
+    if postgres_table_exists(connection, "core", "polymer_property_filter_records"):
+        property_filter_total = int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"])
+    else:
+        property_filter_status = "missing"
+        property_filter_message = "core.polymer_property_filter_records is missing."
     _, dft_total, _, _ = get_dft_browser_summary_postgres(connection)
     formulation_total = int(connection.execute("SELECT COUNT(*) AS count FROM knowledge.formulation_records").fetchone()["count"])
     for key, total, status, message, import_key in [
         ("process", process_total, process_status, process_message, "experimental_process"),
         ("property", property_total, property_status, property_message, "experimental_property"),
         ("structureEffect", structure_total, "ready", None, "core"),
+        ("propertyFilter", property_filter_total, property_filter_status, property_filter_message, "property_filter"),
         ("dft", dft_total, "ready", None, "dft"),
         ("formulation", formulation_total, "ready", "Derived from knowledge.documents.", "knowledge"),
     ]:
@@ -244,6 +261,7 @@ def get_dataset_summaries(request: Request) -> DatasetSummaryResponse:
                 ("dft", "energy_trace"),
                 ("experimental", "process_records"),
                 ("experimental", "property_records"),
+                ("core", "polymer_property_filter_records"),
             ]
             missing = [f"{schema}.{table}" for schema, table in required if not postgres_table_exists(connection, schema, table)]
             if missing:
@@ -385,6 +403,143 @@ async def browse_structure_property(
             )
             for row in rows
         ],
+    )
+
+
+def _property_filter_record(row) -> PropertyFilterRecord:
+    return PropertyFilterRecord(
+        filter_record_id=int(row["filter_record_id"]),
+        source_row_number=int(row["source_row_number"]),
+        polymer_name=row["polymer_name"],
+        smiles=row["smiles"],
+        canonical_smiles=row["canonical_smiles"],
+        property_category=row["property_category"],
+        property_name=row["property_name"],
+        property_value=row["property_value"],
+        property_value_num=row["property_value_num"],
+        property_unit_raw=row["property_unit_raw"],
+        property_unit_clean=row["property_unit_clean"],
+        property_key=row["property_key"],
+        property_label=row["property_label"],
+        canonical_value=row["canonical_value"],
+        canonical_unit=row["canonical_unit"],
+        unit_conversion_status=row["unit_conversion_status"],
+        value_origin=row["value_origin"],
+        label_source=row["label_source"],
+        reliable_score=row["reliable_score"],
+        soft_quality_flags=row["soft_quality_flags"],
+        duplicate_flag=row["duplicate_flag"],
+        filter_index=int(row["filter_index"]),
+    )
+
+
+@router.get("/property-filter/options", response_model=PropertyFilterOptionsResponse)
+def get_property_filter_options(request: Request) -> PropertyFilterOptionsResponse:
+    started_at = perf_counter()
+    settings = request.app.state.settings
+    _require_postgres_browser(request)
+
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
+                raise RuntimeError("core.polymer_property_filter_records is missing")
+            total_records, mapped_records, raw_records, rows = get_property_filter_options_postgres(connection)
+            source_status, source_message = source_file_status(connection, "property_filter_csv")
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return PropertyFilterOptionsResponse(
+        query_time_ms=(perf_counter() - started_at) * 1000,
+        total_records=total_records,
+        mapped_records=mapped_records,
+        raw_records=raw_records,
+        data_source="postgres",
+        source_status=source_status,
+        source_message=source_message,
+        options=[
+            PropertyFilterOption(
+                filter_type=row["filter_type"],
+                option_key=row["option_key"],
+                label=row["label"],
+                property_key=row["property_key"],
+                property_name=row["property_name"],
+                property_unit_clean=row["property_unit_clean"],
+                canonical_unit=row["canonical_unit"],
+                rows=int(row["rows"]),
+                unique_smiles=int(row["unique_smiles"]),
+                min_value=row["min_value"],
+                p5_value=row["p5_value"],
+                median_value=row["median_value"],
+                p95_value=row["p95_value"],
+                max_value=row["max_value"],
+            )
+            for row in rows
+        ],
+    )
+
+
+@router.post("/property-filter/search", response_model=PropertyFilterSearchResponse)
+def search_property_filter(request_body: PropertyFilterSearchRequest, request: Request) -> PropertyFilterSearchResponse:
+    started_at = perf_counter()
+    query = request_body.q.strip()
+    settings = request.app.state.settings
+    _require_postgres_browser(request)
+
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
+                raise RuntimeError("core.polymer_property_filter_records is missing")
+            total_records, matched_records, rows = search_property_filter_records_postgres(
+                connection,
+                conditions=request_body.filters,
+                query=query,
+                page=request_body.page,
+                page_size=request_body.page_size,
+            )
+            source_status, source_message = source_file_status(connection, "property_filter_csv")
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    grouped: dict[str, list[PropertyFilterRecord]] = {}
+    group_meta: dict[str, dict[str, str | None]] = {}
+    for row in rows:
+        group_key = row["group_key"]
+        grouped.setdefault(group_key, []).append(_property_filter_record(row))
+        group_meta.setdefault(
+            group_key,
+            {
+                "smiles": row["smiles"],
+                "canonical_smiles": row["canonical_smiles"],
+                "polymer_name": row["polymer_name"],
+            },
+        )
+
+    results = [
+        PropertyFilterSearchResult(
+            smiles=group_meta[group_key]["smiles"],
+            canonical_smiles=group_meta[group_key]["canonical_smiles"],
+            polymer_name=group_meta[group_key]["polymer_name"],
+            matched_filters=len({record.filter_index for record in records}),
+            records=records,
+        )
+        for group_key, records in grouped.items()
+    ]
+
+    return PropertyFilterSearchResponse(
+        query=query,
+        page=request_body.page,
+        page_size=request_body.page_size,
+        query_time_ms=(perf_counter() - started_at) * 1000,
+        total_records=total_records,
+        matched_records=matched_records,
+        data_source="postgres",
+        source_status=source_status,
+        source_message=source_message,
+        results=results,
     )
 
 

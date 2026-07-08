@@ -17,6 +17,8 @@ from app.models import (
     ExperimentalProcessBrowseResponse,
     ExperimentalPropertyBrowseResponse,
     PredictRequest,
+    PropertyFilterOptionsResponse,
+    PropertyFilterSearchResponse,
     SmilesQueryRequest,
     Structure3DRequest,
 )
@@ -429,11 +431,15 @@ def test_experimental_csv_routes_keep_response_models() -> None:
 
     assert routes["/api/v1/database-browser/experimental-process"].response_model is ExperimentalProcessBrowseResponse
     assert routes["/api/v1/database-browser/experimental-property"].response_model is ExperimentalPropertyBrowseResponse
+    assert routes["/api/v1/database-browser/property-filter/options"].response_model is PropertyFilterOptionsResponse
+    assert routes["/api/v1/database-browser/property-filter/search"].response_model is PropertyFilterSearchResponse
 
 
 def test_experimental_csv_routes_are_sync_for_threadpool() -> None:
     assert not inspect.iscoroutinefunction(database_browser.browse_experimental_process_records)
     assert not inspect.iscoroutinefunction(database_browser.browse_experimental_property_records)
+    assert not inspect.iscoroutinefunction(database_browser.get_property_filter_options)
+    assert not inspect.iscoroutinefunction(database_browser.search_property_filter)
 
 
 def test_experimental_process_browser_endpoint_returns_typed_records(test_app: FastAPI) -> None:

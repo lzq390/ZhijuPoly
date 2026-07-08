@@ -354,6 +354,126 @@ class StructurePropertyBrowseResponse(BaseModel):
     results: list[StructurePropertyRecord] = Field(default_factory=list)
 
 
+PropertyFilterType = Literal["standardized", "raw"]
+
+
+class PropertyFilterOption(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    filter_type: PropertyFilterType
+    option_key: str
+    label: str
+    property_key: str | None = None
+    property_name: str | None = None
+    property_unit_clean: str | None = None
+    canonical_unit: str | None = None
+    rows: int = Field(ge=0)
+    unique_smiles: int = Field(ge=0)
+    min_value: float | None = None
+    p5_value: float | None = None
+    median_value: float | None = None
+    p95_value: float | None = None
+    max_value: float | None = None
+
+
+class PropertyFilterOptionsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query_time_ms: float = Field(ge=0.0)
+    total_records: int = Field(ge=0)
+    mapped_records: int = Field(ge=0)
+    raw_records: int = Field(ge=0)
+    data_source: str = "postgres"
+    source_status: str = "ready"
+    source_message: str | None = None
+    options: list[PropertyFilterOption] = Field(default_factory=list)
+
+
+class PropertyFilterCondition(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    filter_type: PropertyFilterType
+    property_key: str | None = Field(default=None, max_length=120)
+    canonical_unit: str | None = Field(default=None, max_length=120)
+    property_name: str | None = Field(default=None, max_length=240)
+    property_unit_clean: str | None = Field(default=None, max_length=120)
+    min_value: float | None = None
+    max_value: float | None = None
+
+    @model_validator(mode="after")
+    def validate_filter(self) -> "PropertyFilterCondition":
+        if self.min_value is None and self.max_value is None:
+            raise ValueError("At least one threshold bound is required")
+        if self.min_value is not None and self.max_value is not None and self.min_value > self.max_value:
+            raise ValueError("min_value cannot be greater than max_value")
+        if self.filter_type == "standardized" and not self.property_key:
+            raise ValueError("property_key is required for standardized filters")
+        if self.filter_type == "raw" and not self.property_name:
+            raise ValueError("property_name is required for raw filters")
+        return self
+
+
+class PropertyFilterSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    filters: list[PropertyFilterCondition] = Field(min_length=1, max_length=8)
+    q: str = Field(default="", max_length=200)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=25, ge=1, le=100)
+
+
+class PropertyFilterRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    filter_record_id: int
+    source_row_number: int
+    polymer_name: str | None = None
+    smiles: str | None = None
+    canonical_smiles: str | None = None
+    property_category: str
+    property_name: str
+    property_value: str
+    property_value_num: float | None = None
+    property_unit_raw: str | None = None
+    property_unit_clean: str | None = None
+    property_key: str | None = None
+    property_label: str | None = None
+    canonical_value: float | None = None
+    canonical_unit: str | None = None
+    unit_conversion_status: str | None = None
+    value_origin: str | None = None
+    label_source: str | None = None
+    reliable_score: float | None = None
+    soft_quality_flags: str | None = None
+    duplicate_flag: str | None = None
+    filter_index: int
+
+
+class PropertyFilterSearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str | None = None
+    canonical_smiles: str | None = None
+    polymer_name: str | None = None
+    matched_filters: int = Field(ge=0)
+    records: list[PropertyFilterRecord] = Field(default_factory=list)
+
+
+class PropertyFilterSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    query_time_ms: float = Field(ge=0.0)
+    total_records: int = Field(ge=0)
+    matched_records: int = Field(ge=0)
+    data_source: str = "postgres"
+    source_status: str = "ready"
+    source_message: str | None = None
+    results: list[PropertyFilterSearchResult] = Field(default_factory=list)
+
+
 class DftMoleculeBrowserRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

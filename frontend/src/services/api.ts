@@ -48,6 +48,9 @@ import type {
   OnlineKnowledgeSearchResponse,
   PredictRequest,
   PredictResponse,
+  PropertyFilterOptionsResponse,
+  PropertyFilterSearchRequest,
+  PropertyFilterSearchResponse,
   ReverseDesignTgJobCreateResponse,
   ReverseDesignTgJobStatusResponse,
   ReverseDesignTgRequest,
@@ -445,6 +448,16 @@ export function browseStructurePropertyRecords(params: {
 
   const suffix = searchParams.toString() ? `?${searchParams.toString()}` : "";
   return getJSON(`/database-browser/structure-property${suffix}`);
+}
+
+export function fetchPropertyFilterOptions(): Promise<PropertyFilterOptionsResponse> {
+  return getJSON("/database-browser/property-filter/options");
+}
+
+export function searchPropertyFilterRecords(
+  payload: PropertyFilterSearchRequest
+): Promise<PropertyFilterSearchResponse> {
+  return postJSON("/database-browser/property-filter/search", payload);
 }
 
 function buildQueryString(params: { q?: string; mol_id?: string; page?: number; page_size?: number }): string {

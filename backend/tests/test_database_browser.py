@@ -44,13 +44,125 @@ def test_database_browser_dataset_summary_reports_all_dataset_keys(test_app) -> 
     payload = response.json()
     assert payload["backend"] == "postgres"
     by_key = {item["key"]: item for item in payload["datasets"]}
-    assert set(by_key) == {"process", "property", "structureEffect", "dft", "formulation"}
+    assert set(by_key) == {"process", "property", "structureEffect", "propertyFilter", "dft", "formulation"}
     assert by_key["process"]["source_status"] == "ready"
     assert by_key["process"]["total_records"] == 0
     assert by_key["property"]["total_records"] == 0
     assert by_key["property"]["source_status"] == "ready"
     assert by_key["structureEffect"]["total_records"] == 6
+    assert by_key["propertyFilter"]["total_records"] == 6
+    assert by_key["propertyFilter"]["source_status"] == "ready"
     assert by_key["dft"]["total_records"] == 5
+
+
+def test_property_filter_options_include_standardized_and_raw_properties(test_app) -> None:
+    client = TestClient(test_app)
+
+    response = client.get("/api/v1/database-browser/property-filter/options")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_records"] == 6
+    assert payload["mapped_records"] == 4
+    assert payload["raw_records"] == 2
+    options = payload["options"]
+    tg_option = next(item for item in options if item["filter_type"] == "standardized" and item["property_key"] == "tg")
+    raw_option = next(item for item in options if item["filter_type"] == "raw" and item["property_name"] == "Cv")
+    assert tg_option["canonical_unit"] == "C"
+    assert tg_option["rows"] == 2
+    assert raw_option["property_unit_clean"] == "cal/(g*C)"
+    assert raw_option["rows"] == 2
+
+
+def test_property_filter_search_filters_standardized_property_range(test_app) -> None:
+    client = TestClient(test_app)
+
+    response = client.post(
+        "/api/v1/database-browser/property-filter/search",
+        json={
+            "filters": [
+                {
+                    "filter_type": "standardized",
+                    "property_key": "tg",
+                    "canonical_unit": "C",
+                    "min_value": 100,
+                    "max_value": 200,
+                }
+            ],
+            "page": 1,
+            "page_size": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_records"] == 6
+    assert payload["matched_records"] == 1
+    assert payload["results"][0]["smiles"] == "CCO"
+    assert payload["results"][0]["records"][0]["property_key"] == "tg"
+    assert payload["results"][0]["records"][0]["canonical_value"] == 123.4
+
+
+def test_property_filter_search_ands_multiple_conditions_by_smiles(test_app) -> None:
+    client = TestClient(test_app)
+
+    response = client.post(
+        "/api/v1/database-browser/property-filter/search",
+        json={
+            "filters": [
+                {
+                    "filter_type": "standardized",
+                    "property_key": "tg",
+                    "canonical_unit": "C",
+                    "min_value": 100,
+                    "max_value": 200,
+                },
+                {
+                    "filter_type": "standardized",
+                    "property_key": "bandgap",
+                    "canonical_unit": "eV",
+                    "max_value": 4,
+                },
+            ],
+            "page": 1,
+            "page_size": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["matched_records"] == 1
+    assert payload["results"][0]["smiles"] == "CCO"
+    assert payload["results"][0]["matched_filters"] == 2
+    assert {record["property_key"] for record in payload["results"][0]["records"]} == {"tg", "bandgap"}
+
+
+def test_property_filter_search_supports_raw_property_range(test_app) -> None:
+    client = TestClient(test_app)
+
+    response = client.post(
+        "/api/v1/database-browser/property-filter/search",
+        json={
+            "filters": [
+                {
+                    "filter_type": "raw",
+                    "property_name": "Cv",
+                    "property_unit_clean": "cal/(g*C)",
+                    "min_value": 0.3,
+                    "max_value": 0.4,
+                }
+            ],
+            "page": 1,
+            "page_size": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["matched_records"] == 1
+    assert payload["results"][0]["smiles"] == "CCN"
+    assert payload["results"][0]["records"][0]["property_name"] == "Cv"
+    assert payload["results"][0]["records"][0]["property_key"] is None
 
 
 def test_smiles_lookup_properties_returns_all_matching_rows(test_app) -> None:

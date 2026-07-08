@@ -104,11 +104,25 @@ def _governance_settings(
     legacy_main_sqlite_path: Path | None = None,
 ) -> Settings:
     property_csv = _write_file(tmp_path / "data1.csv", b"smiles,property_name\nCCO,Tg\n")
+    property_filter_csv = _write_file(
+        tmp_path / "property_filter.csv",
+        (
+            "polymer_name,smiles,property_category,property_name,property_value,property_unit,"
+            "property_unit_raw,property_unit_clean,property_key,property_label,canonical_value,"
+            "canonical_unit,unit_conversion_status,value_origin,label_source,reliable_score,"
+            "soft_quality_flags,duplicate_flag\n"
+            "polymer_a,CCO,Thermal,Tg,123.4,C,C,C,tg,Glass transition temperature,123.4,C,"
+            "already_standard,observed,exp,0.99,,\n"
+            "polymer_a,CCO,Thermal,Cv,0.28,cal/(g*C),cal/(g*C),cal/(g*C),,,,"
+            "not_mapped,observed,exp,0.98,,\n"
+        ).encode("utf-8"),
+    )
     process_csv = _write_file(tmp_path / "process.csv", b"polymer_id,process_flow_original_text\nP1,mix\n")
     property_detail_csv = _write_file(tmp_path / "property_detail.csv", b"polymer_id,property_name_en,value\nP1,Tg,123\n")
     legacy_main = legacy_main_sqlite_path or _write_file(tmp_path / "polyprop.db")
     return Settings(
         csv_source_path=str(property_csv),
+        property_filter_csv_path=str(property_filter_csv),
         experimental_process_csv_path=str(process_csv),
         experimental_property_csv_path=str(property_detail_csv),
         knowledge_zip_path=str(_write_file(tmp_path / "knowledge.zip")),
@@ -202,6 +216,40 @@ def test_rebuild_is_rejected_for_governance_only_import(tmp_path: Path, postgres
         polymer_count = connection.execute("SELECT COUNT(*) AS count FROM core.polymers").fetchone()["count"]
 
     assert polymer_count == 3
+
+
+def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postgres_dsn: str) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+
+    stats = import_all_to_postgres(
+        settings,
+        dsn=postgres_dsn,
+        datasets={"property_filter"},
+        apply_migrations=False,
+    )
+
+    dataset_stats = next(item for item in stats.datasets if item.dataset_key == "property_filter")
+    assert dataset_stats.row_count == 2
+    assert dataset_stats.details == {"mapped_records": 1, "raw_records": 1}
+
+    with postgres_connection(postgres_dsn) as connection:
+        property_filter_rows = connection.execute(
+            """
+            SELECT property_name, property_key, canonical_value, canonical_unit, property_value_num
+            FROM core.polymer_property_filter_records
+            ORDER BY filter_record_id
+            """
+        ).fetchall()
+        core_property_count = connection.execute("SELECT COUNT(*) AS count FROM core.polymer_properties").fetchone()["count"]
+
+    assert core_property_count == 6
+    assert len(property_filter_rows) == 2
+    assert property_filter_rows[0]["property_key"] == "tg"
+    assert property_filter_rows[0]["canonical_value"] == 123.4
+    assert property_filter_rows[0]["canonical_unit"] == "C"
+    assert property_filter_rows[1]["property_name"] == "Cv"
+    assert property_filter_rows[1]["property_key"] is None
+    assert property_filter_rows[1]["property_value_num"] == 0.28
 
 
 def test_online_history_sequence_resets_after_legacy_import_and_keeps_runtime_rows(tmp_path: Path, postgres_dsn: str) -> None:
