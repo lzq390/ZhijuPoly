@@ -18,18 +18,41 @@ from app.services.monomer_md_worker_client import (
     MonomerMdWorkerSubmitPayload,
 )
 
+FORMAL_PROTOCOLS = ("Density", "HVap", "Compressibility", "Dielectric", "Transport")
+
+
+def _ready_protocols() -> dict[str, dict[str, object]]:
+    return {
+        protocol: {
+            "protocol": protocol,
+            "run_mode": "formal",
+            "supported": True,
+            "runtime_ready": True,
+            "runtime_error": None,
+        }
+        for protocol in FORMAL_PROTOCOLS
+    }
+
 
 class FakeWorkerClient:
-    def __init__(self) -> None:
+    def __init__(self, *, mode: str = "dry-run", protocols: dict[str, dict[str, object]] | None = None) -> None:
         self.payloads = []
+        self.deleted_jobs = []
+        self.mode = mode
+        self.protocols = protocols if protocols is not None else _ready_protocols()
 
     def get_health(self):
-        return {
+        health = {
             "status": "ok",
-            "mode": "dry-run",
+            "mode": self.mode,
             "db_configured": True,
+            "runtime_ready": True,
             "active_jobs": 0,
+            "protocols": self.protocols,
         }
+        if self.mode == "real":
+            health["byteff2_root_exists"] = True
+        return health
 
     def submit_job(self, payload):
         self.payloads.append(payload)
@@ -42,6 +65,15 @@ class FakeWorkerClient:
                 "worker_version": "test",
             },
         )()
+
+    def delete_artifacts(self, job_id: str):
+        self.deleted_jobs.append(job_id)
+        return {
+            "job_id": job_id,
+            "deleted": True,
+            "artifact_root": f"/runs/{job_id}",
+            "message": "artifacts deleted",
+        }
 
 
 class FailingWorkerClient:
@@ -61,6 +93,22 @@ class DegradedWorkerClient:
             "byteff2_root_exists": True,
             "runtime_ready": True,
             "active_jobs": 0,
+        }
+
+    def submit_job(self, payload):
+        raise AssertionError("degraded workers must not receive submitted jobs")
+
+
+class DegradedFormalReadyWorkerClient:
+    def get_health(self):
+        return {
+            "status": "degraded",
+            "mode": "real",
+            "db_configured": False,
+            "byteff2_root_exists": True,
+            "runtime_ready": True,
+            "active_jobs": 0,
+            "protocols": _ready_protocols(),
         }
 
     def submit_job(self, payload):
@@ -141,6 +189,45 @@ def _monomer_md_job_count(postgres_dsn: str) -> int:
         return int(row["count"])
 
 
+def _density_formal_config() -> dict[str, object]:
+    return {
+        "protocol": "Density",
+        "params_dir": "/tmp/user-supplied-params",
+        "output_dir": "/tmp/user-supplied-output",
+        "working_dir": "/tmp/user-supplied-working",
+        "temperature": 298,
+        "natoms": 10000,
+        "components": {
+            "DMC": 249,
+            "EC": 170,
+            "LI": 34,
+            "PF6": 34,
+        },
+        "smiles": {
+            "DMC": "COC(=O)OC",
+            "EC": "O=C1OCCO1",
+            "LI": "[Li+]",
+            "PF6": "F[P-](F)(F)(F)(F)F",
+        },
+    }
+
+
+def _dielectric_formal_config() -> dict[str, object]:
+    return {
+        "protocol": "Dielectric",
+        "params_dir": "dielectric_params",
+        "output_dir": "dielectric_results",
+        "working_dir": "dielectric_working_dir",
+        "temperature": 298,
+        "natoms": 5000,
+        "npt_steps": 2000000,
+        "nvt_steps": 8000000,
+        "dipole_interval": 1000,
+        "components": {"DMC": 1},
+        "smiles": {"DMC": "COC(=O)OC"},
+    }
+
+
 def test_monomer_md_status_reports_disabled_worker(postgres_dsn: str):
     client = TestClient(_create_app(postgres_dsn, worker_url=""))
 
@@ -167,6 +254,38 @@ def test_monomer_md_status_checks_configured_worker_health(postgres_dsn: str):
     assert data["worker_status"] == "ok"
     assert data["worker_mode"] == "dry-run"
     assert data["db_configured"] is True
+
+
+def test_monomer_md_protocols_returns_catalog_with_readiness(postgres_dsn: str):
+    app = _create_app(postgres_dsn)
+    app.state.monomer_md_worker_client = FakeWorkerClient(mode="real")
+    client = TestClient(app)
+
+    response = client.get("/api/v1/monomer-md/protocols")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is True
+    assert data["available"] is True
+    protocols = {item["protocol"]: item for item in data["protocols"]}
+    assert set(protocols) == set(FORMAL_PROTOCOLS)
+    assert protocols["Density"]["runtime_ready"] is True
+    assert protocols["Density"]["default_config"]["protocol"] == "Density"
+    assert protocols["Transport"]["required_result_file"] == "results.json"
+
+
+def test_monomer_md_protocols_reports_unavailable_when_worker_degraded(postgres_dsn: str):
+    app = _create_app(postgres_dsn)
+    app.state.monomer_md_worker_client = DegradedFormalReadyWorkerClient()
+    client = TestClient(app)
+
+    response = client.get("/api/v1/monomer-md/protocols")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is True
+    assert data["available"] is False
+    assert "degraded" in data["message"]
 
 
 def test_monomer_md_status_reports_unreachable_worker(postgres_dsn: str):
@@ -376,6 +495,173 @@ def test_monomer_md_job_submit_and_status_roundtrip(postgres_dsn: str):
         assert completed_payload["progress_percent"] == 100
         assert completed_payload["result"]["summary"]["final_density_g_cm3"] == 0.78
         assert completed_payload["result"]["density_series"]["points"][0]["step"] == 10
+
+
+def test_monomer_md_formal_density_submit_and_status_roundtrip(postgres_dsn: str):
+    app = _create_app(postgres_dsn)
+    fake_worker = FakeWorkerClient(mode="real")
+    app.state.monomer_md_worker_client = fake_worker
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/v1/monomer-md/jobs",
+            json={
+                "protocol": "Density",
+                "run_mode": "formal",
+                "config_json": _density_formal_config(),
+            },
+        )
+        assert create_response.status_code == 202
+        job_id = create_response.json()["job_id"]
+
+        assert len(fake_worker.payloads) == 1
+        payload = fake_worker.payloads[0]
+        assert payload.job_id == job_id
+        assert payload.protocol == "Density"
+        assert payload.run_mode == "formal"
+        assert payload.steps == 1500000
+        assert payload.config_json["params_dir"] == "managed_params"
+
+        status_response = client.get(f"/api/v1/monomer-md/jobs/{job_id}")
+        assert status_response.status_code == 200
+        status_payload = status_response.json()
+        assert status_payload["protocol"] == "Density"
+        assert status_payload["run_mode"] == "formal"
+        assert status_payload["requested_steps"] == 1500000
+        assert status_payload["config_json"]["output_dir"] == "managed_output"
+        assert status_payload["components"]["smiles"]["DMC"] == "COC(=O)OC"
+        assert status_payload["engine"] == "byteff2-formal-worker"
+
+        with postgres_connection(postgres_dsn) as connection:
+            mark_monomer_md_job_completed_postgres(
+                connection,
+                job_id=job_id,
+                completed_steps=1500000,
+                artifact_root="/runs/formal-density",
+                artifacts={"density_results_json": {"path": "outputs/density_results.json"}},
+                artifact_manifest={"files": [{"path": "outputs/density_results.json"}]},
+                result_summary={"density": 1.21, "density_std": 0.02},
+                byteff2_git_sha="abc1234",
+                gpu_device="2",
+                result_data={
+                    "protocol": "Density",
+                    "run_mode": "formal",
+                    "summary": {"density": 1.21, "density_std": 0.02},
+                    "artifacts": {"outputs/density_results.json": {"path": "outputs/density_results.json"}},
+                    "metrics": {"density": 1.21, "density_std": 0.02},
+                },
+            )
+
+        completed_response = client.get(f"/api/v1/monomer-md/jobs/{job_id}")
+        assert completed_response.status_code == 200
+        completed_payload = completed_response.json()
+        assert completed_payload["status"] == "completed"
+        assert completed_payload["result_summary"]["density"] == 1.21
+        assert completed_payload["artifact_manifest"]["files"][0]["path"] == "outputs/density_results.json"
+        assert completed_payload["byteff2_git_sha"] == "abc1234"
+        assert completed_payload["gpu_device"] == "2"
+        assert completed_payload["result"]["metrics"]["density"] == 1.21
+
+
+def test_monomer_md_formal_job_rejects_invalid_dielectric_step_config(postgres_dsn: str):
+    app = _create_app(postgres_dsn)
+    app.state.monomer_md_worker_client = FakeWorkerClient(mode="real")
+    client = TestClient(app)
+    config = _dielectric_formal_config()
+    config["npt_steps"] = "bad"
+
+    response = client.post(
+        "/api/v1/monomer-md/jobs",
+        json={"protocol": "Dielectric", "run_mode": "formal", "config_json": config},
+    )
+
+    assert response.status_code == 422
+    assert "npt_steps" in response.json()["detail"]
+    assert _monomer_md_job_count(postgres_dsn) == 0
+
+
+def test_monomer_md_formal_job_capacity_is_always_one(postgres_dsn: str):
+    app = _create_app(
+        postgres_dsn,
+        monomer_md_rate_limit_per_ip_per_minute=10,
+        monomer_md_max_active_jobs=10,
+    )
+    fake_worker = FakeWorkerClient(mode="real")
+    app.state.monomer_md_worker_client = fake_worker
+    client = TestClient(app)
+
+    first_response = client.post(
+        "/api/v1/monomer-md/jobs",
+        json={"protocol": "Density", "run_mode": "formal", "config_json": _density_formal_config()},
+    )
+    second_response = client.post(
+        "/api/v1/monomer-md/jobs",
+        json={"protocol": "Density", "run_mode": "formal", "config_json": _density_formal_config()},
+    )
+
+    assert first_response.status_code == 202
+    assert second_response.status_code == 429
+    assert "formal ByteFF2" in second_response.json()["detail"]
+    assert _monomer_md_job_count(postgres_dsn) == 1
+    assert len(fake_worker.payloads) == 1
+
+
+def test_monomer_md_formal_job_rejects_unready_protocol_without_creating_row(postgres_dsn: str):
+    protocols = _ready_protocols()
+    protocols["Transport"] = {
+        "protocol": "Transport",
+        "run_mode": "formal",
+        "supported": True,
+        "runtime_ready": False,
+        "runtime_error": "velocityverletplugin is not importable",
+    }
+    app = _create_app(postgres_dsn)
+    app.state.monomer_md_worker_client = FakeWorkerClient(mode="real", protocols=protocols)
+    client = TestClient(app)
+
+    config = _density_formal_config()
+    config["protocol"] = "Transport"
+    response = client.post(
+        "/api/v1/monomer-md/jobs",
+        json={"protocol": "Transport", "run_mode": "formal", "config_json": config},
+    )
+
+    assert response.status_code == 503
+    assert "velocityverletplugin" in response.json()["detail"]
+    assert _monomer_md_job_count(postgres_dsn) == 0
+
+
+def test_monomer_md_artifact_delete_marks_job_and_preserves_audit(postgres_dsn: str):
+    app = _create_app(postgres_dsn)
+    fake_worker = FakeWorkerClient()
+    app.state.monomer_md_worker_client = fake_worker
+
+    with TestClient(app) as client:
+        create_response = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"})
+        assert create_response.status_code == 202
+        job_id = create_response.json()["job_id"]
+        with postgres_connection(postgres_dsn) as connection:
+            mark_monomer_md_job_completed_postgres(
+                connection,
+                job_id=job_id,
+                completed_steps=1000,
+                artifact_root=f"/runs/{job_id}",
+                artifacts={"npt_state_csv": {"path": "npt_state.csv"}},
+                artifact_manifest={"files": [{"path": "npt_state.csv"}]},
+                result_summary={"final_density_g_cm3": 0.8},
+                result_data={"summary": {"final_density_g_cm3": 0.8}, "artifacts": {}},
+            )
+
+        delete_response = client.delete(f"/api/v1/monomer-md/jobs/{job_id}/artifacts")
+
+    assert delete_response.status_code == 200
+    payload = delete_response.json()
+    assert fake_worker.deleted_jobs == [job_id]
+    assert payload["status"] == "completed"
+    assert payload["artifact_deleted_at"] is not None
+    assert payload["artifact_delete_message"] == "artifacts deleted"
+    assert payload["artifact_manifest"]["deleted"] is True
+    assert payload["artifact_root"] == f"/runs/{job_id}"
 
 
 def test_monomer_md_worker_identity_update_does_not_regress_running_status(postgres_dsn: str):

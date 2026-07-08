@@ -216,6 +216,8 @@ export type MdDemoRunResponse = {
 };
 
 export type MonomerMdJobStatus = "pending" | "submitted" | "running" | "completed" | "failed" | "cancelled";
+export type MonomerMdProtocol = "DensityDemo" | "Density" | "Transport" | "HVap" | "Dielectric" | "Compressibility";
+export type MonomerMdRunMode = "demo" | "formal";
 
 export type MonomerMdServiceStatusResponse = {
   enabled?: boolean;
@@ -230,10 +232,34 @@ export type MonomerMdServiceStatusResponse = {
   queue_depth?: number | null;
   running_jobs?: number | null;
   worker?: string | null;
-  [key: string]: string | number | boolean | null | undefined;
+  protocols?: Record<string, MonomerMdProtocolInfo>;
+  [key: string]: string | number | boolean | null | undefined | Record<string, MonomerMdProtocolInfo>;
 };
 
-export type MonomerMdJobCreateRequest = { smiles: string };
+export type MonomerMdProtocolInfo = {
+  protocol: MonomerMdProtocol;
+  run_mode: MonomerMdRunMode;
+  supported?: boolean;
+  runtime_ready?: boolean;
+  runtime_error?: string | null;
+  default_config?: Record<string, unknown>;
+  required_result_file?: string;
+  [key: string]: unknown;
+};
+
+export type MonomerMdProtocolCatalogResponse = {
+  enabled: boolean;
+  available: boolean;
+  protocols: MonomerMdProtocolInfo[];
+  message: string;
+};
+
+export type MonomerMdJobCreateRequest = {
+  smiles?: string;
+  protocol?: MonomerMdProtocol;
+  run_mode?: MonomerMdRunMode;
+  config_json?: Record<string, unknown>;
+};
 export type MonomerMdJobCreateResponse = { job_id: string; status: MonomerMdJobStatus };
 export type MonomerMdSeriesPoint = { step?: number; frame?: number; time_ps?: number; time_ns?: number; value?: number; [key: string]: string | number | null | undefined };
 export type MonomerMdSeries = { key?: string; label?: string; unit?: string; points: MonomerMdSeriesPoint[] } | MonomerMdSeriesPoint[];
@@ -241,21 +267,30 @@ export type MonomerMdTrajectoryPoint = { atom_id?: number; chain_id?: number; at
 export type MonomerMdTrajectoryPreview = { stage_id?: string; frame_index?: number; time_ps?: number; sampled_points?: number; points?: MonomerMdTrajectoryPoint[]; atoms?: MonomerMdTrajectoryPoint[]; box?: { lx?: number; ly?: number; lz?: number }; preview_url?: string | null; format?: string | null; content?: string | null; [key: string]: unknown };
 export type MonomerMdArtifact = { name?: string; label?: string; kind?: string; url?: string | null; path?: string | null; size_bytes?: number | null; [key: string]: string | number | boolean | null | undefined };
 export type MonomerMdSimulationResult = {
-  density_series: MonomerMdSeries;
-  temperature_series: MonomerMdSeries;
-  energy_series: MonomerMdSeries;
-  trajectory_preview: MonomerMdTrajectoryPreview | null;
+  protocol?: MonomerMdProtocol;
+  run_mode?: MonomerMdRunMode;
+  density_series?: MonomerMdSeries;
+  temperature_series?: MonomerMdSeries;
+  energy_series?: MonomerMdSeries;
+  trajectory_preview?: MonomerMdTrajectoryPreview | null;
   summary: Record<string, string | number | boolean | null>;
+  metrics?: Record<string, unknown>;
+  artifact_manifest?: Record<string, unknown>;
   artifacts: MonomerMdArtifact[] | Record<string, MonomerMdArtifact | string | number | boolean | null>;
   warnings?: string[];
   not_equilibrated?: boolean;
   physical_density_estimate?: boolean;
+  physical_result?: boolean;
 };
 export type MonomerMdJobResponse = {
   job_id: string;
   status: MonomerMdJobStatus;
   input_smiles?: string;
   canonical_smiles?: string;
+  protocol?: MonomerMdProtocol;
+  run_mode?: MonomerMdRunMode;
+  config_json?: Record<string, unknown>;
+  components?: Record<string, unknown>;
   requested_steps?: number;
   completed_steps?: number;
   progress_percent?: number | null;
@@ -267,6 +302,13 @@ export type MonomerMdJobResponse = {
   worker_version?: string | null;
   engine?: string | null;
   artifact_root?: string | null;
+  artifact_manifest?: Record<string, unknown>;
+  artifact_deleted_at?: string | null;
+  artifact_delete_message?: string | null;
+  result_summary?: Record<string, string | number | boolean | null>;
+  byteff2_git_sha?: string | null;
+  gpu_device?: string | null;
+  error_category?: string | null;
   smiles?: string;
   created_at?: string;
   updated_at?: string;

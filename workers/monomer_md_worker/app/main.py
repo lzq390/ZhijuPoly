@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -10,7 +12,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, status
 
 from .config import WorkerSettings, load_settings
-from .models import HealthResponse, JobAccepted, JobRequest
+from .formal_protocols import FORMAL_PROTOCOLS
+from .models import ArtifactDeletionResponse, HealthResponse, JobAccepted, JobRequest
 from .repository import PostgresJobRepository
 from .runner import MonomerMdRunner
 
@@ -22,6 +25,7 @@ repository = PostgresJobRepository(settings)
 runner = MonomerMdRunner(settings)
 semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 active_jobs: dict[str, asyncio.Task[None]] = {}
+active_formal_jobs: set[str] = set()
 active_jobs_lock = asyncio.Lock()
 
 app = FastAPI(title="NexPoly Monomer MD Worker", version=settings.worker_version)
@@ -35,17 +39,15 @@ async def health() -> HealthResponse:
 @app.post("/jobs", response_model=JobAccepted, status_code=status.HTTP_202_ACCEPTED)
 async def submit_job(request: JobRequest) -> JobAccepted:
     steps = request.steps or settings.default_steps
-    if steps > settings.max_steps:
+    if request.run_mode == "demo" and steps > settings.max_steps:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"steps must be <= {settings.max_steps}",
         )
     health_response = _build_health_response()
-    if settings.mode == "real" and health_response.status != "ok":
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_health_rejection_message(health_response),
-        )
+    rejection = _job_rejection_message(health_response, request)
+    if rejection is not None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=rejection)
 
     async with active_jobs_lock:
         if request.job_id in active_jobs:
@@ -57,6 +59,11 @@ async def submit_job(request: JobRequest) -> JobAccepted:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="monomer MD worker active job capacity is full",
+            )
+        if request.run_mode == "formal" and active_formal_jobs:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="formal ByteFF2 monomer MD capacity is full",
             )
 
         initial_update_ok = await _safe_update_status(
@@ -74,7 +81,9 @@ async def submit_job(request: JobRequest) -> JobAccepted:
 
         task = asyncio.create_task(_run_job(request, steps))
         active_jobs[request.job_id] = task
-        task.add_done_callback(lambda _: active_jobs.pop(request.job_id, None))
+        if request.run_mode == "formal":
+            active_formal_jobs.add(request.job_id)
+        task.add_done_callback(lambda _: _remove_active_job(request.job_id))
     return JobAccepted(
         job_id=request.job_id,
         status="submitted",
@@ -86,16 +95,53 @@ async def submit_job(request: JobRequest) -> JobAccepted:
     )
 
 
+def _remove_active_job(job_id: str) -> None:
+    active_jobs.pop(job_id, None)
+    active_formal_jobs.discard(job_id)
+
+
+@app.delete("/jobs/{job_id}/artifacts", response_model=ArtifactDeletionResponse)
+async def delete_job_artifacts(job_id: str) -> ArtifactDeletionResponse:
+    async with active_jobs_lock:
+        if job_id in active_jobs:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="cannot delete artifacts for an active monomer MD job",
+            )
+    artifact_root = runner.output_dir_for_job(job_id)
+    if artifact_root.exists():
+        await asyncio.to_thread(shutil.rmtree, artifact_root)
+        return ArtifactDeletionResponse(
+            job_id=job_id,
+            deleted=True,
+            artifact_root=str(artifact_root),
+            message="artifacts deleted",
+        )
+    return ArtifactDeletionResponse(
+        job_id=job_id,
+        deleted=False,
+        artifact_root=str(artifact_root),
+        message="artifacts were already absent",
+    )
+
+
 def _build_health_response() -> HealthResponse:
     byteff2_root_exists = settings.byteff2_root.exists()
     runtime_ready = True
     runtime_error = None
+    protocols: dict[str, Any] = {}
     if settings.mode == "real":
         if byteff2_root_exists:
-            runtime_ready, runtime_error = _probe_real_runtime()
+            probe_result = _probe_real_runtime()
+            if len(probe_result) == 2:
+                runtime_ready, runtime_error = probe_result
+                protocols = {}
+            else:
+                runtime_ready, runtime_error, protocols = probe_result
         else:
             runtime_ready = False
             runtime_error = f"ByteFF2 root does not exist: {settings.byteff2_root}"
+            protocols = _unready_protocols(runtime_error)
 
     worker_status = "ok"
     if settings.mode == "real" and (
@@ -117,24 +163,33 @@ def _build_health_response() -> HealthResponse:
         report_interval=settings.report_interval,
         worker_id=settings.worker_id,
         worker_version=settings.worker_version,
+        protocols=protocols,
     )
 
 
-def _probe_real_runtime() -> tuple[bool, str | None]:
+def _probe_real_runtime() -> tuple[bool, str | None, dict[str, Any]]:
     demo_entry_error = _configured_density_demo_entry_error()
     if demo_entry_error is not None:
-        return False, demo_entry_error
+        return False, demo_entry_error, _unready_protocols(demo_entry_error)
 
     env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = settings.cuda_visible_devices
     env["PYTHONPATH"] = os.pathsep.join(
         [str(settings.byteff2_root), env.get("PYTHONPATH", "")]
     ).strip(os.pathsep)
     try:
-        completed = subprocess.run(
+        demo_completed = subprocess.run(
             [
                 settings.byteff2_python,
                 "-c",
-                "import openmm; import MDAnalysis; import byteff2.toolkit.protocol",
+                (
+                    "import openmm as omm; import MDAnalysis; import pandas; "
+                    "import byteff2.toolkit.protocol as p; "
+                    "from MDAnalysis.lib.formats.libdcd import DCDFile; "
+                    "omm.Platform.getPlatformByName('CUDA'); "
+                    "assert hasattr(p, 'DensityProtocol'), 'DensityProtocol is not available'; "
+                    "print('demo runtime ready')"
+                ),
             ],
             cwd=settings.byteff2_root,
             env=env,
@@ -144,19 +199,55 @@ def _probe_real_runtime() -> tuple[bool, str | None]:
             check=False,
         )
     except FileNotFoundError:
-        return False, f"BYTEFF2_PYTHON not found: {settings.byteff2_python}"
+        error = f"BYTEFF2_PYTHON not found: {settings.byteff2_python}"
+        return False, error, _unready_protocols(error)
     except subprocess.TimeoutExpired:
-        return (
-            False,
-            f"runtime import probe timed out after {settings.health_probe_timeout_seconds}s",
-        )
+        error = f"runtime import probe timed out after {settings.health_probe_timeout_seconds}s"
+        return False, error, _unready_protocols(error)
     except OSError as exc:
-        return False, str(exc)
+        error = str(exc)
+        return False, error, _unready_protocols(error)
+
+    if demo_completed.returncode != 0:
+        error = _completed_process_error(demo_completed, "runtime import probe")
+        return False, error, _unready_protocols(error)
+
+    try:
+        completed = subprocess.run(
+            [
+                settings.byteff2_python,
+                "-c",
+                (
+                    "import json; "
+                    "import byteff2.toolkit.protocol as p; "
+                    "protocols=['Density','Transport','HVap','Dielectric','Compressibility']; "
+                    "data={name:{'supported':hasattr(p, name+'Protocol')} for name in protocols}\n"
+                    "try:\n import velocityverletplugin; data['Transport']['velocityverletplugin']=True\n"
+                    "except Exception as exc:\n data['Transport']['velocityverletplugin']=False; data['Transport']['velocityverletplugin_error']=str(exc)\n"
+                    "print(json.dumps(data))"
+                ),
+            ],
+            cwd=settings.byteff2_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=settings.health_probe_timeout_seconds,
+            check=False,
+        )
+    except FileNotFoundError:
+        error = f"BYTEFF2_PYTHON not found: {settings.byteff2_python}"
+        return True, None, _unready_protocols(error)
+    except subprocess.TimeoutExpired:
+        error = f"formal protocol import probe timed out after {settings.health_probe_timeout_seconds}s"
+        return True, None, _unready_protocols(error)
+    except OSError as exc:
+        error = str(exc)
+        return True, None, _unready_protocols(error)
 
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "").strip().splitlines()
-        message = detail[-1] if detail else f"runtime import probe exited {completed.returncode}"
-        return False, message[:500]
+        error = _completed_process_error(completed, "formal protocol import probe")
+        return True, None, _unready_protocols(error)
+    protocol_probe = _parse_protocol_probe(completed.stdout)
 
     try:
         gmx_completed = subprocess.run(
@@ -169,17 +260,84 @@ def _probe_real_runtime() -> tuple[bool, str | None]:
             check=False,
         )
     except FileNotFoundError:
-        return False, "gmx was not found on PATH"
+        error = "gmx was not found on PATH"
+        return False, error, _protocols_with_runtime_error(protocol_probe, error)
     except subprocess.TimeoutExpired:
-        return False, f"gmx probe timed out after {settings.health_probe_timeout_seconds}s"
+        error = f"gmx probe timed out after {settings.health_probe_timeout_seconds}s"
+        return False, error, _protocols_with_runtime_error(protocol_probe, error)
     except OSError as exc:
-        return False, str(exc)
+        error = str(exc)
+        return False, error, _protocols_with_runtime_error(protocol_probe, error)
 
     if gmx_completed.returncode == 0:
-        return True, None
-    detail = (gmx_completed.stderr or gmx_completed.stdout or "").strip().splitlines()
-    message = detail[-1] if detail else f"gmx probe exited {gmx_completed.returncode}"
-    return False, message[:500]
+        return True, None, _protocol_health_from_probe(protocol_probe)
+    error = _completed_process_error(gmx_completed, "gmx probe")
+    return False, error, _protocols_with_runtime_error(protocol_probe, error)
+
+
+def _completed_process_error(completed: subprocess.CompletedProcess[str], label: str) -> str:
+    detail = (completed.stderr or completed.stdout or "").strip().splitlines()
+    message = detail[-1] if detail else f"{label} exited {completed.returncode}"
+    return message[:500]
+
+
+def _parse_protocol_probe(stdout: str) -> dict[str, Any]:
+    for line in reversed(stdout.strip().splitlines()):
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _protocol_health_from_probe(probe: dict[str, Any]) -> dict[str, Any]:
+    health: dict[str, Any] = {}
+    for protocol in FORMAL_PROTOCOLS:
+        item = probe.get(protocol) if isinstance(probe.get(protocol), dict) else {}
+        supported = item.get("supported") is True
+        runtime_ready = supported
+        runtime_error = None
+        if protocol == "Transport" and item.get("velocityverletplugin") is not True:
+            runtime_ready = False
+            runtime_error = item.get("velocityverletplugin_error") or "velocityverletplugin is not importable"
+        health[protocol] = {
+            "protocol": protocol,
+            "run_mode": "formal",
+            "supported": supported,
+            "runtime_ready": runtime_ready,
+            "runtime_error": runtime_error,
+        }
+    return health
+
+
+def _unready_protocols(error: str) -> dict[str, Any]:
+    return {
+        protocol: {
+            "protocol": protocol,
+            "run_mode": "formal",
+            "supported": False,
+            "runtime_ready": False,
+            "runtime_error": error,
+        }
+        for protocol in FORMAL_PROTOCOLS
+    }
+
+
+def _protocols_with_runtime_error(probe: dict[str, Any], error: str) -> dict[str, Any]:
+    return {
+        protocol: {
+            "protocol": protocol,
+            "run_mode": "formal",
+            "supported": (
+                isinstance(probe.get(protocol), dict)
+                and probe[protocol].get("supported") is True
+            ),
+            "runtime_ready": False,
+            "runtime_error": error,
+        }
+        for protocol in FORMAL_PROTOCOLS
+    }
 
 
 def _configured_density_demo_entry_error() -> str | None:
@@ -206,6 +364,23 @@ def _health_rejection_message(health_response: HealthResponse) -> str:
     return f"monomer MD worker health is {health_response.status}"
 
 
+def _job_rejection_message(health_response: HealthResponse, request: JobRequest) -> str | None:
+    if request.run_mode == "formal" and settings.mode != "real":
+        return "formal ByteFF2 protocols require real worker mode"
+    if settings.mode == "real" and health_response.status != "ok":
+        return _health_rejection_message(health_response)
+    if request.run_mode == "formal":
+        protocol_health = health_response.protocols.get(request.protocol)
+        if not isinstance(protocol_health, dict):
+            return f"ByteFF2 {request.protocol} readiness is not reported"
+        if protocol_health.get("runtime_ready") is not True:
+            error = protocol_health.get("runtime_error")
+            if error:
+                return f"ByteFF2 {request.protocol} runtime is not ready: {error}"
+            return f"ByteFF2 {request.protocol} runtime is not ready"
+    return None
+
+
 async def _run_job(request: JobRequest, steps: int) -> None:
     async with semaphore:
         running_update_ok = await _safe_update_status(
@@ -213,7 +388,11 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             "running",
             progress_percent=5,
             progress_stage="running",
-            progress_message="Running the 1000-step ByteFF2 density demo.",
+            progress_message=(
+                f"Running ByteFF2 {request.protocol} formal protocol."
+                if request.run_mode == "formal"
+                else "Running the 1000-step ByteFF2 density demo."
+            ),
         )
         if settings.db_configured and not running_update_ok:
             logger.warning("monomer MD job stopped before execution: %s", request.job_id)
@@ -226,6 +405,7 @@ async def _run_job(request: JobRequest, steps: int) -> None:
                 request.job_id,
                 "failed",
                 error=str(exc),
+                error_category=_classify_error(exc),
                 progress_stage="failed",
                 progress_message=str(exc)[:500],
             )
@@ -235,16 +415,28 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             "artifact_root": str(result.output_dir),
             "outputs": result.result.get("outputs", {}),
         }
+        if isinstance(result.result.get("artifacts"), dict):
+            artifacts.update(result.result["artifacts"])
+        artifact_manifest = result.result.get("artifact_manifest") if isinstance(result.result.get("artifact_manifest"), dict) else None
+        result_summary = result.result.get("summary") if isinstance(result.result.get("summary"), dict) else None
         await _safe_update_status(
             request.job_id,
             "completed",
             result=result.result,
             output_dir=str(result.output_dir),
             artifacts=artifacts,
-            completed_steps=steps,
+            completed_steps=result.completed_steps,
             progress_percent=100,
             progress_stage="completed",
-            progress_message="Density demo completed.",
+            progress_message=(
+                f"ByteFF2 {request.protocol} formal protocol completed."
+                if request.run_mode == "formal"
+                else "Density demo completed."
+            ),
+            artifact_manifest=artifact_manifest,
+            result_summary=result_summary,
+            byteff2_git_sha=result.result.get("byteff2_git_sha") if isinstance(result.result.get("byteff2_git_sha"), str) else None,
+            gpu_device=result.result.get("gpu_device") if isinstance(result.result.get("gpu_device"), str) else None,
         )
 
 
@@ -260,6 +452,11 @@ async def _safe_update_status(
     progress_percent: int | None = None,
     progress_stage: str | None = None,
     progress_message: str | None = None,
+    artifact_manifest: dict[str, Any] | None = None,
+    result_summary: dict[str, Any] | None = None,
+    byteff2_git_sha: str | None = None,
+    gpu_device: str | None = None,
+    error_category: str | None = None,
 ) -> bool:
     if not settings.db_configured:
         return True
@@ -276,6 +473,11 @@ async def _safe_update_status(
             progress_percent=progress_percent,
             progress_stage=progress_stage,
             progress_message=progress_message,
+            artifact_manifest=artifact_manifest,
+            result_summary=result_summary,
+            byteff2_git_sha=byteff2_git_sha,
+            gpu_device=gpu_device,
+            error_category=error_category,
         )
     except Exception:
         logger.exception("failed to update monomer MD job status: %s", job_id)
@@ -284,3 +486,16 @@ async def _safe_update_status(
         logger.warning("monomer MD job row was not found: %s", job_id)
         return False
     return True
+
+
+def _classify_error(exc: Exception) -> str:
+    message = str(exc).lower()
+    if "timed out" in message:
+        return "timeout"
+    if "not found" in message or "not importable" in message:
+        return "runtime_missing"
+    if "result file" in message or "required files" in message or "artifact" in message:
+        return "artifact_missing"
+    if "gmx" in message or "exit code" in message:
+        return "byteff2_failed"
+    return "worker_failed"

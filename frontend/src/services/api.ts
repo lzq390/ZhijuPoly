@@ -32,6 +32,7 @@ import type {
   MonomerMdJobCreateRequest,
   MonomerMdJobCreateResponse,
   MonomerMdJobResponse,
+  MonomerMdProtocolCatalogResponse,
   MonomerMdServiceStatusResponse,
   MonomerRetrosynthesisRequest,
   MonomerRetrosynthesisResponse,
@@ -277,6 +278,10 @@ export function fetchMonomerMdStatus(): Promise<MonomerMdServiceStatusResponse> 
   return getJSON("/monomer-md/status");
 }
 
+export function fetchMonomerMdProtocols(): Promise<MonomerMdProtocolCatalogResponse> {
+  return getJSON("/monomer-md/protocols");
+}
+
 export function createMonomerMdJob(payload: MonomerMdJobCreateRequest): Promise<MonomerMdJobCreateResponse> {
   return postJSON("/monomer-md/jobs", payload);
 }
@@ -284,6 +289,18 @@ export function createMonomerMdJob(payload: MonomerMdJobCreateRequest): Promise<
 export async function fetchMonomerMdJob(jobId: string): Promise<MonomerMdJobResponse> {
   const job = await getJSON<MonomerMdJobResponse>(`/monomer-md/jobs/${encodeURIComponent(jobId)}`);
   return normalizeMonomerMdJob(job);
+}
+
+export async function deleteMonomerMdArtifacts(jobId: string): Promise<MonomerMdJobResponse> {
+  const response = await fetch(`${API_BASE_URL}/monomer-md/jobs/${encodeURIComponent(jobId)}/artifacts`, {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
+  }
+
+  return normalizeMonomerMdJob((await response.json()) as MonomerMdJobResponse);
 }
 
 export function searchKnowledge(payload: KnowledgeSearchRequest): Promise<KnowledgeSearchResponse> {

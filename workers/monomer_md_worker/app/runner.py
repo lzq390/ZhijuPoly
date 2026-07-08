@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import WorkerSettings
+from .byteff2_formal_runner import ByteFF2FormalRunner
 from .models import JobRequest
 
 NOT_PHYSICAL_WARNING = (
@@ -24,15 +25,24 @@ NOT_PHYSICAL_WARNING = (
 class DemoRunResult:
     result: dict[str, Any]
     output_dir: Path
+    completed_steps: int
 
 
 class MonomerMdRunner:
     def __init__(self, settings: WorkerSettings) -> None:
         self._settings = settings
+        self._formal_runner = ByteFF2FormalRunner(settings)
 
     async def run(self, request: JobRequest, steps: int) -> DemoRunResult:
         output_dir = self._job_output_dir(request.job_id)
         output_dir.mkdir(parents=True, exist_ok=True)
+        if request.run_mode == "formal":
+            formal_result = await asyncio.to_thread(self._formal_runner.run, request, output_dir)
+            return DemoRunResult(
+                result=formal_result.result,
+                output_dir=output_dir,
+                completed_steps=formal_result.completed_steps,
+            )
         if self._settings.mode == "dry-run":
             return await asyncio.to_thread(self._run_dry_run, request, steps, output_dir)
         return await self._run_real(request, steps, output_dir)
@@ -101,7 +111,7 @@ class MonomerMdRunner:
             output_dir=output_dir,
         )
         self._write_json(output_dir / "density_demo_results.json", result)
-        return DemoRunResult(result=result, output_dir=output_dir)
+        return DemoRunResult(result=result, output_dir=output_dir, completed_steps=steps)
 
     async def _run_real(
         self, request: JobRequest, steps: int, output_dir: Path
@@ -165,7 +175,10 @@ class MonomerMdRunner:
             raw_result, request=request, steps=steps, output_dir=output_dir
         )
         self._write_json(result_path, result)
-        return DemoRunResult(result=result, output_dir=output_dir)
+        return DemoRunResult(result=result, output_dir=output_dir, completed_steps=steps)
+
+    def output_dir_for_job(self, job_id: str) -> Path:
+        return self._job_output_dir(job_id)
 
     def _build_real_command(
         self, request: JobRequest, steps: int, output_dir: Path

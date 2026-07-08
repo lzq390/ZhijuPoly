@@ -27,15 +27,39 @@ def _timestamp(value: Any) -> str | None:
     return str(value)
 
 
-def create_monomer_md_job_postgres(connection: Any, *, job_id: str, input_smiles: str, canonical_smiles: str, requested_steps: int) -> None:
+def create_monomer_md_job_postgres(
+    connection: Any,
+    *,
+    job_id: str,
+    input_smiles: str,
+    canonical_smiles: str,
+    requested_steps: int,
+    protocol: str = "DensityDemo",
+    run_mode: str = "demo",
+    config_json: dict[str, Any] | None = None,
+    components: dict[str, Any] | None = None,
+) -> None:
     connection.execute(
         """
         INSERT INTO md.monomer_md_jobs (
-          job_id, status, input_smiles, canonical_smiles, requested_steps, progress_stage, progress_message
+          job_id, status, input_smiles, canonical_smiles, requested_steps, progress_stage, progress_message,
+          protocol, run_mode, config_json, components, engine
         )
-        VALUES (%s, 'pending', %s, %s, %s, 'pending', 'Waiting for the monomer MD worker to start.')
+        VALUES (%s, 'pending', %s, %s, %s, 'pending', 'Waiting for the monomer MD worker to start.',
+                %s, %s, %s::jsonb, %s::jsonb,
+                CASE WHEN %s = 'formal' THEN 'byteff2-formal-worker' ELSE 'byteff2-density-demo-worker' END)
         """,
-        (job_id, input_smiles, canonical_smiles, requested_steps),
+        (
+            job_id,
+            input_smiles,
+            canonical_smiles,
+            requested_steps,
+            protocol,
+            run_mode,
+            _jsonb(config_json),
+            _jsonb(components),
+            run_mode,
+        ),
     )
 
 
@@ -45,6 +69,18 @@ def count_active_monomer_md_jobs_postgres(connection: Any) -> int:
         SELECT count(*) AS count
         FROM md.monomer_md_jobs
         WHERE status IN ('pending', 'submitted', 'running')
+        """
+    ).fetchone()
+    return int(row["count"] if row is not None else 0)
+
+
+def count_active_formal_monomer_md_jobs_postgres(connection: Any) -> int:
+    row = connection.execute(
+        """
+        SELECT count(*) AS count
+        FROM md.monomer_md_jobs
+        WHERE status IN ('pending', 'submitted', 'running')
+          AND run_mode = 'formal'
         """
     ).fetchone()
     return int(row["count"] if row is not None else 0)
@@ -64,36 +100,86 @@ def mark_monomer_md_job_submitted_postgres(connection: Any, *, job_id: str, work
     )
 
 
-def mark_monomer_md_job_completed_postgres(connection: Any, *, job_id: str, result_data: dict[str, Any], artifacts: dict[str, Any] | None = None, artifact_root: str | None = None, completed_steps: int | None = None) -> None:
+def mark_monomer_md_job_completed_postgres(
+    connection: Any,
+    *,
+    job_id: str,
+    result_data: dict[str, Any],
+    artifacts: dict[str, Any] | None = None,
+    artifact_root: str | None = None,
+    completed_steps: int | None = None,
+    artifact_manifest: dict[str, Any] | None = None,
+    result_summary: dict[str, Any] | None = None,
+    byteff2_git_sha: str | None = None,
+    gpu_device: str | None = None,
+) -> None:
     connection.execute(
         """
         UPDATE md.monomer_md_jobs
         SET status = 'completed', completed_steps = COALESCE(%s, requested_steps), progress_percent = 100,
-            progress_stage = 'completed', progress_message = 'Monomer MD demo completed.', artifact_root = COALESCE(%s, artifact_root),
-            artifacts = %s::jsonb, result_data = %s::jsonb, error_message = NULL, updated_at = now(), finished_at = now()
+            progress_stage = 'completed',
+            progress_message = CASE WHEN run_mode = 'formal' THEN 'ByteFF2 formal protocol completed.' ELSE 'Monomer MD demo completed.' END,
+            artifact_root = COALESCE(%s, artifact_root),
+            artifacts = %s::jsonb, artifact_manifest = %s::jsonb, result_summary = %s::jsonb,
+            result_data = %s::jsonb, byteff2_git_sha = COALESCE(%s, byteff2_git_sha), gpu_device = COALESCE(%s, gpu_device),
+            error_message = NULL, error_category = NULL, updated_at = now(), finished_at = now()
         WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
         """,
-        (completed_steps, artifact_root, _jsonb(artifacts), _jsonb(result_data), job_id),
+        (
+            completed_steps,
+            artifact_root,
+            _jsonb(artifacts),
+            _jsonb(artifact_manifest),
+            _jsonb(result_summary),
+            _jsonb(result_data),
+            byteff2_git_sha,
+            gpu_device,
+            job_id,
+        ),
     )
 
 
-def mark_monomer_md_job_failed_postgres(connection: Any, job_id: str, error_message: str) -> None:
+def mark_monomer_md_job_failed_postgres(connection: Any, job_id: str, error_message: str, error_category: str | None = None) -> None:
     connection.execute(
         """
         UPDATE md.monomer_md_jobs
-        SET status = 'failed', progress_stage = 'failed', progress_message = %s, error_message = %s, updated_at = now(), finished_at = now()
+        SET status = 'failed', progress_stage = 'failed', progress_message = %s, error_message = %s,
+            error_category = %s, updated_at = now(), finished_at = now()
         WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
         """,
-        (error_message, error_message, job_id),
+        (error_message, error_message, error_category, job_id),
+    )
+
+
+def mark_monomer_md_artifacts_deleted_postgres(connection: Any, *, job_id: str, message: str) -> None:
+    connection.execute(
+        """
+        UPDATE md.monomer_md_jobs
+        SET artifact_deleted_at = COALESCE(artifact_deleted_at, now()),
+            artifact_delete_message = %s,
+            artifact_manifest = jsonb_set(
+              COALESCE(artifact_manifest, '{}'::jsonb),
+              '{deleted}',
+              'true'::jsonb,
+              true
+            ),
+            updated_at = now()
+        WHERE job_id = %s
+          AND status NOT IN ('pending', 'submitted', 'running')
+        """,
+        (message, job_id),
     )
 
 
 def get_monomer_md_job_postgres(connection: Any, job_id: str) -> dict[str, Any] | None:
     row = connection.execute(
         """
-        SELECT job_id, status, input_smiles, canonical_smiles, requested_steps, completed_steps, progress_percent,
+        SELECT job_id, status, input_smiles, canonical_smiles, protocol, run_mode, config_json, components,
+               requested_steps, completed_steps, progress_percent,
                progress_stage, progress_message, worker_id, worker_job_id, worker_version, engine, artifact_root,
-               artifacts, result_data, error_message, created_at, updated_at, started_at, finished_at
+               artifacts, artifact_manifest, artifact_deleted_at, artifact_delete_message, result_summary,
+               byteff2_git_sha, gpu_device, error_category, result_data, error_message,
+               created_at, updated_at, started_at, finished_at
         FROM md.monomer_md_jobs
         WHERE job_id = %s
         """,
@@ -107,6 +193,10 @@ def get_monomer_md_job_postgres(connection: Any, job_id: str) -> dict[str, Any] 
         "status": row["status"],
         "input_smiles": row["input_smiles"],
         "canonical_smiles": row["canonical_smiles"],
+        "protocol": row["protocol"],
+        "run_mode": row["run_mode"],
+        "config_json": _as_dict(row["config_json"]),
+        "components": _as_dict(row["components"]),
         "requested_steps": int(row["requested_steps"]),
         "completed_steps": int(row["completed_steps"]),
         "progress_percent": int(row["progress_percent"]),
@@ -122,6 +212,13 @@ def get_monomer_md_job_postgres(connection: Any, job_id: str) -> dict[str, Any] 
         "engine": row["engine"],
         "artifact_root": row["artifact_root"],
         "artifacts": _as_dict(row["artifacts"]),
+        "artifact_manifest": _as_dict(row["artifact_manifest"]),
+        "artifact_deleted_at": _timestamp(row["artifact_deleted_at"]),
+        "artifact_delete_message": row["artifact_delete_message"],
+        "result_summary": _as_dict(row["result_summary"]),
+        "byteff2_git_sha": row["byteff2_git_sha"],
+        "gpu_device": row["gpu_device"],
+        "error_category": row["error_category"],
         "error_message": row["error_message"],
         "result": result_data or None,
     }

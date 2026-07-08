@@ -27,14 +27,22 @@ class MonomerMdWorkerSubmitPayload:
     smiles: str
     canonical_smiles: str
     steps: int
+    protocol: str = "DensityDemo"
+    run_mode: str = "demo"
+    config_json: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "job_id": self.job_id,
             "smiles": self.smiles,
             "canonical_smiles": self.canonical_smiles,
             "steps": self.steps,
+            "protocol": self.protocol,
+            "run_mode": self.run_mode,
         }
+        if self.config_json is not None:
+            payload["config_json"] = self.config_json
+        return payload
 
 
 class MonomerMdWorkerClient:
@@ -91,6 +99,20 @@ class MonomerMdWorkerClient:
             worker_version=_optional_str(data.get("worker_version")),
         )
 
+    def delete_artifacts(self, job_id: str) -> dict[str, Any]:
+        try:
+            response = self.session.delete(
+                f"{self.base_url}/jobs/{job_id}/artifacts",
+                timeout=self.timeout_seconds,
+            )
+        except requests.RequestException as exc:
+            raise MonomerMdWorkerError("monomer MD worker is not reachable") from exc
+
+        if response.status_code >= 400:
+            detail = _safe_response_detail(response)
+            raise MonomerMdWorkerError(f"monomer MD worker rejected artifact deletion: {detail}")
+        return _response_json_object(response, "artifact deletion")
+
 
 def _safe_response_detail(response: requests.Response) -> str:
     try:
@@ -137,6 +159,9 @@ class _UnixSocketWorkerSession:
             body=body,
             headers={"Content-Type": "application/json"},
         )
+
+    def delete(self, url: str, *, timeout: float) -> requests.Response:
+        return self._request("DELETE", url, timeout=timeout)
 
     def _request(
         self,

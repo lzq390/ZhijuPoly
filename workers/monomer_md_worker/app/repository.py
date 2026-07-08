@@ -34,6 +34,11 @@ class PostgresJobRepository:
         progress_percent: int | None = None,
         progress_stage: str | None = None,
         progress_message: str | None = None,
+        artifact_manifest: dict[str, Any] | None = None,
+        result_summary: dict[str, Any] | None = None,
+        byteff2_git_sha: str | None = None,
+        gpu_device: str | None = None,
+        error_category: str | None = None,
     ) -> int:
         if not self._settings.db_configured:
             return 0
@@ -51,6 +56,11 @@ class PostgresJobRepository:
             progress_percent,
             progress_stage,
             progress_message,
+            artifact_manifest,
+            result_summary,
+            byteff2_git_sha,
+            gpu_device,
+            error_category,
         )
         with psycopg.connect(self._settings.app_postgres_dsn) as conn:
             with conn.cursor() as cur:
@@ -69,6 +79,11 @@ class PostgresJobRepository:
         progress_percent: int | None,
         progress_stage: str | None,
         progress_message: str | None,
+        artifact_manifest: dict[str, Any] | None,
+        result_summary: dict[str, Any] | None,
+        byteff2_git_sha: str | None,
+        gpu_device: str | None,
+        error_category: str | None,
     ) -> tuple[Any, list[Any]]:
         settings = self._settings
         assignments: list[Any] = []
@@ -97,6 +112,16 @@ class PostgresJobRepository:
             assign(settings.progress_stage_column, progress_stage)
         if progress_message is not None:
             assign(settings.progress_message_column, progress_message)
+        if artifact_manifest is not None:
+            assign(settings.artifact_manifest_column, Jsonb(artifact_manifest))
+        if result_summary is not None:
+            assign(settings.result_summary_column, Jsonb(result_summary))
+        if byteff2_git_sha is not None:
+            assign(settings.byteff2_git_sha_column, byteff2_git_sha)
+        if gpu_device is not None:
+            assign(settings.gpu_device_column, gpu_device)
+        if error_category is not None:
+            assign(settings.error_category_column, error_category)
 
         if status == "running":
             assignments.append(

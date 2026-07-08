@@ -43,6 +43,7 @@ STRICT_REQUIRED_MIGRATIONS = (
     "0002_lab_identity_defaults",
     "0003_runtime_postgres_cutover",
     "0004_monomer_md_jobs",
+    "0005_byteff2_formal_monomer_md",
 )
 STRICT_RUNTIME_TABLES = tuple(POSTGRES_TABLES)
 

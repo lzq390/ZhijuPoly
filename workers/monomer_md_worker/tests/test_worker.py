@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from workers.monomer_md_worker.app import main as worker_main
+from workers.monomer_md_worker.app.byteff2_formal_runner import ByteFF2FormalRunner
 from workers.monomer_md_worker.app.config import WorkerSettings
+from workers.monomer_md_worker.app.models import JobRequest
 from workers.monomer_md_worker.app.repository import PostgresJobRepository
 
 
@@ -84,9 +87,11 @@ def test_real_health_reports_missing_gmx_after_import_probe(tmp_path: Path, monk
     settings.byteff2_root.mkdir()
     monkeypatch.setattr(worker_main, "settings", settings)
     calls = []
+    envs = []
 
     def fake_run(args, **kwargs):
         calls.append(args)
+        envs.append(kwargs.get("env", {}))
         if args[0] == settings.byteff2_python:
             return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
         return subprocess.CompletedProcess(
@@ -103,7 +108,10 @@ def test_real_health_reports_missing_gmx_after_import_probe(tmp_path: Path, monk
     assert response.status == "degraded"
     assert response.runtime_ready is False
     assert "gmx" in (response.runtime_error or "")
+    assert response.protocols["Density"]["runtime_ready"] is False
+    assert "gmx" in response.protocols["Density"]["runtime_error"]
     assert any(call == ["gmx", "--version"] for call in calls)
+    assert all(env.get("CUDA_VISIBLE_DEVICES") == "2" for env in envs if env)
 
 
 def test_real_health_reports_missing_configured_demo_entry(tmp_path: Path, monkeypatch):
@@ -124,6 +132,44 @@ def test_real_health_reports_missing_configured_demo_entry(tmp_path: Path, monke
     assert "BYTEFF2_DENSITY_DEMO_ENTRY" in (response.runtime_error or "")
 
 
+def test_submit_rejects_unready_formal_protocol(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, mode="real", app_postgres_dsn="postgresql://db/app")
+    settings.byteff2_root.mkdir()
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    protocols = {
+        protocol: {
+            "protocol": protocol,
+            "run_mode": "formal",
+            "supported": True,
+            "runtime_ready": True,
+            "runtime_error": None,
+        }
+        for protocol in ("Density", "HVap", "Compressibility", "Dielectric", "Transport")
+    }
+    protocols["Transport"]["runtime_ready"] = False
+    protocols["Transport"]["runtime_error"] = "velocityverletplugin is not importable"
+    monkeypatch.setattr(worker_main, "_probe_real_runtime", lambda: (True, None, protocols))
+
+    client = TestClient(worker_main.app)
+    response = client.post(
+        "/jobs",
+        json={
+            "job_id": "formal-transport-1",
+            "smiles": "{}",
+            "canonical_smiles": "{}",
+            "steps": 15000000,
+            "protocol": "Transport",
+            "run_mode": "formal",
+            "config_json": {"protocol": "Transport"},
+        },
+    )
+
+    assert response.status_code == 503
+    assert "velocityverletplugin" in response.json()["detail"]
+    assert worker_main.active_jobs == {}
+
+
 def test_submit_rejects_when_active_capacity_is_full(tmp_path: Path, monkeypatch):
     settings = _settings(tmp_path, app_postgres_dsn=None, max_active_jobs=1)
     monkeypatch.setattr(worker_main, "settings", settings)
@@ -138,6 +184,43 @@ def test_submit_rejects_when_active_capacity_is_full(tmp_path: Path, monkeypatch
     assert response.status_code == 429
     assert response.json()["detail"] == "monomer MD worker active job capacity is full"
     assert set(worker_main.active_jobs) == {"busy-job"}
+
+
+def test_submit_rejects_when_formal_capacity_is_full(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, mode="real", app_postgres_dsn="postgresql://db/app", max_active_jobs=10)
+    settings.byteff2_root.mkdir()
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "active_jobs", {"formal-busy": object()})
+    monkeypatch.setattr(worker_main, "active_formal_jobs", {"formal-busy"})
+    protocols = {
+        protocol: {
+            "protocol": protocol,
+            "run_mode": "formal",
+            "supported": True,
+            "runtime_ready": True,
+            "runtime_error": None,
+        }
+        for protocol in ("Density", "HVap", "Compressibility", "Dielectric", "Transport")
+    }
+    monkeypatch.setattr(worker_main, "_probe_real_runtime", lambda: (True, None, protocols))
+
+    client = TestClient(worker_main.app)
+    response = client.post(
+        "/jobs",
+        json={
+            "job_id": "formal-density-2",
+            "smiles": "{}",
+            "canonical_smiles": "{}",
+            "steps": 1500000,
+            "protocol": "Density",
+            "run_mode": "formal",
+            "config_json": {"protocol": "Density"},
+        },
+    )
+
+    assert response.status_code == 429
+    assert "formal ByteFF2" in response.json()["detail"]
+    assert worker_main.active_formal_jobs == {"formal-busy"}
 
 
 def test_submit_rejects_real_degraded_worker(tmp_path: Path, monkeypatch):
@@ -178,6 +261,78 @@ def test_submit_rejects_when_initial_status_update_fails(tmp_path: Path, monkeyp
     assert response.status_code == 503
     assert response.json()["detail"] == "monomer MD job row is not available for status updates"
     assert worker_main.active_jobs == {}
+
+
+def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
+    settings = _settings(tmp_path, mode="real", app_postgres_dsn=None)
+    settings.byteff2_root.mkdir()
+    object.__setattr__(settings, "byteff2_python", sys.executable)
+    run_md = settings.byteff2_root / "example" / "4_MD_simulations" / "run_md.py"
+    run_md.parent.mkdir(parents=True)
+    run_md.write_text(
+        "\n".join(
+            [
+                "import argparse, json, pathlib",
+                "parser = argparse.ArgumentParser()",
+                "parser.add_argument('--config')",
+                "args = parser.parse_args()",
+                "config = json.loads(pathlib.Path(args.config).read_text())",
+                "out = pathlib.Path(config['output_dir'])",
+                "out.mkdir(parents=True, exist_ok=True)",
+                "(out / 'density_results.json').write_text(json.dumps({'density': 1.02, 'density_std': 0.01}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = ByteFF2FormalRunner(settings)
+    request = JobRequest(
+        job_id="formal-density-1",
+        smiles='{"DMC": "COC(=O)OC"}',
+        canonical_smiles='{"DMC": "COC(=O)OC"}',
+        steps=1500000,
+        protocol="Density",
+        run_mode="formal",
+        config_json={
+            "protocol": "Density",
+            "params_dir": "unsafe-params",
+            "output_dir": "unsafe-output",
+            "working_dir": "unsafe-working",
+            "temperature": 298,
+            "natoms": 10000,
+            "components": {"DMC": 1},
+            "smiles": {"DMC": "COC(=O)OC"},
+        },
+    )
+
+    result = runner.run(request, tmp_path / "job-root")
+
+    config = (tmp_path / "job-root" / "config.json").read_text(encoding="utf-8")
+    assert str(tmp_path / "job-root" / "outputs") in config
+    assert result.completed_steps == 1500000
+    assert result.result["summary"]["density"] == 1.02
+    assert result.result["metrics"]["density_std"] == 0.01
+    assert any(
+        item["path"] == "outputs/density_results.json"
+        for item in result.result["artifact_manifest"]["files"]
+    )
+
+
+def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, app_postgres_dsn=None)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "runner", worker_main.MonomerMdRunner(settings))
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    output_dir = settings.job_root / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "density_demo_results.json").write_text("{}", encoding="utf-8")
+
+    client = TestClient(worker_main.app)
+    response = client.delete("/jobs/job-1/artifacts")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["deleted"] is True
+    assert not output_dir.exists()
 
 
 def test_repository_update_query_guards_terminal_statuses():

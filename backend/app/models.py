@@ -1001,12 +1001,31 @@ class LabDataSummaryRead(BaseModel):
     by_project: list[LabDataProjectStatsRead] = Field(alias="byProject")
 
 MonomerMdJobStatus = Literal["pending", "submitted", "running", "completed", "failed", "cancelled"]
+MonomerMdProtocol = Literal["DensityDemo", "Density", "Transport", "HVap", "Dielectric", "Compressibility"]
+MonomerMdRunMode = Literal["demo", "formal"]
 
 
 class MonomerMdRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
 
-    smiles: str = Field(min_length=1, max_length=1000)
+    smiles: str | None = Field(default=None, min_length=1, max_length=1000)
+    protocol: MonomerMdProtocol = "DensityDemo"
+    run_mode: MonomerMdRunMode = "demo"
+    config_json: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_request_shape(self) -> "MonomerMdRunRequest":
+        if self.run_mode == "demo" and self.protocol == "DensityDemo":
+            if not self.smiles:
+                raise ValueError("smiles is required for DensityDemo")
+            return self
+        if self.run_mode != "formal":
+            raise ValueError("formal ByteFF2 protocols must use run_mode='formal'")
+        if self.protocol == "DensityDemo":
+            raise ValueError("DensityDemo must use run_mode='demo'")
+        if self.config_json is None:
+            raise ValueError("config_json is required for formal ByteFF2 protocols")
+        return self
 
 
 class MonomerMdStatusResponse(BaseModel):
@@ -1023,6 +1042,16 @@ class MonomerMdStatusResponse(BaseModel):
     runtime_ready: bool | None = None
     runtime_error: str | None = None
     active_jobs: int | None = Field(default=None, ge=0)
+    protocols: dict[str, Any] = Field(default_factory=dict)
+    message: str
+
+
+class MonomerMdProtocolCatalogResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    available: bool
+    protocols: list[dict[str, Any]] = Field(default_factory=list)
     message: str
 
 
@@ -1040,6 +1069,10 @@ class MonomerMdJobStatusResponse(BaseModel):
     status: MonomerMdJobStatus
     input_smiles: str
     canonical_smiles: str
+    protocol: MonomerMdProtocol = "DensityDemo"
+    run_mode: MonomerMdRunMode = "demo"
+    config_json: dict[str, Any] = Field(default_factory=dict)
+    components: dict[str, Any] = Field(default_factory=dict)
     requested_steps: int = Field(ge=1)
     completed_steps: int = Field(ge=0)
     progress_percent: int = Field(ge=0, le=100)
@@ -1055,5 +1088,12 @@ class MonomerMdJobStatusResponse(BaseModel):
     engine: str
     artifact_root: str | None = None
     artifacts: dict[str, Any] = Field(default_factory=dict)
+    artifact_manifest: dict[str, Any] = Field(default_factory=dict)
+    artifact_deleted_at: str | None = None
+    artifact_delete_message: str | None = None
+    result_summary: dict[str, Any] = Field(default_factory=dict)
+    byteff2_git_sha: str | None = None
+    gpu_device: str | None = None
+    error_category: str | None = None
     error_message: str | None = None
     result: dict[str, Any] | None = None

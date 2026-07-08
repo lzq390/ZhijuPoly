@@ -63,6 +63,14 @@ class WorkerSettings:
     cuda_visible_devices: str
     worker_id: str
     worker_version: str
+    formal_timeout_seconds: int = 43200
+    protocol_column: str = "protocol"
+    run_mode_column: str = "run_mode"
+    artifact_manifest_column: str = "artifact_manifest"
+    result_summary_column: str = "result_summary"
+    byteff2_git_sha_column: str = "byteff2_git_sha"
+    gpu_device_column: str = "gpu_device"
+    error_category_column: str = "error_category"
 
     @property
     def db_configured(self) -> bool:
@@ -115,6 +123,7 @@ def load_settings() -> WorkerSettings:
         max_steps=max_steps,
         report_interval=_get_int("MONOMER_MD_REPORT_INTERVAL", 10),
         timeout_seconds=_get_int("MONOMER_MD_TIMEOUT_SECONDS", 3600),
+        formal_timeout_seconds=_get_int("MONOMER_MD_FORMAL_TIMEOUT_SECONDS", 43200),
         health_probe_timeout_seconds=_get_int("MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS", 5),
         max_concurrent_jobs=_get_int("MONOMER_MD_MAX_CONCURRENT_JOBS", 1),
         max_active_jobs=_get_int(
@@ -127,4 +136,11 @@ def load_settings() -> WorkerSettings:
         ),
         worker_id=os.getenv("MONOMER_MD_WORKER_ID", "monomer-md-worker"),
         worker_version=os.getenv("MONOMER_MD_WORKER_VERSION", "0.1.0"),
+        protocol_column=os.getenv("MONOMER_MD_PROTOCOL_COLUMN", "protocol"),
+        run_mode_column=os.getenv("MONOMER_MD_RUN_MODE_COLUMN", "run_mode"),
+        artifact_manifest_column=os.getenv("MONOMER_MD_ARTIFACT_MANIFEST_COLUMN", "artifact_manifest"),
+        result_summary_column=os.getenv("MONOMER_MD_RESULT_SUMMARY_COLUMN", "result_summary"),
+        byteff2_git_sha_column=os.getenv("MONOMER_MD_BYTEFF2_GIT_SHA_COLUMN", "byteff2_git_sha"),
+        gpu_device_column=os.getenv("MONOMER_MD_GPU_DEVICE_COLUMN", "gpu_device"),
+        error_category_column=os.getenv("MONOMER_MD_ERROR_CATEGORY_COLUMN", "error_category"),
     )
