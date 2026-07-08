@@ -36,6 +36,7 @@ database/
 model/conditional_generation/
 model/reactiont5-retrosynthesis/
 model/ocsr/
+model/polytao/
 !model/ocsr/README.md
 
 # Local release bundles
