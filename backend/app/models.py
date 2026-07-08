@@ -1185,6 +1185,8 @@ class PolytaoStatusResponse(BaseModel):
     worker_status: str | None = None
     worker_mode: str | None = None
     db_configured: bool | None = None
+    db_ready: bool | None = None
+    db_error: str | None = None
     runtime_ready: bool | None = None
     runtime_error: str | None = None
     active_jobs: int | None = Field(default=None, ge=0)

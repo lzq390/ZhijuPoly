@@ -125,6 +125,13 @@ def _source_file_label(path: Path) -> str:
         return str(resolved_path)
 
 
+def _property_filter_source_status(connection, total_records: int) -> tuple[str, str | None]:
+    source_status, source_message = source_file_status(connection, "property_filter_csv")
+    if total_records == 0 and source_status == "ready":
+        return "empty", "core.polymer_property_filter_records has no records; run the property_filter import."
+    return source_status, source_message
+
+
 def _postgres_dataset_summaries(connection) -> list[DatasetSummaryItem]:
     items: list[DatasetSummaryItem] = []
     process_status, process_message = source_file_status(connection, "experimental_process_csv")
@@ -136,10 +143,10 @@ def _postgres_dataset_summaries(connection) -> list[DatasetSummaryItem]:
     if postgres_table_exists(connection, "experimental", "property_records"):
         property_total = int(connection.execute("SELECT COUNT(*) AS count FROM experimental.property_records").fetchone()["count"])
     structure_total = int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_properties").fetchone()["count"])
-    property_filter_status, property_filter_message = source_file_status(connection, "property_filter_csv")
     property_filter_total = 0
     if postgres_table_exists(connection, "core", "polymer_property_filter_records"):
         property_filter_total = int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"])
+        property_filter_status, property_filter_message = _property_filter_source_status(connection, property_filter_total)
     else:
         property_filter_status = "missing"
         property_filter_message = "core.polymer_property_filter_records is missing."
@@ -444,7 +451,7 @@ def get_property_filter_options(request: Request) -> PropertyFilterOptionsRespon
             if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
                 raise RuntimeError("core.polymer_property_filter_records is missing")
             total_records, mapped_records, raw_records, rows = get_property_filter_options_postgres(connection)
-            source_status, source_message = source_file_status(connection, "property_filter_csv")
+            source_status, source_message = _property_filter_source_status(connection, total_records)
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     except RuntimeError as exc:
@@ -498,7 +505,7 @@ def search_property_filter(request_body: PropertyFilterSearchRequest, request: R
                 page=request_body.page,
                 page_size=request_body.page_size,
             )
-            source_status, source_message = source_file_status(connection, "property_filter_csv")
+            source_status, source_message = _property_filter_source_status(connection, total_records)
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     except RuntimeError as exc:

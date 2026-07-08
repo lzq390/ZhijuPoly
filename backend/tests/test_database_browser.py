@@ -74,6 +74,21 @@ def test_property_filter_options_include_standardized_and_raw_properties(test_ap
     assert raw_option["rows"] == 2
 
 
+def test_property_filter_options_report_empty_table_as_not_ready(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute("TRUNCATE core.polymer_property_filter_records")
+    client = TestClient(test_app)
+
+    response = client.get("/api/v1/database-browser/property-filter/options")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_records"] == 0
+    assert payload["source_status"] == "empty"
+    assert "no records" in payload["source_message"]
+    assert payload["options"] == []
+
+
 def test_property_filter_search_filters_standardized_property_range(test_app) -> None:
     client = TestClient(test_app)
 

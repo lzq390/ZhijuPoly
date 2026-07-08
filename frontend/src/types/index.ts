@@ -961,6 +961,8 @@ export type PolytaoStatusResponse = {
   worker_status: string | null;
   worker_mode: string | null;
   db_configured: boolean | null;
+  db_ready: boolean | null;
+  db_error: string | null;
   runtime_ready: boolean | null;
   runtime_error: string | null;
   active_jobs: number | null;

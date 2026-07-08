@@ -79,11 +79,16 @@ async def submit_job(request: JobRequest) -> JobAccepted:
 
 
 def _build_health_response() -> HealthResponse:
+    db_ready = False
+    db_error = "APP_POSTGRES_DSN is not configured"
+    if settings.db_configured:
+        db_ready, db_error = repository.health_check()
+
     probe = runtime.probe()
     worker_status = "ok"
     if (
         settings.mode != "real"
-        or not settings.db_configured
+        or not db_ready
         or not probe.model_files_ready
         or not probe.runtime_ready
     ):
@@ -93,6 +98,8 @@ def _build_health_response() -> HealthResponse:
         status=worker_status,
         mode=settings.mode,
         db_configured=settings.db_configured,
+        db_ready=db_ready,
+        db_error=db_error,
         model_dir=str(settings.model_dir),
         model_files_ready=probe.model_files_ready,
         runtime_ready=probe.runtime_ready,
@@ -117,6 +124,10 @@ def _health_rejection_message(health_response: HealthResponse) -> str:
         return f"PolyTAO worker mode is {health_response.mode}; only real mode accepts jobs"
     if not health_response.db_configured:
         return "PolyTAO worker database is not configured"
+    if not health_response.db_ready:
+        if health_response.db_error:
+            return f"PolyTAO worker database is not ready: {health_response.db_error}"
+        return "PolyTAO worker database is not ready"
     if not health_response.model_files_ready:
         return health_response.runtime_error or "PolyTAO model files are not available"
     if not health_response.runtime_ready:

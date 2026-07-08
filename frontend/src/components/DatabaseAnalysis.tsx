@@ -2130,7 +2130,7 @@ function DatabaseHome({
               Polymer Data Platform
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-slate-300">
-              Explore five curated polymer data views through focused charts and summaries.
+              Explore curated polymer data views through focused charts and summaries.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">

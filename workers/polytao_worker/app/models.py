@@ -63,6 +63,8 @@ class HealthResponse(BaseModel):
     status: str
     mode: str
     db_configured: bool
+    db_ready: bool
+    db_error: str | None = None
     model_dir: str
     model_files_ready: bool
     runtime_ready: bool

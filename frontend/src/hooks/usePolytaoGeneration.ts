@@ -20,6 +20,7 @@ type PolytaoGenerationState = {
 };
 
 const POLL_INTERVAL_MS = 1400;
+const POLL_MAX_FAILURES = 3;
 const TERMINAL_STATUSES = new Set<PolytaoJobStatus>(["completed", "failed", "cancelled"]);
 
 function createEmptyDescriptors(): PolytaoDescriptorMap {
@@ -133,8 +134,28 @@ export function usePolytaoGeneration() {
   }, [refreshStatus]);
 
   async function pollJob(jobId: string, token: number) {
+    let failureCount = 0;
     while (pollTokenRef.current === token) {
-      const job = await fetchPolytaoJob(jobId);
+      let job: PolytaoJobStatusResponse;
+      try {
+        job = await fetchPolytaoJob(jobId);
+        failureCount = 0;
+      } catch (error) {
+        if (pollTokenRef.current !== token) {
+          return;
+        }
+        failureCount += 1;
+        if (failureCount >= POLL_MAX_FAILURES) {
+          setState((current) => ({
+            ...current,
+            isLoading: false,
+            error: error instanceof Error ? error.message : "Failed to refresh PolyTAO job status."
+          }));
+          return;
+        }
+        await delay(POLL_INTERVAL_MS);
+        continue;
+      }
       if (pollTokenRef.current !== token) {
         return;
       }
@@ -166,11 +187,11 @@ export function usePolytaoGeneration() {
       }
       setState((current) => ({
         ...current,
-          job: {
-            job_id: createdJob.job_id,
-            status: createdJob.status,
-            input_smiles: activeRequest.input_smiles ?? null,
-            canonical_smiles: null,
+        job: {
+          job_id: createdJob.job_id,
+          status: createdJob.status,
+          input_smiles: activeRequest.input_smiles ?? null,
+          canonical_smiles: null,
           prompt: "",
           requested_count: activeRequest.candidate_count,
           returned_count: 0,

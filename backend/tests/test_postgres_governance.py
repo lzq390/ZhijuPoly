@@ -15,6 +15,7 @@ from app.import_postgres import (
     backfill_import_batch_sources,
     import_all_to_postgres,
     import_model_registry,
+    resolve_requested_datasets,
     upsert_source_registry,
 )
 from app.model_asset_manifest import iter_model_asset_specs
@@ -218,6 +219,10 @@ def test_rebuild_is_rejected_for_governance_only_import(tmp_path: Path, postgres
     assert polymer_count == 3
 
 
+def test_all_import_selection_includes_property_filter() -> None:
+    assert "property_filter" in resolve_requested_datasets({"all"})
+
+
 def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postgres_dsn: str) -> None:
     settings = _governance_settings(tmp_path, postgres_dsn)
 
@@ -250,6 +255,47 @@ def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postg
     assert property_filter_rows[1]["property_name"] == "Cv"
     assert property_filter_rows[1]["property_key"] is None
     assert property_filter_rows[1]["property_value_num"] == 0.28
+
+
+def test_property_filter_import_records_missing_source_without_truncating(tmp_path: Path, postgres_dsn: str) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    settings.property_filter_csv_path = str(tmp_path / "missing_property_filter.csv")
+
+    stats = import_all_to_postgres(
+        settings,
+        dsn=postgres_dsn,
+        datasets={"property_filter"},
+        apply_migrations=False,
+    )
+
+    dataset_stats = next(item for item in stats.datasets if item.dataset_key == "property_filter")
+    assert dataset_stats.row_count == 0
+    assert dataset_stats.details == {"missing_source": 1}
+
+    with postgres_connection(postgres_dsn) as connection:
+        batch = connection.execute(
+            """
+            SELECT status, row_count, error_message
+            FROM governance.import_batches
+            WHERE dataset_key = 'property_filter'
+            ORDER BY import_batch_id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        source = connection.execute(
+            """
+            SELECT status
+            FROM governance.source_files
+            WHERE logical_name = 'property_filter_csv'
+            """
+        ).fetchone()
+        existing_rows = connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"]
+
+    assert batch["status"] == "missing"
+    assert batch["row_count"] == 0
+    assert "missing_property_filter.csv" in batch["error_message"]
+    assert source["status"] == "missing"
+    assert existing_rows == 6
 
 
 def test_online_history_sequence_resets_after_legacy_import_and_keeps_runtime_rows(tmp_path: Path, postgres_dsn: str) -> None:

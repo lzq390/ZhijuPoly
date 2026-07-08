@@ -55,6 +55,10 @@ cd backend
 python -m app.import_postgres --dataset property_filter
 ```
 
+`--dataset all` also includes `property_filter` in the default deployment
+import path. The explicit command above is only needed when refreshing the
+threshold-filter table by itself.
+
 The import replaces only `core.polymer_property_filter_records`. It must not
 truncate or rebuild `core.polymer_properties`, knowledge, DFT, PI, or monomer MD
 runtime tables.
@@ -72,7 +76,8 @@ WHERE version IN (
   '0003_runtime_postgres_cutover',
   '0004_monomer_md_jobs',
   '0005_byteff2_formal_monomer_md',
-  '0006_property_filter_records'
+  '0006_property_filter_records',
+  '0007_polytao_jobs'
 )
 ORDER BY version;
 
@@ -83,9 +88,9 @@ SELECT logical_name, status, row_count
 FROM governance.source_files
 WHERE logical_name = 'property_filter_csv';
 
-SELECT dataset, status, row_count
+SELECT dataset_key, status, row_count
 FROM governance.import_batches
-WHERE dataset = 'property_filter'
+WHERE dataset_key = 'property_filter'
 ORDER BY finished_at DESC NULLS LAST, started_at DESC
 LIMIT 1;
 ```
