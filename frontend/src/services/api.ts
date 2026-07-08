@@ -46,6 +46,12 @@ import type {
   OnlineKnowledgeJobResponse,
   OnlineKnowledgeSearchRequest,
   OnlineKnowledgeSearchResponse,
+  PolytaoDescriptorRequest,
+  PolytaoDescriptorResponse,
+  PolytaoGenerationRequest,
+  PolytaoJobCreateResponse,
+  PolytaoJobStatusResponse,
+  PolytaoStatusResponse,
   PredictRequest,
   PredictResponse,
   PropertyFilterOptionsResponse,
@@ -388,6 +394,24 @@ export function fetchConditionalGenerationTgJob(
 
 export function fetchConditionalGenerationTgStatus(): Promise<ConditionalGenerationTgStatusResponse> {
   return getJSON("/conditional-generation/tg/status");
+}
+
+export function fetchPolytaoStatus(): Promise<PolytaoStatusResponse> {
+  return getJSON("/conditional-generation/polytao/status");
+}
+
+export function calculatePolytaoDescriptors(
+  payload: PolytaoDescriptorRequest
+): Promise<PolytaoDescriptorResponse> {
+  return postJSON("/conditional-generation/polytao/descriptors", payload);
+}
+
+export function createPolytaoJob(payload: PolytaoGenerationRequest): Promise<PolytaoJobCreateResponse> {
+  return postJSON("/conditional-generation/polytao/jobs", payload);
+}
+
+export function fetchPolytaoJob(jobId: string): Promise<PolytaoJobStatusResponse> {
+  return getJSON(`/conditional-generation/polytao/jobs/${encodeURIComponent(jobId)}`);
 }
 
 export function fetchStructure3D(

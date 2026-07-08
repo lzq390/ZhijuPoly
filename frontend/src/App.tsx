@@ -23,6 +23,7 @@ import { LabDataPage, type LabDataView } from "./components/LabDataPage";
 import { MdSimulationDemoPage } from "./components/MdSimulationDemoPage";
 import { MonomerMdSimulationPage } from "./components/MonomerMdSimulationPage";
 import { MonomerPolymerizationPage } from "./components/MonomerPolymerizationPage";
+import { PolytaoGenerationPage } from "./components/PolytaoGenerationPage";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
 import { PolymerExplorerDesktopPage } from "./components/PolymerExplorerDesktopPage";
 import { StructureWorkbenchPage } from "./components/StructureWorkbenchPage";
@@ -46,6 +47,7 @@ type ActiveModule =
   | "monomerPolymerization"
   | "reverseDesign"
   | "conditionalGeneration"
+  | "polytaoGeneration"
   | "databaseQuery"
   | "database"
   | "knowledge"
@@ -60,6 +62,8 @@ type AppRoute = {
 };
 
 type KnowledgeNavigationInput = string | KnowledgeNavigationRequest;
+const POLYTAO_ROUTE = "/polytao-generation";
+const LEGACY_POLYTAO_ROUTE = "/conditional-generation/polytao";
 
 const datasetPathByKey: Record<DatasetKey, string> = {
   process: "/database/process",
@@ -108,6 +112,10 @@ function routeFromPath(pathname: string): AppRoute {
 
   if (path === "/conditional-generation") {
     return { module: "conditionalGeneration", datasetKey: null };
+  }
+
+  if (path === POLYTAO_ROUTE || path === LEGACY_POLYTAO_ROUTE) {
+    return { module: "polytaoGeneration", datasetKey: null };
   }
 
   if (path === "/database-query") {
@@ -175,6 +183,10 @@ function pathFromRoute(route: AppRoute) {
     return "/conditional-generation";
   }
 
+  if (route.module === "polytaoGeneration") {
+    return POLYTAO_ROUTE;
+  }
+
   if (route.module === "databaseQuery") {
     return "/database-query";
   }
@@ -207,7 +219,11 @@ function getInitialRoute() {
     return { module: "home", datasetKey: null } satisfies AppRoute;
   }
 
-  return routeFromPath(window.location.pathname);
+  const route = routeFromPath(window.location.pathname);
+  if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
+    window.history.replaceState(route, "", POLYTAO_ROUTE);
+  }
+  return route;
 }
 
 function normalizeKnowledgeTerms(terms: string[] | undefined) {
@@ -353,6 +369,9 @@ export default function App() {
   useEffect(() => {
     function handlePopState() {
       const route = routeFromPath(window.location.pathname);
+      if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
+        window.history.replaceState(route, "", POLYTAO_ROUTE);
+      }
       if (route.module === "knowledge") {
         setKnowledgeInitialQuery(new URLSearchParams(window.location.search).get("q") ?? "");
         setKnowledgeInitialTerms(getKnowledgeTermsFromSearch(window.location.search));
@@ -390,6 +409,10 @@ export default function App() {
 
   function openConditionalGeneration() {
     navigate({ module: "conditionalGeneration", datasetKey: null });
+  }
+
+  function openPolytaoGeneration() {
+    navigate({ module: "polytaoGeneration", datasetKey: null });
   }
 
   function openExperimentWorkflowDemo() {
@@ -477,6 +500,9 @@ export default function App() {
         break;
       case "conditionalGeneration":
         openConditionalGeneration();
+        break;
+      case "polytaoGeneration":
+        openPolytaoGeneration();
         break;
       case "experimentWorkflowDemo":
         openExperimentWorkflowDemo();
@@ -597,6 +623,15 @@ export default function App() {
           onClick: openConditionalGeneration
         },
         {
+          id: "polytaoGeneration",
+          label: "PolyTAO 生成",
+          description: "按 15 个 RDKit 描述符调用 PolyTAO 生成候选重复单元。",
+          route: POLYTAO_ROUTE,
+          icon: <Sparkles className="h-4 w-4" />,
+          isActive: activeModule === "polytaoGeneration",
+          onClick: openPolytaoGeneration
+        },
+        {
           id: "highThroughputWorkflowDemo",
           label: "高通量优化演示",
           description: "用模拟数据展示 PI 候选空间、单目标 Agent 和配方混合优化闭环。",
@@ -622,6 +657,7 @@ export default function App() {
     activeModule === "databaseQuery" ||
     activeModule === "structureWorkbench" ||
     activeModule === "monomerPolymerization" ||
+    activeModule === "polytaoGeneration" ||
     activeModule === "reverseDesign" ||
     activeModule === "experimentWorkflowDemo" ||
     activeModule === "highThroughputWorkflowDemo" ||
@@ -709,6 +745,14 @@ export default function App() {
 
       {activeModule === "conditionalGeneration" ? (
         <ConditionalGenerationPage
+          structure={structureWorkspace}
+          onEditStructure={openStructureWorkbench}
+          onBackHome={() => navigate({ module: "home", datasetKey: null })}
+        />
+      ) : null}
+
+      {activeModule === "polytaoGeneration" ? (
+        <PolytaoGenerationPage
           structure={structureWorkspace}
           onEditStructure={openStructureWorkbench}
           onBackHome={() => navigate({ module: "home", datasetKey: null })}
