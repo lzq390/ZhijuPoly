@@ -290,7 +290,9 @@ NEXPOLY_DEPLOY_REF=<previous-sha-or-tag> scripts/deploy_server.sh
 
 For a data rollback, restore the matching dump into `lab-postgres` before
 rerunning the deployment script. Keep restored data and code refs paired; schema
-migration checksum mismatches should be treated as blockers, not ignored.
+migration checksum mismatches should be treated as blockers, not ignored. See
+[`docs/postgres-migration-governance.md`](postgres-migration-governance.md) for
+the guarded reconcile process.
 
 ## Release Package
 
