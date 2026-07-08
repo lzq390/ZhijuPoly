@@ -1085,6 +1085,152 @@ class ConditionalGenerationJobStatusResponse(BaseModel):
     result: ConditionalGenerationTgResponse | None = None
 
 
+POLYTAO_DESCRIPTOR_NAMES: tuple[str, ...] = (
+    "MolWt",
+    "HeavyAtomCount",
+    "NHOHCount",
+    "NOCount",
+    "NumAliphaticCarbocycles",
+    "NumAliphaticHeterocycles",
+    "NumAliphaticRings",
+    "NumAromaticCarbocycles",
+    "NumAromaticHeterocycles",
+    "NumAromaticRings",
+    "NumHAcceptors",
+    "NumHDonors",
+    "NumHeteroatoms",
+    "NumRotatableBonds",
+    "RingCount",
+)
+
+
+class PolytaoDescriptorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str = Field(min_length=1, max_length=2048)
+
+
+class PolytaoDescriptorValue(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
+
+    name: str
+    value: float = Field(allow_inf_nan=False)
+
+
+class PolytaoDescriptorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    input_smiles: str
+    canonical_smiles: str
+    descriptors: list[PolytaoDescriptorValue]
+    prompt: str
+    query_time_ms: float = Field(ge=0.0)
+
+
+class PolytaoGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
+
+    descriptors: dict[str, float]
+    input_smiles: str | None = Field(default=None, max_length=2048)
+    candidate_count: int = Field(default=10, ge=1, le=50)
+    temperature: float = Field(default=1.0, ge=0.1, le=2.0, allow_inf_nan=False)
+    top_k: int = Field(default=100, ge=1, le=500)
+    top_p: float = Field(default=0.999, gt=0.0, le=1.0, allow_inf_nan=False)
+    max_length: int = Field(default=300, ge=16, le=512)
+
+    @field_validator("descriptors")
+    @classmethod
+    def validate_descriptors(cls, descriptors: dict[str, float]) -> dict[str, float]:
+        required = set(POLYTAO_DESCRIPTOR_NAMES)
+        actual = set(descriptors)
+        missing = sorted(required - actual)
+        extra = sorted(actual - required)
+        if missing:
+            raise ValueError("missing PolyTAO descriptors: " + ", ".join(missing))
+        if extra:
+            raise ValueError("unknown PolyTAO descriptors: " + ", ".join(extra))
+        return descriptors
+
+
+class PolytaoCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    rank: int = Field(ge=1)
+    generated_smiles: str
+    raw_smiles: str
+    structure_svg: str | None = None
+    valid_smiles: bool = True
+    sa_score: float | None = Field(default=None, ge=0.0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class PolytaoGenerationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    prompt: str
+    query_time_ms: float = Field(ge=0.0)
+    requested_count: int = Field(ge=1)
+    returned_count: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+    filter_counter: dict[str, int] = Field(default_factory=dict)
+    results: list[PolytaoCandidate] = Field(default_factory=list)
+
+
+class PolytaoStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    enabled: bool
+    available: bool
+    worker_base_url_configured: bool
+    worker_status: str | None = None
+    worker_mode: str | None = None
+    db_configured: bool | None = None
+    runtime_ready: bool | None = None
+    runtime_error: str | None = None
+    active_jobs: int | None = Field(default=None, ge=0)
+    model_id: str | None = None
+    model_revision: str | None = None
+    default_params: dict[str, float | int | str | bool | None] = Field(default_factory=dict)
+    worker_version: str | None = None
+    message: str
+
+
+PolytaoJobStatus = Literal["pending", "submitted", "running", "completed", "failed", "cancelled"]
+
+
+class PolytaoJobCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: PolytaoJobStatus
+
+
+class PolytaoJobStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: PolytaoJobStatus
+    input_smiles: str | None = None
+    canonical_smiles: str | None = None
+    prompt: str
+    requested_count: int = Field(ge=1)
+    returned_count: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+    progress_percent: int = Field(ge=0, le=100)
+    progress_stage: str
+    progress_message: str
+    created_at: str
+    updated_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    worker_id: str | None = None
+    worker_job_id: str | None = None
+    worker_version: str | None = None
+    engine: str
+    error_message: str | None = None
+    result: PolytaoGenerationResponse | None = None
+
+
 class DftPcaPoint(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

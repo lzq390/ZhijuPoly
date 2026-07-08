@@ -37,6 +37,7 @@ POSTGRES_TABLES = [
     ("lab", "sample_measurements"),
     ("model_registry", "assets"),
     ("md", "monomer_md_jobs"),
+    ("generation", "polytao_jobs"),
 ]
 
 STRICT_REQUIRED_MIGRATIONS = (
@@ -46,6 +47,7 @@ STRICT_REQUIRED_MIGRATIONS = (
     "0004_monomer_md_jobs",
     "0005_byteff2_formal_monomer_md",
     "0006_property_filter_records",
+    "0007_polytao_jobs",
 )
 STRICT_RUNTIME_TABLES = tuple(POSTGRES_TABLES)
 

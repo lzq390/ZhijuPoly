@@ -24,6 +24,7 @@ from app.routers.monomer_polymerization import router as monomer_polymerization_
 from app.routers.monomer_retrosynthesis import router as monomer_retrosynthesis_router
 from app.routers.online_knowledge import router as online_knowledge_router
 from app.routers.predict import router as predict_router
+from app.routers.polytao import router as polytao_router
 from app.routers.query import router as query_router
 from app.routers.reverse_design import router as reverse_design_router
 from app.services.conditional_generation_jobs import ConditionalGenerationJobManager
@@ -94,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(query_router)
     app.include_router(predict_router)
     app.include_router(conditional_generation_router)
+    app.include_router(polytao_router)
     app.include_router(knowledge_router)
     app.include_router(lab_data_router)
     app.include_router(md_demo_router)

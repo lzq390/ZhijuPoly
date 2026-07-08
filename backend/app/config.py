@@ -104,6 +104,12 @@ class Settings:
         gen_model_dir: str | None = None,
         gen_device: str | None = None,
         gen_job_workers: int | None = None,
+        polytao_worker_base_url: str | None = None,
+        polytao_worker_timeout_seconds: float | None = None,
+        polytao_submit_enabled: bool | None = None,
+        polytao_rate_limit_per_ip_per_minute: int | None = None,
+        polytao_rate_limit_window_seconds: int | None = None,
+        polytao_max_active_jobs: int | None = None,
         retro_model_enabled: bool | None = None,
         retro_model_id: str | None = None,
         retro_device: str | None = None,
@@ -404,6 +410,55 @@ class Settings:
                 str(env_values.get("GEN_JOB_WORKERS", "1")),
             )
         )
+        raw_polytao_worker_base_url = polytao_worker_base_url
+        if raw_polytao_worker_base_url is None:
+            raw_polytao_worker_base_url = os.getenv(
+                "POLYTAO_WORKER_BASE_URL",
+                env_values.get("POLYTAO_WORKER_BASE_URL", ""),
+            )
+        raw_polytao_worker_timeout_seconds = (
+            str(polytao_worker_timeout_seconds)
+            if polytao_worker_timeout_seconds is not None
+            else os.getenv(
+                "POLYTAO_WORKER_TIMEOUT_SECONDS",
+                str(env_values.get("POLYTAO_WORKER_TIMEOUT_SECONDS", "30")),
+            )
+        )
+        raw_polytao_submit_enabled = polytao_submit_enabled
+        if raw_polytao_submit_enabled is None:
+            raw_polytao_submit_enabled = os.getenv(
+                "POLYTAO_SUBMIT_ENABLED",
+                str(env_values.get("POLYTAO_SUBMIT_ENABLED", "true")),
+            ).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        raw_polytao_rate_limit_per_ip_per_minute = (
+            str(polytao_rate_limit_per_ip_per_minute)
+            if polytao_rate_limit_per_ip_per_minute is not None
+            else os.getenv(
+                "POLYTAO_RATE_LIMIT_PER_IP_PER_MINUTE",
+                str(env_values.get("POLYTAO_RATE_LIMIT_PER_IP_PER_MINUTE", "5")),
+            )
+        )
+        raw_polytao_rate_limit_window_seconds = (
+            str(polytao_rate_limit_window_seconds)
+            if polytao_rate_limit_window_seconds is not None
+            else os.getenv(
+                "POLYTAO_RATE_LIMIT_WINDOW_SECONDS",
+                str(env_values.get("POLYTAO_RATE_LIMIT_WINDOW_SECONDS", "60")),
+            )
+        )
+        raw_polytao_max_active_jobs = (
+            str(polytao_max_active_jobs)
+            if polytao_max_active_jobs is not None
+            else os.getenv(
+                "POLYTAO_MAX_ACTIVE_JOBS",
+                str(env_values.get("POLYTAO_MAX_ACTIVE_JOBS", "1")),
+            )
+        )
         raw_retro_model_id = retro_model_id or os.getenv(
             "RETRO_MODEL_ID",
             env_values.get("RETRO_MODEL_ID", "sagawa/ReactionT5v2-retrosynthesis-USPTO_50k"),
@@ -528,6 +583,12 @@ class Settings:
         self.gen_model_dir = _resolve_from_root(raw_gen_model_dir)
         self.gen_device = raw_gen_device.strip().lower()
         self.gen_job_workers = max(1, int(raw_gen_job_workers))
+        self.polytao_worker_base_url = raw_polytao_worker_base_url.strip().rstrip("/")
+        self.polytao_worker_timeout_seconds = max(1.0, float(raw_polytao_worker_timeout_seconds))
+        self.polytao_submit_enabled = bool(raw_polytao_submit_enabled)
+        self.polytao_rate_limit_per_ip_per_minute = max(1, int(raw_polytao_rate_limit_per_ip_per_minute))
+        self.polytao_rate_limit_window_seconds = max(1, int(raw_polytao_rate_limit_window_seconds))
+        self.polytao_max_active_jobs = max(1, int(raw_polytao_max_active_jobs))
         self.retro_model_enabled = bool(raw_retro_model_enabled)
         self.retro_model_id = raw_retro_model_id.strip()
         self.retro_device = raw_retro_device.strip().lower()
