@@ -53,6 +53,7 @@ nexpoly-release-*.tar.gz
 /database/pi_reverse_design_demo_*.csv
 /database/polymer_process_material_filtered_cleaned_office_utf8_bom.csv
 /database/polymer_property_detail_cleaned_office_utf8_bom.csv
+/database/PolymerDatabaseV2.0_reliable085_standardized.csv
 /database/preview_100.csv
 
 # Generated reports and local planning artifacts

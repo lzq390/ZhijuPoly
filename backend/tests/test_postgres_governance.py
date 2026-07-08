@@ -19,6 +19,7 @@ from app.import_postgres import (
 )
 from app.model_asset_manifest import iter_model_asset_specs
 from app.postgres_database import postgres_connection
+from app.postgres_migrations import migration_checksum
 from app.services.online_knowledge.postgres_history_repository import save_online_history_postgres
 from app.services.postgres_database_browser import get_database_analytics_postgres
 
@@ -171,6 +172,18 @@ def test_model_registry_uses_shared_asset_manifest(postgres_dsn: str) -> None:
     assert stats.row_count == len(expected_names)
     assert actual_names == expected_names
     assert {row["status"] for row in rows} <= {"ready", "missing"}
+
+
+def test_migration_checksum_is_stable_across_line_endings(tmp_path: Path) -> None:
+    lf_path = tmp_path / "lf.sql"
+    crlf_path = tmp_path / "crlf.sql"
+    bare_cr_path = tmp_path / "bare_cr.sql"
+    lf_path.write_bytes(b"CREATE TABLE demo(id int);\nCREATE INDEX demo_id ON demo(id);\n")
+    crlf_path.write_bytes(b"CREATE TABLE demo(id int);\r\nCREATE INDEX demo_id ON demo(id);\r\n")
+    bare_cr_path.write_bytes(b"CREATE TABLE demo(id int);\rCREATE INDEX demo_id ON demo(id);\r")
+
+    assert migration_checksum(lf_path) == migration_checksum(crlf_path)
+    assert migration_checksum(lf_path) == migration_checksum(bare_cr_path)
 
 
 def test_rebuild_is_rejected_for_governance_only_import(tmp_path: Path, postgres_dsn: str) -> None:

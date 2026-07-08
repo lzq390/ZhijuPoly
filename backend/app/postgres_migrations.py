@@ -19,7 +19,8 @@ class MigrationResult:
 
 
 def migration_checksum(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    normalized = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(normalized).hexdigest()
 
 
 def ensure_migration_table(connection) -> None:
