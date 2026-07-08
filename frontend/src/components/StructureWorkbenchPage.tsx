@@ -348,6 +348,13 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
       onClick: () => void openModuleWithSyncedStructure("explorer")
     },
     {
+      id: "monomerPolymerization",
+      label: "单体正向聚合",
+      detail: "用当前结构作为单体 A，运行一次 SMiPoly 规则聚合。",
+      icon: <FlaskConical className="h-4 w-4" />,
+      onClick: () => void openModuleWithSyncedStructure("monomerPolymerization")
+    },
+    {
       id: "reverseDesign",
       label: "Tg 逆向设计",
       detail: "用当前结构约束 Tg 候选搜索。",

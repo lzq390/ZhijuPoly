@@ -20,6 +20,7 @@ from app.routers.knowledge import router as knowledge_router
 from app.routers.lab_data import router as lab_data_router
 from app.routers.md_demo import router as md_demo_router
 from app.routers.monomer_md import router as monomer_md_router
+from app.routers.monomer_polymerization import router as monomer_polymerization_router
 from app.routers.monomer_retrosynthesis import router as monomer_retrosynthesis_router
 from app.routers.online_knowledge import router as online_knowledge_router
 from app.routers.predict import router as predict_router
@@ -97,6 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(lab_data_router)
     app.include_router(md_demo_router)
     app.include_router(monomer_md_router)
+    app.include_router(monomer_polymerization_router)
     app.include_router(monomer_retrosynthesis_router)
     app.include_router(online_knowledge_router)
     app.include_router(dft_router)

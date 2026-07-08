@@ -5,6 +5,15 @@ export type WorkspaceMode = "query" | "predict";
 export type ResultsTab = "query" | "predict";
 export type SmilesLookupTable = "polymers" | "properties" | "pi_candidates";
 export type MonomerRetrosynthesisTargetRole = "auto" | "diamine" | "dianhydride" | "other";
+export type MonomerPolymerizationTargetClass =
+  | "polyolefin"
+  | "polyester"
+  | "polyether"
+  | "polyamide"
+  | "polyimide"
+  | "polyurethane"
+  | "polyoxazolidone"
+  | "all";
 
 export type StructureWorkspaceContext = {
   smiles: string;
@@ -368,6 +377,55 @@ export type MonomerRetrosynthesisResponse = {
   query_time_ms: number;
   total: number;
   candidates: MonomerRetrosynthesisCandidate[];
+};
+
+export type MonomerPolymerizationRequest = {
+  monomer_a_smiles: string;
+  monomer_b_smiles?: string | null;
+  target_class: MonomerPolymerizationTargetClass;
+  max_results: number;
+};
+
+export type MonomerPolymerizationInput = {
+  role: "monomer_a" | "monomer_b";
+  input_smiles: string;
+  canonical_smiles: string;
+};
+
+export type MonomerPolymerizationCandidate = {
+  rank: number;
+  monomer_a_smiles: string;
+  monomer_b_smiles: string | null;
+  polymer_smiles: string;
+  polymer_class: string;
+  reaction_id: number | null;
+  reaction_name: string | null;
+  reactset: string[];
+  structure_svg: string | null;
+};
+
+export type MonomerPolymerizationResponse = {
+  input_monomers: MonomerPolymerizationInput[];
+  target_class: MonomerPolymerizationTargetClass;
+  query_time_ms: number;
+  total: number;
+  results: MonomerPolymerizationCandidate[];
+  warnings: string[];
+};
+
+export type MonomerPolymerizationStatusResponse = {
+  enabled: boolean;
+  available: boolean;
+  default_target_class: MonomerPolymerizationTargetClass;
+  available_target_classes: MonomerPolymerizationTargetClass[];
+  target_requirements?: Partial<Record<MonomerPolymerizationTargetClass, {
+    min_monomers: number;
+    max_monomers: number;
+    monomer_b_required: boolean;
+    note: string;
+  }>>;
+  max_results_limit: number;
+  message: string;
 };
 
 export type SmilesStandardizeRequest = {

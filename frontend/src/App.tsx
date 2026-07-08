@@ -5,6 +5,7 @@ import {
   BarChart3,
   BookOpen,
   Database,
+  FlaskConical,
   Grid2X2,
   Microscope,
   Search,
@@ -21,6 +22,7 @@ import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { LabDataPage, type LabDataView } from "./components/LabDataPage";
 import { MdSimulationDemoPage } from "./components/MdSimulationDemoPage";
 import { MonomerMdSimulationPage } from "./components/MonomerMdSimulationPage";
+import { MonomerPolymerizationPage } from "./components/MonomerPolymerizationPage";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
 import { PolymerExplorerDesktopPage } from "./components/PolymerExplorerDesktopPage";
 import { StructureWorkbenchPage } from "./components/StructureWorkbenchPage";
@@ -41,6 +43,7 @@ type ActiveModule =
   | "explorer"
   | "mdSimulationDemo"
   | "monomerMdSimulation"
+  | "monomerPolymerization"
   | "reverseDesign"
   | "conditionalGeneration"
   | "databaseQuery"
@@ -92,6 +95,10 @@ function routeFromPath(pathname: string): AppRoute {
 
   if (path === "/monomer-md-simulation") {
     return { module: "monomerMdSimulation", datasetKey: null };
+  }
+
+  if (path === "/monomer-polymerization") {
+    return { module: "monomerPolymerization", datasetKey: null };
   }
 
   if (path === "/reverse-design") {
@@ -153,6 +160,10 @@ function pathFromRoute(route: AppRoute) {
 
   if (route.module === "monomerMdSimulation") {
     return "/monomer-md-simulation";
+  }
+
+  if (route.module === "monomerPolymerization") {
+    return "/monomer-polymerization";
   }
 
   if (route.module === "reverseDesign") {
@@ -368,6 +379,10 @@ export default function App() {
     navigate({ module: "monomerMdSimulation", datasetKey: null });
   }
 
+  function openMonomerPolymerization() {
+    navigate({ module: "monomerPolymerization", datasetKey: null });
+  }
+
   function openReverseDesign() {
     navigate({ module: "reverseDesign", datasetKey: null });
   }
@@ -452,6 +467,9 @@ export default function App() {
         break;
       case "monomerMdSimulation":
         openMonomerMdSimulation();
+        break;
+      case "monomerPolymerization":
+        openMonomerPolymerization();
         break;
       case "reverseDesign":
         openReverseDesign();
@@ -551,6 +569,15 @@ export default function App() {
       title: "聚合物设计",
       items: [
         {
+          id: "monomerPolymerization",
+          label: "单体正向聚合",
+          description: "用 SMiPoly 规则对一个或两个单体生成少量聚合物候选。",
+          route: "/monomer-polymerization",
+          icon: <FlaskConical className="h-4 w-4" />,
+          isActive: activeModule === "monomerPolymerization",
+          onClick: openMonomerPolymerization
+        },
+        {
           id: "reverseDesign",
           label: "Tg 逆向设计",
           description: "按目标玻璃化转变温度筛选候选结构。",
@@ -593,6 +620,7 @@ export default function App() {
     activeModule === "explorer" ||
     activeModule === "databaseQuery" ||
     activeModule === "structureWorkbench" ||
+    activeModule === "monomerPolymerization" ||
     activeModule === "reverseDesign" ||
     activeModule === "experimentWorkflowDemo" ||
     activeModule === "highThroughputWorkflowDemo" ||
@@ -680,6 +708,14 @@ export default function App() {
 
       {activeModule === "conditionalGeneration" ? (
         <ConditionalGenerationPage
+          structure={structureWorkspace}
+          onEditStructure={openStructureWorkbench}
+          onBackHome={() => navigate({ module: "home", datasetKey: null })}
+        />
+      ) : null}
+
+      {activeModule === "monomerPolymerization" ? (
+        <MonomerPolymerizationPage
           structure={structureWorkspace}
           onEditStructure={openStructureWorkbench}
           onBackHome={() => navigate({ module: "home", datasetKey: null })}

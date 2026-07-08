@@ -106,6 +106,7 @@ class Settings:
         retro_model_enabled: bool | None = None,
         retro_model_id: str | None = None,
         retro_device: str | None = None,
+        smipoly_enabled: bool | None = None,
     ) -> None:
         env_values = dotenv_values(DEFAULT_ENV_FILE) if DEFAULT_ENV_FILE.exists() else {}
 
@@ -428,6 +429,17 @@ class Settings:
                 "yes",
                 "on",
             }
+        raw_smipoly_enabled = smipoly_enabled
+        if raw_smipoly_enabled is None:
+            raw_smipoly_enabled = os.getenv(
+                "SMIPOLY_ENABLED",
+                str(env_values.get("SMIPOLY_ENABLED", "true")),
+            ).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
         raw_model_enabled = model_enabled
         if raw_model_enabled is None:
             raw_model_enabled = os.getenv(
@@ -513,6 +525,7 @@ class Settings:
         self.retro_model_enabled = bool(raw_retro_model_enabled)
         self.retro_model_id = raw_retro_model_id.strip()
         self.retro_device = raw_retro_device.strip().lower()
+        self.smipoly_enabled = bool(raw_smipoly_enabled)
 
     @property
     def sqlite_db_file(self) -> Path:
