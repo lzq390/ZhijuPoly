@@ -886,6 +886,122 @@ export type ConditionalGenerationJobStatusResponse = {
   result: ConditionalGenerationTgResponse | null;
 };
 
+export const POLYTAO_DESCRIPTOR_NAMES = [
+  "MolWt",
+  "HeavyAtomCount",
+  "NHOHCount",
+  "NOCount",
+  "NumAliphaticCarbocycles",
+  "NumAliphaticHeterocycles",
+  "NumAliphaticRings",
+  "NumAromaticCarbocycles",
+  "NumAromaticHeterocycles",
+  "NumAromaticRings",
+  "NumHAcceptors",
+  "NumHDonors",
+  "NumHeteroatoms",
+  "NumRotatableBonds",
+  "RingCount"
+] as const;
+
+export type PolytaoDescriptorName = (typeof POLYTAO_DESCRIPTOR_NAMES)[number];
+export type PolytaoDescriptorMap = Record<PolytaoDescriptorName, number>;
+
+export type PolytaoDescriptorRequest = {
+  smiles: string;
+};
+
+export type PolytaoDescriptorValue = {
+  name: PolytaoDescriptorName;
+  value: number;
+};
+
+export type PolytaoDescriptorResponse = {
+  input_smiles: string;
+  canonical_smiles: string;
+  descriptors: PolytaoDescriptorValue[];
+  prompt: string;
+  query_time_ms: number;
+};
+
+export type PolytaoGenerationRequest = {
+  descriptors: PolytaoDescriptorMap;
+  input_smiles?: string | null;
+  candidate_count: number;
+  temperature: number;
+  top_k: number;
+  top_p: number;
+  max_length: number;
+};
+
+export type PolytaoCandidate = {
+  rank: number;
+  generated_smiles: string;
+  raw_smiles: string;
+  structure_svg: string | null;
+  valid_smiles: boolean;
+  sa_score: number | null;
+  warnings: string[];
+};
+
+export type PolytaoGenerationResponse = {
+  prompt: string;
+  query_time_ms: number;
+  requested_count: number;
+  returned_count: number;
+  attempts: number;
+  filter_counter: Record<string, number>;
+  results: PolytaoCandidate[];
+};
+
+export type PolytaoStatusResponse = {
+  enabled: boolean;
+  available: boolean;
+  worker_base_url_configured: boolean;
+  worker_status: string | null;
+  worker_mode: string | null;
+  db_configured: boolean | null;
+  runtime_ready: boolean | null;
+  runtime_error: string | null;
+  active_jobs: number | null;
+  model_id: string | null;
+  model_revision: string | null;
+  default_params: Record<string, string | number | boolean | null>;
+  worker_version: string | null;
+  message: string;
+};
+
+export type PolytaoJobStatus = "pending" | "submitted" | "running" | "completed" | "failed" | "cancelled";
+
+export type PolytaoJobCreateResponse = {
+  job_id: string;
+  status: PolytaoJobStatus;
+};
+
+export type PolytaoJobStatusResponse = {
+  job_id: string;
+  status: PolytaoJobStatus;
+  input_smiles: string | null;
+  canonical_smiles: string | null;
+  prompt: string;
+  requested_count: number;
+  returned_count: number;
+  attempts: number;
+  progress_percent: number;
+  progress_stage: string;
+  progress_message: string;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  worker_id: string | null;
+  worker_job_id: string | null;
+  worker_version: string | null;
+  engine: string;
+  error_message: string | null;
+  result: PolytaoGenerationResponse | null;
+};
+
 export type StructurePropertyRecord = {
   property_id: number;
   polymer_id: number;
