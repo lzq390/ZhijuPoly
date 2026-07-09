@@ -55,6 +55,23 @@ def test_database_browser_dataset_summary_reports_all_dataset_keys(test_app) -> 
     assert by_key["dft"]["total_records"] == 5
 
 
+def test_database_browser_live_analytics_includes_property_filter_counts(test_app) -> None:
+    client = TestClient(test_app)
+
+    response = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
+
+    assert response.status_code == 200
+    payload = response.json()
+    property_filter = payload["datasets"]["propertyFilter"]
+    assert payload["source"] == "live"
+    assert property_filter["rows"] == 6
+    assert property_filter["mappedRows"] == 4
+    assert property_filter["rawRows"] == 2
+    assert property_filter["standardizedProperties"] == 2
+    assert property_filter["rawProperties"] == 1
+    assert property_filter["uniqueSmiles"] == 2
+
+
 def test_property_filter_options_include_standardized_and_raw_properties(test_app) -> None:
     client = TestClient(test_app)
 

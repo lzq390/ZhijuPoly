@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -28,7 +29,11 @@ from app.routers.polytao import router as polytao_router
 from app.routers.query import router as query_router
 from app.routers.reverse_design import router as reverse_design_router
 from app.services.conditional_generation_jobs import ConditionalGenerationJobManager
+from app.services.polytao_jobs import PolytaoJobManager
+from app.services.polytao_repository import mark_stale_polytao_jobs_failed_postgres
 from app.services.reverse_design_jobs import ReverseDesignJobManager
+
+logger = logging.getLogger(__name__)
 
 
 async def health() -> dict[str, str]:
@@ -57,10 +62,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(api_app: FastAPI):
         try:
+            _mark_stale_polytao_jobs_failed(api_app)
             yield
         finally:
             api_app.state.reverse_design_job_manager.shutdown(wait=False)
             api_app.state.conditional_generation_job_manager.shutdown(wait=False)
+            api_app.state.polytao_job_manager.shutdown(wait=False)
 
     app = FastAPI(title="PolyProp API", version="0.1.0", lifespan=lifespan)
 
@@ -79,6 +86,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.reverse_design_job_manager = ReverseDesignJobManager(max_workers=app_settings.pi_reverse_job_workers)
     app.state.conditional_generation_job_manager = ConditionalGenerationJobManager(
         max_workers=app_settings.gen_job_workers,
+    )
+    app.state.polytao_job_manager = PolytaoJobManager(
+        app_postgres_dsn=app_settings.app_postgres_dsn,
+        max_workers=app_settings.polytao_job_workers,
     )
 
     app.add_middleware(
@@ -108,6 +119,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(reverse_design_router)
 
     return app
+
+
+def _mark_stale_polytao_jobs_failed(api_app: FastAPI) -> None:
+    try:
+        with api_app.state.postgres_connection_factory(api_app.state.settings.app_postgres_dsn) as connection:
+            mark_stale_polytao_jobs_failed_postgres(connection)
+    except Exception as exc:  # pragma: no cover - runtime preflight reports database readiness.
+        logger.warning("Failed to mark stale PolyTAO jobs during startup: %s", exc)
 
 
 app = create_app()

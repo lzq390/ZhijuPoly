@@ -10,3 +10,4 @@ httpx
 openai==2.36.0
 joblib==1.5.3
 python-multipart==0.0.20
+sentencepiece>=0.2,<1

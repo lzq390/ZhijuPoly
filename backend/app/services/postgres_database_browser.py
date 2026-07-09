@@ -939,6 +939,29 @@ def _count_where(connection: Any, table_sql: str, where_sql: str) -> int:
     return _int_value(connection.execute(f"SELECT COUNT(*) AS count FROM {table_sql} WHERE {where_sql}").fetchone()["count"])
 
 
+def _property_filter_analytics(connection: Any) -> dict[str, Any]:
+    summary = connection.execute(
+        """
+        SELECT
+          COUNT(*) AS rows,
+          COUNT(*) FILTER (WHERE property_key IS NOT NULL) AS mapped_rows,
+          COUNT(*) FILTER (WHERE property_key IS NULL) AS raw_rows,
+          COUNT(DISTINCT property_key) FILTER (WHERE property_key IS NOT NULL) AS standardized_properties,
+          COUNT(DISTINCT property_name) FILTER (WHERE property_key IS NULL) AS raw_properties,
+          COUNT(DISTINCT COALESCE(NULLIF(smiles, ''), NULLIF(canonical_smiles, ''))) AS unique_smiles
+        FROM core.polymer_property_filter_records
+        """
+    ).fetchone()
+    return {
+        "rows": _int_value(summary["rows"]),
+        "mappedRows": _int_value(summary["mapped_rows"]),
+        "rawRows": _int_value(summary["raw_rows"]),
+        "standardizedProperties": _int_value(summary["standardized_properties"]),
+        "rawProperties": _int_value(summary["raw_properties"]),
+        "uniqueSmiles": _int_value(summary["unique_smiles"]),
+    }
+
+
 def _process_analytics(connection: Any) -> dict[str, Any]:
     summary = connection.execute(
         """
@@ -1280,6 +1303,7 @@ def get_database_analytics_postgres(connection: Any) -> dict[str, Any]:
         "process": _process_analytics(connection),
         "property": _property_analytics(connection),
         "structureEffect": _structure_effect_analytics(connection),
+        "propertyFilter": _property_filter_analytics(connection),
         "dft": _dft_analytics(connection),
         "formulation": _formulation_analytics(connection),
     }

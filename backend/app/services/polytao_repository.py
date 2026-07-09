@@ -42,9 +42,12 @@ def create_polytao_job_postgres(
         """
         INSERT INTO generation.polytao_jobs (
           job_id, status, input_smiles, canonical_smiles, descriptor_prompt, descriptors,
-          request_data, requested_count, progress_stage, progress_message
+          request_data, requested_count, progress_stage, progress_message, engine
         )
-        VALUES (%s, 'pending', %s, %s, %s, %s::jsonb, %s::jsonb, %s, 'pending', 'Waiting for the PolyTAO worker to start.')
+        VALUES (
+          %s, 'pending', %s, %s, %s, %s::jsonb, %s::jsonb, %s,
+          'pending', 'Waiting for the PolyTAO backend runtime to start.', 'polytao-backend'
+        )
         """,
         (
             job_id,
@@ -82,14 +85,58 @@ def mark_polytao_job_submitted_postgres(
         UPDATE generation.polytao_jobs
         SET status = CASE WHEN status = 'pending' THEN 'submitted' ELSE status END,
             progress_stage = CASE WHEN status = 'pending' THEN 'submitted' ELSE progress_stage END,
-            progress_message = CASE WHEN status = 'pending' THEN 'Submitted to the PolyTAO worker.' ELSE progress_message END,
+            progress_message = CASE WHEN status = 'pending' THEN 'Submitted to the PolyTAO backend runtime.' ELSE progress_message END,
             worker_id = %s,
             worker_job_id = %s,
             worker_version = %s,
+            engine = 'polytao-backend',
             updated_at = now()
         WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
         """,
         (worker_id, worker_job_id, worker_version, job_id),
+    )
+
+
+def mark_polytao_job_running_postgres(connection: Any, job_id: str) -> None:
+    connection.execute(
+        """
+        UPDATE generation.polytao_jobs
+        SET status = 'running',
+            attempts = attempts + 1,
+            progress_percent = 10,
+            progress_stage = 'running',
+            progress_message = 'Running PolyTAO generation in the backend runtime.',
+            engine = 'polytao-backend',
+            updated_at = now(),
+            started_at = COALESCE(started_at, now())
+        WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
+        """,
+        (job_id,),
+    )
+
+
+def mark_polytao_job_completed_postgres(
+    connection: Any,
+    *,
+    job_id: str,
+    result: dict[str, Any],
+    returned_count: int,
+) -> None:
+    connection.execute(
+        """
+        UPDATE generation.polytao_jobs
+        SET status = 'completed',
+            result_data = %s::jsonb,
+            returned_count = %s,
+            progress_percent = 100,
+            progress_stage = 'completed',
+            progress_message = 'PolyTAO generation completed in the backend runtime.',
+            engine = 'polytao-backend',
+            updated_at = now(),
+            finished_at = now()
+        WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
+        """,
+        (_jsonb(result), returned_count, job_id),
     )
 
 
@@ -101,11 +148,30 @@ def mark_polytao_job_failed_postgres(connection: Any, job_id: str, error_message
             progress_stage = 'failed',
             progress_message = %s,
             error_message = %s,
+            engine = 'polytao-backend',
             updated_at = now(),
             finished_at = now()
         WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
         """,
         (error_message, error_message, job_id),
+    )
+
+
+def mark_stale_polytao_jobs_failed_postgres(connection: Any) -> None:
+    message = "PolyTAO backend restarted before this job finished."
+    connection.execute(
+        """
+        UPDATE generation.polytao_jobs
+        SET status = 'failed',
+            progress_stage = 'failed',
+            progress_message = %s,
+            error_message = %s,
+            engine = 'polytao-backend',
+            updated_at = now(),
+            finished_at = now()
+        WHERE status IN ('pending', 'submitted', 'running')
+        """,
+        (message, message),
     )
 
 

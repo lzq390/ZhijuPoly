@@ -24,13 +24,11 @@ http://114.214.255.154:9000
   `python -m app.import_postgres --dataset all --refresh-analytics-snapshot`.
   It intentionally does not pass `--rebuild`.
 - `backend`: FastAPI service on port `8000` inside the Docker network. By
-  default it is limited to host GPU `2` through `NEXPOLY_GPU_DEVICE`.
+  default it is limited to host GPU `2` through `NEXPOLY_GPU_DEVICE`. OCSR,
+  conditional generation, retrosynthesis, and PolyTAO all run as backend GPU
+  model services.
 - `nginx`: Nginx static site on host port `${NEXPOLY_WEB_PORT:-9000}`, with
   `/api` and `/health` proxied to the backend.
-- `polytao-worker`: optional real-mode PolyTAO worker from
-  `docker-compose.polytao-worker.yml`. It joins the `nexpoly_default` network
-  and is enabled by `NEXPOLY_POLYTAO_WORKER_MODE=auto` only when the PolyTAO
-  model files are present.
 
 Local build images are named explicitly:
 
@@ -90,7 +88,8 @@ model/conditional_generation/
 model/reactiont5-retrosynthesis/
 ```
 
-The optional PolyTAO worker additionally requires these deployment-only files:
+The backend PolyTAO runtime additionally requires these deployment-only files
+when `POLYTAO_ENABLED=true`:
 
 ```text
 model/polytao/config.json
@@ -99,10 +98,9 @@ model/polytao/tokenizer.json
 model/polytao/spiece.model
 ```
 
-If these files are absent and `NEXPOLY_POLYTAO_WORKER_MODE=auto`, deployment
-skips the worker and `/api/v1/conditional-generation/polytao/status` reports the
-module unavailable. If the mode is explicitly true/enabled, missing files block
-deployment.
+If these files are absent while `POLYTAO_ENABLED=true`, deployment blocks before
+recreating backend. Set `POLYTAO_ENABLED=false` to keep the rest of backend
+available while PolyTAO submissions are disabled.
 
 Treat the existing `polyprop` deployment as read-only when copying or refreshing
 any of these assets.
@@ -119,13 +117,15 @@ GEN_MODEL_ENABLED=true
 RETRO_MODEL_ENABLED=true
 RETRO_MODEL_ID=/app/model/reactiont5-retrosynthesis
 RETRO_DEVICE=auto
+POLYTAO_ENABLED=true
+POLYTAO_MODEL_DIR=/app/model/polytao
+POLYTAO_DEVICE=auto
+POLYTAO_JOB_WORKERS=1
+POLYTAO_MAX_ACTIVE_JOBS=1
 MONOMER_MD_SUBMIT_ENABLED=true
 MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE=3
 MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS=60
 MONOMER_MD_MAX_ACTIVE_JOBS=1
-NEXPOLY_POLYTAO_WORKER_MODE=auto
-POLYTAO_SUBMIT_ENABLED=true
-POLYTAO_MAX_ACTIVE_JOBS=1
 ```
 
 Optional local secrets such as online knowledge or assistant API credentials can
@@ -147,9 +147,8 @@ The workflow is `.github/workflows/nexpoly-deploy.yml`.
 
 Triggers:
 
-- `pull_request` to `main`: frontend build, Compose config validation, PolyTAO
-  worker Compose validation, backend monomer MD tests, backend PolyTAO/Postgres
-  tests, worker monomer MD tests, and worker PolyTAO tests.
+- `pull_request` to `main`: frontend build, Compose config validation, backend
+  monomer MD tests, backend PolyTAO/Postgres tests, and worker monomer MD tests.
 - `push` to `main`: CI, then SSH deployment to the server.
 - `workflow_dispatch`: CI and manual deployment of a selected Git ref, with an
   optional post-deploy monomer MD `CCO` smoke.
@@ -170,15 +169,14 @@ Required GitHub Variables:
 | `NEXPOLY_SSH_PORT` | `22` | SSH port. |
 | `NEXPOLY_DEPLOY_PATH` | `/data/lzq/gith/nexpoly` | Server checkout path. |
 | `NEXPOLY_WEB_PORT` | optional | Optional override for the server `.env` web port. If omitted, the server `.env` value is used, then `9000`. |
-| `NEXPOLY_POLYTAO_WORKER_MODE` | `auto` | PolyTAO worker deploy mode: `auto`, `true`, or `false`. |
 | `NEXPOLY_MONOMER_MD_SMOKE` | `false` | Optional default for running the post-deploy monomer MD `CCO` smoke on push deploys. Manual dispatch input overrides it. |
 | `NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS` | `300` | Optional timeout for the post-deploy monomer MD `CCO` smoke. Manual dispatch input overrides it. |
 
 CI on GitHub hosted runners runs the monomer MD backend test module against a
 Postgres service with `backend/requirements-monomer-md-ci.txt`, runs the
 PolyTAO/database-governance backend tests against Postgres, and runs the
-standalone monomer MD and PolyTAO worker tests. It intentionally does not run
-the full backend pytest suite. Full backend tests, when enabled on the deployment
+standalone monomer MD worker tests. It intentionally does not run the full
+backend pytest suite. Full backend tests, when enabled on the deployment
 server with `NEXPOLY_RUN_SERVER_TESTS=true`, depend on a configured
 `NEXPOLY_TEST_PYTHON` and a Postgres role that can create/drop isolated test
 databases.
@@ -238,14 +236,12 @@ The script then performs these gates in order:
    target commit for the normal `main` deployment path.
 10. Runs `docker compose build`.
 11. Runs `docker compose run --rm postgres-init`.
-12. Builds and recreates the PolyTAO worker when enabled, then waits for its
-    `/health` check.
-13. Recreates `backend` and `nginx`.
-14. Restarts the monomer MD worker through user systemd or pidfile fallback when
+12. Recreates `backend` and `nginx`.
+13. Restarts the monomer MD worker through user systemd or pidfile fallback when
     `.env.monomer-md-worker` exists.
-15. Verifies strict Postgres preflight, backend monomer MD status, optional
+14. Verifies strict Postgres preflight, backend monomer MD status, optional
     `NEXPOLY_MONOMER_MD_SMOKE=true` CCO artifact smoke, backend PolyTAO status
-    when the worker is enabled, and `http://127.0.0.1:$NEXPOLY_WEB_PORT/health`.
+    when PolyTAO is enabled, and `http://127.0.0.1:$NEXPOLY_WEB_PORT/health`.
 
 The script never runs `--rebuild`, never prunes Docker resources, and never
 targets the old `polyprop` compose project.

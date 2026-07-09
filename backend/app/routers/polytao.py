@@ -27,13 +27,9 @@ from app.services.polytao_repository import (
     create_polytao_job_postgres,
     get_polytao_job_postgres,
     mark_polytao_job_failed_postgres,
-    mark_polytao_job_submitted_postgres,
 )
-from app.services.polytao_worker_client import (
-    PolytaoWorkerClient,
-    PolytaoWorkerError,
-    PolytaoWorkerSubmitPayload,
-)
+from app.services.polytao_jobs import PolytaoJobManager
+from app.services.polytao_runtime import BackendPolytaoRuntime, RuntimeProbe
 from app.services.structure_2d import generate_2d_svg
 
 
@@ -78,16 +74,6 @@ def _enforce_submit_rate_limit(request: Request, settings) -> None:
     hits_by_ip[client_ip] = recent_hits
 
 
-def _optional_bool(value: object) -> bool | None:
-    return value if isinstance(value, bool) else None
-
-
-def _optional_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    return value if isinstance(value, int) else None
-
-
 def _optional_str(value: object) -> str | None:
     if value is None:
         return None
@@ -95,107 +81,101 @@ def _optional_str(value: object) -> str | None:
     return text or None
 
 
-def _worker_client_for_app(app) -> PolytaoWorkerClient:
-    override = getattr(app.state, "polytao_worker_client", None)
-    if override is not None:
-        return override
-
-    settings = app.state.settings
-    if not settings.polytao_worker_base_url:
-        raise HTTPException(status_code=503, detail="PolyTAO worker is not configured")
-    client = PolytaoWorkerClient(
-        base_url=settings.polytao_worker_base_url,
-        timeout_seconds=settings.polytao_worker_timeout_seconds,
-    )
-    app.state.polytao_worker_client = client
-    return client
-
-
-def _worker_unavailable_message(health: dict[str, Any]) -> str | None:
-    worker_status = str(health.get("status") or "unknown")
-    db_configured = _optional_bool(health.get("db_configured"))
-    db_ready = _optional_bool(health.get("db_ready"))
-    if db_ready is None:
-        db_ready = db_configured
-    runtime_ready = _optional_bool(health.get("runtime_ready"))
-
-    if db_configured is not True:
-        return "PolyTAO worker database is not configured"
-    if db_ready is not True:
-        db_error = _optional_str(health.get("db_error"))
-        if db_error:
-            return f"PolyTAO worker database is not ready: {db_error}"
-        return "PolyTAO worker database is not ready"
-    if runtime_ready is not True:
-        runtime_error = _optional_str(health.get("runtime_error"))
-        if runtime_error:
-            return f"PolyTAO worker runtime is not ready: {runtime_error}"
-        return "PolyTAO worker runtime is not ready"
-    if worker_status != "ok":
-        return f"PolyTAO worker health is {worker_status}"
-    return None
-
-
-def _status_response_from_health(*, settings, health: dict[str, Any]) -> PolytaoStatusResponse:
-    unavailable_message = _worker_unavailable_message(health)
-    available = unavailable_message is None
-    default_params = health.get("default_params")
-    if not isinstance(default_params, dict):
-        default_params = default_polytao_params()
-    return PolytaoStatusResponse(
-        enabled=True,
-        available=available,
-        worker_base_url_configured=bool(settings.polytao_worker_base_url),
-        worker_status=str(health.get("status") or "unknown"),
-        worker_mode=_optional_str(health.get("mode")),
-        db_configured=_optional_bool(health.get("db_configured")),
-        db_ready=_optional_bool(health.get("db_ready")),
-        db_error=_optional_str(health.get("db_error")),
-        runtime_ready=_optional_bool(health.get("runtime_ready")),
-        runtime_error=_optional_str(health.get("runtime_error")),
-        active_jobs=_optional_int(health.get("active_jobs")),
-        model_id=_optional_str(health.get("model_id")),
-        model_revision=_optional_str(health.get("model_revision")),
-        default_params=default_params,
-        worker_version=_optional_str(health.get("worker_version")),
-        message="PolyTAO worker is ready" if available else unavailable_message,
-    )
-
-
-@router.get("/status", response_model=PolytaoStatusResponse)
-async def get_polytao_status(request: Request) -> PolytaoStatusResponse:
-    settings = request.app.state.settings
-    if not settings.polytao_submit_enabled:
-        return PolytaoStatusResponse(
-            enabled=False,
-            available=False,
-            worker_base_url_configured=bool(settings.polytao_worker_base_url),
-            default_params=default_polytao_params(),
-            message="PolyTAO submissions are disabled",
+def _runtime_for_app(app) -> BackendPolytaoRuntime:
+    runtime = getattr(app.state, "polytao_runtime", None)
+    if runtime is None:
+        settings = app.state.settings
+        runtime = BackendPolytaoRuntime(
+            model_dir=settings.polytao_model_dir_path,
+            device=settings.polytao_device,
+            model_id=settings.polytao_model_id,
+            model_revision=settings.polytao_model_revision,
         )
+        app.state.polytao_runtime = runtime
+    return runtime
 
-    configured = bool(settings.polytao_worker_base_url) or getattr(request.app.state, "polytao_worker_client", None) is not None
-    if not configured:
+
+def _job_manager_for_app(app) -> PolytaoJobManager:
+    manager = getattr(app.state, "polytao_job_manager", None)
+    if manager is None:
+        settings = app.state.settings
+        manager = PolytaoJobManager(
+            app_postgres_dsn=settings.app_postgres_dsn,
+            max_workers=settings.polytao_job_workers,
+        )
+        app.state.polytao_job_manager = manager
+    return manager
+
+
+def _polytao_db_health(settings) -> tuple[bool, bool, str | None, int | None]:
+    if not settings.app_postgres_dsn:
+        return False, False, "APP_POSTGRES_DSN is not configured", None
+    try:
+        with postgres_connection(settings.app_postgres_dsn) as connection:
+            row = connection.execute("SELECT to_regclass('generation.polytao_jobs') AS table_name").fetchone()
+            table_name = row["table_name"] if row is not None else None
+            if table_name is None:
+                return True, False, "generation.polytao_jobs table is missing", None
+            active_jobs = count_active_polytao_jobs_postgres(connection)
+    except Exception as exc:
+        return True, False, str(exc)[:240], None
+    return True, True, None, active_jobs
+
+
+def _runtime_unavailable_message(probe: RuntimeProbe) -> str | None:
+    if probe.runtime_ready:
+        return None
+    if probe.runtime_error:
+        return f"PolyTAO backend runtime is not ready: {probe.runtime_error}"
+    return "PolyTAO backend runtime is not ready"
+
+
+def _status_response_for_app(app) -> PolytaoStatusResponse:
+    settings = app.state.settings
+    if not settings.polytao_enabled:
         return PolytaoStatusResponse(
             enabled=False,
             available=False,
             worker_base_url_configured=False,
             default_params=default_polytao_params(),
-            message="PolyTAO worker is disabled until POLYTAO_WORKER_BASE_URL is configured",
+            message="PolyTAO backend runtime is disabled",
         )
 
-    try:
-        health = _worker_client_for_app(request.app).get_health()
-    except PolytaoWorkerError as exc:
-        return PolytaoStatusResponse(
-            enabled=True,
-            available=False,
-            worker_base_url_configured=bool(settings.polytao_worker_base_url),
-            worker_status="unreachable",
-            default_params=default_polytao_params(),
-            message=str(exc),
-        )
-    return _status_response_from_health(settings=settings, health=health)
+    db_configured, db_ready, db_error, active_jobs = _polytao_db_health(settings)
+    probe = _runtime_for_app(app).probe()
+    runtime_message = _runtime_unavailable_message(probe)
+    if not db_configured:
+        message = "PolyTAO backend database is not configured"
+    elif not db_ready:
+        message = f"PolyTAO backend database is not ready: {db_error}" if db_error else "PolyTAO backend database is not ready"
+    elif runtime_message:
+        message = runtime_message
+    else:
+        message = "PolyTAO backend runtime is ready"
+
+    return PolytaoStatusResponse(
+        enabled=True,
+        available=db_configured and db_ready and probe.runtime_ready,
+        worker_base_url_configured=False,
+        worker_status=None,
+        worker_mode=None,
+        db_configured=db_configured,
+        db_ready=db_ready,
+        db_error=db_error,
+        runtime_ready=probe.runtime_ready,
+        runtime_error=probe.runtime_error,
+        active_jobs=active_jobs,
+        model_id=settings.polytao_model_id,
+        model_revision=settings.polytao_model_revision,
+        default_params=default_polytao_params(),
+        worker_version=None,
+        message=message,
+    )
+
+
+@router.get("/status", response_model=PolytaoStatusResponse)
+async def get_polytao_status(request: Request) -> PolytaoStatusResponse:
+    return _status_response_for_app(request.app)
 
 
 @router.post("/descriptors", response_model=PolytaoDescriptorResponse)
@@ -249,10 +229,8 @@ async def create_polytao_job(
     request: Request,
 ) -> PolytaoJobCreateResponse:
     settings = request.app.state.settings
-    if not settings.polytao_submit_enabled:
-        raise HTTPException(status_code=503, detail="PolyTAO submissions are disabled")
-    if not settings.polytao_worker_base_url and getattr(request.app.state, "polytao_worker_client", None) is None:
-        raise HTTPException(status_code=503, detail="PolyTAO worker is not configured")
+    if not settings.polytao_enabled:
+        raise HTTPException(status_code=503, detail="PolyTAO backend runtime is disabled")
 
     try:
         prompt = polytao_prompt_from_descriptors(request_body.descriptors)
@@ -262,14 +240,9 @@ async def create_polytao_job(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    try:
-        client = _worker_client_for_app(request.app)
-        health = client.get_health()
-    except PolytaoWorkerError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    unavailable_message = _worker_unavailable_message(health)
-    if unavailable_message is not None:
-        raise HTTPException(status_code=503, detail=unavailable_message)
+    service_status = _status_response_for_app(request.app)
+    if not service_status.available:
+        raise HTTPException(status_code=503, detail=service_status.message)
     _enforce_submit_rate_limit(request, settings)
 
     job_id = uuid4().hex
@@ -282,34 +255,24 @@ async def create_polytao_job(
     )
 
     try:
-        submission = client.submit_job(
-            PolytaoWorkerSubmitPayload(
-                job_id=job_id,
-                descriptors=request_body.descriptors,
+        _job_manager_for_app(request.app).submit_job(
+            job_id,
+            lambda: _runtime_for_app(request.app).generate(
                 prompt=prompt,
-                input_smiles=request_body.input_smiles,
-                canonical_smiles=canonical_smiles,
                 candidate_count=request_body.candidate_count,
                 temperature=request_body.temperature,
                 top_k=request_body.top_k,
                 top_p=request_body.top_p,
                 max_length=request_body.max_length,
-            )
+            ),
         )
-    except PolytaoWorkerError as exc:
+    except Exception as exc:
         error_message = str(exc)
         with postgres_connection(settings.app_postgres_dsn) as connection:
             mark_polytao_job_failed_postgres(connection, job_id, error_message)
         raise HTTPException(status_code=503, detail=error_message) from exc
 
     with postgres_connection(settings.app_postgres_dsn) as connection:
-        mark_polytao_job_submitted_postgres(
-            connection,
-            job_id=job_id,
-            worker_id=submission.worker_id,
-            worker_job_id=submission.worker_job_id,
-            worker_version=submission.worker_version,
-        )
         job = get_polytao_job_postgres(connection, job_id)
 
     if job is None:

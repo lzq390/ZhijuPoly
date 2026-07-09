@@ -12,6 +12,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     GEN_MODEL_DIR=/app/model/conditional_generation \
     GEN_DEVICE=auto \
     GEN_JOB_WORKERS=1 \
+    POLYTAO_ENABLED=true \
+    POLYTAO_MODEL_DIR=/app/model/polytao \
+    POLYTAO_DEVICE=auto \
+    POLYTAO_JOB_WORKERS=1 \
     ALLOWED_ORIGINS=http://localhost:9000,http://127.0.0.1:9000
 
 WORKDIR /app

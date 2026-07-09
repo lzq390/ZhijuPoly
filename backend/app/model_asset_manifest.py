@@ -59,7 +59,7 @@ MODEL_DIRECTORY_ASSETS: tuple[ModelAssetSpec, ...] = (
         "model/polytao",
         "model-directory",
         logical_name="polytao_dir",
-        notes="optional PolyTAO worker model directory; missing files should make PolyTAO unavailable, not ready",
+        notes="PolyTAO backend runtime model directory; missing files should make PolyTAO unavailable, not ready",
     ),
 )
 

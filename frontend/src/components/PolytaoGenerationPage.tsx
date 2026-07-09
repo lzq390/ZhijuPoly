@@ -305,7 +305,7 @@ function ServicePill({
     return (
       <Badge className="border-slate-200 bg-slate-50 text-slate-700">
         <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin" />
-        Checking worker
+        Checking runtime
       </Badge>
     );
   }
@@ -313,14 +313,14 @@ function ServicePill({
     return (
       <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">
         <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
-        Worker ready
+        Runtime ready
       </Badge>
     );
   }
   return (
     <Badge className="border-rose-200 bg-rose-50 text-rose-700">
       <CircleAlert className="mr-2 h-3.5 w-3.5" />
-      {statusError ? "Status error" : "Worker unavailable"}
+      {statusError ? "Status error" : "Runtime unavailable"}
     </Badge>
   );
 }
@@ -603,7 +603,7 @@ function RunControlPanel({
 
         <div className="rounded-[10px] border border-slate-200 bg-slate-50 px-3 py-3">
           <MetricRow label="Prompt fields" value={String(prompt.split(",").length)} />
-          <MetricRow label="Worker version" value={status?.worker_version ?? "Pending"} />
+          <MetricRow label="Runtime version" value={status?.worker_version ?? "Backend"} />
           <MetricRow label="Active jobs" value={String(status?.active_jobs ?? 0)} />
         </div>
 
@@ -679,7 +679,7 @@ function ResultsPanel({
         {isLoading ? (
           <div className="flex min-h-[240px] items-center justify-center rounded-[12px] border border-dashed border-slate-200 bg-slate-50 text-sm font-semibold text-slate-600">
             <LoaderCircle className="mr-2 h-5 w-5 animate-spin text-sky-600" />
-            Waiting for PolyTAO worker
+            Waiting for PolyTAO backend runtime
           </div>
         ) : null}
         {!isLoading && !data && !error ? (
@@ -700,7 +700,7 @@ function ResultsPanel({
               </div>
             ) : (
               <div className="rounded-[12px] border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
-                Worker completed but no candidate passed filtering.
+                Backend runtime completed but no candidate passed filtering.
               </div>
             )}
           </div>

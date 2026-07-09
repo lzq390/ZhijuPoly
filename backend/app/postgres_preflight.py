@@ -48,6 +48,7 @@ STRICT_REQUIRED_MIGRATIONS = (
     "0005_byteff2_formal_monomer_md",
     "0006_property_filter_records",
     "0007_polytao_jobs",
+    "0008_polytao_backend_runtime",
 )
 STRICT_RUNTIME_TABLES = tuple(POSTGRES_TABLES)
 

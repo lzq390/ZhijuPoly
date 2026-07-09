@@ -198,7 +198,7 @@ export function usePolytaoGeneration() {
           attempts: 0,
           progress_percent: 0,
           progress_stage: createdJob.status,
-          progress_message: "Submitted to PolyTAO.",
+          progress_message: "Submitted to PolyTAO backend runtime.",
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           started_at: null,
@@ -206,7 +206,7 @@ export function usePolytaoGeneration() {
           worker_id: null,
           worker_job_id: null,
           worker_version: null,
-          engine: "polytao",
+          engine: "polytao-backend",
           error_message: null,
           result: null
         }
