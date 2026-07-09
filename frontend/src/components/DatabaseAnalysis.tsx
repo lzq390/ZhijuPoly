@@ -786,7 +786,7 @@ function resolveDatasets(summary: DatasetSummaryResponse | null, summaryError: s
     return {
       ...dataset,
       recordCount: item.total_records,
-      status: item.source_status === "missing" ? ("Reserved" as const) : ("Ready" as const),
+      status: item.source_status === "ready" ? ("Ready" as const) : ("Reserved" as const),
       sourceStatus: item.source_status,
       sourceMessage: item.source_message,
       latestImportStatus: item.latest_import_status,

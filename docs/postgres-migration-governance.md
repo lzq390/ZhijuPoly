@@ -45,19 +45,20 @@ Apply migrations first:
 ```bash
 cd backend
 python -m app.postgres_migrations
-python -m app.postgres_preflight --mode runtime --strict
 ```
 
-Then import the standardized property filter dataset:
+Place `database/PolymerDatabaseV2.0_reliable085_standardized.csv` on the target
+host before importing the standardized property filter dataset:
 
 ```bash
 cd backend
 python -m app.import_postgres --dataset property_filter
+python -m app.postgres_preflight --mode runtime --strict
 ```
 
 `--dataset all` also includes `property_filter` in the default deployment
-import path. The explicit command above is only needed when refreshing the
-threshold-filter table by itself.
+import path. Use `python -m app.import_postgres --dataset all` instead of the
+explicit property-filter command when initializing all governed datasets.
 
 The import replaces only `core.polymer_property_filter_records`. It must not
 truncate or rebuild `core.polymer_properties`, knowledge, DFT, PI, or monomer MD
@@ -71,8 +72,8 @@ Run these checks before using the database browser property filter module:
 SELECT version, checksum
 FROM governance.schema_migrations
 WHERE version IN (
-  '0001_initial_core',
-  '0002_knowledge_and_analytics',
+  '0001_app_data_governance',
+  '0002_lab_identity_defaults',
   '0003_runtime_postgres_cutover',
   '0004_monomer_md_jobs',
   '0005_byteff2_formal_monomer_md',

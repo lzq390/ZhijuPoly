@@ -235,6 +235,7 @@ check_required_data_sources() {
     "database/data_txt.zip"
     "database/polymer_process_material_filtered_cleaned_office_utf8_bom.csv"
     "database/polymer_property_detail_cleaned_office_utf8_bom.csv"
+    "database/PolymerDatabaseV2.0_reliable085_standardized.csv"
     "backend/data/polyprop.db"
     "backend/data/pi_reverse_design.db"
     "backend/data/fumol.db"
