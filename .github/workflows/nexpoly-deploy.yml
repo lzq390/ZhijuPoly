@@ -43,6 +43,11 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
 
+      - name: Validate release packaging
+        run: |
+          bash -n scripts/package_release.sh
+          python3 -m unittest discover -s scripts/tests -p 'test_release_*.py' -v
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

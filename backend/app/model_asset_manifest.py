@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import json
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +17,13 @@ class ModelAssetSpec:
     @property
     def resolved_logical_name(self) -> str:
         return self.logical_name or Path(self.path).name
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseAssetSpec:
+    path: str
+    kind: Literal["file", "tree"]
+    category: Literal["required-model", "reactiont5", "polytao"]
 
 
 REQUIRED_MODEL_FILE_ASSETS: tuple[ModelAssetSpec, ...] = (
@@ -64,6 +73,13 @@ MODEL_DIRECTORY_ASSETS: tuple[ModelAssetSpec, ...] = (
 )
 
 
+RELEASE_MODEL_ASSETS: tuple[ReleaseAssetSpec, ...] = (
+    *(ReleaseAssetSpec(spec.path, "file", "required-model") for spec in REQUIRED_MODEL_FILE_ASSETS),
+    ReleaseAssetSpec("model/reactiont5-retrosynthesis", "tree", "reactiont5"),
+    *(ReleaseAssetSpec(spec.path, "file", "polytao") for spec in POLYTAO_MODEL_FILE_ASSETS),
+)
+
+
 def iter_model_asset_specs(include_directories: bool = True, include_optional: bool = True) -> tuple[ModelAssetSpec, ...]:
     specs = REQUIRED_MODEL_FILE_ASSETS
     if include_optional:
@@ -75,11 +91,38 @@ def iter_model_asset_specs(include_directories: bool = True, include_optional: b
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Print Nexpoly model asset manifest entries.")
-    parser.add_argument("--format", choices=["paths"], default="paths")
+    parser.add_argument("--profile", choices=["runtime", "release"], default="runtime")
+    parser.add_argument("--format", choices=["paths", "json"], default="paths")
     args = parser.parse_args()
-    if args.format == "paths":
+
+    if args.profile == "runtime" and args.format == "paths":
         for spec in REQUIRED_MODEL_FILE_ASSETS:
             print(spec.path)
+        return
+
+    if args.profile == "release" and args.format == "paths":
+        for spec in RELEASE_MODEL_ASSETS:
+            print(spec.path)
+        return
+
+    if args.profile != "release":
+        parser.error("--format json requires --profile release")
+
+    print(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "profile": "release",
+                "assets": [
+                    {"path": spec.path, "kind": spec.kind, "category": spec.category}
+                    for spec in RELEASE_MODEL_ASSETS
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":
