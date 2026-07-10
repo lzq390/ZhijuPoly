@@ -126,6 +126,8 @@ MONOMER_MD_SUBMIT_ENABLED=true
 MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE=3
 MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS=60
 MONOMER_MD_MAX_ACTIVE_JOBS=1
+NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS=40
+NEXPOLY_MONOMER_MD_STATUS_RETRIES=3
 ```
 
 Optional local secrets such as online knowledge or assistant API credentials can
@@ -242,6 +244,13 @@ The script then performs these gates in order:
 14. Verifies strict Postgres preflight, backend monomer MD status, optional
     `NEXPOLY_MONOMER_MD_SMOKE=true` CCO artifact smoke, backend PolyTAO status
     when PolyTAO is enabled, and `http://127.0.0.1:$NEXPOLY_WEB_PORT/health`.
+
+The backend monomer MD status gate allows `1..300` seconds per request and
+`0..3` additional retries after the first request. Its defaults are `40`
+seconds and `3` retries because the real worker performs CUDA and
+molecular-dynamics readiness probes. The gate accepts only a JSON object with
+`available=true` and logs only an allowlisted status summary; it never prints
+free-form worker errors or response bodies.
 
 The script never runs `--rebuild`, never prunes Docker resources, and never
 targets the old `polyprop` compose project.

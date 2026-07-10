@@ -83,13 +83,53 @@ validate_port() {
   fi
 }
 
+validate_integer_range() {
+  local name="$1"
+  local value="$2"
+  local minimum="$3"
+  local maximum="$4"
+  local numeric_value=0
+  local normalized_value=""
+
+  case "$value" in
+    *[!0-9]*|"")
+      die "$name must be an integer."
+      ;;
+  esac
+  normalized_value="$value"
+  while [[ ${#normalized_value} -gt 1 && "$normalized_value" == 0* ]]; do
+    normalized_value="${normalized_value#0}"
+  done
+  if (( ${#normalized_value} > ${#maximum} )); then
+    die "$name must be between $minimum and $maximum."
+  fi
+  numeric_value=$((10#$normalized_value))
+  if (( numeric_value < minimum || numeric_value > maximum )); then
+    die "$name must be between $minimum and $maximum."
+  fi
+}
+
 DEPLOY_REF="${NEXPOLY_DEPLOY_REF:-main}"
 DEPLOY_BRANCH="${NEXPOLY_DEPLOY_BRANCH:-main}"
 DEPLOY_BUNDLE="${NEXPOLY_DEPLOY_BUNDLE:-}"
 WEB_PORT="$(config_value NEXPOLY_WEB_PORT 9000)"
 POSTGRES_PORT="$(config_value NEXPOLY_POSTGRES_PORT 55432)"
+MONOMER_MD_STATUS_TIMEOUT_SECONDS="$(
+  config_value NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS 40
+)"
+MONOMER_MD_STATUS_RETRIES="$(config_value NEXPOLY_MONOMER_MD_STATUS_RETRIES 3)"
 validate_port NEXPOLY_WEB_PORT "$WEB_PORT"
 validate_port NEXPOLY_POSTGRES_PORT "$POSTGRES_PORT"
+validate_integer_range \
+  NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS \
+  "$MONOMER_MD_STATUS_TIMEOUT_SECONDS" \
+  1 \
+  300
+validate_integer_range \
+  NEXPOLY_MONOMER_MD_STATUS_RETRIES \
+  "$MONOMER_MD_STATUS_RETRIES" \
+  0 \
+  3
 export NEXPOLY_WEB_PORT="$WEB_PORT"
 export NEXPOLY_POSTGRES_PORT="$POSTGRES_PORT"
 
@@ -510,10 +550,12 @@ check_monomer_backend_status() {
   fi
 
   log "Checking backend monomer MD status endpoint."
-  local payload
-  payload="$(curl --fail --silent --show-error --max-time 10 "http://localhost:${WEB_PORT}/api/v1/monomer-md/status")"
-  printf '%s\n' "$payload"
-  json_field_is "$payload" available true || die "Backend monomer MD status is not available."
+  if ! python3 "$ROOT_DIR/scripts/monomer_backend_status_probe.py" \
+    --url "http://127.0.0.1:${WEB_PORT}/api/v1/monomer-md/status" \
+    --timeout-seconds "$MONOMER_MD_STATUS_TIMEOUT_SECONDS" \
+    --retries "$MONOMER_MD_STATUS_RETRIES"; then
+    die "Backend monomer MD status is not available."
+  fi
 }
 
 monomer_smoke_enabled() {
