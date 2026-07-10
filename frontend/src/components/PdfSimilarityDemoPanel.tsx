@@ -8,7 +8,6 @@ import {
 } from "react";
 import "./PdfSimilarityDemoPanel.css";
 
-const LEGACY_API_SETTINGS_STORAGE_KEY = "polyprop.pdfSimilarityDemo.apiSettings";
 const UPLOAD_HISTORY_STORAGE_KEY = "polyprop.pdfSimilarityDemo.uploadHistory";
 const MAX_HISTORY_ITEMS = 12;
 const SIMILAR_PAPERS_DELAY_MS = 10000;
@@ -125,19 +124,6 @@ function writeStorage(key: string, value: unknown) {
 
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function removeStorage(key: string) {
-  if (typeof window === "undefined") {
-    return true;
-  }
-
-  try {
-    window.localStorage.removeItem(key);
     return true;
   } catch {
     return false;
@@ -378,13 +364,9 @@ export function PdfSimilarityDemoPanel() {
   const [storageWarning, setStorageWarning] = useState("");
 
   useEffect(() => {
-    const legacySettingsRemoved = removeStorage(LEGACY_API_SETTINGS_STORAGE_KEY);
     const storedHistory = sanitizeHistory(readStorage<unknown>(UPLOAD_HISTORY_STORAGE_KEY, []));
 
     setHistoryItems(storedHistory);
-    if (!legacySettingsRemoved) {
-      setStorageWarning("Local storage is unavailable. Legacy preview settings could not be cleared.");
-    }
     if (storedHistory[0]) {
       setSelectedRecordId(storedHistory[0].id);
       setUploadState({
