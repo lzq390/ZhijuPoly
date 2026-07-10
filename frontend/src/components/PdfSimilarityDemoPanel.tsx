@@ -8,19 +8,9 @@ import {
 } from "react";
 import "./PdfSimilarityDemoPanel.css";
 
-const DEFAULT_API_BASE_URL = (import.meta.env.VITE_DEFAULT_API_BASE_URL || "https://api.vectorengine.ai/v1").trim();
-const DEFAULT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL || "gpt-5.4-mini").trim();
-const API_SETTINGS_STORAGE_KEY = "polyprop.pdfSimilarityDemo.apiSettings";
 const UPLOAD_HISTORY_STORAGE_KEY = "polyprop.pdfSimilarityDemo.uploadHistory";
 const MAX_HISTORY_ITEMS = 12;
 const SIMILAR_PAPERS_DELAY_MS = 10000;
-
-type ApiSettings = {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  savedAt: string;
-};
 
 type UploadState = {
   state: "idle" | "uploaded" | "error";
@@ -47,8 +37,6 @@ type UploadHistoryRecord = {
   note: string;
   papers: SimilarPaperCard[];
 };
-
-type EditableSettingsField = keyof Pick<ApiSettings, "baseUrl" | "apiKey" | "model">;
 
 const curatedPaperCards: SimilarPaperCard[] = [
   {
@@ -113,13 +101,6 @@ const curatedPaperCards: SimilarPaperCard[] = [
   }
 ];
 
-const defaultApiSettings: ApiSettings = {
-  baseUrl: DEFAULT_API_BASE_URL,
-  apiKey: "",
-  model: DEFAULT_MODEL,
-  savedAt: ""
-};
-
 function readStorage<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") {
     return fallback;
@@ -161,15 +142,6 @@ function formatTimestamp(isoString: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
-}
-
-function sanitizeSettings(value: Partial<ApiSettings> | null | undefined): ApiSettings {
-  return {
-    baseUrl: String(value?.baseUrl || defaultApiSettings.baseUrl),
-    apiKey: String(value?.apiKey || ""),
-    model: String(value?.model || defaultApiSettings.model),
-    savedAt: String(value?.savedAt || "")
-  };
 }
 
 function sanitizePaperCards(value: unknown): SimilarPaperCard[] {
@@ -375,103 +347,9 @@ function PaperPreviewCard({ paper }: { paper: SimilarPaperCard }) {
   );
 }
 
-function SettingsModal({
-  open,
-  settings,
-  onChange,
-  onClose,
-  onSave
-}: {
-  open: boolean;
-  settings: ApiSettings;
-  onChange: (field: EditableSettingsField, value: string) => void;
-  onClose: () => void;
-  onSave: () => void;
-}) {
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
-
-  if (!open) {
-    return null;
-  }
-
-  return (
-    <div
-      className="pdf-demo-settings-modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="pdf-demo-settings-title"
-      onClick={onClose}
-    >
-      <section className="pdf-demo-settings-modal-card" onClick={(event) => event.stopPropagation()}>
-        <div className="pdf-demo-settings-modal-header">
-          <div>
-            <p className="pdf-demo-section-kicker">Settings</p>
-            <h2 id="pdf-demo-settings-title">API Settings</h2>
-          </div>
-          <button
-            type="button"
-            className="pdf-demo-modal-close-btn"
-            aria-label="Close settings"
-            onClick={onClose}
-          />
-        </div>
-
-        <div className="pdf-demo-settings-stack">
-          <label className="pdf-demo-field">
-            <span>API Base URL</span>
-            <input
-              type="text"
-              value={settings.baseUrl}
-              placeholder="https://api.vectorengine.ai/v1"
-              onChange={(event) => onChange("baseUrl", event.target.value)}
-            />
-          </label>
-          <label className="pdf-demo-field">
-            <span>API Key</span>
-            <input
-              type="password"
-              value={settings.apiKey}
-              placeholder="Optional for local demo"
-              autoComplete="off"
-              onChange={(event) => onChange("apiKey", event.target.value)}
-            />
-          </label>
-          <label className="pdf-demo-field">
-            <span>Model Name</span>
-            <input
-              type="text"
-              value={settings.model}
-              placeholder="gpt-5.4-mini"
-              onChange={(event) => onChange("model", event.target.value)}
-            />
-          </label>
-          <button className="pdf-demo-primary-btn" type="button" onClick={onSave}>
-            Save Settings
-          </button>
-          {settings.savedAt ? <p className="pdf-demo-helper-text">Saved: {formatTimestamp(settings.savedAt)}</p> : null}
-        </div>
-      </section>
-    </div>
-  );
-}
-
 export function PdfSimilarityDemoPanel() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const revealTimerRef = useRef<number | null>(null);
-  const [apiSettings, setApiSettings] = useState<ApiSettings>(defaultApiSettings);
   const [historyItems, setHistoryItems] = useState<UploadHistoryRecord[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState("");
   const [uploadState, setUploadState] = useState<UploadState>({
@@ -480,17 +358,14 @@ export function PdfSimilarityDemoPanel() {
     fileName: ""
   });
   const [isDragging, setIsDragging] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [isLoadingSimilarPapers, setIsLoadingSimilarPapers] = useState(false);
   const [similarPapersVisible, setSimilarPapersVisible] = useState(false);
   const [pendingRecordId, setPendingRecordId] = useState("");
   const [storageWarning, setStorageWarning] = useState("");
 
   useEffect(() => {
-    const storedSettings = sanitizeSettings(readStorage<Partial<ApiSettings>>(API_SETTINGS_STORAGE_KEY, defaultApiSettings));
     const storedHistory = sanitizeHistory(readStorage<unknown>(UPLOAD_HISTORY_STORAGE_KEY, []));
 
-    setApiSettings(storedSettings);
     setHistoryItems(storedHistory);
     if (storedHistory[0]) {
       setSelectedRecordId(storedHistory[0].id);
@@ -513,27 +388,6 @@ export function PdfSimilarityDemoPanel() {
 
   const selectedRecord = historyItems.find((item) => item.id === selectedRecordId) || null;
   const visiblePapers = similarPapersVisible && selectedRecord?.papers.length ? selectedRecord.papers : [];
-
-  function persistSettings(nextSettings: ApiSettings) {
-    const saved = writeStorage(API_SETTINGS_STORAGE_KEY, nextSettings);
-    setApiSettings(nextSettings);
-    setStorageWarning(saved ? "" : "Local storage is unavailable. Settings are kept for this session only.");
-  }
-
-  function handleSettingsChange(field: EditableSettingsField, value: string) {
-    setApiSettings((current) => ({ ...current, [field]: value }));
-  }
-
-  function handleSaveSettings() {
-    const nextSettings: ApiSettings = {
-      baseUrl: apiSettings.baseUrl.trim() || defaultApiSettings.baseUrl,
-      apiKey: apiSettings.apiKey,
-      model: apiSettings.model.trim() || defaultApiSettings.model,
-      savedAt: new Date().toISOString()
-    };
-    persistSettings(nextSettings);
-    setSettingsOpen(false);
-  }
 
   function persistHistory(nextHistory: UploadHistoryRecord[]) {
     const saved = writeStorage(UPLOAD_HISTORY_STORAGE_KEY, nextHistory);
@@ -644,18 +498,6 @@ export function PdfSimilarityDemoPanel() {
       <main className="pdf-demo-workbench-layout">
         <aside className="pdf-demo-sidebar">
           <div className="pdf-demo-sidebar-shell">
-            <section className="pdf-demo-sidebar-section pdf-demo-sidebar-settings-section">
-              <button
-                className={`pdf-demo-settings-entry ${settingsOpen ? "is-active" : ""}`}
-                type="button"
-                onClick={() => setSettingsOpen((current) => !current)}
-              >
-                <span className="pdf-demo-settings-entry-title">Settings</span>
-                <span className="pdf-demo-settings-entry-meta">Click to open API settings</span>
-                <span className="pdf-demo-settings-entry-meta">{apiSettings.model}</span>
-              </button>
-            </section>
-
             <section className="pdf-demo-sidebar-section pdf-demo-sidebar-history-section">
               <div className="pdf-demo-sidebar-section-header">
                 <div>
@@ -707,6 +549,10 @@ export function PdfSimilarityDemoPanel() {
                 {uploadState.state === "uploaded" ? "Uploaded" : uploadState.state === "error" ? "Needs attention" : "Ready"}
               </div>
             </div>
+
+            <p className="pdf-demo-preview-notice" role="status">
+              Static preview: uploads stay in this browser and results come from prepared local examples. No external API is called.
+            </p>
 
             <button
               type="button"
@@ -762,14 +608,6 @@ export function PdfSimilarityDemoPanel() {
           </section>
         </section>
       </main>
-
-      <SettingsModal
-        open={settingsOpen}
-        settings={apiSettings}
-        onChange={handleSettingsChange}
-        onClose={() => setSettingsOpen(false)}
-        onSave={handleSaveSettings}
-      />
     </section>
   );
 }

@@ -11,6 +11,10 @@ __pycache__/
 .env.ai
 .env.monomer-md-worker
 backend/.env
+/.env.dev
+/.env.dev.ai
+/docker-compose.dev.yml
+/scripts/dev_server_gpu.sh
 
 # Generated SQLite databases
 *.db
