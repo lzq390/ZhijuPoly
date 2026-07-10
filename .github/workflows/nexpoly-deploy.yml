@@ -97,6 +97,11 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements-monomer-md-ci.txt
 
+      - name: Validate deployment status probe
+        run: |
+          bash -n scripts/deploy_server.sh
+          python -m unittest discover -s scripts/tests -p 'test_monomer_backend_status_probe.py' -v
+
       - name: Install backend dependencies
         run: python -m pip install -r backend/requirements-monomer-md-ci.txt
 
