@@ -326,21 +326,70 @@ migration checksum mismatches should be treated as blockers, not ignored. See
 [`docs/postgres-migration-governance.md`](postgres-migration-governance.md) for
 the guarded reconcile process.
 
-## Release Package
+## Offline Source/Asset Handoff Package（离线源码/资产交接包）
 
-The SSH pipeline is the default deployment path. A release bundle can still be
-created for offline handoff:
+The SSH pipeline is the default deployment path. The release package is a
+deterministic source and governed-asset handoff artifact; it is not a complete
+air-gapped runtime. Docker images, the NVIDIA runtime, npm/pip caches, and other
+third-party dependencies must be transferred or made available separately.
+
+Packaging requires a valid, clean Git `HEAD`: staged changes, tracked unstaged
+changes, and unignored untracked paths are rejected. The frontend production
+build runs as a gate, but generated `frontend/dist` content is not added to the
+archive. Source files come only from `git archive` of the full commit captured
+before that build.
+
+Run the packager on the supported GNU/Linux toolchain used by CI and the release
+server: Bash 4 or newer, Python 3.11 with `fcntl`, GNU tar/gzip, Git, and npm.
+
+Create a package without governed import data:
 
 ```bash
 scripts/package_release.sh
 ```
 
-By default, legacy data files are excluded to keep the package small. To bundle
-prepared data too:
+This default mode removes all `database/` and `backend/data/` content. To add
+the eight exact data inputs checked by the deployment gate, use:
 
 ```bash
 INCLUDE_DATA=1 scripts/package_release.sh
 ```
 
-The package is written to `release/nexpoly-release-*.tar.gz`. Model artifacts
-are included by default and validated through the shared model asset manifest.
+`INCLUDE_DATA` accepts only `0` or `1`. Both modes include the 21 required model
+files, the complete ReactionT5 tree, and the four PolyTAO files defined by the
+release profile in `backend/app/model_asset_manifest.py`. Explicit asset entries
+may be symlinks, but their canonical targets must remain under the matching
+default asset roots (`model/`, `database/`, or `backend/data/`) or an approved
+colon-separated external root:
+
+```bash
+RELEASE_ALLOWED_MODEL_ROOTS=/approved/models \
+RELEASE_ALLOWED_DATA_ROOTS=/approved/data \
+INCLUDE_DATA=1 scripts/package_release.sh
+```
+
+Nested links, broken links, cycles, empty assets, and special filesystem nodes
+are rejected. Ignored files that are not in the explicit model/data contracts
+are never copied. Keep approved external model/data roots unchanged for the
+duration of packaging; regular asset files are opened without following links,
+but an operator must not rewrite an external model directory concurrently.
+
+The output pair is named from the packaged commit:
+
+```text
+release/nexpoly-release-<commit>-data<0-or-1>-<manifest-digest>.tar.gz
+release/nexpoly-release-<commit>-data<0-or-1>-<manifest-digest>.tar.gz.sha256
+```
+
+The data mode and manifest digest keep packages with different governed assets
+from overwriting each other. Packaging uses a non-blocking process lock; retry
+after the active packaging process finishes if another invocation is reported.
+
+The archive root contains `RELEASE-MANIFEST.json`, recording the full commit and
+tree IDs, data mode, and every payload file's category, size, and SHA-256. Verify
+the sidecar before extracting:
+
+```bash
+cd release
+sha256sum --check nexpoly-release-<commit>-data<0-or-1>-<manifest-digest>.tar.gz.sha256
+```

@@ -2,13 +2,16 @@
 .codex
 .superpowers
 AGENTS.md
-CLAUDE.md
 design-system/
 docs/superpowers/
 
 # Local environments and generated Python files
-.env
-backend/.env
+.env*
+**/.env*
+!backend/.env.example
+!frontend/.env.example
+docker-compose.dev.yml
+scripts/dev_server_gpu.sh
 __pycache__/
 *.py[cod]
 .pytest_cache/
