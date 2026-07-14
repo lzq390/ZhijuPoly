@@ -1,24 +1,32 @@
 name: nexpoly
 
 x-backend-environment: &backend-environment
+  WEB_CONCURRENCY: "1"
   MODEL_DIR: /app/model
   MODEL_ENABLED: "true"
   GEN_MODEL_ENABLED: "${GEN_MODEL_ENABLED:-false}"
   GEN_MODEL_DIR: /app/model/conditional_generation
   GEN_DEVICE: "${GEN_DEVICE:-auto}"
   GEN_JOB_WORKERS: "${GEN_JOB_WORKERS:-1}"
-  POLYTAO_ENABLED: "${POLYTAO_ENABLED:-true}"
+  GEN_MAX_ACTIVE_JOBS: "${GEN_MAX_ACTIVE_JOBS:-8}"
+  GPU_PRELOAD_MODE: "${GPU_PRELOAD_MODE:-lazy}"
+  GPU_MAX_CONCURRENT_INFERENCES: "${GPU_MAX_CONCURRENT_INFERENCES:-1}"
+  GPU_MAX_WAITING_INFERENCES: "${GPU_MAX_WAITING_INFERENCES:-8}"
+  GPU_SYNC_QUEUE_TIMEOUT_SECONDS: "${GPU_SYNC_QUEUE_TIMEOUT_SECONDS:-30}"
+  GPU_ASYNC_QUEUE_TIMEOUT_SECONDS: "${GPU_ASYNC_QUEUE_TIMEOUT_SECONDS:-600}"
+  POLYTAO_ENABLED: "${POLYTAO_ENABLED:-false}"
   POLYTAO_MODEL_DIR: /app/model/polytao
   POLYTAO_DEVICE: "${POLYTAO_DEVICE:-auto}"
-  POLYTAO_JOB_WORKERS: "${POLYTAO_JOB_WORKERS:-1}"
+  POLYTAO_JOB_THREADS: "${POLYTAO_JOB_THREADS:-1}"
   RETRO_MODEL_ENABLED: "${RETRO_MODEL_ENABLED:-true}"
   RETRO_MODEL_ID: "${RETRO_MODEL_ID:-/app/model/reactiont5-retrosynthesis}"
   RETRO_DEVICE: "${RETRO_DEVICE:-auto}"
   STRUCTURED_DATA_BACKEND: "${STRUCTURED_DATA_BACKEND:-postgres}"
-  APP_POSTGRES_DSN: "${APP_POSTGRES_DSN:-postgresql://polyprop:polyprop@lab-postgres:5432/nexpoly}"
+  DEPLOYMENT_DRAIN_ENABLED: "true"
+  APP_POSTGRES_DSN: "${APP_POSTGRES_DSN:-}"
   PI_REVERSE_BACKEND: "${PI_REVERSE_BACKEND:-postgres}"
-  PI_POSTGRES_DSN: "${PI_POSTGRES_DSN:-postgresql://polyprop:polyprop@lab-postgres:5432/nexpoly}"
-  LAB_DATA_POSTGRES_DSN: "${LAB_DATA_POSTGRES_DSN:-postgresql://polyprop:polyprop@lab-postgres:5432/nexpoly}"
+  PI_POSTGRES_DSN: "${PI_POSTGRES_DSN:-}"
+  LAB_DATA_POSTGRES_DSN: "${LAB_DATA_POSTGRES_DSN:-}"
   PI_REVERSE_TG_WINDOW_CELSIUS: "50"
   PI_REVERSE_TG_MAX_WINDOW_CELSIUS: "200"
   PI_REVERSE_MAX_SCAN_ROWS: "500000"
@@ -28,7 +36,7 @@ x-backend-environment: &backend-environment
   PI_REVERSE_PROGRESS_INTERVAL_ROWS: "50000"
   MONOMER_MD_WORKER_BASE_URL: "${MONOMER_MD_WORKER_BASE_URL:-}"
   MONOMER_MD_WORKER_TIMEOUT_SECONDS: "${MONOMER_MD_WORKER_TIMEOUT_SECONDS:-15}"
-  MONOMER_MD_DEFAULT_STEPS: "1000"
+  MONOMER_MD_DEFAULT_STEPS: "300"
   MONOMER_MD_SUBMIT_ENABLED: "${MONOMER_MD_SUBMIT_ENABLED:-true}"
   MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE: "${MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE:-3}"
   MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS: "${MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS:-60}"
@@ -38,14 +46,22 @@ x-backend-environment: &backend-environment
   POLYTAO_MAX_ACTIVE_JOBS: "${POLYTAO_MAX_ACTIVE_JOBS:-1}"
   ALLOWED_ORIGINS: "http://localhost:${NEXPOLY_WEB_PORT:-9000},http://127.0.0.1:${NEXPOLY_WEB_PORT:-9000}"
 
+x-backend-asset-volumes: &backend-asset-volumes
+  - ${NEXPOLY_ASSET_ROOT:-.}/backend-data:/app/backend/data:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/database:/app/database:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/model/ocsr:/app/model/ocsr:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/model/conditional_generation:/app/model/conditional_generation:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/model/polytao:/app/model/polytao:ro
+
 x-backend-volumes: &backend-volumes
-  - ./backend/data:/app/backend/data:ro
-  - ./database:/app/database:ro
-  - ./model/ocsr:/app/model/ocsr:ro
-  - ./model/conditional_generation:/app/model/conditional_generation:ro
-  - ./model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
-  - ./model/polytao:/app/model/polytao:ro
-  - ${MONOMER_MD_WORKER_SOCKET_DIR:-/data/lzq/monomer-md-worker-socket}:/app/monomer-md-worker
+  - ${NEXPOLY_ASSET_ROOT:-.}/backend-data:/app/backend/data:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/database:/app/database:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/model/ocsr:/app/model/ocsr:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/model/conditional_generation:/app/model/conditional_generation:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
+  - ${NEXPOLY_ASSET_ROOT:-.}/model/polytao:/app/model/polytao:ro
+  - ${MONOMER_MD_WORKER_SOCKET_DIR:-./ops/state/monomer-md-worker-socket}:/app/monomer-md-worker:ro
 
 services:
   postgres-init:
@@ -53,24 +69,31 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: "${NEXPOLY_BUILD_REVISION:-dev}"
     restart: "no"
     env_file:
       - path: .env.ai
         required: false
     environment: *backend-environment
-    volumes: *backend-volumes
+    # Migrations never call the host Worker.  Keeping its socket out of this
+    # one-shot container also prevents maintenance commands from inheriting a
+    # production-only control channel.
+    volumes: *backend-asset-volumes
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       lab-postgres:
         condition: service_healthy
-    command: ["python", "-m", "app.import_postgres", "--dataset", "all", "--refresh-analytics-snapshot"]
+    command: ["python", "-m", "app.postgres_migrations", "--mode", "bootstrap"]
 
   backend:
     image: nexpoly-backend:latest
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: "${NEXPOLY_BUILD_REVISION:-dev}"
     gpus:
       - driver: nvidia
         device_ids:
@@ -78,6 +101,7 @@ services:
         capabilities:
           - gpu
     restart: unless-stopped
+    stop_grace_period: 45s
     env_file:
       - path: .env.ai
         required: false
@@ -92,26 +116,27 @@ services:
       test:
         - CMD-SHELL
         - >
-          python -m app.postgres_preflight --strict >/tmp/nexpoly-preflight.json &&
-          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
+          python -m app.postgres_preflight --strict >/tmp/nexpoly-postgres-preflight.json &&
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()" &&
+          python -m app.gpu_preflight --mode "$$(if [ "$$GPU_PRELOAD_MODE" = required ]; then echo ready; else echo configured; fi)" >/tmp/nexpoly-gpu-preflight.json
       interval: 30s
-      timeout: 5s
+      timeout: 15s
       retries: 3
-      start_period: 20s
+      start_period: 120s
 
   lab-postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     restart: unless-stopped
     environment:
-      POSTGRES_USER: polyprop
-      POSTGRES_PASSWORD: polyprop
-      POSTGRES_DB: nexpoly
+      POSTGRES_USER: "${NEXPOLY_POSTGRES_USER:-nexpoly}"
+      POSTGRES_PASSWORD: "${NEXPOLY_POSTGRES_PASSWORD:-}"
+      POSTGRES_DB: "${NEXPOLY_POSTGRES_DB:-nexpoly}"
     ports:
-      - "${NEXPOLY_POSTGRES_PORT:-55432}:5432"
+      - "127.0.0.1:${NEXPOLY_POSTGRES_PORT:-55432}:5432"
     volumes:
       - app_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U polyprop -d nexpoly"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5

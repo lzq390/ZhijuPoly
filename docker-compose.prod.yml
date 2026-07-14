@@ -1,0 +1,86 @@
+name: nexpoly
+
+# Production must always be rendered together with docker-compose.yml.  This
+# override removes every application build context; release_controller.py also
+# rejects image references that are not immutable sha256 digests.
+x-production-environment: &production-environment
+  WEB_CONCURRENCY: "1"
+  APP_POSTGRES_DSN: "${APP_POSTGRES_DSN:?APP_POSTGRES_DSN is required}"
+  PI_POSTGRES_DSN: "${PI_POSTGRES_DSN:?PI_POSTGRES_DSN is required}"
+  LAB_DATA_POSTGRES_DSN: "${LAB_DATA_POSTGRES_DSN:?LAB_DATA_POSTGRES_DSN is required}"
+  GPU_PRELOAD_MODE: "required"
+  GPU_MAX_CONCURRENT_INFERENCES: "1"
+  GPU_MAX_WAITING_INFERENCES: "8"
+  GPU_SYNC_QUEUE_TIMEOUT_SECONDS: "30"
+  GPU_ASYNC_QUEUE_TIMEOUT_SECONDS: "600"
+  GEN_MAX_ACTIVE_JOBS: "8"
+  GEN_JOB_WORKERS: "1"
+  OCSR_ENABLED: "true"
+  GEN_MODEL_ENABLED: "true"
+  RETRO_MODEL_ENABLED: "true"
+  POLYTAO_ENABLED: "${POLYTAO_ENABLED:?POLYTAO_ENABLED is required in production}"
+  POLYTAO_JOB_THREADS: "1"
+  POLYTAO_MAX_ACTIVE_JOBS: "1"
+  OCSR_DEVICE: "cuda"
+  GEN_DEVICE: "cuda"
+  RETRO_DEVICE: "cuda"
+  POLYTAO_DEVICE: "cuda"
+  MONOMER_MD_WORKER_BASE_URL: "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock"
+  MONOMER_MD_WORKER_TIMEOUT_SECONDS: "30"
+
+x-production-volumes: &production-volumes
+  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
+  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
+  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/ocsr:/app/model/ocsr:ro
+  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
+  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
+  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
+  - /data/lzq/gith/nexpoly/ops/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
+
+services:
+  postgres-init:
+    image: "${NEXPOLY_BACKEND_IMAGE:?NEXPOLY_BACKEND_IMAGE must be an image digest}"
+    build: !reset null
+    env_file: !override
+      - path: "${NEXPOLY_APP_ENV_FILE:-/data/lzq/gith/nexpoly/ops/config/app.env}"
+        required: true
+    environment: *production-environment
+    volumes: !override
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/ocsr:/app/model/ocsr:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
+    command: ["python", "-m", "app.postgres_migrations", "--mode", "expand"]
+
+  backend:
+    image: "${NEXPOLY_BACKEND_IMAGE:?NEXPOLY_BACKEND_IMAGE must be an image digest}"
+    build: !reset null
+    env_file: !override
+      - path: "${NEXPOLY_APP_ENV_FILE:-/data/lzq/gith/nexpoly/ops/config/app.env}"
+        required: true
+    environment: *production-environment
+    volumes: !override
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/ocsr:/app/model/ocsr:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
+      - /data/lzq/gith/nexpoly/ops/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
+    depends_on: !override
+      lab-postgres:
+        condition: service_healthy
+
+  nginx:
+    image: "${NEXPOLY_WEB_IMAGE:?NEXPOLY_WEB_IMAGE must be an image digest}"
+    build: !reset null
+
+  lab-postgres:
+    environment:
+      POSTGRES_USER: "${NEXPOLY_POSTGRES_USER:-nexpoly}"
+      POSTGRES_PASSWORD: "${NEXPOLY_POSTGRES_PASSWORD:?NEXPOLY_POSTGRES_PASSWORD is required}"
+      POSTGRES_DB: "${NEXPOLY_POSTGRES_DB:-nexpoly}"
+    ports: !override
+      - "127.0.0.1:${NEXPOLY_POSTGRES_PORT:-55432}:5432"
