@@ -109,6 +109,13 @@ def main() -> int:
             "[[ \"$EVENT_REF\" == refs/heads/main ]]",
             "[[ \"$DISPATCH_OPERATION\" == bootstrap ]]",
             "name: ci-gate",
+            "  release:\n"
+            "    name: Build, smoke, package, and deploy current main\n"
+            "    if: >-\n"
+            "      !cancelled() &&\n"
+            "      needs.ci-gate.result == 'success' &&\n"
+            "      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')\n"
+            "    needs: [resolve-sha, ci-gate]",
             "python3 scripts/ci/backend_test_shards.py --shards 3 --shard",
             "python -m pytest workers/monomer_md_worker/tests",
             "working-directory: frontend",
