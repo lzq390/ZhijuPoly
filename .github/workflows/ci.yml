@@ -337,6 +337,7 @@ jobs:
   release:
     name: Build, smoke, package, and deploy current main
     if: >-
+      !cancelled() &&
       needs.ci-gate.result == 'success' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: [resolve-sha, ci-gate]
