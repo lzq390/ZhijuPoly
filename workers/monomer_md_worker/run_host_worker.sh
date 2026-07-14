@@ -1,8 +1,31 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 umask 0077
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+case "$SCRIPT_PATH" in
+  */*)
+    SCRIPT_PARENT="${SCRIPT_PATH%/*}"
+    ;;
+  *)
+    SCRIPT_PARENT="."
+    ;;
+esac
+SCRIPT_DIR="$(cd "$SCRIPT_PARENT" && pwd -P)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
+
+# user-systemd services inherit the user manager's environment. Re-read the
+# owner-only file through the same literal parser used by deployment and the
+# pidfile fallback so omitted Worker keys cannot retain stale manager values.
+# The private argv marker is added only by this re-exec path; an inherited
+# environment variable can therefore never bypass sanitization.
+if [[ "${1:-}" != "--nexpoly-worker-env-applied" ]]; then
+  exec /usr/bin/python3 -I "$REPO_ROOT/scripts/monomer_worker_env.py" exec \
+    "$REPO_ROOT/.env.monomer-md-worker" -- \
+    /bin/bash "$SCRIPT_DIR/run_host_worker.sh" --nexpoly-worker-env-applied
+fi
+shift
+
 cd "$SCRIPT_DIR"
 
 export MONOMER_MD_WORKER_MODE="${MONOMER_MD_WORKER_MODE:-real}"
@@ -12,10 +35,6 @@ export BYTEFF2_ROOT="${BYTEFF2_ROOT:-}"
 export NEXPOLY_GPU_DEVICE="${NEXPOLY_GPU_DEVICE:-2}"
 export MONOMER_MD_CUDA_VISIBLE_DEVICES="${MONOMER_MD_CUDA_VISIBLE_DEVICES:-$NEXPOLY_GPU_DEVICE}"
 export BYTEFF2_PYTHON="${BYTEFF2_PYTHON:-${MONOMER_MD_PYTHON:-python}}"
-
-if [[ "$BYTEFF2_PYTHON" == */* ]]; then
-  export PATH="$(dirname "$BYTEFF2_PYTHON"):$PATH"
-fi
 
 if [[ -z "${APP_POSTGRES_DSN:-}" ]]; then
   echo "APP_POSTGRES_DSN is required for the monomer MD worker." >&2
