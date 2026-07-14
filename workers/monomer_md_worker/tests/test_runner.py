@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+from workers.monomer_md_worker.app.byteff2_env import REQUIRED_OPENMM_FILES
 from workers.monomer_md_worker.app.config import WorkerSettings
 from workers.monomer_md_worker.app.models import JobRequest
 from workers.monomer_md_worker.app.runner import MonomerMdRunner
@@ -70,6 +71,52 @@ def test_dry_run_result_has_frontend_shape(tmp_path: Path):
     assert (run_result.output_dir / "density_demo_results.json").exists()
     assert (run_result.output_dir / "npt_state.csv").exists()
     assert (run_result.output_dir / "npt.dcd").exists()
+
+
+def test_real_density_runner_receives_openmm_environment(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path)
+    object.__setattr__(settings, "mode", "real")
+    settings.byteff2_root.mkdir()
+    openmm_dir = tmp_path / "openmm"
+    for relative_path in REQUIRED_OPENMM_FILES:
+        path = openmm_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    object.__setattr__(settings, "byteff2_openmm_dir", openmm_dir)
+    captured_env = {}
+
+    class CompletedProcess:
+        async def wait(self):
+            return 0
+
+        def kill(self):
+            raise AssertionError("successful density demo should not be killed")
+
+    async def fake_create_subprocess_exec(*command, **kwargs):
+        captured_env.update(kwargs["env"])
+        output_dir = Path(command[command.index("--output-dir") + 1])
+        (output_dir / "density_demo_results.json").write_text(
+            '{"density_g_cm3": 1.0}', encoding="utf-8"
+        )
+        (output_dir / "npt_state.csv").write_text(
+            "step,density_g_cm3,temperature_k\n1000,1.0,298.15\n",
+            encoding="utf-8",
+        )
+        (output_dir / "npt.dcd").write_bytes(b"test")
+        return CompletedProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    runner = MonomerMdRunner(settings)
+    request = JobRequest(job_id="job-1", smiles="CCO", canonical_smiles="CCO", steps=1000)
+
+    asyncio.run(runner.run(request, 1000))
+
+    assert captured_env["OPENMM_DIR"] == str(openmm_dir)
+    assert captured_env["OPENMM_PLUGIN_DIR"] == str(openmm_dir / "lib/plugins")
+    assert captured_env["LD_LIBRARY_PATH"].split(":")[:2] == [
+        str(openmm_dir / "lib"),
+        str(openmm_dir / "lib/plugins"),
+    ]
 
 def test_byteff2_adapter_does_not_use_formal_run_md_as_demo_entry(tmp_path: Path):
     from workers.monomer_md_worker.app.byteff2_density_demo import _find_demo_entry
