@@ -1,40 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UNIT_NAME="${NEXPOLY_MONOMER_MD_WORKER_SYSTEMD_UNIT:-nexpoly-monomer-md-worker.service}"
-UNIT_SOURCE="$ROOT_DIR/ops/systemd/$UNIT_NAME"
-USER_SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-UNIT_TARGET="$USER_SYSTEMD_DIR/$UNIT_NAME"
-CURRENT_USER="$(id -un)"
+cat >&2 <<'EOF'
+[nexpoly-worker-systemd] ERROR: this legacy installer is disabled and made no changes.
 
-log() {
-  printf '[nexpoly-worker-systemd] %s\n' "$*"
-}
+Production Worker installation is part of the reviewed one-time release bootstrap.
+Follow "One-time production preparation" in docs/release-controller.md, beginning with:
 
-die() {
-  printf '[nexpoly-worker-systemd] ERROR: %s\n' "$*" >&2
-  exit 1
-}
+  python3 scripts/bootstrap_release_root.py \
+    --production-root /data/lzq/gith/nexpoly
 
-[[ -f "$UNIT_SOURCE" ]] || die "Unit template is missing: $UNIT_SOURCE"
-[[ -f "$ROOT_DIR/.env.monomer-md-worker" ]] || die "Worker env file is missing: $ROOT_DIR/.env.monomer-md-worker"
-command -v systemctl >/dev/null 2>&1 || die "systemctl is required."
+Install the audited candidate unit only during that maintenance-window procedure,
+then dispatch the CI workflow from main with operation=bootstrap as documented.
+For local development, follow docs/monomer-md-worker.md and run:
 
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-[[ -d "$XDG_RUNTIME_DIR" ]] || die "User systemd runtime is unavailable: $XDG_RUNTIME_DIR"
+  scripts/dev_server_gpu.sh worker-venv
 
-if command -v loginctl >/dev/null 2>&1; then
-  if loginctl show-user "$CURRENT_USER" -p Linger 2>/dev/null | grep -qx 'Linger=no'; then
-    log "Trying to enable linger for $CURRENT_USER so the user service can survive logout."
-    loginctl enable-linger "$CURRENT_USER" >/dev/null 2>&1 || log "Could not enable linger without elevated permissions; continuing with the active user manager."
-  fi
-fi
-
-mkdir -p "$USER_SYSTEMD_DIR"
-cp "$UNIT_SOURCE" "$UNIT_TARGET"
-
-log "Installed $UNIT_TARGET."
-systemctl --user daemon-reload
-systemctl --user enable --now "$UNIT_NAME"
-systemctl --user --no-pager --full status "$UNIT_NAME"
+This compatibility shim intentionally does not read .env.monomer-md-worker,
+copy a systemd unit, reload systemd, or start a service.
+EOF
+exit 2
