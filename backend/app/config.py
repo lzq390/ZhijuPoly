@@ -68,6 +68,7 @@ class Settings:
         pi_reverse_backend: str | None = None,
         app_postgres_dsn: str | None = None,
         structured_data_backend: str | None = None,
+        deployment_drain_enabled: bool | None = None,
         pi_postgres_dsn: str | None = None,
         lab_data_postgres_dsn: str | None = None,
         pi_reverse_tg_window_celsius: float | None = None,
@@ -104,11 +105,18 @@ class Settings:
         gen_model_dir: str | None = None,
         gen_device: str | None = None,
         gen_job_workers: int | None = None,
+        gen_max_active_jobs: int | None = None,
+        gpu_preload_mode: str | None = None,
+        gpu_max_concurrent_inferences: int | None = None,
+        gpu_max_waiting_inferences: int | None = None,
+        gpu_sync_queue_timeout_seconds: float | None = None,
+        gpu_async_queue_timeout_seconds: float | None = None,
         polytao_enabled: bool | None = None,
         polytao_model_dir: str | None = None,
         polytao_device: str | None = None,
         polytao_model_id: str | None = None,
         polytao_model_revision: str | None = None,
+        polytao_job_threads: int | None = None,
         polytao_job_workers: int | None = None,
         polytao_rate_limit_per_ip_per_minute: int | None = None,
         polytao_rate_limit_window_seconds: int | None = None,
@@ -180,15 +188,18 @@ class Settings:
         )
         raw_app_postgres_dsn = app_postgres_dsn or os.getenv(
             "APP_POSTGRES_DSN",
-            env_values.get(
-                "APP_POSTGRES_DSN",
-                "postgresql://polyprop:polyprop@localhost:55432/nexpoly",
-            ),
+            env_values.get("APP_POSTGRES_DSN", ""),
         )
         raw_structured_data_backend = structured_data_backend or os.getenv(
             "STRUCTURED_DATA_BACKEND",
             env_values.get("STRUCTURED_DATA_BACKEND", "postgres"),
         )
+        raw_deployment_drain_enabled = deployment_drain_enabled
+        if raw_deployment_drain_enabled is None:
+            raw_deployment_drain_enabled = os.getenv(
+                "DEPLOYMENT_DRAIN_ENABLED",
+                str(env_values.get("DEPLOYMENT_DRAIN_ENABLED", "false")),
+            ).strip().lower() in {"1", "true", "yes", "on"}
         raw_pi_postgres_dsn = pi_postgres_dsn or os.getenv(
             "PI_POSTGRES_DSN",
             env_values.get("PI_POSTGRES_DSN", raw_app_postgres_dsn),
@@ -283,7 +294,7 @@ class Settings:
             if monomer_md_default_steps is not None
             else os.getenv(
                 "MONOMER_MD_DEFAULT_STEPS",
-                str(env_values.get("MONOMER_MD_DEFAULT_STEPS", "1000")),
+                str(env_values.get("MONOMER_MD_DEFAULT_STEPS", "300")),
             )
         )
         raw_monomer_md_submit_enabled = monomer_md_submit_enabled
@@ -413,6 +424,50 @@ class Settings:
                 str(env_values.get("GEN_JOB_WORKERS", "1")),
             )
         )
+        raw_gen_max_active_jobs = (
+            str(gen_max_active_jobs)
+            if gen_max_active_jobs is not None
+            else os.getenv(
+                "GEN_MAX_ACTIVE_JOBS",
+                str(env_values.get("GEN_MAX_ACTIVE_JOBS", "8")),
+            )
+        )
+        raw_gpu_preload_mode = gpu_preload_mode or os.getenv(
+            "GPU_PRELOAD_MODE",
+            env_values.get("GPU_PRELOAD_MODE", "lazy"),
+        )
+        raw_gpu_max_concurrent_inferences = (
+            str(gpu_max_concurrent_inferences)
+            if gpu_max_concurrent_inferences is not None
+            else os.getenv(
+                "GPU_MAX_CONCURRENT_INFERENCES",
+                str(env_values.get("GPU_MAX_CONCURRENT_INFERENCES", "1")),
+            )
+        )
+        raw_gpu_max_waiting_inferences = (
+            str(gpu_max_waiting_inferences)
+            if gpu_max_waiting_inferences is not None
+            else os.getenv(
+                "GPU_MAX_WAITING_INFERENCES",
+                str(env_values.get("GPU_MAX_WAITING_INFERENCES", "8")),
+            )
+        )
+        raw_gpu_sync_queue_timeout_seconds = (
+            str(gpu_sync_queue_timeout_seconds)
+            if gpu_sync_queue_timeout_seconds is not None
+            else os.getenv(
+                "GPU_SYNC_QUEUE_TIMEOUT_SECONDS",
+                str(env_values.get("GPU_SYNC_QUEUE_TIMEOUT_SECONDS", "30")),
+            )
+        )
+        raw_gpu_async_queue_timeout_seconds = (
+            str(gpu_async_queue_timeout_seconds)
+            if gpu_async_queue_timeout_seconds is not None
+            else os.getenv(
+                "GPU_ASYNC_QUEUE_TIMEOUT_SECONDS",
+                str(env_values.get("GPU_ASYNC_QUEUE_TIMEOUT_SECONDS", "600")),
+            )
+        )
         raw_polytao_enabled = polytao_enabled
         if raw_polytao_enabled is None:
             raw_polytao_enabled_value = os.getenv(
@@ -446,14 +501,19 @@ class Settings:
                 "POLYTAO_MODEL_REVISION",
                 env_values.get("POLYTAO_MODEL_REVISION", ""),
             )
-        raw_polytao_job_workers = (
-            str(polytao_job_workers)
-            if polytao_job_workers is not None
-            else os.getenv(
-                "POLYTAO_JOB_WORKERS",
-                str(env_values.get("POLYTAO_JOB_WORKERS", "1")),
-            )
-        )
+        if polytao_job_threads is not None:
+            raw_polytao_job_threads = str(polytao_job_threads)
+        elif polytao_job_workers is not None:
+            raw_polytao_job_threads = str(polytao_job_workers)
+        else:
+            raw_polytao_job_threads = os.getenv("POLYTAO_JOB_THREADS")
+            if raw_polytao_job_threads is None:
+                raw_polytao_job_threads = env_values.get("POLYTAO_JOB_THREADS")
+            if raw_polytao_job_threads is None:
+                raw_polytao_job_threads = os.getenv(
+                    "POLYTAO_JOB_WORKERS",
+                    str(env_values.get("POLYTAO_JOB_WORKERS", "1")),
+                )
         raw_polytao_rate_limit_per_ip_per_minute = (
             str(polytao_rate_limit_per_ip_per_minute)
             if polytao_rate_limit_per_ip_per_minute is not None
@@ -565,6 +625,7 @@ class Settings:
         self.structured_data_backend = raw_structured_data_backend.strip().lower()
         if self.structured_data_backend != "postgres":
             raise ValueError("STRUCTURED_DATA_BACKEND must be 'postgres'")
+        self.deployment_drain_enabled = bool(raw_deployment_drain_enabled)
         self.app_postgres_dsn = raw_app_postgres_dsn.strip()
         self.pi_postgres_dsn = raw_pi_postgres_dsn.strip()
         self.lab_data_postgres_dsn = raw_lab_data_postgres_dsn.strip()
@@ -602,13 +663,23 @@ class Settings:
         self.gen_model_dir = _resolve_from_root(raw_gen_model_dir)
         self.gen_device = raw_gen_device.strip().lower()
         self.gen_job_workers = max(1, int(raw_gen_job_workers))
+        self.gen_max_active_jobs = max(1, int(raw_gen_max_active_jobs))
+        self.gpu_preload_mode = str(raw_gpu_preload_mode).strip().lower()
+        if self.gpu_preload_mode not in {"lazy", "required"}:
+            raise ValueError("GPU_PRELOAD_MODE must be one of: lazy, required")
+        self.gpu_max_concurrent_inferences = max(1, int(raw_gpu_max_concurrent_inferences))
+        self.gpu_max_waiting_inferences = max(0, int(raw_gpu_max_waiting_inferences))
+        self.gpu_sync_queue_timeout_seconds = max(0.001, float(raw_gpu_sync_queue_timeout_seconds))
+        self.gpu_async_queue_timeout_seconds = max(0.001, float(raw_gpu_async_queue_timeout_seconds))
         self.polytao_enabled = bool(raw_polytao_enabled)
         self.polytao_submit_enabled = self.polytao_enabled
         self.polytao_model_dir = _resolve_from_root(raw_polytao_model_dir)
         self.polytao_device = raw_polytao_device.strip().lower()
         self.polytao_model_id = str(raw_polytao_model_id).strip()
         self.polytao_model_revision = str(raw_polytao_model_revision or "").strip() or None
-        self.polytao_job_workers = max(1, int(raw_polytao_job_workers))
+        self.polytao_job_threads = max(1, int(raw_polytao_job_threads))
+        # Compatibility alias for callers that still use the historical name.
+        self.polytao_job_workers = self.polytao_job_threads
         self.polytao_rate_limit_per_ip_per_minute = max(1, int(raw_polytao_rate_limit_per_ip_per_minute))
         self.polytao_rate_limit_window_seconds = max(1, int(raw_polytao_rate_limit_window_seconds))
         self.polytao_max_active_jobs = max(1, int(raw_polytao_max_active_jobs))

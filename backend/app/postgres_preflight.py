@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
 from app.config import Settings
+from app.migration_policy import load_migration_manifest
 from app.postgres_database import PostgresUnavailableError, postgres_connection
 
 SQLITE_TABLES = {
@@ -19,6 +21,8 @@ SQLITE_TABLES = {
 POSTGRES_TABLES = [
     ("governance", "source_files"),
     ("governance", "import_batches"),
+    ("governance", "deployment_control"),
+    ("governance", "database_analytics_snapshots"),
     ("core", "polymers"),
     ("core", "polymer_properties"),
     ("core", "polymer_property_filter_records"),
@@ -37,18 +41,17 @@ POSTGRES_TABLES = [
     ("lab", "sample_measurements"),
     ("model_registry", "assets"),
     ("md", "monomer_md_jobs"),
-    ("generation", "polytao_jobs"),
 ]
 
-STRICT_REQUIRED_MIGRATIONS = (
-    "0001_app_data_governance",
-    "0002_lab_identity_defaults",
-    "0003_runtime_postgres_cutover",
-    "0004_monomer_md_jobs",
-    "0005_byteff2_formal_monomer_md",
-    "0006_property_filter_records",
-    "0007_polytao_jobs",
-    "0008_polytao_backend_runtime",
+_MIGRATION_MANIFEST = (
+    Path(__file__).resolve().parents[1] / "migrations" / "postgres" / "manifest.json"
+)
+_MIGRATION_POLICY = load_migration_manifest(_MIGRATION_MANIFEST)
+STRICT_REQUIRED_MIGRATIONS = tuple(
+    migration.version for migration in _MIGRATION_POLICY if migration.kind in {"baseline", "expand"}
+)
+KNOWN_CONTRACT_MIGRATIONS = tuple(
+    migration.version for migration in _MIGRATION_POLICY if migration.kind == "contract"
 )
 STRICT_RUNTIME_TABLES = tuple(POSTGRES_TABLES)
 
@@ -117,14 +120,31 @@ SNAPSHOT_ROW_COMPARISONS = {
 
 def _analytics_snapshot_report(connection) -> dict[str, object]:
     try:
-        from app.services.database_analytics_snapshot import (
-            STATIC_DATABASE_ANALYTICS_GENERATED_AT,
-            get_database_analytics_snapshot,
-        )
-    except Exception as exc:  # pragma: no cover - runtime diagnostic fallback
-        return {"generated_at": None, "comparisons": {}, "warnings": [f"analytics snapshot unavailable: {exc}"]}
+        from app.services.analytics_snapshot_store import load_analytics_snapshot
 
-    snapshot = get_database_analytics_snapshot()
+        # Keep the surrounding diagnostic transaction usable after a missing or
+        # corrupt table, but never replace production truth with checked-in data.
+        with connection.transaction():
+            stored_snapshot = load_analytics_snapshot(connection)
+    except Exception as exc:
+        return {
+            "generated_at": None,
+            "source_sha": None,
+            "source": "postgres-error",
+            "comparisons": {},
+            "warnings": [f"Postgres analytics snapshot unavailable: {exc}"],
+        }
+    if stored_snapshot is None:
+        return {
+            "generated_at": None,
+            "source_sha": None,
+            "source": "postgres-missing",
+            "comparisons": {},
+            "warnings": ["Postgres analytics snapshot is missing"],
+        }
+
+    snapshot = stored_snapshot.datasets
+    generated_at = stored_snapshot.generated_at.isoformat()
     comparisons: dict[str, dict[str, object]] = {}
     warnings: list[str] = []
     for dataset_key, (schema, table) in SNAPSHOT_ROW_COMPARISONS.items():
@@ -139,7 +159,9 @@ def _analytics_snapshot_report(connection) -> dict[str, object]:
         if not matches:
             warnings.append(f"analytics snapshot row count mismatch for {dataset_key}: snapshot={snapshot_rows} postgres={postgres_rows}")
     return {
-        "generated_at": STATIC_DATABASE_ANALYTICS_GENERATED_AT,
+        "generated_at": generated_at,
+        "source_sha": stored_snapshot.source_sha,
+        "source": "postgres",
         "comparisons": comparisons,
         "warnings": warnings,
     }
@@ -177,6 +199,23 @@ def strict_preflight_errors(report: dict[str, object]) -> list[str]:
             property_filter_file = files.get("property_filter_csv")
             if isinstance(property_filter_file, dict) and not property_filter_file.get("exists"):
                 errors.append("Required runtime source is missing: property_filter_csv")
+        analytics = report.get("analytics_snapshot")
+        if not isinstance(analytics, dict) or analytics.get("source") != "postgres":
+            errors.append("Required Postgres analytics snapshot is missing or invalid")
+        else:
+            warnings = analytics.get("warnings")
+            if not isinstance(warnings, list):
+                errors.append("Postgres analytics snapshot validation is unavailable")
+            else:
+                errors.extend(str(warning) for warning in warnings)
+            expected_source_sha = report.get("expected_source_sha")
+            if (
+                isinstance(expected_source_sha, str)
+                and analytics.get("source_sha") != expected_source_sha
+            ):
+                errors.append(
+                    "Postgres analytics snapshot source SHA does not match the running release"
+                )
 
     if report.get("mode") == "migration":
         files = report.get("files")
@@ -191,22 +230,37 @@ def preflight_blockers(report: dict[str, object]) -> list[str]:
     return strict_preflight_errors(report)
 
 
-def run_preflight(settings: Settings, dsn: str | None = None, mode: str = "runtime", strict: bool = False) -> dict[str, object]:
-    if mode not in {"runtime", "migration"}:
-        raise ValueError("mode must be 'runtime' or 'migration'")
+def run_preflight(
+    settings: Settings,
+    dsn: str | None = None,
+    mode: str = "runtime",
+    strict: bool = False,
+    expected_source_sha: str | None = None,
+) -> dict[str, object]:
+    if mode not in {"runtime", "migration", "schema"}:
+        raise ValueError("mode must be 'runtime', 'migration', or 'schema'")
+    if expected_source_sha is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_source_sha):
+        raise ValueError("expected_source_sha must be a full lowercase 40-character SHA")
 
     target_dsn = dsn or settings.app_postgres_dsn
     report: dict[str, object] = {
         "mode": mode,
         "strict": strict,
+        "expected_source_sha": expected_source_sha,
         "structured_data_backend": settings.structured_data_backend,
         "app_postgres_dsn": _safe_dsn_label(target_dsn),
         "postgres": {"reachable": False, "tables": {}},
-        "migrations": {"required": list(STRICT_REQUIRED_MIGRATIONS), "applied": [], "missing": list(STRICT_REQUIRED_MIGRATIONS)},
+        "migrations": {
+            "required": list(STRICT_REQUIRED_MIGRATIONS),
+            "contracts": list(KNOWN_CONTRACT_MIGRATIONS),
+            "applied": [],
+            "missing": list(STRICT_REQUIRED_MIGRATIONS),
+            "pending_contracts": list(KNOWN_CONTRACT_MIGRATIONS),
+        },
         "files": {},
     }
 
-    files = {
+    files = {} if mode == "schema" else {
         "csv_source": settings.csv_source_file,
         "property_filter_csv": settings.property_filter_csv_file,
         "knowledge_zip": settings.knowledge_zip_file,
@@ -257,8 +311,14 @@ def run_preflight(settings: Settings, dsn: str | None = None, mode: str = "runti
             }
             report["migrations"] = {
                 "required": list(STRICT_REQUIRED_MIGRATIONS),
+                "contracts": list(KNOWN_CONTRACT_MIGRATIONS),
                 "applied": applied_migrations,
                 "missing": [version for version in STRICT_REQUIRED_MIGRATIONS if version not in set(applied_migrations)],
+                "pending_contracts": [
+                    version
+                    for version in KNOWN_CONTRACT_MIGRATIONS
+                    if version not in set(applied_migrations)
+                ],
             }
             report["analytics_snapshot"] = _analytics_snapshot_report(connection)
     except PostgresUnavailableError as exc:
@@ -276,10 +336,17 @@ def run_preflight(settings: Settings, dsn: str | None = None, mode: str = "runti
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only PolyProp Postgres governance preflight.")
     parser.add_argument("--dsn", default=None)
-    parser.add_argument("--mode", choices=["runtime", "migration"], default="runtime")
+    parser.add_argument("--mode", choices=["runtime", "migration", "schema"], default="runtime")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when required migrations or runtime tables are missing.")
+    parser.add_argument("--expected-source-sha", help="Require the stored analytics snapshot to match this release SHA.")
     args = parser.parse_args()
-    report = run_preflight(Settings(), args.dsn, args.mode, strict=args.strict)
+    report = run_preflight(
+        Settings(),
+        args.dsn,
+        args.mode,
+        strict=args.strict,
+        expected_source_sha=args.expected_source_sha,
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if args.strict and report["strict_errors"]:
         sys.exit(1)

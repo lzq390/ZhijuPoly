@@ -1113,7 +1113,9 @@ def import_all_to_postgres(
         )
 
     if apply_migrations:
-        apply_postgres_migrations(target_dsn)
+        # Data imports may prepare compatible schema additions, but must never
+        # implicitly run baseline provisioning or destructive contract changes.
+        apply_postgres_migrations(target_dsn, allowed_kinds={"expand"})
 
     stats = PostgresImportStats()
     source_ids: dict[str, int] = {}
@@ -1201,16 +1203,16 @@ def import_all_to_postgres(
                 stats.datasets.append(DatasetImportStats(dataset_key="governance.import_batches", row_count=updated_count))
 
     if refresh_analytics_snapshot:
-        output_path = write_database_analytics_snapshot(target_dsn)
-        stats.datasets.append(DatasetImportStats(dataset_key="database_analytics_snapshot", row_count=1, details={"bytes": output_path.stat().st_size}))
+        write_database_analytics_snapshot(target_dsn)
+        stats.datasets.append(DatasetImportStats(dataset_key="database_analytics_snapshot", row_count=1))
     return stats
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import PolyProp governed data into PostgreSQL.")
     parser.add_argument("--dsn", default=None, help="Target Postgres DSN. Defaults to APP_POSTGRES_DSN.")
-    parser.add_argument("--dataset", action="append", choices=["all", "governance", "sources", "assets", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "property_filter"], help="Dataset to import. Repeatable. Defaults to all. governance updates source/model registries and backfills batch lineage only.")
-    parser.add_argument("--refresh-analytics-snapshot", action="store_true", help="Regenerate the static database analytics snapshot after the import transaction commits.")
+    parser.add_argument("--dataset", action="append", required=True, choices=["all", "governance", "sources", "assets", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "property_filter"], help="Dataset to import. Repeatable and required; use --dataset all explicitly for a full import. governance updates source/model registries and backfills batch lineage only.")
+    parser.add_argument("--refresh-analytics-snapshot", action="store_true", help="Store a refreshed database analytics snapshot in PostgreSQL after the import commits.")
     parser.add_argument("--rebuild", action="store_true", help="Truncate governed target tables before importing.")
     parser.add_argument("--skip-migrations", action="store_true", help="Do not apply Postgres migrations before importing.")
     parser.add_argument("--batch-size", type=int, default=5000)
@@ -1221,7 +1223,7 @@ def main() -> None:
         stats = import_all_to_postgres(
             settings,
             dsn=args.dsn,
-            datasets=set(args.dataset or ["all"]),
+            datasets=set(args.dataset),
             rebuild=args.rebuild,
             batch_size=max(1, args.batch_size),
             apply_migrations=not args.skip_migrations,

@@ -73,7 +73,10 @@ def test_settings_resolve_paths_to_project_root() -> None:
     assert settings.csv_source_file.name == "data1.csv"
 
 
-def test_settings_load_backend_dotenv(tmp_path: Path) -> None:
+def test_settings_load_backend_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     env_path = tmp_path / ".env"
     env_path.write_text(
         "\n".join(
@@ -86,6 +89,9 @@ def test_settings_load_backend_dotenv(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+    for variable in ("SQLITE_DB_PATH", "CSV_SOURCE_PATH", "ALLOWED_ORIGINS", "MODEL_ENABLED"):
+        monkeypatch.delenv(variable, raising=False)
 
     with patch("app.config.DEFAULT_ENV_FILE", env_path):
         settings = Settings()

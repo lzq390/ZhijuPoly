@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 from pathlib import Path
+from threading import Event
 
 import httpx
 import pytest
@@ -25,8 +27,9 @@ from app.models import (
 from app.routers import database_browser
 from app.routers.predict import predict
 from app.postgres_database import postgres_connection
-from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles
+from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles, router as query_router
 from app.services.database_browser import browse_csv_records
+from app.services.gpu_runtime_registry import GpuRuntimeRegistry
 from app.services.image_recognition import RecognizedStructure
 from app.services.structure_3d import generate_3d_molblock
 from app.utils.exceptions import StructureRecognitionError
@@ -65,6 +68,14 @@ async def post_structure_image(
             "/api/v1/structure/recognize-image",
             files={"image": (filename, content, content_type)},
         )
+
+
+def install_fake_ocsr_runtime(app: FastAPI, runtime: object | None = None) -> object:
+    selected_runtime = runtime or object()
+    registry = GpuRuntimeRegistry()
+    registry.register("ocsr", enabled=True, loader=lambda: selected_runtime)
+    app.state.gpu_runtime_registry = registry
+    return selected_runtime
 
 
 @pytest.mark.asyncio
@@ -703,6 +714,7 @@ async def test_recognize_structure_image_returns_molfile_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
+    captured_runtimes: list[object | None] = []
 
     def fake_recognize(
         image_bytes: bytes,
@@ -711,12 +723,15 @@ async def test_recognize_structure_image_returns_molfile_first(
         model_path: Path,
         device: str,
         max_bytes: int,
+        runtime: object | None = None,
     ) -> RecognizedStructure:
         captured["image_bytes"] = image_bytes
         captured["content_type"] = content_type
         captured["model_path"] = model_path
         captured["device"] = device
         captured["max_bytes"] = max_bytes
+        captured["runtime"] = runtime
+        captured_runtimes.append(runtime)
         return RecognizedStructure(
             smiles="CCO",
             molfile="mock molfile V2000",
@@ -728,9 +743,33 @@ async def test_recognize_structure_image_returns_molfile_first(
     test_app.state.settings.ocsr_enabled = True
     test_app.state.settings.ocsr_max_image_bytes = 1024
 
+    class ObservingRegistry(GpuRuntimeRegistry):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active_when_success_recorded: list[int] = []
+
+        def record_inference_success(self, name: str) -> None:
+            self.active_when_success_recorded.append(self.active_inferences)
+            super().record_inference_success(name)
+
+    expected_runtime = object()
+    load_calls = 0
+
+    def load_runtime() -> object:
+        nonlocal load_calls
+        load_calls += 1
+        return expected_runtime
+
+    registry = ObservingRegistry()
+    registry.register("ocsr", enabled=True, loader=load_runtime)
+    registry.preload_enabled()
+    test_app.state.gpu_runtime_registry = registry
+
     response = await post_structure_image(test_app)
+    second_response = await post_structure_image(test_app)
 
     assert response.status_code == 200
+    assert second_response.status_code == 200
     data = response.json()
     assert data["smiles"] == "CCO"
     assert data["molfile"] == "mock molfile V2000"
@@ -740,6 +779,54 @@ async def test_recognize_structure_image_returns_molfile_first(
     assert captured["image_bytes"] == PNG_BYTES
     assert captured["content_type"] == "image/png"
     assert captured["max_bytes"] == 1024
+    assert captured["runtime"] is expected_runtime
+    assert captured_runtimes == [expected_runtime, expected_runtime]
+    assert load_calls == 1
+    assert registry.active_when_success_recorded == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_recognize_structure_image_does_not_block_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inference_started = Event()
+    release_inference = Event()
+
+    def blocking_recognize(*_args: object, **_kwargs: object) -> RecognizedStructure:
+        inference_started.set()
+        assert release_inference.wait(timeout=3)
+        return RecognizedStructure(smiles="CCO", molfile="mock molfile V2000", confidence=0.9)
+
+    monkeypatch.setattr("app.routers.query.recognize_structure_image_from_bytes", blocking_recognize)
+    test_app = FastAPI()
+    test_app.state.settings = Settings(
+        sqlite_db_path=str(tmp_path / "polyprop.db"),
+        csv_source_path=str(tmp_path / "source.csv"),
+        model_enabled=False,
+        ocsr_enabled=True,
+    )
+    install_fake_ocsr_runtime(test_app)
+    test_app.include_router(query_router)
+    test_app.add_api_route("/health", health, methods=["GET"])
+
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        inference_task = asyncio.create_task(
+            client.post(
+                "/api/v1/structure/recognize-image",
+                files={"image": ("structure.png", PNG_BYTES, "image/png")},
+            )
+        )
+        try:
+            assert await asyncio.to_thread(inference_started.wait, 2)
+            health_response = await asyncio.wait_for(client.get("/health"), timeout=0.5)
+            assert health_response.status_code == 200
+        finally:
+            release_inference.set()
+        inference_response = await asyncio.wait_for(inference_task, timeout=2)
+
+    assert inference_response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -811,6 +898,7 @@ async def test_recognize_structure_image_reports_unusable_results(
 
     monkeypatch.setattr("app.routers.query.recognize_structure_image_from_bytes", fake_recognize)
     test_app.state.settings.ocsr_enabled = True
+    install_fake_ocsr_runtime(test_app)
 
     response = await post_structure_image(test_app)
 

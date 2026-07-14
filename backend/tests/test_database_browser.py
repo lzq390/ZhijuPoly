@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi.testclient import TestClient
 
 from app.postgres_database import postgres_connection
+from app.services.analytics_snapshot_store import save_analytics_snapshot
 
 
 def test_experimental_process_browser_returns_empty_when_postgres_table_empty(test_app) -> None:
@@ -70,6 +73,33 @@ def test_database_browser_live_analytics_includes_property_filter_counts(test_ap
     assert property_filter["standardizedProperties"] == 2
     assert property_filter["rawProperties"] == 1
     assert property_filter["uniqueSmiles"] == 2
+
+
+def test_database_browser_snapshot_never_falls_back_to_checked_in_python(test_app) -> None:
+    client = TestClient(test_app)
+
+    missing = client.get("/api/v1/database-browser/datasets/analytics")
+
+    assert missing.status_code == 503
+    assert missing.json()["detail"] == "Postgres analytics snapshot is missing"
+
+    datasets = {
+        key: {"rows": index}
+        for index, key in enumerate(
+            ("process", "property", "structureEffect", "propertyFilter", "dft", "formulation")
+        )
+    }
+    generated_at = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        save_analytics_snapshot(connection, datasets, generated_at=generated_at, source_sha="a" * 40)
+
+    stored = client.get("/api/v1/database-browser/datasets/analytics")
+
+    assert stored.status_code == 200
+    payload = stored.json()
+    assert payload["source"] == "snapshot"
+    assert payload["generated_at"] == generated_at.isoformat()
+    assert payload["datasets"] == datasets
 
 
 def test_property_filter_options_include_standardized_and_raw_properties(test_app) -> None:
