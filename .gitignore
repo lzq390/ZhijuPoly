@@ -13,8 +13,6 @@ __pycache__/
 backend/.env
 /.env.dev
 /.env.dev.ai
-/docker-compose.dev.yml
-/scripts/dev_server_gpu.sh
 
 # Generated SQLite databases
 *.db
@@ -74,7 +72,14 @@ nexpoly-release-*.tar.gz
 /scripts/prepare_pi_reverse_design_test_data.py
 /backend/tests/*
 !/backend/tests/test_assistant.py
+!/backend/tests/test_data_import_cli.py
+!/backend/tests/test_deployment_control.py
+!/backend/tests/test_gpu_runtime_registry.py
+!/backend/tests/test_gpu_preflight.py
+!/backend/tests/test_in_memory_jobs.py
+!/backend/tests/test_job_manager_reliability.py
 !/backend/tests/test_md_demo.py
+!/backend/tests/test_migration_policy.py
 !/backend/tests/test_monomer_md.py
 !/backend/tests/test_monomer_polymerization.py
 !/backend/tests/test_polytao.py
@@ -85,3 +90,7 @@ nexpoly-release-*.tar.gz
 # Local dev server runtime files
 /*.log
 /*.pid
+/.runtime/
+/.venv-monomer-md-worker/
+/.venv-monomer-md-worker.staging-*/
+/.venv-monomer-md-worker.previous-*/

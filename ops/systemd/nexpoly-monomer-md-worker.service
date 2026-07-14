@@ -5,9 +5,21 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/data/lzq/gith/nexpoly/workers/monomer_md_worker
-EnvironmentFile=/data/lzq/gith/nexpoly/.env.monomer-md-worker
-ExecStart=/data/lzq/gith/nexpoly/workers/monomer_md_worker/run_host_worker.sh
+WorkingDirectory=/data/lzq/gith/nexpoly/ops/current/workers/monomer_md_worker
+Environment="PATH=/home/devuser/miniconda3/envs/byteff2-repro/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="BYTEFF2_ROOT=/data/lzq/gith/nexpoly/ops/current-assets/byteff2"
+Environment="PYTHONPATH=/data/lzq/gith/nexpoly/ops/current-assets/byteff2:/data/lzq/gith/nexpoly/ops/current-assets/byteff2/submodules/bytemol"
+EnvironmentFile=/data/lzq/gith/nexpoly/ops/config/worker.env
+# A marker with no controller holding deploy.lock is a crashed deployment and
+# must fail closed. During a controlled switch the controller still holds the
+# lock, so the replacement Worker may start before release verification.
+ExecStartPre=/usr/bin/bash -c '/usr/bin/test ! -e "$1" || ! /usr/bin/flock -n "$2" /usr/bin/true' _ /data/lzq/gith/nexpoly/ops/state/deploy-in-progress.json /data/lzq/gith/nexpoly/ops/state/deploy.lock
+ExecStartPre=/usr/bin/test -x /data/lzq/gith/nexpoly/ops/current/worker-venv/bin/python
+ExecStartPre=/usr/bin/test -x /home/devuser/miniconda3/envs/byteff2-repro/bin/gmx
+ExecStartPre=/usr/bin/test -d /data/lzq/gith/nexpoly/ops/current-assets/byteff2
+ExecStartPre=/usr/bin/install -d -m 0700 /data/lzq/gith/nexpoly/ops/state/monomer-md-worker-socket
+ExecStartPre=/usr/bin/rm -f /data/lzq/gith/nexpoly/ops/state/monomer-md-worker-socket/worker.sock
+ExecStart=/data/lzq/gith/nexpoly/ops/current/worker-venv/bin/python -m uvicorn app.main:app --uds /data/lzq/gith/nexpoly/ops/state/monomer-md-worker-socket/worker.sock
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
@@ -15,7 +27,9 @@ KillSignal=SIGTERM
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nexpoly-monomer-md-worker
-UMask=0002
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=default.target

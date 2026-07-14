@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+DIGEST_A = "ghcr.io/lzq390/nexpoly-backend@sha256:" + "a" * 64
+DIGEST_B = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
+
+
+class ComposeDeliveryPolicyTests(unittest.TestCase):
+    def test_tracked_compose_contract_has_no_production_default_password(self) -> None:
+        base = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        production = (REPOSITORY_ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
+        dockerignore = (REPOSITORY_ROOT / ".dockerignore").read_text(encoding="utf-8")
+        self.assertNotIn("polyprop:polyprop", base + production)
+        self.assertIn('127.0.0.1:${NEXPOLY_POSTGRES_PORT:-55432}:5432', base)
+        self.assertIn("!reset null", production)
+        self.assertIn("!override", production)
+        self.assertNotIn("docker compose build", production)
+        self.assertNotIn("COPY model", (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8"))
+        for local_runtime in (
+            "/.runtime/",
+            "/.venv-monomer-md-worker/",
+            "/.venv-monomer-md-worker.staging-*/",
+            "/.venv-monomer-md-worker.previous-*/",
+        ):
+            self.assertIn(local_runtime, dockerignore)
+
+    @unittest.skipUnless(shutil.which("docker"), "Docker Compose is not available")
+    def test_production_override_renders_only_digest_application_images_and_no_build(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            temporary = Path(raw)
+            app_env = temporary / "app.env"
+            app_env.write_text("ONLINE_KNOWLEDGE_API_KEY=\n", encoding="utf-8")
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "NEXPOLY_BACKEND_IMAGE": DIGEST_A,
+                    "NEXPOLY_WEB_IMAGE": DIGEST_B,
+                    "NEXPOLY_POSTGRES_PASSWORD": "test-only-not-production",
+                    "APP_POSTGRES_DSN": "postgresql://nexpoly:test@lab-postgres:5432/nexpoly",
+                    "PI_POSTGRES_DSN": "postgresql://nexpoly:test@lab-postgres:5432/nexpoly",
+                    "LAB_DATA_POSTGRES_DSN": "postgresql://nexpoly:test@lab-postgres:5432/nexpoly",
+                    "NEXPOLY_APP_ENV_FILE": str(app_env),
+                    "NEXPOLY_ASSET_ROOT": str(temporary / "assets"),
+                    "POLYTAO_ENABLED": "true",
+                    "WEB_CONCURRENCY": "9",
+                    "GEN_JOB_WORKERS": "9",
+                    "POLYTAO_JOB_THREADS": "9",
+                    "POLYTAO_MAX_ACTIVE_JOBS": "9",
+                }
+            )
+            result = subprocess.run(
+                [
+                    "docker", "compose", "-p", "nexpoly", "-f", str(REPOSITORY_ROOT / "docker-compose.yml"),
+                    "-f", str(REPOSITORY_ROOT / "docker-compose.prod.yml"), "config", "--format", "json",
+                ],
+                env=environment, text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            document = json.loads(result.stdout)
+            for service in ("postgres-init", "backend", "nginx"):
+                self.assertNotIn("build", document["services"][service])
+            self.assertEqual(document["services"]["backend"]["image"], DIGEST_A)
+            self.assertEqual(document["services"]["nginx"]["image"], DIGEST_B)
+            self.assertEqual(document["services"]["lab-postgres"]["ports"][0]["host_ip"], "127.0.0.1")
+            backend = document["services"]["backend"]
+            self.assertEqual(backend["environment"]["WEB_CONCURRENCY"], "1")
+            self.assertEqual(backend["environment"]["GEN_JOB_WORKERS"], "1")
+            self.assertEqual(backend["environment"]["POLYTAO_JOB_THREADS"], "1")
+            self.assertEqual(backend["environment"]["POLYTAO_MAX_ACTIVE_JOBS"], "1")
+            self.assertIn(backend["stop_grace_period"], ("45s", 45000000000))
+
+
+if __name__ == "__main__":
+    unittest.main()

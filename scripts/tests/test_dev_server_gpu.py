@@ -1,0 +1,256 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = REPOSITORY_ROOT / "scripts" / "dev_server_gpu.sh"
+DEV_COMPOSE = REPOSITORY_ROOT / "docker-compose.dev.yml"
+DEV_ENV_EXAMPLE = REPOSITORY_ROOT / ".env.dev.example"
+DEV_BUILDKIT_CONFIG = REPOSITORY_ROOT / "ops" / "config" / "buildkitd.dev.toml"
+
+
+class DevServerGpuScriptTests(unittest.TestCase):
+    def _asset_verifier_source(self) -> str:
+        lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+        marker = 'python3 - "$NEXPOLY_ASSET_ROOT" "$manifest" <<\'PY\''
+        start = lines.index(next(line for line in lines if line.strip() == marker)) + 1
+        end = lines.index("PY", start)
+        return "\n".join(lines[start:end])
+
+    def _asset_fixture(self, root: Path) -> tuple[Path, Path]:
+        release = root / "release"
+        assets: dict[str, list[dict[str, str | int]]] = {}
+        for asset_root in ("model", "database", "backend-data", "byteff2"):
+            content = f"{asset_root}-content".encode()
+            path = release / asset_root / "nested" / "asset.bin"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(content)
+            assets[asset_root] = [
+                {
+                    "path": "nested/asset.bin",
+                    "size": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
+            ]
+        commit = "a" * 40
+        commit_marker = release / "byteff2" / "BYTEFF2-COMMIT"
+        commit_marker.write_text(commit + "\n", encoding="ascii")
+        marker_content = commit_marker.read_bytes()
+        assets["byteff2"].append(
+            {
+                "path": "BYTEFF2-COMMIT",
+                "size": len(marker_content),
+                "sha256": hashlib.sha256(marker_content).hexdigest(),
+            }
+        )
+        manifest = release / "ASSET-MANIFEST.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "byteff2_commit": commit,
+                    "byteff2_submodules": {},
+                    "assets": assets,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return release, manifest
+
+    def _run_asset_verifier(self, release: Path, manifest: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-", str(release), str(manifest)],
+            input=self._asset_verifier_source(),
+            text=True,
+            capture_output=True,
+        )
+
+    def test_script_has_valid_shell_syntax(self) -> None:
+        completed = subprocess.run(
+            ["bash", "-n", str(SCRIPT)],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_embedded_smoke_python_has_valid_syntax(self) -> None:
+        lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+        blocks: list[str] = []
+        current: list[str] | None = None
+        for line in lines:
+            if line.rstrip().endswith("<<'PY'"):
+                current = []
+            elif current is not None and line == "PY":
+                blocks.append("\n".join(current))
+                current = None
+            elif current is not None:
+                current.append(line)
+        self.assertGreaterEqual(len(blocks), 2)
+        for index, block in enumerate(blocks):
+            compile(block, f"dev_server_gpu.sh embedded Python block {index}", "exec")
+
+    def test_backend_build_uses_the_default_compose_builder(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('DEV_PYPI_INDEX_URL="${NEXPOLY_DEV_PYPI_INDEX_URL:-https://pypi.org/simple}"', source)
+        self.assertIn('DEV_PYPI_MIRROR_URL="${NEXPOLY_DEV_PYPI_MIRROR_URL:-https://mirrors.ustc.edu.cn/pypi/simple}"', source)
+        self.assertIn('"${COMPOSE[@]}" build', source)
+        self.assertIn("--builder default", source)
+        self.assertIn('--build-arg SOURCE_REVISION="$NEXPOLY_BUILD_REVISION"', source)
+        self.assertIn('--build-arg PYPI_INDEX_URL="$DEV_PYPI_INDEX_URL"', source)
+        self.assertIn('--build-arg PYPI_MIRROR_URL="$DEV_PYPI_MIRROR_URL"', source)
+        self.assertNotIn("docker buildx create", source)
+        self.assertNotIn("docker buildx use", source)
+        self.assertIn("docker buildx inspect default", source)
+        self.assertIn("docker buildx rm nexpoly-dev-safe", source)
+        self.assertNotIn("DEV_BUILDKIT", source)
+        self.assertNotIn("DEV_BUILDX", source)
+        self.assertIn('docker image inspect "$DEV_BACKEND_IMAGE" >/dev/null', source)
+
+    def test_ordinary_up_never_auto_applies_the_contract(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("run_dev_migrations() {")
+        body = source[start:source.index("\n}\n\nrun_dev_contract_migration()", start)]
+        self.assertNotIn('--mode contract', body)
+        self.assertIn("Destructive migration 0012 is pending", body)
+        up = source[source.index('case "${1:-up}" in'):]
+        up_branch = up[up.index("  up)"):up.index("  stop)")]
+        self.assertIn("run_dev_migrations", up_branch)
+        self.assertNotIn("run_dev_contract_migration", up_branch)
+
+    def test_explicit_contract_command_archives_full_database_and_removed_table(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("run_dev_contract_migration() {")
+        body = source[start:source.index("\n}\n\ncompute_backend_config_hash()", start)]
+        self.assertIn("nexpoly_dev.full.dump", body)
+        self.assertIn("polytao_jobs.dump", body)
+        self.assertIn("SELECT COUNT(*) FROM generation.polytao_jobs", body)
+        self.assertIn("source_schema_migration_version", body)
+        self.assertIn("sha256sum", body)
+        self.assertIn("createdb", body)
+        self.assertIn("pg_restore --exit-on-error", body)
+        self.assertIn("restored_row_count", body)
+        self.assertIn("dropdb --if-exists", body)
+        self.assertIn("python -m app.postgres_migrations --mode contract", body)
+        self.assertIn("  contract-migrate)", source)
+        contract_branch = source[
+            source.index("  contract-migrate)"):source.index("  tunnel)")
+        ]
+        self.assertLess(contract_branch.index("validate_asset_release"), contract_branch.index("build_backend_image"))
+        self.assertLess(contract_branch.index("build_backend_image"), contract_branch.index("run_dev_contract_migration"))
+
+    def test_dedicated_buildx_configuration_is_removed(self) -> None:
+        env_example = DEV_ENV_EXAMPLE.read_text(encoding="utf-8")
+        self.assertFalse(DEV_BUILDKIT_CONFIG.exists())
+        self.assertNotIn("NEXPOLY_DEV_BUILDX", env_example)
+        self.assertNotIn("NEXPOLY_DEV_BUILDKIT", env_example)
+
+    def test_builder_flow_never_prunes_docker_state(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        for destructive_command in (
+            "docker buildx prune",
+            "docker builder prune",
+            "docker image prune",
+            "docker system prune",
+        ):
+            self.assertNotIn(destructive_command, source)
+
+    def test_loaded_tag_matches_compose_and_drift_verification(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        compose = DEV_COMPOSE.read_text(encoding="utf-8")
+        self.assertIn('DEV_BACKEND_IMAGE="nexpoly-dev-backend:latest"', source)
+        self.assertIn('BACKEND_URL="http://127.0.0.1:${NEXPOLY_DEV_BACKEND_PORT:-18000}"', source)
+        self.assertIn('backend_base + "/internal/gpu/status"', source)
+        self.assertIn('"${COMPOSE[@]}" build', source)
+        self.assertIn('docker image inspect -f \'{{.Id}}\' "$DEV_BACKEND_IMAGE"', source)
+        self.assertIn('org.opencontainers.image.revision', source)
+        self.assertIn('NEXPOLY_BUILD_REVISION" == "$CURRENT_SOURCE_REVISION', source)
+        self.assertIn('runtime_revision=', source)
+        self.assertIn('image_revision=', source)
+        self.assertIn("compute_backend_config_hash", source)
+        self.assertIn('com.nexpoly.dev.config-hash', source)
+        self.assertIn('com.nexpoly.dev.config-hash', compose)
+        self.assertIn('GPU_MAX_CONCURRENT_INFERENCES: "1"', compose)
+        self.assertIn('GPU_MAX_WAITING_INFERENCES: "8"', compose)
+        self.assertIn('GEN_MAX_ACTIVE_JOBS: "8"', compose)
+        self.assertIn("'GPU_MAX_CONCURRENT_INFERENCES':'1'", source)
+        self.assertIn("'WEB_CONCURRENCY':'1'", source)
+        self.assertGreaterEqual(compose.count("image: nexpoly-dev-backend:latest"), 2)
+
+    def test_asset_manifest_verifier_accepts_exact_content(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            release, manifest = self._asset_fixture(Path(raw))
+            completed = self._run_asset_verifier(release, manifest)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_asset_manifest_verifier_rejects_hash_mismatch_and_unlisted_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            release, manifest = self._asset_fixture(Path(raw))
+            (release / "model" / "nested" / "asset.bin").write_bytes(b"model-CONTENT")
+            mismatch = self._run_asset_verifier(release, manifest)
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertIn("sha256 mismatch", mismatch.stderr)
+
+            release, manifest = self._asset_fixture(Path(raw) / "second")
+            (release / "database" / "extra.bin").write_bytes(b"extra")
+            unlisted = self._run_asset_verifier(release, manifest)
+            self.assertNotEqual(unlisted.returncode, 0)
+            self.assertIn("unlisted asset file", unlisted.stderr)
+
+    def test_asset_manifest_verifier_rejects_path_traversal_and_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            release, manifest = self._asset_fixture(Path(raw))
+            document = json.loads(manifest.read_text(encoding="utf-8"))
+            document["assets"]["model"][0]["path"] = "../outside.bin"
+            manifest.write_text(json.dumps(document), encoding="utf-8")
+            traversal = self._run_asset_verifier(release, manifest)
+            self.assertNotEqual(traversal.returncode, 0)
+            self.assertIn("unsafe manifest path", traversal.stderr)
+
+            release, manifest = self._asset_fixture(Path(raw) / "second")
+            asset = release / "model" / "nested" / "asset.bin"
+            outside = Path(raw) / "outside.bin"
+            outside.write_bytes(asset.read_bytes())
+            asset.unlink()
+            asset.symlink_to(outside)
+            symlink = self._run_asset_verifier(release, manifest)
+            self.assertNotEqual(symlink.returncode, 0)
+            self.assertIn("symlink is not allowed", symlink.stderr)
+
+    def test_dev_reload_watches_only_the_application_directory(self) -> None:
+        compose = DEV_COMPOSE.read_text(encoding="utf-8")
+        self.assertIn("--reload-dir", compose)
+        self.assertIn("/app/backend/app", compose)
+        self.assertIn("cd /app/backend/app", compose)
+        self.assertIn("--app-dir /app/backend", compose)
+        self.assertNotIn("--reload-exclude", compose)
+
+    def test_worker_bootstrap_and_start_are_fail_closed(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        env_example = DEV_ENV_EXAMPLE.read_text(encoding="utf-8")
+        self.assertIn("worker_prepare_venv()", source)
+        self.assertIn("scripts/prepare_dev_worker_venv.py prepare", source)
+        prepare_source = (REPOSITORY_ROOT / "scripts" / "prepare_dev_worker_venv.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"--require-hashes"', prepare_source)
+        self.assertIn("  worker-base-identity)", source)
+        self.assertIn("  worker-venv)", source)
+        self.assertIn("worker_verify_venv", source)
+        self.assertIn("worker_assert_process_identity", source)
+        worker_start = source.index("worker_up() {")
+        worker_up = source[worker_start:source.index("\n}\n\nworker_stop()", worker_start)]
+        self.assertLess(worker_up.index("validate_asset_release"), worker_up.index("worker_health"))
+        self.assertLess(worker_up.index("worker_verify_venv"), worker_up.index("worker_health"))
+        self.assertIn("MONOMER_MD_DEV_WORKER_BASE_PYTHON=", env_example)
+        self.assertIn("MONOMER_MD_DEV_WORKER_BASE_PYTHON_IDENTITY_SHA256=sha256:", env_example)
+
+
+if __name__ == "__main__":
+    unittest.main()

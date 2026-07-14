@@ -1,0 +1,147 @@
+name: nexpoly_dev
+
+x-dev-backend-env: &dev-backend-env
+  WEB_CONCURRENCY: "1"
+  MODEL_DIR: /app/model
+  MODEL_ENABLED: "true"
+  OCSR_ENABLED: "true"
+  OCSR_MODEL_DIR: /app/model/ocsr
+  OCSR_DEVICE: "cuda"
+  OCSR_MAX_IMAGE_BYTES: "5242880"
+  GEN_MODEL_ENABLED: "true"
+  GEN_MODEL_DIR: /app/model/conditional_generation
+  GEN_DEVICE: "cuda"
+  GEN_JOB_WORKERS: "1"
+  GEN_MAX_ACTIVE_JOBS: "8"
+  GPU_PRELOAD_MODE: "lazy"
+  GPU_MAX_CONCURRENT_INFERENCES: "1"
+  GPU_MAX_WAITING_INFERENCES: "8"
+  GPU_SYNC_QUEUE_TIMEOUT_SECONDS: "30"
+  GPU_ASYNC_QUEUE_TIMEOUT_SECONDS: "600"
+  RETRO_MODEL_ENABLED: "true"
+  RETRO_MODEL_ID: /app/model/reactiont5-retrosynthesis
+  RETRO_DEVICE: "cuda"
+  POLYTAO_ENABLED: "${POLYTAO_ENABLED:-true}"
+  POLYTAO_MODEL_DIR: /app/model/polytao
+  POLYTAO_DEVICE: "cuda"
+  POLYTAO_JOB_THREADS: "1"
+  POLYTAO_MAX_ACTIVE_JOBS: "1"
+  STRUCTURED_DATA_BACKEND: "postgres"
+  PI_REVERSE_BACKEND: "postgres"
+  APP_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
+  PI_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
+  LAB_DATA_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
+  ALLOWED_ORIGINS: http://localhost:15173,http://127.0.0.1:15173
+  MONOMER_MD_SUBMIT_ENABLED: "${MONOMER_MD_SUBMIT_ENABLED:-true}"
+  MONOMER_MD_WORKER_BASE_URL: "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock"
+  MONOMER_MD_WORKER_TIMEOUT_SECONDS: "30"
+  POLYTAO_RATE_LIMIT_PER_IP_PER_MINUTE: "5"
+  POLYTAO_RATE_LIMIT_WINDOW_SECONDS: "60"
+
+services:
+  postgres-init:
+    image: nexpoly-dev-backend:latest
+    env_file: !reset []
+    environment: *dev-backend-env
+    volumes: !override
+      - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/backend-data:/app/backend/data:ro
+      - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/database:/app/database:ro
+      - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/model:/app/model:ro
+    command:
+      - python
+      - -m
+      - app.postgres_migrations
+      - --mode
+      - bootstrap
+
+  backend:
+    depends_on: !override
+      lab-postgres:
+        condition: service_healthy
+    image: nexpoly-dev-backend:latest
+    env_file: !override
+      - path: .env.dev.ai
+        required: false
+    environment: *dev-backend-env
+    labels:
+      com.nexpoly.dev.config-hash: "${NEXPOLY_DEV_CONFIG_HASH:-uncomputed}"
+    volumes: !override
+      - ./backend:/app/backend
+      - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/backend-data:/app/backend/data:ro
+      - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/database:/app/database:ro
+      - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/model:/app/model:ro
+      - ${MONOMER_MD_DEV_WORKER_SOCKET_DIR:-./.runtime/monomer-md-worker-socket}:/app/monomer-md-worker
+    # Uvicorn 0.32 always adds its current working directory to WatchFiles.
+    # Start it from the application directory so tests, locks, and other
+    # repository inputs are structurally outside the watched tree.
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        cd /app/backend/app;
+        exec uvicorn app.main:app --app-dir /app/backend
+        --host 0.0.0.0 --port 8000
+        --workers 1 --timeout-graceful-shutdown 40
+        --reload --reload-dir /app/backend/app
+    ports:
+      - "127.0.0.1:${NEXPOLY_DEV_BACKEND_PORT:-18000}:8000"
+    healthcheck: !override
+      test:
+        - CMD-SHELL
+        - >-
+          python -m app.postgres_preflight --strict >/tmp/nexpoly-postgres-preflight.json &&
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()" &&
+          python -m app.gpu_preflight --mode configured >/tmp/nexpoly-gpu-preflight.json
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+    gpus: !override
+      - driver: nvidia
+        device_ids:
+          - "${NEXPOLY_DEV_GPU_DEVICE:-1}"
+        capabilities:
+          - gpu
+
+  lab-postgres:
+    environment:
+      POSTGRES_USER: nexpoly_dev
+      POSTGRES_PASSWORD: nexpoly_dev
+      POSTGRES_DB: nexpoly_dev
+    ports: !override
+      - "127.0.0.1:${NEXPOLY_DEV_POSTGRES_PORT:-15532}:5432"
+    volumes: !override
+      - nexpoly_dev_postgres_data:/var/lib/postgresql/data
+    healthcheck: !override
+      test: ["CMD-SHELL", "pg_isready -U nexpoly_dev -d nexpoly_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  frontend-dev:
+    image: node:22-bookworm-slim@sha256:d9f850096136edbc402debdd8729579a288aac64574ada0ff4db26b6ae58b0b2
+    working_dir: /app/frontend
+    environment:
+      VITE_API_BASE_URL: /api/v1
+      DEV_PROXY_TARGET: http://backend:8000
+      HOST: 0.0.0.0
+    volumes:
+      - ./frontend:/app/frontend
+      - nexpoly_dev_frontend_node_modules:/app/frontend/node_modules
+    ports:
+      - "127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-15173}:5173"
+    command: ["sh", "-lc", "npm ci && npm run dev -- --host 0.0.0.0 --port 5173"]
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  nginx:
+    profiles:
+      - prod-nginx-disabled-in-dev
+    ports: !override
+      - "127.0.0.1:${NEXPOLY_DEV_NGINX_PORT:-19000}:80"
+
+volumes:
+  nexpoly_dev_postgres_data:
+  nexpoly_dev_frontend_node_modules:
