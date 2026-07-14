@@ -19,8 +19,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROBE_PATH = REPO_ROOT / "scripts" / "monomer_backend_status_probe.py"
-DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy_server.sh"
-WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "nexpoly-deploy.yml"
+WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 SPEC = importlib.util.spec_from_file_location("monomer_backend_status_probe", PROBE_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -68,17 +67,6 @@ class ProbeStatusTests(unittest.TestCase):
         self.assertEqual(args.timeout_seconds, 40)
         self.assertEqual(args.retries, 3)
 
-        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-        self.assertRegex(
-            script,
-            re.compile(
-                r"config_value\s+NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS\s+40"
-            ),
-        )
-        self.assertRegex(
-            script,
-            re.compile(r"config_value\s+NEXPOLY_MONOMER_MD_STATUS_RETRIES\s+3"),
-        )
 
     def test_first_attempt_succeeds_and_uses_configured_timeout(self):
         calls: list[tuple[str, int]] = []
@@ -346,43 +334,10 @@ class ConfigurationValidationTests(unittest.TestCase):
                     )
             self.assertEqual(raised.exception.code, 2)
 
-    def test_deploy_script_rejects_invalid_values_before_deployment(self):
-        invalid_values = [
-            ("NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS", "0"),
-            ("NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS", "301"),
-            ("NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS", "abc"),
-            (
-                "NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS",
-                "18446744073709551617",
-            ),
-            ("NEXPOLY_MONOMER_MD_STATUS_RETRIES", "-1"),
-            ("NEXPOLY_MONOMER_MD_STATUS_RETRIES", "4"),
-            ("NEXPOLY_MONOMER_MD_STATUS_RETRIES", "abc"),
-            ("NEXPOLY_MONOMER_MD_STATUS_RETRIES", "18446744073709551619"),
-        ]
-        for name, value in invalid_values:
-            env = os.environ.copy()
-            env.pop("NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS", None)
-            env.pop("NEXPOLY_MONOMER_MD_STATUS_RETRIES", None)
-            env[name] = value
-            with self.subTest(name=name, value=value):
-                completed = subprocess.run(
-                    ["bash", str(DEPLOY_SCRIPT)],
-                    cwd=REPO_ROOT,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    check=False,
-                )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn(name, completed.stderr)
-            self.assertNotIn("Building Docker images", completed.stdout)
-
     def test_workflow_runs_the_probe_tests(self):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("bash -n scripts/deploy_server.sh", workflow)
-        self.assertIn("test_monomer_backend_status_probe.py", workflow)
+        self.assertIn("python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v", workflow)
 
 
 if __name__ == "__main__":

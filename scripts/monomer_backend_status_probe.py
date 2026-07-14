@@ -23,6 +23,13 @@ SAFE_STATUS_FIELDS = (
     "byteff2_root_exists",
     "runtime_ready",
     "active_jobs",
+    "database_active_jobs",
+    "oldest_active_heartbeat_age_seconds",
+    "max_active_jobs",
+    "accepting_jobs",
+    "draining",
+    "busy",
+    "can_submit",
 )
 SAFE_TEXT_VALUES = {
     "worker_mode": {"demo", "mock", "real", "unknown"},
