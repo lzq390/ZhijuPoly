@@ -23,7 +23,12 @@ from app.services.conditional_generation import (
     to_rdkit_smiles,
 )
 import app.services.conditional_generation_runtime as runtime_module
-from app.services.conditional_generation_runtime import TorchConditionalGenerationRuntime, _resolve_device
+from app.services.conditional_generation_runtime import (
+    TorchConditionalGenerationRuntime,
+    _resolve_device,
+    missing_artifact_paths,
+)
+from app.services.gpu_runtime_registry import GpuRuntimeRegistry
 from app.utils.exceptions import ModelArtifactError
 
 
@@ -63,6 +68,16 @@ class ArtifactErrorRuntime(FakeRuntime):
         raise ModelArtifactError("missing model dependency")
 
 
+class GeneratorFailureRuntime(FakeRuntime):
+    def generate_once(self, **_kwargs) -> GeneratedSmiles:
+        raise RuntimeError("generator execution failed")
+
+
+class EvaluatorFailureRuntime(FakeRuntime):
+    def predict_tg(self, smiles: str) -> float:
+        raise ValueError("scaler feature mismatch")
+
+
 class FakeCuda:
     def __init__(self, *, available: bool, capability: tuple[int, int], arches: list[str]) -> None:
         self._available = available
@@ -96,6 +111,18 @@ class FakeModel:
 
     def eval(self) -> None:
         return None
+
+
+def _install_fake_generation_registry(app, runtime: object | None = None) -> object:
+    selected_runtime = runtime or object()
+    registry = GpuRuntimeRegistry()
+    registry.register(
+        "conditional_generation",
+        enabled=True,
+        loader=lambda: selected_runtime,
+    )
+    app.state.gpu_runtime_registry = registry
+    return selected_runtime
 
 
 def test_star_smiles_normalization_accepts_bracketed_and_bare_stars() -> None:
@@ -158,6 +185,34 @@ def test_conditional_generation_propagates_model_artifact_errors() -> None:
     runtime = ArtifactErrorRuntime(generated=[], predicted_tg={})
 
     with pytest.raises(ModelArtifactError, match="missing model dependency"):
+        run_conditional_generation(
+            input_smiles="*CC*",
+            delta_tg=20.0,
+            candidate_count=1,
+            top_k=5,
+            temperature=1.0,
+            runtime=runtime,
+        )
+
+
+def test_conditional_generation_propagates_generator_runtime_failures() -> None:
+    runtime = GeneratorFailureRuntime(generated=[], predicted_tg={})
+
+    with pytest.raises(RuntimeError, match="generator execution failed"):
+        run_conditional_generation(
+            input_smiles="*CC*",
+            delta_tg=20.0,
+            candidate_count=1,
+            top_k=5,
+            temperature=1.0,
+            runtime=runtime,
+        )
+
+
+def test_conditional_generation_propagates_evaluator_runtime_failures() -> None:
+    runtime = EvaluatorFailureRuntime(generated=["*CCC*"], predicted_tg={})
+
+    with pytest.raises(ValueError, match="scaler feature mismatch"):
         run_conditional_generation(
             input_smiles="*CC*",
             delta_tg=20.0,
@@ -260,6 +315,115 @@ def test_conditional_generation_runtime_load_is_serialized(monkeypatch: pytest.M
     assert load_entries == 1
 
 
+def test_conditional_generation_runtime_failed_load_is_atomic_and_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = TorchConditionalGenerationRuntime(model_dir=Path("/unused"), device="cuda")
+    fail_evaluator = True
+    empty_cache_calls = 0
+
+    def empty_cache() -> None:
+        nonlocal empty_cache_calls
+        empty_cache_calls += 1
+
+    def fake_torch_load(path: Path, **_kwargs):
+        if str(path).endswith("best_chemberta_tg.pth") and fail_evaluator:
+            raise RuntimeError("evaluator checkpoint failed")
+        return {"model_state_dict": {}, "cond_mean": 12.5, "cond_std": 3.0}
+
+    fake_torch = SimpleNamespace(
+        nn=SimpleNamespace(),
+        cuda=SimpleNamespace(is_available=lambda: True, empty_cache=empty_cache),
+        load=fake_torch_load,
+    )
+    fake_transformers = SimpleNamespace(
+        AutoModel=object,
+        AutoTokenizer=SimpleNamespace(from_pretrained=lambda _path: object()),
+    )
+
+    def fake_require_dependency(name: str) -> object:
+        return {
+            "torch": fake_torch,
+            "torch.nn.functional": object(),
+            "transformers": fake_transformers,
+            "chemprop.featurizers": SimpleNamespace(SimpleMoleculeMolGraphFeaturizer=object),
+            "chemprop.data": SimpleNamespace(BatchMolGraph=object),
+            "chemprop.nn": SimpleNamespace(BondMessagePassing=object, MeanAggregation=object),
+        }[name]
+
+    monkeypatch.setattr(runtime, "_assert_artifacts", lambda: None)
+    monkeypatch.setattr(runtime_module, "_require_dependency", fake_require_dependency)
+    monkeypatch.setattr(runtime_module, "_resolve_device", lambda *_args: "cuda")
+    monkeypatch.setattr(runtime_module, "_build_model_classes", lambda *args: (FakeModel, FakeModel))
+    monkeypatch.setattr(
+        runtime_module.joblib,
+        "load",
+        lambda path: [] if str(path).endswith("top10_desc_names.pkl") else object(),
+    )
+
+    with pytest.raises(RuntimeError, match="evaluator checkpoint failed"):
+        runtime.ensure_loaded()
+
+    assert runtime.loaded is False
+    assert runtime.generator_model is None
+    assert runtime.evaluator_bundle is None
+    assert runtime.torch is None
+    assert runtime.functional is None
+    assert runtime.device is None
+    assert runtime.cond_mean == 0.0
+    assert runtime.cond_std == 1.0
+    # One cache release occurs before construction and another after failure.
+    assert empty_cache_calls >= 2
+
+    fail_evaluator = False
+    assert runtime.ensure_loaded() is runtime
+    assert runtime.loaded is True
+    assert runtime.cond_mean == 12.5
+    assert runtime.cond_std == 3.0
+
+
+def test_conditional_generation_runtime_propagates_cuda_oom_for_job_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = TorchConditionalGenerationRuntime(model_dir=Path("/unused"), device="cuda")
+
+    def fail(**_kwargs):
+        raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(runtime, "_generate_once", fail)
+
+    with pytest.raises(ModelArtifactError, match="CUDA inference failed") as exc_info:
+        runtime.generate_once(
+            input_smiles="*CC*",
+            delta_tg=20,
+            top_k=5,
+            temperature=1.0,
+            max_length=32,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+def test_conditional_generation_runtime_propagates_non_cuda_model_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = TorchConditionalGenerationRuntime(model_dir=Path("/unused"), device="cpu")
+    monkeypatch.setattr(
+        runtime,
+        "_generate_once",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("model tensor shape mismatch")),
+    )
+
+    with pytest.raises(ModelArtifactError, match="inference failed"):
+        runtime.generate_once(
+            input_smiles="*CC*",
+            delta_tg=20,
+            top_k=5,
+            temperature=1.0,
+            max_length=32,
+        )
+
+
 def test_conditional_generation_job_api_reports_disabled_service(tmp_path: Path) -> None:
     settings = Settings(
         sqlite_db_path=str(tmp_path / "polyprop.db"),
@@ -347,12 +511,17 @@ def test_conditional_generation_job_api_rejects_non_finite_tg_without_500(tmp_pa
 
 
 def test_conditional_generation_job_api_returns_terminal_result(tmp_path: Path) -> None:
+    model_dir = tmp_path / "conditional-generation"
+    for artifact in missing_artifact_paths(model_dir):
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(b"test artifact")
     settings = Settings(
         sqlite_db_path=str(tmp_path / "polyprop.db"),
         csv_source_path=str(tmp_path / "source.csv"),
         allowed_origins="http://localhost:5173",
         model_enabled=False,
         gen_model_enabled=True,
+        gen_model_dir=str(model_dir),
         gen_job_workers=1,
     )
     app = create_app(settings)
@@ -377,6 +546,7 @@ def test_conditional_generation_job_api_returns_terminal_result(tmp_path: Path) 
             )
         ],
     )
+    _install_fake_generation_registry(app)
 
     with TestClient(app) as client:
         create_response = client.post(
@@ -404,3 +574,146 @@ def test_conditional_generation_job_api_returns_terminal_result(tmp_path: Path) 
     assert status_payload["result"]["delta_tg"] == 30.0
     assert status_payload["result"]["results"][0]["tg_error"] is None
     assert status_payload["result"]["results"][0]["generated_smiles"] == "*COC*"
+
+
+def test_conditional_generation_job_capacity_returns_429(tmp_path: Path) -> None:
+    model_dir = tmp_path / "conditional-generation"
+    for artifact in missing_artifact_paths(model_dir):
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(b"test artifact")
+    settings = Settings(
+        sqlite_db_path=str(tmp_path / "polyprop.db"),
+        csv_source_path=str(tmp_path / "source.csv"),
+        allowed_origins="http://localhost:5173",
+        model_enabled=False,
+        gen_model_enabled=True,
+        gen_model_dir=str(model_dir),
+        gen_job_workers=1,
+        gen_max_active_jobs=1,
+    )
+    app = create_app(settings)
+    runner_started = Event()
+    release_runner = Event()
+
+    def blocking_runner(request_body):
+        runner_started.set()
+        assert release_runner.wait(timeout=2)
+        return ConditionalGenerationTgResponse(
+            input_smiles=request_body.smiles,
+            normalized_input_smiles="*CC*",
+            delta_tg=request_body.delta_tg,
+            query_time_ms=1.0,
+            requested_count=request_body.candidate_count,
+            returned_count=0,
+            attempts=1,
+            filter_counter={},
+            results=[],
+        )
+
+    app.state.conditional_generation_runner = blocking_runner
+    _install_fake_generation_registry(app)
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/v1/conditional-generation/tg/jobs",
+            json={"smiles": "*CC*", "delta_tg": 30, "candidate_count": 1},
+        )
+        assert first.status_code == 202
+        assert runner_started.wait(timeout=2)
+        second = client.post(
+            "/api/v1/conditional-generation/tg/jobs",
+            json={"smiles": "*CC*", "delta_tg": 30, "candidate_count": 1},
+        )
+        release_runner.set()
+
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "5"
+    assert "capacity is full" in second.json()["detail"]
+
+
+def test_conditional_generation_gpu_queue_full_becomes_failed_job(tmp_path: Path) -> None:
+    model_dir = tmp_path / "conditional-generation"
+    for artifact in missing_artifact_paths(model_dir):
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(b"test artifact")
+    settings = Settings(
+        sqlite_db_path=str(tmp_path / "polyprop.db"),
+        csv_source_path=str(tmp_path / "source.csv"),
+        allowed_origins="http://localhost:5173",
+        model_enabled=False,
+        gen_model_enabled=True,
+        gen_model_dir=str(model_dir),
+        gen_job_workers=1,
+        gen_max_active_jobs=2,
+    )
+    app = create_app(settings)
+    registry = GpuRuntimeRegistry(max_concurrent_inferences=1, max_waiting_inferences=0)
+    registry.register("conditional_generation", enabled=True, loader=object)
+    app.state.gpu_runtime_registry = registry
+    holder_started = Event()
+    release_holder = Event()
+
+    def hold_gpu() -> None:
+        with registry.inference_session("conditional_generation", timeout_seconds=2):
+            holder_started.set()
+            assert release_holder.wait(timeout=2)
+
+    with TestClient(app) as client:
+        holder = Thread(target=hold_gpu)
+        holder.start()
+        assert holder_started.wait(timeout=2)
+        created = client.post(
+            "/api/v1/conditional-generation/tg/jobs",
+            json={"smiles": "*CC*", "delta_tg": 30, "candidate_count": 1},
+        )
+        assert created.status_code == 202
+        job_id = created.json()["job_id"]
+        terminal = None
+        for _ in range(40):
+            terminal = client.get(f"/api/v1/conditional-generation/tg/jobs/{job_id}").json()
+            if terminal["status"] in {"completed", "failed", "cancelled"}:
+                break
+            sleep(0.025)
+        release_holder.set()
+        holder.join(timeout=2)
+
+    assert terminal is not None
+    assert terminal["status"] == "failed"
+    assert terminal["error"].startswith("GPU_QUEUE_FULL:")
+
+
+def test_conditional_generation_job_lookup_distinguishes_404_and_410(tmp_path: Path) -> None:
+    settings = Settings(
+        sqlite_db_path=str(tmp_path / "polyprop.db"),
+        csv_source_path=str(tmp_path / "source.csv"),
+        allowed_origins="http://localhost:5173",
+        model_enabled=False,
+        gen_model_enabled=False,
+    )
+    app = create_app(settings)
+    current_instance = app.state.in_memory_job_store.instance_id
+    token = "0" * 32
+
+    with TestClient(app) as client:
+        malformed = client.get("/api/v1/conditional-generation/tg/jobs/not-a-job")
+        wrong_namespace = client.get(
+            "/api/v1/conditional-generation/tg/jobs/"
+            f"polytao.{current_instance}.{token}"
+        )
+        old_instance = client.get(
+            "/api/v1/conditional-generation/tg/jobs/"
+            f"conditional_generation.{('b' * 16)}.{token}"
+        )
+        legacy_uuid = client.get(
+            "/api/v1/conditional-generation/tg/jobs/"
+            "123e4567-e89b-42d3-a456-426614174000"
+        )
+        legacy_uuid_hex = client.get(
+            "/api/v1/conditional-generation/tg/jobs/"
+            "123e4567e89b42d3a456426614174000"
+        )
+
+    assert malformed.status_code == 404
+    assert wrong_namespace.status_code == 404
+    assert old_instance.status_code == 410
+    assert legacy_uuid.status_code == 410
+    assert legacy_uuid_hex.status_code == 410

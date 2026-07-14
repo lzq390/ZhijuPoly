@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 from collections import Counter
 from dataclasses import dataclass, field
@@ -15,9 +14,6 @@ from app.utils.exceptions import ModelArtifactError
 ALLOWED_ELEMENTS = {"H", "C", "N", "O", "F", "S", "Cl", "*"}
 MAX_HEAVY_ATOMS = 30
 DEFAULT_MAX_SMILES_LEN = 128
-logger = logging.getLogger(__name__)
-
-
 @dataclass(slots=True)
 class GeneratedSmiles:
     raw_smiles: str
@@ -200,21 +196,17 @@ def run_conditional_generation(
 
     while len(candidates) < requested_count and attempts < max_attempt_count:
         attempts += 1
-        try:
-            generated = runtime.generate_once(
-                input_smiles=input_smiles_model,
-                delta_tg=condition_delta_tg,
-                top_k=top_k,
-                temperature=temperature,
-                max_length=max_length,
-            )
-        except ModelArtifactError:
-            raise
-        except Exception as exc:
-            if filter_counter["generator_exception"] == 0:
-                logger.exception("conditional generation sampling failed: %s", exc)
-            filter_counter["generator_exception"] += 1
-            continue
+        # Invalid generated strings are ordinary filtering outcomes below.
+        # Exceptions from model execution are runtime failures (including OOM)
+        # and must reach the Registry/job manager instead of being converted
+        # into a misleading successful response with zero candidates.
+        generated = runtime.generate_once(
+            input_smiles=input_smiles_model,
+            delta_tg=condition_delta_tg,
+            top_k=top_k,
+            temperature=temperature,
+            max_length=max_length,
+        )
 
         raw_smiles = generated.raw_smiles.strip()
         rdkit_smiles = generated.rdkit_smiles or to_rdkit_smiles(raw_smiles)
@@ -239,14 +231,9 @@ def run_conditional_generation(
             continue
 
         seen.add(rdkit_smiles)
-        predicted_tg: float | None
-        try:
-            predicted_tg = float(runtime.predict_tg(rdkit_smiles))
-        except ModelArtifactError:
-            raise
-        except Exception as exc:
-            logger.exception("conditional generation Tg prediction failed: %s", exc)
-            predicted_tg = None
+        # The evaluator and scaler are part of the same runtime contract.
+        # Their failures are not candidate-level business errors.
+        predicted_tg = float(runtime.predict_tg(rdkit_smiles))
 
         candidates.append(
             ConditionalGenerationCandidate(

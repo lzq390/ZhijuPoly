@@ -42,11 +42,15 @@ def predict_monomer_precursors(
     max_new_tokens: int,
     model_id: str,
     device: str,
+    runtime: _ReactionT5Runtime | None = None,
 ) -> MonomerRetrosynthesisResponse:
     started_at = perf_counter()
     canonical_smiles, target_mol = _canonicalize_smiles(smiles)
-    resolved_device = _resolve_device(device)
-    runtime = _get_runtime(model_id, resolved_device)
+    if runtime is None:
+        resolved_device = _resolve_device(device)
+        runtime = _get_runtime(model_id, resolved_device)
+    else:
+        resolved_device = runtime.device
 
     inputs = runtime.tokenizer(canonical_smiles, return_tensors="pt")
     inputs = {key: value.to(runtime.device) for key, value in inputs.items()}
@@ -111,6 +115,16 @@ def _get_runtime(model_id: str, device: str) -> _ReactionT5Runtime:
         runtime = _ReactionT5Runtime(tokenizer=tokenizer, model=model, torch=torch, device=device)
         _RUNTIME_CACHE[cache_key] = runtime
         return runtime
+
+
+def load_retrosynthesis_runtime(model_id: str, device: str) -> _ReactionT5Runtime:
+    """Load and return the cached ReactionT5 runtime used by inference requests."""
+    return _get_runtime(model_id, _resolve_device(device))
+
+
+def validate_retrosynthesis_input(smiles: str) -> None:
+    """Validate request input before a lazy model load is attempted."""
+    _canonicalize_smiles(smiles)
 
 
 def _resolve_device(device: str) -> str:

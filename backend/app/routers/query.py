@@ -3,6 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.models import (
     PolymerResult,
@@ -16,7 +17,12 @@ from app.models import (
 )
 from app.postgres_database import PostgresUnavailableError
 from app.services.aggregator import load_polymer_result_postgres, load_polymer_results_postgres
-from app.services.image_recognition import recognize_structure_image_from_bytes
+from app.services.gpu_runtime_registry import (
+    GpuQueueFullError,
+    GpuQueueStoppedError,
+    GpuQueueTimeoutError,
+)
+from app.services.image_recognition import recognize_structure_image_from_bytes, validate_structure_image
 from app.services.property_similarity import property_similarity_search_postgres
 from app.services.similarity import similarity_search_postgres
 from app.services.smiles_utils import standardize_smiles
@@ -32,6 +38,45 @@ from app.utils.exceptions import (
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
 POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set STRUCTURED_DATA_BACKEND=postgres."
+
+
+def _run_ocsr_inference(app, image_bytes: bytes, content_type: str | None):
+    settings = app.state.settings
+    validate_structure_image(
+        image_bytes,
+        content_type=content_type,
+        max_bytes=settings.ocsr_max_image_bytes,
+    )
+    registry = getattr(app.state, "gpu_runtime_registry", None)
+    if registry is None:
+        raise ModelArtifactError("GPU runtime registry is unavailable")
+
+    with registry.inference_session(
+        "ocsr",
+        timeout_seconds=settings.gpu_sync_queue_timeout_seconds,
+    ) as runtime:
+        try:
+            result = recognize_structure_image_from_bytes(
+                image_bytes,
+                content_type=content_type,
+                model_path=settings.ocsr_model_dir_path,
+                device=settings.ocsr_device,
+                max_bytes=settings.ocsr_max_image_bytes,
+                runtime=runtime,
+            )
+        except (InvalidImageError, StructureRecognitionError):
+            raise
+        except Exception as exc:
+            failure_kind = registry.record_inference_failure("ocsr", exc)
+            if failure_kind == "oom":
+                raise ModelArtifactError(
+                    "OCSR GPU memory is exhausted; retry after current GPU work finishes"
+                ) from exc
+            raise
+        # Publish success while this request still owns the scheduler permit so
+        # status observers cannot see the next inference active first.
+        registry.record_inference_success("ocsr")
+    return result
 
 
 @router.post("/query/smiles", response_model=SmilesQueryResponse)
@@ -164,16 +209,29 @@ async def recognize_structure_image(
 
     try:
         image_bytes = await image.read(settings.ocsr_max_image_bytes + 1)
-        result = recognize_structure_image_from_bytes(
+        result = await run_in_threadpool(
+            _run_ocsr_inference,
+            request.app,
             image_bytes,
-            content_type=image.content_type,
-            model_path=settings.ocsr_model_dir_path,
-            device=settings.ocsr_device,
-            max_bytes=settings.ocsr_max_image_bytes,
+            image.content_type,
         )
     except InvalidImageError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except ModelArtifactError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except GpuQueueFullError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except (GpuQueueTimeoutError, GpuQueueStoppedError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except StructureRecognitionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

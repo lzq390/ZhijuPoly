@@ -23,6 +23,7 @@ from app.services import assistant_orchestrator
 from app.services.assistant_chat import build_assistant_system_prompt
 from app.services.assistant_orchestrator import AssistantStreamEvent
 from app.services.assistant_skills import predict_properties
+from app.services.gpu_runtime_registry import GpuRuntimeRegistry
 from app.services.image_recognition import RecognizedStructure
 
 
@@ -74,6 +75,7 @@ def make_ocsr_app(
             assistant_model="test-model",
             ocsr_enabled=ocsr_enabled,
             ocsr_model_dir=str(ocsr_model_dir or (tmp_path / "missing-ocsr")),
+            ocsr_device="auto",
             ocsr_max_image_bytes=ocsr_max_image_bytes,
         )
     )
@@ -164,12 +166,14 @@ def test_structure_image_recognition_returns_molscribe_result(tmp_path: Path, mo
         model_path: Path,
         device: str,
         max_bytes: int,
+        runtime: object | None = None,
     ) -> RecognizedStructure:
         assert image_bytes == PNG_BYTES
         assert content_type == "image/png"
         assert model_path == tmp_path / "missing-ocsr"
         assert device == "auto"
         assert max_bytes == 1024
+        assert runtime is fake_runtime
         return RecognizedStructure(
             smiles="CCO",
             molfile="mol block",
@@ -178,7 +182,12 @@ def test_structure_image_recognition_returns_molscribe_result(tmp_path: Path, mo
         )
 
     monkeypatch.setattr(query_router, "recognize_structure_image_from_bytes", fake_recognize_structure_image_from_bytes)
-    response = post_structure_image(make_ocsr_app(tmp_path), PNG_BYTES)
+    app = make_ocsr_app(tmp_path)
+    fake_runtime = object()
+    registry = GpuRuntimeRegistry()
+    registry.register("ocsr", enabled=True, loader=lambda: fake_runtime)
+    app.state.gpu_runtime_registry = registry
+    response = post_structure_image(app, PNG_BYTES)
 
     assert response.status_code == 200
     assert response.json()["smiles"] == "CCO"

@@ -1,1 +1,0 @@
-"""PolyTAO worker package."""

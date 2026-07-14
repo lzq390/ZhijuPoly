@@ -19,7 +19,9 @@ from app.services.conditional_generation import (
     run_conditional_generation,
     to_model_smiles,
 )
-from app.services.conditional_generation_runtime import TorchConditionalGenerationRuntime, missing_artifact_paths
+from app.services.conditional_generation_runtime import missing_artifact_paths
+from app.services.conditional_generation_jobs import ConditionalGenerationJobCapacityError
+from app.services.in_memory_jobs import JobGoneError, JobNotFoundError, JobStoreCapacityError
 from app.services.structure_2d import generate_2d_svg
 from app.utils.exceptions import ModelArtifactError
 
@@ -34,18 +36,6 @@ def _validate_generation_input(request_body: ConditionalGenerationTgRequest) -> 
         raise HTTPException(status_code=422, detail="invalid smiles")
     if count_attachment_points(normalized) < 2:
         raise HTTPException(status_code=422, detail="input polymer must contain at least two attachment points")
-
-
-def _runtime_for_app(app) -> TorchConditionalGenerationRuntime:
-    runtime = getattr(app.state, "conditional_generation_runtime", None)
-    if runtime is None:
-        settings = app.state.settings
-        runtime = TorchConditionalGenerationRuntime(
-            model_dir=settings.gen_model_dir_path,
-            device=settings.gen_device,
-        )
-        app.state.conditional_generation_runtime = runtime
-    return runtime
 
 
 def _generation_status_for_app(app) -> ConditionalGenerationTgStatusResponse:
@@ -102,27 +92,51 @@ def _build_response(
     )
 
 
-def _run_generation_response(request_body: ConditionalGenerationTgRequest, app) -> ConditionalGenerationTgResponse:
+def _run_generation_response(
+    request_body: ConditionalGenerationTgRequest,
+    app,
+    *,
+    timeout_seconds: float | None = None,
+) -> ConditionalGenerationTgResponse:
     started_at = perf_counter()
     runner: GenerationRunner | None = getattr(app.state, "conditional_generation_runner", None)
-    if runner is not None:
-        return runner(request_body)
-
-    runtime = _runtime_for_app(app)
+    registry = getattr(app.state, "gpu_runtime_registry", None)
     try:
-        result = run_conditional_generation(
-            input_smiles=request_body.smiles,
-            delta_tg=request_body.delta_tg,
-            candidate_count=request_body.candidate_count,
-            top_k=request_body.top_k,
-            temperature=request_body.temperature,
-            runtime=runtime,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if registry is None:
+            raise ModelArtifactError("GPU runtime registry is unavailable")
+        with registry.inference_session(
+            "conditional_generation",
+            timeout_seconds=(
+                app.state.settings.gpu_async_queue_timeout_seconds
+                if timeout_seconds is None
+                else timeout_seconds
+            ),
+        ) as runtime:
+            try:
+                if runner is not None:
+                    response = runner(request_body)
+                else:
+                    result = run_conditional_generation(
+                        input_smiles=request_body.smiles,
+                        delta_tg=request_body.delta_tg,
+                        candidate_count=request_body.candidate_count,
+                        top_k=request_body.top_k,
+                        temperature=request_body.temperature,
+                        runtime=runtime,
+                    )
+            except Exception as exc:
+                failure_kind = registry.record_inference_failure("conditional_generation", exc)
+                if failure_kind == "oom":
+                    raise ModelArtifactError(
+                        "conditional generation GPU memory is exhausted; retry after current GPU work finishes"
+                    ) from exc
+                raise
+            registry.record_inference_success("conditional_generation")
     except ModelArtifactError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    if runner is not None:
+        return response
     return _build_response(request_body, result, (perf_counter() - started_at) * 1000)
 
 
@@ -151,10 +165,27 @@ async def create_tg_generation_job(
 
     _validate_generation_input(request_body)
     manager = request.app.state.conditional_generation_job_manager
-    job = manager.create_job(
-        request_body,
-        lambda: _run_generation_response(request_body, request.app),
-    )
+    try:
+        job = manager.create_job(
+            request_body,
+            lambda remaining_seconds: _run_generation_response(
+                request_body,
+                request.app,
+                timeout_seconds=remaining_seconds,
+            ),
+            timeout_seconds=request.app.state.settings.gpu_async_queue_timeout_seconds,
+        )
+    except (ConditionalGenerationJobCapacityError, JobStoreCapacityError) as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": "5"},
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="conditional generation job executor is unavailable",
+        ) from exc
     return ConditionalGenerationJobCreateResponse(job_id=job.job_id, status=job.status)
 
 
@@ -163,5 +194,7 @@ async def get_tg_generation_job(job_id: str, request: Request) -> ConditionalGen
     manager = request.app.state.conditional_generation_job_manager
     try:
         return manager.get_job(job_id)
-    except KeyError as exc:
+    except JobGoneError as exc:
+        raise HTTPException(status_code=410, detail="Job result is no longer available") from exc
+    except (JobNotFoundError, KeyError) as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
