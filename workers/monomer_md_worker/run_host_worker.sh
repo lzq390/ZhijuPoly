@@ -41,7 +41,7 @@ if [[ -n "${MONOMER_MD_WORKER_UDS:-}" ]]; then
   install -d -m 0700 "$socket_dir"
   chmod 0700 "$socket_dir"
   rm -f "$MONOMER_MD_WORKER_UDS"
-  exec "${MONOMER_MD_PYTHON:-python}" -m uvicorn app.main:app --uds "$MONOMER_MD_WORKER_UDS"
+  exec "${MONOMER_MD_PYTHON:-python}" -m uvicorn app.main:app --workers 1 --uds "$MONOMER_MD_WORKER_UDS"
 fi
 
-exec "${MONOMER_MD_PYTHON:-python}" -m uvicorn app.main:app --host "$MONOMER_MD_WORKER_HOST" --port "$MONOMER_MD_WORKER_PORT"
+exec "${MONOMER_MD_PYTHON:-python}" -m uvicorn app.main:app --workers 1 --host "$MONOMER_MD_WORKER_HOST" --port "$MONOMER_MD_WORKER_PORT"

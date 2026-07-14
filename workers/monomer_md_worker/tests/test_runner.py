@@ -118,6 +118,52 @@ def test_real_density_runner_receives_openmm_environment(tmp_path: Path, monkeyp
         str(openmm_dir / "lib/plugins"),
     ]
 
+
+def test_real_demo_cancellation_terminates_process_group(tmp_path: Path):
+    settings = _settings(tmp_path)
+    object.__setattr__(settings, "mode", "real")
+    settings.byteff2_root.mkdir()
+    pid_path = tmp_path / "demo-child.pid"
+    grandchild_pid_path = tmp_path / "demo-grandchild.pid"
+    script = tmp_path / "slow_demo.py"
+    script.write_text(
+        "import os, pathlib, subprocess, sys, time\n"
+        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
+        "grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"pathlib.Path({str(grandchild_pid_path)!r}).write_text(str(grandchild.pid))\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    object.__setattr__(
+        settings, "byteff2_demo_command", f"{sys.executable} {script}"
+    )
+    runner = MonomerMdRunner(settings)
+    request = JobRequest(
+        job_id="cancel-demo", smiles="CCO", canonical_smiles="CCO", steps=1000
+    )
+
+    async def scenario() -> tuple[int, int]:
+        task = asyncio.create_task(runner.run(request, 1000))
+        for _ in range(100):
+            if pid_path.exists() and grandchild_pid_path.exists():
+                break
+            await asyncio.sleep(0.02)
+        assert pid_path.exists()
+        assert grandchild_pid_path.exists()
+        child_pid = int(pid_path.read_text(encoding="utf-8"))
+        grandchild_pid = int(grandchild_pid_path.read_text(encoding="utf-8"))
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return child_pid, grandchild_pid
+
+    child_pid, grandchild_pid = asyncio.run(scenario())
+    for pid in (child_pid, grandchild_pid):
+        process_state = Path(f"/proc/{pid}/stat")
+        if process_state.exists():
+            assert process_state.read_text(encoding="utf-8").split()[2] == "Z"
+
+
 def test_byteff2_adapter_does_not_use_formal_run_md_as_demo_entry(tmp_path: Path):
     from workers.monomer_md_worker.app.byteff2_density_demo import _find_demo_entry
 
