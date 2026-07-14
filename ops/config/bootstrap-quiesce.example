@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+production_root=/data/lzq/gith/nexpoly
+probe="$production_root/ops/config/bootstrap-active-jobs-probe"
+
+[[ "$PWD" == "$production_root" ]] || {
+  echo "bootstrap quiesce must run from $production_root" >&2
+  exit 2
+}
+[[ -f "$probe" && ! -L "$probe" && -x "$probe" ]] || {
+  echo "install an audited executable bootstrap-active-jobs-probe" >&2
+  exit 2
+}
+[[ "$(stat -c '%u:%a' "$probe")" == "$(id -u):700" ]] || {
+  echo "bootstrap-active-jobs-probe must be deploy-user-owned and mode 0700" >&2
+  exit 2
+}
+
+# Isolate public ingress before asking the audited legacy-runtime probe for
+# evidence. All command logs go to stderr; stdout is reserved for one JSON object.
+docker compose -p nexpoly -f "$production_root/docker-compose.yml" stop nginx >&2
+
+evidence="$(mktemp)"
+trap 'rm -f "$evidence"' EXIT
+"$probe" >"$evidence"
+[[ -s "$evidence" && "$(stat -c '%s' "$evidence")" -le 65536 ]] || {
+  echo "bootstrap active-job evidence is empty or too large" >&2
+  exit 2
+}
+
+python3 - "$evidence" <<'PY'
+import json
+import sys
+
+categories = (
+    "monomer_md",
+    "polytao",
+    "online_knowledge",
+    "conditional_generation",
+    "reverse_design",
+    "gpu_inference",
+    "gpu_waiting",
+    "inflight_api_writes",
+)
+with open(sys.argv[1], encoding="utf-8") as source:
+    document = json.load(source)
+if not isinstance(document, dict) or set(document) != {
+    "schema_version", "ingress_isolated", "active_jobs", "active_total"
+}:
+    raise SystemExit("bootstrap probe returned an invalid object")
+jobs = document["active_jobs"]
+if document["schema_version"] != 1 or document["ingress_isolated"] is not True:
+    raise SystemExit("bootstrap probe did not confirm isolated ingress")
+if not isinstance(jobs, dict) or set(jobs) != set(categories):
+    raise SystemExit("bootstrap probe did not cover every active-job category")
+if any(isinstance(jobs[name], bool) or not isinstance(jobs[name], int) or jobs[name] != 0 for name in categories):
+    raise SystemExit("bootstrap probe found active work or an invalid count")
+if isinstance(document["active_total"], bool) or document["active_total"] != 0:
+    raise SystemExit("bootstrap probe active_total must be zero")
+print(json.dumps(document, sort_keys=True, separators=(",", ":")))
+PY

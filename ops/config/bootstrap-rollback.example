@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+production_root=/data/lzq/gith/nexpoly
+restore="$production_root/ops/config/bootstrap-legacy-runtime-restore"
+: "${NEXPOLY_BOOTSTRAP_LEGACY_RUNTIME_SHA256:?set the audited legacy runtime digest}"
+
+[[ "$PWD" == "$production_root" ]] || {
+  echo "bootstrap rollback must run from $production_root" >&2
+  exit 2
+}
+[[ -f "$restore" && ! -L "$restore" && -x "$restore" ]] || {
+  echo "install an audited executable bootstrap-legacy-runtime-restore" >&2
+  exit 2
+}
+[[ "$(stat -c '%u:%a' "$restore")" == "$(id -u):700" ]] || {
+  echo "bootstrap-legacy-runtime-restore must be deploy-user-owned and mode 0700" >&2
+  exit 2
+}
+
+# The site-specific restore owns the actual rollback: it must restore the saved
+# legacy Backend/Web image IDs and user Worker unit, restart them without a
+# build, verify all three runtimes plus ingress, and print only the evidence
+# object below. Any log output belongs on stderr.
+evidence="$(mktemp)"
+trap 'rm -f "$evidence"' EXIT
+"$restore" >"$evidence"
+[[ -s "$evidence" && "$(stat -c '%s' "$evidence")" -le 65536 ]] || {
+  echo "legacy runtime restore evidence is empty or too large" >&2
+  exit 2
+}
+
+python3 - "$evidence" <<'PY'
+import json
+import hashlib
+import os
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    document = json.load(source)
+expected = {
+    "schema_version",
+    "legacy_runtime_restored",
+    "backend_image_id",
+    "web_image_id",
+    "worker_unit_sha256",
+    "backend_healthy",
+    "web_healthy",
+    "worker_healthy",
+    "ingress_restored",
+}
+if not isinstance(document, dict) or set(document) != expected:
+    raise SystemExit("legacy runtime restore returned an invalid evidence object")
+if document["schema_version"] != 1:
+    raise SystemExit("legacy runtime restore evidence has an unsupported schema")
+for field in (
+    "legacy_runtime_restored",
+    "backend_healthy",
+    "web_healthy",
+    "worker_healthy",
+    "ingress_restored",
+):
+    if document[field] is not True:
+        raise SystemExit(f"legacy runtime restore did not prove {field}")
+digest = re.compile(r"^sha256:[0-9a-f]{64}$")
+identity = {}
+for field in ("backend_image_id", "web_image_id", "worker_unit_sha256"):
+    value = document[field]
+    if not isinstance(value, str) or not digest.fullmatch(value):
+        raise SystemExit(f"legacy runtime restore returned an invalid {field}")
+    identity[field] = value
+payload = json.dumps(
+    identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+).encode("utf-8")
+actual_identity = "sha256:" + hashlib.sha256(payload).hexdigest()
+if actual_identity != os.environ["NEXPOLY_BOOTSTRAP_LEGACY_RUNTIME_SHA256"]:
+    raise SystemExit("legacy runtime restore selected the wrong saved identity")
+print(json.dumps(document, sort_keys=True, separators=(",", ":")))
+PY
