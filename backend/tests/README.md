@@ -4,11 +4,15 @@ Backend tests are Postgres-only. They do not fall back to SQLite runtime paths.
 
 ## Required Environment
 
-Run the backend suite from the `screen312` environment:
+CI installs the Python 3.11 hash lock and runs all modules in three deterministic
+PostgreSQL shards. Locally, use any isolated Python 3.11 venv installed from the
+same lock:
 
 ```bash
-cd backend
-/home/lzq390/miniconda3/envs/screen312/bin/python -m pytest
+python3.11 -m venv .venv-ci
+.venv-ci/bin/python -m pip install --require-hashes -r backend/requirements-ci.lock
+APP_POSTGRES_DSN=postgresql://<test-role>:<password>@127.0.0.1:5432/<admin-db> \
+  .venv-ci/bin/python -m pytest backend/tests
 ```
 
 `Settings().app_postgres_dsn` must resolve to a reachable Postgres server. The
@@ -36,12 +40,22 @@ SQLite is only valid for legacy import and migration-source tests.
 
 ## Deployment Gate
 
-Docker startup uses the same Postgres-only contract. `postgres-init` runs:
+Automatic code deployment runs only compatible migrations:
 
 ```bash
-python -m app.import_postgres --dataset all --refresh-analytics-snapshot
+python -m app.postgres_migrations --mode expand
 ```
 
-It intentionally does not pass `--rebuild`. Runtime healthchecks should use
-`python -m app.postgres_preflight --strict` so a missing migration or runtime
-schema fails before the backend is considered healthy.
+The single `ci.yml` pipeline reads the immutable asset digest and explicit
+dataset list from `release-input.json`. An unchanged digest performs no import;
+when the digest changes, the production controller takes a verified dump and
+runs one `--rebuild` with those exact dataset names. The implicit dataset value
+`all` is forbidden. Runtime healthchecks use:
+
+```bash
+python -m app.postgres_preflight --mode runtime --strict \
+  --expected-source-sha <sha>
+```
+
+A missing migration, analytics snapshot, or runtime schema therefore fails
+before the Backend is considered healthy.

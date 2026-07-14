@@ -42,7 +42,7 @@ React 19 / Vite / Ketcher / 3Dmol
 | 环境 | Compose 项目名 | 前端入口（默认值） | 后端（默认值） | PostgreSQL（默认值） | 端口覆盖 |
 |---|---|---|---|---|---|
 | dev | `nexpoly_dev` | `127.0.0.1:15173` | `127.0.0.1:18000` | `127.0.0.1:15532` | `NEXPOLY_DEV_FRONTEND_PORT`、`NEXPOLY_DEV_BACKEND_PORT`、`NEXPOLY_DEV_POSTGRES_PORT` |
-| prod | `nexpoly` | `:9000` | Compose 内部 `:8000` | 宿主机 `:55432` → 容器 `:5432` | `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` |
+| prod | `nexpoly` | `:9000` | Compose 内部 `:8000` | `127.0.0.1:55432` → 容器 `:5432` | `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` |
 
 dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开发配置。dev 端口可由表中的 `NEXPOLY_DEV_*_PORT` 变量覆盖；prod 前端和 PostgreSQL 宿主机端口可分别由 `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` 覆盖。未经明确授权，不得从 dev 流程启动、停止、迁移或探测 prod 服务。`9000` 和 `55432` 都只是 prod Compose 的默认值，不是识别 prod 的固定标志；端口被覆盖后仍须以 Compose 项目和解析配置判断环境。
 
@@ -56,11 +56,14 @@ dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开�
 - `.env.dev` 与可选的 `.env.dev.ai`
 - `scripts/dev_server_gpu.sh`
 
-这些文件由仓库的 `.gitignore` 保护，保持未跟踪，不属于干净克隆。缺少这些文件时，不能因为 README 中存在 dev 命令就把当前工作区视为 dev，也不能执行下列流程。只有在环境维护者已经配置完成，并确认解析后的 Compose 项目为 `nexpoly_dev` 时，才使用这些命令：
+Compose overlay、无密钥环境示例和启动脚本已纳入版本控制；`.env.dev`、`.env.dev.ai` 与 Worker 运行目录仍保持忽略并应为 mode `0600`。复制 `.env.dev.example` 后必须把 `NEXPOLY_ASSET_ROOT` 固定到只读资产 release，并确认解析后的 Compose 项目为 `nexpoly_dev`，才使用这些命令：
 
 ```bash
-# 启动独立 dev 数据库，导入数据，启动可选 MD Worker、后端和前端
+# 校验固定资产 release，构建后端，应用增量迁移并启动 dev 服务
 ./scripts/dev_server_gpu.sh up
+
+# 仅在明确需要刷新源数据时执行全量导入
+./scripts/dev_server_gpu.sh refresh-data
 
 # 查看状态和日志
 ./scripts/dev_server_gpu.sh ps
@@ -71,6 +74,9 @@ dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开�
 ./scripts/dev_server_gpu.sh preflight
 ./scripts/dev_server_gpu.sh smoke
 
+# 仅在审阅 destructive contract 后显式执行；普通 up 永不自动执行
+./scripts/dev_server_gpu.sh contract-migrate
+
 # 运行当前 dev 快速测试与前端构建
 ./scripts/dev_server_gpu.sh test-backend
 ./scripts/dev_server_gpu.sh build-frontend
@@ -80,7 +86,15 @@ dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开�
 ./scripts/dev_server_gpu.sh down
 ```
 
-首次或全量导入可能耗时较长。在 `postgres-init` 完成前，不要把尚未启动的后端或前端判断为代码故障。
+首次构建统一 CUDA 镜像可能耗时较长。普通 `up` 只应用非破坏性增量迁移，不重复导入数据；检测到待执行 contract 时会失败并要求显式运行 `contract-migrate`。该命令会先生成全库和目标表归档、SHA-256 与行数证据，并在临时数据库真实恢复核对后才迁移。`refresh-data` 的首次或全量导入可能耗时较长。在 `postgres-init` 完成前，不要把尚未启动的后端或前端判断为代码故障。
+
+开发后端使用 Docker Compose 的默认 builder 构建，不创建常驻的专用
+Buildx/BuildKit 容器。四类 GPU 模型共享严格 FIFO 的推理准入，默认同一
+时刻只执行一个模型加载或 GPU 推理；HTTP、数据库和轮询请求仍可并发。
+PolyTAO 的最大公开参数保持不变，但内部按最多 2 条序列的微批次采样，避免
+单个任务一次分配 100 条解码缓存而耗尽 24GB 显存。
+条件生成和 PolyTAO 保留 `202 + job_id + 轮询`，但作业状态存放在 Backend
+单进程的有界内存中；重启或终态淘汰后查询返回 410，前端会保留输入并提示重提。
 
 ## 干净克隆与外部资产
 
@@ -92,7 +106,7 @@ dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开�
 - 正式 Monomer-MD 所需的 ByteFF2/OpenMM/GROMACS 环境；
 - 与目标机器匹配的 dev overlay 或生产环境配置。
 
-不要在 README 复制容易漂移的完整资产列表。模型资产以 [`backend/app/model_asset_manifest.py`](backend/app/model_asset_manifest.py) 为准，生产数据和部署检查以 [`scripts/deploy_server.sh`](scripts/deploy_server.sh) 及部署文档为准。
+不要在 README 复制容易漂移的完整资产列表。模型清单以 [`backend/app/model_asset_manifest.py`](backend/app/model_asset_manifest.py) 为准，生产资产以只读 `ASSET-MANIFEST.json` 为准，部署检查以 [`scripts/release_controller.py`](scripts/release_controller.py) 及发布控制器文档为准。
 
 ## 仓库目录
 
@@ -100,7 +114,7 @@ dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开�
 |---|---|
 | `frontend/` | React/Vite 前端、Ketcher 与 3Dmol 静态资源 |
 | `backend/` | FastAPI、领域服务、PostgreSQL 迁移、导入工具和测试 |
-| `workers/` | Monomer-MD Worker，以及保留的旧 PolyTAO Worker 实现 |
+| `workers/` | 需要独立科学计算环境的 Monomer-MD Worker；PolyTAO 直接运行在 backend 内 |
 | `database/` | 可跟踪的基础 CSV；大体量运行数据通常由部署环境提供 |
 | `model/` | 随仓库提供的 RF 模型和外部模型目录入口 |
 | `docs/` | 部署、数据库治理、Worker 和历史设计文档 |
@@ -136,7 +150,8 @@ docker compose config --quiet
 
 ## 权威文档
 
-- [生产部署](docs/deployment.md)
+- [生产部署与不可变发布控制器](docs/release-controller.md)
+- [CI/CD 与生产部署入口](docs/deployment.md)
 - [PostgreSQL 迁移治理](docs/postgres-migration-governance.md)
 - [Monomer-MD Worker](docs/monomer-md-worker.md)
 - [后端测试环境](backend/tests/README.md)
