@@ -1,395 +1,169 @@
-# nexpoly Deployment
+# NexPoly deployment
 
-This deployment runs `nexpoly` as the Docker Compose project defined by
-`docker-compose.yml`. It is designed to run in parallel with the existing
-`polyprop` deployment and must not stop, remove, prune, or overwrite any
-`polyprop` containers, images, volumes, or deployment directories.
+NexPoly uses one CI/CD workflow for application code, the host Monomer-MD
+Worker, and the immutable model/data asset pin.  Production remains rooted at
+`/data/lzq/gith/nexpoly`, but a deployment never builds an image or installs a
+package from the network on that host.
 
-Default server deployment path:
+## Environment boundaries
+
+- Development: `/data/lzq/gith/nexpoly-dev`, Compose project `nexpoly_dev`.
+- Production: `/data/lzq/gith/nexpoly`, Compose project `nexpoly`.
+- Immutable assets: `/data/lzq/nexpoly-assets/releases/<manifest-sha256>`.
+- Backend and Web releases: private GHCR images referenced by `@sha256`.
+- Monomer-MD Worker: a per-release venv layered on the frozen
+  `/home/devuser/miniconda3/envs/byteff2-repro` environment.
+
+The two PostgreSQL volumes remain independent.  A deployment must never copy
+models or data directly from the development checkout into production.  New
+assets are first sealed in the content-addressed asset store and then selected
+by the tracked `release-input.json` digest.
+
+## The single workflow
+
+`.github/workflows/ci.yml` is the only delivery workflow.
+
+- Pull requests run secret-free Backend, Frontend, Worker, script, Compose and
+  image-build checks.  The stable required status is `ci-gate`.
+- A push to protected `main` repeats the immutable-SHA gate, builds and pushes
+  Backend/Web images, tests their exact digests, creates one release bundle,
+  and automatically deploys it when `NEXPOLY_AUTODEPLOY_ENABLED=true`.
+- `workflow_dispatch` has no SHA input and is accepted only for the one-time
+  bootstrap of the current `main` commit.
+
+All Actions are pinned to full commits.  PR jobs have no secrets.  The deploy
+step alone receives the `nexpoly-production` SSH secrets and requires a pinned
+`known_hosts`; host-key discovery is forbidden.  GitHub concurrency and the
+server `deploy.lock` prevent overlapping production changes.
+
+There is no `workflow_run` hand-off, control/Worker OCI image, Actions release
+inventory, standalone data workflow, or manual arbitrary-SHA redeploy path.
+
+## Release input and bundle
+
+`release-input.json` has this public contract:
+
+```json
+{
+  "schema_version": 1,
+  "asset_manifest_digest": "sha256:<64 lowercase hex>",
+  "datasets_on_asset_change": ["governance", "core"]
+}
+```
+
+Dataset names must be explicit, unique and supported by
+`python -m app.import_postgres`; `all` and `none` are forbidden.  The repository
+uses the complete explicit set so an asset change can rebuild governed data
+without relying on an implicit default.  When the asset digest is unchanged,
+the deployment runs no import at all.
+
+The main release job creates:
+
+- a manifest containing the source SHA, CI run, Backend/Web digests, the single
+  release-bundle digest, asset digest, datasets and migrations;
+- a release bundle containing the exact Compose/control files, Worker source,
+  hash lock and offline wheelhouse.
+
+The bundle is hashed and copied over the pinned SSH connection.  The server
+validates the manifest, file type, size, hash and archive paths before using any
+content.  Application containers are still sourced only from GHCR digest
+references.
+
+## Production state
+
+Only these mutable control records are required:
 
 ```text
-/data/lzq/gith/nexpoly
+ops/current -> releases/<sha>
+ops/current-assets -> /data/lzq/nexpoly-assets/releases/<digest>
+ops/state/release-state.json
+ops/state/deploy-in-progress.json
+ops/state/deploy.lock
 ```
 
-Default public URL:
+`release-state.json` records the current and previous release identities,
+Backend/Web digests, the single release-bundle digest, Worker base/toolchain
+identity, asset digest, migrations and the verified pre-deploy backup. It is the
+only persistent source of the active asset digest. `deploy-in-progress.json` is
+a small crash marker, not a journal; an unfinished marker is reconciled before
+another deployment or Worker start.
 
-```text
-http://114.214.255.154:9000
-```
+## Automatic deployment
 
-## Services
+The controller performs the following under the non-blocking server lock:
 
-- `lab-postgres`: PostgreSQL 16 service for all runtime data.
-- `postgres-init`: one-shot import gate that runs
-  `python -m app.import_postgres --dataset all --refresh-analytics-snapshot`.
-  It intentionally does not pass `--rebuild`.
-- `backend`: FastAPI service on port `8000` inside the Docker network. By
-  default it is limited to host GPU `2` through `NEXPOLY_GPU_DEVICE`. OCSR,
-  conditional generation, retrosynthesis, and PolyTAO all run as backend GPU
-  model services.
-- `nginx`: Nginx static site on host port `${NEXPOLY_WEB_PORT:-9000}`, with
-  `/api` and `/health` proxied to the backend.
+1. Verify the production root, current `main` SHA, manifest, images, bundle,
+   asset manifest and free space.
+2. Pull the two image digests, unpack staging, and build the Worker venv from
+   the offline wheelhouse.  Verify the frozen Python/Conda identity, `gmx`,
+   ByteFF2 commit and imports before changing the running release.
+3. Drain Backend and Worker, then wait up to 30 minutes for persistent jobs,
+   in-memory jobs, GPU queues, API writes and Worker jobs to reach zero.
+4. Create a custom-format PostgreSQL dump, SHA-256 sidecar, and successfully run
+   `pg_restore --list`.
+5. Apply only expand migrations.  A trailing contract suffix remains pending;
+   an expand after a pending contract is rejected.
+6. If the asset digest changed, use the candidate asset root to run the explicit
+   complete dataset set with `--rebuild`.  Otherwise skip imports.  Refresh the
+   PostgreSQL analytics snapshot for the target SHA.
+7. Atomically switch `current-assets` and `current`, start the target Worker and
+   digest-pinned Backend/Web, and keep public ingress isolated.
+8. Run strict PostgreSQL/GPU checks, Backend and versioned Web asset health,
+   PolyTAO smoke, and the 300-step Monomer-MD/ByteFF2/GROMACS smoke.
+9. Commit `release-state.json`, remove the crash marker, and resume ingress.
 
-Local build images are named explicitly:
-
-```text
-nexpoly-backend:latest
-nexpoly-nginx:latest
-```
-
-## Runtime Contract
-
-The application runtime is Postgres-only. SQLite files are retained only as
-legacy import, migration-source, or audit rollback inputs; they are not runtime
-backends.
-
-The Compose startup order is:
-
-```text
-lab-postgres -> postgres-init -> backend -> nginx
-```
-
-`backend` is considered healthy only after:
-
-```bash
-python -m app.postgres_preflight --strict
-```
-
-and the local FastAPI `/health` route both succeed.
-
-## Required Runtime Files
-
-The server checkout must keep deployment-only files outside Git control. They
-are mounted into containers by `docker-compose.yml`:
-
-```text
-database/data1.csv
-database/PolymerDatabaseV2.0_reliable085_standardized.csv
-database/data_txt.zip
-database/polymer_process_material_filtered_cleaned_office_utf8_bom.csv
-database/polymer_property_detail_cleaned_office_utf8_bom.csv
-backend/data/polyprop.db
-backend/data/fumol.db
-backend/data/pi_reverse_design.db
-model/
-.env
-.env.ai, if present
-.env.monomer-md-worker, if monomer MD real-mode worker is enabled
-```
-
-Required model artifacts are defined by `backend/app/model_asset_manifest.py`.
-The deployment script checks that manifest before rebuilding containers. The
-current required set includes:
-
-```text
-model/rf_*.pkl
-model/ocsr/swin_base_char_aux_1m.pth
-model/conditional_generation/
-model/reactiont5-retrosynthesis/
-```
-
-The backend PolyTAO runtime additionally requires these deployment-only files
-when `POLYTAO_ENABLED=true`:
-
-```text
-model/polytao/config.json
-model/polytao/pytorch_model.bin
-model/polytao/tokenizer.json
-model/polytao/spiece.model
-```
-
-If these files are absent while `POLYTAO_ENABLED=true`, deployment blocks before
-recreating backend. Set `POLYTAO_ENABLED=false` to keep the rest of backend
-available while PolyTAO submissions are disabled.
-
-Treat the existing `polyprop` deployment as read-only when copying or refreshing
-any of these assets.
-
-## Server Environment
-
-Create `/data/lzq/gith/nexpoly/.env` on the server:
-
-```bash
-NEXPOLY_WEB_PORT=9000
-NEXPOLY_POSTGRES_PORT=55432
-NEXPOLY_GPU_DEVICE=2
-GEN_MODEL_ENABLED=true
-RETRO_MODEL_ENABLED=true
-RETRO_MODEL_ID=/app/model/reactiont5-retrosynthesis
-RETRO_DEVICE=auto
-POLYTAO_ENABLED=true
-POLYTAO_MODEL_DIR=/app/model/polytao
-POLYTAO_DEVICE=auto
-POLYTAO_JOB_WORKERS=1
-POLYTAO_MAX_ACTIVE_JOBS=1
-MONOMER_MD_SUBMIT_ENABLED=true
-MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE=3
-MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS=60
-MONOMER_MD_MAX_ACTIVE_JOBS=1
-NEXPOLY_MONOMER_MD_STATUS_TIMEOUT_SECONDS=40
-NEXPOLY_MONOMER_MD_STATUS_RETRIES=3
-```
-
-Optional local secrets such as online knowledge or assistant API credentials can
-remain in `/data/lzq/gith/nexpoly/.env.ai`. Do not commit `.env` or `.env.ai`.
-
-Required server tools:
-
-```text
-git
-docker compose
-NVIDIA container runtime for GPU-backed backend workloads
-systemctl --user, if the host-side monomer MD worker is supervised by user systemd
-Postgres role able to create and drop temporary test databases, only when server-side pytest is enabled
-```
-
-## GitHub Actions Pipeline
-
-The workflow is `.github/workflows/nexpoly-deploy.yml`.
-
-Triggers:
-
-- `pull_request` to `main`: frontend build, Compose config validation, backend
-  monomer MD tests, backend PolyTAO/Postgres tests, and worker monomer MD tests.
-- `push` to `main`: CI, then SSH deployment to the server.
-- `workflow_dispatch`: CI and manual deployment of a selected Git ref, with an
-  optional post-deploy monomer MD `CCO` smoke.
-
-Required GitHub Secrets:
-
-| Secret | Purpose |
-| --- | --- |
-| `NEXPOLY_SSH_HOST` | Deployment server host or IP. |
-| `NEXPOLY_SSH_USER` | SSH user that owns `/data/lzq/gith/nexpoly`. |
-| `NEXPOLY_SSH_PRIVATE_KEY` | Private key for the deployment user. |
-| `NEXPOLY_SSH_KNOWN_HOSTS` | Optional pinned SSH host key entries. If omitted, the workflow uses `ssh-keyscan`. |
-
-Required GitHub Variables:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `NEXPOLY_SSH_PORT` | `22` | SSH port. |
-| `NEXPOLY_DEPLOY_PATH` | `/data/lzq/gith/nexpoly` | Server checkout path. |
-| `NEXPOLY_WEB_PORT` | optional | Optional override for the server `.env` web port. If omitted, the server `.env` value is used, then `9000`. |
-| `NEXPOLY_MONOMER_MD_SMOKE` | `false` | Optional default for running the post-deploy monomer MD `CCO` smoke on push deploys. Manual dispatch input overrides it. |
-| `NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS` | `300` | Optional timeout for the post-deploy monomer MD `CCO` smoke. Manual dispatch input overrides it. |
-
-CI on GitHub hosted runners runs the monomer MD backend test module against a
-Postgres service with `backend/requirements-monomer-md-ci.txt`, runs the
-PolyTAO/database-governance backend tests against Postgres, and runs the
-standalone monomer MD worker tests. It intentionally does not run the full
-backend pytest suite. Full backend tests, when enabled on the deployment
-server with `NEXPOLY_RUN_SERVER_TESTS=true`, depend on a configured
-`NEXPOLY_TEST_PYTHON` and a Postgres role that can create/drop isolated test
-databases.
-The server deployment step first bootstraps the checkout to the requested ref,
-then runs the `scripts/deploy_server.sh` from that ref so first-time deployments
-and later script updates use the correct script version. The deploy job creates
-a Git bundle on the GitHub runner, uploads it to
-`$NEXPOLY_DEPLOY_PATH/ops/incoming/`, and fetches deployment refs from that
-bundle on the server. The normal CI/CD path therefore does not depend on the
-server being able to fetch from GitHub directly.
-
-`NEXPOLY_WEB_PORT` in GitHub Variables is optional. Leave it unset to use the
-server `.env` value. `NEXPOLY_POSTGRES_PORT` is intentionally managed on the
-server through `.env`, not as a GitHub Variable.
-
-## Manual Server Deployment
-
-From the server:
-
-```bash
-cd /data/lzq/gith/nexpoly
-NEXPOLY_DEPLOY_REF=main scripts/deploy_server.sh
-```
-
-The GitHub workflow bootstraps the deployment checkout before invoking the
-script: it verifies tracked files are clean, fetches refs from the uploaded
-bundle, checks out the target commit, and fails clearly if the target ref does
-not contain `scripts/deploy_server.sh`. Manual server deployments without
-`NEXPOLY_DEPLOY_BUNDLE` still fetch from `origin`.
-
-If real-mode monomer MD is enabled, install the user-level worker service once:
-
-```bash
-cd /data/lzq/gith/nexpoly
-scripts/install_monomer_md_worker_user_service.sh
-```
-
-The deploy script restarts `nexpoly-monomer-md-worker.service` when the user
-unit is installed. If the unit is absent or user systemd is unavailable, it
-falls back to the pidfile-managed worker and still blocks deployment unless the
-worker health endpoint reports `status=ok` and `runtime_ready=true`.
-
-The script then performs these gates in order:
-
-1. Verifies the deployment checkout has no tracked local modifications.
-2. Reads `NEXPOLY_WEB_PORT` and `NEXPOLY_POSTGRES_PORT` from explicit shell env,
-   then server `.env`, then defaults `9000` and `55432`.
-3. Validates the Docker Compose service contract.
-4. Fetches the requested Git ref, from `NEXPOLY_DEPLOY_BUNDLE` when present,
-   and creates a temporary worktree for tests.
-5. Starts or confirms `lab-postgres`.
-6. Optionally runs backend pytest against local Postgres when
-   `NEXPOLY_RUN_SERVER_TESTS=true`.
-7. Checks required data sources and model assets.
-8. Creates `backups/nexpoly-$SHA.dump` with `pg_dump -Fc`.
-9. Updates the deployment checkout with a fast-forward merge to the tested
-   target commit for the normal `main` deployment path.
-10. Runs `docker compose build`.
-11. Runs `docker compose run --rm postgres-init`.
-12. Recreates `backend` and `nginx`.
-13. Restarts the monomer MD worker through user systemd or pidfile fallback when
-    `.env.monomer-md-worker` exists.
-14. Verifies strict Postgres preflight, backend monomer MD status, optional
-    `NEXPOLY_MONOMER_MD_SMOKE=true` CCO artifact smoke, backend PolyTAO status
-    when PolyTAO is enabled, and `http://127.0.0.1:$NEXPOLY_WEB_PORT/health`.
-
-The backend monomer MD status gate allows `1..300` seconds per request and
-`0..3` additional retries after the first request. Its defaults are `40`
-seconds and `3` retries because the real worker performs CUDA and
-molecular-dynamics readiness probes. The gate accepts only a JSON object with
-`available=true` and logs only an allowlisted status summary; it never prints
-free-form worker errors or response bodies.
-
-The script never runs `--rebuild`, never prunes Docker resources, and never
-targets the old `polyprop` compose project.
-
-## Monomer MD Public Demo Guardrails
-
-The monomer MD endpoint is a public demo entrypoint on the `9000` service, so it
-does not require login but is resource-limited before a job row is created:
-
-```bash
-MONOMER_MD_SUBMIT_ENABLED=true
-MONOMER_MD_RATE_LIMIT_PER_IP_PER_MINUTE=3
-MONOMER_MD_RATE_LIMIT_WINDOW_SECONDS=60
-MONOMER_MD_MAX_ACTIVE_JOBS=1
-```
-
-`MONOMER_MD_MAX_ACTIVE_JOBS` counts `pending`, `submitted`, and `running` jobs in
-Postgres. When the service is busy or an IP exceeds the window limit, the
-backend returns `429` and does not create another `md.monomer_md_jobs` row.
-Set `MONOMER_MD_SUBMIT_ENABLED=false` to keep `/status` available while
-rejecting new submissions with `503`.
-
-To make deployment run a real 1000-step `CCO` smoke, set:
-
-```bash
-NEXPOLY_MONOMER_MD_SMOKE=true
-NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS=300
-```
-
-For GitHub Actions, use the `workflow_dispatch` inputs `monomer_md_smoke=true`
-and `monomer_md_smoke_timeout_seconds=300`, or set the GitHub Variables above
-for push deploys. The smoke is disabled by default to avoid consuming GPU time
-on every deploy.
-
-## Health Checks
-
-Check the new `nexpoly` deployment:
-
-```bash
-cd /data/lzq/gith/nexpoly
-docker compose ps
-docker compose config --images
-docker compose exec -T backend python -m app.postgres_preflight --mode runtime --strict
-curl http://localhost:9000/health
-```
-
-Confirm the old `polyprop` deployment separately, without modifying it:
-
-```bash
-docker compose ls
-curl http://localhost:10000/health
-```
+If draining times out, the old release is resumed without backup, migration or
+switch.  The Worker is never force-killed while it reports an active job.
 
 ## Rollback
 
-Each deployment creates a compressed Postgres backup under:
+- For a code-only failure, restore the previous Backend/Web images, Worker
+  release and pointers.  Compatible expand migrations remain.  Regenerate the
+  previous SHA analytics snapshot with the previous image and run all previous
+  release preflights before resuming.
+- If an asset pointer changed or a dataset import began, first restore the
+  verified pre-change dump, then restore the old asset and all old runtimes.
+- If rollback cannot be verified, keep drain/ingress isolation in place and
+  fail closed.
 
-```text
-/data/lzq/gith/nexpoly/backups/
-```
+All health helpers receive the release they are checking explicitly.  A failed
+target must never be used to run the previous release's PostgreSQL or GPU
+preflight.
 
-For a code rollback, SSH to the server, checkout the previous known-good Git ref,
-and rerun the deployment script:
+## One-time bootstrap
 
-```bash
-cd /data/lzq/gith/nexpoly
-NEXPOLY_DEPLOY_REF=<previous-sha-or-tag> scripts/deploy_server.sh
-```
+Bootstrap is a reviewed maintenance-window operation for current `main` only.
+It creates private `ops` directories, stores read-only GHCR credentials, binds
+PostgreSQL to `127.0.0.1:55432`, rotates the `polyprop` password in App and
+Worker configuration, installs the `ops/current` Worker systemd unit, and
+records the legacy Backend/Web image IDs and Worker unit as one canonical
+rollback identity. The audited rollback helper must restore and health-check
+all three runtimes plus ingress; merely restarting nginx is rejected. See
+[`release-controller.md`](release-controller.md) for the capture, GHCR pull
+credential, rehearsal, and evidence procedure.
 
-For a data rollback, restore the matching dump into `lab-postgres` before
-rerunning the deployment script. Keep restored data and code refs paired; schema
-migration checksum mismatches should be treated as blockers, not ignored. See
-[`docs/postgres-migration-governance.md`](postgres-migration-governance.md) for
-the guarded reconcile process.
+The initial asset release is
+`sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2`.
+Its file content matches the current production model/database/backend-data
+trees, so bootstrap treats it as the baseline pin and does not rebuild data.
+It applies migrations 0009-0011 and leaves 0012 pending.  After live smoke and
+one rollback rehearsal succeed, set repository variable
+`NEXPOLY_AUTODEPLOY_ENABLED=true`.
 
-## Offline Source/Asset Handoff Package（离线源码/资产交接包）
+## GitHub configuration
 
-The SSH pipeline is the default deployment path. The release package is a
-deterministic source and governed-asset handoff artifact; it is not a complete
-air-gapped runtime. Docker images, the NVIDIA runtime, npm/pip caches, and other
-third-party dependencies must be transferred or made available separately.
+- Protect `main`: require a pull request, require the branch to be up to date,
+  require `ci-gate`, and forbid force-push and deletion.
+- The current single-maintainer personal repository does not require an
+  approval count or merge queue.
+- Restrict `nexpoly-production` to protected `main`, with no reviewer so normal
+  main releases remain automatic.
+- Store `NEXPOLY_SSH_HOST`, `NEXPOLY_SSH_USER`,
+  `NEXPOLY_SSH_PRIVATE_KEY`, and the independently verified
+  `NEXPOLY_SSH_KNOWN_HOSTS` as environment secrets.  Store the SSH port as an
+  environment variable.  Remove the old repository-scoped SSH secrets only
+  after a successful bootstrap.
 
-Packaging requires a valid, clean Git `HEAD`: staged changes, tracked unstaged
-changes, and unignored untracked paths are rejected. The frontend production
-build runs as a gate, but generated `frontend/dist` content is not added to the
-archive. Source files come only from `git archive` of the full commit captured
-before that build.
-
-Run the packager on the supported GNU/Linux toolchain used by CI and the release
-server: Bash 4 or newer, Python 3.11 with `fcntl`, GNU tar/gzip, Git, and npm.
-
-Create a package without governed import data:
-
-```bash
-scripts/package_release.sh
-```
-
-This default mode removes all `database/` and `backend/data/` content. To add
-the eight exact data inputs checked by the deployment gate, use:
-
-```bash
-INCLUDE_DATA=1 scripts/package_release.sh
-```
-
-`INCLUDE_DATA` accepts only `0` or `1`. Both modes include the 21 required model
-files, the complete ReactionT5 tree, and the four PolyTAO files defined by the
-release profile in `backend/app/model_asset_manifest.py`. Explicit asset entries
-may be symlinks, but their canonical targets must remain under the matching
-default asset roots (`model/`, `database/`, or `backend/data/`) or an approved
-colon-separated external root:
-
-```bash
-RELEASE_ALLOWED_MODEL_ROOTS=/approved/models \
-RELEASE_ALLOWED_DATA_ROOTS=/approved/data \
-INCLUDE_DATA=1 scripts/package_release.sh
-```
-
-Nested links, broken links, cycles, empty assets, and special filesystem nodes
-are rejected. Ignored files that are not in the explicit model/data contracts
-are never copied. Keep approved external model/data roots unchanged for the
-duration of packaging; regular asset files are opened without following links,
-but an operator must not rewrite an external model directory concurrently.
-
-The output pair is named from the packaged commit:
-
-```text
-release/nexpoly-release-<commit>-data<0-or-1>-<manifest-digest>.tar.gz
-release/nexpoly-release-<commit>-data<0-or-1>-<manifest-digest>.tar.gz.sha256
-```
-
-The data mode and manifest digest keep packages with different governed assets
-from overwriting each other. Packaging uses a non-blocking process lock; retry
-after the active packaging process finishes if another invocation is reported.
-
-The archive root contains `RELEASE-MANIFEST.json`, recording the full commit and
-tree IDs, data mode, and every payload file's category, size, and SHA-256. Verify
-the sidecar before extracting:
-
-```bash
-cd release
-sha256sum --check nexpoly-release-<commit>-data<0-or-1>-<manifest-digest>.tar.gz.sha256
-```
+Off-host backups, blue/green deployment, full ByteFF2 containerization,
+scheduled restore drills and automatic retention are deliberately outside this
+minimal delivery path.
