@@ -12,6 +12,10 @@ docs/superpowers/
 !frontend/.env.example
 docker-compose.dev.yml
 scripts/dev_server_gpu.sh
+/.runtime/
+/.venv-monomer-md-worker/
+/.venv-monomer-md-worker.staging-*/
+/.venv-monomer-md-worker.previous-*/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -35,12 +39,9 @@ frontend/vite.config.d.ts
 # Large source datasets are imported before deployment.
 database/
 
-# Large runtime model directories are mounted through docker-compose.
-model/conditional_generation/
-model/reactiont5-retrosynthesis/
-model/ocsr/
-model/polytao/
-!model/ocsr/README.md
+# Runtime models are mounted from an immutable asset release and never enter
+# an application image or BuildKit context.
+model/
 
 # Local release bundles
 release/

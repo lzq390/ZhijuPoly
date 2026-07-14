@@ -1,0 +1,7 @@
+# Reviewed wheel assertions for Python 3.11/Linux x86_64. The packages are
+# supplied by the digest-pinned PyTorch base image; Docker verifies this lock
+# with pip --no-index --no-deps --require-hashes before installing the app lock.
+torch==2.6.0+cu118 \
+    --hash=sha256:3e73419aab6dbcd888a3cc6a00d1f52f5950d918d7289ea6aeae751346613edc
+torchvision==0.21.0+cu118 \
+    --hash=sha256:5ebe0267c872ac55b387008f772052bbf1f2fdfdd8afb011d4751e124759295e

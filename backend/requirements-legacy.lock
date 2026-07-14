@@ -1,0 +1,12 @@
+# Reviewed OCSR compatibility exceptions. These hashed packages are installed
+# with --no-deps so MolScribe/OpenNMT legacy metadata cannot replace the unified
+# Torch/Transformers runtime. Real checkpoint loading and image inference are
+# the compatibility gate. Hashes target Python 3.11/Linux.
+MolScribe==1.1.1 \
+    --hash=sha256:f1fe78f422d063979446671e19f95695aab3b340a6ff03b9a9e773e6c9e16cff
+OpenNMT-py==2.2.0 \
+    --hash=sha256:ea8537b2c9bece7ce0fa2988b556fc18ae1ff657aa941e6be03af86ceef08ece
+SmilesPE==0.0.3 \
+    --hash=sha256:9f74279daa14945859546fb2de11c208b5116927ce5fe03b3cf46bcba96f5e58
+timm==0.4.12 \
+    --hash=sha256:dba6b1702b7d24bf9f0f1c2fc394b4ee28f93cde5404f1dc732d63ccd00533b6

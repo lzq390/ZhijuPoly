@@ -1,0 +1,28 @@
+# Application dependencies resolved into requirements.lock by pip-tools 7.5.0
+# on Python 3.11/Linux x86_64. Torch and TorchVision are supplied and pinned by
+# the digest-locked PyTorch base image plus requirements-system.lock. Legacy OCSR
+# packages use a separate direct-artifact hash lock because their historical
+# dependency ranges intentionally conflict with the supported runtime.
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.10.6
+python-multipart==0.0.20
+python-dotenv==1.0.1
+numpy==1.26.4
+albumentations==1.1.0
+opencv-python-headless==4.10.0.84
+pandas==2.2.3
+pytz==2026.2
+tzdata==2026.2
+requests==2.32.5
+requests-unixsocket==0.3.0
+openai==2.36.0
+psycopg[binary]==3.3.4
+rdkit==2023.9.1
+smipoly==1.1.2
+joblib==1.5.3
+scikit-learn==1.8.0
+transformers==4.57.6
+sentencepiece==0.2.1
+chemprop==2.2.4
+safetensors==0.8.0
