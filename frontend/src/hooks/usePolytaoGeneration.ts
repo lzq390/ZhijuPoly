@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPolytaoJob, fetchPolytaoJob, fetchPolytaoStatus } from "../services/api";
+import {
+  createPolytaoJob,
+  fetchPolytaoJob,
+  fetchPolytaoStatus,
+  isApiRequestError
+} from "../services/api";
 import type {
   PolytaoGenerationRequest,
   PolytaoGenerationResponse,
@@ -21,7 +26,59 @@ type PolytaoGenerationState = {
 
 const POLL_INTERVAL_MS = 1400;
 const POLL_MAX_FAILURES = 3;
+const STATUS_POLL_INTERVAL_MS = 5000;
 const TERMINAL_STATUSES = new Set<PolytaoJobStatus>(["completed", "failed", "cancelled"]);
+const EXPIRED_JOB_MESSAGE = "Backend restarted or the job expired. Please resubmit.";
+
+export type PolytaoRuntimeDisplayState =
+  | "checking"
+  | "disabled"
+  | "cold"
+  | "loading"
+  | "ready"
+  | "db_unavailable"
+  | "runtime_error";
+
+export function getPolytaoRuntimeDisplayState(
+  status: PolytaoStatusResponse | null,
+  statusError: string | null,
+  isStatusLoading: boolean
+): PolytaoRuntimeDisplayState {
+  if (isStatusLoading && status === null) {
+    return "checking";
+  }
+  if (statusError || status === null) {
+    return "runtime_error";
+  }
+  if (!status.enabled) {
+    return "disabled";
+  }
+  if (status.db_configured === false || status.db_ready === false) {
+    return "db_unavailable";
+  }
+  if (status.runtime_ready === true) {
+    return "ready";
+  }
+  if (status.runtime_error) {
+    return "runtime_error";
+  }
+
+  const reportedStatus = status.worker_status?.trim().toLowerCase();
+  if (reportedStatus === "loading" || status.message.toLowerCase().includes("runtime is loading")) {
+    return "loading";
+  }
+  if (status.available) {
+    return "cold";
+  }
+  return "runtime_error";
+}
+
+export function shouldAutoRefreshPolytaoStatus(
+  status: PolytaoStatusResponse | null,
+  statusError: string | null
+): boolean {
+  return Boolean(statusError) || status === null || status.available !== true || status.runtime_ready !== true;
+}
 
 function createEmptyDescriptors(): PolytaoDescriptorMap {
   return POLYTAO_DESCRIPTOR_NAMES.reduce((descriptors, name) => {
@@ -96,7 +153,7 @@ export function usePolytaoGeneration() {
     data: null,
     job: null,
     serviceStatus: null,
-    isStatusLoading: false,
+    isStatusLoading: true,
     statusError: null
   });
   const pollTokenRef = useRef(0);
@@ -133,6 +190,27 @@ export function usePolytaoGeneration() {
     };
   }, [refreshStatus]);
 
+  useEffect(() => {
+    if (
+      state.isStatusLoading ||
+      !shouldAutoRefreshPolytaoStatus(state.serviceStatus, state.statusError)
+    ) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void refreshStatus();
+    }, STATUS_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [refreshStatus, state.isStatusLoading, state.serviceStatus, state.statusError]);
+
+  useEffect(() => {
+    const refreshOnFocus = () => {
+      void refreshStatus();
+    };
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [refreshStatus]);
+
   async function pollJob(jobId: string, token: number) {
     let failureCount = 0;
     while (pollTokenRef.current === token) {
@@ -142,6 +220,14 @@ export function usePolytaoGeneration() {
         failureCount = 0;
       } catch (error) {
         if (pollTokenRef.current !== token) {
+          return;
+        }
+        if (isApiRequestError(error, 410)) {
+          setState((current) => ({
+            ...current,
+            isLoading: false,
+            error: EXPIRED_JOB_MESSAGE
+          }));
           return;
         }
         failureCount += 1;
@@ -168,6 +254,7 @@ export function usePolytaoGeneration() {
         job
       }));
       if (isTerminal) {
+        void refreshStatus();
         return;
       }
       await delay(POLL_INTERVAL_MS);
@@ -221,6 +308,7 @@ export function usePolytaoGeneration() {
         isLoading: false,
         error: error instanceof Error ? error.message : "Failed to submit PolyTAO generation."
       }));
+      void refreshStatus();
     }
   }
 

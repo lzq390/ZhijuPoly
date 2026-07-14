@@ -73,6 +73,20 @@ import type {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
+export class ApiRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
+export function isApiRequestError(error: unknown, status?: number): error is ApiRequestError {
+  return error instanceof ApiRequestError && (status === undefined || error.status === status);
+}
+
 async function errorMessageFromResponse(response: Response): Promise<string> {
   const data = await response.json().catch(() => null);
   if (typeof data?.detail === "string") {
@@ -92,7 +106,7 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(await errorMessageFromResponse(response));
+    throw new ApiRequestError(response.status, await errorMessageFromResponse(response));
   }
 
   return (await response.json()) as T;
@@ -106,7 +120,7 @@ async function postForm<T>(path: string, body: FormData, signal?: AbortSignal): 
   });
 
   if (!response.ok) {
-    throw new Error(await errorMessageFromResponse(response));
+    throw new ApiRequestError(response.status, await errorMessageFromResponse(response));
   }
 
   return (await response.json()) as T;
@@ -243,11 +257,11 @@ function handleAssistantStreamEvent(rawEvent: string, handlers: AssistantStreamH
     throw new Error(detail);
   }
 }
-async function getJSON<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`);
+async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, init);
 
   if (!response.ok) {
-    throw new Error(await errorMessageFromResponse(response));
+    throw new ApiRequestError(response.status, await errorMessageFromResponse(response));
   }
 
   return (await response.json()) as T;
@@ -396,8 +410,22 @@ export function fetchConditionalGenerationTgStatus(): Promise<ConditionalGenerat
   return getJSON("/conditional-generation/tg/status");
 }
 
-export function fetchPolytaoStatus(): Promise<PolytaoStatusResponse> {
-  return getJSON("/conditional-generation/polytao/status");
+export async function fetchPolytaoStatus(): Promise<PolytaoStatusResponse> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 10_000);
+  try {
+    return await getJSON("/conditional-generation/polytao/status", {
+      cache: "no-store",
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("PolyTAO runtime status request timed out after 10 seconds.");
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 export function calculatePolytaoDescriptors(

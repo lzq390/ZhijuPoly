@@ -20,7 +20,9 @@ import { Input } from "./ui/input";
 import {
   DEFAULT_POLYTAO_DESCRIPTORS,
   EMPTY_POLYTAO_DESCRIPTORS,
+  getPolytaoRuntimeDisplayState,
   polytaoDescriptorMapFromEntries,
+  type PolytaoRuntimeDisplayState,
   usePolytaoGeneration
 } from "../hooks/usePolytaoGeneration";
 import { cn } from "../lib/utils";
@@ -119,6 +121,11 @@ export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }
   const [isDescriptorLoading, setIsDescriptorLoading] = useState(false);
   const currentPrompt = useMemo(() => descriptorPrompt(polytao.request.descriptors), [polytao.request.descriptors]);
   const hasStructure = structure.smiles.trim().length > 0;
+  const runtimeDisplayState = getPolytaoRuntimeDisplayState(
+    polytao.serviceStatus,
+    polytao.statusError,
+    polytao.isStatusLoading
+  );
 
   function updateRequest(partial: Partial<PolytaoGenerationRequest>) {
     polytao.setRequest({
@@ -271,6 +278,7 @@ export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }
             request={polytao.request}
             status={polytao.serviceStatus}
             statusError={polytao.statusError}
+            runtimeDisplayState={runtimeDisplayState}
             job={polytao.job}
             canSubmit={canSubmit}
             descriptorReady={descriptorReady}
@@ -301,7 +309,8 @@ function ServicePill({
   statusError: string | null;
   isLoading: boolean;
 }) {
-  if (isLoading) {
+  const displayState = getPolytaoRuntimeDisplayState(status, statusError, isLoading);
+  if (displayState === "checking") {
     return (
       <Badge className="border-slate-200 bg-slate-50 text-slate-700">
         <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin" />
@@ -309,7 +318,7 @@ function ServicePill({
       </Badge>
     );
   }
-  if (status?.available) {
+  if (displayState === "ready") {
     return (
       <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">
         <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
@@ -317,10 +326,32 @@ function ServicePill({
       </Badge>
     );
   }
+  if (displayState === "cold") {
+    return (
+      <Badge className="border-amber-200 bg-amber-50 text-amber-700">
+        <CircleAlert className="mr-2 h-3.5 w-3.5" />
+        Runtime cold
+      </Badge>
+    );
+  }
+  if (displayState === "loading") {
+    return (
+      <Badge className="border-sky-200 bg-sky-50 text-sky-700">
+        <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin" />
+        Runtime loading
+      </Badge>
+    );
+  }
+  const label =
+    displayState === "disabled"
+      ? "Disabled"
+      : displayState === "db_unavailable"
+        ? "DB unavailable"
+        : "Runtime error";
   return (
     <Badge className="border-rose-200 bg-rose-50 text-rose-700">
       <CircleAlert className="mr-2 h-3.5 w-3.5" />
-      {statusError ? "Status error" : "Runtime unavailable"}
+      {label}
     </Badge>
   );
 }
@@ -534,6 +565,7 @@ function RunControlPanel({
   request,
   status,
   statusError,
+  runtimeDisplayState,
   job,
   canSubmit,
   descriptorReady,
@@ -545,6 +577,7 @@ function RunControlPanel({
   request: PolytaoGenerationRequest;
   status: PolytaoStatusResponse | null;
   statusError: string | null;
+  runtimeDisplayState: PolytaoRuntimeDisplayState;
   job: PolytaoJobStatusResponse | null;
   canSubmit: boolean;
   descriptorReady: boolean;
@@ -553,7 +586,19 @@ function RunControlPanel({
   onRequestChange: (partial: Partial<PolytaoGenerationRequest>) => void;
   onSubmit: () => void;
 }) {
-  const unavailableMessage = statusError ?? (status && !status.available ? status.message : null);
+  let runtimeMessage: string | null = null;
+  if (runtimeDisplayState === "cold") {
+    runtimeMessage = "The PolyTAO runtime is cold. Your first job will load the model before generation starts.";
+  } else if (runtimeDisplayState === "loading") {
+    runtimeMessage = "The PolyTAO model is loading. Accepted jobs will run when the runtime is ready.";
+  } else if (runtimeDisplayState === "runtime_error") {
+    runtimeMessage = statusError ?? status?.runtime_error ?? status?.message ?? "PolyTAO runtime status is unavailable.";
+    if (status?.available) {
+      runtimeMessage = `${runtimeMessage} Submitting another job will retry model loading.`;
+    }
+  } else if (runtimeDisplayState === "disabled" || runtimeDisplayState === "db_unavailable") {
+    runtimeMessage = statusError ?? status?.message ?? "PolyTAO is unavailable.";
+  }
 
   return (
     <Panel title="Run Controls" eyebrow="Sampling" icon={<Play className="h-4 w-4" />}>
@@ -608,7 +653,7 @@ function RunControlPanel({
         </div>
 
         {job ? <JobProgress job={job} /> : null}
-        {unavailableMessage ? <AlertBox tone="warning" title={unavailableMessage} /> : null}
+        {runtimeMessage ? <AlertBox tone="warning" title={runtimeMessage} /> : null}
         {!descriptorReady ? <AlertBox tone="warning" title="Fill all 15 descriptors, prefill from a structure, or load the sample vector." /> : null}
 
         <Button

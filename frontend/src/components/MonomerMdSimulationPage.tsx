@@ -22,6 +22,7 @@ import {
 import { cn } from "../lib/utils";
 import type {
   MonomerMdArtifact,
+  MonomerMdJobResponse,
   MonomerMdJobStatus,
   MonomerMdProtocol,
   MonomerMdSeries,
@@ -29,6 +30,7 @@ import type {
   MonomerMdTrajectoryPoint,
   MonomerMdTrajectoryPreview
 } from "../types";
+import { isGenericMonomerMdDemoWarning, monomerMdDemoNotice, monomerMdServiceCanSubmit } from "../utils/monomerMdPresentation";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
@@ -82,6 +84,7 @@ const SUMMARY_LABELS: Record<string, string> = {
 };
 
 const RESULT_MESSAGE_TRANSLATIONS: Record<string, string> = {
+  "300-step demo output is not equilibrated and is not a physical density estimate.": "300 步演示结果尚未达到平衡，不能作为物理密度估计。",
   "1000-step demo output is not equilibrated and is not a physical density estimate.": "1000 步演示结果尚未达到平衡，不能作为物理密度估计。",
   "Density demo output is not equilibrated and is not a physical density estimate.": "密度演示输出尚未达到平衡，不能作为物理密度估计。"
 };
@@ -99,7 +102,12 @@ const UI_MESSAGE_TRANSLATIONS: Record<string, string> = {
   "monomer MD worker ByteFF2 root is not available": "单体 MD worker 找不到 ByteFF2 根目录。",
   "monomer MD worker runtime is not ready": "单体 MD worker 运行环境尚未就绪。",
   "monomer MD submit rate limit exceeded; please wait before submitting another job": "提交过于频繁，请稍后再试。",
-  "monomer MD job capacity is full; please wait for the current demo job to finish": "当前已有单体 MD 演示任务在运行，请等待完成后再提交。",
+  "monomer MD job capacity is full; please wait for the active job to finish": "当前已有单体 MD 任务在运行，请等待完成后再提交。",
+  "monomer MD job capacity is full; please wait for the current demo job to finish": "当前已有单体 MD 任务在运行，请等待完成后再提交。",
+  "monomer MD worker is draining for deployment": "单体 MD worker 正在等待现有任务完成并进行部署升级。",
+  "monomer MD worker is not accepting jobs": "单体 MD worker 当前暂不接收新任务。",
+  "monomer MD worker database recovery has not completed": "单体 MD worker 正在恢复任务状态，请稍后重试。",
+  "monomer MD database capacity check failed": "无法读取单体 MD 任务容量，请稍后重试。",
   "monomer MD worker active job capacity is full": "单体 MD worker 当前任务已满，请等待当前任务完成。",
   "Failed to fetch": "网络请求失败。"
 };
@@ -477,7 +485,7 @@ function ArtifactsPanel({
   );
 }
 
-function ResultNotice({ result, completedWithoutResult }: { result: MonomerMdSimulationResult | null; completedWithoutResult: boolean }) {
+function ResultNotice({ result, job, completedWithoutResult }: { result: MonomerMdSimulationResult | null; job: MonomerMdJobResponse | null; completedWithoutResult: boolean }) {
   if (completedWithoutResult) {
     return (
       <section className="rounded-[14px] border border-red-100 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700">
@@ -493,11 +501,12 @@ function ResultNotice({ result, completedWithoutResult }: { result: MonomerMdSim
   }
 
   const messages = new Set<string>();
-  if (result.not_equilibrated || result.physical_density_estimate === false) {
-    messages.add("1000 步演示结果尚未达到平衡，不能作为物理密度估计。");
+  const demoNotice = monomerMdDemoNotice(result, job);
+  if (demoNotice) {
+    messages.add(demoNotice);
   }
   for (const warning of result.warnings ?? []) {
-    if (warning.trim()) {
+    if (warning.trim() && !isGenericMonomerMdDemoWarning(warning)) {
       messages.add(translateResultMessage(warning.trim()));
     }
   }
@@ -523,12 +532,23 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
   const simulation = useMonomerMdSimulation();
   const validationError = simulation.runMode === "demo" ? getMonomerMdSmilesValidationError(simulation.smiles) : null;
   const serviceUnavailable = simulation.serviceStatus?.enabled === false || simulation.serviceStatus?.available === false;
+  const serviceBusy = simulation.serviceStatus?.busy === true;
+  const serviceDraining = simulation.serviceStatus?.draining === true;
+  const serviceCanSubmit = monomerMdServiceCanSubmit(
+    simulation.serviceStatus,
+    simulation.isStatusLoading,
+    simulation.statusError
+  );
   const protocolCatalog = simulation.protocolCatalog?.protocols ?? [];
   const selectedProtocolInfo = protocolCatalog.find((item) => item.protocol === simulation.selectedProtocol);
   const formalReady = simulation.runMode !== "formal" || selectedProtocolInfo?.runtime_ready === true;
   const formalUnavailable = simulation.runMode === "formal" && selectedProtocolInfo?.runtime_ready === false;
   const formalUnknown = simulation.runMode === "formal" && selectedProtocolInfo?.runtime_ready !== true && !formalUnavailable;
-  const canSubmit = !simulation.isLoading && !validationError && !serviceUnavailable && formalReady;
+  const canSubmit = !simulation.isLoading
+    && !validationError
+    && !serviceUnavailable
+    && serviceCanSubmit
+    && formalReady;
   const currentStatus = simulation.job?.status ?? null;
   const progress = progressValue(currentStatus, simulation.job?.progress);
   const result = simulation.data;
@@ -556,7 +576,7 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className={cn("inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-medium", serviceUnavailable ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-600")}>
               {simulation.isStatusLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
-              {simulation.isStatusLoading ? "正在检查计算服务" : simulation.statusError ? "状态检查失败" : serviceUnavailable ? "计算服务不可用" : "计算服务可用"}
+              {simulation.isStatusLoading ? "正在检查计算服务" : simulation.statusError ? "状态检查失败" : serviceUnavailable ? "计算服务不可用" : serviceDraining ? "部署排空中" : serviceBusy ? "任务容量已满" : "计算服务可用"}
             </span>
             <Button type="button" variant="outline" onClick={() => void simulation.refreshStatus()} className="h-8 rounded-md border-slate-200 bg-white px-2.5 text-xs text-slate-600 shadow-none hover:bg-slate-50"><RotateCw className="mr-1.5 h-3.5 w-3.5" />刷新</Button>
           </div>
@@ -575,7 +595,7 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
                 <>
                   <label className="mt-4 block space-y-2"><span className="text-xs font-medium text-slate-600">SMILES</span><Textarea value={simulation.smiles} onChange={(event) => simulation.setSmiles(event.target.value)} placeholder="示例：CCOC(=O)c1ccc(N)cc1" spellCheck={false} className="min-h-[96px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200" disabled={simulation.isLoading} /></label>
                   <div className="mt-2 min-h-[20px] text-xs text-slate-500">{validationError ? <span className="text-red-600">{validationError}</span> : "可输入任意普通单分子 SMILES；不要输入带 * 的聚合物重复单元。"}</div>
-                  <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">第一阶段只运行 1000 步演示。结果尚未达到平衡，不能作为真实物理密度结论。</div>
+                  <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">第一阶段只运行 300 步演示。结果尚未达到平衡，不能作为真实物理密度结论。</div>
                 </>
               ) : (
                 <>
@@ -601,6 +621,8 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
               )}
               <div className="mt-4 flex flex-wrap items-center gap-2"><Button type="submit" disabled={!canSubmit} className="h-10 rounded-md px-4 shadow-none disabled:opacity-[0.45]">{simulation.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}{simulation.isLoading ? "运行中" : simulation.runMode === "formal" ? "提交正式任务" : "提交演示"}</Button><Button type="button" variant="outline" onClick={simulation.reset} disabled={simulation.isLoading} className="h-10 rounded-md border-slate-200 bg-white px-4 text-slate-700 shadow-none hover:bg-slate-50">清空结果</Button></div>
               {serviceUnavailable ? <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">{simulation.serviceStatus?.message ? translateUiMessage(simulation.serviceStatus.message) : "后端报告单体 MD 服务当前不可用。"}</div> : null}
+              {!serviceUnavailable && serviceDraining ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">单体 MD worker 正在等待现有任务完成并进行部署升级，升级完成后会自动恢复提交。</div> : null}
+              {!serviceUnavailable && !serviceDraining && serviceBusy ? <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">当前已有单体 MD 任务运行，任务完成后会自动释放提交容量。</div> : null}
               {simulation.statusError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">状态接口不可用：{translateUiMessage(simulation.statusError)}</div> : null}
             </form>
 
@@ -620,7 +642,7 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
           </div>
 
           <div className="grid min-w-0 gap-4">
-            <ResultNotice result={result} completedWithoutResult={completedWithoutResult} />
+            <ResultNotice result={result} job={simulation.job} completedWithoutResult={completedWithoutResult} />
             <SummaryPanel result={result} />
             <MetricsPanel result={result} />
             {showSeriesCards ? (
