@@ -1390,6 +1390,13 @@ class MonomerMdStatusResponse(BaseModel):
     runtime_ready: bool | None = None
     runtime_error: str | None = None
     active_jobs: int | None = Field(default=None, ge=0)
+    database_active_jobs: int | None = Field(default=None, ge=0)
+    oldest_active_heartbeat_age_seconds: int | None = Field(default=None, ge=0)
+    max_active_jobs: int | None = Field(default=None, ge=1)
+    accepting_jobs: bool | None = None
+    draining: bool = False
+    busy: bool = False
+    can_submit: bool = False
     protocols: dict[str, Any] = Field(default_factory=dict)
     message: str
 

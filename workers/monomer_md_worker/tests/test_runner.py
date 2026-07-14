@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -35,8 +37,8 @@ def _settings(tmp_path: Path) -> WorkerSettings:
         byteff2_python="python",
         byteff2_demo_command=None,
         job_root=tmp_path / "runs",
-        default_steps=1000,
-        max_steps=1000,
+        default_steps=300,
+        max_steps=300,
         report_interval=10,
         timeout_seconds=30,
         health_probe_timeout_seconds=5,
@@ -50,16 +52,16 @@ def _settings(tmp_path: Path) -> WorkerSettings:
 
 def test_dry_run_result_has_frontend_shape(tmp_path: Path):
     runner = MonomerMdRunner(_settings(tmp_path))
-    request = JobRequest(job_id="job-1", smiles="CCO", canonical_smiles="CCO", steps=1000)
+    request = JobRequest(job_id="job-1", smiles="CCO", canonical_smiles="CCO", steps=300)
 
-    run_result = asyncio.run(runner.run(request, 1000))
+    run_result = asyncio.run(runner.run(request, 300))
     result = run_result.result
 
     assert result["job_id"] == "job-1"
-    assert result["summary"]["n_steps"] == 1000
-    assert result["summary"]["sample_count"] == 100
+    assert result["summary"]["n_steps"] == 300
+    assert result["summary"]["sample_count"] == 30
     assert result["summary"]["final_density_g_cm3"] > 0
-    assert result["density_series"]["points"][-1]["step"] == 1000
+    assert result["density_series"]["points"][-1]["step"] == 300
     assert result["temperature_series"]["points"][-1]["value"] == 298.15
     assert result["energy_series"]["points"] == []
     assert result["trajectory_preview"] is None
@@ -77,6 +79,15 @@ def test_byteff2_adapter_does_not_use_formal_run_md_as_demo_entry(tmp_path: Path
     (formal_dir / "run_md.py").write_text("print('formal')\n", encoding="utf-8")
 
     assert _find_demo_entry(tmp_path) is None
+
+
+def test_sealed_byteff2_commit_marker_is_used_without_git_metadata(tmp_path: Path):
+    from workers.monomer_md_worker.app.byteff2_formal_runner import resolve_byteff2_commit
+
+    commit = "a" * 40
+    (tmp_path / "BYTEFF2-COMMIT").write_text(commit + "\n", encoding="ascii")
+
+    assert resolve_byteff2_commit(tmp_path) == commit
 
 
 def test_byteff2_adapter_missing_configured_entry_fails(tmp_path: Path, monkeypatch):
@@ -136,3 +147,44 @@ def test_byteff2_adapter_adds_missing_gro_box_line(tmp_path: Path):
     assert len(lines) == 5
     assert lines[2].startswith("    1MONOM    C    1")
     assert lines[4] == "  10.00000  10.00000  10.00000"
+
+
+def test_real_demo_cancellation_terminates_process_group(tmp_path: Path):
+    settings = _settings(tmp_path)
+    object.__setattr__(settings, "mode", "real")
+    settings.byteff2_root.mkdir()
+    pid_path = tmp_path / "demo-child.pid"
+    grandchild_pid_path = tmp_path / "demo-grandchild.pid"
+    script = tmp_path / "slow_demo.py"
+    script.write_text(
+        "import os, pathlib, subprocess, sys, time\n"
+        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
+        "grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"pathlib.Path({str(grandchild_pid_path)!r}).write_text(str(grandchild.pid))\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    object.__setattr__(settings, "byteff2_demo_command", f"{sys.executable} {script}")
+    runner = MonomerMdRunner(settings)
+    request = JobRequest(job_id="cancel-demo", smiles="CCO", canonical_smiles="CCO", steps=300)
+
+    async def scenario() -> tuple[int, int]:
+        task = asyncio.create_task(runner.run(request, 300))
+        for _ in range(100):
+            if pid_path.exists() and grandchild_pid_path.exists():
+                break
+            await asyncio.sleep(0.02)
+        assert pid_path.exists()
+        pid = int(pid_path.read_text(encoding="utf-8"))
+        assert grandchild_pid_path.exists()
+        grandchild_pid = int(grandchild_pid_path.read_text(encoding="utf-8"))
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return pid, grandchild_pid
+
+    child_pid, grandchild_pid = asyncio.run(scenario())
+    for pid in (child_pid, grandchild_pid):
+        process_state = Path(f"/proc/{pid}/stat")
+        if process_state.exists():
+            assert process_state.read_text(encoding="utf-8").split()[2] == "Z"

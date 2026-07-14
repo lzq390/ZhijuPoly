@@ -71,6 +71,12 @@ class WorkerSettings:
     byteff2_git_sha_column: str = "byteff2_git_sha"
     gpu_device_column: str = "gpu_device"
     error_category_column: str = "error_category"
+    worker_instance_id_column: str = "worker_instance_id"
+    heartbeat_at_column: str = "heartbeat_at"
+    lease_expires_at_column: str = "lease_expires_at"
+    heartbeat_interval_seconds: int = 15
+    lease_seconds: int = 90
+    recovery_retry_seconds: int = 15
 
     @property
     def db_configured(self) -> bool:
@@ -78,7 +84,7 @@ class WorkerSettings:
 
 
 def load_settings() -> WorkerSettings:
-    default_steps = _get_int("MONOMER_MD_DEFAULT_STEPS", 1000)
+    default_steps = _get_int("MONOMER_MD_DEFAULT_STEPS", 300)
     max_steps = _get_int("MONOMER_MD_MAX_STEPS", default_steps)
     if max_steps < default_steps:
         raise ValueError("MONOMER_MD_MAX_STEPS must be >= MONOMER_MD_DEFAULT_STEPS")
@@ -115,7 +121,7 @@ def load_settings() -> WorkerSettings:
         started_at_column=os.getenv("MONOMER_MD_STARTED_AT_COLUMN", "started_at"),
         finished_at_column=os.getenv("MONOMER_MD_FINISHED_AT_COLUMN", "finished_at"),
         updated_at_column=os.getenv("MONOMER_MD_UPDATED_AT_COLUMN", "updated_at"),
-        byteff2_root=Path(os.getenv("BYTEFF2_ROOT", "/data/lzq/gith/byteff2")),
+        byteff2_root=Path(os.getenv("BYTEFF2_ROOT", ".")),
         byteff2_python=os.getenv("BYTEFF2_PYTHON", "python"),
         byteff2_demo_command=os.getenv("BYTEFF2_DEMO_COMMAND") or None,
         job_root=Path(os.getenv("MONOMER_MD_JOB_ROOT", "/tmp/monomer-md-jobs")),
@@ -143,4 +149,10 @@ def load_settings() -> WorkerSettings:
         byteff2_git_sha_column=os.getenv("MONOMER_MD_BYTEFF2_GIT_SHA_COLUMN", "byteff2_git_sha"),
         gpu_device_column=os.getenv("MONOMER_MD_GPU_DEVICE_COLUMN", "gpu_device"),
         error_category_column=os.getenv("MONOMER_MD_ERROR_CATEGORY_COLUMN", "error_category"),
+        worker_instance_id_column=os.getenv("MONOMER_MD_WORKER_INSTANCE_ID_COLUMN", "worker_instance_id"),
+        heartbeat_at_column=os.getenv("MONOMER_MD_HEARTBEAT_AT_COLUMN", "heartbeat_at"),
+        lease_expires_at_column=os.getenv("MONOMER_MD_LEASE_EXPIRES_AT_COLUMN", "lease_expires_at"),
+        heartbeat_interval_seconds=_get_int("MONOMER_MD_HEARTBEAT_INTERVAL_SECONDS", 15),
+        lease_seconds=_get_int("MONOMER_MD_LEASE_SECONDS", 90),
+        recovery_retry_seconds=_get_int("MONOMER_MD_RECOVERY_RETRY_SECONDS", 15),
     )

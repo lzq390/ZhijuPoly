@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +12,24 @@ from workers.monomer_md_worker.app import main as worker_main
 from workers.monomer_md_worker.app.byteff2_formal_runner import ByteFF2FormalRunner
 from workers.monomer_md_worker.app.config import WorkerSettings
 from workers.monomer_md_worker.app.models import JobRequest
-from workers.monomer_md_worker.app.repository import PostgresJobRepository
+from workers.monomer_md_worker.app.repository import JobUpdateResult, PostgresJobRepository
+
+
+RELEASE_SHA = "a" * 40
+
+
+def _production_runtime_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
+    release = tmp_path / "ops" / "releases" / RELEASE_SHA
+    module = release / "workers" / "monomer_md_worker" / "app" / "main.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# worker fixture\n", encoding="utf-8")
+    (release / "release-manifest.json").write_text(
+        '{"source_sha":"' + RELEASE_SHA + '"}\n',
+        encoding="utf-8",
+    )
+    venv = release / "worker-venv"
+    venv.mkdir()
+    return release, module, venv
 
 
 def _settings(
@@ -44,8 +63,8 @@ def _settings(
         byteff2_python="python",
         byteff2_demo_command=None,
         job_root=tmp_path / "runs",
-        default_steps=1000,
-        max_steps=1000,
+        default_steps=300,
+        max_steps=300,
         report_interval=10,
         timeout_seconds=30,
         health_probe_timeout_seconds=5,
@@ -55,6 +74,78 @@ def _settings(
         worker_id="test-worker",
         worker_version="test",
     )
+
+
+def test_health_exposes_source_and_venv_identity(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path)
+    identity = worker_main.RuntimeIdentity(
+        source_sha=None,
+        source_root=str(tmp_path / "source"),
+        venv_prefix=str(tmp_path / "venv"),
+        python_executable=str(Path(sys.executable).resolve()),
+    )
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "runtime_identity", identity)
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    monkeypatch.setattr(worker_main, "recovery_ready", True)
+
+    response = worker_main._build_health_response()
+
+    assert response.source_sha is None
+    assert response.source_root == identity.source_root
+    assert response.venv_prefix == identity.venv_prefix
+    assert response.python_executable == identity.python_executable
+
+
+def test_production_runtime_identity_uses_manifest_and_sys_prefix(tmp_path: Path):
+    release, module, venv = _production_runtime_paths(tmp_path)
+
+    identity = worker_main._load_runtime_identity(
+        module_path=module,
+        python_prefix=venv,
+        python_executable=Path(sys.executable),
+    )
+
+    assert identity.source_sha == RELEASE_SHA
+    assert identity.source_root == str(release.resolve())
+    assert identity.venv_prefix == str(venv.resolve())
+    assert identity.python_executable == str(Path(sys.executable).resolve())
+
+
+def test_production_runtime_identity_rejects_manifest_sha_mismatch(tmp_path: Path):
+    release, module, venv = _production_runtime_paths(tmp_path)
+    (release / "release-manifest.json").write_text(
+        '{"source_sha":"' + ("b" * 40) + '"}\n',
+        encoding="utf-8",
+    )
+
+    try:
+        worker_main._load_runtime_identity(
+            module_path=module,
+            python_prefix=venv,
+            python_executable=Path(sys.executable),
+        )
+    except RuntimeError as exc:
+        assert "manifest" in str(exc)
+    else:
+        raise AssertionError("mismatched production source SHA was accepted")
+
+
+def test_production_runtime_identity_rejects_old_release_venv(tmp_path: Path):
+    _release, module, _venv = _production_runtime_paths(tmp_path)
+    old_venv = tmp_path / "ops" / "releases" / ("b" * 40) / "worker-venv"
+    old_venv.mkdir(parents=True)
+
+    try:
+        worker_main._load_runtime_identity(
+            module_path=module,
+            python_prefix=old_venv,
+            python_executable=Path(sys.executable),
+        )
+    except RuntimeError as exc:
+        assert "release venv" in str(exc)
+    else:
+        raise AssertionError("old production Worker venv was accepted")
 
 
 def test_real_health_reports_runtime_probe_failure(tmp_path: Path, monkeypatch):
@@ -178,7 +269,7 @@ def test_submit_rejects_when_active_capacity_is_full(tmp_path: Path, monkeypatch
     client = TestClient(worker_main.app)
     response = client.post(
         "/jobs",
-        json={"job_id": "job-1", "smiles": "CCO", "canonical_smiles": "CCO", "steps": 1000},
+        json={"job_id": "job-1", "smiles": "CCO", "canonical_smiles": "CCO", "steps": 300},
     )
 
     assert response.status_code == 429
@@ -233,7 +324,7 @@ def test_submit_rejects_real_degraded_worker(tmp_path: Path, monkeypatch):
     client = TestClient(worker_main.app)
     response = client.post(
         "/jobs",
-        json={"job_id": "job-1", "smiles": "CCO", "canonical_smiles": "CCO", "steps": 1000},
+        json={"job_id": "job-1", "smiles": "CCO", "canonical_smiles": "CCO", "steps": 300},
     )
 
     assert response.status_code == 503
@@ -248,14 +339,14 @@ def test_submit_rejects_when_initial_status_update_fails(tmp_path: Path, monkeyp
 
     class MissingRowRepository:
         def update_status(self, *args, **kwargs):
-            return 0
+            return JobUpdateResult.MISSING
 
     monkeypatch.setattr(worker_main, "repository", MissingRowRepository())
 
     client = TestClient(worker_main.app)
     response = client.post(
         "/jobs",
-        json={"job_id": "job-1", "smiles": "CCO", "canonical_smiles": "CCO", "steps": 1000},
+        json={"job_id": "job-1", "smiles": "CCO", "canonical_smiles": "CCO", "steps": 300},
     )
 
     assert response.status_code == 503
@@ -304,7 +395,7 @@ def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
         },
     )
 
-    result = runner.run(request, tmp_path / "job-root")
+    result = asyncio.run(runner.run(request, tmp_path / "job-root"))
 
     config = (tmp_path / "job-root" / "config.json").read_text(encoding="utf-8")
     assert str(tmp_path / "job-root" / "outputs") in config
@@ -315,6 +406,76 @@ def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
         item["path"] == "outputs/density_results.json"
         for item in result.result["artifact_manifest"]["files"]
     )
+
+
+def test_formal_runner_cancellation_terminates_process_group(tmp_path: Path):
+    settings = _settings(tmp_path, mode="real", app_postgres_dsn=None)
+    settings.byteff2_root.mkdir()
+    object.__setattr__(settings, "byteff2_python", sys.executable)
+    run_md = settings.byteff2_root / "example" / "4_MD_simulations" / "run_md.py"
+    run_md.parent.mkdir(parents=True)
+    run_md.write_text(
+        "\n".join(
+            [
+                "import argparse, json, os, pathlib, subprocess, sys, time",
+                "parser = argparse.ArgumentParser()",
+                "parser.add_argument('--config')",
+                "args = parser.parse_args()",
+                "config = json.loads(pathlib.Path(args.config).read_text())",
+                "out = pathlib.Path(config['output_dir'])",
+                "out.mkdir(parents=True, exist_ok=True)",
+                "(out / 'child.pid').write_text(str(os.getpid()))",
+                "grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])",
+                "(out / 'grandchild.pid').write_text(str(grandchild.pid))",
+                "time.sleep(60)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = ByteFF2FormalRunner(settings)
+    request = JobRequest(
+        job_id="formal-cancel-1",
+        smiles='{"DMC": "COC(=O)OC"}',
+        canonical_smiles='{"DMC": "COC(=O)OC"}',
+        steps=1500000,
+        protocol="Density",
+        run_mode="formal",
+        config_json={
+            "protocol": "Density",
+            "temperature": 298,
+            "natoms": 10000,
+            "components": {"DMC": 1},
+            "smiles": {"DMC": "COC(=O)OC"},
+        },
+    )
+    output_dir = tmp_path / "cancel-job"
+
+    async def scenario() -> tuple[int, int]:
+        task = asyncio.create_task(runner.run(request, output_dir))
+        pid_path = output_dir / "outputs" / "child.pid"
+        grandchild_pid_path = output_dir / "outputs" / "grandchild.pid"
+        for _ in range(100):
+            if pid_path.exists() and grandchild_pid_path.exists():
+                break
+            await asyncio.sleep(0.02)
+        assert pid_path.exists()
+        pid = int(pid_path.read_text(encoding="utf-8"))
+        assert grandchild_pid_path.exists()
+        grandchild_pid = int(grandchild_pid_path.read_text(encoding="utf-8"))
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("cancelled formal runner did not raise CancelledError")
+        return pid, grandchild_pid
+
+    child_pid, grandchild_pid = asyncio.run(scenario())
+    for pid in (child_pid, grandchild_pid):
+        process_state = Path(f"/proc/{pid}/stat")
+        if process_state.exists():
+            assert process_state.read_text(encoding="utf-8").split()[2] == "Z"
 
 
 def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypatch):
@@ -343,3 +504,162 @@ def test_repository_update_query_guards_terminal_statuses():
         and "NOT IN ('completed', 'failed', 'cancelled')" in value
         for value in source_names
     )
+
+
+def test_drain_is_idempotent_and_rejects_new_jobs(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, app_postgres_dsn=None)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "recovery_ready", True)
+    monkeypatch.setattr(worker_main, "draining", False)
+    monkeypatch.setattr(worker_main, "active_jobs", {"busy-job": object()})
+
+    client = TestClient(worker_main.app)
+    first = client.post("/drain")
+    second = client.post("/drain")
+    rejected = client.post(
+        "/jobs",
+        json={"job_id": "job-1", "smiles": "CCO", "canonical_smiles": "CCO", "steps": 300},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["active_jobs"] == 1
+    assert first.json()["worker_instance_id"] == worker_main.worker_instance_id
+    assert rejected.status_code == 503
+    assert rejected.json()["detail"] == "monomer MD worker is draining for deployment"
+
+    resumed = client.post("/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "ready"
+    assert resumed.json()["accepting_jobs"] is False
+    assert resumed.json()["active_jobs"] == 1
+
+
+def test_health_accepting_jobs_respects_capacity(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, app_postgres_dsn=None, max_active_jobs=1)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "recovery_ready", True)
+    monkeypatch.setattr(worker_main, "draining", False)
+    monkeypatch.setattr(worker_main, "active_jobs", {"busy-job": object()})
+
+    response = worker_main._build_health_response()
+
+    assert response.accepting_jobs is False
+    assert response.active_jobs == 1
+    assert response.max_active_jobs == 1
+
+
+def test_terminal_persistence_stops_when_database_is_already_terminal(monkeypatch):
+    calls = []
+
+    async def fake_update(*args, **kwargs):
+        calls.append((args, kwargs))
+        return JobUpdateResult.ALREADY_TERMINAL
+
+    monkeypatch.setattr(worker_main, "_safe_update_status", fake_update)
+
+    assert asyncio.run(worker_main._persist_terminal_status("job-1", "completed")) is True
+    assert len(calls) == 1
+
+
+def test_terminal_persistence_stops_when_database_row_is_missing(monkeypatch):
+    calls = []
+
+    async def fake_update(*args, **kwargs):
+        calls.append((args, kwargs))
+        return JobUpdateResult.MISSING
+
+    monkeypatch.setattr(worker_main, "_safe_update_status", fake_update)
+
+    assert asyncio.run(worker_main._persist_terminal_status("job-1", "failed")) is True
+    assert len(calls) == 1
+
+
+def test_terminal_persistence_retries_database_failure(monkeypatch):
+    results = iter((None, JobUpdateResult.UPDATED))
+    calls = []
+
+    async def fake_update(*args, **kwargs):
+        calls.append((args, kwargs))
+        return next(results)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(worker_main, "_safe_update_status", fake_update)
+    monkeypatch.setattr(worker_main.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(worker_main, "shutting_down", False)
+
+    assert asyncio.run(worker_main._persist_terminal_status("job-1", "completed")) is True
+    assert len(calls) == 2
+
+
+def test_health_reports_capacity_instance_and_lease(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, app_postgres_dsn=None, max_active_jobs=2)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "recovery_ready", True)
+    monkeypatch.setattr(worker_main, "draining", False)
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+
+    response = worker_main._build_health_response()
+
+    assert response.max_active_jobs == 2
+    assert response.worker_instance_id == worker_main.worker_instance_id
+    assert response.accepting_jobs is True
+    assert response.draining is False
+    assert response.lease_seconds == 90
+
+
+def test_recovery_reconciles_previous_worker_instance(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, app_postgres_dsn="postgresql://db/app")
+
+    class RecoveringRepository:
+        def __init__(self):
+            self.instances = []
+
+        def reconcile_orphaned_jobs(self, instance_id):
+            self.instances.append(instance_id)
+            return 1
+
+    fake_repository = RecoveringRepository()
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "repository", fake_repository)
+    monkeypatch.setattr(worker_main, "recovery_ready", False)
+
+    recovered = asyncio.run(worker_main._attempt_recovery())
+
+    assert recovered is True
+    assert worker_main.recovery_ready is True
+    assert fake_repository.instances == [worker_main.worker_instance_id]
+
+
+def test_heartbeat_renews_active_instance_jobs(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path, app_postgres_dsn="postgresql://db/app")
+    calls = []
+
+    class HeartbeatRepository:
+        def heartbeat(self, job_ids, instance_id):
+            calls.append((job_ids, instance_id))
+            return len(job_ids)
+
+    sleep_calls = 0
+
+    async def one_iteration(_seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "repository", HeartbeatRepository())
+    monkeypatch.setattr(worker_main, "active_jobs", {"job-1": object()})
+    monkeypatch.setattr(worker_main.asyncio, "sleep", one_iteration)
+
+    try:
+        asyncio.run(worker_main._heartbeat_loop())
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("heartbeat loop did not stop after the test iteration")
+
+    assert calls == [(["job-1"], worker_main.worker_instance_id)]
