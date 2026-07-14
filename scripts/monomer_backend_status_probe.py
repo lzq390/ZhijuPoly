@@ -156,8 +156,26 @@ def _failure_label(failure: ProbeFailure) -> str:
         "network_error": "network error",
         "response_too_large": "response exceeded 64 KiB",
         "timeout": "request timed out",
+        "transport_unavailable": "Transport runtime reported unavailable",
         "unavailable": "status reported unavailable",
     }.get(failure.kind, "probe failed")
+
+
+def transport_is_ready(status: dict[str, object]) -> bool:
+    """Return whether the status contains the strict Transport-ready contract."""
+
+    protocols = status.get("protocols")
+    if not isinstance(protocols, dict):
+        return False
+    transport = protocols.get("Transport")
+    if not isinstance(transport, dict):
+        return False
+    return (
+        transport.get("supported") is True
+        and transport.get("runtime_ready") is True
+        and "runtime_error" in transport
+        and transport.get("runtime_error") is None
+    )
 
 
 def probe_status(
@@ -170,8 +188,9 @@ def probe_status(
     sleep: Callable[[float], None] = time.sleep,
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
+    require_transport_ready: bool = False,
 ) -> bool:
-    """Return true once the endpoint reports ``available is true``."""
+    """Return true once the endpoint satisfies the selected readiness contract."""
 
     attempts = retries + 1
     for attempt in range(1, attempts + 1):
@@ -179,6 +198,8 @@ def probe_status(
             status = decode_status(fetch(url, timeout_seconds))
             if status.get("available") is not True:
                 raise ProbeFailure("unavailable")
+            if require_transport_ready and not transport_is_ready(status):
+                raise ProbeFailure("transport_unavailable")
         except ProbeFailure as exc:
             print(
                 f"Monomer-MD status attempt {attempt}/{attempts} failed: "
@@ -205,6 +226,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=int, default=40)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--retry-delay-seconds", type=float, default=2.0)
+    parser.add_argument(
+        "--require-transport-ready",
+        action="store_true",
+        help="require protocols.Transport to satisfy the strict runtime-ready contract",
+    )
     return parser
 
 
@@ -223,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         timeout_seconds=args.timeout_seconds,
         retries=args.retries,
         retry_delay_seconds=args.retry_delay_seconds,
+        require_transport_ready=args.require_transport_ready,
     ) else 1
 
 

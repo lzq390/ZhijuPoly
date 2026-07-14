@@ -28,6 +28,16 @@ sys.modules[SPEC.name] = probe
 SPEC.loader.exec_module(probe)
 
 
+def transport_health(**overrides: object) -> dict[str, object]:
+    health: dict[str, object] = {
+        "supported": True,
+        "runtime_ready": True,
+        "runtime_error": None,
+    }
+    health.update(overrides)
+    return health
+
+
 def status_payload(**overrides: object) -> bytes:
     payload: dict[str, object] = {
         "enabled": True,
@@ -38,13 +48,20 @@ def status_payload(**overrides: object) -> bytes:
         "byteff2_root_exists": True,
         "runtime_ready": True,
         "active_jobs": 0,
+        "protocols": {"Transport": transport_health()},
     }
     payload.update(overrides)
     return json.dumps(payload).encode("utf-8")
 
 
 class ProbeStatusTests(unittest.TestCase):
-    def run_probe(self, fetch, *, retries: int = 3):
+    def run_probe(
+        self,
+        fetch,
+        *,
+        retries: int = 3,
+        require_transport_ready: bool = False,
+    ):
         stdout = io.StringIO()
         stderr = io.StringIO()
         sleeps: list[float] = []
@@ -57,6 +74,7 @@ class ProbeStatusTests(unittest.TestCase):
             sleep=sleeps.append,
             stdout=stdout,
             stderr=stderr,
+            require_transport_ready=require_transport_ready,
         )
         return result, stdout.getvalue(), stderr.getvalue(), sleeps
 
@@ -66,6 +84,7 @@ class ProbeStatusTests(unittest.TestCase):
         )
         self.assertEqual(args.timeout_seconds, 40)
         self.assertEqual(args.retries, 3)
+        self.assertFalse(args.require_transport_ready)
 
 
     def test_first_attempt_succeeds_and_uses_configured_timeout(self):
