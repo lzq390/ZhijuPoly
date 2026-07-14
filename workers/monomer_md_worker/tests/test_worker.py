@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from workers.monomer_md_worker.app import main as worker_main
+from workers.monomer_md_worker.app.byteff2_env import REQUIRED_OPENMM_FILES
 from workers.monomer_md_worker.app.byteff2_formal_runner import ByteFF2FormalRunner
 from workers.monomer_md_worker.app.config import WorkerSettings
 from workers.monomer_md_worker.app.models import JobRequest
@@ -551,19 +552,29 @@ def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
     settings = _settings(tmp_path, mode="real", app_postgres_dsn=None)
     settings.byteff2_root.mkdir()
     object.__setattr__(settings, "byteff2_python", sys.executable)
+    openmm_dir = tmp_path / "openmm"
+    for relative_path in REQUIRED_OPENMM_FILES:
+        path = openmm_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    object.__setattr__(settings, "byteff2_openmm_dir", openmm_dir)
     run_md = settings.byteff2_root / "example" / "4_MD_simulations" / "run_md.py"
     run_md.parent.mkdir(parents=True)
     run_md.write_text(
         "\n".join(
             [
-                "import argparse, json, pathlib",
+                "import argparse, json, os, pathlib",
                 "parser = argparse.ArgumentParser()",
                 "parser.add_argument('--config')",
                 "args = parser.parse_args()",
                 "config = json.loads(pathlib.Path(args.config).read_text())",
                 "out = pathlib.Path(config['output_dir'])",
                 "out.mkdir(parents=True, exist_ok=True)",
-                "(out / 'density_results.json').write_text(json.dumps({'density': 1.02, 'density_std': 0.01}))",
+                "(out / 'density_results.json').write_text(json.dumps({"
+                "'density': 1.02, 'density_std': 0.01, "
+                "'openmm_dir': os.environ.get('OPENMM_DIR'), "
+                "'openmm_plugin_dir': os.environ.get('OPENMM_PLUGIN_DIR'), "
+                "'ld_library_path': os.environ.get('LD_LIBRARY_PATH')}))",
             ]
         ),
         encoding="utf-8",
@@ -595,6 +606,14 @@ def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
     assert result.completed_steps == 1500000
     assert result.result["summary"]["density"] == 1.02
     assert result.result["metrics"]["density_std"] == 0.01
+    assert result.result["metrics"]["openmm_dir"] == str(openmm_dir)
+    assert result.result["metrics"]["openmm_plugin_dir"] == str(
+        openmm_dir / "lib/plugins"
+    )
+    assert result.result["metrics"]["ld_library_path"].split(":")[:2] == [
+        str(openmm_dir / "lib"),
+        str(openmm_dir / "lib/plugins"),
+    ]
     assert any(
         item["path"] == "outputs/density_results.json"
         for item in result.result["artifact_manifest"]["files"]

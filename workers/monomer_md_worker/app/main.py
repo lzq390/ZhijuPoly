@@ -355,7 +355,9 @@ async def _build_health_response() -> HealthResponse:
             )
     worker_status = "ok"
     if settings.mode == "real" and (
-        not byteff2_root_exists or not settings.db_configured or not runtime_ready
+        not runtime_snapshot.byteff2_root_exists
+        or not settings.db_configured
+        or not runtime_snapshot.runtime_ready
     ):
         worker_status = "degraded"
     if settings.db_configured and not recovery_ready:
@@ -382,9 +384,9 @@ async def _build_health_response() -> HealthResponse:
         python_executable=runtime_identity.python_executable,
         db_configured=settings.db_configured,
         byteff2_root=str(settings.byteff2_root),
-        byteff2_root_exists=byteff2_root_exists,
-        runtime_ready=runtime_ready,
-        runtime_error=runtime_error,
+        byteff2_root_exists=runtime_snapshot.byteff2_root_exists,
+        runtime_ready=runtime_snapshot.runtime_ready,
+        runtime_error=runtime_snapshot.runtime_error,
         job_root=str(settings.job_root),
         active_jobs=len(active_jobs),
         max_active_jobs=settings.max_active_jobs,
