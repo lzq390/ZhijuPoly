@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from workers.monomer_md_worker.app import byteff2_formal_runner as formal_runner_module
 from workers.monomer_md_worker.app import main as worker_main
+from workers.monomer_md_worker.app import process_control
 from workers.monomer_md_worker.app.byteff2_env import REQUIRED_OPENMM_FILES
 from workers.monomer_md_worker.app.byteff2_formal_runner import ByteFF2FormalRunner
 from workers.monomer_md_worker.app.config import WorkerSettings
@@ -621,8 +623,11 @@ def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
     )
 
 
-def test_formal_runner_cancellation_terminates_process_group(tmp_path: Path):
+def test_formal_runner_cancellation_terminates_process_group(
+    tmp_path: Path, monkeypatch
+):
     settings = _settings(tmp_path, mode="real", app_postgres_dsn=None)
+    _install_short_process_group_grace(monkeypatch)
     settings.byteff2_root.mkdir()
     object.__setattr__(settings, "byteff2_python", sys.executable)
     run_md = settings.byteff2_root / "example" / "4_MD_simulations" / "run_md.py"

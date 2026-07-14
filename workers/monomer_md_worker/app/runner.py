@@ -601,6 +601,7 @@ class MonomerMdRunner:
                 stderr=stderr,
                 start_new_session=True,
             )
+            process_group_id = process.pid
             try:
                 return_code = await wait_for_process_group(
                     process,
@@ -612,7 +613,9 @@ class MonomerMdRunner:
                     f"ByteFF2 density demo timed out after {self._settings.timeout_seconds}s"
                 ) from exc
             except asyncio.CancelledError:
-                await terminate_process_group(process)
+                await terminate_process_group(
+                    process, process_group_id=process_group_id
+                )
                 raise
 
         if return_code != 0:

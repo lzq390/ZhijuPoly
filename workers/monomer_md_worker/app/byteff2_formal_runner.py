@@ -91,6 +91,7 @@ class ByteFF2FormalRunner:
                 stdout=stdout,
                 stderr=stderr,
             )
+            process_group_id = process.pid
             try:
                 return_code = await wait_for_process_group(
                     process,

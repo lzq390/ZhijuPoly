@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from workers.monomer_md_worker.app import process_control
+from workers.monomer_md_worker.app import runner as runner_module
 from workers.monomer_md_worker.app.byteff2_env import REQUIRED_OPENMM_FILES
 from workers.monomer_md_worker.app.config import WorkerSettings
 from workers.monomer_md_worker.app.models import JobRequest
@@ -51,6 +53,56 @@ def _settings(tmp_path: Path) -> WorkerSettings:
     )
 
 
+def _install_short_process_group_grace(monkeypatch) -> None:
+    async def terminate_quickly(process, *, process_group_id: int) -> None:
+        await process_control.terminate_process_group(
+            process,
+            process_group_id=process_group_id,
+            grace_seconds=0.1,
+        )
+
+    monkeypatch.setattr(runner_module, "terminate_process_group", terminate_quickly)
+
+
+def _write_stubborn_process_tree(
+    script: Path, leader_pid_path: Path, grandchild_pid_path: Path
+) -> None:
+    grandchild_source = "\n".join(
+        [
+            "import os, pathlib, signal, time",
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+            (
+                f"pathlib.Path({str(grandchild_pid_path)!r})"
+                ".write_text(str(os.getpid()))"
+            ),
+            "time.sleep(60)",
+        ]
+    )
+    script.write_text(
+        "\n".join(
+            [
+                "import os, pathlib, subprocess, sys, time",
+                (
+                    f"pathlib.Path({str(leader_pid_path)!r})"
+                    ".write_text(str(os.getpid()))"
+                ),
+                f"subprocess.Popen([sys.executable, '-c', {grandchild_source!r}])",
+                "time.sleep(60)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _assert_process_stopped(pid: int) -> None:
+    process_state = Path(f"/proc/{pid}/stat")
+    try:
+        state = process_state.read_text(encoding="utf-8").split()[2]
+    except FileNotFoundError:
+        return
+    assert state == "Z"
+
+
 def test_dry_run_result_has_frontend_shape(tmp_path: Path):
     runner = MonomerMdRunner(_settings(tmp_path))
     request = JobRequest(job_id="job-1", smiles="CCO", canonical_smiles="CCO", steps=300)
@@ -86,6 +138,8 @@ def test_real_density_runner_receives_openmm_environment(tmp_path: Path, monkeyp
     captured_env = {}
 
     class CompletedProcess:
+        pid = 12345
+
         async def wait(self):
             return 0
 
@@ -119,21 +173,17 @@ def test_real_density_runner_receives_openmm_environment(tmp_path: Path, monkeyp
     ]
 
 
-def test_real_demo_cancellation_terminates_process_group(tmp_path: Path):
+def test_real_demo_cancellation_terminates_stubborn_process_group(
+    tmp_path: Path, monkeypatch
+):
     settings = _settings(tmp_path)
     object.__setattr__(settings, "mode", "real")
     settings.byteff2_root.mkdir()
+    _install_short_process_group_grace(monkeypatch)
     pid_path = tmp_path / "demo-child.pid"
     grandchild_pid_path = tmp_path / "demo-grandchild.pid"
     script = tmp_path / "slow_demo.py"
-    script.write_text(
-        "import os, pathlib, subprocess, sys, time\n"
-        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
-        "grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
-        f"pathlib.Path({str(grandchild_pid_path)!r}).write_text(str(grandchild.pid))\n"
-        "time.sleep(60)\n",
-        encoding="utf-8",
-    )
+    _write_stubborn_process_tree(script, pid_path, grandchild_pid_path)
     object.__setattr__(
         settings, "byteff2_demo_command", f"{sys.executable} {script}"
     )
@@ -159,9 +209,36 @@ def test_real_demo_cancellation_terminates_process_group(tmp_path: Path):
 
     child_pid, grandchild_pid = asyncio.run(scenario())
     for pid in (child_pid, grandchild_pid):
-        process_state = Path(f"/proc/{pid}/stat")
-        if process_state.exists():
-            assert process_state.read_text(encoding="utf-8").split()[2] == "Z"
+        _assert_process_stopped(pid)
+
+
+def test_real_demo_timeout_terminates_stubborn_process_group(
+    tmp_path: Path, monkeypatch
+):
+    settings = _settings(tmp_path)
+    object.__setattr__(settings, "mode", "real")
+    object.__setattr__(settings, "timeout_seconds", 1)
+    settings.byteff2_root.mkdir()
+    _install_short_process_group_grace(monkeypatch)
+    pid_path = tmp_path / "timeout-demo-child.pid"
+    grandchild_pid_path = tmp_path / "timeout-demo-grandchild.pid"
+    script = tmp_path / "timeout_demo.py"
+    _write_stubborn_process_tree(script, pid_path, grandchild_pid_path)
+    object.__setattr__(
+        settings, "byteff2_demo_command", f"{sys.executable} {script}"
+    )
+    runner = MonomerMdRunner(settings)
+    request = JobRequest(
+        job_id="timeout-demo", smiles="CCO", canonical_smiles="CCO", steps=1000
+    )
+
+    with pytest.raises(RuntimeError, match="density demo timed out after 1s"):
+        asyncio.run(runner.run(request, 1000))
+
+    assert pid_path.exists()
+    assert grandchild_pid_path.exists()
+    for pid_path_to_check in (pid_path, grandchild_pid_path):
+        _assert_process_stopped(int(pid_path_to_check.read_text(encoding="utf-8")))
 
 
 def test_byteff2_adapter_does_not_use_formal_run_md_as_demo_entry(tmp_path: Path):

@@ -182,6 +182,11 @@ async def wait_for_process_group(
         )
 
 
+MAX_TERMINATION_GRACE_SECONDS = 10.0
+PROCESS_GROUP_POLL_SECONDS = 0.05
+PROCESS_GROUP_KILL_OBSERVE_SECONDS = 1.0
+
+
 async def terminate_process_group(
     process: asyncio.subprocess.Process,
     *,
