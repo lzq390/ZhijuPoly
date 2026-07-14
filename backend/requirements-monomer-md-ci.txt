@@ -4,10 +4,13 @@ python-dotenv==1.0.1
 requests==2.32.5
 psycopg[binary]>=3.2,<4
 numpy<2
+pandas==2.2.3
 rdkit==2023.9.1
 pytest==8.3.4
+pytest-asyncio==0.25.3
 httpx
 openai==2.36.0
 joblib==1.5.3
+scikit-learn==1.8.0
 python-multipart==0.0.20
 sentencepiece>=0.2,<1
