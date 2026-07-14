@@ -1,0 +1,580 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Run the one-time bootstrap for the current main commit
+        required: true
+        type: choice
+        options:
+          - bootstrap
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  POSTGRES_IMAGE: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+
+jobs:
+  resolve-sha:
+    name: Resolve immutable candidate SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      candidate_sha: ${{ steps.resolve.outputs.candidate_sha }}
+    steps:
+      - id: resolve
+        name: Resolve and validate event SHA
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_REF: ${{ github.ref }}
+          DISPATCH_OPERATION: ${{ inputs.operation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request)
+              [[ "$EVENT_REF" == refs/pull/*/merge ]] || {
+                echo "pull_request must resolve through its merge ref" >&2
+                exit 1
+              }
+              candidate_sha="$EVENT_SHA"
+              ;;
+            push)
+              candidate_sha="$EVENT_SHA"
+              ;;
+            workflow_dispatch)
+              [[ "$EVENT_REF" == refs/heads/main ]] || {
+                echo "bootstrap must be dispatched from main" >&2
+                exit 1
+              }
+              [[ "$DISPATCH_OPERATION" == bootstrap ]] || {
+                echo "workflow_dispatch supports only the bootstrap operation" >&2
+                exit 1
+              }
+              candidate_sha="$EVENT_SHA"
+              ;;
+            *)
+              echo "unsupported event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "event did not resolve to a full immutable SHA" >&2
+            exit 1
+          }
+          echo "candidate_sha=$candidate_sha" >>"$GITHUB_OUTPUT"
+
+  policy:
+    name: Workflow, shell, compose, dependency, and migration policy
+    needs: resolve-sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Set up Go for actionlint
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+      - name: Validate the single GitHub Actions workflow
+        run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          python3 scripts/ci/validate_workflows.py
+      - name: Validate every tracked shell script
+        run: |
+          git ls-files -z -- '*.sh' | xargs -0 --no-run-if-empty -n1 bash -n
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          git ls-files -z -- '*.sh' | xargs -0 --no-run-if-empty shellcheck --severity=error
+      - name: Verify deterministic backend test coverage
+        run: python3 scripts/ci/backend_test_shards.py --shards 3 --verify
+      - name: Validate migration governance
+        working-directory: backend
+        run: python3 -m app.migration_policy
+      - name: Validate hashed dependency locks and GPU runtime split
+        run: python3 scripts/ci/validate_dependency_locks.py
+      - name: Validate Compose configurations
+        env:
+          NEXPOLY_BACKEND_IMAGE: ghcr.io/lzq390/nexpoly-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          NEXPOLY_WEB_IMAGE: ghcr.io/lzq390/nexpoly-web@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          NEXPOLY_POSTGRES_PASSWORD: ci-not-a-production-secret
+          NEXPOLY_ASSET_ROOT: /tmp/nexpoly-assets
+          NEXPOLY_APP_ENV_FILE: /tmp/nexpoly-app.env
+          APP_POSTGRES_DSN: postgresql://nexpoly:ci-only@lab-postgres:5432/nexpoly
+          PI_POSTGRES_DSN: postgresql://nexpoly:ci-only@lab-postgres:5432/nexpoly
+          LAB_DATA_POSTGRES_DSN: postgresql://nexpoly:ci-only@lab-postgres:5432/nexpoly
+          BYTEFF2_ROOT: /tmp/byteff2
+          POLYTAO_ENABLED: "true"
+        run: |
+          install -m 600 /dev/null "$NEXPOLY_APP_ENV_FILE"
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+          docker compose -f docker-compose.monomer-md-worker.yml config --quiet
+
+  script-tests:
+    name: Release and deployment script tests
+    needs: resolve-sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Run all script tests
+        run: |
+          bash -n scripts/deploy_server.sh
+          bash -n scripts/ci/remote_release.sh
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+
+  backend-tests:
+    name: Backend tests (shard ${{ matrix.shard }})
+    needs: resolve-sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: nexpoly_ci
+          POSTGRES_PASSWORD: nexpoly_ci
+          POSTGRES_DB: nexpoly_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexpoly_ci -d nexpoly_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_POSTGRES_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
+      PI_POSTGRES_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
+      LAB_DATA_POSTGRES_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
+      STRUCTURED_DATA_BACKEND: postgres
+      PYTHONPATH: backend
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-ci.lock
+      - name: Install locked backend CI dependencies
+        run: python -m pip install --require-hashes -r backend/requirements-ci.lock
+      - name: Run shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mapfile -t tests < <(python3 scripts/ci/backend_test_shards.py --shards 3 --shard "$SHARD")
+          [[ "${#tests[@]}" -gt 0 ]]
+          python -m pytest "${tests[@]}"
+
+  frontend:
+    name: Frontend Vitest and build
+    needs: resolve-sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Run Vitest
+        working-directory: frontend
+        run: npm test
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  worker-tests:
+    name: Monomer-MD Worker tests
+    needs: resolve-sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: workers/monomer_md_worker/requirements-ci.lock
+      - name: Install locked Worker dependencies
+        run: python -m pip install --require-hashes -r workers/monomer_md_worker/requirements-ci.lock
+      - name: Run Worker tests
+        run: python -m pytest workers/monomer_md_worker/tests
+
+  image-build:
+    name: Build ${{ matrix.name }} image without publishing
+    if: github.event_name == 'pull_request'
+    needs: resolve-sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            file: Dockerfile
+            cache_scope: backend
+            lock_pattern: backend/requirements*.lock
+          - name: web
+            file: frontend/Dockerfile
+            cache_scope: web
+            lock_pattern: frontend/package-lock.json
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64
+          push: false
+          build-args: |
+            SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          cache-from: type=gha,scope=ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}
+
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs:
+      - resolve-sha
+      - policy
+      - script-tests
+      - backend-tests
+      - frontend
+      - worker-tests
+      - image-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every applicable CI job to succeed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          event_name = os.environ["EVENT_NAME"]
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          failures = {}
+          for name, value in needs.items():
+              result = value["result"]
+              if result == "success":
+                  continue
+              if name == "image-build" and event_name != "pull_request" and result == "skipped":
+                  continue
+              failures[name] = result
+          if failures:
+              raise SystemExit(f"CI gate failed: {failures}")
+          print("all applicable CI jobs succeeded")
+          PY
+
+  release:
+    name: Build, smoke, package, and deploy current main
+    if: >-
+      needs.ci-gate.result == 'success' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [resolve-sha, ci-gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: nexpoly-production
+    concurrency:
+      group: nexpoly-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out release SHA
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Resolve reviewed release input
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_SHA: ${{ needs.resolve-sha.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/validate_workflows.py
+          {
+            echo "RELEASE_SHA=$RELEASE_SHA"
+            if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+              echo "DEPLOY_MODE=bootstrap"
+            else
+              echo "DEPLOY_MODE=auto"
+            fi
+          } >>"$GITHUB_ENV"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to private GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: backend
+        name: Build and push Backend once
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/lzq390/nexpoly-backend:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.resolve-sha.outputs.candidate_sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          build-args: |
+            SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          cache-from: type=gha,scope=release-backend-${{ hashFiles('backend/requirements*.lock') }}
+          cache-to: type=gha,mode=max,scope=release-backend-${{ hashFiles('backend/requirements*.lock') }}
+          provenance: false
+      - id: web
+        name: Build and push Web once
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/lzq390/nexpoly-web:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.resolve-sha.outputs.candidate_sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          build-args: |
+            SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          cache-from: type=gha,scope=release-web-${{ hashFiles('frontend/package-lock.json') }}
+          cache-to: type=gha,mode=max,scope=release-web-${{ hashFiles('frontend/package-lock.json') }}
+          provenance: false
+      - name: Record immutable image references
+        env:
+          BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$BACKEND_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "BACKEND_IMAGE=ghcr.io/lzq390/nexpoly-backend@${BACKEND_DIGEST}"
+            echo "WEB_IMAGE=ghcr.io/lzq390/nexpoly-web@${WEB_DIGEST}"
+          } >>"$GITHUB_ENV"
+      - name: Smoke the exact published image digests
+        run: |
+          set -euo pipefail
+          network="nexpoly-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          postgres="${network}-postgres"
+          backend="${network}-backend"
+          web="${network}-web"
+          web_html="/tmp/${network}.html"
+          cleanup() {
+            docker rm -f "$web" "$backend" "$postgres" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+            rm -f "$web_html"
+          }
+          trap cleanup EXIT
+          docker network create "$network"
+          docker run -d --name "$postgres" --network "$network" --network-alias postgres \
+            -e POSTGRES_USER=nexpoly -e POSTGRES_PASSWORD=nexpoly -e POSTGRES_DB=nexpoly \
+            "$POSTGRES_IMAGE"
+          for _ in {1..30}; do
+            docker exec "$postgres" pg_isready -U nexpoly -d nexpoly && break
+            sleep 2
+          done
+          docker exec "$postgres" pg_isready -U nexpoly -d nexpoly
+          common_env=(
+            -e APP_POSTGRES_DSN=postgresql://nexpoly:nexpoly@postgres:5432/nexpoly
+            -e PI_POSTGRES_DSN=postgresql://nexpoly:nexpoly@postgres:5432/nexpoly
+            -e LAB_DATA_POSTGRES_DSN=postgresql://nexpoly:nexpoly@postgres:5432/nexpoly
+            -e MODEL_ENABLED=false -e OCSR_ENABLED=false -e GEN_MODEL_ENABLED=false
+            -e POLYTAO_ENABLED=false -e RETRO_MODEL_ENABLED=false -e MONOMER_MD_SUBMIT_ENABLED=false
+          )
+          docker run --rm --network "$network" "${common_env[@]}" "$BACKEND_IMAGE" \
+            python -m app.postgres_migrations --mode bootstrap-expand
+          docker run --rm --network "$network" "${common_env[@]}" "$BACKEND_IMAGE" \
+            python -m app.postgres_preflight --mode schema --strict
+          docker run -d --name "$backend" --network "$network" --network-alias backend \
+            -p 127.0.0.1:18000:8000 "${common_env[@]}" "$BACKEND_IMAGE"
+          for _ in {1..60}; do
+            curl --fail --silent --show-error http://127.0.0.1:18000/health >/dev/null && break
+            sleep 2
+          done
+          curl --fail --silent --show-error http://127.0.0.1:18000/health >/dev/null
+          docker run -d --name "$web" --network "$network" -p 127.0.0.1:18080:80 "$WEB_IMAGE"
+          for _ in {1..30}; do
+            curl --fail --silent --show-error http://127.0.0.1:18080/ >/dev/null && break
+            sleep 2
+          done
+          curl --fail --silent --show-error http://127.0.0.1:18080/ -o "$web_html"
+          asset_path="$(grep -Eo '(src|href)="/assets/[^"?]+' "$web_html" | head -n1 | cut -d'"' -f2)"
+          [[ "$asset_path" == /assets/* ]]
+          curl --fail --silent --show-error "http://127.0.0.1:18080${asset_path}" >/dev/null
+      - name: Set up Python for the offline Worker wheelhouse
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: workers/monomer_md_worker/requirements.lock
+      - name: Build and verify the release bundle and manifest
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 700 dist
+          bundle="dist/nexpoly-release-${RELEASE_SHA}.tar.gz"
+          staging="$(mktemp -d)"
+          trap 'rm -rf "$staging"' EXIT
+          git archive --format=tar "$RELEASE_SHA" -- . \
+            ':(exclude)model/**' ':(exclude)database/**' ':(exclude)backend/data/**' \
+            | tar -C "$staging" -xf -
+          install -d -m 700 "$staging/wheelhouse"
+          python -m pip download --require-hashes --only-binary=:all: \
+            --dest "$staging/wheelhouse" -r workers/monomer_md_worker/requirements.lock
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -C "$staging" -czf "$bundle" .
+          tar -tzf "$bundle" >/dev/null
+          migration_args=()
+          while IFS=: read -r name kind; do
+            [[ "$kind" == baseline ]] || migration_args+=(--migration "${name}:${kind}")
+          done < <(python3 - <<'PY'
+          import json
+
+          with open("backend/migrations/postgres/manifest.json", encoding="utf-8") as source:
+              for migration in json.load(source)["migrations"]:
+                  print(f"{migration['version']}:{migration['kind']}")
+          PY
+          )
+          python3 scripts/release_controller.py build-manifest \
+            --sha "$RELEASE_SHA" \
+            --ci-run-id "$GITHUB_RUN_ID" \
+            --backend-image "$BACKEND_IMAGE" \
+            --web-image "$WEB_IMAGE" \
+            --release-bundle "$bundle" \
+            --release-input release-input.json \
+            "${migration_args[@]}" \
+            --output dist/release-manifest.json
+          python3 scripts/release_controller.py verify-manifest \
+            --manifest dist/release-manifest.json --sha "$RELEASE_SHA"
+      - id: freshness
+        name: Reconfirm that this SHA is still current main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_main="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])')"
+          [[ "$current_main" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$current_main" != "$RELEASE_SHA" ]]; then
+            echo "Release $RELEASE_SHA is superseded by main $current_main; deployment skipped." >>"$GITHUB_STEP_SUMMARY"
+            echo "superseded=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "superseded=false" >>"$GITHUB_OUTPUT"
+          fi
+      - id: deployment-gate
+        name: Resolve automatic deployment gate
+        if: steps.freshness.outputs.superseded == 'false'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          AUTODEPLOY_ENABLED: ${{ vars.NEXPOLY_AUTODEPLOY_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            echo "enabled=true" >>"$GITHUB_OUTPUT"
+          elif [[ "$AUTODEPLOY_ENABLED" == true ]]; then
+            echo "enabled=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >>"$GITHUB_OUTPUT"
+            echo "Images and the release bundle passed smoke, but NEXPOLY_AUTODEPLOY_ENABLED is not true; production was not changed." >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Deploy bundle over pinned-host-key SSH
+        if: >-
+          steps.freshness.outputs.superseded == 'false' &&
+          steps.deployment-gate.outputs.enabled == 'true'
+        env:
+          NEXPOLY_RELEASE_SHA: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          NEXPOLY_SSH_HOST: ${{ secrets.NEXPOLY_SSH_HOST }}
+          NEXPOLY_SSH_USER: ${{ secrets.NEXPOLY_SSH_USER }}
+          NEXPOLY_SSH_PRIVATE_KEY: ${{ secrets.NEXPOLY_SSH_PRIVATE_KEY }}
+          NEXPOLY_SSH_KNOWN_HOSTS: ${{ secrets.NEXPOLY_SSH_KNOWN_HOSTS }}
+          NEXPOLY_SSH_PORT: ${{ vars.NEXPOLY_SSH_PORT }}
+          NEXPOLY_PRODUCTION_ROOT: /data/lzq/gith/nexpoly
+        run: |
+          set -euo pipefail
+          scripts/ci/remote_release.sh "$DEPLOY_MODE" \
+            dist/release-manifest.json \
+            "dist/nexpoly-release-${NEXPOLY_RELEASE_SHA}.tar.gz"
