@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import sys
 
+from psycopg.errors import DependentObjectsStillExist
 import pytest
 
 from app import postgres_preflight
@@ -20,7 +21,11 @@ from app.import_postgres import (
 )
 from app.model_asset_manifest import iter_model_asset_specs
 from app.postgres_database import postgres_connection
-from app.postgres_migrations import migration_checksum
+from app.postgres_migrations import (
+    MIGRATIONS_DIR,
+    apply_postgres_migrations,
+    migration_checksum,
+)
 from app.services.online_knowledge.postgres_history_repository import save_online_history_postgres
 from app.services.postgres_database_browser import get_database_analytics_postgres
 
@@ -341,7 +346,7 @@ def test_strict_runtime_preflight_passes_after_migrations(tmp_path: Path, postgr
     monkeypatch.setattr(
         postgres_preflight,
         "_analytics_snapshot_report",
-        lambda connection: {"generated_at": "fixture", "comparisons": {}, "warnings": []},
+        lambda connection: {"generated_at": "fixture", "source": "postgres", "comparisons": {}, "warnings": []},
     )
 
     report = postgres_preflight.run_preflight(settings, dsn=postgres_dsn, mode="runtime", strict=True)
@@ -354,13 +359,193 @@ def test_strict_runtime_preflight_passes_after_migrations(tmp_path: Path, postgr
     assert report["migrations"]["missing"] == []
 
 
+def test_strict_runtime_preflight_requires_matching_snapshot_source_sha(
+    tmp_path: Path,
+    postgres_dsn: str,
+    monkeypatch,
+) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    monkeypatch.setattr(
+        postgres_preflight,
+        "_analytics_snapshot_report",
+        lambda connection: {
+            "generated_at": "fixture",
+            "source_sha": "a" * 40,
+            "source": "postgres",
+            "comparisons": {},
+            "warnings": [],
+        },
+    )
+
+    report = postgres_preflight.run_preflight(
+        settings,
+        dsn=postgres_dsn,
+        mode="runtime",
+        strict=True,
+        expected_source_sha="b" * 40,
+    )
+
+    assert report["strict_ok"] is False
+    assert "Postgres analytics snapshot source SHA does not match the running release" in report["strict_errors"]
+
+
+def test_strict_runtime_preflight_requires_postgres_analytics_snapshot(
+    tmp_path: Path,
+    postgres_dsn: str,
+) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+
+    report = postgres_preflight.run_preflight(
+        settings,
+        dsn=postgres_dsn,
+        mode="runtime",
+        strict=True,
+    )
+
+    assert report["analytics_snapshot"]["source"] == "postgres-missing"
+    assert report["strict_ok"] is False
+    assert "Required Postgres analytics snapshot is missing or invalid" in report["strict_errors"]
+
+
+def test_polytao_database_contract_is_applied(postgres_dsn: str) -> None:
+    with postgres_connection(postgres_dsn) as connection:
+        table = connection.execute(
+            "SELECT to_regclass('generation.polytao_jobs') AS relation"
+        ).fetchone()["relation"]
+        schema = connection.execute(
+            "SELECT to_regnamespace('generation') AS namespace"
+        ).fetchone()["namespace"]
+
+    assert table is None
+    assert schema is None
+
+
+def test_bootstrap_expand_defers_trailing_contract_and_schema_preflight_passes(
+    tmp_path: Path,
+    postgres_dsn: str,
+    monkeypatch,
+) -> None:
+    """The first controller cutover may deploy 0009-0011 before approving 0012."""
+
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    version = "0012_drop_polytao_jobs"
+    monkeypatch.setattr(
+        postgres_preflight,
+        "_analytics_snapshot_report",
+        lambda connection: {"generated_at": "fixture", "source": "postgres", "comparisons": {}, "warnings": []},
+    )
+
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute(
+            "DELETE FROM governance.schema_migrations WHERE version >= %s",
+            ("0009_monomer_md_job_leases",),
+        )
+
+    try:
+        results = apply_postgres_migrations(
+            postgres_dsn,
+            allowed_kinds={"baseline", "expand"},
+            defer_trailing_contracts=True,
+        )
+        newly_applied = {result.version for result in results if result.applied}
+        assert newly_applied == {
+            "0009_monomer_md_job_leases",
+            "0010_deployment_control",
+            "0011_monomer_md_demo_steps",
+        }
+        deferred = next(result for result in results if result.version == version)
+        assert deferred.applied is False
+
+        with postgres_connection(postgres_dsn) as connection:
+            recorded = {
+                str(row["version"])
+                for row in connection.execute(
+                    "SELECT version FROM governance.schema_migrations WHERE version >= %s",
+                    ("0009_monomer_md_job_leases",),
+                ).fetchall()
+            }
+        assert recorded == newly_applied
+
+        report = postgres_preflight.run_preflight(
+            settings,
+            dsn=postgres_dsn,
+            mode="schema",
+            strict=True,
+        )
+        assert report["status"] == "ok"
+        assert report["strict_ok"] is True
+        assert report["strict_errors"] == []
+        assert report["migrations"]["missing"] == []
+        assert report["migrations"]["pending_contracts"] == [version]
+    finally:
+        apply_postgres_migrations(
+            postgres_dsn,
+            allowed_kinds={"expand", "contract"},
+        )
+
+
+def test_polytao_contract_rolls_back_when_generation_schema_is_not_empty(
+    postgres_dsn: str,
+) -> None:
+    version = "0012_drop_polytao_jobs"
+    checksum = migration_checksum(MIGRATIONS_DIR / f"{version}.sql")
+
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute(
+            "DELETE FROM governance.schema_migrations WHERE version = %s",
+            (version,),
+        )
+        connection.execute("CREATE SCHEMA generation")
+        connection.execute("CREATE TABLE generation.polytao_jobs (job_id text PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE generation.unrelated_runtime_data (id integer PRIMARY KEY)"
+        )
+
+    try:
+        with pytest.raises(DependentObjectsStillExist):
+            apply_postgres_migrations(
+                postgres_dsn,
+                allowed_kinds={"expand", "contract"},
+            )
+
+        with postgres_connection(postgres_dsn) as connection:
+            state = connection.execute(
+                """
+                SELECT
+                  to_regclass('generation.polytao_jobs') AS jobs_table,
+                  to_regclass('generation.unrelated_runtime_data') AS unrelated_table,
+                  EXISTS (
+                    SELECT 1
+                    FROM governance.schema_migrations
+                    WHERE version = %s
+                  ) AS migration_recorded
+                """,
+                (version,),
+            ).fetchone()
+
+        assert state["jobs_table"] == "generation.polytao_jobs"
+        assert state["unrelated_table"] == "generation.unrelated_runtime_data"
+        assert state["migration_recorded"] is False
+    finally:
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
+            connection.execute(
+                """
+                INSERT INTO governance.schema_migrations (version, checksum)
+                VALUES (%s, %s)
+                ON CONFLICT (version) DO UPDATE SET checksum = excluded.checksum
+                """,
+                (version, checksum),
+            )
+
+
 def test_strict_runtime_preflight_reports_missing_required_migration(tmp_path: Path, postgres_dsn: str, monkeypatch) -> None:
     settings = _governance_settings(tmp_path, postgres_dsn)
     version = "0003_runtime_postgres_cutover"
     monkeypatch.setattr(
         postgres_preflight,
         "_analytics_snapshot_report",
-        lambda connection: {"generated_at": "fixture", "comparisons": {}, "warnings": []},
+        lambda connection: {"generated_at": "fixture", "source": "postgres", "comparisons": {}, "warnings": []},
     )
 
     with postgres_connection(postgres_dsn) as connection:
@@ -390,11 +575,53 @@ def test_strict_runtime_preflight_reports_missing_required_migration(tmp_path: P
             )
 
 
+def test_analytics_snapshot_failure_isolated_without_static_fallback(monkeypatch) -> None:
+    class FakeTransaction:
+        def __init__(self, connection) -> None:
+            self.connection = connection
+
+        def __enter__(self):
+            self.connection.transaction_entered = True
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> bool:
+            if exc_type is not None:
+                self.connection.aborted = False
+            return False
+
+    class FakeConnection:
+        aborted = False
+        transaction_entered = False
+
+        def transaction(self):
+            return FakeTransaction(self)
+
+    connection = FakeConnection()
+
+    def fail_snapshot_load(_connection):
+        connection.aborted = True
+        raise RuntimeError("snapshot table is unavailable")
+
+    monkeypatch.setattr(
+        "app.services.analytics_snapshot_store.load_analytics_snapshot",
+        fail_snapshot_load,
+    )
+    monkeypatch.setattr(postgres_preflight, "_postgres_count", lambda *_args: 0)
+
+    report = postgres_preflight._analytics_snapshot_report(connection)
+
+    assert connection.transaction_entered is True
+    assert connection.aborted is False
+    assert report["source"] == "postgres-error"
+    assert report["comparisons"] == {}
+    assert report["warnings"]
+
+
 def test_runtime_preflight_cli_exits_nonzero_for_strict_errors(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         postgres_preflight,
         "run_preflight",
-        lambda settings, dsn=None, mode="runtime", strict=False: {
+        lambda settings, dsn=None, mode="runtime", strict=False, expected_source_sha=None: {
             "status": "failed",
             "blockers": ["Required Postgres migration is missing: 0003_runtime_postgres_cutover"],
             "strict_ok": False,
@@ -414,7 +641,7 @@ def test_runtime_preflight_cli_returns_zero_for_ready_report(monkeypatch, capsys
     monkeypatch.setattr(
         postgres_preflight,
         "run_preflight",
-        lambda settings, dsn=None, mode="runtime", strict=False: {"status": "ok", "blockers": [], "strict_ok": True, "strict_errors": []},
+        lambda settings, dsn=None, mode="runtime", strict=False, expected_source_sha=None: {"status": "ok", "blockers": [], "strict_ok": True, "strict_errors": []},
     )
     monkeypatch.setattr(sys, "argv", ["postgres_preflight", "--mode", "runtime", "--strict"])
 

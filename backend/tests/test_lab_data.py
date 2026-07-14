@@ -162,7 +162,30 @@ def make_client_with_fake_lab_data(fake_connection: FakeLabDataConnection) -> Te
         assert dsn == "postgresql://pi-user:pi-pass@example.invalid/nexpoly"
         yield fake_connection
 
+    @contextmanager
+    def fake_deployment_control_connection_factory(dsn: str):
+        assert dsn == "postgresql://pi-user:pi-pass@example.invalid/nexpoly"
+
+        class DeploymentControlConnection:
+            def execute(self, sql: str, params=None) -> FakeCursor:
+                assert "from governance.deployment_control" in " ".join(sql.lower().split())
+                return FakeCursor(
+                    [
+                        {
+                            "drain_enabled": False,
+                            "reason": None,
+                            "release_sha": None,
+                            "activated_at": None,
+                            "activated_by": None,
+                            "updated_at": datetime.now(),
+                        }
+                    ]
+                )
+
+        yield DeploymentControlConnection()
+
     app.state.postgres_connection_factory = fake_connection_factory
+    app.state.deployment_control_connection_factory = fake_deployment_control_connection_factory
     return TestClient(app)
 
 

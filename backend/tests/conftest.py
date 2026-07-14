@@ -159,6 +159,7 @@ def reset_postgres_fixture(dsn: str) -> None:
         connection.execute(
             """
             TRUNCATE
+              governance.database_analytics_snapshots,
               governance.import_batches,
               governance.source_files,
               core.polymer_property_filter_records,
@@ -176,7 +177,6 @@ def reset_postgres_fixture(dsn: str) -> None:
               experimental.process_records,
               experimental.property_records,
               md.monomer_md_jobs,
-              generation.polytao_jobs,
               model_registry.assets
             RESTART IDENTITY CASCADE
             """

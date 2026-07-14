@@ -34,10 +34,7 @@ from app.models import (
     StructurePropertyRecord,
 )
 from app.postgres_database import PostgresUnavailableError
-from app.services.database_analytics_snapshot import (
-    STATIC_DATABASE_ANALYTICS_GENERATED_AT,
-    get_database_analytics_snapshot,
-)
+from app.services.analytics_snapshot_store import load_analytics_snapshot
 from app.services.postgres_database_browser import (
     browse_dft_energy_steps_postgres,
     browse_dft_molecules_postgres,
@@ -288,12 +285,23 @@ def get_dataset_analytics(request: Request, refresh: bool = Query(default=False)
     _require_postgres_browser(request)
 
     if not refresh:
+        settings = request.app.state.settings
+        try:
+            with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+                stored_snapshot = load_analytics_snapshot(connection)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Postgres analytics snapshot is unavailable",
+            ) from exc
+        if stored_snapshot is None:
+            raise HTTPException(status_code=503, detail="Postgres analytics snapshot is missing")
         return DatabaseAnalyticsResponse(
             query_time_ms=(perf_counter() - started_at) * 1000,
             backend="postgres",
             source="snapshot",
-            generated_at=STATIC_DATABASE_ANALYTICS_GENERATED_AT,
-            datasets=get_database_analytics_snapshot(),
+            generated_at=stored_snapshot.generated_at.isoformat(),
+            datasets=stored_snapshot.datasets,
         )
 
     settings = request.app.state.settings
