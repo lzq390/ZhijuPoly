@@ -1,25 +1,109 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 import os
 import json
+import re
 import shutil
 import subprocess
+import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, status
 
 from .config import WorkerSettings, load_settings
 from .formal_protocols import FORMAL_PROTOCOLS
-from .models import ArtifactDeletionResponse, HealthResponse, JobAccepted, JobRequest
-from .repository import PostgresJobRepository
+from .models import ArtifactDeletionResponse, DrainResponse, HealthResponse, JobAccepted, JobRequest
+from .repository import JobUpdateResult, PostgresJobRepository
 from .runner import MonomerMdRunner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("monomer_md_worker")
 
+
+_SOURCE_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_WORKER_MODULE_PATH = Path("workers/monomer_md_worker/app/main.py")
+
+
+@dataclass(frozen=True)
+class RuntimeIdentity:
+    source_sha: str | None
+    source_root: str
+    venv_prefix: str
+    python_executable: str
+
+
+def _load_runtime_identity(
+    *,
+    module_path: Path | None = None,
+    python_prefix: Path | None = None,
+    python_executable: Path | None = None,
+) -> RuntimeIdentity:
+    """Derive release identity from loaded code, never from mutable environment."""
+
+    try:
+        loaded_module = (module_path or Path(__file__)).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("cannot resolve the Monomer MD Worker source") from exc
+    try:
+        source_root = loaded_module.parents[3]
+    except IndexError as exc:
+        raise RuntimeError("Monomer MD Worker source is outside the release layout") from exc
+    if loaded_module != source_root / _WORKER_MODULE_PATH:
+        raise RuntimeError("Monomer MD Worker source has an unexpected layout")
+
+    try:
+        resolved_prefix = (python_prefix or Path(sys.prefix)).resolve(strict=True)
+        resolved_executable = (python_executable or Path(sys.executable)).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("cannot resolve the Monomer MD Worker Python runtime") from exc
+
+    source_sha: str | None = None
+    # Path(__file__).resolve() traverses ops/current and lands in this layout.
+    # Treat every source below an ops/releases tree as production and fail
+    # closed when either the directory, manifest, or release venv is stale.
+    is_release_source = (
+        source_root.parent.name == "releases"
+        and source_root.parent.parent.name == "ops"
+    )
+    if is_release_source:
+        if _SOURCE_SHA_RE.fullmatch(source_root.name) is None:
+            raise RuntimeError("production Worker release directory is not a full source SHA")
+        source_sha = source_root.name
+        manifest_path = source_root / "release-manifest.json"
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            raise RuntimeError("production Worker release manifest is missing or unsafe")
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("production Worker release manifest is unreadable") from exc
+        if not isinstance(manifest, dict) or manifest.get("source_sha") != source_sha:
+            raise RuntimeError("production Worker source SHA differs from its release manifest")
+
+        expected_prefix_path = source_root / "worker-venv"
+        if expected_prefix_path.is_symlink():
+            raise RuntimeError("production Worker release venv must not be a symlink")
+        try:
+            expected_prefix = expected_prefix_path.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError("production Worker release venv is missing") from exc
+        if resolved_prefix != expected_prefix:
+            raise RuntimeError("production Worker is not running from its release venv")
+
+    return RuntimeIdentity(
+        source_sha=source_sha,
+        source_root=str(source_root),
+        venv_prefix=str(resolved_prefix),
+        python_executable=str(resolved_executable),
+    )
+
+
+runtime_identity = _load_runtime_identity()
 settings: WorkerSettings = load_settings()
 repository = PostgresJobRepository(settings)
 runner = MonomerMdRunner(settings)
@@ -27,13 +111,93 @@ semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 active_jobs: dict[str, asyncio.Task[None]] = {}
 active_formal_jobs: set[str] = set()
 active_jobs_lock = asyncio.Lock()
+worker_instance_id = uuid4().hex
+recovery_ready = not settings.db_configured
+draining = False
+shutting_down = False
+heartbeat_task: asyncio.Task[None] | None = None
+recovery_task: asyncio.Task[None] | None = None
 
-app = FastAPI(title="NexPoly Monomer MD Worker", version=settings.worker_version)
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    global heartbeat_task, recovery_task, shutting_down, draining
+    shutting_down = False
+    draining = False
+    if settings.db_configured:
+        await _attempt_recovery()
+        if not recovery_ready:
+            recovery_task = asyncio.create_task(_recovery_loop())
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    try:
+        yield
+    finally:
+        shutting_down = True
+        draining = True
+        for background_task in (heartbeat_task, recovery_task):
+            if background_task is not None:
+                background_task.cancel()
+        tasks = list(active_jobs.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=15,
+                )
+            except asyncio.TimeoutError:
+                logger.error("timed out waiting for active monomer MD tasks during shutdown")
+        if settings.db_configured:
+            try:
+                await asyncio.to_thread(
+                    repository.fail_instance_jobs,
+                    worker_instance_id,
+                    message="Monomer MD worker shut down before this job finished.",
+                    error_category="worker_shutdown",
+                )
+            except Exception:
+                logger.exception("failed to mark active monomer MD jobs during shutdown")
+
+
+app = FastAPI(
+    title="NexPoly Monomer MD Worker",
+    version=settings.worker_version,
+    lifespan=lifespan,
+)
 
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return _build_health_response()
+
+
+@app.post("/drain", response_model=DrainResponse)
+async def drain_worker() -> DrainResponse:
+    global draining
+    draining = True
+    async with active_jobs_lock:
+        active_job_count = len(active_jobs)
+    return DrainResponse(
+        status="draining",
+        accepting_jobs=False,
+        active_jobs=active_job_count,
+        worker_instance_id=worker_instance_id,
+    )
+
+
+@app.post("/resume", response_model=DrainResponse)
+async def resume_worker() -> DrainResponse:
+    global draining
+    draining = False
+    async with active_jobs_lock:
+        active_job_count = len(active_jobs)
+    return DrainResponse(
+        status="ready",
+        accepting_jobs=_build_health_response().accepting_jobs,
+        active_jobs=active_job_count,
+        worker_instance_id=worker_instance_id,
+    )
 
 
 @app.post("/jobs", response_model=JobAccepted, status_code=status.HTTP_202_ACCEPTED)
@@ -50,6 +214,16 @@ async def submit_job(request: JobRequest) -> JobAccepted:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=rejection)
 
     async with active_jobs_lock:
+        if draining:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="monomer MD worker is draining for deployment",
+            )
+        if not recovery_ready:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="monomer MD worker database recovery has not completed",
+            )
         if request.job_id in active_jobs:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -66,14 +240,14 @@ async def submit_job(request: JobRequest) -> JobAccepted:
                 detail="formal ByteFF2 monomer MD capacity is full",
             )
 
-        initial_update_ok = await _safe_update_status(
+        initial_update_result = await _safe_update_status(
             request.job_id,
             "submitted",
             progress_percent=0,
             progress_stage="submitted",
             progress_message="Submitted to the monomer MD worker.",
         )
-        if settings.db_configured and not initial_update_ok:
+        if settings.db_configured and initial_update_result is not JobUpdateResult.UPDATED:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="monomer MD job row is not available for status updates",
@@ -148,9 +322,22 @@ def _build_health_response() -> HealthResponse:
         not byteff2_root_exists or not settings.db_configured or not runtime_ready
     ):
         worker_status = "degraded"
+    if settings.db_configured and not recovery_ready:
+        worker_status = "degraded"
+        runtime_error = runtime_error or "worker database recovery has not completed"
+    accepting_jobs = (
+        worker_status == "ok"
+        and recovery_ready
+        and not draining
+        and len(active_jobs) < settings.max_active_jobs
+    )
     return HealthResponse(
         status=worker_status,
         mode=settings.mode,
+        source_sha=runtime_identity.source_sha,
+        source_root=runtime_identity.source_root,
+        venv_prefix=runtime_identity.venv_prefix,
+        python_executable=runtime_identity.python_executable,
         db_configured=settings.db_configured,
         byteff2_root=str(settings.byteff2_root),
         byteff2_root_exists=byteff2_root_exists,
@@ -158,6 +345,11 @@ def _build_health_response() -> HealthResponse:
         runtime_error=runtime_error,
         job_root=str(settings.job_root),
         active_jobs=len(active_jobs),
+        max_active_jobs=settings.max_active_jobs,
+        worker_instance_id=worker_instance_id,
+        accepting_jobs=accepting_jobs,
+        draining=draining,
+        lease_seconds=settings.lease_seconds,
         default_steps=settings.default_steps,
         max_steps=settings.max_steps,
         report_interval=settings.report_interval,
@@ -369,6 +561,16 @@ def _job_rejection_message(health_response: HealthResponse, request: JobRequest)
         return "formal ByteFF2 protocols require real worker mode"
     if settings.mode == "real" and health_response.status != "ok":
         return _health_rejection_message(health_response)
+    if health_response.draining:
+        return "monomer MD worker is draining for deployment"
+    if not health_response.accepting_jobs:
+        if not recovery_ready:
+            return "monomer MD worker database recovery has not completed"
+        # Capacity is rechecked while holding active_jobs_lock so callers retain
+        # the established 429 response instead of a racy generic 503.
+        if health_response.active_jobs >= health_response.max_active_jobs:
+            return None
+        return "monomer MD worker is not accepting jobs"
     if request.run_mode == "formal":
         protocol_health = health_response.protocols.get(request.protocol)
         if not isinstance(protocol_health, dict):
@@ -383,7 +585,7 @@ def _job_rejection_message(health_response: HealthResponse, request: JobRequest)
 
 async def _run_job(request: JobRequest, steps: int) -> None:
     async with semaphore:
-        running_update_ok = await _safe_update_status(
+        running_update_result = await _safe_update_status(
             request.job_id,
             "running",
             progress_percent=5,
@@ -391,17 +593,36 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             progress_message=(
                 f"Running ByteFF2 {request.protocol} formal protocol."
                 if request.run_mode == "formal"
-                else "Running the 1000-step ByteFF2 density demo."
+                else f"Running the {steps}-step ByteFF2 density demo."
             ),
         )
-        if settings.db_configured and not running_update_ok:
+        if settings.db_configured and running_update_result is not JobUpdateResult.UPDATED:
             logger.warning("monomer MD job stopped before execution: %s", request.job_id)
+            if running_update_result is None:
+                await _persist_terminal_status(
+                    request.job_id,
+                    "failed",
+                    error="Monomer MD worker could not persist the running state.",
+                    error_category="worker_status_update_failed",
+                    progress_stage="failed",
+                    progress_message="Monomer MD worker could not persist the running state.",
+                )
             return
         try:
             result = await runner.run(request, steps)
+        except asyncio.CancelledError:
+            await _persist_terminal_status(
+                request.job_id,
+                "failed",
+                error="Monomer MD worker shut down before this job finished.",
+                error_category="worker_shutdown",
+                progress_stage="failed",
+                progress_message="Monomer MD worker shut down before this job finished.",
+            )
+            raise
         except Exception as exc:
             logger.exception("monomer MD job failed: %s", request.job_id)
-            await _safe_update_status(
+            await _persist_terminal_status(
                 request.job_id,
                 "failed",
                 error=str(exc),
@@ -419,7 +640,7 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             artifacts.update(result.result["artifacts"])
         artifact_manifest = result.result.get("artifact_manifest") if isinstance(result.result.get("artifact_manifest"), dict) else None
         result_summary = result.result.get("summary") if isinstance(result.result.get("summary"), dict) else None
-        await _safe_update_status(
+        await _persist_terminal_status(
             request.job_id,
             "completed",
             result=result.result,
@@ -457,11 +678,11 @@ async def _safe_update_status(
     byteff2_git_sha: str | None = None,
     gpu_device: str | None = None,
     error_category: str | None = None,
-) -> bool:
+) -> JobUpdateResult | None:
     if not settings.db_configured:
-        return True
+        return JobUpdateResult.UPDATED
     try:
-        row_count = await asyncio.to_thread(
+        update_result = await asyncio.to_thread(
             repository.update_status,
             job_id,
             status_value,
@@ -478,14 +699,72 @@ async def _safe_update_status(
             byteff2_git_sha=byteff2_git_sha,
             gpu_device=gpu_device,
             error_category=error_category,
+            worker_instance_id=worker_instance_id,
         )
     except Exception:
         logger.exception("failed to update monomer MD job status: %s", job_id)
+        return None
+    if update_result is JobUpdateResult.ALREADY_TERMINAL:
+        logger.info("monomer MD job already reached a terminal state: %s", job_id)
+    elif update_result is JobUpdateResult.MISSING:
+        logger.error("monomer MD job row is missing; releasing local capacity: %s", job_id)
+    return update_result
+
+
+async def _persist_terminal_status(job_id: str, status_value: str, **kwargs: Any) -> bool:
+    while True:
+        update_result = await _safe_update_status(job_id, status_value, **kwargs)
+        if update_result in {
+            JobUpdateResult.UPDATED,
+            JobUpdateResult.ALREADY_TERMINAL,
+            JobUpdateResult.MISSING,
+        }:
+            return True
+        if shutting_down:
+            return False
+        await asyncio.sleep(5)
+
+
+async def _attempt_recovery() -> bool:
+    global recovery_ready
+    if not settings.db_configured:
+        recovery_ready = True
+        return True
+    try:
+        recovered = await asyncio.to_thread(
+            repository.reconcile_orphaned_jobs,
+            worker_instance_id,
+        )
+    except Exception:
+        recovery_ready = False
+        logger.exception("failed to reconcile orphaned monomer MD jobs")
         return False
-    if row_count == 0:
-        logger.warning("monomer MD job row was not found: %s", job_id)
-        return False
+    recovery_ready = True
+    if recovered:
+        logger.warning("marked %s orphaned monomer MD job(s) failed", recovered)
     return True
+
+
+async def _recovery_loop() -> None:
+    while not recovery_ready:
+        await asyncio.sleep(settings.recovery_retry_seconds)
+        await _attempt_recovery()
+
+
+async def _heartbeat_loop() -> None:
+    while True:
+        await asyncio.sleep(settings.heartbeat_interval_seconds)
+        job_ids = list(active_jobs)
+        if not job_ids or not settings.db_configured:
+            continue
+        try:
+            await asyncio.to_thread(
+                repository.heartbeat,
+                job_ids,
+                worker_instance_id,
+            )
+        except Exception:
+            logger.exception("failed to heartbeat active monomer MD jobs")
 
 
 def _classify_error(exc: Exception) -> str:

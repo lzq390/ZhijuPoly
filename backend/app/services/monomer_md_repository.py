@@ -38,16 +38,18 @@ def create_monomer_md_job_postgres(
     run_mode: str = "demo",
     config_json: dict[str, Any] | None = None,
     components: dict[str, Any] | None = None,
+    pending_lease_seconds: int = 120,
 ) -> None:
     connection.execute(
         """
         INSERT INTO md.monomer_md_jobs (
           job_id, status, input_smiles, canonical_smiles, requested_steps, progress_stage, progress_message,
-          protocol, run_mode, config_json, components, engine
+          protocol, run_mode, config_json, components, engine, lease_expires_at
         )
         VALUES (%s, 'pending', %s, %s, %s, 'pending', 'Waiting for the monomer MD worker to start.',
                 %s, %s, %s::jsonb, %s::jsonb,
-                CASE WHEN %s = 'formal' THEN 'byteff2-formal-worker' ELSE 'byteff2-density-demo-worker' END)
+                CASE WHEN %s = 'formal' THEN 'byteff2-formal-worker' ELSE 'byteff2-density-demo-worker' END,
+                now() + make_interval(secs => %s))
         """,
         (
             job_id,
@@ -59,8 +61,27 @@ def create_monomer_md_job_postgres(
             _jsonb(config_json),
             _jsonb(components),
             run_mode,
+            pending_lease_seconds,
         ),
     )
+
+
+def mark_expired_unclaimed_monomer_md_jobs_failed_postgres(connection: Any) -> int:
+    message = "Monomer MD job was not claimed by the worker before its submission lease expired."
+    cursor = connection.execute(
+        """
+        UPDATE md.monomer_md_jobs
+        SET status = 'failed', progress_stage = 'failed', progress_message = %s,
+            error_message = %s, error_category = 'submit_lease_expired',
+            updated_at = now(), finished_at = now()
+        WHERE status = 'pending'
+          AND worker_instance_id IS NULL
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at < now()
+        """,
+        (message, message),
+    )
+    return int(cursor.rowcount or 0)
 
 
 def count_active_monomer_md_jobs_postgres(connection: Any) -> int:
@@ -72,6 +93,33 @@ def count_active_monomer_md_jobs_postgres(connection: Any) -> int:
         """
     ).fetchone()
     return int(row["count"] if row is not None else 0)
+
+
+def get_active_monomer_md_capacity_postgres(connection: Any) -> tuple[int, int | None]:
+    row = connection.execute(
+        """
+        SELECT count(*) AS count,
+               floor(extract(epoch FROM now() - min(COALESCE(heartbeat_at, updated_at))))::bigint
+                 AS oldest_heartbeat_age_seconds
+        FROM md.monomer_md_jobs
+        WHERE status IN ('pending', 'submitted', 'running')
+        """
+    ).fetchone()
+    if row is None:
+        return 0, None
+    age = row["oldest_heartbeat_age_seconds"]
+    return int(row["count"]), max(0, int(age)) if age is not None else None
+
+
+def reconcile_and_get_active_monomer_md_capacity_postgres(
+    connection: Any,
+    *,
+    advisory_lock_id: int,
+) -> tuple[int, int | None]:
+    """Converge expired unclaimed jobs and count capacity under one transaction lock."""
+    connection.execute("SELECT pg_advisory_xact_lock(%s)", (advisory_lock_id,))
+    mark_expired_unclaimed_monomer_md_jobs_failed_postgres(connection)
+    return get_active_monomer_md_capacity_postgres(connection)
 
 
 def count_active_formal_monomer_md_jobs_postgres(connection: Any) -> int:

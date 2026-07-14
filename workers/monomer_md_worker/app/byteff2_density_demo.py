@@ -19,7 +19,7 @@ KJ_PER_MOL_TO_KCAL_PER_MOL = 0.239005736
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run a 1000-step single-SMILES ByteFF2 density demo, not formal DensityProtocol post-processing."
+        description="Run a 300-step single-SMILES ByteFF2 density demo, not formal DensityProtocol post-processing."
     )
     parser.add_argument("--byteff2-root", required=True)
     parser.add_argument("--job-id", required=True)
@@ -235,7 +235,7 @@ def _run_builtin_monomer_demo(byteff2_root: Path, output_dir: Path, args: argpar
     result = {
         "demo": True,
         "mode": "builtin-monomer-density-demo",
-        "protocol": "DensityProtocol with 1000-step NPT demo patch",
+        "protocol": f"DensityProtocol with {steps}-step NPT demo patch",
         "elapsed_seconds": elapsed,
         "npt_steps": steps,
         "steps": steps,

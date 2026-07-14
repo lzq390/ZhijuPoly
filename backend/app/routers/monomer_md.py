@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request, status
+from starlette.concurrency import run_in_threadpool
 
 from app.models import (
     MonomerMdJobCreateResponse,
@@ -17,12 +18,12 @@ from app.models import (
 from app.postgres_database import postgres_connection
 from app.services.monomer_md_repository import (
     count_active_formal_monomer_md_jobs_postgres,
-    count_active_monomer_md_jobs_postgres,
     create_monomer_md_job_postgres,
     get_monomer_md_job_postgres,
     mark_monomer_md_artifacts_deleted_postgres,
     mark_monomer_md_job_failed_postgres,
     mark_monomer_md_job_submitted_postgres,
+    reconcile_and_get_active_monomer_md_capacity_postgres,
 )
 from app.services.monomer_md_worker_client import (
     MonomerMdWorkerClient,
@@ -83,7 +84,7 @@ def _enforce_submit_rate_limit(request: Request, settings) -> None:
 def _raise_active_job_capacity_error() -> None:
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail="monomer MD job capacity is full; please wait for the current demo job to finish",
+        detail="monomer MD job capacity is full; please wait for the active job to finish",
     )
 
 
@@ -107,8 +108,10 @@ def _create_pending_job_with_capacity_guard(
     components: dict[str, Any] | None = None,
 ) -> None:
     with postgres_connection(settings.app_postgres_dsn) as connection:
-        connection.execute("SELECT pg_advisory_xact_lock(%s)", (_ACTIVE_CAPACITY_ADVISORY_LOCK_ID,))
-        active_jobs = count_active_monomer_md_jobs_postgres(connection)
+        active_jobs, _ = reconcile_and_get_active_monomer_md_capacity_postgres(
+            connection,
+            advisory_lock_id=_ACTIVE_CAPACITY_ADVISORY_LOCK_ID,
+        )
         if active_jobs >= settings.monomer_md_max_active_jobs:
             _raise_active_job_capacity_error()
         if run_mode == "formal" and count_active_formal_monomer_md_jobs_postgres(connection) >= 1:
@@ -177,6 +180,8 @@ def _worker_unavailable_message(health: dict[str, Any]) -> str | None:
     db_configured = _optional_bool(health.get("db_configured"))
     byteff2_root_exists = _optional_bool(health.get("byteff2_root_exists"))
     runtime_ready = _optional_bool(health.get("runtime_ready"))
+    accepting_jobs = _optional_bool(health.get("accepting_jobs"))
+    draining = _optional_bool(health.get("draining"))
 
     if worker_status != "ok":
         return f"monomer MD worker health is {worker_status}"
@@ -189,6 +194,10 @@ def _worker_unavailable_message(health: dict[str, Any]) -> str | None:
         if runtime_error:
             return f"monomer MD worker runtime is not ready: {runtime_error}"
         return "monomer MD worker runtime is not ready"
+    if accepting_jobs is False:
+        if draining is True:
+            return "monomer MD worker is draining for deployment"
+        return "monomer MD worker is not accepting jobs"
     return None
 
 
@@ -196,10 +205,46 @@ def _status_response_from_health(
     *,
     settings,
     health: dict[str, Any],
+    database_active_jobs: int | None,
+    oldest_active_heartbeat_age_seconds: int | None = None,
+    database_error: str | None = None,
 ) -> MonomerMdStatusResponse:
-    unavailable_message = _worker_unavailable_message(health)
-    available = unavailable_message is None
+    worker_unavailable_message = _worker_unavailable_message(health)
+    health_unavailable_message = worker_unavailable_message
+    if worker_unavailable_message in {
+        "monomer MD worker is draining for deployment",
+        "monomer MD worker is not accepting jobs",
+    }:
+        health_unavailable_message = None
+    available = health_unavailable_message is None and database_error is None
     worker_status = str(health.get("status") or "unknown")
+    worker_active_jobs = _optional_int(health.get("active_jobs"))
+    accepting_jobs = _optional_bool(health.get("accepting_jobs"))
+    if accepting_jobs is None:
+        accepting_jobs = True
+    draining = _optional_bool(health.get("draining")) is True
+    database_busy = (
+        database_active_jobs is not None
+        and database_active_jobs >= settings.monomer_md_max_active_jobs
+    )
+    worker_max_active_jobs = _optional_int(health.get("max_active_jobs"))
+    worker_busy = (
+        worker_active_jobs is not None
+        and worker_max_active_jobs is not None
+        and worker_active_jobs >= worker_max_active_jobs
+    )
+    busy = database_busy or worker_busy
+    can_submit = available and accepting_jobs and not busy
+    if database_error is not None:
+        message = "monomer MD database capacity check failed"
+    elif draining:
+        message = "monomer MD worker is draining for deployment"
+    elif busy:
+        message = "monomer MD job capacity is full; please wait for the active job to finish"
+    elif can_submit:
+        message = "monomer MD worker is ready"
+    else:
+        message = worker_unavailable_message or "monomer MD worker is not accepting jobs"
     return MonomerMdStatusResponse(
         enabled=True,
         available=available,
@@ -211,14 +256,80 @@ def _status_response_from_health(
         byteff2_root_exists=_optional_bool(health.get("byteff2_root_exists")),
         runtime_ready=_optional_bool(health.get("runtime_ready")),
         runtime_error=_optional_str(health.get("runtime_error")),
-        active_jobs=_optional_int(health.get("active_jobs")),
+        active_jobs=worker_active_jobs,
+        database_active_jobs=database_active_jobs,
+        oldest_active_heartbeat_age_seconds=oldest_active_heartbeat_age_seconds,
+        max_active_jobs=settings.monomer_md_max_active_jobs,
+        accepting_jobs=accepting_jobs,
+        draining=draining,
+        busy=busy,
+        can_submit=can_submit,
         protocols=health.get("protocols") if isinstance(health.get("protocols"), dict) else {},
-        message=(
-            "monomer MD worker is ready"
-            if available
-            else unavailable_message
-        ),
+        message=message,
     )
+
+
+def _database_active_job_count(settings) -> tuple[int | None, int | None, str | None]:
+    try:
+        with postgres_connection(settings.app_postgres_dsn) as connection:
+            count, oldest_age = reconcile_and_get_active_monomer_md_capacity_postgres(
+                connection,
+                advisory_lock_id=_ACTIVE_CAPACITY_ADVISORY_LOCK_ID,
+            )
+            return count, oldest_age, None
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+def _get_job(dsn: str, job_id: str) -> dict[str, Any] | None:
+    with postgres_connection(dsn) as connection:
+        return get_monomer_md_job_postgres(connection, job_id)
+
+
+def _mark_job_failed_after_submit_error(
+    dsn: str,
+    job_id: str,
+    error_message: str,
+) -> None:
+    with postgres_connection(dsn) as connection:
+        mark_monomer_md_job_failed_postgres(
+            connection,
+            job_id,
+            error_message,
+            "worker_submit_failed",
+        )
+
+
+def _mark_job_submitted_and_get(
+    dsn: str,
+    job_id: str,
+    worker_id: str,
+    worker_job_id: str,
+    worker_version: str,
+) -> dict[str, Any] | None:
+    with postgres_connection(dsn) as connection:
+        mark_monomer_md_job_submitted_postgres(
+            connection,
+            job_id=job_id,
+            worker_id=worker_id,
+            worker_job_id=worker_job_id,
+            worker_version=worker_version,
+        )
+        return get_monomer_md_job_postgres(connection, job_id)
+
+
+def _mark_artifacts_deleted_and_get(
+    dsn: str,
+    job_id: str,
+    message: str,
+) -> dict[str, Any] | None:
+    with postgres_connection(dsn) as connection:
+        mark_monomer_md_artifacts_deleted_postgres(
+            connection,
+            job_id=job_id,
+            message=message,
+        )
+        return get_monomer_md_job_postgres(connection, job_id)
 
 
 def _formal_protocol_unavailable_message(health: dict[str, Any], protocol: str) -> str | None:
@@ -298,7 +409,8 @@ async def get_monomer_md_status(request: Request) -> MonomerMdStatusResponse:
         )
 
     try:
-        health = _worker_client_for_app(request.app).get_health()
+        client = _worker_client_for_app(request.app)
+        health = await run_in_threadpool(client.get_health)
     except MonomerMdWorkerError as exc:
         return MonomerMdStatusResponse(
             enabled=True,
@@ -309,7 +421,18 @@ async def get_monomer_md_status(request: Request) -> MonomerMdStatusResponse:
             message=str(exc),
         )
 
-    return _status_response_from_health(settings=settings, health=health)
+    (
+        database_active_jobs,
+        oldest_active_heartbeat_age_seconds,
+        database_error,
+    ) = await run_in_threadpool(_database_active_job_count, settings)
+    return _status_response_from_health(
+        settings=settings,
+        health=health,
+        database_active_jobs=database_active_jobs,
+        oldest_active_heartbeat_age_seconds=oldest_active_heartbeat_age_seconds,
+        database_error=database_error,
+    )
 
 
 @router.get("/protocols", response_model=MonomerMdProtocolCatalogResponse)
@@ -331,7 +454,8 @@ async def get_monomer_md_protocols(request: Request) -> MonomerMdProtocolCatalog
             message="monomer MD worker is not configured",
         )
     try:
-        health = _worker_client_for_app(request.app).get_health()
+        client = _worker_client_for_app(request.app)
+        health = await run_in_threadpool(client.get_health)
     except MonomerMdWorkerError as exc:
         return MonomerMdProtocolCatalogResponse(
             enabled=True,
@@ -367,10 +491,10 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
     if not settings.monomer_md_worker_base_url and getattr(request.app.state, "monomer_md_worker_client", None) is None:
         raise HTTPException(status_code=503, detail="monomer MD worker is not configured")
 
-    details = _job_request_details(request_body)
+    details = await run_in_threadpool(_job_request_details, request_body)
     try:
         client = _worker_client_for_app(request.app)
-        health = client.get_health()
+        health = await run_in_threadpool(client.get_health)
     except MonomerMdWorkerError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     unavailable_message = _worker_unavailable_message(health)
@@ -384,7 +508,8 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
 
     job_id = uuid4().hex
     requested_steps = details["requested_steps"] or settings.monomer_md_default_steps
-    _create_pending_job_with_capacity_guard(
+    await run_in_threadpool(
+        _create_pending_job_with_capacity_guard,
         settings,
         job_id=job_id,
         input_smiles=details["input_smiles"],
@@ -397,7 +522,8 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
     )
 
     try:
-        submission = client.submit_job(
+        submission = await run_in_threadpool(
+            client.submit_job,
             MonomerMdWorkerSubmitPayload(
                 job_id=job_id,
                 smiles=details["input_smiles"],
@@ -410,19 +536,22 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
         )
     except MonomerMdWorkerError as exc:
         error_message = str(exc)
-        with postgres_connection(settings.app_postgres_dsn) as connection:
-            mark_monomer_md_job_failed_postgres(connection, job_id, error_message, "worker_submit_failed")
+        await run_in_threadpool(
+            _mark_job_failed_after_submit_error,
+            settings.app_postgres_dsn,
+            job_id,
+            error_message,
+        )
         raise HTTPException(status_code=503, detail=error_message) from exc
 
-    with postgres_connection(settings.app_postgres_dsn) as connection:
-        mark_monomer_md_job_submitted_postgres(
-            connection,
-            job_id=job_id,
-            worker_id=submission.worker_id,
-            worker_job_id=submission.worker_job_id,
-            worker_version=submission.worker_version,
-        )
-        job = get_monomer_md_job_postgres(connection, job_id)
+    job = await run_in_threadpool(
+        _mark_job_submitted_and_get,
+        settings.app_postgres_dsn,
+        job_id,
+        submission.worker_id,
+        submission.worker_job_id,
+        submission.worker_version,
+    )
 
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -431,8 +560,11 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
 
 @router.get("/jobs/{job_id}", response_model=MonomerMdJobStatusResponse)
 async def get_monomer_md_job(job_id: str, request: Request) -> MonomerMdJobStatusResponse:
-    with postgres_connection(request.app.state.settings.app_postgres_dsn) as connection:
-        job = get_monomer_md_job_postgres(connection, job_id)
+    job = await run_in_threadpool(
+        _get_job,
+        request.app.state.settings.app_postgres_dsn,
+        job_id,
+    )
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return MonomerMdJobStatusResponse(**job)
@@ -441,8 +573,7 @@ async def get_monomer_md_job(job_id: str, request: Request) -> MonomerMdJobStatu
 @router.delete("/jobs/{job_id}/artifacts", response_model=MonomerMdJobStatusResponse)
 async def delete_monomer_md_job_artifacts(job_id: str, request: Request) -> MonomerMdJobStatusResponse:
     settings = request.app.state.settings
-    with postgres_connection(settings.app_postgres_dsn) as connection:
-        job = get_monomer_md_job_postgres(connection, job_id)
+    job = await run_in_threadpool(_get_job, settings.app_postgres_dsn, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job["status"] in {"pending", "submitted", "running"}:
@@ -451,14 +582,18 @@ async def delete_monomer_md_job_artifacts(job_id: str, request: Request) -> Mono
         return MonomerMdJobStatusResponse(**job)
 
     try:
-        deletion = _worker_client_for_app(request.app).delete_artifacts(job_id)
+        client = _worker_client_for_app(request.app)
+        deletion = await run_in_threadpool(client.delete_artifacts, job_id)
     except MonomerMdWorkerError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     message = _optional_str(deletion.get("message")) or "artifacts deleted"
-    with postgres_connection(settings.app_postgres_dsn) as connection:
-        mark_monomer_md_artifacts_deleted_postgres(connection, job_id=job_id, message=message)
-        updated = get_monomer_md_job_postgres(connection, job_id)
+    updated = await run_in_threadpool(
+        _mark_artifacts_deleted_and_get,
+        settings.app_postgres_dsn,
+        job_id,
+        message,
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return MonomerMdJobStatusResponse(**updated)

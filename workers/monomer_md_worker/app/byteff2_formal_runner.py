@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import re
+import signal
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -25,7 +28,7 @@ class ByteFF2FormalRunner:
     def __init__(self, settings: WorkerSettings) -> None:
         self._settings = settings
 
-    def run(self, request: JobRequest, output_dir: Path) -> FormalProtocolRunResult:
+    async def run(self, request: JobRequest, output_dir: Path) -> FormalProtocolRunResult:
         protocol = request.protocol
         if request.config_json is None:
             raise RuntimeError("formal ByteFF2 jobs require config_json")
@@ -51,23 +54,33 @@ class ByteFF2FormalRunner:
         stdout_path = output_dir / "worker_stdout.log"
         stderr_path = output_dir / "worker_stderr.log"
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            process = await asyncio.create_subprocess_exec(
+                self._settings.byteff2_python,
+                str(run_md_path),
+                "--config",
+                str(config_path),
+                cwd=output_dir,
+                env=env,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+            )
             try:
-                completed = subprocess.run(
-                    [self._settings.byteff2_python, str(run_md_path), "--config", str(config_path)],
-                    cwd=output_dir,
-                    env=env,
-                    stdout=stdout,
-                    stderr=stderr,
+                return_code = await asyncio.wait_for(
+                    process.wait(),
                     timeout=self._settings.formal_timeout_seconds,
-                    check=False,
                 )
-            except subprocess.TimeoutExpired as exc:
+            except asyncio.TimeoutError as exc:
+                await _terminate_process_group(process)
                 raise RuntimeError(
                     f"ByteFF2 {protocol} timed out after {self._settings.formal_timeout_seconds}s"
                 ) from exc
-        if completed.returncode != 0:
+            except asyncio.CancelledError:
+                await _terminate_process_group(process)
+                raise
+        if return_code != 0:
             raise RuntimeError(
-                f"ByteFF2 {protocol} failed with exit code {completed.returncode}; "
+                f"ByteFF2 {protocol} failed with exit code {return_code}; "
                 f"see {stdout_path.name} and {stderr_path.name}"
             )
 
@@ -84,7 +97,7 @@ class ByteFF2FormalRunner:
 
         summary = _summary_from_result(raw_result)
         artifact_manifest = _artifact_manifest(output_dir)
-        byteff2_git_sha = _git_sha(self._settings.byteff2_root)
+        byteff2_git_sha = resolve_byteff2_commit(self._settings.byteff2_root)
         completed_steps = estimate_requested_steps(protocol, final_config)
         result = {
             "job_id": request.job_id,
@@ -106,6 +119,27 @@ class ByteFF2FormalRunner:
         result["artifacts"] = _frontend_artifacts(artifact_manifest)
         _write_json(output_dir / "formal_results.json", result)
         return FormalProtocolRunResult(result=result, completed_steps=completed_steps)
+
+
+async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        await process.wait()
+        return
+    try:
+        await asyncio.wait_for(process.wait(), timeout=10)
+        return
+    except asyncio.TimeoutError:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        await process.wait()
+        return
+    await process.wait()
 
 
 def _summary_from_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -160,10 +194,18 @@ def _public_config(config: dict[str, Any], root: Path) -> dict[str, Any]:
     return public
 
 
-def _git_sha(root: Path) -> str | None:
+def resolve_byteff2_commit(root: Path) -> str | None:
+    marker = root / "BYTEFF2-COMMIT"
+    if marker.exists():
+        if not marker.is_file() or marker.is_symlink():
+            raise RuntimeError("BYTEFF2-COMMIT must be a regular file")
+        commit = marker.read_text(encoding="ascii").strip()
+        if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+            raise RuntimeError("BYTEFF2-COMMIT must contain a full lowercase commit SHA")
+        return commit
     try:
         completed = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "rev-parse", "HEAD"],
             cwd=root,
             capture_output=True,
             text=True,

@@ -3,10 +3,12 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.routers import monomer_md as monomer_md_routes
 from app.config import Settings
 from app.postgres_database import postgres_connection
 from app.routers.monomer_md import router as monomer_md_router
 from app.services.monomer_md_repository import (
+    count_active_monomer_md_jobs_postgres,
     create_monomer_md_job_postgres,
     mark_monomer_md_job_completed_postgres,
     mark_monomer_md_job_failed_postgres,
@@ -115,6 +117,25 @@ class DegradedFormalReadyWorkerClient:
         raise AssertionError("degraded workers must not receive submitted jobs")
 
 
+class DrainingWorkerClient:
+    def get_health(self):
+        return {
+            "status": "ok",
+            "mode": "real",
+            "db_configured": True,
+            "byteff2_root_exists": True,
+            "runtime_ready": True,
+            "active_jobs": 1,
+            "max_active_jobs": 1,
+            "accepting_jobs": False,
+            "draining": True,
+            "protocols": _ready_protocols(),
+        }
+
+    def submit_job(self, payload):
+        raise AssertionError("draining workers must not receive submitted jobs")
+
+
 class SubmitFailingWorkerClient:
     def get_health(self):
         return {
@@ -169,7 +190,7 @@ def _create_app(
         pi_reverse_backend="postgres",
         model_enabled=False,
         monomer_md_worker_base_url=worker_url,
-        monomer_md_default_steps=1000,
+        monomer_md_default_steps=300,
         monomer_md_submit_enabled=monomer_md_submit_enabled,
         monomer_md_rate_limit_per_ip_per_minute=monomer_md_rate_limit_per_ip_per_minute,
         monomer_md_rate_limit_window_seconds=monomer_md_rate_limit_window_seconds,
@@ -237,7 +258,7 @@ def test_monomer_md_status_reports_disabled_worker(postgres_dsn: str):
     data = response.json()
     assert data["enabled"] is False
     assert data["available"] is False
-    assert data["default_steps"] == 1000
+    assert data["default_steps"] == 300
 
 
 def test_monomer_md_status_checks_configured_worker_health(postgres_dsn: str):
@@ -254,6 +275,59 @@ def test_monomer_md_status_checks_configured_worker_health(postgres_dsn: str):
     assert data["worker_status"] == "ok"
     assert data["worker_mode"] == "dry-run"
     assert data["db_configured"] is True
+
+
+def test_monomer_md_status_offloads_worker_and_database_io(
+    postgres_dsn: str,
+    monkeypatch,
+):
+    app = _create_app(postgres_dsn)
+    app.state.monomer_md_worker_client = FakeWorkerClient()
+    offloaded_functions = []
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        offloaded_functions.append(function)
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(monomer_md_routes, "run_in_threadpool", fake_run_in_threadpool)
+
+    response = TestClient(app).get("/api/v1/monomer-md/status")
+
+    assert response.status_code == 200
+    assert [function.__name__ for function in offloaded_functions] == [
+        "get_health",
+        "_database_active_job_count",
+    ]
+
+
+def test_monomer_md_job_lifecycle_offloads_worker_and_database_io(
+    postgres_dsn: str,
+    monkeypatch,
+):
+    app = _create_app(postgres_dsn)
+    app.state.monomer_md_worker_client = FakeWorkerClient()
+    offloaded_functions = []
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        offloaded_functions.append(function)
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(monomer_md_routes, "run_in_threadpool", fake_run_in_threadpool)
+
+    with TestClient(app) as client:
+        created = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"})
+        assert created.status_code == 202
+        loaded = client.get(f"/api/v1/monomer-md/jobs/{created.json()['job_id']}")
+
+    assert loaded.status_code == 200
+    assert [function.__name__ for function in offloaded_functions] == [
+        "_job_request_details",
+        "get_health",
+        "_create_pending_job_with_capacity_guard",
+        "submit_job",
+        "_mark_job_submitted_and_get",
+        "_get_job",
+    ]
 
 
 def test_monomer_md_protocols_returns_catalog_with_readiness(postgres_dsn: str):
@@ -416,7 +490,7 @@ def test_monomer_md_job_rejects_when_active_capacity_is_full_without_creating_ex
 
     assert first_response.status_code == 202
     assert second_response.status_code == 429
-    assert "capacity is full" in second_response.json()["detail"]
+    assert second_response.json()["detail"] == "monomer MD job capacity is full; please wait for the active job to finish"
     assert _monomer_md_job_count(postgres_dsn) == 1
     assert len(fake_worker.payloads) == 1
 
@@ -457,7 +531,7 @@ def test_monomer_md_job_submit_and_status_roundtrip(postgres_dsn: str):
         assert len(fake_worker.payloads) == 1
         assert fake_worker.payloads[0].job_id == job_id
         assert fake_worker.payloads[0].canonical_smiles == "CCO"
-        assert fake_worker.payloads[0].steps == 1000
+        assert fake_worker.payloads[0].steps == 300
 
         status_response = client.get(f"/api/v1/monomer-md/jobs/{job_id}")
         assert status_response.status_code == 200
@@ -465,14 +539,14 @@ def test_monomer_md_job_submit_and_status_roundtrip(postgres_dsn: str):
         assert status_payload["status"] == "submitted"
         assert status_payload["input_smiles"] == "OCC"
         assert status_payload["canonical_smiles"] == "CCO"
-        assert status_payload["requested_steps"] == 1000
+        assert status_payload["requested_steps"] == 300
         assert status_payload["worker_id"] == "fake-worker"
 
         with postgres_connection(postgres_dsn) as connection:
             mark_monomer_md_job_completed_postgres(
                 connection,
                 job_id=job_id,
-                completed_steps=1000,
+                completed_steps=300,
                 artifact_root="/runs/job",
                 artifacts={"npt_state_csv": {"relative_path": "npt_state.csv"}},
                 result_data={
@@ -491,7 +565,7 @@ def test_monomer_md_job_submit_and_status_roundtrip(postgres_dsn: str):
         assert completed_response.status_code == 200
         completed_payload = completed_response.json()
         assert completed_payload["status"] == "completed"
-        assert completed_payload["completed_steps"] == 1000
+        assert completed_payload["completed_steps"] == 300
         assert completed_payload["progress_percent"] == 100
         assert completed_payload["result"]["summary"]["final_density_g_cm3"] == 0.78
         assert completed_payload["result"]["density_series"]["points"][0]["step"] == 10
@@ -644,7 +718,7 @@ def test_monomer_md_artifact_delete_marks_job_and_preserves_audit(postgres_dsn: 
             mark_monomer_md_job_completed_postgres(
                 connection,
                 job_id=job_id,
-                completed_steps=1000,
+                completed_steps=300,
                 artifact_root=f"/runs/{job_id}",
                 artifacts={"npt_state_csv": {"path": "npt_state.csv"}},
                 artifact_manifest={"files": [{"path": "npt_state.csv"}]},
@@ -708,13 +782,13 @@ def test_monomer_md_repository_completed_update_does_not_override_failed(postgre
             job_id=job_id,
             input_smiles="CCO",
             canonical_smiles="CCO",
-            requested_steps=1000,
+            requested_steps=300,
         )
         mark_monomer_md_job_failed_postgres(connection, job_id, "worker failed")
         mark_monomer_md_job_completed_postgres(
             connection,
             job_id=job_id,
-            completed_steps=1000,
+            completed_steps=300,
             artifact_root="/runs/job",
             artifacts={"npt_state_csv": {"path": "npt_state.csv"}},
             result_data={"summary": {"final_density_g_cm3": 0.8}},
@@ -737,7 +811,7 @@ def test_monomer_md_repository_failed_update_does_not_override_failed(postgres_d
             job_id=job_id,
             input_smiles="CCO",
             canonical_smiles="CCO",
-            requested_steps=1000,
+            requested_steps=300,
         )
         mark_monomer_md_job_failed_postgres(connection, job_id, "first failure")
         mark_monomer_md_job_failed_postgres(connection, job_id, "late failure")
@@ -794,7 +868,7 @@ def test_monomer_md_worker_client_rejects_non_json_submit_response(monkeypatch):
         job_id="job-1",
         smiles="CCO",
         canonical_smiles="CCO",
-        steps=1000,
+        steps=300,
     )
     try:
         client.submit_job(payload)
@@ -821,6 +895,153 @@ def test_monomer_md_worker_client_uses_configured_health_timeout(monkeypatch):
     client.get_health()
 
     assert observed["timeout"] == 21
+
+
+def test_monomer_md_status_reports_database_capacity(postgres_dsn: str):
+    app = _create_app(postgres_dsn, monomer_md_max_active_jobs=1)
+    app.state.monomer_md_worker_client = FakeWorkerClient()
+    with postgres_connection(postgres_dsn) as connection:
+        create_monomer_md_job_postgres(
+            connection,
+            job_id="busy-job",
+            input_smiles="CCO",
+            canonical_smiles="CCO",
+            requested_steps=300,
+        )
+
+    response = TestClient(app).get("/api/v1/monomer-md/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["can_submit"] is False
+    assert payload["busy"] is True
+    assert payload["active_jobs"] == 0
+    assert payload["database_active_jobs"] == 1
+    assert payload["max_active_jobs"] == 1
+    assert payload["oldest_active_heartbeat_age_seconds"] is not None
+    assert payload["oldest_active_heartbeat_age_seconds"] >= 0
+
+
+def test_monomer_md_status_fails_closed_when_capacity_database_is_unavailable(
+    postgres_dsn: str,
+    monkeypatch,
+):
+    app = _create_app(postgres_dsn)
+    app.state.monomer_md_worker_client = FakeWorkerClient()
+
+    def unavailable_connection(_dsn):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr("app.routers.monomer_md.postgres_connection", unavailable_connection)
+
+    response = TestClient(app).get("/api/v1/monomer-md/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is False
+    assert payload["can_submit"] is False
+    assert payload["message"] == "monomer MD database capacity check failed"
+    assert payload["database_active_jobs"] is None
+
+
+def test_monomer_md_draining_worker_rejects_without_creating_row(postgres_dsn: str):
+    app = _create_app(postgres_dsn)
+    app.state.monomer_md_worker_client = DrainingWorkerClient()
+    client = TestClient(app)
+
+    status_response = client.get("/api/v1/monomer-md/status")
+    create_response = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"})
+
+    assert status_response.status_code == 200
+    assert status_response.json()["available"] is True
+    assert status_response.json()["draining"] is True
+    assert status_response.json()["can_submit"] is False
+    assert create_response.status_code == 503
+    assert create_response.json()["detail"] == "monomer MD worker is draining for deployment"
+    assert _monomer_md_job_count(postgres_dsn) == 0
+
+
+def test_expired_unclaimed_pending_job_is_failed_before_capacity_count(postgres_dsn: str):
+    app = _create_app(
+        postgres_dsn,
+        monomer_md_rate_limit_per_ip_per_minute=10,
+        monomer_md_max_active_jobs=1,
+    )
+    fake_worker = FakeWorkerClient()
+    app.state.monomer_md_worker_client = fake_worker
+    with postgres_connection(postgres_dsn) as connection:
+        create_monomer_md_job_postgres(
+            connection,
+            job_id="expired-pending",
+            input_smiles="CCO",
+            canonical_smiles="CCO",
+            requested_steps=300,
+        )
+        connection.execute(
+            "UPDATE md.monomer_md_jobs SET lease_expires_at = now() - interval '1 second' WHERE job_id = %s",
+            ("expired-pending",),
+        )
+
+    response = TestClient(app).post("/api/v1/monomer-md/jobs", json={"smiles": "CCN"})
+
+    assert response.status_code == 202
+    with postgres_connection(postgres_dsn) as connection:
+        expired = connection.execute(
+            "SELECT status, error_category FROM md.monomer_md_jobs WHERE job_id = %s",
+            ("expired-pending",),
+        ).fetchone()
+        assert count_active_monomer_md_jobs_postgres(connection) == 1
+    assert expired["status"] == "failed"
+    assert expired["error_category"] == "submit_lease_expired"
+
+
+def test_status_reconciles_expired_unclaimed_pending_job(postgres_dsn: str):
+    app = _create_app(postgres_dsn, monomer_md_max_active_jobs=1)
+    app.state.monomer_md_worker_client = FakeWorkerClient()
+    with postgres_connection(postgres_dsn) as connection:
+        create_monomer_md_job_postgres(
+            connection,
+            job_id="expired-status-pending",
+            input_smiles="CCO",
+            canonical_smiles="CCO",
+            requested_steps=300,
+        )
+        connection.execute(
+            "UPDATE md.monomer_md_jobs SET lease_expires_at = now() - interval '1 second' WHERE job_id = %s",
+            ("expired-status-pending",),
+        )
+
+    response = TestClient(app).get("/api/v1/monomer-md/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["database_active_jobs"] == 0
+    assert payload["busy"] is False
+    assert payload["can_submit"] is True
+    with postgres_connection(postgres_dsn) as connection:
+        row = connection.execute(
+            "SELECT status, error_category FROM md.monomer_md_jobs WHERE job_id = %s",
+            ("expired-status-pending",),
+        ).fetchone()
+    assert row["status"] == "failed"
+    assert row["error_category"] == "submit_lease_expired"
+
+
+def test_monomer_md_requested_steps_database_default_is_300(postgres_dsn: str):
+    with postgres_connection(postgres_dsn) as connection:
+        row = connection.execute(
+            """
+            SELECT column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'md'
+              AND table_name = 'monomer_md_jobs'
+              AND column_name = 'requested_steps'
+            """
+        ).fetchone()
+
+    assert row is not None
+    assert str(row["column_default"]).strip("()") == "300"
 
 
 def test_monomer_md_worker_client_uses_unix_socket_connection(monkeypatch):
@@ -885,7 +1106,7 @@ def test_monomer_md_worker_client_rejects_submit_response_without_job_id(monkeyp
         job_id="job-1",
         smiles="CCO",
         canonical_smiles="CCO",
-        steps=1000,
+        steps=300,
     )
     try:
         client.submit_job(payload)

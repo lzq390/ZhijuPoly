@@ -56,6 +56,10 @@ class JobAccepted(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     mode: str
+    source_sha: str | None = None
+    source_root: str
+    venv_prefix: str
+    python_executable: str
     db_configured: bool
     byteff2_root: str
     byteff2_root_exists: bool
@@ -63,12 +67,24 @@ class HealthResponse(BaseModel):
     runtime_error: str | None = None
     job_root: str
     active_jobs: int
+    max_active_jobs: int
+    worker_instance_id: str
+    accepting_jobs: bool
+    draining: bool
+    lease_seconds: int
     default_steps: int
     max_steps: int
     report_interval: int
     worker_id: str
     worker_version: str
     protocols: dict[str, Any] = Field(default_factory=dict)
+
+
+class DrainResponse(BaseModel):
+    status: Literal["draining", "ready"]
+    accepting_jobs: bool
+    active_jobs: int
+    worker_instance_id: str
 
 
 class ArtifactDeletionResponse(BaseModel):

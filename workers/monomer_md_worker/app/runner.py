@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import shlex
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import WorkerSettings
-from .byteff2_formal_runner import ByteFF2FormalRunner
+from .byteff2_formal_runner import ByteFF2FormalRunner, resolve_byteff2_commit
 from .models import JobRequest
 
 NOT_PHYSICAL_WARNING = (
@@ -37,7 +38,7 @@ class MonomerMdRunner:
         output_dir = self._job_output_dir(request.job_id)
         output_dir.mkdir(parents=True, exist_ok=True)
         if request.run_mode == "formal":
-            formal_result = await asyncio.to_thread(self._formal_runner.run, request, output_dir)
+            formal_result = await self._formal_runner.run(request, output_dir)
             return DemoRunResult(
                 result=formal_result.result,
                 output_dir=output_dir,
@@ -137,17 +138,20 @@ class MonomerMdRunner:
                 env=env,
                 stdout=stdout,
                 stderr=stderr,
+                start_new_session=True,
             )
             try:
                 return_code = await asyncio.wait_for(
                     process.wait(), timeout=self._settings.timeout_seconds
                 )
             except asyncio.TimeoutError as exc:
-                process.kill()
-                await process.wait()
+                await _terminate_process_group(process)
                 raise RuntimeError(
                     f"ByteFF2 density demo timed out after {self._settings.timeout_seconds}s"
                 ) from exc
+            except asyncio.CancelledError:
+                await _terminate_process_group(process)
+                raise
 
         if return_code != 0:
             raise RuntimeError(
@@ -176,7 +180,6 @@ class MonomerMdRunner:
         )
         self._write_json(result_path, result)
         return DemoRunResult(result=result, output_dir=output_dir, completed_steps=steps)
-
     def output_dir_for_job(self, job_id: str) -> Path:
         return self._job_output_dir(job_id)
 
@@ -290,6 +293,10 @@ class MonomerMdRunner:
                 "npt_dcd": "npt.dcd",
             },
         )
+        if self._settings.mode != "dry-run":
+            normalized["byteff2_git_sha"] = resolve_byteff2_commit(
+                self._settings.byteff2_root
+            )
         return normalized
 
     @staticmethod
@@ -395,3 +402,24 @@ class MonomerMdRunner:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
         tmp_path.replace(path)
+
+
+async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        await process.wait()
+        return
+    try:
+        await asyncio.wait_for(process.wait(), timeout=10)
+        return
+    except asyncio.TimeoutError:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        await process.wait()
+        return
+    await process.wait()
