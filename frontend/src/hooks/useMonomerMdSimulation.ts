@@ -30,6 +30,7 @@ type MonomerMdSimulationState = {
 };
 
 const POLL_INTERVAL_MS = 1400;
+const SERVICE_STATUS_POLL_INTERVAL_MS = 5000;
 const TERMINAL_STATUSES = new Set<MonomerMdJobStatus>(["completed", "failed", "cancelled"]);
 
 export function getMonomerMdSmilesValidationError(smiles: string): string | null {
@@ -144,7 +145,6 @@ export function useMonomerMdSimulation() {
       }
       setState((current) => ({
         ...current,
-        serviceStatus: null,
         isStatusLoading: false,
         statusError: error instanceof Error ? error.message : "检查单体 MD 服务状态失败。",
         protocolsError: error instanceof Error ? error.message : "检查 ByteFF2 协议列表失败。"
@@ -176,6 +176,33 @@ export function useMonomerMdSimulation() {
       statusTokenRef.current += 1;
     };
   }, [refreshStatus]);
+
+  useEffect(() => {
+    const shouldPollStatus = state.serviceStatus?.busy === true || state.serviceStatus?.draining === true;
+    if (!shouldPollStatus) {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | null = null;
+    const scheduleRefresh = () => {
+      timer = window.setTimeout(() => {
+        void refreshStatus().finally(() => {
+          if (!cancelled) {
+            scheduleRefresh();
+          }
+        });
+      }, SERVICE_STATUS_POLL_INTERVAL_MS);
+    };
+
+    scheduleRefresh();
+    return () => {
+      cancelled = true;
+      if (timer != null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [refreshStatus, state.serviceStatus?.busy, state.serviceStatus?.draining]);
 
   async function pollJob(jobId: string, token: number) {
     while (pollTokenRef.current === token) {

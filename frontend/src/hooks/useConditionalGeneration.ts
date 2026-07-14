@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { createConditionalGenerationTgJob, fetchConditionalGenerationTgJob } from "../services/api";
+import {
+  createConditionalGenerationTgJob,
+  fetchConditionalGenerationTgJob,
+  isApiRequestError
+} from "../services/api";
 import type {
   ConditionalGenerationJobStatus,
   ConditionalGenerationJobStatusResponse,
@@ -16,6 +20,7 @@ type ConditionalGenerationState = {
 
 const POLL_INTERVAL_MS = 1000;
 const TERMINAL_STATUSES = new Set<ConditionalGenerationJobStatus>(["completed", "failed", "cancelled"]);
+const EXPIRED_JOB_MESSAGE = "Backend restarted or the job expired. Please resubmit.";
 
 const DEFAULT_REQUEST: ConditionalGenerationTgRequest = {
   smiles: "",
@@ -43,7 +48,23 @@ export function useConditionalGeneration() {
 
   async function pollJob(jobId: string, token: number) {
     while (pollTokenRef.current === token) {
-      const job = await fetchConditionalGenerationTgJob(jobId);
+      let job: ConditionalGenerationJobStatusResponse;
+      try {
+        job = await fetchConditionalGenerationTgJob(jobId);
+      } catch (error) {
+        if (pollTokenRef.current !== token) {
+          return;
+        }
+        if (isApiRequestError(error, 410)) {
+          setState((current) => ({
+            ...current,
+            isLoading: false,
+            error: EXPIRED_JOB_MESSAGE
+          }));
+          return;
+        }
+        throw error;
+      }
       if (pollTokenRef.current !== token) {
         return;
       }

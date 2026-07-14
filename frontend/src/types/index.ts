@@ -237,6 +237,13 @@ export type MonomerMdServiceStatusResponse = {
   worker_status?: string | null;
   worker_mode?: string | null;
   active_jobs?: number | null;
+  database_active_jobs?: number | null;
+  oldest_active_heartbeat_age_seconds?: number | null;
+  max_active_jobs?: number | null;
+  accepting_jobs?: boolean | null;
+  draining?: boolean;
+  busy?: boolean;
+  can_submit?: boolean;
   message?: string | null;
   queue_depth?: number | null;
   running_jobs?: number | null;
