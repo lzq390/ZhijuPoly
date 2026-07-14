@@ -4,7 +4,7 @@ import math
 import os
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from rdkit import Chem
 from rdkit.Chem import Descriptors, RDConfig
@@ -27,6 +27,51 @@ class PolytaoNormalizedCandidate:
     valid_smiles: bool = True
     sa_score: float | None = None
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class PolytaoCandidateAccumulator:
+    """Incrementally normalize decoder batches without reprocessing history."""
+
+    requested_count: int
+    seen: set[str] = field(default_factory=set)
+    accepted: list[PolytaoNormalizedCandidate] = field(default_factory=list)
+    filters: Counter[str] = field(default_factory=Counter)
+
+    @property
+    def complete(self) -> bool:
+        return len(self.accepted) >= max(1, int(self.requested_count))
+
+    def add(self, raw_candidates: Iterable[str]) -> None:
+        for raw in raw_candidates:
+            if self.complete:
+                break
+            raw_smiles = str(raw).strip()
+            if not raw_smiles:
+                self.filters["empty_raw_smiles"] += 1
+                continue
+            normalized = normalize_polytao_smiles(raw_smiles)
+            if normalized is None:
+                self.filters["rdkit_parse_failed"] += 1
+                continue
+            if count_attachment_points(normalized) < 2:
+                self.filters["star_count_lt_2"] += 1
+                continue
+            if normalized in self.seen:
+                self.filters["duplicate"] += 1
+                continue
+            self.seen.add(normalized)
+            self.accepted.append(
+                PolytaoNormalizedCandidate(
+                    rank=len(self.accepted) + 1,
+                    generated_smiles=normalized,
+                    raw_smiles=raw_smiles,
+                    sa_score=calculate_sa_score(normalized),
+                )
+            )
+
+    def result(self) -> tuple[list[PolytaoNormalizedCandidate], dict[str, int]]:
+        return list(self.accepted), dict(self.filters)
 
 
 def canonicalize_smiles(smiles: str) -> str:
@@ -117,38 +162,13 @@ def calculate_sa_score(smiles: str) -> float | None:
             return None
 
 
-def normalize_polytao_candidates(raw_candidates: list[str], requested_count: int) -> tuple[list[PolytaoNormalizedCandidate], dict[str, int]]:
-    seen: set[str] = set()
-    accepted: list[PolytaoNormalizedCandidate] = []
-    filters: Counter[str] = Counter()
-
-    for raw in raw_candidates:
-        raw_smiles = str(raw).strip()
-        if not raw_smiles:
-            filters["empty_raw_smiles"] += 1
-            continue
-        normalized = normalize_polytao_smiles(raw_smiles)
-        if normalized is None:
-            filters["rdkit_parse_failed"] += 1
-            continue
-        if count_attachment_points(normalized) < 2:
-            filters["star_count_lt_2"] += 1
-            continue
-        if normalized in seen:
-            filters["duplicate"] += 1
-            continue
-        seen.add(normalized)
-        accepted.append(
-            PolytaoNormalizedCandidate(
-                rank=len(accepted) + 1,
-                generated_smiles=normalized,
-                raw_smiles=raw_smiles,
-                sa_score=calculate_sa_score(normalized),
-            )
-        )
-        if len(accepted) >= requested_count:
-            break
-    return accepted, dict(filters)
+def normalize_polytao_candidates(
+    raw_candidates: list[str],
+    requested_count: int,
+) -> tuple[list[PolytaoNormalizedCandidate], dict[str, int]]:
+    accumulator = PolytaoCandidateAccumulator(requested_count=requested_count)
+    accumulator.add(raw_candidates)
+    return accumulator.result()
 
 
 def default_polytao_params() -> dict[str, float | int]:

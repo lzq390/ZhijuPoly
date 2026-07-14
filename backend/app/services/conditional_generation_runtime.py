@@ -13,6 +13,7 @@ from rdkit import Chem
 from rdkit.Chem import Descriptors
 
 from app.services.conditional_generation import GeneratedSmiles, to_model_smiles, to_rdkit_smiles
+from app.services.gpu_runtime_registry import is_cuda_runtime_error
 from app.utils.exceptions import ModelArtifactError
 
 
@@ -324,65 +325,156 @@ class TorchConditionalGenerationRuntime:
         with self._load_lock:
             if self.generator_model is not None and self.evaluator_bundle is not None:
                 return
-            self._load_unlocked()
+            # A prior failed attempt must never leak a half-initialized model
+            # into a retry.  `_load_unlocked` only commits fully built state,
+            # but reset here as a defensive invariant for process upgrades.
+            self._reset_loaded_state()
+            try:
+                self._load_unlocked()
+            except BaseException:
+                self._reset_loaded_state()
+                raise
+
+    def ensure_loaded(self) -> "TorchConditionalGenerationRuntime":
+        self._load()
+        return self
+
+    @property
+    def loaded(self) -> bool:
+        return self.generator_model is not None and self.evaluator_bundle is not None
+
+    def _reset_loaded_state(self) -> None:
+        self.device = None
+        self.generator_model = None
+        self.cond_mean = 0.0
+        self.cond_std = 1.0
+        self.evaluator_bundle = None
+        self.torch = None
+        self.functional = None
 
     def _load_unlocked(self) -> None:
-        self._assert_artifacts()
-        torch_module = _require_dependency("torch")
-        nn_module = torch_module.nn
-        self.functional = _require_dependency("torch.nn.functional")
-        transformers = _require_dependency("transformers")
-        chemprop_featurizers = _require_dependency("chemprop.featurizers")
-        chemprop_data = _require_dependency("chemprop.data")
-        chemprop_nn = _require_dependency("chemprop.nn")
+        torch_module = None
+        functional = None
+        generator_model = None
+        evaluator_model = None
+        ckpt = None
+        state = None
+        evaluator_ckpt = None
+        evaluator_state = None
+        evaluator_bundle = None
+        committed = False
+        try:
+            self._assert_artifacts()
+            torch_module = _require_dependency("torch")
+            nn_module = torch_module.nn
+            functional = _require_dependency("torch.nn.functional")
+            transformers = _require_dependency("transformers")
+            chemprop_featurizers = _require_dependency("chemprop.featurizers")
+            chemprop_data = _require_dependency("chemprop.data")
+            chemprop_nn = _require_dependency("chemprop.nn")
 
-        self.torch = torch_module
-        self.device = _resolve_device(torch_module, self.device_setting)
-        gc.collect()
-        if torch_module.cuda.is_available():
-            torch_module.cuda.empty_cache()
+            device = _resolve_device(torch_module, self.device_setting)
+            gc.collect()
+            if torch_module.cuda.is_available():
+                torch_module.cuda.empty_cache()
 
-        ChempropTransformerAE, ChemBERTaTgModel = _build_model_classes(
-            torch_module,
-            nn_module,
-            transformers.AutoModel,
-            chemprop_featurizers.SimpleMoleculeMolGraphFeaturizer,
-            chemprop_data.BatchMolGraph,
-            chemprop_nn.BondMessagePassing,
-            chemprop_nn.MeanAggregation,
-            self.tokenizer,
-        )
+            ChempropTransformerAE, ChemBERTaTgModel = _build_model_classes(
+                torch_module,
+                nn_module,
+                transformers.AutoModel,
+                chemprop_featurizers.SimpleMoleculeMolGraphFeaturizer,
+                chemprop_data.BatchMolGraph,
+                chemprop_nn.BondMessagePassing,
+                chemprop_nn.MeanAggregation,
+                self.tokenizer,
+            )
 
-        generator_model = ChempropTransformerAE().to(self.device)
-        ckpt = torch_module.load(self.model_dir / "generator_best_40.pth", map_location=self.device)
-        state = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
-        generator_model.load_state_dict(state, strict=False)
-        generator_model.eval()
-        self.generator_model = generator_model
-        self.cond_mean = float(ckpt.get("cond_mean", 0.0)) if isinstance(ckpt, dict) else 0.0
-        self.cond_std = float(ckpt.get("cond_std", 1.0)) if isinstance(ckpt, dict) else 1.0
+            generator_model = ChempropTransformerAE().to(device)
+            ckpt = torch_module.load(self.model_dir / "generator_best_40.pth", map_location=device)
+            state = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
+            generator_model.load_state_dict(state, strict=False)
+            generator_model.eval()
+            cond_mean = float(ckpt.get("cond_mean", 0.0)) if isinstance(ckpt, dict) else 0.0
+            cond_std = float(ckpt.get("cond_std", 1.0)) if isinstance(ckpt, dict) else 1.0
 
-        top_10_features = joblib.load(self.model_dir / "top10_desc_names.pkl")
-        scaler = joblib.load(self.model_dir / "tg_scaler.pkl")
-        chemberta_path = str(self.model_dir / "ChemBerta")
-        hf_tokenizer = transformers.AutoTokenizer.from_pretrained(chemberta_path)
-        evaluator_model = ChemBERTaTgModel(model_name=chemberta_path, num_desc=len(top_10_features)).to(self.device)
-        evaluator_ckpt = torch_module.load(self.model_dir / "best_chemberta_tg.pth", map_location=self.device)
-        evaluator_state = (
-            evaluator_ckpt["model_state_dict"]
-            if isinstance(evaluator_ckpt, dict) and "model_state_dict" in evaluator_ckpt
-            else evaluator_ckpt
-        )
-        evaluator_model.load_state_dict(evaluator_state, strict=False)
-        evaluator_model.eval()
-        self.evaluator_bundle = {
-            "model": evaluator_model,
-            "tokenizer": hf_tokenizer,
-            "top_10_features": top_10_features,
-            "scaler": scaler,
-        }
+            top_10_features = joblib.load(self.model_dir / "top10_desc_names.pkl")
+            scaler = joblib.load(self.model_dir / "tg_scaler.pkl")
+            chemberta_path = str(self.model_dir / "ChemBerta")
+            hf_tokenizer = transformers.AutoTokenizer.from_pretrained(chemberta_path)
+            evaluator_model = ChemBERTaTgModel(
+                model_name=chemberta_path,
+                num_desc=len(top_10_features),
+            ).to(device)
+            evaluator_ckpt = torch_module.load(
+                self.model_dir / "best_chemberta_tg.pth",
+                map_location=device,
+            )
+            evaluator_state = (
+                evaluator_ckpt["model_state_dict"]
+                if isinstance(evaluator_ckpt, dict) and "model_state_dict" in evaluator_ckpt
+                else evaluator_ckpt
+            )
+            evaluator_model.load_state_dict(evaluator_state, strict=False)
+            evaluator_model.eval()
+            evaluator_bundle = {
+                "model": evaluator_model,
+                "tokenizer": hf_tokenizer,
+                "top_10_features": top_10_features,
+                "scaler": scaler,
+            }
+
+            # Commit only after both generator and evaluator have loaded.
+            self.torch = torch_module
+            self.functional = functional
+            self.device = device
+            self.generator_model = generator_model
+            self.cond_mean = cond_mean
+            self.cond_std = cond_std
+            self.evaluator_bundle = evaluator_bundle
+            committed = True
+        finally:
+            if not committed:
+                # Drop every local reference that may own CUDA tensors before
+                # returning control to the Registry retry path.
+                generator_model = None
+                evaluator_model = None
+                evaluator_bundle = None
+                state = None
+                ckpt = None
+                evaluator_state = None
+                evaluator_ckpt = None
+                gc.collect()
+                try:
+                    if torch_module is not None and torch_module.cuda.is_available():
+                        torch_module.cuda.empty_cache()
+                except Exception:
+                    pass
 
     def generate_once(
+        self,
+        *,
+        input_smiles: str,
+        delta_tg: float,
+        top_k: int,
+        temperature: float,
+        max_length: int,
+    ) -> GeneratedSmiles:
+        try:
+            return self._generate_once(
+                input_smiles=input_smiles,
+                delta_tg=delta_tg,
+                top_k=top_k,
+                temperature=temperature,
+                max_length=max_length,
+            )
+        except ModelArtifactError:
+            raise
+        except Exception as exc:
+            if is_cuda_runtime_error(exc):
+                raise ModelArtifactError(f"conditional generation CUDA inference failed: {exc}") from exc
+            raise ModelArtifactError(f"conditional generation inference failed: {exc}") from exc
+
+    def _generate_once(
         self,
         *,
         input_smiles: str,
@@ -427,6 +519,16 @@ class TorchConditionalGenerationRuntime:
         return GeneratedSmiles(raw_smiles=raw_smiles, rdkit_smiles=to_rdkit_smiles(raw_smiles))
 
     def predict_tg(self, smiles: str) -> float:
+        try:
+            return self._predict_tg(smiles)
+        except ModelArtifactError:
+            raise
+        except Exception as exc:
+            if is_cuda_runtime_error(exc):
+                raise ModelArtifactError(f"conditional generation CUDA inference failed: {exc}") from exc
+            raise ModelArtifactError(f"conditional generation Tg inference failed: {exc}") from exc
+
+    def _predict_tg(self, smiles: str) -> float:
         self._load()
         assert self.torch is not None
         assert self.device is not None

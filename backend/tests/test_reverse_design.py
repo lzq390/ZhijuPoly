@@ -276,6 +276,31 @@ def test_reverse_design_job_api_returns_terminal_status(test_app: FastAPI) -> No
         assert status_payload["result"]["total"] == 1
 
 
+def test_reverse_design_job_api_returns_503_when_executor_rejects(test_app: FastAPI) -> None:
+    with TestClient(test_app) as client:
+        manager = test_app.state.reverse_design_job_manager
+        manager._executor.shutdown(wait=False)
+
+        response = client.post(
+            "/api/v1/reverse-design/tg/jobs",
+            json={
+                "smiles": "CCO",
+                "target_tg": 215,
+                "similarity_threshold": 0.0,
+                "candidate_size": 1,
+            },
+        )
+
+        assert response.status_code == 503
+        assert response.headers["Retry-After"] == "1"
+        assert response.json() == {
+            "detail": "Reverse-design job service is temporarily unavailable."
+        }
+        assert manager.active_jobs == 0
+        assert manager.active_executions == 0
+        assert manager._jobs == {}
+
+
 def test_reverse_design_request_ignores_removed_client_limits() -> None:
     request = ReverseDesignTgRequest(
         smiles="CCO",

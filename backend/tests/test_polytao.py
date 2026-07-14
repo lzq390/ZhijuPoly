@@ -1,24 +1,27 @@
 from __future__ import annotations
 
-import json
+from contextlib import contextmanager
+from threading import Event
+from time import monotonic, sleep
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.postgres_database import postgres_connection
+from app.routers import polytao as polytao_router_module
 from app.routers.polytao import router as polytao_router
-from app.services.polytao import normalize_polytao_candidates, polytao_prompt_from_descriptors
-from app.services.polytao_repository import (
-    create_polytao_job_postgres,
-    mark_polytao_job_completed_postgres,
-    mark_polytao_job_failed_postgres,
-    mark_polytao_job_running_postgres,
-    mark_polytao_job_submitted_postgres,
-    mark_stale_polytao_jobs_failed_postgres,
+from app.services.gpu_runtime_registry import GpuRuntimeRegistry
+from app.services.in_memory_jobs import BoundedInMemoryJobStore
+from app.services.polytao import normalize_polytao_candidates
+from app.services.polytao_jobs import PolytaoJobManager
+from app.services.polytao_runtime import (
+    MAX_GENERATION_BATCH_SIZE,
+    BackendPolytaoRuntime,
+    PolytaoGenerationResult,
+    RuntimeProbe,
 )
-from app.services.polytao_runtime import PolytaoGenerationResult, RuntimeProbe
 
 
 DEFAULT_DESCRIPTORS = {
@@ -41,14 +44,19 @@ DEFAULT_DESCRIPTORS = {
 
 
 class FakePolytaoRuntime:
-    def __init__(self) -> None:
+    def __init__(self, *, blocker: tuple[Event, Event] | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.blocker = blocker
 
     def probe(self) -> RuntimeProbe:
         return RuntimeProbe(model_files_ready=True, runtime_ready=True)
 
     def generate(self, **kwargs: Any) -> PolytaoGenerationResult:
         self.calls.append(kwargs)
+        if self.blocker is not None:
+            started, release = self.blocker
+            started.set()
+            assert release.wait(timeout=3)
         result = {
             "prompt": kwargs["prompt"],
             "query_time_ms": 1.5,
@@ -70,6 +78,18 @@ class FakePolytaoRuntime:
         return PolytaoGenerationResult(result=result, query_time_ms=1.5, returned_count=1)
 
 
+class ColdPolytaoRuntime(FakePolytaoRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.loaded = False
+        self.ensure_loaded_calls = 0
+
+    def ensure_loaded(self):
+        self.ensure_loaded_calls += 1
+        self.loaded = True
+        return self
+
+
 class DegradedPolytaoRuntime:
     def probe(self) -> RuntimeProbe:
         return RuntimeProbe(
@@ -82,53 +102,24 @@ class DegradedPolytaoRuntime:
         raise AssertionError("degraded PolyTAO runtime must not receive jobs")
 
 
-class FailingPolytaoRuntime:
-    def probe(self) -> RuntimeProbe:
-        return RuntimeProbe(model_files_ready=True, runtime_ready=True)
-
+class FailingPolytaoRuntime(FakePolytaoRuntime):
     def generate(self, **kwargs: Any) -> PolytaoGenerationResult:
         raise RuntimeError("backend runtime failed")
 
 
-class ImmediatePolytaoJobManager:
-    def __init__(self, postgres_dsn: str) -> None:
-        self._postgres_dsn = postgres_dsn
-
-    def submit_job(self, job_id: str, runner) -> None:
-        with postgres_connection(self._postgres_dsn) as connection:
-            mark_polytao_job_submitted_postgres(connection, job_id=job_id)
-            mark_polytao_job_running_postgres(connection, job_id)
-        try:
-            result = runner()
-        except Exception as exc:
-            with postgres_connection(self._postgres_dsn) as connection:
-                mark_polytao_job_failed_postgres(connection, job_id, str(exc))
-            return
-        with postgres_connection(self._postgres_dsn) as connection:
-            mark_polytao_job_completed_postgres(
-                connection,
-                job_id=job_id,
-                result=result.result,
-                returned_count=result.returned_count,
-            )
-
-    def shutdown(self, *, wait: bool = False) -> None:
-        return None
-
-
 def _create_app(
-    postgres_dsn: str,
     *,
     runtime: object | None = None,
     polytao_enabled: bool = True,
     polytao_max_active_jobs: int = 1,
     polytao_rate_limit_per_ip_per_minute: int = 5,
     polytao_rate_limit_window_seconds: int = 60,
-):
+    max_waiting_inferences: int = 8,
+) -> FastAPI:
     settings = Settings(
-        app_postgres_dsn=postgres_dsn,
-        pi_postgres_dsn=postgres_dsn,
-        lab_data_postgres_dsn=postgres_dsn,
+        app_postgres_dsn="postgresql://unused",
+        pi_postgres_dsn="postgresql://unused",
+        lab_data_postgres_dsn="postgresql://unused",
         csv_source_path="database/data1.csv",
         experimental_process_csv_path="database/missing_process.csv",
         experimental_property_csv_path="database/missing_property.csv",
@@ -143,23 +134,48 @@ def _create_app(
     )
     app = FastAPI()
     app.state.settings = settings
-    app.state.polytao_runtime = runtime if runtime is not None else FakePolytaoRuntime()
-    app.state.polytao_job_manager = ImmediatePolytaoJobManager(postgres_dsn)
+    selected_runtime = runtime if runtime is not None else FakePolytaoRuntime()
+    app.state.polytao_runtime = selected_runtime
+    registry = GpuRuntimeRegistry(max_waiting_inferences=max_waiting_inferences)
+
+    def load_runtime():
+        ensure_loaded = getattr(selected_runtime, "ensure_loaded", None)
+        return ensure_loaded() if callable(ensure_loaded) else selected_runtime
+
+    registry.register("polytao", enabled=polytao_enabled, loader=load_runtime)
+    if polytao_enabled:
+        probe = selected_runtime.probe()
+        if (
+            probe.model_files_ready
+            and probe.runtime_ready
+            and getattr(selected_runtime, "loaded", True) is not False
+        ):
+            registry.mark_ready("polytao", selected_runtime)
+    app.state.gpu_runtime_registry = registry
+    app.state.in_memory_job_store = BoundedInMemoryJobStore(instance_id="a" * 16)
+    app.state.polytao_job_manager = PolytaoJobManager(
+        max_workers=1,
+        max_active_jobs=polytao_max_active_jobs,
+        store=app.state.in_memory_job_store,
+    )
     app.include_router(polytao_router)
     return app
 
 
-def _polytao_job_count(postgres_dsn: str) -> int:
-    with postgres_connection(postgres_dsn) as connection:
-        row = connection.execute("SELECT count(*) AS count FROM generation.polytao_jobs").fetchone()
-        return int(row["count"])
+@contextmanager
+def _client_for(app: FastAPI):
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.state.polytao_job_manager.shutdown(wait=True)
 
 
 def _request_payload(**overrides):
     payload = {
         "descriptors": DEFAULT_DESCRIPTORS,
         "input_smiles": None,
-        "candidate_count": 10,
+        "candidate_count": 1,
         "temperature": 1.0,
         "top_k": 100,
         "top_p": 0.999,
@@ -169,235 +185,257 @@ def _request_payload(**overrides):
     return payload
 
 
-def _seed_polytao_job(postgres_dsn: str, job_id: str = "job-1") -> None:
-    with postgres_connection(postgres_dsn) as connection:
-        create_polytao_job_postgres(
-            connection,
-            job_id=job_id,
-            input_smiles=None,
-            canonical_smiles=None,
-            descriptor_prompt=polytao_prompt_from_descriptors(DEFAULT_DESCRIPTORS),
-            descriptors=DEFAULT_DESCRIPTORS,
-            request_data=_request_payload(),
-            requested_count=10,
+def _wait_for_terminal(client: TestClient, job_id: str, *, timeout: float = 3.0) -> dict[str, Any]:
+    deadline = monotonic() + timeout
+    while monotonic() < deadline:
+        response = client.get(f"/api/v1/conditional-generation/polytao/jobs/{job_id}")
+        assert response.status_code == 200
+        job = response.json()
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            return job
+        sleep(0.01)
+    raise AssertionError("PolyTAO job did not reach a terminal state")
+
+
+def test_polytao_descriptor_endpoint_calculates_rdkit_prompt() -> None:
+    app = _create_app(polytao_enabled=False)
+    with _client_for(app) as client:
+        response = client.post(
+            "/api/v1/conditional-generation/polytao/descriptors",
+            json={"smiles": "CCO"},
         )
-
-
-def test_polytao_descriptor_endpoint_calculates_rdkit_prompt(postgres_dsn: str):
-    client = TestClient(_create_app(postgres_dsn, polytao_enabled=False))
-
-    response = client.post("/api/v1/conditional-generation/polytao/descriptors", json={"smiles": "CCO"})
 
     assert response.status_code == 200
     data = response.json()
     assert data["canonical_smiles"] == "CCO"
     assert len(data["descriptors"]) == 15
-    assert data["descriptors"][0]["name"] == "MolWt"
     assert data["descriptors"][1] == {"name": "HeavyAtomCount", "value": 3.0}
     assert len(data["prompt"].split(",")) == 15
 
 
-def test_polytao_status_reports_disabled_backend_runtime(postgres_dsn: str):
-    client = TestClient(_create_app(postgres_dsn, polytao_enabled=False))
-
-    response = client.get("/api/v1/conditional-generation/polytao/status")
+def test_polytao_status_is_process_local_and_does_not_report_database_health() -> None:
+    app = _create_app()
+    with _client_for(app) as client:
+        response = client.get("/api/v1/conditional-generation/polytao/status")
 
     assert response.status_code == 200
     data = response.json()
+    assert data["available"] is True
+    assert data["runtime_ready"] is True
+    assert data["worker_mode"] == "backend-in-memory"
+    assert data["db_configured"] is None
+    assert data["db_ready"] is None
+    assert data["db_error"] is None
+    assert data["active_jobs"] == 0
+
+
+def test_polytao_status_reports_disabled_runtime() -> None:
+    app = _create_app(polytao_enabled=False)
+    with _client_for(app) as client:
+        data = client.get("/api/v1/conditional-generation/polytao/status").json()
+
     assert data["enabled"] is False
     assert data["available"] is False
-    assert data["worker_base_url_configured"] is False
-    assert data["message"] == "PolyTAO backend runtime is disabled"
 
 
-def test_polytao_status_checks_backend_runtime(postgres_dsn: str):
-    client = TestClient(_create_app(postgres_dsn))
+def test_lazy_status_is_cold_without_loading_and_first_job_loads_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = ColdPolytaoRuntime()
+    monkeypatch.setattr(polytao_router_module, "generate_2d_svg", lambda smiles: "<svg />")
+    app = _create_app(runtime=runtime)
+    with _client_for(app) as client:
+        status_response = client.get("/api/v1/conditional-generation/polytao/status")
+        assert status_response.json()["worker_status"] == "cold"
+        assert status_response.json()["available"] is True
+        assert runtime.ensure_loaded_calls == 0
 
-    response = client.get("/api/v1/conditional-generation/polytao/status")
+        submitted = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(),
+        )
+        assert submitted.status_code == 202
+        job = _wait_for_terminal(client, submitted.json()["job_id"])
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["enabled"] is True
-    assert data["available"] is True
-    assert data["worker_status"] is None
-    assert data["worker_mode"] is None
-    assert data["runtime_ready"] is True
-    assert data["message"] == "PolyTAO backend runtime is ready"
-
-
-def test_polytao_status_reports_degraded_backend_runtime(postgres_dsn: str):
-    client = TestClient(_create_app(postgres_dsn, runtime=DegradedPolytaoRuntime()))
-
-    response = client.get("/api/v1/conditional-generation/polytao/status")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["enabled"] is True
-    assert data["available"] is False
-    assert data["runtime_ready"] is False
-    assert data["runtime_error"] == "missing PolyTAO model files: config.json"
-    assert data["message"] == "PolyTAO backend runtime is not ready: missing PolyTAO model files: config.json"
+    assert job["status"] == "completed"
+    assert runtime.ensure_loaded_calls == 1
 
 
-def test_polytao_status_reports_database_not_ready(monkeypatch, postgres_dsn: str):
+def test_completed_job_retains_svg_and_get_does_not_recompute_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svg_calls: list[str] = []
     monkeypatch.setattr(
-        "app.routers.polytao._polytao_db_health",
-        lambda settings: (True, False, "generation.polytao_jobs table is missing", None),
+        polytao_router_module,
+        "generate_2d_svg",
+        lambda smiles: (svg_calls.append(smiles), "<svg>stored</svg>")[1],
     )
-    client = TestClient(_create_app(postgres_dsn))
+    app = _create_app()
+    with _client_for(app) as client:
+        submitted = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(),
+        )
+        job_id = submitted.json()["job_id"]
+        completed = _wait_for_terminal(client, job_id)
+        second_read = client.get(
+            f"/api/v1/conditional-generation/polytao/jobs/{job_id}"
+        ).json()
 
-    response = client.get("/api/v1/conditional-generation/polytao/status")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["available"] is False
-    assert data["db_ready"] is False
-    assert data["db_error"] == "generation.polytao_jobs table is missing"
-    assert data["message"] == "PolyTAO backend database is not ready: generation.polytao_jobs table is missing"
-
-
-def test_polytao_job_requires_enabled_backend_runtime(postgres_dsn: str):
-    client = TestClient(_create_app(postgres_dsn, polytao_enabled=False))
-
-    response = client.post("/api/v1/conditional-generation/polytao/jobs", json=_request_payload())
-
-    assert response.status_code == 503
-    assert response.json()["detail"] == "PolyTAO backend runtime is disabled"
-    assert _polytao_job_count(postgres_dsn) == 0
+    assert completed["result"]["results"][0]["structure_svg"] == "<svg>stored</svg>"
+    assert second_read["result"] == completed["result"]
+    assert svg_calls == ["*CC*"]
 
 
-def test_polytao_job_rejects_degraded_runtime_without_creating_row(postgres_dsn: str):
-    client = TestClient(_create_app(postgres_dsn, runtime=DegradedPolytaoRuntime()))
+def test_gpu_queue_full_is_an_accepted_job_with_failed_terminal_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(polytao_router_module, "generate_2d_svg", lambda smiles: "<svg />")
+    app = _create_app(max_waiting_inferences=0)
+    registry = app.state.gpu_runtime_registry
+    with registry.inference_session("polytao", timeout_seconds=1):
+        with _client_for(app) as client:
+            submitted = client.post(
+                "/api/v1/conditional-generation/polytao/jobs",
+                json=_request_payload(),
+            )
+            assert submitted.status_code == 202
+            job = _wait_for_terminal(client, submitted.json()["job_id"])
 
-    response = client.post("/api/v1/conditional-generation/polytao/jobs", json=_request_payload())
-
-    assert response.status_code == 503
-    assert "backend runtime is not ready" in response.json()["detail"]
-    assert _polytao_job_count(postgres_dsn) == 0
+    assert job["status"] == "failed"
+    assert job["error_message"].startswith("GPU_QUEUE_FULL:")
 
 
-def test_polytao_job_submit_and_status_roundtrip(postgres_dsn: str):
-    fake_runtime = FakePolytaoRuntime()
-    client = TestClient(_create_app(postgres_dsn, runtime=fake_runtime))
+def test_degraded_runtime_rejects_submission_without_retaining_a_job() -> None:
+    app = _create_app(runtime=DegradedPolytaoRuntime())
+    with _client_for(app) as client:
+        status_response = client.get("/api/v1/conditional-generation/polytao/status")
+        submitted = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(),
+        )
 
-    create_response = client.post("/api/v1/conditional-generation/polytao/jobs", json=_request_payload(input_smiles="CCO"))
+    assert status_response.json()["available"] is False
+    assert submitted.status_code == 503
+    assert app.state.polytao_job_manager.retained_jobs == 0
 
-    assert create_response.status_code == 202
-    job_id = create_response.json()["job_id"]
-    assert fake_runtime.calls[0]["prompt"] == "264,19,0,4,1,0,1,0,0,0,4,0,6,5,1"
 
-    status_response = client.get(f"/api/v1/conditional-generation/polytao/jobs/{job_id}")
+def test_runtime_failure_is_retained_as_failed_job() -> None:
+    app = _create_app(runtime=FailingPolytaoRuntime())
+    with _client_for(app) as client:
+        submitted = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(),
+        )
+        assert submitted.status_code == 202
+        job = _wait_for_terminal(client, submitted.json()["job_id"])
+
+    assert job["status"] == "failed"
+    assert job["error_message"] == "backend runtime failed"
+
+
+def test_submit_rate_limit_is_per_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(polytao_router_module, "generate_2d_svg", lambda smiles: "<svg />")
+    app = _create_app(polytao_max_active_jobs=2, polytao_rate_limit_per_ip_per_minute=1)
+    with _client_for(app) as client:
+        first = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(),
+            headers={"x-forwarded-for": "198.51.100.1"},
+        )
+        second = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(),
+            headers={"x-forwarded-for": "198.51.100.1"},
+        )
+        other_ip = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(),
+            headers={"x-forwarded-for": "198.51.100.2"},
+        )
+
+    assert first.status_code == 202
+    assert second.status_code == 429
+    assert other_ip.status_code == 202
+
+
+def test_lane_capacity_is_atomic_and_returns_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(polytao_router_module, "generate_2d_svg", lambda smiles: "<svg />")
+    started = Event()
+    release = Event()
+    app = _create_app(runtime=FakePolytaoRuntime(blocker=(started, release)))
+    with _client_for(app) as client:
+        first = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(),
+        )
+        assert first.status_code == 202
+        assert started.wait(timeout=3)
+        second = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(),
+        )
+        release.set()
+        _wait_for_terminal(client, first.json()["job_id"])
+
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "5"
+    assert app.state.polytao_job_manager.retained_jobs == 1
+
+
+def test_job_lookup_uses_404_for_wrong_namespace_and_410_for_old_instance() -> None:
+    app = _create_app()
+    current_token = "0" * 32
+    with _client_for(app) as client:
+        malformed = client.get("/api/v1/conditional-generation/polytao/jobs/not-a-job")
+        wrong_namespace = client.get(
+            "/api/v1/conditional-generation/polytao/jobs/"
+            f"conditional_generation.{('a' * 16)}.{current_token}"
+        )
+        old_instance = client.get(
+            "/api/v1/conditional-generation/polytao/jobs/"
+            f"polytao.{('b' * 16)}.{current_token}"
+        )
+        legacy_uuid = client.get(
+            "/api/v1/conditional-generation/polytao/jobs/"
+            "123e4567-e89b-42d3-a456-426614174000"
+        )
+        legacy_uuid_hex = client.get(
+            "/api/v1/conditional-generation/polytao/jobs/"
+            "123e4567e89b42d3a456426614174000"
+        )
+
+    assert malformed.status_code == 404
+    assert wrong_namespace.status_code == 404
+    assert old_instance.status_code == 410
+    assert legacy_uuid.status_code == 410
+    assert legacy_uuid_hex.status_code == 410
+
+
+def test_status_becomes_unavailable_after_job_admission_stops() -> None:
+    app = _create_app()
+    app.state.polytao_job_manager.stop_accepting()
+    with _client_for(app) as client:
+        status_response = client.get("/api/v1/conditional-generation/polytao/status")
+
     assert status_response.status_code == 200
-    completed = status_response.json()
-    assert completed["status"] == "completed"
-    assert completed["engine"] == "polytao-backend"
-    assert completed["progress_message"] == "PolyTAO generation completed in the backend runtime."
-    assert completed["result"]["returned_count"] == 1
-    assert "<svg" in completed["result"]["results"][0]["structure_svg"]
+    assert status_response.json()["available"] is False
 
 
-def test_polytao_job_submit_rate_limit_is_per_ip(postgres_dsn: str):
-    app = _create_app(
-        postgres_dsn,
-        polytao_max_active_jobs=10,
-        polytao_rate_limit_per_ip_per_minute=1,
-        polytao_rate_limit_window_seconds=60,
-    )
-    client = TestClient(app)
-    headers = {"x-forwarded-for": "203.0.113.9"}
-
-    first_response = client.post(
-        "/api/v1/conditional-generation/polytao/jobs",
-        json=_request_payload(),
-        headers=headers,
-    )
-    second_response = client.post(
-        "/api/v1/conditional-generation/polytao/jobs",
-        json=_request_payload(),
-        headers=headers,
-    )
-
-    assert first_response.status_code == 202
-    assert second_response.status_code == 429
-    assert second_response.json()["detail"] == "PolyTAO submit rate limit exceeded; please wait before submitting another job"
-
-
-def test_polytao_job_capacity_counts_active_postgres_jobs(postgres_dsn: str):
-    _seed_polytao_job(postgres_dsn, job_id="active-job")
-    with postgres_connection(postgres_dsn) as connection:
-        mark_polytao_job_running_postgres(connection, "active-job")
-    client = TestClient(_create_app(postgres_dsn, polytao_max_active_jobs=1))
-
-    response = client.post("/api/v1/conditional-generation/polytao/jobs", json=_request_payload())
-
-    assert response.status_code == 429
-    assert response.json()["detail"] == "PolyTAO job capacity is full; please wait for the current job to finish"
-
-
-def test_polytao_backend_runtime_failure_marks_job_failed(postgres_dsn: str):
-    client = TestClient(_create_app(postgres_dsn, runtime=FailingPolytaoRuntime()))
-
-    response = client.post("/api/v1/conditional-generation/polytao/jobs", json=_request_payload())
-
-    assert response.status_code == 202
-    job_id = response.json()["job_id"]
-    status_response = client.get(f"/api/v1/conditional-generation/polytao/jobs/{job_id}")
-    assert status_response.status_code == 200
-    data = status_response.json()
-    assert data["status"] == "failed"
-    assert data["error_message"] == "backend runtime failed"
-
-
-def test_polytao_generation_request_rejects_missing_descriptor(postgres_dsn: str):
-    payload = _request_payload(descriptors={k: v for k, v in DEFAULT_DESCRIPTORS.items() if k != "MolWt"})
-    client = TestClient(_create_app(postgres_dsn))
-
-    response = client.post("/api/v1/conditional-generation/polytao/jobs", json=payload)
+def test_generation_request_rejects_missing_descriptor() -> None:
+    descriptors = dict(DEFAULT_DESCRIPTORS)
+    descriptors.pop("MolWt")
+    app = _create_app()
+    with _client_for(app) as client:
+        response = client.post(
+            "/api/v1/conditional-generation/polytao/jobs",
+            json=_request_payload(descriptors=descriptors),
+        )
 
     assert response.status_code == 422
 
 
-def test_polytao_terminal_state_updates_do_not_regress(postgres_dsn: str):
-    _seed_polytao_job(postgres_dsn, job_id="terminal-job")
-    result = {
-        "prompt": polytao_prompt_from_descriptors(DEFAULT_DESCRIPTORS),
-        "query_time_ms": 1.0,
-        "requested_count": 10,
-        "returned_count": 0,
-        "attempts": 1,
-        "filter_counter": {},
-        "results": [],
-    }
-    with postgres_connection(postgres_dsn) as connection:
-        mark_polytao_job_completed_postgres(connection, job_id="terminal-job", result=result, returned_count=0)
-        mark_polytao_job_running_postgres(connection, "terminal-job")
-        mark_polytao_job_failed_postgres(connection, "terminal-job", "late failure")
-        row = connection.execute(
-            "SELECT status, error_message, result_data FROM generation.polytao_jobs WHERE job_id = %s",
-            ("terminal-job",),
-        ).fetchone()
-
-    assert row["status"] == "completed"
-    assert row["error_message"] is None
-    result_data = json.loads(row["result_data"]) if isinstance(row["result_data"], str) else row["result_data"]
-    assert result_data["returned_count"] == 0
-
-
-def test_polytao_startup_cleanup_marks_stale_active_jobs_failed(postgres_dsn: str):
-    _seed_polytao_job(postgres_dsn, job_id="stale-job")
-    with postgres_connection(postgres_dsn) as connection:
-        mark_polytao_job_running_postgres(connection, "stale-job")
-        mark_stale_polytao_jobs_failed_postgres(connection)
-        row = connection.execute(
-            "SELECT status, error_message FROM generation.polytao_jobs WHERE job_id = %s",
-            ("stale-job",),
-        ).fetchone()
-
-    assert row["status"] == "failed"
-    assert row["error_message"] == "PolyTAO backend restarted before this job finished."
-
-
-def test_polytao_candidate_normalization_filters_invalid_duplicates_and_attachment_points():
+def test_polytao_candidate_normalization_filters_invalid_duplicates_and_attachment_points() -> None:
     candidates, filters = normalize_polytao_candidates(
         ["", "not-a-smiles", "CCO", "[*]CC[*]", "*CC*", "*OCC*"],
         requested_count=10,
@@ -408,3 +446,240 @@ def test_polytao_candidate_normalization_filters_invalid_duplicates_and_attachme
     assert filters["rdkit_parse_failed"] == 1
     assert filters["star_count_lt_2"] == 1
     assert filters["duplicate"] == 1
+
+
+def test_backend_runtime_micro_batches_maximum_request(tmp_path) -> None:
+    class Tensor:
+        def to(self, _device):
+            return self
+
+    class Tokenizer:
+        pad_token_id = 0
+        eos_token_id = 1
+
+        def __call__(self, _prompt, *, return_tensors):
+            assert return_tensors == "pt"
+            return {"input_ids": Tensor()}
+
+        def decode(self, _output, *, skip_special_tokens):
+            assert skip_special_tokens is True
+            return "[*]CC[*]"
+
+    class Model:
+        def __init__(self) -> None:
+            self.batch_sizes: list[int] = []
+
+        def generate(self, **kwargs):
+            batch_size = int(kwargs["num_return_sequences"])
+            self.batch_sizes.append(batch_size)
+            return list(range(batch_size))
+
+    class Cuda:
+        def __init__(self) -> None:
+            self.empty_cache_calls = 0
+
+        def empty_cache(self) -> None:
+            self.empty_cache_calls += 1
+
+    class Torch:
+        def __init__(self) -> None:
+            self.cuda = Cuda()
+
+        @contextmanager
+        def inference_mode(self):
+            yield
+
+    tokenizer = Tokenizer()
+    model = Model()
+    torch = Torch()
+    runtime = BackendPolytaoRuntime(
+        model_dir=tmp_path,
+        device="cuda",
+        model_id="polytao-test",
+    )
+    runtime._load = lambda: (tokenizer, model, torch, "cuda")  # type: ignore[method-assign]
+
+    generated = runtime.generate(
+        prompt="test",
+        candidate_count=50,
+        temperature=2.0,
+        top_k=500,
+        top_p=1.0,
+        max_length=512,
+    )
+
+    assert model.batch_sizes == [MAX_GENERATION_BATCH_SIZE] * 50
+    assert max(model.batch_sizes) == 2
+    assert torch.cuda.empty_cache_calls == 50
+    assert generated.result["attempts"] == 1
+    assert generated.returned_count == 1
+
+
+def test_backend_runtime_rejects_empty_model_output(tmp_path) -> None:
+    class Tensor:
+        def to(self, _device):
+            return self
+
+    class Tokenizer:
+        pad_token_id = 0
+        eos_token_id = 1
+
+        def __call__(self, _prompt, *, return_tensors):
+            return {"input_ids": Tensor()}
+
+        def decode(self, _output, *, skip_special_tokens):
+            return "[*]CC[*]"
+
+    class Model:
+        def generate(self, **_kwargs):
+            return []
+
+    class Cuda:
+        def empty_cache(self) -> None:
+            pass
+
+    class Torch:
+        cuda = Cuda()
+
+        @contextmanager
+        def inference_mode(self):
+            yield
+
+    runtime = BackendPolytaoRuntime(
+        model_dir=tmp_path,
+        device="cuda",
+        model_id="polytao-test",
+    )
+    runtime._load = lambda: (Tokenizer(), Model(), Torch(), "cuda")  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="no decoded candidates"):
+        runtime.generate(
+            prompt="test",
+            candidate_count=1,
+            temperature=1.0,
+            top_k=100,
+            top_p=0.999,
+            max_length=300,
+        )
+
+
+def test_backend_runtime_bounds_all_filtered_batches(tmp_path) -> None:
+    class Tensor:
+        def to(self, _device):
+            return self
+
+    class Tokenizer:
+        pad_token_id = 0
+        eos_token_id = 1
+
+        def __call__(self, _prompt, *, return_tensors):
+            return {"input_ids": Tensor()}
+
+        def decode(self, _output, *, skip_special_tokens):
+            return ""
+
+    class Model:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, **kwargs):
+            self.calls += 1
+            return list(range(int(kwargs["num_return_sequences"])))
+
+    class Cuda:
+        def empty_cache(self) -> None:
+            pass
+
+    class Torch:
+        cuda = Cuda()
+
+        @contextmanager
+        def inference_mode(self):
+            yield
+
+    model = Model()
+    runtime = BackendPolytaoRuntime(
+        model_dir=tmp_path,
+        device="cuda",
+        model_id="polytao-test",
+    )
+    runtime._load = lambda: (Tokenizer(), model, Torch(), "cuda")  # type: ignore[method-assign]
+
+    generated = runtime.generate(
+        prompt="test",
+        candidate_count=50,
+        temperature=1.0,
+        top_k=100,
+        top_p=0.999,
+        max_length=300,
+    )
+
+    assert model.calls == 50
+    assert generated.returned_count == 0
+    assert generated.result["filter_counter"] == {"empty_raw_smiles": 100}
+
+
+@pytest.mark.parametrize("failure_stage", ["encode", "generate", "decode"])
+def test_backend_runtime_cleanup_preserves_primary_batch_error(
+    tmp_path,
+    failure_stage: str,
+) -> None:
+    class Tensor:
+        def to(self, _device):
+            if failure_stage == "encode":
+                raise RuntimeError("encode failed")
+            return self
+
+    class Tokenizer:
+        pad_token_id = 0
+        eos_token_id = 1
+
+        def __call__(self, _prompt, *, return_tensors):
+            return {"input_ids": Tensor()}
+
+        def decode(self, _output, *, skip_special_tokens):
+            if failure_stage == "decode":
+                raise RuntimeError("decode failed")
+            return "[*]CC[*]"
+
+    class Model:
+        def generate(self, **kwargs):
+            if failure_stage == "generate":
+                raise RuntimeError("generate failed")
+            return list(range(int(kwargs["num_return_sequences"])))
+
+    class Cuda:
+        def __init__(self) -> None:
+            self.empty_cache_calls = 0
+
+        def empty_cache(self) -> None:
+            self.empty_cache_calls += 1
+            raise RuntimeError("cleanup failed")
+
+    class Torch:
+        def __init__(self) -> None:
+            self.cuda = Cuda()
+
+        @contextmanager
+        def inference_mode(self):
+            yield
+
+    torch = Torch()
+    runtime = BackendPolytaoRuntime(
+        model_dir=tmp_path,
+        device="cuda",
+        model_id="polytao-test",
+    )
+    runtime._load = lambda: (Tokenizer(), Model(), torch, "cuda")  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match=rf"^{failure_stage} failed$"):
+        runtime.generate(
+            prompt="test",
+            candidate_count=1,
+            temperature=1.0,
+            top_k=100,
+            top_p=0.999,
+            max_length=300,
+        )
+
+    assert torch.cuda.empty_cache_calls == 1

@@ -5,6 +5,7 @@ import inspect
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from rdkit import Chem
@@ -31,6 +32,7 @@ class RecognizedStructure:
 
 
 _RECOGNIZER_CACHE: dict[tuple[str, str], Any] = {}
+_RECOGNIZER_CACHE_LOCK = Lock()
 
 
 def _detect_image_type(image_bytes: bytes) -> str | None:
@@ -102,7 +104,12 @@ def _normalize_confidence(confidence: float | None, warnings: list[str]) -> floa
     return confidence
 
 
-def _resolve_molscribe_checkpoint(model_path: Path) -> Path:
+def resolve_molscribe_checkpoint(model_path: Path) -> Path:
+    """Resolve the exact MolScribe checkpoint accepted by the runtime loader.
+
+    Keep this resolver public so startup/preflight checks and the actual model
+    loader cannot drift to different filename or directory rules.
+    """
     resolved_model_path = model_path.expanduser().resolve()
     if not resolved_model_path.exists():
         raise ModelArtifactError(f"OCSR model path not found: {resolved_model_path}")
@@ -312,14 +319,22 @@ def _build_molscribe_recognizer(checkpoint_path: Path, torch_device: Any, device
 
 
 def _get_recognizer(model_path: Path, device: str) -> Any:
-    checkpoint_path = _resolve_molscribe_checkpoint(model_path)
+    checkpoint_path = resolve_molscribe_checkpoint(model_path)
     torch_device, device_label = _resolve_torch_device(device)
     cache_key = (str(checkpoint_path), device_label)
     recognizer = _RECOGNIZER_CACHE.get(cache_key)
     if recognizer is None:
-        recognizer = _build_molscribe_recognizer(checkpoint_path, torch_device, device_label)
-        _RECOGNIZER_CACHE[cache_key] = recognizer
+        with _RECOGNIZER_CACHE_LOCK:
+            recognizer = _RECOGNIZER_CACHE.get(cache_key)
+            if recognizer is None:
+                recognizer = _build_molscribe_recognizer(checkpoint_path, torch_device, device_label)
+                _RECOGNIZER_CACHE[cache_key] = recognizer
     return recognizer
+
+
+def load_image_recognition_runtime(model_path: Path, device: str) -> Any:
+    """Load and return the cached MolScribe runtime used by inference requests."""
+    return _get_recognizer(model_path, device)
 
 
 def _predict_with_recognizer(recognizer: Any, image_path: Path) -> Any:
@@ -377,7 +392,7 @@ def _call_prediction_method(method: Any, method_name: str, *attempts: tuple[tupl
             if first_error is None:
                 first_error = exc
 
-    raise ModelArtifactError(f"MolScribe {method_name} failed: {first_error}")
+    raise ModelArtifactError(f"MolScribe {method_name} failed: {first_error}") from first_error
 
 
 def recognize_structure_image_from_bytes(
@@ -387,13 +402,14 @@ def recognize_structure_image_from_bytes(
     model_path: Path,
     device: str,
     max_bytes: int,
+    runtime: Any | None = None,
 ) -> RecognizedStructure:
     _detected_type, suffix = validate_structure_image(
         image_bytes,
         content_type=content_type,
         max_bytes=max_bytes,
     )
-    recognizer = _get_recognizer(model_path, device)
+    recognizer = runtime if runtime is not None else _get_recognizer(model_path, device)
 
     with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
         handle.write(image_bytes)

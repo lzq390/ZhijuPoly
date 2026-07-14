@@ -16,6 +16,7 @@ from app.postgres_database import PostgresUnavailableError
 from app.services.postgres_reverse_design import search_reverse_design_by_tg_postgres
 from app.services.fingerprint import generate
 from app.services.structure_2d import generate_2d_svg
+from app.services.reverse_design_jobs import ReverseDesignJobUnavailableError
 from app.utils.exceptions import InvalidSmilesError
 
 
@@ -176,7 +177,14 @@ async def create_tg_search_job(
             cancellation_check=cancellation_check,
         )
 
-    job = manager.create_job(request_body, run_search)
+    try:
+        job = manager.create_job(request_body, run_search)
+    except ReverseDesignJobUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Reverse-design job service is temporarily unavailable.",
+            headers={"Retry-After": "1"},
+        ) from exc
     return ReverseDesignTgJobCreateResponse(job_id=job.job_id, status=job.status)
 
 
