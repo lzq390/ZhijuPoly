@@ -122,6 +122,22 @@ def load_retrosynthesis_runtime(model_id: str, device: str) -> _ReactionT5Runtim
     return _get_runtime(model_id, _resolve_device(device))
 
 
+def warmup_retrosynthesis_runtime(runtime: _ReactionT5Runtime) -> None:
+    """Run one minimal local generation to validate loaded CUDA kernels."""
+
+    inputs = runtime.tokenizer("CC", return_tensors="pt")
+    inputs = {key: value.to(runtime.device) for key, value in inputs.items()}
+    with runtime.torch.inference_mode():
+        runtime.model.generate(
+            **inputs,
+            num_beams=1,
+            num_return_sequences=1,
+            max_new_tokens=1,
+        )
+    if str(runtime.device).startswith("cuda"):
+        runtime.torch.cuda.synchronize()
+
+
 def validate_retrosynthesis_input(smiles: str) -> None:
     """Validate request input before a lazy model load is attempted."""
     _canonicalize_smiles(smiles)

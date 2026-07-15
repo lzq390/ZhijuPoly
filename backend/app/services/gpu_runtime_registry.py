@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterator, Literal
 
 
 RuntimeLoader = Callable[[], Any]
+RuntimeWarmup = Callable[[Any], None]
 
 
 class GpuQueueError(RuntimeError):
@@ -69,6 +70,7 @@ class _RuntimeEntry:
     name: str
     enabled: bool
     loader: RuntimeLoader
+    warmup: RuntimeWarmup | None = None
     loading: bool = False
     loaded: bool = False
     ready: bool = False
@@ -118,7 +120,14 @@ class GpuRuntimeRegistry:
         self._next_ticket_sequence = 0
         self._accepting_inferences = True
 
-    def register(self, name: str, *, enabled: bool, loader: RuntimeLoader) -> None:
+    def register(
+        self,
+        name: str,
+        *,
+        enabled: bool,
+        loader: RuntimeLoader,
+        warmup: RuntimeWarmup | None = None,
+    ) -> None:
         clean_name = str(name).strip()
         if not clean_name:
             raise ValueError("GPU runtime name must be non-empty")
@@ -129,6 +138,7 @@ class GpuRuntimeRegistry:
                 name=clean_name,
                 enabled=bool(enabled),
                 loader=loader,
+                warmup=warmup,
             )
 
     def preload_enabled(self) -> None:
@@ -183,6 +193,8 @@ class GpuRuntimeRegistry:
         started_at = time.perf_counter()
         try:
             runtime = entry.loader()
+            if entry.warmup is not None and self.preload_mode == "required":
+                entry.warmup(runtime)
         except Exception as exc:
             with entry.condition:
                 entry.loading = False

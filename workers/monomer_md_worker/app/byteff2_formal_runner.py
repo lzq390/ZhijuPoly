@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import re
-import signal
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,8 @@ from .formal_protocols import (
     sanitize_formal_config,
 )
 from .models import JobRequest
+from .process_control import create_fenced_subprocess_exec, wait_for_process_group
+from gpu_resource import ManagedGpuLease, mps_client_environment
 
 
 class FormalProtocolRunResult:
@@ -28,7 +29,13 @@ class ByteFF2FormalRunner:
     def __init__(self, settings: WorkerSettings) -> None:
         self._settings = settings
 
-    async def run(self, request: JobRequest, output_dir: Path) -> FormalProtocolRunResult:
+    async def run(
+        self,
+        request: JobRequest,
+        output_dir: Path,
+        *,
+        execution_lease: ManagedGpuLease | None = None,
+    ) -> FormalProtocolRunResult:
         protocol = request.protocol
         if request.config_json is None:
             raise RuntimeError("formal ByteFF2 jobs require config_json")
@@ -46,7 +53,18 @@ class ByteFF2FormalRunner:
 
         env = os.environ.copy()
         env["BYTEFF2_ROOT"] = str(self._settings.byteff2_root)
-        env["CUDA_VISIBLE_DEVICES"] = self._settings.cuda_visible_devices
+        if execution_lease is not None:
+            env.update(
+                mps_client_environment(
+                    execution_lease.lease,
+                    pipe_root=self._settings.gpu_mps_pipe_root,
+                )
+            )
+            result_gpu_device = str(execution_lease.lease.gpu_index)
+        else:
+            env["CUDA_VISIBLE_DEVICES"] = self._settings.cuda_visible_devices
+            env["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = "50"
+            result_gpu_device = self._settings.cuda_visible_devices
         env["PYTHONPATH"] = os.pathsep.join(
             [str(self._settings.byteff2_root), env.get("PYTHONPATH", "")]
         ).strip(os.pathsep)
@@ -54,30 +72,29 @@ class ByteFF2FormalRunner:
         stdout_path = output_dir / "worker_stdout.log"
         stderr_path = output_dir / "worker_stderr.log"
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            process = await asyncio.create_subprocess_exec(
-                self._settings.byteff2_python,
-                str(run_md_path),
-                "--config",
-                str(config_path),
+            process = await create_fenced_subprocess_exec(
+                (
+                    self._settings.byteff2_python,
+                    str(run_md_path),
+                    "--config",
+                    str(config_path),
+                ),
+                execution_lease=execution_lease,
                 cwd=output_dir,
                 env=env,
                 stdout=stdout,
                 stderr=stderr,
-                start_new_session=True,
             )
             try:
-                return_code = await asyncio.wait_for(
-                    process.wait(),
-                    timeout=self._settings.formal_timeout_seconds,
+                return_code = await wait_for_process_group(
+                    process,
+                    timeout_seconds=self._settings.formal_timeout_seconds,
+                    execution_lease=execution_lease,
                 )
             except asyncio.TimeoutError as exc:
-                await _terminate_process_group(process)
                 raise RuntimeError(
                     f"ByteFF2 {protocol} timed out after {self._settings.formal_timeout_seconds}s"
                 ) from exc
-            except asyncio.CancelledError:
-                await _terminate_process_group(process)
-                raise
         if return_code != 0:
             raise RuntimeError(
                 f"ByteFF2 {protocol} failed with exit code {return_code}; "
@@ -110,9 +127,11 @@ class ByteFF2FormalRunner:
             "artifact_manifest": artifact_manifest,
             "artifacts": _frontend_artifacts(artifact_manifest),
             "byteff2_git_sha": byteff2_git_sha,
-            "gpu_device": self._settings.cuda_visible_devices,
+            "gpu_device": result_gpu_device,
             "physical_result": True,
         }
+        if execution_lease is not None:
+            result.update(_lease_provenance(execution_lease))
         _write_json(output_dir / "formal_results.json", result)
         artifact_manifest = _artifact_manifest(output_dir)
         result["artifact_manifest"] = artifact_manifest
@@ -121,25 +140,18 @@ class ByteFF2FormalRunner:
         return FormalProtocolRunResult(result=result, completed_steps=completed_steps)
 
 
-async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is not None:
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        await process.wait()
-        return
-    try:
-        await asyncio.wait_for(process.wait(), timeout=10)
-        return
-    except asyncio.TimeoutError:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        await process.wait()
-        return
-    await process.wait()
+def _lease_provenance(execution_lease: ManagedGpuLease) -> dict[str, Any]:
+    lease = execution_lease.lease
+    return {
+        "execution_path": "broker",
+        "gpu_uuid": lease.gpu_uuid,
+        "gpu_budget_mib": lease.memory_mib,
+        "gpu_thread_percent": lease.thread_percent,
+        "gpu_lease_id": lease.lease_id,
+        "gpu_fencing_token": lease.fencing_token,
+        "gpu_broker_instance_id": lease.broker_instance_id,
+        "gpu_preferred_device": lease.preferred,
+    }
 
 
 def _summary_from_result(result: dict[str, Any]) -> dict[str, Any]:

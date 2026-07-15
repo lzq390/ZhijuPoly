@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import math
 import logging
+import math
+import os
 from contextlib import asynccontextmanager
 from time import monotonic
 from typing import Any
@@ -38,13 +39,20 @@ from app.services.conditional_generation_jobs import ConditionalGenerationJobMan
 from app.services.conditional_generation_runtime import TorchConditionalGenerationRuntime
 from app.services.deployment_control import InflightApiWriteTracker
 from app.services.gpu_runtime_registry import GpuRuntimeRegistry
-from app.services.image_recognition import load_image_recognition_runtime
+from app.services.image_recognition import (
+    load_image_recognition_runtime,
+    warmup_image_recognition_runtime,
+)
 from app.services.in_memory_jobs import BoundedInMemoryJobStore
-from app.services.monomer_retrosynthesis import load_retrosynthesis_runtime
+from app.services.monomer_retrosynthesis import (
+    load_retrosynthesis_runtime,
+    warmup_retrosynthesis_runtime,
+)
 from app.services.polytao_jobs import PolytaoJobManager
 from app.services.polytao_runtime import BackendPolytaoRuntime
 from app.services.monomer_md_repository import mark_expired_unclaimed_monomer_md_jobs_failed_postgres
 from app.services.reverse_design_jobs import ReverseDesignJobManager
+from gpu_resource import GpuBrokerClient, ManagedGpuLease, mps_client_environment
 
 logger = logging.getLogger(__name__)
 JOB_SHUTDOWN_GRACE_SECONDS = 35.0
@@ -75,15 +83,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(api_app: FastAPI):
+        residency_lease: ManagedGpuLease | None = None
         try:
             required_startup = api_app.state.settings.gpu_preload_mode == "required"
             _run_database_startup_preflight(api_app, required=required_startup)
             _mark_expired_monomer_md_jobs_failed(api_app)
+            if api_app.state.settings.gpu_broker_enabled:
+                residency_lease = await run_in_threadpool(
+                    _acquire_backend_gpu_residency,
+                    api_app.state.settings,
+                )
+                api_app.state.backend_gpu_residency_lease = residency_lease
             if required_startup:
                 api_app.state.gpu_runtime_registry.preload_enabled()
+                if residency_lease is not None:
+                    # Warmup may take long enough for a Broker restart or
+                    # fencing response to arrive.  Never advertise a fully
+                    # preloaded process whose residency is no longer proven.
+                    residency_lease.assert_healthy()
+                snapshot = api_app.state.gpu_runtime_registry.snapshot()
+                not_ready = [
+                    name
+                    for name, state in snapshot["models"].items()
+                    if state["enabled"] and not state["ready"]
+                ]
+                if snapshot["status"] != "ready" or not_ready:
+                    raise RuntimeError(
+                        "required GPU preload did not reach ready state: "
+                        + ", ".join(sorted(not_ready))
+                    )
+            if residency_lease is not None:
+                residency_lease.assert_healthy()
             yield
         finally:
             await run_in_threadpool(_shutdown_in_process_job_managers, api_app)
+            if residency_lease is not None:
+                # Models and their CUDA context remain resident until process
+                # exit.  Stop heartbeats but let the broker reclaim only after
+                # the exact owner PID is gone.
+                await run_in_threadpool(residency_lease.abandon)
 
     app = FastAPI(title="PolyProp API", version="0.1.0", lifespan=lifespan)
 
@@ -103,6 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # In lazy/development mode startup database checks are allowed to fail
     # without taking unrelated APIs offline.
     app.state.database_preflight_errors = ()
+    app.state.backend_gpu_residency_lease = None
     app.state.conditional_generation_runtime = TorchConditionalGenerationRuntime(
         model_dir=app_settings.gen_model_dir_path,
         device=app_settings.gen_device,
@@ -159,6 +198,84 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
+def _acquire_backend_gpu_residency(settings: Settings) -> ManagedGpuLease:
+    client = GpuBrokerClient(settings.gpu_broker_socket_path)
+    client_id = f"backend-{settings.gpu_broker_environment}"
+    lease = client.acquire_managed(
+        kind="residency",
+        placement="preferred",
+        component="backend",
+        environment=settings.gpu_broker_environment,
+        client_id=client_id,
+        memory_mib=8_192,
+        thread_percent=100,
+        wait_timeout_seconds=settings.gpu_broker_wait_timeout_seconds,
+        heartbeat_interval_seconds=settings.gpu_broker_heartbeat_interval_seconds,
+        request_id=f"backend:{settings.gpu_broker_environment}:residency",
+    )
+    expected_gpu = (
+        (2, "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe")
+        if settings.gpu_broker_environment == "prod"
+        else (1, "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771")
+    )
+    lease_payload = lease.lease
+    valid_identity = (
+        isinstance(getattr(lease_payload, "lease_id", None), str)
+        and bool(lease_payload.lease_id)
+        and isinstance(getattr(lease_payload, "fencing_token", None), int)
+        and not isinstance(lease_payload.fencing_token, bool)
+        and lease_payload.fencing_token > 0
+        and isinstance(getattr(lease_payload, "broker_instance_id", None), str)
+        and bool(lease_payload.broker_instance_id)
+        and isinstance(getattr(lease_payload, "workload_pid", None), int)
+        and not isinstance(lease_payload.workload_pid, bool)
+        and lease_payload.workload_pid > 0
+        and isinstance(
+            getattr(lease_payload, "workload_process_start_ticks", None), int
+        )
+        and not isinstance(lease_payload.workload_process_start_ticks, bool)
+        and lease_payload.workload_process_start_ticks > 0
+        and isinstance(
+            getattr(lease_payload, "workload_process_group_id", None), int
+        )
+        and not isinstance(lease_payload.workload_process_group_id, bool)
+        and lease_payload.workload_process_group_id > 0
+        and isinstance(getattr(lease_payload, "workload_cgroup", None), str)
+        and bool(lease_payload.workload_cgroup)
+    )
+    expected_metadata = {
+        "kind": "residency",
+        "placement": "preferred",
+        "component": "backend",
+        "environment": settings.gpu_broker_environment,
+        "client_id": client_id,
+        "gpu_index": expected_gpu[0],
+        "gpu_uuid": expected_gpu[1],
+        "memory_mib": 8_192,
+        "thread_percent": 100,
+        "preferred": True,
+        "parent_lease_id": None,
+        "status": "active",
+    }
+    if not valid_identity or any(
+        getattr(lease_payload, name, object()) != expected
+        for name, expected in expected_metadata.items()
+    ):
+        lease.close()
+        raise RuntimeError("GPU broker returned invalid Backend residency lease metadata")
+    try:
+        os.environ.update(
+            mps_client_environment(
+                lease.lease,
+                pipe_root=settings.gpu_mps_pipe_root,
+            )
+        )
+    except Exception:
+        lease.close()
+        raise
+    return lease
+
+
 def _build_gpu_runtime_registry(app: FastAPI, settings: Settings) -> GpuRuntimeRegistry:
     registry = GpuRuntimeRegistry(
         preload_mode=settings.gpu_preload_mode,
@@ -169,21 +286,25 @@ def _build_gpu_runtime_registry(app: FastAPI, settings: Settings) -> GpuRuntimeR
         "ocsr",
         enabled=settings.ocsr_enabled,
         loader=lambda: load_image_recognition_runtime(settings.ocsr_model_dir_path, settings.ocsr_device),
+        warmup=warmup_image_recognition_runtime,
     )
     registry.register(
         "conditional_generation",
         enabled=settings.gen_model_enabled,
         loader=lambda: _ensure_runtime_instance(app.state.conditional_generation_runtime),
+        warmup=lambda runtime: runtime.warmup(),
     )
     registry.register(
         "retrosynthesis",
         enabled=settings.retro_model_enabled,
         loader=lambda: load_retrosynthesis_runtime(settings.retro_model_id, settings.retro_device),
+        warmup=warmup_retrosynthesis_runtime,
     )
     registry.register(
         "polytao",
         enabled=settings.polytao_enabled,
         loader=lambda: _ensure_runtime_instance(app.state.polytao_runtime),
+        warmup=lambda runtime: runtime.warmup(),
     )
     return registry
 

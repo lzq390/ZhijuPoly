@@ -179,7 +179,8 @@ class WorkerHostRuntimeTests(unittest.TestCase):
         self.assertIn(f'Environment="PATH={FROZEN_BASE_BIN}:', unit)
         self.assertIn(f'Environment="BYTEFF2_ROOT={CURRENT_ASSET_BYTEFF2}"', unit)
         self.assertIn(
-            f'Environment="PYTHONPATH={CURRENT_ASSET_BYTEFF2}:{CURRENT_ASSET_BYTEFF2}/submodules/bytemol"',
+            'Environment="PYTHONPATH=/data/lzq/gith/nexpoly/ops/current:'
+            f'{CURRENT_ASSET_BYTEFF2}:{CURRENT_ASSET_BYTEFF2}/submodules/bytemol"',
             unit,
         )
         self.assertIn(
@@ -204,7 +205,14 @@ class WorkerHostRuntimeTests(unittest.TestCase):
         self.assertEqual(worker["BYTEFF2_PYTHON"], f"{FROZEN_BASE_BIN}/python")
         self.assertEqual(
             worker["PYTHONPATH"],
+            "/data/lzq/gith/nexpoly/ops/current:"
             f"{CURRENT_ASSET_BYTEFF2}:{CURRENT_ASSET_BYTEFF2}/submodules/bytemol",
+        )
+        self.assertEqual(worker["MONOMER_MD_GPU_BROKER_ENABLED"], "false")
+        self.assertEqual(worker["MONOMER_MD_GPU_BROKER_ENVIRONMENT"], "prod")
+        self.assertEqual(
+            worker["MONOMER_MD_GPU_MPS_PIPE_ROOT"],
+            "/data/lzq/gith/nexpoly/ops/state/gpu-resource",
         )
         self.assertEqual(
             worker["MONOMER_MD_PYTHON"],

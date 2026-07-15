@@ -1,6 +1,6 @@
 [Unit]
 Description=NexPoly monomer MD worker
-After=network-online.target
+After=network-online.target nexpoly-gpu-broker.service
 Wants=network-online.target
 
 [Service]
@@ -8,7 +8,7 @@ Type=simple
 WorkingDirectory=/data/lzq/gith/nexpoly/ops/current/workers/monomer_md_worker
 Environment="PATH=/home/devuser/miniconda3/envs/byteff2-repro/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="BYTEFF2_ROOT=/data/lzq/gith/nexpoly/ops/current-assets/byteff2"
-Environment="PYTHONPATH=/data/lzq/gith/nexpoly/ops/current-assets/byteff2:/data/lzq/gith/nexpoly/ops/current-assets/byteff2/submodules/bytemol"
+Environment="PYTHONPATH=/data/lzq/gith/nexpoly/ops/current:/data/lzq/gith/nexpoly/ops/current-assets/byteff2:/data/lzq/gith/nexpoly/ops/current-assets/byteff2/submodules/bytemol"
 EnvironmentFile=/data/lzq/gith/nexpoly/ops/config/worker.env
 # A marker with no controller holding deploy.lock is a crashed deployment and
 # must fail closed. During a controlled switch the controller still holds the

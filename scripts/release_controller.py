@@ -2417,6 +2417,7 @@ class ReleaseController:
                 "BYTEFF2_ROOT": str(self.ops / "current-assets" / "byteff2"),
                 "BYTEFF2_PYTHON": "/home/devuser/miniconda3/envs/byteff2-repro/bin/python",
                 "PYTHONPATH": (
+                    f"{self.ops / 'current'}:"
                     f"{self.ops / 'current-assets' / 'byteff2'}:"
                     f"{self.ops / 'current-assets' / 'byteff2' / 'submodules' / 'bytemol'}"
                 ),
@@ -2426,6 +2427,16 @@ class ReleaseController:
                     self.ops / "state" / "monomer-md-worker-socket" / "worker.sock"
                 ),
                 "MONOMER_MD_WORKER_MODE": "real",
+                "MONOMER_MD_GPU_BROKER_ENABLED": "false",
+                "MONOMER_MD_GPU_BROKER_ENVIRONMENT": "prod",
+                "MONOMER_MD_GPU_BROKER_SOCKET_PATH": str(
+                    self.ops / "state" / "gpu-resource" / "broker.sock"
+                ),
+                "MONOMER_MD_GPU_MPS_PIPE_ROOT": str(
+                    self.ops / "state" / "gpu-resource"
+                ),
+                "MONOMER_MD_GPU_BROKER_WAIT_TIMEOUT_SECONDS": "600",
+                "MONOMER_MD_GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS": "5",
             }
             for key, expected in expected_worker_values.items():
                 if worker_values.get(key) != expected:

@@ -13,6 +13,11 @@ x-production-environment: &production-environment
   GPU_MAX_WAITING_INFERENCES: "8"
   GPU_SYNC_QUEUE_TIMEOUT_SECONDS: "30"
   GPU_ASYNC_QUEUE_TIMEOUT_SECONDS: "600"
+  # GPU Broker/MPS production activation is a separate maintenance PR.
+  GPU_BROKER_ENABLED: "false"
+  GPU_BROKER_ENVIRONMENT: "prod"
+  GPU_BROKER_SOCKET_PATH: "/app/gpu-broker/broker.sock"
+  GPU_MPS_PIPE_ROOT: "/app/gpu-mps"
   GEN_MAX_ACTIVE_JOBS: "8"
   GEN_JOB_WORKERS: "1"
   OCSR_ENABLED: "true"

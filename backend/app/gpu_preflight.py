@@ -85,46 +85,60 @@ def inspect_configured_runtime(settings: Settings) -> dict[str, Any]:
         versions[distribution] = actual
         if actual != expected:
             errors.append(f"{distribution} must be {expected}, found {actual}")
-    for module_name in ("torchvision", "transformers", "sklearn"):
+    broker_managed = bool(getattr(settings, "gpu_broker_enabled", False))
+    if not broker_managed:
+        for module_name in ("torchvision", "transformers", "sklearn"):
+            try:
+                _import_runtime_dependency(module_name)
+            except PreflightError as exc:
+                errors.append(str(exc))
+
+    cuda: dict[str, Any] = {
+        "available": False,
+        "runtime": None,
+        "device": None,
+        "managed_by_broker": broker_managed,
+    }
+    if broker_managed:
+        # This command is used by Docker health checks in a process separate
+        # from the lease-owning Backend.  Importing torch/torchvision or
+        # calling any CUDA API here would create an unleased MPS client.  CUDA
+        # readiness is therefore proven only by the main-process status API.
+        cuda["inspection"] = "deferred_to_lease_owner"
+    else:
         try:
-            _import_runtime_dependency(module_name)
-        except PreflightError as exc:
-            errors.append(str(exc))
+            import torch
 
-    cuda: dict[str, Any] = {"available": False, "runtime": None, "device": None}
-    try:
-        import torch
-
-        cuda["runtime"] = torch.version.cuda
-        cuda["available"] = bool(torch.cuda.is_available())
-        if torch.__version__ != EXPECTED_VERSIONS["torch"]:
-            errors.append(
-                f"imported torch must be {EXPECTED_VERSIONS['torch']}, found {torch.__version__}"
-            )
-        if torch.version.cuda != EXPECTED_CUDA_RUNTIME:
-            errors.append(
-                f"CUDA runtime must be {EXPECTED_CUDA_RUNTIME}, found {torch.version.cuda or 'none'}"
-            )
-        if not torch.cuda.is_available():
-            errors.append("CUDA is not available")
-        else:
-            capability = tuple(int(value) for value in torch.cuda.get_device_capability(0))
-            name = torch.cuda.get_device_name(0)
-            cuda["device"] = {
-                "index": 0,
-                "name": name,
-                "capability": f"{capability[0]}.{capability[1]}",
-            }
-            if capability != EXPECTED_CAPABILITY:
+            cuda["runtime"] = torch.version.cuda
+            cuda["available"] = bool(torch.cuda.is_available())
+            if torch.__version__ != EXPECTED_VERSIONS["torch"]:
                 errors.append(
-                    "GPU capability must be "
-                    f"{EXPECTED_CAPABILITY[0]}.{EXPECTED_CAPABILITY[1]}, found "
-                    f"{capability[0]}.{capability[1]}"
+                    f"imported torch must be {EXPECTED_VERSIONS['torch']}, found {torch.__version__}"
                 )
-            if "RTX 4090" not in name.upper():
-                errors.append(f"GPU must be an RTX 4090, found {name}")
-    except Exception as exc:
-        errors.append(f"CUDA runtime inspection failed: {exc}")
+            if torch.version.cuda != EXPECTED_CUDA_RUNTIME:
+                errors.append(
+                    f"CUDA runtime must be {EXPECTED_CUDA_RUNTIME}, found {torch.version.cuda or 'none'}"
+                )
+            if not torch.cuda.is_available():
+                errors.append("CUDA is not available")
+            else:
+                capability = tuple(int(value) for value in torch.cuda.get_device_capability(0))
+                name = torch.cuda.get_device_name(0)
+                cuda["device"] = {
+                    "index": 0,
+                    "name": name,
+                    "capability": f"{capability[0]}.{capability[1]}",
+                }
+                if capability != EXPECTED_CAPABILITY:
+                    errors.append(
+                        "GPU capability must be "
+                        f"{EXPECTED_CAPABILITY[0]}.{EXPECTED_CAPABILITY[1]}, found "
+                        f"{capability[0]}.{capability[1]}"
+                    )
+                if "RTX 4090" not in name.upper():
+                    errors.append(f"GPU must be an RTX 4090, found {name}")
+        except Exception as exc:
+            errors.append(f"CUDA runtime inspection failed: {exc}")
 
     models = {
         "ocsr": settings.ocsr_enabled,
@@ -205,7 +219,11 @@ def verify_serialized_assets(settings: Settings) -> dict[str, Any]:
     return {"checked": checked, "count": len(checked)}
 
 
-def inspect_ready_runtime(status_url: str) -> dict[str, Any]:
+def inspect_ready_runtime(
+    status_url: str,
+    *,
+    require_broker: bool = False,
+) -> dict[str, Any]:
     request = Request(status_url, headers={"Cache-Control": "no-store"})
     try:
         with urlopen(request, timeout=10) as response:
@@ -229,6 +247,19 @@ def inspect_ready_runtime(status_url: str) -> dict[str, Any]:
     ]
     if not_ready:
         raise PreflightError("enabled GPU runtimes are not ready: " + ", ".join(sorted(not_ready)))
+    if require_broker:
+        broker = payload.get("resource_broker")
+        lease = broker.get("lease") if isinstance(broker, dict) else None
+        if (
+            not isinstance(broker, dict)
+            or broker.get("enabled") is not True
+            or broker.get("connectivity") != "healthy"
+            or not isinstance(lease, dict)
+            or lease.get("status") != "active"
+        ):
+            raise PreflightError(
+                "GPU registry is not backed by a healthy active residency lease"
+            )
     return payload
 
 
@@ -245,7 +276,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.verify_serialized_assets:
             report["serialized_assets"] = verify_serialized_assets(settings)
         if args.mode == "ready" and not report["errors"]:
-            report["registry"] = inspect_ready_runtime(args.status_url)
+            report["registry"] = inspect_ready_runtime(
+                args.status_url,
+                require_broker=bool(getattr(settings, "gpu_broker_enabled", False)),
+            )
     except Exception as exc:
         report["errors"].append(str(exc))
     if args.mode == "ready" and "registry" in report:

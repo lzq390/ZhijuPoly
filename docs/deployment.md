@@ -1,5 +1,10 @@
 # NexPoly deployment
 
+GPU Broker/MPS accounting, fixed budgets, and the separately authorized
+activation sequence are documented in
+[GPU resource governance](gpu-resource-governance.md). The units ship disabled;
+normal release automation must not change production compute mode.
+
 NexPoly uses one CI/CD workflow for application code, the host Monomer-MD
 Worker, and the immutable model/data asset pin.  Production remains rooted at
 `/data/lzq/gith/nexpoly`, but a deployment never builds an image or installs a

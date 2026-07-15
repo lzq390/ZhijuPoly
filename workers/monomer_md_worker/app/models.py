@@ -40,6 +40,12 @@ class JobRequest(BaseModel):
             raise ValueError("DensityDemo must use run_mode='demo'")
         if self.config_json is None:
             raise ValueError("config_json is required for formal ByteFF2 jobs")
+        natoms = self.config_json.get("natoms")
+        if natoms is not None:
+            if isinstance(natoms, bool) or not isinstance(natoms, int) or natoms <= 0:
+                raise ValueError("config_json.natoms must be a positive integer")
+            if natoms > 10_000:
+                raise ValueError("config_json.natoms must be <= 10000")
         return self
 
 
@@ -78,6 +84,9 @@ class HealthResponse(BaseModel):
     worker_id: str
     worker_version: str
     protocols: dict[str, Any] = Field(default_factory=dict)
+    gpu_broker_enabled: bool = False
+    gpu_broker_ready: bool = True
+    gpu_broker_error: str | None = None
 
 
 class DrainResponse(BaseModel):

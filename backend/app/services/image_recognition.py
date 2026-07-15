@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib
 import inspect
 import tempfile
@@ -335,6 +336,20 @@ def _get_recognizer(model_path: Path, device: str) -> Any:
 def load_image_recognition_runtime(model_path: Path, device: str) -> Any:
     """Load and return the cached MolScribe runtime used by inference requests."""
     return _get_recognizer(model_path, device)
+
+
+def warmup_image_recognition_runtime(recognizer: Any) -> None:
+    """Run a minimal, read-only MolScribe forward pass for startup readiness."""
+
+    # Valid 1x1 RGB PNG; MolScribe preprocessing resizes it to model input size.
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4"
+        "z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".png") as handle:
+        handle.write(image_bytes)
+        handle.flush()
+        _predict_with_recognizer(recognizer, Path(handle.name))
 
 
 def _predict_with_recognizer(recognizer: Any, image_path: Path) -> Any:

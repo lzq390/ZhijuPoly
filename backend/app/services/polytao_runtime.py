@@ -169,6 +169,23 @@ class BackendPolytaoRuntime:
         self._load()
         return self
 
+    def warmup(self) -> None:
+        """Run one minimal local generation without creating a business job."""
+
+        tokenizer, model, torch, device = self._load()
+        encoded = tokenizer("C", return_tensors="pt")
+        encoded = {key: value.to(device) for key, value in encoded.items()}
+        with torch.inference_mode():
+            model.generate(
+                **encoded,
+                max_new_tokens=1,
+                num_return_sequences=1,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+        if str(device).startswith("cuda"):
+            torch.cuda.synchronize()
+
     @property
     def loaded(self) -> bool:
         return self._loaded

@@ -21,6 +21,7 @@ from .formal_protocols import FORMAL_PROTOCOLS
 from .models import ArtifactDeletionResponse, DrainResponse, HealthResponse, JobAccepted, JobRequest
 from .repository import JobUpdateResult, PostgresJobRepository
 from .runner import MonomerMdRunner
+from gpu_resource import GpuBrokerClient, GpuBrokerClientError, ManagedGpuLease
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("monomer_md_worker")
@@ -304,6 +305,16 @@ def _build_health_response() -> HealthResponse:
     runtime_ready = True
     runtime_error = None
     protocols: dict[str, Any] = {}
+    gpu_broker_ready = True
+    gpu_broker_error: str | None = None
+    if settings.gpu_broker_enabled:
+        try:
+            broker_status = GpuBrokerClient(settings.gpu_broker_socket_path).status()
+            if broker_status.get("draining") is True:
+                raise GpuBrokerClientError("broker_draining", "GPU broker is draining")
+        except GpuBrokerClientError as exc:
+            gpu_broker_ready = False
+            gpu_broker_error = f"{exc.code}: {exc}"
     if settings.mode == "real":
         if byteff2_root_exists:
             probe_result = _probe_real_runtime()
@@ -325,6 +336,8 @@ def _build_health_response() -> HealthResponse:
     if settings.db_configured and not recovery_ready:
         worker_status = "degraded"
         runtime_error = runtime_error or "worker database recovery has not completed"
+    if settings.mode == "real" and settings.gpu_broker_enabled and not gpu_broker_ready:
+        worker_status = "degraded"
     accepting_jobs = (
         worker_status == "ok"
         and recovery_ready
@@ -356,10 +369,15 @@ def _build_health_response() -> HealthResponse:
         worker_id=settings.worker_id,
         worker_version=settings.worker_version,
         protocols=protocols,
+        gpu_broker_enabled=settings.gpu_broker_enabled,
+        gpu_broker_ready=gpu_broker_ready,
+        gpu_broker_error=gpu_broker_error,
     )
 
 
 def _probe_real_runtime() -> tuple[bool, str | None, dict[str, Any]]:
+    if settings.gpu_broker_enabled:
+        return _probe_broker_managed_runtime_without_cuda()
     demo_entry_error = _configured_density_demo_entry_error()
     if demo_entry_error is not None:
         return False, demo_entry_error, _unready_protocols(demo_entry_error)
@@ -467,6 +485,57 @@ def _probe_real_runtime() -> tuple[bool, str | None, dict[str, Any]]:
     return False, error, _protocols_with_runtime_error(protocol_probe, error)
 
 
+def _probe_broker_managed_runtime_without_cuda() -> tuple[
+    bool,
+    str | None,
+    dict[str, Any],
+]:
+    """Validate immutable assets without importing OpenMM/CUDA.
+
+    Health runs before any per-job execution lease exists.  Even a seemingly
+    harmless CUDA platform lookup would create an unbudgeted MPS client, so
+    Broker mode limits health to CPU/filesystem delivery checks.  The actual
+    protocol imports and CUDA platform creation occur behind the exec gate
+    after the job lease and dedicated cgroup have both been registered.
+    """
+
+    errors: list[str] = []
+    entry_error = _configured_density_demo_entry_error()
+    if entry_error is not None:
+        errors.append(entry_error)
+    byteff_python = Path(settings.byteff2_python)
+    if byteff_python.is_absolute():
+        if not byteff_python.is_file():
+            errors.append(f"BYTEFF2_PYTHON is missing: {byteff_python}")
+    elif shutil.which(settings.byteff2_python) is None:
+        errors.append(f"BYTEFF2_PYTHON not found: {settings.byteff2_python}")
+    run_md = (
+        settings.byteff2_root
+        / "example"
+        / "4_MD_simulations"
+        / "run_md.py"
+    )
+    if not run_md.is_file() or run_md.is_symlink():
+        errors.append(f"ByteFF2 run_md.py was not found or is unsafe: {run_md}")
+    if shutil.which("gmx") is None:
+        errors.append("gmx was not found on PATH")
+    if errors:
+        error = "; ".join(errors)
+        return False, error, _unready_protocols(error)
+    protocols = {
+        protocol: {
+            "protocol": protocol,
+            "run_mode": "formal",
+            "supported": True,
+            "runtime_ready": True,
+            "runtime_error": None,
+            "probe": "lease_gated_at_execution",
+        }
+        for protocol in FORMAL_PROTOCOLS
+    }
+    return True, None, protocols
+
+
 def _completed_process_error(completed: subprocess.CompletedProcess[str], label: str) -> str:
     detail = (completed.stderr or completed.stdout or "").strip().splitlines()
     message = detail[-1] if detail else f"{label} exited {completed.returncode}"
@@ -545,6 +614,10 @@ def _configured_density_demo_entry_error() -> str | None:
 
 
 def _health_rejection_message(health_response: HealthResponse) -> str:
+    if health_response.gpu_broker_enabled and not health_response.gpu_broker_ready:
+        if health_response.gpu_broker_error:
+            return f"monomer MD GPU broker is not ready: {health_response.gpu_broker_error}"
+        return "monomer MD GPU broker is not ready"
     if not health_response.db_configured:
         return "monomer MD worker database is not configured"
     if not health_response.byteff2_root_exists:
@@ -585,32 +658,44 @@ def _job_rejection_message(health_response: HealthResponse, request: JobRequest)
 
 async def _run_job(request: JobRequest, steps: int) -> None:
     async with semaphore:
-        running_update_result = await _safe_update_status(
-            request.job_id,
-            "running",
-            progress_percent=5,
-            progress_stage="running",
-            progress_message=(
-                f"Running ByteFF2 {request.protocol} formal protocol."
-                if request.run_mode == "formal"
-                else f"Running the {steps}-step ByteFF2 density demo."
-            ),
-        )
-        if settings.db_configured and running_update_result is not JobUpdateResult.UPDATED:
-            logger.warning("monomer MD job stopped before execution: %s", request.job_id)
-            if running_update_result is None:
-                await _persist_terminal_status(
-                    request.job_id,
-                    "failed",
-                    error="Monomer MD worker could not persist the running state.",
-                    error_category="worker_status_update_failed",
-                    progress_stage="failed",
-                    progress_message="Monomer MD worker could not persist the running state.",
-                )
-            return
+        execution_lease: ManagedGpuLease | None = None
         try:
-            result = await runner.run(request, steps)
+            # Keep the durable job in submitted state while waiting for host
+            # capacity.  No ByteFF2/OpenMM child exists before this succeeds.
+            execution_lease = await runner.acquire_execution_lease(request.job_id)
+            running_update_result = await _safe_update_status(
+                request.job_id,
+                "running",
+                progress_percent=5,
+                progress_stage="running",
+                progress_message=(
+                    f"Running ByteFF2 {request.protocol} formal protocol."
+                    if request.run_mode == "formal"
+                    else f"Running the {steps}-step ByteFF2 density demo."
+                ),
+            )
+            if settings.db_configured and running_update_result is not JobUpdateResult.UPDATED:
+                logger.warning("monomer MD job stopped before execution: %s", request.job_id)
+                if running_update_result is None:
+                    await _persist_terminal_status(
+                        request.job_id,
+                        "failed",
+                        error="Monomer MD worker could not persist the running state.",
+                        error_category="worker_status_update_failed",
+                        progress_stage="failed",
+                        progress_message="Monomer MD worker could not persist the running state.",
+                    )
+                await _release_execution_lease_safely(execution_lease, request.job_id)
+                return
+            result = await runner.run(
+                request,
+                steps,
+                execution_lease=execution_lease,
+            )
+            await runner.release_execution_lease(execution_lease)
+            execution_lease = None
         except asyncio.CancelledError:
+            await _release_execution_lease_safely(execution_lease, request.job_id)
             await _persist_terminal_status(
                 request.job_id,
                 "failed",
@@ -621,6 +706,7 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             )
             raise
         except Exception as exc:
+            await _release_execution_lease_safely(execution_lease, request.job_id)
             logger.exception("monomer MD job failed: %s", request.job_id)
             await _persist_terminal_status(
                 request.job_id,
@@ -659,6 +745,23 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             byteff2_git_sha=result.result.get("byteff2_git_sha") if isinstance(result.result.get("byteff2_git_sha"), str) else None,
             gpu_device=result.result.get("gpu_device") if isinstance(result.result.get("gpu_device"), str) else None,
         )
+
+
+async def _release_execution_lease_safely(
+    execution_lease: ManagedGpuLease | None,
+    job_id: str,
+) -> None:
+    if execution_lease is None:
+        return
+    if getattr(execution_lease, "termination_unsafe", False):
+        execution_lease.abandon()
+        return
+    try:
+        await runner.release_execution_lease(execution_lease)
+    except Exception:
+        # The reservation remains fail-closed in the Broker.  Logging retains
+        # evidence and a Worker restart will eventually clear the exact owner.
+        logger.exception("failed to release GPU execution lease for job %s", job_id)
 
 
 async def _safe_update_status(
@@ -769,6 +872,12 @@ async def _heartbeat_loop() -> None:
 
 def _classify_error(exc: Exception) -> str:
     message = str(exc).lower()
+    if isinstance(exc, GpuBrokerClientError):
+        if exc.code == "gpu_capacity_unavailable":
+            return "gpu_capacity_unavailable"
+        if exc.code in {"gpu_lease_lost", "stale_fencing_token", "unknown_lease"}:
+            return "gpu_lease_lost"
+        return "gpu_runtime_unhealthy"
     if "timed out" in message:
         return "timeout"
     if "not found" in message or "not importable" in message:
