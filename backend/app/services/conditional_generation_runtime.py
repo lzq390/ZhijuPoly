@@ -343,6 +343,21 @@ class TorchConditionalGenerationRuntime:
     def loaded(self) -> bool:
         return self.generator_model is not None and self.evaluator_bundle is not None
 
+    def warmup(self) -> None:
+        """Exercise both generator and Tg evaluator without persisting output."""
+
+        self._load()
+        self.generate_once(
+            input_smiles="CC",
+            delta_tg=0.0,
+            top_k=1,
+            temperature=1.0,
+            max_length=1,
+        )
+        self.predict_tg("CC")
+        if self.torch is not None and str(self.device).startswith("cuda"):
+            self.torch.cuda.synchronize()
+
     def _reset_loaded_state(self) -> None:
         self.device = None
         self.generator_model = None

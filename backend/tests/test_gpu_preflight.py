@@ -84,6 +84,36 @@ def test_configured_preflight_checks_exact_runtime_and_assets(tmp_path, monkeypa
     assert all(state["enabled"] for state in report["models"].values())
 
 
+def test_broker_managed_configured_preflight_never_imports_cuda_runtime(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    settings = _configured_settings(tmp_path)
+    settings.gpu_broker_enabled = True
+    monkeypatch.setattr(
+        gpu_preflight,
+        "_distribution_version",
+        lambda name: gpu_preflight.EXPECTED_VERSIONS[name],
+    )
+
+    def forbidden_import(name):
+        raise AssertionError(f"runtime import is forbidden in Broker health: {name}")
+
+    monkeypatch.setattr(gpu_preflight, "_import_runtime_dependency", forbidden_import)
+
+    report = gpu_preflight.inspect_configured_runtime(settings)
+
+    assert report["status"] == "configured"
+    assert report["errors"] == []
+    assert report["cuda"] == {
+        "available": False,
+        "runtime": None,
+        "device": None,
+        "managed_by_broker": True,
+        "inspection": "deferred_to_lease_owner",
+    }
+
+
 def test_configured_preflight_rejects_version_and_asset_drift(tmp_path, monkeypatch) -> None:
     settings = _configured_settings(tmp_path)
     settings.polytao_model_dir_path.joinpath("pytorch_model.bin").unlink()
@@ -217,3 +247,40 @@ def test_ready_preflight_rejects_scheduler_that_is_not_accepting(monkeypatch) ->
 
     with pytest.raises(gpu_preflight.PreflightError, match="not accepting"):
         gpu_preflight.inspect_ready_runtime("http://status")
+
+
+def test_ready_preflight_requires_healthy_active_broker_lease(monkeypatch) -> None:
+    payload = {
+        "status": "ready",
+        "accepting_inferences": True,
+        "max_concurrent_inferences": 1,
+        "models": {"polytao": {"enabled": True, "ready": True}},
+        "resource_broker": {
+            "enabled": True,
+            "connectivity": "suspect",
+            "lease": {"status": "suspect"},
+        },
+    }
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(payload).encode()
+
+    monkeypatch.setattr(gpu_preflight, "urlopen", lambda *_args, **_kwargs: Response())
+    with pytest.raises(gpu_preflight.PreflightError, match="residency lease"):
+        gpu_preflight.inspect_ready_runtime("http://status", require_broker=True)
+
+    payload["resource_broker"]["connectivity"] = "healthy"
+    payload["resource_broker"]["lease"]["status"] = "active"
+    assert (
+        gpu_preflight.inspect_ready_runtime(
+            "http://status", require_broker=True
+        )["status"]
+        == "ready"
+    )

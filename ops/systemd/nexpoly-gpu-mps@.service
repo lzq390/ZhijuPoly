@@ -1,0 +1,31 @@
+[Unit]
+Description=NexPoly NVIDIA MPS control daemon for GPU%i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=1001
+Group=1001
+WorkingDirectory=/data/lzq/gith/nexpoly/ops/current
+Environment="NEXPOLY_GPU_STATE_ROOT=/data/lzq/gith/nexpoly/ops/state/gpu-resource"
+Environment="NEXPOLY_GPU_EXTERNAL_RESERVATIONS=/data/lzq/gith/nexpoly/ops/state/gpu-resource/external-reservations.json"
+Environment="XDG_RUNTIME_DIR=/run/user/1001"
+ExecStartPre=/usr/bin/install -d -m 0700 /data/lzq/gith/nexpoly/ops/state/gpu-resource
+ExecStartPre=/usr/bin/install -m 0600 /data/lzq/gith/nexpoly/ops/current/ops/config/gpu-external-reservations.json /data/lzq/gith/nexpoly/ops/state/gpu-resource/external-reservations.json
+ExecStart=/data/lzq/gith/nexpoly/ops/current/scripts/gpu_mps_control.sh start %i
+ExecStop=/data/lzq/gith/nexpoly/ops/current/scripts/gpu_mps_control.sh stop %i
+TimeoutStartSec=30
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexpoly-gpu-mps-%i
+
+# Template instances 1, 2, and 3 are shipped disabled.  GPU0 has no valid
+# instance and the helper refuses it even if started manually.
+[Install]
+WantedBy=default.target

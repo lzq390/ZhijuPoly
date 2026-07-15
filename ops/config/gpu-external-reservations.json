@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "blocked_gpu_uuids": {
+    "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5": "GPU3 has an unmanaged Docker DeviceRequest; remove only after host audit"
+  },
+  "managed_docker_claims": {
+    "backend-prod": {
+      "component": "backend",
+      "environment": "prod",
+      "compose_project": "nexpoly",
+      "compose_service": "backend",
+      "gpu_uuids": [
+        "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+      ]
+    },
+    "backend-dev": {
+      "component": "backend",
+      "environment": "dev",
+      "compose_project": "nexpoly_dev",
+      "compose_service": "backend",
+      "gpu_uuids": [
+        "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771"
+      ]
+    },
+    "md-prod": {
+      "component": "md",
+      "environment": "prod",
+      "compose_project": "nexpoly-monomer-md-worker",
+      "compose_service": "monomer-md-worker",
+      "gpu_uuids": [
+        "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+        "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+        "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
+      ]
+    },
+    "md-dev": {
+      "component": "md",
+      "environment": "dev",
+      "compose_project": "nexpoly-dev-monomer-md-worker",
+      "compose_service": "monomer-md-worker",
+      "gpu_uuids": [
+        "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+        "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
+      ]
+    }
+  },
+  "managed_systemd_claims": {
+    "nexpoly-monomer-md-worker.service": {
+      "gpu_uuids": [
+        "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+        "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+        "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
+      ],
+      "reason": "Broker-managed host MD supervisor; GPU contexts exist only under per-job leases"
+    },
+    "nexpoly-gpu-mps@1.service": {
+      "gpu_uuids": [
+        "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771"
+      ],
+      "reason": "Broker-governed single-user MPS server for GPU1"
+    },
+    "nexpoly-gpu-mps@2.service": {
+      "gpu_uuids": [
+        "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+      ],
+      "reason": "Broker-governed single-user MPS server for GPU2"
+    },
+    "nexpoly-gpu-mps@3.service": {
+      "gpu_uuids": [
+        "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
+      ],
+      "reason": "Broker-governed single-user MPS server for GPU3"
+    }
+  }
+}

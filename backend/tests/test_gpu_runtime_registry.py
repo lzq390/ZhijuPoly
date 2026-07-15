@@ -48,6 +48,45 @@ def test_registry_preloads_enabled_models_in_registration_order() -> None:
     assert registry.snapshot()["status"] == "ready"
 
 
+def test_registry_marks_runtime_ready_only_after_warmup() -> None:
+    runtime = object()
+    events: list[tuple[str, object]] = []
+    registry = GpuRuntimeRegistry(preload_mode="required")
+    registry.register(
+        "polytao",
+        enabled=True,
+        loader=lambda: events.append(("load", runtime)) or runtime,
+        warmup=lambda loaded: events.append(("warmup", loaded)),
+    )
+
+    registry.preload_enabled()
+
+    assert events == [("load", runtime), ("warmup", runtime)]
+    assert registry.model_snapshots()["polytao"]["ready"] is True
+
+
+def test_required_warmup_failure_keeps_runtime_unready() -> None:
+    registry = GpuRuntimeRegistry(preload_mode="required")
+
+    def fail_warmup(_runtime: object) -> None:
+        raise RuntimeError("CUDA warmup failed")
+
+    registry.register(
+        "polytao",
+        enabled=True,
+        loader=object,
+        warmup=fail_warmup,
+    )
+
+    with pytest.raises(RuntimeError, match="CUDA warmup failed"):
+        registry.preload_enabled()
+
+    snapshot = registry.model_snapshots()["polytao"]
+    assert snapshot["loaded"] is False
+    assert snapshot["ready"] is False
+    assert snapshot["error"] == "CUDA warmup failed"
+
+
 def test_ocsr_inference_reuses_preloaded_runtime_and_records_success_before_release(
     monkeypatch,
 ) -> None:
@@ -508,6 +547,36 @@ def test_internal_gpu_status_exposes_registry_snapshot() -> None:
     assert payload["waiting_inferences"] == 0
 
 
+def test_internal_gpu_status_degrades_on_suspect_residency_heartbeat() -> None:
+    registry = GpuRuntimeRegistry(preload_mode="required")
+    registry.register("polytao", enabled=True, loader=object)
+    registry.preload_enabled()
+    app = FastAPI()
+    app.state.gpu_runtime_registry = registry
+    app.state.backend_gpu_residency_lease = SimpleNamespace(
+        connectivity_status="suspect",
+        last_heartbeat_error="GPU broker request failed",
+        lease=SimpleNamespace(
+            lease_id="lease-1",
+            fencing_token=1,
+            broker_instance_id="broker-1",
+            gpu_index=1,
+            gpu_uuid="GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+            memory_mib=8192,
+            thread_percent=100,
+            status="active",
+        ),
+    )
+    app.include_router(gpu_status_router)
+
+    payload = TestClient(app).get("/internal/gpu/status").json()
+
+    assert payload["status"] == "degraded"
+    assert payload["accepting_inferences"] is False
+    assert payload["resource_broker"]["connectivity"] == "suspect"
+    assert payload["resource_broker"]["lease"]["status"] == "suspect"
+
+
 def test_registry_with_no_enabled_models_is_not_ready() -> None:
     registry = GpuRuntimeRegistry()
     registry.register("polytao", enabled=False, loader=object)
@@ -590,3 +659,47 @@ def test_required_preload_failure_blocks_application_startup(monkeypatch) -> Non
     with pytest.raises(RuntimeError, match="required GPU runtime failed"):
         with TestClient(app):
             pass
+
+
+def test_required_preload_rechecks_residency_after_warmup(monkeypatch) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(
+        "app.main._run_database_startup_preflight", lambda app, required: None
+    )
+
+    class Lease:
+        def assert_healthy(self) -> None:
+            events.append("lease-assert")
+            raise RuntimeError("residency fenced during warmup")
+
+        def abandon(self) -> None:
+            events.append("lease-abandon")
+
+    monkeypatch.setattr(
+        "app.main._acquire_backend_gpu_residency", lambda _settings: Lease()
+    )
+    settings = Settings(
+        gpu_preload_mode="required",
+        gpu_broker_enabled=True,
+        ocsr_enabled=False,
+        gen_model_enabled=False,
+        retro_model_enabled=False,
+        polytao_enabled=False,
+        model_enabled=False,
+    )
+    app = create_app(settings)
+    registry = GpuRuntimeRegistry(preload_mode="required")
+    registry.register(
+        "polytao",
+        enabled=True,
+        loader=lambda: events.append("load") or object(),
+        warmup=lambda _runtime: events.append("warmup"),
+    )
+    app.state.gpu_runtime_registry = registry
+
+    with pytest.raises(RuntimeError, match="fenced during warmup"):
+        with TestClient(app):
+            pass
+
+    assert events[:3] == ["load", "warmup", "lease-assert"]
+    assert events[-1] == "lease-abandon"

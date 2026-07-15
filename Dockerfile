@@ -5,6 +5,7 @@ ARG PYPI_MIRROR_URL="https://pypi.org/simple"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HOME=/home/nexpoly \
     WEB_CONCURRENCY=1 \
     MODEL_DIR=/app/model \
     MODEL_ENABLED=true \
@@ -22,6 +23,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     GPU_MAX_WAITING_INFERENCES=8 \
     GPU_SYNC_QUEUE_TIMEOUT_SECONDS=30 \
     GPU_ASYNC_QUEUE_TIMEOUT_SECONDS=600 \
+    GPU_BROKER_ENABLED=false \
     POLYTAO_ENABLED=false \
     POLYTAO_MODEL_DIR=/app/model/polytao \
     POLYTAO_DEVICE=auto \
@@ -59,7 +61,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && python -c "import importlib.metadata as m, torch; expected={'torch':'2.6.0+cu118','torchvision':'0.21.0+cu118','transformers':'4.57.6','scikit-learn':'1.8.0'}; actual={name:m.version(name) for name in expected}; assert actual == expected, (actual, expected); assert torch.version.cuda == '11.8', torch.version.cuda"
 
 COPY backend /app/backend
-RUN mkdir -p /app/model
+COPY gpu_resource /app/gpu_resource
+RUN mkdir -p /app/model \
+    && (getent group 1001 >/dev/null || groupadd --gid 1001 nexpoly) \
+    && (getent passwd 1001 >/dev/null || useradd --uid 1001 --gid 1001 --create-home nexpoly) \
+    && install -d -o 1001 -g 1001 -m 0700 /home/nexpoly \
+    && chown -R 1001:1001 /app
 
 ARG SOURCE_REVISION="unknown"
 ARG SOURCE_URL="https://github.com/lzq390/ZhijuPoly"
@@ -72,6 +79,8 @@ LABEL org.opencontainers.image.source="$SOURCE_URL" \
 ENV BUILD_REVISION=${SOURCE_REVISION}
 
 WORKDIR /app/backend
+ENV PYTHONPATH=/app
+USER 1001:1001
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--timeout-graceful-shutdown", "40"]

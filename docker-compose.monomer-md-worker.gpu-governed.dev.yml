@@ -1,0 +1,22 @@
+name: nexpoly-dev-monomer-md-worker
+
+# Explicit development opt-in. GPU2 (production primary) and GPU0 are never
+# exposed to this Worker.
+services:
+  monomer-md-worker:
+    user: "1001:1001"
+    environment:
+      MONOMER_MD_GPU_BROKER_ENABLED: "true"
+      MONOMER_MD_GPU_BROKER_ENVIRONMENT: "dev"
+      MONOMER_MD_GPU_BROKER_SOCKET_PATH: "/app/gpu-mps/broker.sock"
+      MONOMER_MD_GPU_MPS_PIPE_ROOT: "/app/gpu-mps"
+    labels:
+      com.nexpoly.gpu.registration: "md-dev"
+      com.nexpoly.gpu.component: "md"
+      com.nexpoly.gpu.environment: "dev"
+    volumes:
+      - ${NEXPOLY_GPU_STATE_ROOT:-/data/lzq/gith/nexpoly/ops/state/gpu-resource}:/app/gpu-mps:rw
+    gpus: !override
+      - driver: nvidia
+        device_ids: ["1", "3"]
+        capabilities: [gpu]

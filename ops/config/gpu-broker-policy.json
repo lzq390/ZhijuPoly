@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "gpu_total_budget_mib": 20736,
+  "component_budgets_mib": {
+    "backend": 8192,
+    "dft": 4096,
+    "md": 8192
+  },
+  "component_thread_percent": {
+    "backend": 100,
+    "dft": 50,
+    "md": 50
+  },
+  "gpu_uuids": {
+    "1": "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+    "2": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+    "3": "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
+  },
+  "device_policy": {
+    "prod.backend": [2],
+    "prod.dft": [2, 3, 1],
+    "prod.md": [2, 3, 1],
+    "dev.backend": [1],
+    "dev.dft": [1, 3],
+    "dev.md": [1, 3]
+  }
+}

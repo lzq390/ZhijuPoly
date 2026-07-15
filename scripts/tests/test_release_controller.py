@@ -377,12 +377,19 @@ class ReleaseControllerTests(unittest.TestCase):
             "MONOMER_MD_MAX_CONCURRENT_JOBS=1\n"
             f"BYTEFF2_ROOT={controller.ops / 'current-assets' / 'byteff2'}\n"
             "BYTEFF2_PYTHON=/home/devuser/miniconda3/envs/byteff2-repro/bin/python\n"
-            f"PYTHONPATH={controller.ops / 'current-assets' / 'byteff2'}:"
+            f"PYTHONPATH={controller.ops / 'current'}:"
+            f"{controller.ops / 'current-assets' / 'byteff2'}:"
             f"{controller.ops / 'current-assets' / 'byteff2' / 'submodules' / 'bytemol'}\n"
             f"MONOMER_MD_PYTHON={controller.ops / 'current' / 'worker-venv' / 'bin' / 'python'}\n"
             f"MONOMER_MD_JOB_ROOT={controller.ops / 'state' / 'monomer-md-worker-runs'}\n"
             f"MONOMER_MD_WORKER_UDS={controller.ops / 'state' / 'monomer-md-worker-socket' / 'worker.sock'}\n"
-            "MONOMER_MD_WORKER_MODE=real\n",
+            "MONOMER_MD_WORKER_MODE=real\n"
+            "MONOMER_MD_GPU_BROKER_ENABLED=false\n"
+            "MONOMER_MD_GPU_BROKER_ENVIRONMENT=prod\n"
+            f"MONOMER_MD_GPU_BROKER_SOCKET_PATH={controller.ops / 'state' / 'gpu-resource' / 'broker.sock'}\n"
+            f"MONOMER_MD_GPU_MPS_PIPE_ROOT={controller.ops / 'state' / 'gpu-resource'}\n"
+            "MONOMER_MD_GPU_BROKER_WAIT_TIMEOUT_SECONDS=600\n"
+            "MONOMER_MD_GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS=5\n",
             encoding="utf-8",
         )
         deploy_values = (
