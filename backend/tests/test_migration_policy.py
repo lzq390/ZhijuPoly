@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import sys
@@ -8,8 +9,16 @@ import pytest
 
 from app import postgres_migrations
 from app.config import PROJECT_ROOT
-from app.migration_policy import assert_pending_migrations_allowed, validate_migration_manifest
-from app.postgres_migrations import database_is_fresh_for_bootstrap
+from app.migration_policy import (
+    assert_pending_migrations_allowed,
+    canonical_migration_checksum,
+    validate_migration_manifest,
+    validate_migration_manifest_entries,
+)
+from app.postgres_migrations import (
+    POLYTAO_CONTRACT_CHECKSUM,
+    database_is_fresh_for_bootstrap,
+)
 
 
 MIGRATIONS_DIR = PROJECT_ROOT / "backend" / "migrations" / "postgres"
@@ -17,6 +26,7 @@ MIGRATIONS_DIR = PROJECT_ROOT / "backend" / "migrations" / "postgres"
 
 def test_repository_migration_manifest_classifies_every_sql_file() -> None:
     kinds = validate_migration_manifest(MIGRATIONS_DIR)
+    entries = validate_migration_manifest_entries(MIGRATIONS_DIR)
 
     assert kinds["0001_app_data_governance"] == "baseline"
     assert kinds["0009_monomer_md_job_leases"] == "expand"
@@ -24,6 +34,11 @@ def test_repository_migration_manifest_classifies_every_sql_file() -> None:
     assert kinds["0011_monomer_md_demo_steps"] == "expand"
     assert kinds["0012_drop_polytao_jobs"] == "contract"
     assert set(kinds) == {path.stem for path in MIGRATIONS_DIR.glob("*.sql")}
+    assert {entry.manifest_schema_version for entry in entries} == {2}
+    assert {entry.epoch for entry in entries} == {1}
+    assert next(
+        entry for entry in entries if entry.version == "0012_drop_polytao_jobs"
+    ).checksum == POLYTAO_CONTRACT_CHECKSUM
 
 
 def test_manifest_rejects_unclassified_sql_migration(tmp_path: Path) -> None:
@@ -91,6 +106,336 @@ def test_manifest_rejects_expand_after_contract(tmp_path: Path) -> None:
         validate_migration_manifest(tmp_path)
 
 
+def _write_v2_manifest(
+    directory: Path,
+    migrations: list[dict[str, object]],
+) -> None:
+    for migration in migrations:
+        path = directory / f"{migration['version']}.sql"
+        path.write_text(f"SELECT '{migration['version']}';\n", encoding="utf-8")
+        migration["checksum"] = canonical_migration_checksum(path)
+    (directory / "manifest.json").write_text(
+        json.dumps({"schema_version": 2, "migrations": migrations}),
+        encoding="utf-8",
+    )
+
+
+def test_v2_manifest_allows_expand_in_new_epoch_after_checksum_bound_contract(
+    tmp_path: Path,
+) -> None:
+    migrations: list[dict[str, object]] = [
+        {
+            "version": "0001_first",
+            "kind": "baseline",
+            "epoch": 1,
+            "requires_contracts": [],
+        },
+        {
+            "version": "0002_remove_old",
+            "kind": "contract",
+            "epoch": 1,
+            "requires_contracts": [],
+        },
+        {
+            "version": "0003_expand_after_contract",
+            "kind": "expand",
+            "epoch": 2,
+            "requires_contracts": [],
+        },
+    ]
+    _write_v2_manifest(tmp_path, migrations)
+    migrations[2]["requires_contracts"] = [
+        {
+            "version": "0002_remove_old",
+            "checksum": migrations[1]["checksum"],
+        }
+    ]
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"schema_version": 2, "migrations": migrations}),
+        encoding="utf-8",
+    )
+
+    entries = validate_migration_manifest_entries(tmp_path)
+
+    assert [entry.epoch for entry in entries] == [1, 1, 2]
+    assert entries[2].requires_contracts[0].version == "0002_remove_old"
+
+
+def test_v2_manifest_rejects_new_epoch_without_all_prior_contracts(tmp_path: Path) -> None:
+    migrations: list[dict[str, object]] = [
+        {
+            "version": "0001_first",
+            "kind": "baseline",
+            "epoch": 1,
+            "requires_contracts": [],
+        },
+        {
+            "version": "0002_remove_old",
+            "kind": "contract",
+            "epoch": 1,
+            "requires_contracts": [],
+        },
+        {
+            "version": "0003_expand_after_contract",
+            "kind": "expand",
+            "epoch": 2,
+            "requires_contracts": [],
+        },
+    ]
+    _write_v2_manifest(tmp_path, migrations)
+
+    with pytest.raises(ValueError, match="must require every contract"):
+        validate_migration_manifest_entries(tmp_path)
+
+
+def test_v2_manifest_rejects_sql_checksum_drift(tmp_path: Path) -> None:
+    migrations: list[dict[str, object]] = [
+        {
+            "version": "0001_first",
+            "kind": "baseline",
+            "epoch": 1,
+            "requires_contracts": [],
+        }
+    ]
+    _write_v2_manifest(tmp_path, migrations)
+    (tmp_path / "0001_first.sql").write_text("SELECT 'changed';\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match canonical SQL checksum"):
+        validate_migration_manifest_entries(tmp_path)
+
+
+class _LedgerResult:
+    def __init__(self, rows=(), row=None):
+        self._rows = list(rows)
+        self._row = row
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._row
+
+
+class _LedgerConnection:
+    def __init__(self, rows=()):
+        self.rows = list(rows)
+        self.queries: list[str] = []
+
+    def execute(self, query: str, params=None):
+        del params
+        self.queries.append(query)
+        if "SELECT version, checksum FROM governance.schema_migrations" in query:
+            return _LedgerResult(self.rows)
+        return _LedgerResult()
+
+
+def test_epoch_dependency_failure_precedes_any_migration_sql(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    migrations: list[dict[str, object]] = [
+        {
+            "version": "0001_first",
+            "kind": "baseline",
+            "epoch": 1,
+            "requires_contracts": [],
+        },
+        {
+            "version": "0002_remove_old",
+            "kind": "contract",
+            "epoch": 1,
+            "requires_contracts": [],
+        },
+        {
+            "version": "0003_next_epoch",
+            "kind": "expand",
+            "epoch": 2,
+            "requires_contracts": [],
+        },
+    ]
+    _write_v2_manifest(tmp_path, migrations)
+    migrations[2]["requires_contracts"] = [
+        {
+            "version": "0002_remove_old",
+            "checksum": migrations[1]["checksum"],
+        }
+    ]
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"schema_version": 2, "migrations": migrations}),
+        encoding="utf-8",
+    )
+    connection = _LedgerConnection()
+
+    @contextmanager
+    def fake_connection(_dsn):
+        yield connection
+
+    monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+
+    with pytest.raises(RuntimeError, match="requires approved contract 0002_remove_old"):
+        postgres_migrations.apply_postgres_migrations(
+            "postgresql://fixture",
+            tmp_path,
+            allowed_kinds={"baseline", "expand"},
+            defer_trailing_contracts=True,
+        )
+
+    # Creating/verifying the governance ledger is permitted, but no migration
+    # body (including the epoch-1 baseline) may run after planning fails.
+    assert all("SELECT '0001_first'" not in query for query in connection.queries)
+
+
+def test_dirty_dev_image_0009_checksum_is_not_silently_accepted(monkeypatch) -> None:
+    dirty_image_checksum = (
+        "79a6956fc934794d61bc003f02a6b5280e9e8bd77a217b61a28d3dbdb8b7be0b"
+    )
+    assert canonical_migration_checksum(
+        MIGRATIONS_DIR / "0009_monomer_md_job_leases.sql"
+    ) == "ef1757a81976f351459e8257bd492aa6267cbf507c4ea85506fefa2d465d2db8"
+    connection = _LedgerConnection(
+        [
+            {
+                "version": "0009_monomer_md_job_leases",
+                "checksum": dirty_image_checksum,
+            }
+        ]
+    )
+
+    @contextmanager
+    def fake_connection(_dsn):
+        yield connection
+
+    monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "0009_monomer_md_job_leases was already applied with checksum "
+            + dirty_image_checksum
+        ),
+    ):
+        postgres_migrations.apply_postgres_migrations(
+            "postgresql://fixture",
+            MIGRATIONS_DIR,
+            allowed_kinds={"expand"},
+            defer_trailing_contracts=True,
+        )
+
+    migration_bodies = [
+        path.read_text(encoding="utf-8") for path in sorted(MIGRATIONS_DIR.glob("*.sql"))
+    ]
+    assert not any(body in query for body in migration_bodies for query in connection.queries)
+
+
+def test_unknown_ledger_version_is_rejected_before_any_migration_sql(
+    monkeypatch,
+) -> None:
+    connection = _LedgerConnection(
+        [{"version": "9999_unreviewed", "checksum": "f" * 64}]
+    )
+
+    @contextmanager
+    def fake_connection(_dsn):
+        yield connection
+
+    monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+
+    with pytest.raises(RuntimeError, match="absent from the canonical manifest"):
+        postgres_migrations.apply_postgres_migrations(
+            "postgresql://fixture",
+            MIGRATIONS_DIR,
+            allowed_kinds={"expand"},
+            defer_trailing_contracts=True,
+        )
+
+    migration_bodies = [
+        path.read_text(encoding="utf-8")
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql"))
+    ]
+    assert not any(body in query for body in migration_bodies for query in connection.queries)
+
+
+@pytest.mark.parametrize(
+    "duplicate_checksum",
+    ["same", "conflicting"],
+)
+def test_duplicate_ledger_version_is_rejected_before_any_migration_sql(
+    monkeypatch,
+    duplicate_checksum: str,
+) -> None:
+    entries = validate_migration_manifest_entries(MIGRATIONS_DIR)
+    first = entries[0]
+    conflicting = "0" * 64
+    connection = _LedgerConnection(
+        [
+            {"version": first.version, "checksum": first.checksum},
+            {
+                "version": first.version,
+                "checksum": (
+                    first.checksum
+                    if duplicate_checksum == "same"
+                    else conflicting
+                ),
+            },
+        ]
+    )
+
+    @contextmanager
+    def fake_connection(_dsn):
+        yield connection
+
+    monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+
+    with pytest.raises(RuntimeError, match="duplicate versions"):
+        postgres_migrations.apply_postgres_migrations(
+            "postgresql://fixture",
+            MIGRATIONS_DIR,
+            allowed_kinds={"expand"},
+            defer_trailing_contracts=True,
+        )
+
+    migration_bodies = [
+        path.read_text(encoding="utf-8")
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql"))
+    ]
+    assert not any(body in query for body in migration_bodies for query in connection.queries)
+
+
+def test_restricted_contract_requires_exact_canonical_ledger_prefix(
+    monkeypatch,
+) -> None:
+    entries = validate_migration_manifest_entries(MIGRATIONS_DIR)
+    target_index = next(
+        index
+        for index, entry in enumerate(entries)
+        if entry.version == postgres_migrations.POLYTAO_CONTRACT_VERSION
+    )
+    rows = [
+        {"version": entry.version, "checksum": entry.checksum}
+        for entry in entries[:target_index]
+    ]
+    rows.pop(-1)
+    rows.append(
+        {
+            "version": entries[target_index].version,
+            "checksum": entries[target_index].checksum,
+        }
+    )
+    connection = _LedgerConnection(rows)
+
+    @contextmanager
+    def fake_connection(_dsn):
+        yield connection
+
+    monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+
+    with pytest.raises(RuntimeError, match="exact canonical ledger prefix"):
+        postgres_migrations.apply_polytao_contract_migration(
+            "postgresql://fixture",
+            MIGRATIONS_DIR,
+        )
+
+
 def test_automated_migration_policy_rejects_baseline_and_contract() -> None:
     kinds = {"0001_baseline": "baseline", "0002_expand": "expand", "0003_contract": "contract"}
 
@@ -108,6 +453,11 @@ def test_existing_bootstrap_must_not_implicitly_apply_contract() -> None:
             kinds,
             {"baseline", "expand"},
         )
+
+
+def test_migration_library_requires_an_explicit_execution_policy() -> None:
+    with pytest.raises(ValueError, match="explicit policy"):
+        postgres_migrations.apply_postgres_migrations("postgresql://unused")
 
 
 @pytest.mark.parametrize("mode", ["expand", "restore-expand"])
@@ -128,6 +478,32 @@ def test_automated_expand_cli_defers_only_trailing_contracts(monkeypatch, mode: 
         "allow_contract_on_fresh_database": False,
         "defer_trailing_contracts": True,
     }
+
+
+def test_only_checksum_pinned_0012_contract_is_exposed_by_cli(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_apply(dsn, migrations_dir):
+        captured.update({"dsn": dsn, "migrations_dir": migrations_dir})
+        return []
+
+    monkeypatch.setattr(postgres_migrations, "apply_polytao_contract_migration", fake_apply)
+    monkeypatch.setattr(sys, "argv", ["postgres_migrations", "--mode", "contract-0012"])
+
+    postgres_migrations.main()
+
+    assert captured["migrations_dir"] == postgres_migrations.MIGRATIONS_DIR
+    with pytest.raises(SystemExit):
+        monkeypatch.setattr(sys, "argv", ["postgres_migrations", "--mode", "contract"])
+        postgres_migrations.main()
+
+    with pytest.raises(ValueError, match="Only the checksum-pinned 0012"):
+        postgres_migrations.apply_postgres_migrations(
+            "postgresql://unused",
+            MIGRATIONS_DIR,
+            allowed_kinds={"contract"},
+            restricted_contract=("0013_future_contract", "f" * 64),
+        )
 
 
 class _Result:

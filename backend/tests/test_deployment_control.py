@@ -596,6 +596,7 @@ def test_deployment_status_remains_available_when_all_gpu_features_are_disabled(
         response = client.get("/internal/deployment/status")
 
     assert response.status_code == 200
+    assert response.json()["active_jobs_schema_version"] == 1
     assert response.json()["active_jobs"] == {
         "monomer_md": 0,
         "online_knowledge": 0,

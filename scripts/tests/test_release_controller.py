@@ -193,6 +193,15 @@ class ReleaseControllerTests(unittest.TestCase):
     def build_single_bundle(self, **overrides: object) -> Path:
         return self.build(**overrides)
 
+    def build_v2(self, **overrides: object) -> Path:
+        return self.build(
+            migration=[],
+            migration_manifest=str(
+                REPOSITORY_ROOT / "backend" / "migrations" / "postgres" / "manifest.json"
+            ),
+            **overrides,
+        )
+
     def existing_release_controller(self) -> release_controller.ReleaseController:
         manifest = self.build()
         controller = release_controller.ReleaseController(
@@ -417,6 +426,19 @@ class ReleaseControllerTests(unittest.TestCase):
         os.chmod(controller.env_file, 0o600)
 
         controller.env_file.write_text(
+            deploy_values.replace("NEXPOLY_POSTGRES_DB=nexpoly", "NEXPOLY_POSTGRES_DB=other"),
+            encoding="utf-8",
+        )
+        os.chmod(controller.env_file, 0o600)
+        with (
+            mock.patch.object(release_controller, "ASSET_RELEASES_ROOT", store),
+            self.assertRaisesRegex(release_controller.ReleaseError, "hard-locked.*nexpoly"),
+        ):
+            controller.environment()
+        controller.env_file.write_text(deploy_values, encoding="utf-8")
+        os.chmod(controller.env_file, 0o600)
+
+        controller.env_file.write_text(
             deploy_values.replace(
                 "PI_POSTGRES_DSN=postgresql://polyprop:random-production-value@lab-postgres:5432/nexpoly",
                 "PI_POSTGRES_DSN=postgresql://polyprop:random-production-value@lab-postgres:5432/nexpoly?sslmode=disable",
@@ -577,7 +599,1290 @@ class ReleaseControllerTests(unittest.TestCase):
         manifest = self.build(migration=["0002_contract:contract"])
         document = release_controller.load_manifest(manifest)
         release_controller.validate_manifest(document, deployment_mode="auto")
+
+    def test_v2_release_manifest_binds_epoch_checksum_and_contract_dependencies(self) -> None:
+        document = release_controller.load_manifest(self.build_v2())
+
         release_controller.validate_manifest(document, deployment_mode="auto")
+
+        self.assertEqual(document["schema_version"], 2)
+        contract = next(
+            record
+            for record in document["migrations"]
+            if record["version"] == "0012_drop_polytao_jobs"
+        )
+        self.assertEqual(contract["kind"], "contract")
+        self.assertEqual(contract["epoch"], 1)
+        self.assertEqual(contract["checksum"], release_controller.POLYTAO_CONTRACT_CHECKSUM)
+        self.assertEqual(contract["requires_contracts"], [])
+
+    def test_epoch_two_expand_requires_exact_checksum_approval(self) -> None:
+        contract = {
+            "version": "0012_drop_polytao_jobs",
+            "kind": "contract",
+            "epoch": 1,
+            "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            "requires_contracts": [],
+        }
+        expand = {
+            "version": "0013_next_epoch",
+            "kind": "expand",
+            "epoch": 2,
+            "checksum": "d" * 64,
+            "requires_contracts": [
+                {
+                    "version": contract["version"],
+                    "checksum": contract["checksum"],
+                }
+            ],
+        }
+        candidate = {"schema_version": 2, "migrations": [contract, expand]}
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "checksum-approved contracts",
+        ):
+            release_controller.code_deploy_migration_mode(
+                {"approved_contracts": []},
+                candidate,
+                deployment_mode="auto",
+                target_sha="e" * 40,
+            )
+
+        state = {
+            "approved_contracts": [
+                {
+                    "version": contract["version"],
+                    "checksum": contract["checksum"],
+                    "operation_id": "contract-0012-fixture",
+                    "approved_at": "2026-07-15T00:00:00+00:00",
+                }
+            ],
+            "schema_compatibility_floor": {
+                "version": contract["version"],
+                "checksum": contract["checksum"],
+            },
+            "migration_epoch_barrier": {
+                "epoch": 1,
+                "contract": {
+                    "version": contract["version"],
+                    "checksum": contract["checksum"],
+                },
+                "operation_id": "contract-0012-fixture",
+                "approved_at": "2026-07-15T00:00:00+00:00",
+            },
+            "last_contract_operation": "contract-0012-fixture",
+        }
+        incomplete_state = {"approved_contracts": state["approved_contracts"]}
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "missing its migration epoch barrier",
+        ):
+            release_controller.code_deploy_migration_mode(
+                incomplete_state,
+                candidate,
+                deployment_mode="auto",
+                target_sha="e" * 40,
+            )
+        self.assertEqual(
+            release_controller.code_deploy_migration_mode(
+                state,
+                candidate,
+                deployment_mode="auto",
+                target_sha="e" * 40,
+            ),
+            "expand",
+        )
+
+    def test_contract_approval_is_never_inferred_from_history_or_manifest(self) -> None:
+        state = {
+            "migrations": ["0012_drop_polytao_jobs"],
+            "migration_manifest": [
+                {
+                    "version": "0012_drop_polytao_jobs",
+                    "kind": "contract",
+                    "epoch": 1,
+                    "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                    "requires_contracts": [],
+                }
+            ],
+        }
+
+        self.assertEqual(release_controller.approved_contract_migrations(state), {})
+
+        state["schema_compatibility_floor"] = {
+            "version": "0012_drop_polytao_jobs",
+            "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+        }
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "missing its migration epoch barrier",
+        ):
+            release_controller.approved_contract_migrations(state)
+
+    def test_contract_approval_requires_matching_floor_barrier_and_operation(self) -> None:
+        approval = {
+            "version": "0012_drop_polytao_jobs",
+            "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            "operation_id": "contract-0012-fixture",
+            "approved_at": "2026-07-15T00:00:00+00:00",
+        }
+        state = {
+            "approved_contracts": [approval],
+            "schema_compatibility_floor": {
+                "version": approval["version"],
+                "checksum": approval["checksum"],
+            },
+            "migration_epoch_barrier": {
+                "epoch": 1,
+                "contract": {
+                    "version": approval["version"],
+                    "checksum": approval["checksum"],
+                },
+                "operation_id": approval["operation_id"],
+                "approved_at": approval["approved_at"],
+            },
+            "last_contract_operation": approval["operation_id"],
+        }
+        self.assertEqual(
+            release_controller.approved_contract_migrations(state),
+            {approval["version"]: approval["checksum"]},
+        )
+
+        for mutation in ("floor", "barrier-operation", "approval-operation"):
+            broken = json.loads(json.dumps(state))
+            if mutation == "floor":
+                broken["schema_compatibility_floor"]["checksum"] = "0" * 64
+            elif mutation == "barrier-operation":
+                broken["migration_epoch_barrier"]["operation_id"] = "other-operation"
+            else:
+                broken["approved_contracts"][0]["operation_id"] = "other-operation"
+            with (
+                self.subTest(mutation=mutation),
+                self.assertRaises(release_controller.ReleaseError),
+            ):
+                release_controller.approved_contract_migrations(broken)
+
+        extra = json.loads(json.dumps(state))
+        extra["approved_contracts"].append(
+            {
+                "version": "0013_unreviewed_contract",
+                "checksum": "f" * 64,
+                "operation_id": "contract-0013-fixture",
+                "approved_at": "2026-07-15T01:00:00+00:00",
+            }
+        )
+        with self.assertRaisesRegex(release_controller.ReleaseError, "invalid approved"):
+            release_controller.approved_contract_migrations(extra)
+
+        with self.assertRaisesRegex(release_controller.ReleaseError, "name-only"):
+            release_controller.approved_contract_migrations(
+                {"approved_contract_migrations": [approval["version"]]}
+            )
+
+        for mutation in (
+            "barrier-epoch",
+            "approval-timestamp",
+            "barrier-timestamp",
+            "noncanonical-zulu",
+        ):
+            broken = json.loads(json.dumps(state))
+            if mutation == "barrier-epoch":
+                broken["migration_epoch_barrier"]["epoch"] = 999
+            elif mutation == "approval-timestamp":
+                broken["approved_contracts"][0]["approved_at"] = "not-a-timestamp"
+            elif mutation == "barrier-timestamp":
+                broken["migration_epoch_barrier"]["approved_at"] = "not-a-timestamp"
+            else:
+                broken["approved_contracts"][0]["approved_at"] = "2026-07-15T00:00:00Z"
+                broken["migration_epoch_barrier"]["approved_at"] = "2026-07-15T00:00:00Z"
+            with (
+                self.subTest(mutation=mutation),
+                self.assertRaises(release_controller.ReleaseError),
+            ):
+                release_controller.approved_contract_migrations(broken)
+
+    def test_migration_runner_output_is_exact_checksum_bound_and_mode_scoped(self) -> None:
+        controller = release_controller.ReleaseController(
+            self.root / "production",
+            self.build_v2(),
+            "auto",
+            False,
+        )
+        policy_source = REPOSITORY_ROOT / "backend" / "migrations" / "postgres"
+        policy_target = (
+            controller.candidate_dir / "backend" / "migrations" / "postgres"
+        )
+        shutil.copytree(policy_source, policy_target)
+        records = release_controller.release_migrations_from_policy_manifest(
+            policy_target / "manifest.json",
+            include_baseline=True,
+        )
+
+        def output(
+            *,
+            statuses: dict[str, str] | None = None,
+            checksum_overrides: dict[str, str] | None = None,
+            duplicate: str | None = None,
+            extra: str | None = None,
+        ) -> str:
+            statuses = statuses or {}
+            checksum_overrides = checksum_overrides or {}
+            lines = [
+                "\t".join(
+                    (
+                        record["version"],
+                        statuses.get(record["version"], "skipped"),
+                        checksum_overrides.get(record["version"], record["checksum"]),
+                    )
+                )
+                for record in records
+            ]
+            if duplicate is not None:
+                record = next(item for item in records if item["version"] == duplicate)
+                lines.append(f"{duplicate}\tskipped\t{record['checksum']}")
+            if extra is not None:
+                lines.append(f"{extra}\tskipped\t{'f' * 64}")
+            return "\n".join(lines) + "\n"
+
+        valid = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=output(statuses={"0011_monomer_md_demo_steps": "applied"}),
+        )
+        with mock.patch.object(release_controller.subprocess, "run", return_value=valid):
+            self.assertEqual(
+                controller.run_migrations({}, mode="expand"),
+                ["0011_monomer_md_demo_steps"],
+            )
+
+        invalid_cases = (
+            (
+                "checksum",
+                output(checksum_overrides={"0011_monomer_md_demo_steps": "0" * 64}),
+            ),
+            ("duplicate", output(duplicate="0011_monomer_md_demo_steps")),
+            ("canonical migration set", output(extra="9999_unreviewed")),
+            (
+                "outside maintenance",
+                output(statuses={"0012_drop_polytao_jobs": "applied"}),
+            ),
+            (
+                "baseline may only",
+                output(statuses={"0001_app_data_governance": "applied"}),
+            ),
+        )
+        for message, stdout in invalid_cases:
+            with (
+                self.subTest(message=message),
+                mock.patch.object(
+                    release_controller.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 0, stdout=stdout),
+                ),
+                self.assertRaisesRegex(release_controller.ReleaseError, message),
+            ):
+                controller.run_migrations({}, mode="expand")
+
+        contract_output = output(
+            statuses={"0012_drop_polytao_jobs": "applied"}
+        )
+        with mock.patch.object(
+            release_controller.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, stdout=contract_output),
+        ):
+            self.assertEqual(
+                controller.run_migrations({}, mode="contract-0012"),
+                ["0012_drop_polytao_jobs"],
+            )
+
+        controller.previous_state = {"migrations": ["0011_monomer_md_demo_steps"]}
+        with (
+            mock.patch.object(release_controller.subprocess, "run", return_value=valid),
+            self.assertRaisesRegex(release_controller.ReleaseError, "re-applied"),
+        ):
+            controller.run_migrations({}, mode="expand")
+        controller.previous_state = {}
+
+        controller.document["migrations"][0]["checksum"] = "0" * 64
+        with (
+            mock.patch.object(release_controller.subprocess, "run") as run,
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "candidate canonical policy",
+            ),
+        ):
+            controller.run_migrations({}, mode="expand")
+        run.assert_not_called()
+
+    def test_0012_maintenance_plan_is_checksum_pinned_and_non_mutating(self) -> None:
+        manifest = self.build_v2()
+        production = self.root / "absent-production"
+
+        plan = release_controller.PolytaoContractMaintenance(
+            production,
+            manifest,
+            "contract-0012-fixture",
+            False,
+        ).run()
+
+        self.assertFalse(production.exists())
+        self.assertEqual(plan["action"], "maintain-contract-0012")
+        self.assertEqual(
+            plan["contract"],
+            {
+                "version": "0012_drop_polytao_jobs",
+                "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                "epoch": 1,
+            },
+        )
+
+    def test_0012_maintenance_rejects_name_only_release_manifest(self) -> None:
+        with self.assertRaisesRegex(release_controller.ReleaseError, "V2 release manifest"):
+            release_controller.PolytaoContractMaintenance(
+                self.root / "production",
+                self.build(),
+                "contract-0012-fixture",
+                False,
+            )
+
+    def test_0012_inventory_requires_exact_database_set_ledger_and_owned_verify_db(
+        self,
+    ) -> None:
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            "contract-0012-fixture",
+            False,
+        )
+        policy_source = REPOSITORY_ROOT / "backend" / "migrations" / "postgres"
+        policy_target = (
+            maintenance.controller.candidate_dir
+            / "backend"
+            / "migrations"
+            / "postgres"
+        )
+        shutil.copytree(policy_source, policy_target)
+        environment = {"NEXPOLY_POSTGRES_USER": "polyprop"}
+        payload = {
+            "schema_version": 1,
+            "target_database": "nexpoly",
+            "current_user": "polyprop",
+            "databases": [
+                {
+                    "name": "nexpoly",
+                    "owner": "polyprop",
+                    "is_template": False,
+                    "allow_connections": True,
+                },
+                {
+                    "name": "postgres",
+                    "owner": "polyprop",
+                    "is_template": False,
+                    "allow_connections": True,
+                },
+                {
+                    "name": "template0",
+                    "owner": "polyprop",
+                    "is_template": True,
+                    "allow_connections": False,
+                },
+                {
+                    "name": "template1",
+                    "owner": "polyprop",
+                    "is_template": True,
+                    "allow_connections": True,
+                },
+            ],
+            "ledger": maintenance._canonical_contract_ledger_prefix(
+                include_contract=False
+            ),
+            "legacy_relation_present": True,
+        }
+        validated = maintenance._validate_database_inventory(
+            payload,
+            environment,
+            allow_contract=False,
+            allow_owned_verification=False,
+        )
+        self.assertEqual(
+            validated["database_purposes"]["nexpoly"],
+            "production-target",
+        )
+
+        unknown = json.loads(json.dumps(payload))
+        unknown["databases"].append(
+            {
+                "name": "nexpoly_shadow",
+                "owner": "polyprop",
+                "is_template": False,
+                "allow_connections": True,
+            }
+        )
+        with self.assertRaisesRegex(release_controller.ReleaseError, "unknown"):
+            maintenance._validate_database_inventory(
+                unknown,
+                environment,
+                allow_contract=False,
+                allow_owned_verification=False,
+            )
+
+        wrong_ledger = json.loads(json.dumps(payload))
+        wrong_ledger["ledger"].append(
+            {"version": "9999_unreviewed", "checksum": "f" * 64}
+        )
+        with self.assertRaisesRegex(release_controller.ReleaseError, "exact canonical"):
+            maintenance._validate_database_inventory(
+                wrong_ledger,
+                environment,
+                allow_contract=False,
+                allow_owned_verification=False,
+            )
+
+        verification_database = maintenance._verification_database_name()
+        verification = json.loads(json.dumps(payload))
+        verification["databases"].append(
+            {
+                "name": verification_database,
+                "owner": "polyprop",
+                "is_template": False,
+                "allow_connections": True,
+            }
+        )
+        with self.assertRaisesRegex(release_controller.ReleaseError, "unknown"):
+            maintenance._validate_database_inventory(
+                verification,
+                environment,
+                allow_contract=False,
+                allow_owned_verification=False,
+            )
+        intent_owner = maintenance._write_verification_owner(
+            verification_database,
+            "create-intent",
+            database_absent_before_create=True,
+        )
+        owned_intent = maintenance._validate_database_inventory(
+            verification,
+            environment,
+            allow_contract=False,
+            allow_owned_verification=True,
+        )
+        self.assertEqual(
+            owned_intent["database_purposes"][verification_database],
+            "operation-owned-isolated-restore-create-intent",
+        )
+        maintenance._write_verification_owner(
+            verification_database,
+            "created",
+            previous=intent_owner,
+        )
+        owned = maintenance._validate_database_inventory(
+            verification,
+            environment,
+            allow_contract=False,
+            allow_owned_verification=True,
+        )
+        self.assertEqual(
+            owned["database_purposes"][verification_database],
+            "operation-owned-isolated-restore",
+        )
+
+        after_contract = maintenance._canonical_contract_ledger_prefix(
+            include_contract=True
+        )
+        dev_audit = {
+            "schema_version": 1,
+            "database": "nexpoly_dev",
+            "current_user": "polyprop",
+            "transaction_read_only": True,
+            "ledger": after_contract,
+            "legacy_relation_present": False,
+        }
+        self.assertEqual(
+            maintenance._validate_registered_database_audit(
+                dev_audit,
+                environment,
+                "nexpoly_dev",
+            ),
+            dev_audit,
+        )
+        writable_dev_audit = json.loads(json.dumps(dev_audit))
+        writable_dev_audit["transaction_read_only"] = False
+        with self.assertRaisesRegex(release_controller.ReleaseError, "invalid identity"):
+            maintenance._validate_registered_database_audit(
+                writable_dev_audit,
+                environment,
+                "nexpoly_dev",
+            )
+        dirty_dev = json.loads(json.dumps(dev_audit))
+        dirty_dev["ledger"][-1]["checksum"] = "0" * 64
+        with self.assertRaisesRegex(release_controller.ReleaseError, "exact canonical"):
+            maintenance._validate_registered_database_audit(
+                dirty_dev,
+                environment,
+                "nexpoly_dev",
+            )
+        health_prefixes = maintenance._canonical_contract_ledger_prefixes()
+        for prefix in health_prefixes:
+            health_audit = {
+                "schema_version": 1,
+                "database": "nexpoly_md_health_opt",
+                "current_user": "polyprop",
+                "transaction_read_only": True,
+                "ledger": prefix,
+                "legacy_relation_present": maintenance._legacy_relation_expected(
+                    prefix
+                ),
+            }
+            self.assertEqual(
+                maintenance._validate_registered_database_audit(
+                    health_audit,
+                    environment,
+                    "nexpoly_md_health_opt",
+                ),
+                health_audit,
+            )
+
+        through_0008 = health_prefixes[7]
+        self.assertEqual(through_0008[-1]["version"], "0008_polytao_backend_runtime")
+        gap = json.loads(json.dumps(health_audit))
+        gap["ledger"] = [*through_0008[:3], *through_0008[4:]]
+        gap["legacy_relation_present"] = True
+        with self.assertRaisesRegex(release_controller.ReleaseError, "canonical ledger prefix"):
+            maintenance._validate_registered_database_audit(
+                gap,
+                environment,
+                "nexpoly_md_health_opt",
+            )
+
+        relation_mismatch = {
+            "schema_version": 1,
+            "database": "nexpoly_md_health_opt",
+            "current_user": "polyprop",
+            "transaction_read_only": True,
+            "ledger": through_0008,
+            "legacy_relation_present": False,
+        }
+        with self.assertRaisesRegex(release_controller.ReleaseError, "relation state"):
+            maintenance._validate_registered_database_audit(
+                relation_mismatch,
+                environment,
+                "nexpoly_md_health_opt",
+            )
+
+        external_environment = {
+            **environment,
+            "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER": "nexpoly_dev_auditor",
+            "NEXPOLY_CONTRACT_0012_MD_HEALTH_AUDIT_USER": "nexpoly_health_auditor",
+        }
+        external_inventory = {
+            "schema_version": 1,
+            "inventory_complete": True,
+            "writable_target": {
+                "stack": "production",
+                "database": "nexpoly",
+            },
+            "databases": [
+                {
+                    "stack": "nexpoly_dev",
+                    "database": "nexpoly_dev",
+                    "current_user": "nexpoly_dev_auditor",
+                    "transaction_read_only": True,
+                    "role_superuser": False,
+                    "role_create_db": False,
+                    "role_create_role": False,
+                    "ledger": after_contract,
+                    "legacy_relation_present": False,
+                },
+                {
+                    "stack": "nexpoly_md_health_opt",
+                    "database": "nexpoly_md_health_opt",
+                    "current_user": "nexpoly_health_auditor",
+                    "transaction_read_only": True,
+                    "role_superuser": False,
+                    "role_create_db": False,
+                    "role_create_role": False,
+                    "ledger": through_0008,
+                    "legacy_relation_present": True,
+                },
+            ],
+        }
+        self.assertEqual(
+            maintenance._validate_external_database_inventory(
+                external_inventory,
+                external_environment,
+            ),
+            external_inventory,
+        )
+        missing_stack = json.loads(json.dumps(external_inventory))
+        missing_stack["databases"].pop()
+        with self.assertRaisesRegex(release_controller.ReleaseError, "missing required stacks"):
+            maintenance._validate_external_database_inventory(
+                missing_stack,
+                external_environment,
+            )
+        writable_stack = json.loads(json.dumps(external_inventory))
+        writable_stack["databases"][0]["transaction_read_only"] = False
+        with self.assertRaisesRegex(release_controller.ReleaseError, "not provably read-only"):
+            maintenance._validate_external_database_inventory(
+                writable_stack,
+                external_environment,
+            )
+        wrong_writable_target = json.loads(json.dumps(external_inventory))
+        wrong_writable_target["writable_target"] = {
+            "stack": "nexpoly_dev",
+            "database": "nexpoly_dev",
+        }
+        with self.assertRaisesRegex(release_controller.ReleaseError, "only writable target"):
+            maintenance._validate_external_database_inventory(
+                wrong_writable_target,
+                external_environment,
+            )
+        unknown_stack = json.loads(json.dumps(external_inventory))
+        unknown_stack["databases"].append(
+            {
+                **unknown_stack["databases"][0],
+                "stack": "nexpoly_shadow",
+                "database": "nexpoly_shadow",
+            }
+        )
+        with self.assertRaisesRegex(release_controller.ReleaseError, "unknown"):
+            maintenance._validate_external_database_inventory(
+                unknown_stack,
+                external_environment,
+            )
+
+    def test_0012_database_gate_requires_external_stack_evidence(self) -> None:
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            "contract-0012-fixture",
+            False,
+        )
+        with (
+            mock.patch.object(maintenance, "_capture_json", return_value={}),
+            mock.patch.object(
+                maintenance,
+                "_validate_database_inventory",
+                return_value={"databases": []},
+            ),
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "requires the external database audit command",
+            ),
+        ):
+            maintenance._pre_destructive_database_gate(
+                {"NEXPOLY_POSTGRES_USER": "polyprop"}
+            )
+
+    def test_0012_registered_stack_audits_are_read_only_and_recovery_reuses_evidence(
+        self,
+    ) -> None:
+        self.assertIn(
+            'connection.execute("SET TRANSACTION READ ONLY")',
+            release_controller.CONTRACT_0012_DATABASE_AUDIT_PROGRAM,
+        )
+        self.assertIn(
+            '"transaction_read_only": identity["transaction_read_only"] == "on"',
+            release_controller.CONTRACT_0012_DATABASE_AUDIT_PROGRAM,
+        )
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            "contract-0012-fixture",
+            False,
+        )
+        recorded = {"recorded": True}
+        validated_external = {
+            "schema_version": 1,
+            "inventory_complete": True,
+            "writable_target": {"stack": "production", "database": "nexpoly"},
+            "databases": [],
+        }
+        with (
+            mock.patch.object(maintenance, "_capture_json", return_value={}),
+            mock.patch.object(
+                maintenance,
+                "_validate_database_inventory",
+                return_value={"databases": []},
+            ),
+            mock.patch.object(
+                maintenance,
+                "_validate_external_database_inventory",
+                return_value=validated_external,
+            ) as validate_external,
+            mock.patch.object(
+                maintenance,
+                "_capture_external_database_inventory",
+            ) as capture_external,
+        ):
+            inventory = maintenance._pre_destructive_database_gate(
+                {"NEXPOLY_POSTGRES_USER": "polyprop"},
+                recorded_external_inventory=recorded,
+            )
+
+        validate_external.assert_called_once_with(
+            recorded,
+            {"NEXPOLY_POSTGRES_USER": "polyprop"},
+        )
+        capture_external.assert_not_called()
+        self.assertEqual(
+            inventory["external_registered_database_inventory"],
+            validated_external,
+        )
+
+    def test_atomic_state_replace_and_unlink_fsync_parent_directory(self) -> None:
+        path = self.root / "state" / "record.json"
+        with mock.patch.object(release_controller, "fsync_directory") as fsync:
+            release_controller.atomic_json(path, {"ok": True})
+            self.assertEqual(fsync.call_args_list[-1], mock.call(path.parent))
+            self.assertIn(mock.call(path.parent.parent), fsync.call_args_list)
+            fsync.reset_mock()
+            release_controller.durable_unlink(path)
+            fsync.assert_called_once_with(path.parent)
+
+    def test_0012_archives_are_fsynced_before_they_become_evidence(self) -> None:
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            "contract-0012-fixture",
+            False,
+        )
+        events: list[str] = []
+        real_fsync_file = release_controller.fsync_regular_file
+
+        def tracked_fsync(path: Path) -> None:
+            events.append(f"fsync:{path.name}")
+            real_fsync_file(path)
+
+        def fake_run(command, *, env, stdin=None, stdout=None) -> None:
+            del env, stdin
+            if "pg_dump" in command:
+                events.append("pg_dump")
+                assert stdout is not None
+                stdout.write(b"verified fixture dump")
+            elif "pg_restore" in command:
+                events.append("pg_restore-list")
+
+        evidence = {
+            "schema_version": 2,
+            "row_count": 9,
+            "status_counts": {"completed": 7, "failed": 2},
+            "rows_sha256": "a" * 64,
+            "schema_sha256": "b" * 64,
+            "structure_counts": {
+                "columns": 1,
+                "indexes": 1,
+                "constraints": 1,
+                "triggers": 0,
+            },
+        }
+        with (
+            mock.patch.object(maintenance.controller, "run", side_effect=fake_run),
+            mock.patch.object(maintenance, "_capture_json", return_value=evidence),
+            mock.patch.object(
+                release_controller,
+                "fsync_regular_file",
+                side_effect=tracked_fsync,
+            ),
+        ):
+            result = maintenance._archive_legacy_table(
+                {"NEXPOLY_POSTGRES_USER": "polyprop", "NEXPOLY_POSTGRES_DB": "nexpoly"},
+                {"source_sha": SHA},
+                {"external_registered_database_inventory": {"verified": True}},
+            )
+
+        self.assertEqual(result, evidence)
+        first_dump = events.index("pg_dump")
+        first_dump_fsync = next(
+            index
+            for index, event in enumerate(events)
+            if event.startswith("fsync:pre-") and event.endswith(".dump")
+        )
+        restore_list = events.index("pg_restore-list")
+        self.assertLess(first_dump, first_dump_fsync)
+        self.assertLess(first_dump_fsync, restore_list)
+        self.assertIn("fsync:generation.polytao_jobs.dump", events)
+        self.assertIn("fsync:generation.schema.sql", events)
+        copied_names = {
+            path.name
+            for path in maintenance.audit_dir.iterdir()
+            if path.name.startswith("pre-")
+        }
+        for name in copied_names:
+            self.assertIn(f"fsync:{name}", events)
+
+    def test_verification_database_create_failure_never_runs_unowned_drop(self) -> None:
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            "contract-0012-fixture",
+            False,
+        )
+        backup = self.root / "database.dump"
+        backup.write_bytes(b"fixture")
+        maintenance.controller.backup_path = backup
+        with (
+            mock.patch.object(
+                maintenance,
+                "_pre_destructive_database_gate",
+                return_value={"databases": []},
+            ),
+            mock.patch.object(
+                maintenance.controller,
+                "run",
+                side_effect=RuntimeError("createdb failed"),
+            ) as run,
+            self.assertRaisesRegex(RuntimeError, "createdb failed"),
+        ):
+            maintenance._verify_full_restore(
+                {"NEXPOLY_POSTGRES_USER": "polyprop"},
+                {},
+            )
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.verification_owner_path)["status"],
+            "create-intent",
+        )
+
+    def test_unknown_createdb_result_exactly_cleans_owned_database(self) -> None:
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            "contract-0012-fixture",
+            False,
+        )
+        verification_database = maintenance._verification_database_name()
+        maintenance._write_verification_owner(
+            verification_database,
+            "create-intent",
+            database_absent_before_create=True,
+        )
+        before = {"databases": [{"name": verification_database}]}
+        after = {"databases": []}
+        recorded = {"external_registered_database_inventory": {"verified": True}}
+
+        with (
+            mock.patch.object(
+                maintenance,
+                "_pre_destructive_database_gate",
+                side_effect=[before, after],
+            ) as gate,
+            mock.patch.object(
+                maintenance.controller,
+                "compose",
+                return_value=["drop-exact-owned-verification"],
+            ) as compose,
+            mock.patch.object(maintenance.controller, "run") as run,
+        ):
+            result = maintenance._reconcile_owned_verification_database(
+                {"NEXPOLY_POSTGRES_USER": "polyprop"},
+                recorded_database_inventory=recorded,
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "database": verification_database,
+                "status": "dropped",
+                "present_before_cleanup": True,
+                "verified_absent": True,
+            },
+        )
+        self.assertEqual(gate.call_count, 2)
+        compose.assert_called_once_with(
+            maintenance.controller.candidate_dir,
+            "exec",
+            "-T",
+            "lab-postgres",
+            "dropdb",
+            "--if-exists",
+            "--force",
+            "-U",
+            "polyprop",
+            verification_database,
+        )
+        run.assert_called_once_with(
+            ["drop-exact-owned-verification"],
+            env={"NEXPOLY_POSTGRES_USER": "polyprop"},
+        )
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.verification_owner_path)["status"],
+            "dropped",
+        )
+
+    def test_unknown_createdb_result_absence_closes_intent_without_drop(self) -> None:
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            "contract-0012-fixture",
+            False,
+        )
+        verification_database = maintenance._verification_database_name()
+        maintenance._write_verification_owner(
+            verification_database,
+            "create-intent",
+            database_absent_before_create=True,
+        )
+        absent = {"databases": []}
+
+        with (
+            mock.patch.object(
+                maintenance,
+                "_pre_destructive_database_gate",
+                side_effect=[absent, absent],
+            ),
+            mock.patch.object(
+                maintenance,
+                "_drop_owned_verification_database",
+            ) as drop,
+        ):
+            result = maintenance._reconcile_owned_verification_database({})
+
+        drop.assert_not_called()
+        self.assertFalse(result["present_before_cleanup"])
+        self.assertTrue(result["verified_absent"])
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.verification_owner_path)["status"],
+            "dropped",
+        )
+
+    def test_unknown_createdb_inventory_failure_keeps_marker_and_drain(self) -> None:
+        operation_id = "contract-0012-fixture"
+        production = self.root / "production"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            production,
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        maintenance.apply = True
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+        }
+        database_inventory = {
+            "external_registered_database_inventory": {"verified": True}
+        }
+        backup = production / "backups" / "pre-contract.dump"
+        backup.parent.mkdir(parents=True)
+        backup.write_bytes(b"verified database backup")
+        maintenance.controller.backup_path = backup
+        current_release = production / "ops" / "releases" / SHA
+        verification_database = maintenance._verification_database_name()
+
+        def ambiguous_createdb(_environment, _evidence) -> None:
+            maintenance._write_verification_owner(
+                verification_database,
+                "create-intent",
+                database_absent_before_create=True,
+            )
+            raise RuntimeError("createdb result is unknown")
+
+        with (
+            mock.patch.object(maintenance.controller, "ensure_root"),
+            mock.patch.object(
+                maintenance.controller,
+                "deployment_lock",
+                return_value=ExitStack(),
+            ),
+            mock.patch.object(
+                maintenance,
+                "_load_current_state",
+                return_value=previous_state,
+            ),
+            mock.patch.object(maintenance, "_approved_record", return_value=None),
+            mock.patch.object(
+                maintenance,
+                "_bind_current_release",
+                return_value=current_release,
+            ),
+            mock.patch.object(maintenance.controller, "environment", return_value={}),
+            mock.patch.object(maintenance.controller, "validate_current_runtime"),
+            mock.patch.object(
+                maintenance,
+                "_pre_destructive_database_gate",
+                side_effect=[
+                    database_inventory,
+                    release_controller.ReleaseError("inventory unavailable"),
+                ],
+            ),
+            mock.patch.object(release_controller, "release_uses_worker", return_value=False),
+            mock.patch.object(maintenance.controller, "drain"),
+            mock.patch.object(maintenance.controller, "wait_for_jobs"),
+            mock.patch.object(
+                maintenance,
+                "_archive_legacy_table",
+                return_value={"schema_version": 2},
+            ),
+            mock.patch.object(
+                maintenance,
+                "_verify_full_restore",
+                side_effect=ambiguous_createdb,
+            ),
+            mock.patch.object(maintenance, "_resume_admission") as resume,
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "rollback is incomplete",
+            ),
+        ):
+            maintenance.run()
+
+        resume.assert_not_called()
+        self.assertTrue(maintenance.marker_path.is_file())
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.verification_owner_path)["status"],
+            "create-intent",
+        )
+        other = release_controller.PolytaoContractMaintenance(
+            production,
+            self.build_v2(),
+            "contract-0012-other",
+            False,
+        )
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "different 0012 maintenance operation",
+        ):
+            other._recover(release_controller.load_manifest(maintenance.marker_path))
+
+    def test_0012_recovery_cleans_create_intent_database_after_createdb_crash(self) -> None:
+        operation_id = "contract-0012-fixture"
+        production = self.root / "production"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            production,
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+        }
+        maintenance.state_path.parent.mkdir(parents=True)
+        maintenance.state_path.write_text(json.dumps(previous_state), encoding="utf-8")
+        verification_database = maintenance._verification_database_name()
+        maintenance._write_verification_owner(
+            verification_database,
+            "create-intent",
+            database_absent_before_create=True,
+        )
+        marker = {
+            "operation_id": operation_id,
+            "source_sha": SHA,
+            "previous_state": previous_state,
+            "database_change_started": False,
+            "worker_drain_attempted": False,
+        }
+        release_controller.atomic_json(maintenance.marker_path, marker)
+        current_release = production / "ops" / "releases" / SHA
+        inventory_with_verify = {
+            "databases": [{"name": verification_database}]
+        }
+        inventory_without_verify = {"databases": []}
+
+        with (
+            mock.patch.object(maintenance.controller, "environment", return_value={}),
+            mock.patch.object(
+                maintenance,
+                "_bind_current_release",
+                return_value=current_release,
+            ),
+            mock.patch.object(
+                maintenance,
+                "_pre_destructive_database_gate",
+                side_effect=[inventory_with_verify, inventory_without_verify],
+            ) as gate,
+            mock.patch.object(
+                maintenance.controller,
+                "compose",
+                return_value=["drop-owned-verification"],
+            ),
+            mock.patch.object(maintenance.controller, "run") as run,
+            mock.patch.object(maintenance, "_resume_admission") as resume,
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "recovered an interrupted 0012 operation",
+            ),
+        ):
+            maintenance._recover(marker)
+
+        run.assert_called_once_with(["drop-owned-verification"], env={})
+        self.assertEqual(gate.call_count, 2)
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.verification_owner_path)["status"],
+            "dropped",
+        )
+        resume.assert_called_once_with({}, worker_was_drained=False)
+        self.assertFalse(maintenance.marker_path.exists())
+
+    def test_0012_recovery_rebuilds_success_journal_after_state_commit(self) -> None:
+        operation_id = "contract-0012-fixture"
+        production = self.root / "production"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            production,
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        approval = {
+            "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            "operation_id": operation_id,
+            "approved_at": "2026-07-15T00:00:00+00:00",
+        }
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+        }
+        committed_state = {
+            **previous_state,
+            "migrations": [
+                release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION,
+                release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            ],
+            "approved_contracts": [approval],
+            "schema_compatibility_floor": {
+                "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            },
+            "migration_epoch_barrier": {
+                "epoch": 1,
+                "contract": {
+                    "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                    "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                },
+                "operation_id": operation_id,
+                "approved_at": approval["approved_at"],
+            },
+            "last_contract_operation": operation_id,
+        }
+        maintenance.state_path.parent.mkdir(parents=True)
+        maintenance.state_path.write_text(json.dumps(committed_state), encoding="utf-8")
+
+        backup = production / "backups" / "pre-contract.dump"
+        backup.parent.mkdir(parents=True)
+        backup.write_bytes(b"verified database backup")
+        maintenance.audit_dir.mkdir(parents=True)
+        os.chmod(maintenance.audit_dir, 0o700)
+        (maintenance.audit_dir / "legacy-table-evidence.json").write_text(
+            '{"schema_version":1}\n',
+            encoding="utf-8",
+        )
+        os.chmod(maintenance.audit_dir / "legacy-table-evidence.json", 0o600)
+        audit_manifest = maintenance._audit_manifest()
+        audit_path = maintenance.audit_dir / "AUDIT-MANIFEST.json"
+        marker = {
+            "operation_id": operation_id,
+            "source_sha": SHA,
+            "previous_state": previous_state,
+            "database_backup": str(backup),
+            "database_backup_sha256": release_controller.sha256_file(backup),
+            "audit_manifest_sha256": release_controller.sha256_file(audit_path),
+            "database_change_started": True,
+            "worker_drain_attempted": True,
+        }
+        release_controller.atomic_json(maintenance.marker_path, marker)
+        current_release = production / "ops" / "releases" / SHA
+
+        with (
+            mock.patch.object(maintenance.controller, "environment", return_value={}),
+            mock.patch.object(
+                maintenance,
+                "_bind_current_release",
+                return_value=current_release,
+            ),
+            mock.patch.object(
+                maintenance,
+                "_capture_json",
+                return_value={"schema_version": 1, "verified": True},
+            ),
+            mock.patch.object(
+                maintenance,
+                "_pre_destructive_database_gate",
+                return_value={},
+            ),
+            mock.patch.object(
+                maintenance.controller,
+                "compose",
+                return_value=["compose"],
+            ),
+            mock.patch.object(maintenance.controller, "run") as run,
+            mock.patch.object(maintenance, "_resume_admission") as resume,
+        ):
+            recovered = maintenance._recover(marker)
+
+        self.assertEqual(recovered, committed_state)
+        self.assertFalse(maintenance.marker_path.exists())
+        journal = release_controller.load_manifest(maintenance.journal_path)
+        self.assertEqual(journal["status"], "success")
+        self.assertEqual(journal["approval"], approval)
+        self.assertEqual(journal["audit_manifest"], audit_manifest)
+        self.assertEqual(
+            maintenance._validate_success_journal(journal, approval),
+            journal,
+        )
+        run.assert_called_once_with(["compose"], env={})
+        resume.assert_called_once_with({}, worker_was_drained=True)
+
+    def test_0012_rollback_recovery_journals_before_requiring_new_operation_id(self) -> None:
+        operation_id = "contract-0012-fixture"
+        production = self.root / "production"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            production,
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+        }
+        maintenance.state_path.parent.mkdir(parents=True)
+        maintenance.state_path.write_text(json.dumps(previous_state), encoding="utf-8")
+        marker = {
+            "operation_id": operation_id,
+            "source_sha": SHA,
+            "previous_state": previous_state,
+            "database_change_started": False,
+            "worker_drain_attempted": False,
+        }
+        release_controller.atomic_json(maintenance.marker_path, marker)
+        current_release = production / "ops" / "releases" / SHA
+
+        with (
+            mock.patch.object(maintenance.controller, "environment", return_value={}),
+            mock.patch.object(
+                maintenance,
+                "_bind_current_release",
+                return_value=current_release,
+            ),
+            mock.patch.object(
+                maintenance,
+                "_pre_destructive_database_gate",
+                return_value={},
+            ),
+            mock.patch.object(maintenance, "_resume_admission") as resume,
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "new operation ID",
+            ),
+        ):
+            maintenance._recover(marker)
+
+        self.assertFalse(maintenance.marker_path.exists())
+        journal = release_controller.load_manifest(maintenance.journal_path)
+        self.assertEqual(journal["status"], "recovered")
+        self.assertTrue(journal["retry_requires_new_operation_id"])
+        resume.assert_called_once_with({}, worker_was_drained=False)
 
 
 
@@ -1545,12 +2850,32 @@ class ReleaseControllerTests(unittest.TestCase):
         smoke.assert_not_called()
 
     def test_schema_compatibility_floor_is_recorded_and_preserved(self) -> None:
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "without canonical records",
+        ):
+            release_controller.schema_compatibility_floor_after(
+                None,
+                ["0012_drop_polytao_jobs"],
+            )
         self.assertEqual(
             release_controller.schema_compatibility_floor_after(
                 None,
                 ["0012_drop_polytao_jobs"],
+                [
+                    {
+                        "version": "0012_drop_polytao_jobs",
+                        "kind": "contract",
+                        "epoch": 1,
+                        "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                        "requires_contracts": [],
+                    }
+                ],
             ),
-            "0012_drop_polytao_jobs",
+            {
+                "version": "0012_drop_polytao_jobs",
+                "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            },
         )
 
     def test_migration_history_is_a_fail_closed_ordered_union(self) -> None:
@@ -1687,7 +3012,7 @@ class ReleaseControllerTests(unittest.TestCase):
         }
         self.assertEqual(
             release_controller.pending_contract_migrations(current, candidate),
-            ["0013_future_contract"],
+            ["0012_drop_polytao_jobs", "0013_future_contract"],
         )
 
     def test_bootstrap_state_keeps_deferred_contract_pending_until_approval(self) -> None:
@@ -1713,10 +3038,8 @@ class ReleaseControllerTests(unittest.TestCase):
         )
 
         bootstrap_state["approved_contract_migrations"] = ["0012_drop_polytao_jobs"]
-        self.assertEqual(
-            release_controller.pending_contract_migrations(bootstrap_state, candidate),
-            [],
-        )
+        with self.assertRaisesRegex(release_controller.ReleaseError, "name-only"):
+            release_controller.pending_contract_migrations(bootstrap_state, candidate)
 
     def test_pending_trailing_contract_is_deferred_by_code_deploy(self) -> None:
         current = {
@@ -2433,7 +3756,7 @@ class ReleaseControllerTests(unittest.TestCase):
         )
         jobs = {category: 0 for category in release_controller.ACTIVE_JOB_CATEGORIES}
         valid = {
-            "schema_version": 1,
+            "active_jobs_schema_version": 1,
             "ingress_isolated": True,
             "active_jobs": jobs,
             "active_total": 0,
@@ -2442,6 +3765,15 @@ class ReleaseControllerTests(unittest.TestCase):
         environment = {"NEXPOLY_BOOTSTRAP_QUIESCE_COMMAND": str(quiesce_hook)}
 
         completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(valid))
+        with mock.patch.object(release_controller.subprocess, "run", return_value=completed):
+            self.assertEqual(controller.run_bootstrap_quiesce(environment), valid)
+
+        unversioned = {
+            key: value
+            for key, value in valid.items()
+            if key != "active_jobs_schema_version"
+        }
+        completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(unversioned))
         with mock.patch.object(release_controller.subprocess, "run", return_value=completed):
             self.assertEqual(controller.run_bootstrap_quiesce(environment), valid)
 
@@ -2462,6 +3794,12 @@ class ReleaseControllerTests(unittest.TestCase):
         mismatched_total = json.loads(json.dumps(valid))
         mismatched_total["active_total"] = 1
         invalid_payloads.append(("does not match", mismatched_total))
+        old_field = json.loads(json.dumps(valid))
+        old_field["schema_version"] = old_field.pop("active_jobs_schema_version")
+        invalid_payloads.append(("invalid shape", old_field))
+        dual_fields = json.loads(json.dumps(valid))
+        dual_fields["schema_version"] = 1
+        invalid_payloads.append(("invalid shape", dual_fields))
 
         for message, payload in invalid_payloads:
             with (
@@ -3206,6 +4544,57 @@ class ReleaseControllerTests(unittest.TestCase):
             release_controller.validated_active_total(
                 {"active_jobs": mismatched, "active_total": 0},
                 set(release_controller.ACTIVE_JOB_CATEGORIES),
+            )
+
+        v2_jobs = {**jobs, "monomer_dft": 1}
+        self.assertEqual(
+            release_controller.validated_active_total(
+                {
+                    "active_jobs_schema_version": 2,
+                    "active_jobs": v2_jobs,
+                    "active_total": 1,
+                },
+                set(release_controller.ACTIVE_JOB_CATEGORIES_V1),
+            ),
+            1,
+        )
+        for unsupported in (None, 0, 3, True, 1.0, 2.0):
+            with (
+                self.subTest(active_jobs_schema_version=unsupported),
+                self.assertRaisesRegex(release_controller.ReleaseError, "unsupported"),
+            ):
+                release_controller.validated_active_total(
+                    {
+                        "active_jobs_schema_version": unsupported,
+                        "active_jobs": jobs,
+                        "active_total": 0,
+                    },
+                    set(release_controller.ACTIVE_JOB_CATEGORIES_V1),
+                )
+
+        for payload in (
+            {"schema_version": 1, "active_jobs": jobs, "active_total": 0},
+            {
+                "schema_version": 1,
+                "active_jobs_schema_version": 1,
+                "active_jobs": jobs,
+                "active_total": 0,
+            },
+        ):
+            with self.assertRaisesRegex(release_controller.ReleaseError, "legacy"):
+                release_controller.validated_active_total(
+                    payload,
+                    set(release_controller.ACTIVE_JOB_CATEGORIES_V1),
+                )
+
+        with self.assertRaisesRegex(release_controller.ReleaseError, "exact required"):
+            release_controller.validated_active_total(
+                {
+                    "active_jobs_schema_version": 1,
+                    "active_jobs": {"monomer_md": 0, "online_knowledge": 0},
+                    "active_total": 0,
+                },
+                {"monomer_md", "online_knowledge"},
             )
 
     def test_busy_worker_cannot_be_restarted_after_global_drain_gate(self) -> None:

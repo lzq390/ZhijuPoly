@@ -42,10 +42,21 @@ DOCKER_COMPOSE_VERSION_RE = re.compile(
     r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?$"
 )
 MINIMUM_DOCKER_COMPOSE_VERSION = (2, 24, 4)
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_RELEASE_SCHEMA_VERSIONS = frozenset({1, 2})
+MIGRATION_CHECKSUM_RE = re.compile(r"^[0-9a-f]{64}$")
+OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
 POLYTAO_CONTRACT_PREVIOUS_VERSION = "0011_monomer_md_demo_steps"
 POLYTAO_SCHEMA_COMPATIBILITY_FLOOR = "0012_drop_polytao_jobs"
-ACTIVE_JOB_CATEGORIES = (
+POLYTAO_CONTRACT_CHECKSUM = "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+CONTRACT_0012_EXTERNAL_AUDIT_COMMAND = (
+    "NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND"
+)
+CONTRACT_0012_EXTERNAL_AUDIT_USERS = {
+    "nexpoly_dev": "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER",
+    "nexpoly_md_health_opt": "NEXPOLY_CONTRACT_0012_MD_HEALTH_AUDIT_USER",
+}
+ACTIVE_JOB_CATEGORIES_V1 = (
     "monomer_md",
     "polytao",
     "online_knowledge",
@@ -55,6 +66,10 @@ ACTIVE_JOB_CATEGORIES = (
     "gpu_waiting",
     "inflight_api_writes",
 )
+ACTIVE_JOB_CATEGORIES_V2 = (*ACTIVE_JOB_CATEGORIES_V1, "monomer_dft")
+# Compatibility for existing operational tooling and tests. New consumers
+# should select a category set through the payload schema version.
+ACTIVE_JOB_CATEGORIES = ACTIVE_JOB_CATEGORIES_V1
 FORBIDDEN_DEPLOY_HOOKS = (
     "NEXPOLY_DRAIN_ENABLE_COMMAND",
     "NEXPOLY_DRAIN_DISABLE_COMMAND",
@@ -359,6 +374,237 @@ if (
     raise RuntimeError("PolyTAO candidate is missing generated_smiles or a complete structure_svg")
 print(json.dumps({"conditional_generation": "completed", "polytao": "completed"}, sort_keys=True))
 '''
+CONTRACT_0012_AUDIT_PROGRAM = r'''
+import hashlib
+import json
+
+from app.config import Settings
+from app.postgres_database import postgres_connection
+
+
+def canonical(value):
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=str,
+    ).encode("utf-8")
+
+
+with postgres_connection(Settings().app_postgres_dsn) as connection:
+    rows = [
+        row["payload"]
+        for row in connection.execute(
+            "SELECT to_jsonb(jobs) AS payload "
+            "FROM generation.polytao_jobs AS jobs ORDER BY job_id::text"
+        ).fetchall()
+    ]
+    statuses = {
+        str(row["status"]): int(row["count"])
+        for row in connection.execute(
+            "SELECT status, COUNT(*) AS count "
+            "FROM generation.polytao_jobs GROUP BY status ORDER BY status"
+        ).fetchall()
+    }
+    columns = [
+        dict(row)
+        for row in connection.execute(
+            "SELECT column_name, ordinal_position, data_type, udt_schema, udt_name, "
+            "is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema = 'generation' AND table_name = 'polytao_jobs' "
+            "ORDER BY ordinal_position"
+        ).fetchall()
+    ]
+    indexes = [
+        dict(row)
+        for row in connection.execute(
+            "SELECT indexname, indexdef FROM pg_indexes "
+            "WHERE schemaname = 'generation' AND tablename = 'polytao_jobs' "
+            "ORDER BY indexname"
+        ).fetchall()
+    ]
+    constraints = [
+        dict(row)
+        for row in connection.execute(
+            "SELECT constraint_row.conname AS name, constraint_row.contype AS type, "
+            "constraint_row.condeferrable AS deferrable, "
+            "constraint_row.condeferred AS initially_deferred, "
+            "constraint_row.convalidated AS validated, "
+            "pg_get_constraintdef(constraint_row.oid, true) AS definition "
+            "FROM pg_constraint AS constraint_row "
+            "JOIN pg_class AS relation ON relation.oid = constraint_row.conrelid "
+            "JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace "
+            "WHERE namespace.nspname = 'generation' "
+            "AND relation.relname = 'polytao_jobs' "
+            "ORDER BY constraint_row.conname"
+        ).fetchall()
+    ]
+    triggers = [
+        dict(row)
+        for row in connection.execute(
+            "SELECT trigger_row.tgname AS name, trigger_row.tgenabled AS enabled, "
+            "pg_get_triggerdef(trigger_row.oid, true) AS definition "
+            "FROM pg_trigger AS trigger_row "
+            "JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid "
+            "JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace "
+            "WHERE namespace.nspname = 'generation' "
+            "AND relation.relname = 'polytao_jobs' "
+            "AND NOT trigger_row.tgisinternal ORDER BY trigger_row.tgname"
+        ).fetchall()
+    ]
+    structure = {
+        "columns": columns,
+        "indexes": indexes,
+        "constraints": constraints,
+        "triggers": triggers,
+    }
+
+print(
+    json.dumps(
+        {
+            "schema_version": 2,
+            "row_count": len(rows),
+            "status_counts": statuses,
+            "rows_sha256": hashlib.sha256(canonical(rows)).hexdigest(),
+            "schema_sha256": hashlib.sha256(canonical(structure)).hexdigest(),
+            "structure_counts": {
+                name: len(records) for name, records in structure.items()
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+)
+'''
+CONTRACT_0012_INVENTORY_PROGRAM = r'''
+import json
+
+from app.config import Settings
+from app.postgres_database import postgres_connection
+
+
+with postgres_connection(Settings().app_postgres_dsn) as connection:
+    connection.execute("SET TRANSACTION READ ONLY")
+    identity = connection.execute(
+        "SELECT current_database() AS database, current_user AS user, "
+        "current_setting('transaction_read_only') AS transaction_read_only"
+    ).fetchone()
+    databases = [
+        {
+            "name": str(row["name"]),
+            "owner": str(row["owner"]),
+            "is_template": bool(row["is_template"]),
+            "allow_connections": bool(row["allow_connections"]),
+        }
+        for row in connection.execute(
+            "SELECT datname AS name, pg_get_userbyid(datdba) AS owner, "
+            "datistemplate AS is_template, datallowconn AS allow_connections "
+            "FROM pg_database ORDER BY datname"
+        ).fetchall()
+    ]
+    ledger_relation = connection.execute(
+        "SELECT to_regclass('governance.schema_migrations') AS relation"
+    ).fetchone()["relation"]
+    if ledger_relation is None:
+        ledger = []
+    else:
+        ledger = [
+            {"version": str(row["version"]), "checksum": str(row["checksum"])}
+            for row in connection.execute(
+                "SELECT version, checksum FROM governance.schema_migrations "
+                "ORDER BY version"
+            ).fetchall()
+        ]
+    legacy_relation = connection.execute(
+        "SELECT to_regclass('generation.polytao_jobs') AS relation"
+    ).fetchone()["relation"]
+
+print(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "target_database": str(identity["database"]),
+            "current_user": str(identity["user"]),
+            "databases": databases,
+            "ledger": ledger,
+            "legacy_relation_present": legacy_relation is not None,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+)
+'''
+CONTRACT_0012_DATABASE_AUDIT_PROGRAM = r'''
+import json
+
+from app.config import Settings
+from app.postgres_database import postgres_connection
+
+
+with postgres_connection(Settings().app_postgres_dsn) as connection:
+    connection.execute("SET TRANSACTION READ ONLY")
+    identity = connection.execute(
+        "SELECT current_database() AS database, current_user AS user, "
+        "current_setting('transaction_read_only') AS transaction_read_only"
+    ).fetchone()
+    ledger_relation = connection.execute(
+        "SELECT to_regclass('governance.schema_migrations') AS relation"
+    ).fetchone()["relation"]
+    if ledger_relation is None:
+        ledger = []
+    else:
+        ledger = [
+            {"version": str(row["version"]), "checksum": str(row["checksum"])}
+            for row in connection.execute(
+                "SELECT version, checksum FROM governance.schema_migrations "
+                "ORDER BY version"
+            ).fetchall()
+        ]
+    legacy_relation = connection.execute(
+        "SELECT to_regclass('generation.polytao_jobs') AS relation"
+    ).fetchone()["relation"]
+
+print(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "database": str(identity["database"]),
+            "current_user": str(identity["user"]),
+            "transaction_read_only": identity["transaction_read_only"] == "on",
+            "ledger": ledger,
+            "legacy_relation_present": legacy_relation is not None,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+)
+'''
+CONTRACT_0012_VERIFY_PROGRAM = r'''
+import json
+
+from app.config import Settings
+from app.postgres_database import postgres_connection
+
+expected = "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+with postgres_connection(Settings().app_postgres_dsn) as connection:
+    row = connection.execute(
+        "SELECT checksum FROM governance.schema_migrations "
+        "WHERE version = '0012_drop_polytao_jobs'"
+    ).fetchone()
+    table = connection.execute(
+        "SELECT to_regclass('generation.polytao_jobs') AS relation"
+    ).fetchone()["relation"]
+    schema = connection.execute(
+        "SELECT to_regnamespace('generation') AS namespace"
+    ).fetchone()["namespace"]
+if row is None or str(row["checksum"]) != expected:
+    raise SystemExit("0012 ledger checksum is absent or incorrect")
+if table is not None or schema is not None:
+    raise SystemExit("0012 did not remove the governed PolyTAO table/schema")
+print(json.dumps({"schema_version": 1, "verified": True}, sort_keys=True))
+'''
 
 
 class ReleaseError(RuntimeError):
@@ -434,9 +680,25 @@ def validated_active_total(
 ) -> int:
     if not isinstance(payload, dict):
         raise ReleaseError("deployment status is not a JSON object")
+    if "schema_version" in payload:
+        raise ReleaseError(
+            "deployment status uses the forbidden legacy schema_version field"
+        )
+    if "active_jobs_schema_version" not in payload:
+        required_categories = set(expected_categories)
+    else:
+        schema_version = payload["active_jobs_schema_version"]
+        if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+            raise ReleaseError("deployment status has an unsupported schema version")
+        if schema_version == 1:
+            required_categories = set(ACTIVE_JOB_CATEGORIES_V1)
+        elif schema_version == 2:
+            required_categories = set(ACTIVE_JOB_CATEGORIES_V2)
+        else:
+            raise ReleaseError("deployment status has an unsupported schema version")
     jobs = payload.get("active_jobs")
     total = payload.get("active_total")
-    if not isinstance(jobs, dict) or set(jobs) != expected_categories:
+    if not isinstance(jobs, dict) or set(jobs) != required_categories:
         raise ReleaseError("deployment status does not contain the exact required job categories")
     if isinstance(total, bool) or not isinstance(total, int) or total < 0:
         raise ReleaseError("deployment status active_total is not a non-negative integer")
@@ -460,36 +722,232 @@ def rollback_allows_resume(database_changed: bool, rollback: str | None) -> bool
     return not database_changed or rollback == "success"
 
 
+def release_migration_records(
+    document: dict[str, Any],
+    *,
+    enforce_sequence: bool = True,
+) -> list[dict[str, Any]]:
+    """Normalize release-manifest V1/V2 migrations without weakening either schema."""
+
+    schema_version = document.get("schema_version", 1)
+    migrations = document.get("migrations")
+    if (
+        isinstance(schema_version, bool)
+        or schema_version not in SUPPORTED_RELEASE_SCHEMA_VERSIONS
+        or not isinstance(migrations, list)
+    ):
+        raise ReleaseError("unsupported release migration manifest schema")
+
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, migration in enumerate(migrations):
+        if not isinstance(migration, dict):
+            raise ReleaseError(f"migration record {index} must be an object")
+        if schema_version == 1:
+            if set(migration) != {"name", "type"}:
+                raise ReleaseError("V1 migration records must contain exactly name and type")
+            version = migration.get("name")
+            kind = migration.get("type")
+            epoch = 1
+            checksum = None
+            requirements: list[dict[str, str]] = []
+        else:
+            if set(migration) != {
+                "version",
+                "kind",
+                "epoch",
+                "checksum",
+                "requires_contracts",
+            }:
+                raise ReleaseError(
+                    "V2 migration records must contain exactly version, kind, epoch, "
+                    "checksum, and requires_contracts"
+                )
+            version = migration.get("version")
+            kind = migration.get("kind")
+            epoch = migration.get("epoch")
+            checksum = migration.get("checksum")
+            raw_requirements = migration.get("requires_contracts")
+            if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1:
+                raise ReleaseError(f"migration {version} has an invalid epoch")
+            if not isinstance(checksum, str) or MIGRATION_CHECKSUM_RE.fullmatch(checksum) is None:
+                raise ReleaseError(f"migration {version} has an invalid canonical checksum")
+            if not isinstance(raw_requirements, list):
+                raise ReleaseError(f"migration {version} requires_contracts must be a list")
+            requirements = []
+            requirement_versions: set[str] = set()
+            for requirement in raw_requirements:
+                if not isinstance(requirement, dict) or set(requirement) != {
+                    "version",
+                    "checksum",
+                }:
+                    raise ReleaseError(
+                        f"migration {version} contains an invalid contract requirement"
+                    )
+                required_version = requirement.get("version")
+                required_checksum = requirement.get("checksum")
+                if (
+                    not isinstance(required_version, str)
+                    or SAFE_MIGRATION_RE.fullmatch(required_version) is None
+                    or required_version in requirement_versions
+                    or not isinstance(required_checksum, str)
+                    or MIGRATION_CHECKSUM_RE.fullmatch(required_checksum) is None
+                ):
+                    raise ReleaseError(
+                        f"migration {version} contains an invalid or duplicate contract requirement"
+                    )
+                requirement_versions.add(required_version)
+                requirements.append(
+                    {"version": required_version, "checksum": required_checksum}
+                )
+        if (
+            not isinstance(version, str)
+            or SAFE_MIGRATION_RE.fullmatch(version) is None
+            or version in seen
+        ):
+            raise ReleaseError("migration versions must be unique safe identifiers")
+        if kind not in {"baseline", "expand", "contract"}:
+            raise ReleaseError(f"invalid migration kind: {kind}")
+        seen.add(version)
+        normalized.append(
+            {
+                "version": version,
+                "kind": kind,
+                "epoch": epoch,
+                "checksum": checksum,
+                "requires_contracts": requirements,
+            }
+        )
+
+    if schema_version == 1:
+        if not enforce_sequence:
+            return normalized
+        first_contract = next(
+            (index for index, record in enumerate(normalized) if record["kind"] == "contract"),
+            None,
+        )
+        if first_contract is not None and any(
+            record["kind"] != "contract" for record in normalized[first_contract:]
+        ):
+            raise ReleaseError("V1 contract migrations must form the trailing migration suffix")
+        return normalized
+
+    if not enforce_sequence:
+        return normalized
+    if normalized:
+        epochs = [record["epoch"] for record in normalized]
+        if epochs[0] != 1:
+            raise ReleaseError("release migration epoch numbering must start at 1")
+        if any(
+            current < previous or current > previous + 1
+            for previous, current in zip(epochs, epochs[1:])
+        ):
+            raise ReleaseError("release migration epochs must be ordered and contiguous")
+    prior_contracts: list[dict[str, str]] = []
+    for epoch in sorted({record["epoch"] for record in normalized}):
+        epoch_records = [record for record in normalized if record["epoch"] == epoch]
+        first_contract = next(
+            (index for index, record in enumerate(epoch_records) if record["kind"] == "contract"),
+            None,
+        )
+        if first_contract is not None and any(
+            record["kind"] != "contract" for record in epoch_records[first_contract:]
+        ):
+            raise ReleaseError(
+                f"contract migrations must form the trailing suffix of epoch {epoch}"
+            )
+        for record in epoch_records:
+            if record["requires_contracts"] != prior_contracts:
+                raise ReleaseError(
+                    f"migration {record['version']} must checksum-bind every earlier-epoch contract"
+                )
+        prior_contracts.extend(
+            {"version": record["version"], "checksum": record["checksum"]}
+            for record in epoch_records
+            if record["kind"] == "contract"
+        )
+    return normalized
+
+
 def assert_release_supports_schema_floor(
     manifest: dict[str, Any],
-    floor: str | None,
+    floor: object,
 ) -> None:
     if floor is None:
         return
-    if not SAFE_MIGRATION_RE.fullmatch(floor):
+    if isinstance(floor, str):
+        if not SAFE_MIGRATION_RE.fullmatch(floor):
+            raise ReleaseError("current release state contains an invalid schema compatibility floor")
+        version = floor
+        checksum = None
+    elif isinstance(floor, dict) and set(floor) == {"version", "checksum"}:
+        version = floor.get("version")
+        checksum = floor.get("checksum")
+        if (
+            not isinstance(version, str)
+            or SAFE_MIGRATION_RE.fullmatch(version) is None
+            or not isinstance(checksum, str)
+            or MIGRATION_CHECKSUM_RE.fullmatch(checksum) is None
+        ):
+            raise ReleaseError("current release state contains an invalid schema compatibility floor")
+    else:
         raise ReleaseError("current release state contains an invalid schema compatibility floor")
     supported = {
-        migration.get("name")
-        for migration in manifest.get("migrations", [])
-        if isinstance(migration, dict)
+        record["version"]: record["checksum"]
+        for record in release_migration_records(manifest)
     }
-    if floor not in supported:
+    if version not in supported or (
+        checksum is not None and supported.get(version) != checksum
+    ):
         raise ReleaseError(
-            f"rollback release does not support the active schema compatibility floor {floor}"
+            f"rollback release does not support the active schema compatibility floor {version}"
         )
 
 
 def schema_compatibility_floor_after(
     previous_floor: object,
     applied_migrations: Iterable[str],
-) -> str | None:
-    if previous_floor is not None and (
-        not isinstance(previous_floor, str)
-        or not SAFE_MIGRATION_RE.fullmatch(previous_floor)
-    ):
-        raise ReleaseError("current release state contains an invalid schema compatibility floor")
+    migration_records: Iterable[dict[str, Any]] | None = None,
+) -> object:
+    if previous_floor is not None:
+        # Validate both the historical name-only record and the checksum-bound
+        # V2 record. Existing state remains readable, while all new floors are
+        # written from V2 migration evidence below.
+        assert_release_supports_schema_floor(
+            {"schema_version": 1, "migrations": [{"name": previous_floor, "type": "contract"}]}
+            if isinstance(previous_floor, str)
+            else {
+                "schema_version": 2,
+                "migrations": [
+                    {
+                        "version": previous_floor.get("version") if isinstance(previous_floor, dict) else None,
+                        "kind": "contract",
+                        "epoch": 1,
+                        "checksum": previous_floor.get("checksum") if isinstance(previous_floor, dict) else None,
+                        "requires_contracts": [],
+                    }
+                ],
+            },
+            previous_floor,
+        )
     if POLYTAO_SCHEMA_COMPATIBILITY_FLOOR in applied_migrations:
-        return POLYTAO_SCHEMA_COMPATIBILITY_FLOOR
+        if migration_records is None:
+            raise ReleaseError(
+                "cannot create a schema floor from a migration name without canonical records"
+            )
+        records = {
+            record.get("version"): record
+            for record in migration_records
+            if isinstance(record, dict)
+        }
+        record = records.get(POLYTAO_SCHEMA_COMPATIBILITY_FLOOR)
+        checksum = record.get("checksum") if isinstance(record, dict) else None
+        if not isinstance(checksum, str) or MIGRATION_CHECKSUM_RE.fullmatch(checksum) is None:
+            raise ReleaseError("cannot create a schema floor without canonical contract checksum")
+        return {
+            "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            "checksum": checksum,
+        }
     return previous_floor
 
 
@@ -534,36 +992,166 @@ def previous_release_for_deploy(previous_state: dict[str, Any], target_sha: str)
     return previous_sha
 
 
-def approved_contract_migrations(current_state: dict[str, Any]) -> set[str]:
-    explicit = current_state.get("approved_contract_migrations")
-    if explicit is not None:
-        if not isinstance(explicit, list) or any(
-            not isinstance(name, str) or not SAFE_MIGRATION_RE.fullmatch(name)
-            for name in explicit
-        ):
-            raise ReleaseError("current release state contains invalid approved contract migrations")
-        return set(explicit)
+def _is_canonical_utc_timestamp(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return (
+        parsed.tzinfo is not None
+        and parsed.utcoffset() == dt.timedelta(0)
+        and parsed.microsecond == 0
+        and parsed.isoformat(timespec="seconds") == value
+        and value.endswith("+00:00")
+    )
 
-    # Compatibility with release-state records written before the explicit
-    # approved-contract field existed.
-    approved: set[str] = set()
-    floor = current_state.get("schema_compatibility_floor")
-    if isinstance(floor, str) and SAFE_MIGRATION_RE.fullmatch(floor):
-        approved.add(floor)
-    actual = current_state.get("migrations", [])
-    records = current_state.get("migration_manifest", [])
-    if isinstance(actual, list) and isinstance(records, list):
-        actual_names = {name for name in actual if isinstance(name, str)}
-        approved.update(
-            str(record.get("name"))
-            for record in records
-            if (
-                isinstance(record, dict)
-                and record.get("type") == "contract"
-                and record.get("name") in actual_names
-            )
+
+def _validated_approved_contract_records(
+    current_state: dict[str, Any],
+) -> tuple[list[dict[str, str]], dict[str, str]]:
+    approved_records = current_state.get("approved_contracts")
+    explicit = current_state.get("approved_contract_migrations")
+    if explicit not in (None, []):
+        raise ReleaseError(
+            "name-only contract approvals are not valid approval authority"
+        )
+    if approved_records is None:
+        return [], {}
+    if not isinstance(approved_records, list):
+        raise ReleaseError("current release state contains invalid approved contracts")
+    approved: dict[str, str] = {}
+    normalized: list[dict[str, str]] = []
+    for record in approved_records:
+        if not isinstance(record, dict) or set(record) != {
+            "version",
+            "checksum",
+            "operation_id",
+            "approved_at",
+        }:
+            raise ReleaseError("current release state contains invalid approved contracts")
+        version = record.get("version")
+        checksum = record.get("checksum")
+        operation_id = record.get("operation_id")
+        approved_at = record.get("approved_at")
+        if (
+            not isinstance(version, str)
+            or SAFE_MIGRATION_RE.fullmatch(version) is None
+            or version != POLYTAO_SCHEMA_COMPATIBILITY_FLOOR
+            or version in approved
+            or not isinstance(checksum, str)
+            or MIGRATION_CHECKSUM_RE.fullmatch(checksum) is None
+            or checksum != POLYTAO_CONTRACT_CHECKSUM
+            or not isinstance(operation_id, str)
+            or OPERATION_ID_RE.fullmatch(operation_id) is None
+            or not _is_canonical_utc_timestamp(approved_at)
+        ):
+            raise ReleaseError("current release state contains invalid approved contracts")
+        approved[version] = checksum
+        normalized.append(
+            {
+                "version": version,
+                "checksum": checksum,
+                "operation_id": operation_id,
+                "approved_at": approved_at,
+            }
+        )
+    return normalized, approved
+
+
+def approved_contract_migrations(current_state: dict[str, Any]) -> dict[str, str]:
+    """Return only checksum-bound approvals backed by the atomic epoch barrier.
+
+    Historic migration history, candidate manifests, compatibility floors, and
+    name-only approval lists are intentionally not authority to approve a
+    destructive contract.
+    """
+
+    _records, approved = _validated_approved_contract_records(current_state)
+    barrier = validated_migration_epoch_barrier(current_state)
+    if approved and barrier is None:
+        raise ReleaseError(
+            "checksum-bound contract approval is missing its migration epoch barrier"
         )
     return approved
+
+
+def validated_migration_epoch_barrier(
+    current_state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Validate the atomic approval/floor/barrier record written by maintenance."""
+
+    barrier = current_state.get("migration_epoch_barrier")
+    last_operation = current_state.get("last_contract_operation")
+    approved_records, _approved = _validated_approved_contract_records(current_state)
+    has_checksum_approvals = bool(approved_records)
+    has_checksum_floor = isinstance(
+        current_state.get("schema_compatibility_floor"),
+        dict,
+    )
+    if barrier is None:
+        if last_operation is not None or has_checksum_approvals or has_checksum_floor:
+            raise ReleaseError(
+                "checksum-bound contract approval is missing its migration epoch barrier"
+            )
+        return None
+    if len(approved_records) != 1:
+        raise ReleaseError(
+            "migration epoch barrier must bind the only checksum-approved contract"
+        )
+    if not isinstance(barrier, dict) or set(barrier) != {
+        "epoch",
+        "contract",
+        "operation_id",
+        "approved_at",
+    }:
+        raise ReleaseError("current release state contains an invalid migration epoch barrier")
+    epoch = barrier.get("epoch")
+    contract = barrier.get("contract")
+    operation_id = barrier.get("operation_id")
+    approved_at = barrier.get("approved_at")
+    if (
+        isinstance(epoch, bool)
+        or not isinstance(epoch, int)
+        or epoch != 1
+        or not isinstance(contract, dict)
+        or set(contract) != {"version", "checksum"}
+        or not isinstance(operation_id, str)
+        or OPERATION_ID_RE.fullmatch(operation_id) is None
+        or not _is_canonical_utc_timestamp(approved_at)
+        or last_operation != operation_id
+    ):
+        raise ReleaseError("current release state contains an invalid migration epoch barrier")
+    version = contract.get("version")
+    checksum = contract.get("checksum")
+    if (
+        not isinstance(version, str)
+        or SAFE_MIGRATION_RE.fullmatch(version) is None
+        or version != POLYTAO_SCHEMA_COMPATIBILITY_FLOOR
+        or not isinstance(checksum, str)
+        or MIGRATION_CHECKSUM_RE.fullmatch(checksum) is None
+        or checksum != POLYTAO_CONTRACT_CHECKSUM
+    ):
+        raise ReleaseError("current release state contains an invalid migration epoch barrier")
+    floor = current_state.get("schema_compatibility_floor")
+    if floor != {"version": version, "checksum": checksum}:
+        raise ReleaseError("migration epoch barrier differs from the schema compatibility floor")
+    matching = [
+        record
+        for record in approved_records
+        if record.get("version") == version
+    ]
+    if matching != [
+        {
+            "version": version,
+            "checksum": checksum,
+            "operation_id": operation_id,
+            "approved_at": approved_at,
+        }
+    ]:
+        raise ReleaseError("migration epoch barrier differs from its contract approval")
+    return dict(barrier)
 
 
 def pending_contract_migrations(
@@ -579,11 +1167,19 @@ def pending_contract_migrations(
     """
 
     candidate_contracts = {
-        str(record.get("name"))
-        for record in candidate_manifest.get("migrations", [])
-        if isinstance(record, dict) and record.get("type") == "contract"
+        record["version"]: record["checksum"]
+        for record in release_migration_records(
+            candidate_manifest,
+            enforce_sequence=False,
+        )
+        if record["kind"] == "contract"
     }
-    return sorted(candidate_contracts - approved_contract_migrations(current_state))
+    approved = approved_contract_migrations(current_state)
+    return sorted(
+        version
+        for version, checksum in candidate_contracts.items()
+        if version not in approved or approved[version] != checksum
+    )
 
 
 def code_deploy_migration_mode(
@@ -595,17 +1191,22 @@ def code_deploy_migration_mode(
 ) -> str:
     """Select expand-only deployment while allowing a trailing contract suffix."""
 
-    del current_state, deployment_mode, target_sha
-    records = candidate_manifest.get("migrations", [])
-    first_contract: int | None = None
-    for index, record in enumerate(records):
-        if not isinstance(record, dict):
-            raise ReleaseError("candidate migration manifest is invalid")
-        if record.get("type") == "contract" and first_contract is None:
-            first_contract = index
-        elif first_contract is not None and record.get("type") != "contract":
+    del deployment_mode, target_sha
+    records = release_migration_records(candidate_manifest)
+    validated_migration_epoch_barrier(current_state)
+    approved = approved_contract_migrations(current_state)
+    for record in records:
+        if record["kind"] not in {"baseline", "expand"}:
+            continue
+        missing = [
+            requirement["version"]
+            for requirement in record["requires_contracts"]
+            if approved.get(requirement["version"]) != requirement["checksum"]
+        ]
+        if missing:
             raise ReleaseError(
-                "pending contract migrations must be the trailing migration suffix"
+                f"migration {record['version']} requires checksum-approved contracts: "
+                + ", ".join(missing)
             )
     return "expand"
 
@@ -1167,6 +1768,86 @@ def parse_migrations(values: Iterable[str]) -> list[dict[str, str]]:
     return migrations
 
 
+def migration_sql_checksum(path: Path) -> str:
+    normalized = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(normalized).hexdigest()
+
+
+def release_migrations_from_policy_manifest(
+    path: Path,
+    *,
+    include_baseline: bool = False,
+) -> list[dict[str, Any]]:
+    """Load a V1/V2 repository policy and emit checksum-complete V2 records."""
+
+    policy = load_manifest(path)
+    if set(policy) != {"schema_version", "migrations"}:
+        raise ReleaseError("migration policy manifest has an invalid shape")
+    schema_version = policy.get("schema_version")
+    raw_migrations = policy.get("migrations")
+    if (
+        isinstance(schema_version, bool)
+        or schema_version not in {1, 2}
+        or not isinstance(raw_migrations, list)
+    ):
+        raise ReleaseError("migration policy manifest must use schema version 1 or 2")
+    sql_paths = sorted(path.parent.glob("*.sql"))
+    sql_by_version = {sql_path.stem: sql_path for sql_path in sql_paths}
+    records: list[dict[str, Any]] = []
+    for raw in raw_migrations:
+        if not isinstance(raw, dict):
+            raise ReleaseError("migration policy contains a non-object record")
+        if schema_version == 1:
+            if set(raw) != {"version", "kind"}:
+                raise ReleaseError("migration policy V1 record has an invalid shape")
+            version = raw.get("version")
+            kind = raw.get("kind")
+            epoch = 1
+            requirements: list[dict[str, str]] = []
+            declared_checksum = None
+        else:
+            if set(raw) != {
+                "version",
+                "kind",
+                "epoch",
+                "checksum",
+                "requires_contracts",
+            }:
+                raise ReleaseError("migration policy V2 record has an invalid shape")
+            version = raw.get("version")
+            kind = raw.get("kind")
+            epoch = raw.get("epoch")
+            declared_checksum = raw.get("checksum")
+            requirements = raw.get("requires_contracts")
+        if not isinstance(version, str) or version not in sql_by_version:
+            raise ReleaseError(f"migration policy SQL is missing for {version}")
+        actual_checksum = migration_sql_checksum(sql_by_version[version])
+        if declared_checksum is not None and declared_checksum != actual_checksum:
+            raise ReleaseError(
+                f"migration policy checksum differs from canonical SQL for {version}"
+            )
+        records.append(
+            {
+                "version": version,
+                "kind": kind,
+                "epoch": epoch,
+                "checksum": actual_checksum,
+                "requires_contracts": requirements,
+            }
+        )
+    if {record["version"] for record in records} != set(sql_by_version):
+        raise ReleaseError("migration policy and SQL file sets differ")
+    if [record["version"] for record in records] != list(sql_by_version):
+        raise ReleaseError("migration policy and SQL files are not in the same lexical order")
+    release_migration_records({"schema_version": 2, "migrations": records})
+    baselines = [record for record in records if record["kind"] == "baseline"]
+    if len(baselines) != 1 or records[0]["kind"] != "baseline":
+        raise ReleaseError("migration policy must contain one leading baseline")
+    if include_baseline:
+        return records
+    return [record for record in records if record["kind"] != "baseline"]
+
+
 def load_release_input(path: Path) -> dict[str, Any]:
     """Load the small, reviewed asset/data input committed with a release."""
 
@@ -1209,8 +1890,23 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         raise ReleaseError("build-manifest requires --release-bundle")
     release_bundle = artifact_record(Path(release_bundle_value))
     release_input = load_release_input(Path(args.release_input))
+    policy_manifest = getattr(args, "migration_manifest", None)
+    legacy_descriptors = list(getattr(args, "migration", None) or [])
+    if policy_manifest and legacy_descriptors:
+        raise ReleaseError("build-manifest cannot combine --migration-manifest and --migration")
+    if policy_manifest:
+        schema_version = 2
+        migrations: list[dict[str, Any]] = release_migrations_from_policy_manifest(
+            Path(policy_manifest)
+        )
+    else:
+        # Compatibility for detached V1 builders during the bridge window.
+        # The production workflow always supplies the repository policy and
+        # therefore emits checksum-bound schema V2.
+        schema_version = 1
+        migrations = parse_migrations(legacy_descriptors)
     document: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
         "release_type": "code",
         "source_sha": source_sha,
         "ci_run_id": str(args.ci_run_id),
@@ -1222,7 +1918,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "release_bundle": release_bundle,
         "asset_manifest_digest": release_input["asset_manifest_digest"],
         "datasets_on_asset_change": release_input["datasets_on_asset_change"],
-        "migrations": parse_migrations(args.migration or []),
+        "migrations": migrations,
     }
     validate_manifest(document, deployment_mode="auto")
     output = Path(args.output)
@@ -1231,6 +1927,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     temporary.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.chmod(temporary, 0o600)
     temporary.replace(output)
+    fsync_directory(output.parent)
     return document
 
 
@@ -1276,7 +1973,11 @@ def validate_manifest(document: dict[str, Any], deployment_mode: str = "auto") -
     }
     if set(document) != expected_fields:
         raise ReleaseError("release manifest must contain exactly the single-bundle schema fields")
-    if document.get("schema_version") != SCHEMA_VERSION or document.get("release_type") != "code":
+    if (
+        isinstance(document.get("schema_version"), bool)
+        or document.get("schema_version") not in SUPPORTED_RELEASE_SCHEMA_VERSIONS
+        or document.get("release_type") != "code"
+    ):
         raise ReleaseError("unsupported release manifest schema or type")
     require_sha(str(document.get("source_sha", "")), "source SHA")
     if not str(document.get("ci_run_id", "")).strip():
@@ -1302,19 +2003,9 @@ def validate_manifest(document: dict[str, Any], deployment_mode: str = "auto") -
         raise ReleaseError("datasets_on_asset_change must contain explicit safe dataset names")
     if not datasets:
         raise ReleaseError("single-bundle releases require explicit datasets_on_asset_change")
-    migrations = document.get("migrations")
-    if not isinstance(migrations, list):
-        raise ReleaseError("migrations must be a list")
-    seen: set[str] = set()
+    migrations = release_migration_records(document)
     for migration in migrations:
-        if not isinstance(migration, dict) or set(migration) != {"name", "type"}:
-            raise ReleaseError("migration records must contain exactly name and type")
-        if not SAFE_MIGRATION_RE.fullmatch(str(migration["name"])) or migration["name"] in seen:
-            raise ReleaseError("migration names must be unique safe identifiers")
-        seen.add(migration["name"])
-        if migration["type"] not in {"baseline", "expand", "contract"}:
-            raise ReleaseError(f"invalid migration type: {migration['type']}")
-        if deployment_mode == "auto" and migration["type"] == "baseline":
+        if deployment_mode == "auto" and migration["kind"] == "baseline":
             raise ReleaseError("automatic code deployment manifests must exclude baseline migrations")
     return document
 
@@ -1407,20 +2098,102 @@ def validate_postgres_dsn(
         raise ReleaseError(f"{field} does not match the pinned production PostgreSQL identity")
 
 
+def fsync_directory(path: Path) -> None:
+    """Durably persist directory-entry changes for state files."""
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def ensure_durable_directory(path: Path, mode: int = 0o700) -> None:
+    """Create a real directory and durably persist every new parent entry."""
+
+    if path.exists() or path.is_symlink():
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise ReleaseError(f"cannot inspect directory {path}") from exc
+        if not stat.S_ISDIR(metadata.st_mode) or path.is_symlink():
+            raise ReleaseError(f"required directory is unsafe: {path}")
+        return
+    parent = path.parent
+    if parent == path:
+        raise ReleaseError(f"cannot create directory root {path}")
+    ensure_durable_directory(parent, mode)
+    try:
+        path.mkdir(mode=mode)
+    except FileExistsError:
+        if not path.is_dir() or path.is_symlink():
+            raise ReleaseError(f"required directory is unsafe: {path}")
+        return
+    os.chmod(path, mode)
+    fsync_directory(path)
+    fsync_directory(parent)
+
+
+def fsync_regular_file(path: Path) -> None:
+    """Persist one non-symlink regular file and its directory entry."""
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ReleaseError(f"cannot open durable file {path}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReleaseError(f"durable file is not a regular file: {path}")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    fsync_directory(path.parent)
+
+
+def durable_unlink(path: Path, *, missing_ok: bool = False) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        if missing_ok:
+            return
+        raise
+    fsync_directory(path.parent)
+
+
 def atomic_json(path: Path, document: dict[str, Any], mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_durable_directory(path.parent)
     fd, raw_temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(raw_temporary)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            os.fchmod(stream.fileno(), mode)
             json.dump(document, stream, indent=2, sort_keys=True)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.chmod(temporary, mode)
         temporary.replace(path)
+        fsync_directory(path.parent)
     finally:
-        temporary.unlink(missing_ok=True)
+        durable_unlink(temporary, missing_ok=True)
+
+
+def atomic_text(path: Path, value: str, *, mode: int = 0o600) -> None:
+    ensure_durable_directory(path.parent)
+    fd, raw_temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(raw_temporary)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+        fsync_directory(path.parent)
+    finally:
+        durable_unlink(temporary, missing_ok=True)
 
 
 def safe_extract_tar(archive: Path, destination: Path) -> None:
@@ -1590,6 +2363,10 @@ class ReleaseController:
                 )
         if values["NEXPOLY_POSTGRES_PASSWORD"] in {"polyprop", "nexpoly", "password"}:
             raise ReleaseError("production Postgres password is a known fixed default")
+        if values["NEXPOLY_POSTGRES_DB"] != "nexpoly":
+            raise ReleaseError(
+                "production maintenance and release operations are hard-locked to database nexpoly"
+            )
         postgres_identity = {
             "expected_user": values["NEXPOLY_POSTGRES_USER"],
             "expected_password": values["NEXPOLY_POSTGRES_PASSWORD"],
@@ -1762,31 +2539,41 @@ class ReleaseController:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             raise ReleaseError("bootstrap quiesce hook must print exactly one JSON object") from exc
-        if not isinstance(payload, dict) or set(payload) != {
-            "schema_version",
-            "ingress_isolated",
-            "active_jobs",
-            "active_total",
+        required_fields = {"ingress_isolated", "active_jobs", "active_total"}
+        if not isinstance(payload, dict) or frozenset(payload) not in {
+            frozenset(required_fields),
+            frozenset((*required_fields, "active_jobs_schema_version")),
         }:
             raise ReleaseError("bootstrap quiesce evidence has an invalid shape")
-        if payload["schema_version"] != 1 or payload["ingress_isolated"] is not True:
+        if payload["ingress_isolated"] is not True:
             raise ReleaseError("bootstrap quiesce did not prove isolated ingress")
-        jobs = payload["active_jobs"]
-        if not isinstance(jobs, dict) or set(jobs) != set(ACTIVE_JOB_CATEGORIES):
-            raise ReleaseError("bootstrap quiesce evidence does not cover every active-job category")
-        for category in ACTIVE_JOB_CATEGORIES:
-            count = jobs[category]
-            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-                raise ReleaseError(f"bootstrap quiesce count is invalid for {category}")
-        total = payload["active_total"]
-        if isinstance(total, bool) or not isinstance(total, int) or total != sum(jobs.values()):
-            raise ReleaseError("bootstrap quiesce active_total does not match category counts")
+        try:
+            total = validated_active_total(payload, set(ACTIVE_JOB_CATEGORIES_V1))
+        except ReleaseError as exc:
+            detail = str(exc)
+            if "does not match" in detail:
+                raise ReleaseError(
+                    "bootstrap quiesce active_total does not match category counts"
+                ) from exc
+            if "job categories" in detail:
+                raise ReleaseError(
+                    "bootstrap quiesce evidence does not cover every active-job category"
+                ) from exc
+            if "category" in detail:
+                raise ReleaseError("bootstrap quiesce count is invalid") from exc
+            raise
         if total != 0:
             raise ReleaseError("bootstrap quiesce found active work; refusing to create a backup")
+        schema_version = payload.get("active_jobs_schema_version", 1)
+        categories = (
+            ACTIVE_JOB_CATEGORIES_V2 if schema_version == 2 else ACTIVE_JOB_CATEGORIES_V1
+        )
         return {
-            "schema_version": 1,
+            "active_jobs_schema_version": schema_version,
             "ingress_isolated": True,
-            "active_jobs": {category: jobs[category] for category in ACTIVE_JOB_CATEGORIES},
+            "active_jobs": {
+                category: payload["active_jobs"][category] for category in categories
+            },
             "active_total": 0,
         }
 
@@ -1854,8 +2641,57 @@ class ReleaseController:
         return payload
 
     def run_migrations(self, environment: dict[str, str], *, mode: str = "expand") -> list[str]:
-        if mode not in {"bootstrap", "bootstrap-expand", "expand", "contract"}:
-            raise ReleaseError("migration mode must be bootstrap, bootstrap-expand, expand, or contract")
+        if mode not in {"bootstrap", "bootstrap-expand", "expand", "contract-0012"}:
+            raise ReleaseError(
+                "migration mode must be bootstrap, bootstrap-expand, expand, or contract-0012"
+            )
+        policy_path = (
+            self.candidate_dir
+            / "backend"
+            / "migrations"
+            / "postgres"
+            / "manifest.json"
+        )
+        canonical_records = release_migrations_from_policy_manifest(
+            policy_path,
+            include_baseline=True,
+        )
+        release_records = release_migration_records(self.document)
+        canonical_release_records = [
+            record for record in canonical_records if record["kind"] != "baseline"
+        ]
+        if self.document.get("schema_version", 1) == 2:
+            if release_records != canonical_release_records:
+                raise ReleaseError(
+                    "release manifest migrations differ from the candidate canonical policy"
+                )
+        else:
+            release_projection = [
+                (record["version"], record["kind"]) for record in release_records
+            ]
+            canonical_projection = [
+                (record["version"], record["kind"])
+                for record in canonical_release_records
+            ]
+            if release_projection != canonical_projection:
+                raise ReleaseError(
+                    "release manifest migrations differ from the candidate canonical policy"
+                )
+        previous_history = self.previous_state.get("migrations", [])
+        if (
+            not isinstance(previous_history, list)
+            or any(
+                not isinstance(version, str)
+                or SAFE_MIGRATION_RE.fullmatch(version) is None
+                for version in previous_history
+            )
+            or len(set(previous_history)) != len(previous_history)
+        ):
+            raise ReleaseError("current release state contains an invalid migration history")
+        previous_versions = set(previous_history)
+
+        # Bind the immutable release manifest to the candidate SQL before the
+        # migration container receives an opportunity to execute any DDL.
         command = self.compose(
             self.candidate_dir,
             "run", "--rm", "--no-deps", "postgres-init",
@@ -1870,17 +2706,63 @@ class ReleaseController:
             text=True,
             stdout=subprocess.PIPE,
         )
+
         applied: list[str] = []
+        output_records: list[tuple[str, str, str]] = []
         seen: set[str] = set()
         for line in result.stdout.splitlines():
+            if not line:
+                raise ReleaseError("migration runner emitted a malformed output record")
             fields = line.split("\t")
-            if len(fields) == 3 and fields[1] in {"applied", "skipped"} and SAFE_MIGRATION_RE.fullmatch(fields[0]):
-                seen.add(fields[0])
-                if fields[1] == "applied":
-                    applied.append(fields[0])
-        expected = {migration["name"] for migration in self.document["migrations"]}
-        if not expected.issubset(seen):
-            raise ReleaseError("migration output did not account for every release manifest migration")
+            if (
+                len(fields) != 3
+                or fields[1] not in {"applied", "skipped"}
+                or SAFE_MIGRATION_RE.fullmatch(fields[0]) is None
+                or MIGRATION_CHECKSUM_RE.fullmatch(fields[2]) is None
+            ):
+                raise ReleaseError("migration runner emitted a malformed output record")
+            version, status, checksum = fields
+            if version in seen:
+                raise ReleaseError(
+                    f"migration runner emitted duplicate output for {version}"
+                )
+            seen.add(version)
+            output_records.append((version, status, checksum))
+
+        expected_versions = [record["version"] for record in canonical_records]
+        if [record[0] for record in output_records] != expected_versions:
+            raise ReleaseError(
+                "migration output does not exactly match the canonical migration set and order"
+            )
+        canonical_by_version = {
+            record["version"]: record for record in canonical_records
+        }
+        for version, status, checksum in output_records:
+            expected_record = canonical_by_version[version]
+            if checksum != expected_record["checksum"]:
+                raise ReleaseError(
+                    f"migration runner checksum differs from canonical SQL for {version}"
+                )
+            if expected_record["kind"] == "baseline" and status != "skipped":
+                raise ReleaseError("the canonical baseline may only be reported as skipped")
+            if mode == "contract-0012":
+                if (
+                    version != POLYTAO_SCHEMA_COMPATIBILITY_FLOOR
+                    and status != "skipped"
+                ):
+                    raise ReleaseError(
+                        "restricted 0012 migration output applied a non-target migration"
+                    )
+            elif expected_record["kind"] == "contract" and status != "skipped":
+                raise ReleaseError(
+                    f"migration output applied contract {version} outside maintenance"
+                )
+            if status == "applied":
+                if version in previous_versions:
+                    raise ReleaseError(
+                        f"migration output re-applied release-state migration {version}"
+                    )
+                applied.append(version)
         return applied
 
     def assert_still_current_main(self, environment: dict[str, str]) -> None:
@@ -2239,8 +3121,6 @@ class ReleaseController:
             raise ReleaseError("cannot resolve the current production release") from exc
         manifest = validate_manifest(load_manifest(previous / "release-manifest.json"), deployment_mode="auto")
         compatibility_floor = self.previous_state.get("schema_compatibility_floor")
-        if compatibility_floor is not None and not isinstance(compatibility_floor, str):
-            raise ReleaseError("current release state contains an invalid schema compatibility floor")
         assert_release_supports_schema_floor(manifest, compatibility_floor)
         if self.previous_state.get("backend_image") != manifest["images"]["backend"]:
             raise ReleaseError("current Backend state differs from its release manifest")
@@ -2641,20 +3521,23 @@ class ReleaseController:
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         name = f"pre-{from_sha}-to-{self.sha}-{stamp}.dump"
         backup_dir = self.root / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        ensure_durable_directory(backup_dir)
         self.backup_path = backup_dir / name
         user = environment.get("NEXPOLY_POSTGRES_USER", "nexpoly")
         database = environment.get("NEXPOLY_POSTGRES_DB", "nexpoly")
         with self.backup_path.open("xb") as output:
             os.chmod(self.backup_path, 0o600)
             self.run(self.compose(self.candidate_dir, "exec", "-T", "lab-postgres", "pg_dump", "-U", user, "-d", database, "-Fc"), env=environment, stdout=output)
+        fsync_regular_file(self.backup_path)
         with self.backup_path.open("rb") as source:
             self.run(self.compose(self.candidate_dir, "exec", "-T", "lab-postgres", "pg_restore", "--list"), env=environment, stdin=source, stdout=subprocess.DEVNULL)
         digest = sha256_file(self.backup_path)
         sidecar = {"schema_version": 1, "created_at": utc_now(), "from_sha": from_sha, "to_sha": self.sha, "file": name, "sha256": digest}
         atomic_json(self.backup_path.with_suffix(".dump.json"), sidecar)
-        self.backup_path.with_suffix(".dump.sha256").write_text(f"{digest.removeprefix('sha256:')}  {name}\n", encoding="ascii")
-        os.chmod(self.backup_path.with_suffix(".dump.sha256"), 0o600)
+        atomic_text(
+            self.backup_path.with_suffix(".dump.sha256"),
+            f"{digest.removeprefix('sha256:')}  {name}\n",
+        )
 
     def candidate_asset_environment(self, environment: dict[str, str]) -> dict[str, str]:
         candidate = environment.copy()
@@ -2994,9 +3877,10 @@ class ReleaseController:
     def switch_current(self, target: Path) -> None:
         current = self.ops / "current"
         temporary = self.ops / ".current.new"
-        temporary.unlink(missing_ok=True)
+        durable_unlink(temporary, missing_ok=True)
         temporary.symlink_to(target.relative_to(self.ops))
         temporary.replace(current)
+        fsync_directory(self.ops)
 
     def clear_failed_bootstrap_release(self) -> None:
         """Return a rolled-back first deployment to a clean retryable state."""
@@ -3012,7 +3896,7 @@ class ReleaseController:
                 raise ReleaseError("failed bootstrap current pointer cannot be resolved safely") from exc
             if target != expected:
                 raise ReleaseError("failed bootstrap current pointer does not reference the target release")
-            current.unlink()
+            durable_unlink(current)
         if self.release_dir.exists() or self.release_dir.is_symlink():
             if not self.release_dir.is_dir() or self.release_dir.is_symlink():
                 raise ReleaseError("failed bootstrap release path is not a safe directory")
@@ -3022,9 +3906,10 @@ class ReleaseController:
         resolved, _, _ = inspect_asset_release(target)
         pointer = self.ops / "current-assets"
         temporary = self.ops / ".current-assets.new"
-        temporary.unlink(missing_ok=True)
+        durable_unlink(temporary, missing_ok=True)
         temporary.symlink_to(resolved)
         temporary.replace(pointer)
+        fsync_directory(self.ops)
 
     def rollback_runtime(self, environment: dict[str, str]) -> None:
         previous_sha = self.previous_state.get("source_sha")
@@ -3035,8 +3920,6 @@ class ReleaseController:
             raise ReleaseError("deployment failed and the previous release directory is unavailable")
         previous_manifest = validate_manifest(load_manifest(previous / "release-manifest.json"), deployment_mode="auto")
         compatibility_floor = self.previous_state.get("schema_compatibility_floor")
-        if compatibility_floor is not None and not isinstance(compatibility_floor, str):
-            raise ReleaseError("current release state contains an invalid schema compatibility floor")
         assert_release_supports_schema_floor(previous_manifest, compatibility_floor)
         rollback_env = environment.copy()
         rollback_env["NEXPOLY_BACKEND_IMAGE"] = previous_manifest["images"]["backend"]
@@ -3191,7 +4074,7 @@ class ReleaseController:
                 self.candidate_dir = self.release_dir
                 self.validate_current_runtime(environment)
                 self.drain(environment, False)
-                self.in_progress_path.unlink()
+                durable_unlink(self.in_progress_path)
                 return
 
         if self.bootstrap:
@@ -3207,7 +4090,7 @@ class ReleaseController:
             self.clear_failed_bootstrap_release()
             if self.staging.exists():
                 shutil.rmtree(self.staging)
-            self.in_progress_path.unlink()
+            durable_unlink(self.in_progress_path)
             return
 
         previous_sha = require_sha(
@@ -3274,7 +4157,7 @@ class ReleaseController:
         self.cleanup_failed_release()
         if self.staging.exists():
             shutil.rmtree(self.staging)
-        self.in_progress_path.unlink()
+        durable_unlink(self.in_progress_path)
 
     def deploy(self) -> dict[str, Any]:
         self.ensure_root()
@@ -3348,10 +4231,6 @@ class ReleaseController:
                     target_sha=self.sha,
                 )
                 compatibility_floor = self.previous_state.get("schema_compatibility_floor")
-                if compatibility_floor is not None and not isinstance(compatibility_floor, str):
-                    raise ReleaseError(
-                        "current release state contains an invalid schema compatibility floor"
-                    )
                 assert_release_supports_schema_floor(self.document, compatibility_floor)
                 self.validate_current_runtime(environment)
             previous_sha = previous_release_for_deploy(self.previous_state, self.sha)
@@ -3501,6 +4380,7 @@ class ReleaseController:
                 )
                 if self.candidate_dir == self.staging:
                     self.staging.replace(self.release_dir)
+                    fsync_directory(self.release_dir.parent)
                     self.candidate_dir = self.release_dir
                 self.switch_current(self.release_dir)
                 state["runtime_switched"] = True
@@ -3576,16 +4456,28 @@ class ReleaseController:
                 compatibility_floor = schema_compatibility_floor_after(
                     self.previous_state.get("schema_compatibility_floor"),
                     actual_migrations,
+                    release_migration_records(self.document),
                 )
-                approved_contracts = approved_contract_migrations(self.previous_state)
-                approved_contracts.update(
-                    migration["name"]
-                    for migration in self.document["migrations"]
-                    if migration["type"] == "contract" and migration["name"] in actual_migrations
-                )
-                state["approved_contract_migrations"] = sorted(approved_contracts)
+                if "approved_contracts" in self.previous_state:
+                    # Preserve checksum-bound approvals byte-for-byte. A code
+                    # deployment cannot mint or widen contract approval.
+                    approved_contract_migrations(self.previous_state)
+                    state["approved_contracts"] = self.previous_state["approved_contracts"]
+                elif "approved_contract_migrations" in self.previous_state:
+                    approved_contract_migrations(self.previous_state)
+                    state["approved_contract_migrations"] = self.previous_state[
+                        "approved_contract_migrations"
+                    ]
+                else:
+                    state["approved_contracts"] = []
                 if compatibility_floor is not None:
                     state["schema_compatibility_floor"] = compatibility_floor
+                epoch_barrier = validated_migration_epoch_barrier(self.previous_state)
+                if epoch_barrier is not None:
+                    state["migration_epoch_barrier"] = epoch_barrier
+                    state["last_contract_operation"] = self.previous_state[
+                        "last_contract_operation"
+                    ]
                 attempt_only_fields = {
                     "previous_state",
                     "bootstrap",
@@ -3620,7 +4512,7 @@ class ReleaseController:
                     drained = False
                     ingress_resumed = True
                     state["drain_resume"] = "success"
-                self.in_progress_path.unlink(missing_ok=True)
+                durable_unlink(self.in_progress_path, missing_ok=True)
                 return release_state
             except Exception as exc:
                 state.update({"status": failure_status(exc), "failed_at": utc_now(), "database_changed": self.database_changed, "error": str(exc)[:500]})
@@ -3753,9 +4645,1728 @@ class ReleaseController:
                 if safe_to_resume and not self.bootstrap and not state_committed:
                     self.cleanup_failed_release()
                 if safe_to_resume:
-                    self.in_progress_path.unlink(missing_ok=True)
+                    durable_unlink(self.in_progress_path, missing_ok=True)
                 if self.staging.exists() and not self.in_progress_path.exists():
                     shutil.rmtree(self.staging)
+
+
+class PolytaoContractMaintenance:
+    """Execute the one reviewed destructive migration as a recoverable operation."""
+
+    EXPECTED_ROWS = 9
+    EXPECTED_STATUS_COUNTS = {"completed": 7, "failed": 2}
+
+    def __init__(
+        self,
+        root: Path,
+        manifest_path: Path,
+        operation_id: str,
+        apply: bool,
+    ) -> None:
+        if OPERATION_ID_RE.fullmatch(operation_id) is None:
+            raise ReleaseError(
+                "contract operation ID must be 8-128 lowercase safe characters"
+            )
+        self.controller = ReleaseController(root, manifest_path, "auto", apply)
+        self.root = self.controller.root
+        self.document = self.controller.document
+        self.operation_id = operation_id
+        self.apply = apply
+        self.state_path = self.controller.state_path
+        self.marker_path = self.controller.ops / "state" / "contract-0012-in-progress.json"
+        self.journal_path = (
+            self.controller.ops
+            / "state"
+            / "contract-operations"
+            / f"{operation_id}.json"
+        )
+        self.audit_dir = (
+            self.root / "backups" / "contracts" / "0012" / operation_id
+        )
+        self.verification_owner_path = (
+            self.controller.ops
+            / "state"
+            / "contract-verification-databases"
+            / f"{operation_id}.json"
+        )
+        self.contract_record = self._contract_record()
+
+    def _contract_record(self) -> dict[str, Any]:
+        if self.document.get("schema_version") != 2:
+            raise ReleaseError("0012 maintenance requires a checksum-bound V2 release manifest")
+        records = {
+            record["version"]: record
+            for record in release_migration_records(self.document)
+        }
+        record = records.get(POLYTAO_SCHEMA_COMPATIBILITY_FLOOR)
+        if (
+            record is None
+            or record["kind"] != "contract"
+            or record["checksum"] != POLYTAO_CONTRACT_CHECKSUM
+            or record["epoch"] != 1
+        ):
+            raise ReleaseError("release manifest does not contain the reviewed 0012 contract identity")
+        return record
+
+    def plan(self) -> dict[str, Any]:
+        return {
+            "action": "maintain-contract-0012",
+            "apply": self.apply,
+            "production_root": str(self.root),
+            "source_sha": self.document["source_sha"],
+            "operation_id": self.operation_id,
+            "contract": {
+                "version": self.contract_record["version"],
+                "checksum": self.contract_record["checksum"],
+                "epoch": self.contract_record["epoch"],
+            },
+            "expected_archive": {
+                "rows": self.EXPECTED_ROWS,
+                "status_counts": self.EXPECTED_STATUS_COUNTS,
+            },
+            "audit_dir": str(self.audit_dir),
+        }
+
+    def _approved_record(
+        self,
+        state: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        approvals = state.get("approved_contracts", [])
+        if not isinstance(approvals, list):
+            raise ReleaseError("release state contains invalid approved contracts")
+        approved_contract_migrations(state)
+        return next(
+            (
+                record
+                for record in approvals
+                if record.get("version") == POLYTAO_SCHEMA_COMPATIBILITY_FLOOR
+            ),
+            None,
+        )
+
+    def _load_current_state(
+        self,
+        *,
+        allow_completed_contract: bool = False,
+    ) -> dict[str, Any]:
+        if not self.state_path.is_file() or self.state_path.is_symlink():
+            raise ReleaseError("0012 maintenance requires an initialized release state")
+        state = load_manifest(self.state_path)
+        if state.get("status") != "success":
+            raise ReleaseError("0012 maintenance requires a successful current release")
+        if state.get("source_sha") != self.document["source_sha"]:
+            raise ReleaseError("0012 maintenance manifest must match the current release SHA")
+        legacy_approvals = state.get("approved_contract_migrations")
+        if legacy_approvals not in (None, []):
+            raise ReleaseError(
+                "name-only contract approvals must be reconciled before 0012 maintenance"
+            )
+        history = state.get("migrations")
+        if not isinstance(history, list) or POLYTAO_CONTRACT_PREVIOUS_VERSION not in history:
+            raise ReleaseError("0012 maintenance requires release-state history through 0011")
+        if (
+            POLYTAO_SCHEMA_COMPATIBILITY_FLOOR in history
+            and not allow_completed_contract
+        ):
+            raise ReleaseError(
+                "release-state already records 0012 without this maintenance operation"
+            )
+        approved_contract_migrations(state)
+        return state
+
+    def _bind_current_release(self, state: dict[str, Any]) -> Path:
+        release = self.controller.ops / "releases" / self.document["source_sha"]
+        manifest = release / "release-manifest.json"
+        if (
+            not release.is_dir()
+            or release.is_symlink()
+            or not manifest.is_file()
+            or manifest.is_symlink()
+        ):
+            raise ReleaseError("current immutable release is unavailable for 0012 maintenance")
+        supplied_digest = sha256_file(self.controller.manifest_path)
+        if sha256_file(manifest) != supplied_digest:
+            raise ReleaseError("0012 maintenance manifest differs from the current release artifact")
+        recorded_digest = state.get("release_manifest_sha256")
+        if recorded_digest is not None and recorded_digest != supplied_digest:
+            raise ReleaseError("release state and 0012 maintenance manifest digests differ")
+        return release
+
+    def _write_marker(self, marker: dict[str, Any]) -> None:
+        atomic_json(self.marker_path, marker)
+
+    def _capture_json(
+        self,
+        program: str,
+        environment: dict[str, str],
+    ) -> dict[str, Any]:
+        command = self.controller.compose(
+            self.controller.candidate_dir,
+            "run",
+            "--rm",
+            "--no-deps",
+            "postgres-init",
+            "python",
+            "-c",
+            program,
+        )
+        print(f"[release-controller] {shlex.join(command)}")
+        result = subprocess.run(
+            command,
+            cwd=self.root,
+            env=environment,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        )
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ReleaseError("contract verification returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ReleaseError("contract verification returned an invalid object")
+        return payload
+
+    @staticmethod
+    def _database_environment(
+        environment: dict[str, str],
+        database: str,
+    ) -> dict[str, str]:
+        updated = environment.copy()
+        for key in ("APP_POSTGRES_DSN", "PI_POSTGRES_DSN", "LAB_DATA_POSTGRES_DSN"):
+            value = updated.get(key)
+            if not value:
+                continue
+            parsed = urllib.parse.urlsplit(value)
+            updated[key] = urllib.parse.urlunsplit(
+                (parsed.scheme, parsed.netloc, f"/{database}", "", "")
+            )
+        return updated
+
+    def _verification_database_name(self) -> str:
+        suffix = hashlib.sha256(self.operation_id.encode("ascii")).hexdigest()[:16]
+        return f"nexpoly_contract_verify_{suffix}"
+
+    def _load_verification_owner(self, database: str) -> dict[str, Any]:
+        path = self.verification_owner_path
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or path.stat().st_uid != os.geteuid()
+            or stat.S_IMODE(path.stat().st_mode) != 0o600
+        ):
+            raise ReleaseError(
+                "verification database exists without a safe operation ownership marker"
+            )
+        marker = load_manifest(path)
+        if not isinstance(marker, dict) or set(marker) != {
+            "schema_version",
+            "operation_id",
+            "source_sha",
+            "database",
+            "database_absent_before_create",
+            "status",
+            "created_at",
+            "updated_at",
+        }:
+            raise ReleaseError("verification database ownership marker has an invalid shape")
+        if (
+            marker.get("schema_version") != 1
+            or marker.get("operation_id") != self.operation_id
+            or marker.get("source_sha") != self.document["source_sha"]
+            or marker.get("database") != database
+            or marker.get("database_absent_before_create") is not True
+            or marker.get("status")
+            not in {"create-intent", "created", "dropped"}
+            or not isinstance(marker.get("created_at"), str)
+            or not marker["created_at"].strip()
+            or not isinstance(marker.get("updated_at"), str)
+            or not marker["updated_at"].strip()
+        ):
+            raise ReleaseError("verification database ownership marker has an invalid identity")
+        return marker
+
+    def _write_verification_owner(
+        self,
+        database: str,
+        status: str,
+        *,
+        previous: dict[str, Any] | None = None,
+        database_absent_before_create: bool | None = None,
+    ) -> dict[str, Any]:
+        if status not in {"create-intent", "created", "dropped"}:
+            raise ReleaseError("invalid verification database ownership state")
+        if previous is None:
+            if status != "create-intent" or database_absent_before_create is not True:
+                raise ReleaseError(
+                    "new verification ownership requires durable pre-create absence evidence"
+                )
+            absence_evidence = True
+        else:
+            if previous.get("database_absent_before_create") is not True:
+                raise ReleaseError("verification ownership lost its absence evidence")
+            absence_evidence = True
+        timestamp = utc_now()
+        marker = {
+            "schema_version": 1,
+            "operation_id": self.operation_id,
+            "source_sha": self.document["source_sha"],
+            "database": database,
+            "database_absent_before_create": absence_evidence,
+            "status": status,
+            "created_at": (
+                previous["created_at"] if previous is not None else timestamp
+            ),
+            "updated_at": timestamp,
+        }
+        atomic_json(self.verification_owner_path, marker)
+        return marker
+
+    def _canonical_contract_ledger_prefix(
+        self,
+        *,
+        include_contract: bool,
+    ) -> list[dict[str, str]]:
+        policy_path = (
+            self.controller.candidate_dir
+            / "backend"
+            / "migrations"
+            / "postgres"
+            / "manifest.json"
+        )
+        records = release_migrations_from_policy_manifest(
+            policy_path,
+            include_baseline=True,
+        )
+        release_records = release_migration_records(self.document)
+        if release_records != [
+            record for record in records if record["kind"] != "baseline"
+        ]:
+            raise ReleaseError(
+                "0012 maintenance release manifest differs from canonical migration policy"
+            )
+        target_index = next(
+            (
+                index
+                for index, record in enumerate(records)
+                if record["version"] == POLYTAO_SCHEMA_COMPATIBILITY_FLOOR
+            ),
+            None,
+        )
+        if target_index is None:
+            raise ReleaseError("canonical migration policy is missing the 0012 contract")
+        limit = target_index + (1 if include_contract else 0)
+        return [
+            {"version": record["version"], "checksum": record["checksum"]}
+            for record in records[:limit]
+        ]
+
+    def _canonical_contract_ledger_prefixes(self) -> list[list[dict[str, str]]]:
+        """Return every non-empty, checksum-bound prefix through 0012."""
+
+        through_contract = self._canonical_contract_ledger_prefix(
+            include_contract=True
+        )
+        return [
+            [dict(record) for record in through_contract[:length]]
+            for length in range(1, len(through_contract) + 1)
+        ]
+
+    @staticmethod
+    def _legacy_relation_expected(ledger: list[dict[str, str]]) -> bool:
+        versions = {record["version"] for record in ledger}
+        return (
+            "0007_polytao_jobs" in versions
+            and POLYTAO_SCHEMA_COMPATIBILITY_FLOOR not in versions
+        )
+
+    def _validate_database_inventory(
+        self,
+        payload: object,
+        environment: dict[str, str],
+        *,
+        allow_contract: bool,
+        allow_owned_verification: bool,
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict) or set(payload) != {
+            "schema_version",
+            "target_database",
+            "current_user",
+            "databases",
+            "ledger",
+            "legacy_relation_present",
+        }:
+            raise ReleaseError("0012 database inventory has an invalid shape")
+        expected_user = environment.get("NEXPOLY_POSTGRES_USER")
+        if (
+            payload.get("schema_version") != 1
+            or payload.get("target_database") != "nexpoly"
+            or not isinstance(expected_user, str)
+            or payload.get("current_user") != expected_user
+            or not isinstance(payload.get("legacy_relation_present"), bool)
+        ):
+            raise ReleaseError("0012 database inventory has an invalid target identity")
+        raw_databases = payload.get("databases")
+        if not isinstance(raw_databases, list):
+            raise ReleaseError("0012 database inventory does not contain a database list")
+        databases: dict[str, dict[str, Any]] = {}
+        for record in raw_databases:
+            if not isinstance(record, dict) or set(record) != {
+                "name",
+                "owner",
+                "is_template",
+                "allow_connections",
+            }:
+                raise ReleaseError("0012 database inventory contains an invalid record")
+            name = record.get("name")
+            if (
+                not isinstance(name, str)
+                or not name
+                or name in databases
+                or record.get("owner") != expected_user
+                or not isinstance(record.get("is_template"), bool)
+                or not isinstance(record.get("allow_connections"), bool)
+            ):
+                raise ReleaseError("0012 database inventory contains an invalid identity")
+            databases[name] = dict(record)
+
+        verification_database = self._verification_database_name()
+        base_databases = {"nexpoly", "postgres", "template0", "template1"}
+        registered_databases = {"nexpoly_dev", "nexpoly_md_health_opt"}
+        extra_databases = set(databases).difference(
+            base_databases | registered_databases
+        )
+        if extra_databases:
+            if (
+                not allow_owned_verification
+                or extra_databases != {verification_database}
+            ):
+                raise ReleaseError(
+                    "unknown or unregistered databases block 0012 maintenance: "
+                    + ", ".join(sorted(extra_databases))
+                )
+            owner = self._load_verification_owner(verification_database)
+            if owner["status"] not in {"create-intent", "created"}:
+                raise ReleaseError(
+                    "verification database cleanup lacks a live ownership marker"
+                )
+        if set(databases).intersection(base_databases) != base_databases:
+            missing = sorted(base_databases.difference(databases))
+            raise ReleaseError(
+                "0012 database inventory is missing required system/target databases: "
+                + ", ".join(missing)
+            )
+        expected_flags = {
+            "nexpoly": (False, True),
+            "postgres": (False, True),
+            "template0": (True, False),
+            "template1": (True, True),
+        }
+        for name, (is_template, allow_connections) in expected_flags.items():
+            if (
+                databases[name]["is_template"] != is_template
+                or databases[name]["allow_connections"] != allow_connections
+            ):
+                raise ReleaseError(
+                    f"0012 database inventory has an unexpected purpose/configuration for {name}"
+                )
+        if verification_database in databases and (
+            databases[verification_database]["is_template"] is not False
+            or databases[verification_database]["allow_connections"] is not True
+        ):
+            raise ReleaseError("verification database has an invalid purpose/configuration")
+        for name in registered_databases.intersection(databases):
+            if (
+                databases[name]["is_template"] is not False
+                or databases[name]["allow_connections"] is not True
+            ):
+                raise ReleaseError(
+                    f"registered database {name} has an invalid purpose/configuration"
+                )
+
+        ledger = payload.get("ledger")
+        if not isinstance(ledger, list) or any(
+            not isinstance(record, dict)
+            or set(record) != {"version", "checksum"}
+            or not isinstance(record.get("version"), str)
+            or SAFE_MIGRATION_RE.fullmatch(record["version"]) is None
+            or not isinstance(record.get("checksum"), str)
+            or MIGRATION_CHECKSUM_RE.fullmatch(record["checksum"]) is None
+            for record in ledger
+        ):
+            raise ReleaseError("0012 database inventory has an invalid migration ledger")
+        expected_before = self._canonical_contract_ledger_prefix(
+            include_contract=False
+        )
+        expected_after = self._canonical_contract_ledger_prefix(
+            include_contract=True
+        )
+        valid_ledgers = [expected_before]
+        if allow_contract:
+            valid_ledgers.append(expected_after)
+        if ledger not in valid_ledgers:
+            raise ReleaseError(
+                "0012 maintenance requires the exact canonical migration ledger prefix"
+            )
+        contract_present = ledger == expected_after
+        if payload["legacy_relation_present"] == contract_present:
+            raise ReleaseError(
+                "0012 database inventory relation state conflicts with its migration ledger"
+            )
+        result = dict(payload)
+        result["database_purposes"] = {
+            "nexpoly": "production-target",
+            "postgres": "cluster-maintenance",
+            "template0": "system-template-no-connect",
+            "template1": "system-template",
+        }
+        if "nexpoly_dev" in databases:
+            result["database_purposes"]["nexpoly_dev"] = (
+                "registered-development-read-only-audit"
+            )
+        if "nexpoly_md_health_opt" in databases:
+            result["database_purposes"]["nexpoly_md_health_opt"] = (
+                "registered-temporary-md-health-read-only-audit"
+            )
+        if verification_database in databases:
+            owner = self._load_verification_owner(verification_database)
+            result["database_purposes"][verification_database] = {
+                "create-intent": "operation-owned-isolated-restore-create-intent",
+                "created": "operation-owned-isolated-restore",
+            }[owner["status"]]
+        return result
+
+    def _validate_registered_database_audit(
+        self,
+        payload: object,
+        environment: dict[str, str],
+        database: str,
+        *,
+        expected_user: str | None = None,
+    ) -> dict[str, Any]:
+        if database not in {"nexpoly_dev", "nexpoly_md_health_opt"}:
+            raise ReleaseError("unregistered database audit was requested")
+        if not isinstance(payload, dict) or set(payload) != {
+            "schema_version",
+            "database",
+            "current_user",
+            "transaction_read_only",
+            "ledger",
+            "legacy_relation_present",
+        }:
+            raise ReleaseError(f"registered database {database} audit has an invalid shape")
+        if (
+            payload.get("schema_version") != 1
+            or payload.get("database") != database
+            or payload.get("current_user")
+            != (expected_user or environment.get("NEXPOLY_POSTGRES_USER"))
+            or payload.get("transaction_read_only") is not True
+            or not isinstance(payload.get("legacy_relation_present"), bool)
+        ):
+            raise ReleaseError(
+                f"registered database {database} audit has an invalid identity"
+            )
+        ledger = payload.get("ledger")
+        if not isinstance(ledger, list) or any(
+            not isinstance(record, dict)
+            or set(record) != {"version", "checksum"}
+            or not isinstance(record.get("version"), str)
+            or SAFE_MIGRATION_RE.fullmatch(record["version"]) is None
+            or not isinstance(record.get("checksum"), str)
+            or MIGRATION_CHECKSUM_RE.fullmatch(record["checksum"]) is None
+            for record in ledger
+        ):
+            raise ReleaseError(
+                f"registered database {database} audit has an invalid ledger"
+            )
+        after = self._canonical_contract_ledger_prefix(include_contract=True)
+        if database == "nexpoly_dev":
+            if ledger != after or payload["legacy_relation_present"] is not False:
+                raise ReleaseError(
+                    "nexpoly_dev must already contain the exact canonical 0012 contract"
+                )
+        else:
+            if ledger not in self._canonical_contract_ledger_prefixes():
+                raise ReleaseError(
+                    "nexpoly_md_health_opt must have an exact known canonical ledger prefix"
+                )
+            if payload["legacy_relation_present"] is not self._legacy_relation_expected(
+                ledger
+            ):
+                raise ReleaseError(
+                    "nexpoly_md_health_opt relation state conflicts with its ledger"
+                )
+        return dict(payload)
+
+    def _validate_external_database_inventory(
+        self,
+        payload: object,
+        environment: dict[str, str],
+    ) -> dict[str, Any]:
+        """Validate mandatory, read-only evidence from independent DB stacks."""
+
+        if not isinstance(payload, dict) or set(payload) != {
+            "schema_version",
+            "inventory_complete",
+            "writable_target",
+            "databases",
+        }:
+            raise ReleaseError("external database inventory has an invalid shape")
+        if payload.get("schema_version") != 1 or payload.get("inventory_complete") is not True:
+            raise ReleaseError("external database inventory is incomplete")
+        if payload.get("writable_target") != {
+            "stack": "production",
+            "database": "nexpoly",
+        }:
+            raise ReleaseError(
+                "external database registry must identify production/nexpoly as its only writable target"
+            )
+        raw_databases = payload.get("databases")
+        if not isinstance(raw_databases, list):
+            raise ReleaseError("external database inventory has no database list")
+
+        expected_databases = set(CONTRACT_0012_EXTERNAL_AUDIT_USERS)
+        records: dict[str, dict[str, Any]] = {}
+        expected_fields = {
+            "stack",
+            "database",
+            "current_user",
+            "transaction_read_only",
+            "role_superuser",
+            "role_create_db",
+            "role_create_role",
+            "ledger",
+            "legacy_relation_present",
+        }
+        for record in raw_databases:
+            if not isinstance(record, dict) or set(record) != expected_fields:
+                raise ReleaseError("external database inventory contains an invalid record")
+            stack = record.get("stack")
+            database = record.get("database")
+            if (
+                not isinstance(stack, str)
+                or stack not in expected_databases
+                or stack in records
+                or database != stack
+            ):
+                raise ReleaseError(
+                    "external database inventory contains an unknown, duplicate, or mismatched stack"
+                )
+            user_key = CONTRACT_0012_EXTERNAL_AUDIT_USERS[stack]
+            expected_user = environment.get(user_key)
+            if (
+                not isinstance(expected_user, str)
+                or re.fullmatch(r"[a-z_][a-z0-9_-]{0,62}", expected_user) is None
+            ):
+                raise ReleaseError(
+                    f"0012 maintenance requires a pinned read-only audit user in {user_key}"
+                )
+            if (
+                record.get("transaction_read_only") is not True
+                or record.get("role_superuser") is not False
+                or record.get("role_create_db") is not False
+                or record.get("role_create_role") is not False
+            ):
+                raise ReleaseError(
+                    f"external database audit for {stack} is not provably read-only"
+                )
+            normalized = {
+                "schema_version": 1,
+                "database": database,
+                "current_user": record.get("current_user"),
+                "transaction_read_only": record.get("transaction_read_only"),
+                "ledger": record.get("ledger"),
+                "legacy_relation_present": record.get("legacy_relation_present"),
+            }
+            self._validate_registered_database_audit(
+                normalized,
+                environment,
+                stack,
+                expected_user=expected_user,
+            )
+            records[stack] = dict(record)
+
+        if set(records) != expected_databases:
+            missing = sorted(expected_databases.difference(records))
+            raise ReleaseError(
+                "external database inventory is missing required stacks: "
+                + ", ".join(missing)
+            )
+        return {
+            "schema_version": 1,
+            "inventory_complete": True,
+            "writable_target": {
+                "stack": "production",
+                "database": "nexpoly",
+            },
+            "databases": [records[name] for name in sorted(records)],
+        }
+
+    def _capture_external_database_inventory(
+        self,
+        environment: dict[str, str],
+    ) -> dict[str, Any]:
+        configured = environment.get(CONTRACT_0012_EXTERNAL_AUDIT_COMMAND)
+        if not isinstance(configured, str) or not configured.strip():
+            raise ReleaseError(
+                "0012 maintenance requires the external database audit command"
+            )
+        command = self.controller.bootstrap_hook_command(
+            environment,
+            CONTRACT_0012_EXTERNAL_AUDIT_COMMAND,
+        )
+        print(f"[release-controller] {shlex.join(command)}")
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.root,
+                env=environment,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise ReleaseError("external database audit command failed") from exc
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise ReleaseError("external database audit command returned invalid JSON") from exc
+        return self._validate_external_database_inventory(payload, environment)
+
+    def _pre_destructive_database_gate(
+        self,
+        environment: dict[str, str],
+        *,
+        allow_contract: bool = False,
+        allow_owned_verification: bool = False,
+        recorded_external_inventory: object | None = None,
+    ) -> dict[str, Any]:
+        inventory = self._validate_database_inventory(
+            self._capture_json(CONTRACT_0012_INVENTORY_PROGRAM, environment),
+            environment,
+            allow_contract=allow_contract,
+            allow_owned_verification=allow_owned_verification,
+        )
+        database_names = {record["name"] for record in inventory["databases"]}
+        registered_audits: dict[str, dict[str, Any]] = {}
+        for database in sorted(
+            database_names.intersection({"nexpoly_dev", "nexpoly_md_health_opt"})
+        ):
+            audit = self._capture_json(
+                CONTRACT_0012_DATABASE_AUDIT_PROGRAM,
+                self._database_environment(environment, database),
+            )
+            registered_audits[database] = self._validate_registered_database_audit(
+                audit,
+                environment,
+                database,
+            )
+        inventory["registered_database_audits"] = registered_audits
+        external_inventory = (
+            self._capture_external_database_inventory(environment)
+            if recorded_external_inventory is None
+            else self._validate_external_database_inventory(
+                recorded_external_inventory,
+                environment,
+            )
+        )
+        external_by_database = {
+            record["database"]: record
+            for record in external_inventory["databases"]
+        }
+        for database, audit in registered_audits.items():
+            external = external_by_database[database]
+            if (
+                audit["ledger"] != external["ledger"]
+                or audit["legacy_relation_present"]
+                is not external["legacy_relation_present"]
+            ):
+                raise ReleaseError(
+                    f"same-cluster and external audit evidence disagree for {database}"
+                )
+        inventory["external_registered_database_inventory"] = external_inventory
+        return inventory
+
+    def _validate_archive_evidence(self, payload: object) -> dict[str, Any]:
+        if not isinstance(payload, dict) or set(payload) != {
+            "schema_version",
+            "row_count",
+            "status_counts",
+            "rows_sha256",
+            "schema_sha256",
+            "structure_counts",
+        }:
+            raise ReleaseError("0012 archive evidence has an invalid shape")
+        if (
+            payload.get("schema_version") != 2
+            or payload.get("row_count") != self.EXPECTED_ROWS
+            or payload.get("status_counts") != self.EXPECTED_STATUS_COUNTS
+        ):
+            raise ReleaseError("0012 archive evidence differs from the reviewed 9-row history")
+        for key in ("rows_sha256", "schema_sha256"):
+            value = payload.get(key)
+            if not isinstance(value, str) or MIGRATION_CHECKSUM_RE.fullmatch(value) is None:
+                raise ReleaseError(f"0012 archive evidence has an invalid {key}")
+        structure_counts = payload.get("structure_counts")
+        if (
+            not isinstance(structure_counts, dict)
+            or set(structure_counts) != {"columns", "indexes", "constraints", "triggers"}
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in structure_counts.values()
+            )
+        ):
+            raise ReleaseError("0012 archive evidence has invalid structure counts")
+        return dict(payload)
+
+    def _archive_legacy_table(
+        self,
+        environment: dict[str, str],
+        previous_state: dict[str, Any],
+        database_inventory: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self.audit_dir.exists() or self.audit_dir.is_symlink():
+            raise ReleaseError("0012 audit directory already exists")
+        ensure_durable_directory(self.audit_dir)
+        atomic_json(self.audit_dir / "release-state.before.json", previous_state)
+        atomic_json(
+            self.audit_dir / "database-inventory.before.json",
+            database_inventory,
+        )
+
+        self.controller.backup_database(
+            environment,
+            str(previous_state["source_sha"]),
+        )
+        if self.controller.backup_path is None:
+            raise ReleaseError("0012 maintenance did not create a full database backup")
+        for source in (
+            self.controller.backup_path,
+            self.controller.backup_path.with_suffix(".dump.json"),
+            self.controller.backup_path.with_suffix(".dump.sha256"),
+        ):
+            target = self.audit_dir / source.name
+            shutil.copyfile(source, target)
+            os.chmod(target, 0o600)
+            fsync_regular_file(target)
+
+        user = environment.get("NEXPOLY_POSTGRES_USER", "nexpoly")
+        database = environment.get("NEXPOLY_POSTGRES_DB", "nexpoly")
+        table_dump = self.audit_dir / "generation.polytao_jobs.dump"
+        with table_dump.open("xb") as output:
+            os.chmod(table_dump, 0o600)
+            self.controller.run(
+                self.controller.compose(
+                    self.controller.candidate_dir,
+                    "exec",
+                    "-T",
+                    "lab-postgres",
+                    "pg_dump",
+                    "-U",
+                    user,
+                    "-d",
+                    database,
+                    "-Fc",
+                    "--table=generation.polytao_jobs",
+                ),
+                env=environment,
+                stdout=output,
+            )
+        fsync_regular_file(table_dump)
+        schema_dump = self.audit_dir / "generation.schema.sql"
+        with schema_dump.open("xb") as output:
+            os.chmod(schema_dump, 0o600)
+            self.controller.run(
+                self.controller.compose(
+                    self.controller.candidate_dir,
+                    "exec",
+                    "-T",
+                    "lab-postgres",
+                    "pg_dump",
+                    "-U",
+                    user,
+                    "-d",
+                    database,
+                    "--schema-only",
+                    "--schema=generation",
+                ),
+                env=environment,
+                stdout=output,
+            )
+        fsync_regular_file(schema_dump)
+        evidence = self._validate_archive_evidence(
+            self._capture_json(CONTRACT_0012_AUDIT_PROGRAM, environment)
+        )
+        atomic_json(self.audit_dir / "legacy-table-evidence.json", evidence)
+        return evidence
+
+    def _drop_owned_verification_database(
+        self,
+        environment: dict[str, str],
+        owner: dict[str, Any],
+    ) -> dict[str, Any]:
+        verification_database = self._verification_database_name()
+        if owner.get("status") not in {"create-intent", "created"}:
+            raise ReleaseError(
+                "verification database cannot be dropped without a live ownership marker"
+            )
+        self.controller.run(
+            self.controller.compose(
+                self.controller.candidate_dir,
+                "exec",
+                "-T",
+                "lab-postgres",
+                "dropdb",
+                "--if-exists",
+                "--force",
+                "-U",
+                environment.get("NEXPOLY_POSTGRES_USER", "nexpoly"),
+                verification_database,
+            ),
+            env=environment,
+        )
+        return self._write_verification_owner(
+            verification_database,
+            "dropped",
+            previous=owner,
+        )
+
+    def _reconcile_owned_verification_database(
+        self,
+        environment: dict[str, str],
+        *,
+        recorded_database_inventory: object | None = None,
+        initial_inventory: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Resolve an operation-owned verification intent before admission.
+
+        ``createdb`` can commit on the server even when the client reports a
+        failure. A durable create intent therefore remains authoritative until
+        a fresh, checksum-bound inventory proves the reserved name absent or
+        proves that the exact operation-owned database exists and can be
+        removed. Inventory or cleanup uncertainty is propagated deliberately,
+        leaving the global operation marker and drain in place.
+        """
+
+        verification_database = self._verification_database_name()
+        path = self.verification_owner_path
+        if not path.exists() and not path.is_symlink():
+            return {
+                "database": verification_database,
+                "status": "not-created",
+            }
+
+        owner = self._load_verification_owner(verification_database)
+        recorded_external_inventory = None
+        if isinstance(recorded_database_inventory, dict):
+            recorded_external_inventory = recorded_database_inventory.get(
+                "external_registered_database_inventory"
+            )
+
+        inventory = initial_inventory
+        if inventory is None:
+            inventory = self._pre_destructive_database_gate(
+                environment,
+                allow_contract=True,
+                allow_owned_verification=True,
+                recorded_external_inventory=recorded_external_inventory,
+            )
+        database_names = {
+            record.get("name")
+            for record in inventory.get("databases", [])
+            if isinstance(record, dict)
+        }
+        present_before_cleanup = verification_database in database_names
+
+        if owner["status"] in {"create-intent", "created"}:
+            if present_before_cleanup:
+                owner = self._drop_owned_verification_database(
+                    environment,
+                    owner,
+                )
+            else:
+                owner = self._write_verification_owner(
+                    verification_database,
+                    "dropped",
+                    previous=owner,
+                )
+        elif owner["status"] != "dropped":  # defensive: loader is stricter
+            raise ReleaseError("verification database has an invalid ownership state")
+
+        verified = self._pre_destructive_database_gate(
+            environment,
+            allow_contract=True,
+            allow_owned_verification=True,
+            recorded_external_inventory=recorded_external_inventory,
+        )
+        remaining_names = {
+            record.get("name")
+            for record in verified.get("databases", [])
+            if isinstance(record, dict)
+        }
+        if verification_database in remaining_names:
+            raise ReleaseError(
+                "operation-owned verification database remains after cleanup"
+            )
+        return {
+            "database": verification_database,
+            "status": owner["status"],
+            "present_before_cleanup": present_before_cleanup,
+            "verified_absent": True,
+        }
+
+    def _verify_full_restore(
+        self,
+        environment: dict[str, str],
+        expected_evidence: dict[str, Any],
+    ) -> None:
+        if self.controller.backup_path is None:
+            raise ReleaseError("isolated restore requires the verified full backup")
+        verification_database = self._verification_database_name()
+        user = environment.get("NEXPOLY_POSTGRES_USER", "nexpoly")
+        release = self.controller.candidate_dir
+        inventory = self._pre_destructive_database_gate(
+            environment,
+            allow_owned_verification=True,
+        )
+        database_names = {record["name"] for record in inventory["databases"]}
+        previous_owner: dict[str, Any] | None = None
+        if self.verification_owner_path.exists() or self.verification_owner_path.is_symlink():
+            previous_owner = self._load_verification_owner(verification_database)
+        if verification_database in database_names:
+            # Cleanup is permitted only after the inventory gate proves the
+            # exact database belongs to this operation marker.
+            previous_owner = self._drop_owned_verification_database(
+                environment,
+                previous_owner,
+            )
+        owner = self._write_verification_owner(
+            verification_database,
+            "create-intent",
+            previous=previous_owner,
+            database_absent_before_create=(previous_owner is None),
+        )
+        createdb_completed = False
+        try:
+            self.controller.run(
+                self.controller.compose(
+                    release,
+                    "exec",
+                    "-T",
+                    "lab-postgres",
+                    "createdb",
+                    "-U",
+                    user,
+                    "--template=template0",
+                    verification_database,
+                ),
+                env=environment,
+            )
+            createdb_completed = True
+            owner = self._write_verification_owner(
+                verification_database,
+                "created",
+                previous=owner,
+            )
+            with self.controller.backup_path.open("rb") as source:
+                self.controller.run(
+                    self.controller.compose(
+                        release,
+                        "exec",
+                        "-T",
+                        "lab-postgres",
+                        "pg_restore",
+                        "--exit-on-error",
+                        "--single-transaction",
+                        "--no-owner",
+                        "--no-privileges",
+                        "-U",
+                        user,
+                        "-d",
+                        verification_database,
+                    ),
+                    env=environment,
+                    stdin=source,
+                )
+            restored = self._validate_archive_evidence(
+                self._capture_json(
+                    CONTRACT_0012_AUDIT_PROGRAM,
+                    self._database_environment(environment, verification_database),
+                )
+            )
+            if restored != expected_evidence:
+                raise ReleaseError("isolated full-backup restore differs from live archive evidence")
+            atomic_json(self.audit_dir / "isolated-restore-evidence.json", restored)
+        finally:
+            current_owner = self._load_verification_owner(verification_database)
+            if current_owner["status"] == "created" or (
+                current_owner["status"] == "create-intent"
+                and createdb_completed
+            ):
+                self._drop_owned_verification_database(
+                    environment,
+                    current_owner,
+                )
+            elif createdb_completed:
+                raise ReleaseError(
+                    "created verification database lacks a completed ownership marker"
+                )
+
+    def _audit_manifest(self) -> dict[str, Any]:
+        records = []
+        for path in sorted(self.audit_dir.iterdir()):
+            if path.name == "AUDIT-MANIFEST.json" or not path.is_file() or path.is_symlink():
+                continue
+            records.append(
+                {
+                    "name": path.name,
+                    "size": path.stat().st_size,
+                    "sha256": sha256_file(path),
+                }
+            )
+        manifest = {
+            "schema_version": 1,
+            "operation_id": self.operation_id,
+            "contract_version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            "contract_checksum": POLYTAO_CONTRACT_CHECKSUM,
+            "files": records,
+        }
+        atomic_json(self.audit_dir / "AUDIT-MANIFEST.json", manifest)
+        return self._validate_audit_manifest(manifest)
+
+    def _validate_audit_manifest(self, manifest: object) -> dict[str, Any]:
+        try:
+            audit_status = self.audit_dir.lstat()
+        except OSError as exc:
+            raise ReleaseError("0012 audit directory is unavailable") from exc
+        if (
+            not stat.S_ISDIR(audit_status.st_mode)
+            or self.audit_dir.is_symlink()
+            or stat.S_IMODE(audit_status.st_mode) != 0o700
+        ):
+            raise ReleaseError("0012 audit directory must be a real mode-0700 directory")
+        if not isinstance(manifest, dict) or set(manifest) != {
+            "schema_version",
+            "operation_id",
+            "contract_version",
+            "contract_checksum",
+            "files",
+        }:
+            raise ReleaseError("0012 audit manifest has an invalid shape")
+        if (
+            manifest.get("schema_version") != 1
+            or manifest.get("operation_id") != self.operation_id
+            or manifest.get("contract_version") != POLYTAO_SCHEMA_COMPATIBILITY_FLOOR
+            or manifest.get("contract_checksum") != POLYTAO_CONTRACT_CHECKSUM
+            or not isinstance(manifest.get("files"), list)
+        ):
+            raise ReleaseError("0012 audit manifest has an invalid identity")
+        seen: set[str] = set()
+        for record in manifest["files"]:
+            if not isinstance(record, dict) or set(record) != {"name", "size", "sha256"}:
+                raise ReleaseError("0012 audit manifest contains an invalid file record")
+            name = record.get("name")
+            size = record.get("size")
+            digest = record.get("sha256")
+            if (
+                not isinstance(name, str)
+                or Path(name).name != name
+                or name in {"", ".", "..", "AUDIT-MANIFEST.json"}
+                or name in seen
+                or isinstance(size, bool)
+                or not isinstance(size, int)
+                or size < 0
+                or not isinstance(digest, str)
+                or DIGEST_RE.fullmatch(digest) is None
+            ):
+                raise ReleaseError("0012 audit manifest contains an invalid file record")
+            seen.add(name)
+            path = self.audit_dir / name
+            try:
+                path_status = path.lstat()
+            except OSError as exc:
+                raise ReleaseError(f"0012 audit file is unavailable: {name}") from exc
+            if (
+                not stat.S_ISREG(path_status.st_mode)
+                or path.is_symlink()
+                or stat.S_IMODE(path_status.st_mode) != 0o600
+                or path_status.st_size != size
+                or sha256_file(path) != digest
+            ):
+                raise ReleaseError(f"0012 audit file differs from its manifest: {name}")
+        return dict(manifest)
+
+    def _audit_manifest_from_marker(self, marker: dict[str, Any]) -> dict[str, Any]:
+        path = self.audit_dir / "AUDIT-MANIFEST.json"
+        expected_digest = marker.get("audit_manifest_sha256")
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or stat.S_IMODE(path.stat().st_mode) != 0o600
+            or not isinstance(expected_digest, str)
+            or DIGEST_RE.fullmatch(expected_digest) is None
+            or sha256_file(path) != expected_digest
+        ):
+            raise ReleaseError("0012 recovery audit manifest is missing or differs from its marker")
+        return self._validate_audit_manifest(load_manifest(path))
+
+    def _success_journal(
+        self,
+        marker: dict[str, Any],
+        approval: dict[str, Any],
+        audit_manifest: dict[str, Any],
+        verification: dict[str, Any],
+    ) -> dict[str, Any]:
+        backup = marker.get("database_backup")
+        backup_digest = marker.get("database_backup_sha256")
+        audit_digest = marker.get("audit_manifest_sha256")
+        if (
+            not isinstance(backup, str)
+            or not isinstance(backup_digest, str)
+            or DIGEST_RE.fullmatch(backup_digest) is None
+            or not isinstance(audit_digest, str)
+            or DIGEST_RE.fullmatch(audit_digest) is None
+        ):
+            raise ReleaseError("0012 success journal is missing immutable backup evidence")
+        return {
+            "schema_version": 1,
+            "status": "success",
+            "operation_id": self.operation_id,
+            "source_sha": self.document["source_sha"],
+            "approval": approval,
+            "completed_at": approval["approved_at"],
+            "database_backup": backup,
+            "database_backup_sha256": backup_digest,
+            "audit_manifest": audit_manifest,
+            "audit_manifest_sha256": audit_digest,
+            "verification": verification,
+        }
+
+    def _write_success_journal(self, journal: dict[str, Any]) -> None:
+        if self.journal_path.exists() or self.journal_path.is_symlink():
+            if (
+                not self.journal_path.is_file()
+                or self.journal_path.is_symlink()
+                or load_manifest(self.journal_path) != journal
+            ):
+                raise ReleaseError("existing 0012 operation journal conflicts with recovery")
+            return
+        atomic_json(self.journal_path, journal)
+
+    def _validate_success_journal(
+        self,
+        journal: object,
+        approval: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not isinstance(journal, dict) or set(journal) != {
+            "schema_version",
+            "status",
+            "operation_id",
+            "source_sha",
+            "approval",
+            "completed_at",
+            "database_backup",
+            "database_backup_sha256",
+            "audit_manifest",
+            "audit_manifest_sha256",
+            "verification",
+        }:
+            raise ReleaseError("existing 0012 success journal has an invalid shape")
+        if (
+            journal.get("schema_version") != 1
+            or journal.get("status") != "success"
+            or journal.get("operation_id") != self.operation_id
+            or journal.get("source_sha") != self.document["source_sha"]
+            or journal.get("approval") != approval
+            or journal.get("completed_at") != approval.get("approved_at")
+            or journal.get("verification")
+            != {"schema_version": 1, "verified": True}
+        ):
+            raise ReleaseError("existing 0012 success journal has an invalid identity")
+        backup = journal.get("database_backup")
+        backup_digest = journal.get("database_backup_sha256")
+        if (
+            not isinstance(backup, str)
+            or not isinstance(backup_digest, str)
+            or DIGEST_RE.fullmatch(backup_digest) is None
+        ):
+            raise ReleaseError("existing 0012 success journal has invalid backup evidence")
+        backup_path = Path(backup)
+        if (
+            not backup_path.is_absolute()
+            or backup_path.parent != self.root / "backups"
+            or not backup_path.is_file()
+            or backup_path.is_symlink()
+            or sha256_file(backup_path) != backup_digest
+        ):
+            raise ReleaseError("existing 0012 success journal backup differs from disk")
+        audit_manifest = self._validate_audit_manifest(journal.get("audit_manifest"))
+        audit_path = self.audit_dir / "AUDIT-MANIFEST.json"
+        audit_digest = journal.get("audit_manifest_sha256")
+        if (
+            not isinstance(audit_digest, str)
+            or DIGEST_RE.fullmatch(audit_digest) is None
+            or not audit_path.is_file()
+            or audit_path.is_symlink()
+            or stat.S_IMODE(audit_path.stat().st_mode) != 0o600
+            or sha256_file(audit_path) != audit_digest
+            or load_manifest(audit_path) != audit_manifest
+        ):
+            raise ReleaseError("existing 0012 success journal audit evidence differs from disk")
+        return dict(journal)
+
+    def _restore_previous_database(
+        self,
+        environment: dict[str, str],
+        previous_state: dict[str, Any],
+        *,
+        recorded_database_inventory: object | None = None,
+    ) -> None:
+        recorded_external_inventory = None
+        if isinstance(recorded_database_inventory, dict):
+            recorded_external_inventory = recorded_database_inventory.get(
+                "external_registered_database_inventory"
+            )
+        self._pre_destructive_database_gate(
+            environment,
+            allow_contract=True,
+            allow_owned_verification=True,
+            recorded_external_inventory=recorded_external_inventory,
+        )
+        release = self.controller.candidate_dir
+        self.controller.run(
+            self.controller.compose(release, "stop", "nginx", "backend"),
+            env=environment,
+        )
+        if release_uses_worker(self.document):
+            self.controller.run(
+                ["systemctl", "--user", "stop", "nexpoly-monomer-md-worker.service"],
+                env=environment,
+            )
+        self.controller.restore_database(environment, release=release)
+        atomic_json(self.state_path, previous_state)
+        self.controller.run(
+            self.controller.compose(
+                release,
+                "up",
+                "-d",
+                "--no-build",
+                "--wait",
+                "--wait-timeout",
+                "300",
+                "lab-postgres",
+                "backend",
+            ),
+            env=environment,
+        )
+        if release_uses_worker(self.document):
+            self.controller.run(
+                ["systemctl", "--user", "restart", "nexpoly-monomer-md-worker.service"],
+                env=environment,
+            )
+            self.controller.wait_for_worker_health(environment, expected_release=release)
+        self.controller.backend_healthcheck(environment, release=release)
+        self.controller.run(
+            self.controller.compose(
+                release,
+                "up",
+                "-d",
+                "--no-build",
+                "--wait",
+                "--wait-timeout",
+                "120",
+                "nginx",
+            ),
+            env=environment,
+        )
+
+    def _resume_admission(
+        self,
+        environment: dict[str, str],
+        *,
+        worker_was_drained: bool,
+    ) -> None:
+        if worker_was_drained and release_uses_worker(self.document):
+            self.controller.resume_worker(environment)
+        self.controller.drain(environment, False)
+
+    def _recover(self, marker: dict[str, Any]) -> dict[str, Any]:
+        if marker.get("operation_id") != self.operation_id:
+            raise ReleaseError("a different 0012 maintenance operation requires recovery")
+        if marker.get("source_sha") != self.document["source_sha"]:
+            raise ReleaseError("0012 recovery marker belongs to a different release")
+        previous_state = marker.get("previous_state")
+        if not isinstance(previous_state, dict):
+            raise ReleaseError("0012 recovery marker is missing previous release state")
+        environment = self.controller.environment()
+        current_release = self._bind_current_release(previous_state)
+        self.controller.candidate_dir = current_release
+        self.controller.previous_state = previous_state
+        backup_path = marker.get("database_backup")
+        if isinstance(backup_path, str):
+            self.controller.backup_path = self.controller.marker_backup(marker)
+
+        current_state = self._load_current_state(allow_completed_contract=True)
+        recorded_database_inventory = marker.get("database_inventory")
+        recorded_external_inventory = None
+        if isinstance(recorded_database_inventory, dict):
+            recorded_external_inventory = recorded_database_inventory.get(
+                "external_registered_database_inventory"
+            )
+        inventory = self._pre_destructive_database_gate(
+            environment,
+            allow_contract=True,
+            allow_owned_verification=True,
+            recorded_external_inventory=recorded_external_inventory,
+        )
+        self._reconcile_owned_verification_database(
+            environment,
+            recorded_database_inventory=recorded_database_inventory,
+            initial_inventory=inventory,
+        )
+        approved = self._approved_record(current_state)
+        if (
+            approved is not None
+            and approved.get("checksum") == POLYTAO_CONTRACT_CHECKSUM
+            and approved.get("operation_id") == self.operation_id
+        ):
+            verification = self._capture_json(CONTRACT_0012_VERIFY_PROGRAM, environment)
+            if verification.get("verified") is not True:
+                raise ReleaseError("committed 0012 operation could not be re-verified")
+            audit_manifest = self._audit_manifest_from_marker(marker)
+            self._write_success_journal(
+                self._success_journal(
+                    marker,
+                    approved,
+                    audit_manifest,
+                    verification,
+                )
+            )
+            self.controller.run(
+                self.controller.compose(
+                    current_release,
+                    "up",
+                    "-d",
+                    "--no-build",
+                    "--wait",
+                    "--wait-timeout",
+                    "120",
+                    "nginx",
+                ),
+                env=environment,
+            )
+            self._resume_admission(
+                environment,
+                worker_was_drained=marker.get("worker_drain_attempted") is True,
+            )
+            durable_unlink(self.marker_path)
+            return current_state
+
+        if marker.get("database_change_started") is True:
+            self._restore_previous_database(
+                environment,
+                previous_state,
+                recorded_database_inventory=recorded_database_inventory,
+            )
+        self._resume_admission(
+            environment,
+            worker_was_drained=(
+                marker.get("worker_drain_attempted") is True
+                and marker.get("database_change_started") is not True
+            ),
+        )
+        recovered_journal = {
+            "schema_version": 1,
+            "status": "recovered",
+            "operation_id": self.operation_id,
+            "source_sha": self.document["source_sha"],
+            "recovered_at": utc_now(),
+            "database_restored": marker.get("database_change_started") is True,
+            "retry_requires_new_operation_id": True,
+        }
+        if self.journal_path.exists() or self.journal_path.is_symlink():
+            if not self.journal_path.is_file() or self.journal_path.is_symlink():
+                raise ReleaseError("interrupted 0012 operation journal is unsafe")
+            existing_journal = load_manifest(self.journal_path)
+            if (
+                existing_journal.get("operation_id") != self.operation_id
+                or existing_journal.get("source_sha") != self.document["source_sha"]
+                or existing_journal.get("status") not in {"failed", "recovered"}
+            ):
+                raise ReleaseError("interrupted 0012 operation journal conflicts with recovery")
+            if existing_journal.get("status") == "failed":
+                recovered_journal["previous_failure"] = existing_journal
+                atomic_json(self.journal_path, recovered_journal)
+        else:
+            atomic_json(self.journal_path, recovered_journal)
+        durable_unlink(self.marker_path)
+        raise ReleaseError(
+            "recovered an interrupted 0012 operation; retry with a new operation ID"
+        )
+
+    def run(self) -> dict[str, Any]:
+        self.controller.ensure_root()
+        if not self.apply:
+            return self.plan()
+        os.umask(0o077)
+        with self.controller.deployment_lock():
+            if self.marker_path.exists():
+                return self._recover(load_manifest(self.marker_path))
+            if self.controller.in_progress_path.exists():
+                raise ReleaseError("a code deployment requires recovery before 0012 maintenance")
+            previous_state = self._load_current_state(allow_completed_contract=True)
+            existing_approval = self._approved_record(previous_state)
+            if existing_approval is not None:
+                if (
+                    existing_approval.get("checksum") == POLYTAO_CONTRACT_CHECKSUM
+                    and existing_approval.get("operation_id") == self.operation_id
+                ):
+                    if (
+                        not self.journal_path.is_file()
+                        or self.journal_path.is_symlink()
+                    ):
+                        raise ReleaseError(
+                            "0012 approval exists but its success journal is unavailable"
+                        )
+                    self._validate_success_journal(
+                        load_manifest(self.journal_path),
+                        existing_approval,
+                    )
+                    return previous_state
+                raise ReleaseError("0012 is already approved by a different operation")
+            if POLYTAO_SCHEMA_COMPATIBILITY_FLOOR in previous_state.get("migrations", []):
+                raise ReleaseError(
+                    "release-state already records 0012 without a valid maintenance approval"
+                )
+            if self.journal_path.exists() or self.journal_path.is_symlink():
+                raise ReleaseError(
+                    "0012 operation ID already has a journal; choose a new operation ID"
+                )
+            if self.audit_dir.exists() or self.audit_dir.is_symlink():
+                raise ReleaseError(
+                    "0012 operation ID already has audit evidence; choose a new operation ID"
+                )
+            environment = self.controller.environment()
+            current_release = self._bind_current_release(previous_state)
+            self.controller.candidate_dir = current_release
+            self.controller.previous_state = previous_state
+            self.controller.validate_current_runtime(environment)
+            database_inventory = self._pre_destructive_database_gate(environment)
+
+            marker: dict[str, Any] = {
+                **self.plan(),
+                "schema_version": 1,
+                "status": "running",
+                "phase": "prepared",
+                "started_at": utc_now(),
+                "previous_state": previous_state,
+                "release_manifest_sha256": sha256_file(self.controller.manifest_path),
+                "drain_attempted": False,
+                "worker_drain_attempted": False,
+                "database_change_started": False,
+                "database_inventory": database_inventory,
+            }
+            self._write_marker(marker)
+            worker_drained = False
+            state_committed = False
+            try:
+                marker["drain_attempted"] = True
+                self._write_marker(marker)
+                self.controller.drain(environment, True)
+                if release_uses_worker(self.document):
+                    marker["worker_drain_attempted"] = True
+                    self._write_marker(marker)
+                    marker["worker_drain"] = self.controller.drain_worker(environment)
+                    worker_drained = True
+                    self._write_marker(marker)
+                self.controller.wait_for_jobs(environment)
+                marker["phase"] = "drained"
+                self._write_marker(marker)
+
+                evidence = self._archive_legacy_table(
+                    environment,
+                    previous_state,
+                    database_inventory,
+                )
+                marker.update(
+                    {
+                        "phase": "backed-up",
+                        "database_backup": str(self.controller.backup_path),
+                        "database_backup_sha256": sha256_file(self.controller.backup_path),
+                        "archive_evidence": evidence,
+                    }
+                )
+                self._write_marker(marker)
+                self._verify_full_restore(environment, evidence)
+                audit_manifest = self._audit_manifest()
+                marker["audit_manifest_sha256"] = sha256_file(
+                    self.audit_dir / "AUDIT-MANIFEST.json"
+                )
+                marker["database_change_started"] = True
+                marker["phase"] = "database-change-started"
+                self._write_marker(marker)
+
+                applied = self.controller.run_migrations(
+                    environment,
+                    mode="contract-0012",
+                )
+                if applied != [POLYTAO_SCHEMA_COMPATIBILITY_FLOOR]:
+                    raise ReleaseError("0012 maintenance did not apply exactly the reviewed contract")
+                marker["phase"] = "contract-applied"
+                self._write_marker(marker)
+                verification = self._capture_json(CONTRACT_0012_VERIFY_PROGRAM, environment)
+                if verification.get("verified") is not True:
+                    raise ReleaseError("0012 post-migration verification failed")
+                self.controller.backend_healthcheck(environment, release=current_release)
+
+                # Public ingress remains stopped while the smoke temporarily
+                # opens only the persistent write gate inside the host network.
+                self.controller.run(
+                    self.controller.compose(current_release, "stop", "nginx"),
+                    env=environment,
+                )
+                marker["nginx_stopped"] = True
+                marker["phase"] = "verifying"
+                self._write_marker(marker)
+                self.controller.run_ingress_isolated_contract_smoke(
+                    environment,
+                    release=current_release,
+                )
+
+                approved_at = utc_now()
+                approval = {
+                    "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                    "checksum": POLYTAO_CONTRACT_CHECKSUM,
+                    "operation_id": self.operation_id,
+                    "approved_at": approved_at,
+                }
+                next_state = json.loads(json.dumps(previous_state))
+                next_state["migrations"] = merge_applied_migrations(
+                    previous_state.get("migrations"),
+                    [POLYTAO_SCHEMA_COMPATIBILITY_FLOOR],
+                )
+                next_state["applied_migrations"] = [POLYTAO_SCHEMA_COMPATIBILITY_FLOOR]
+                next_state["approved_contracts"] = [
+                    *previous_state.get("approved_contracts", []),
+                    approval,
+                ]
+                next_state.pop("approved_contract_migrations", None)
+                next_state["schema_compatibility_floor"] = {
+                    "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                    "checksum": POLYTAO_CONTRACT_CHECKSUM,
+                }
+                next_state["migration_epoch_barrier"] = {
+                    "epoch": 1,
+                    "contract": {
+                        "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                        "checksum": POLYTAO_CONTRACT_CHECKSUM,
+                    },
+                    "operation_id": self.operation_id,
+                    "approved_at": approved_at,
+                }
+                next_state["last_contract_operation"] = self.operation_id
+                journal = self._success_journal(
+                    marker,
+                    approval,
+                    audit_manifest,
+                    verification,
+                )
+                atomic_json(self.state_path, next_state)
+                state_committed = True
+                marker["phase"] = "state-committed"
+                self._write_marker(marker)
+                self._write_success_journal(journal)
+                self.controller.run(
+                    self.controller.compose(
+                        current_release,
+                        "up",
+                        "-d",
+                        "--no-build",
+                        "--wait",
+                        "--wait-timeout",
+                        "120",
+                        "nginx",
+                    ),
+                    env=environment,
+                )
+                self._resume_admission(
+                    environment,
+                    worker_was_drained=worker_drained,
+                )
+                durable_unlink(self.marker_path)
+                return next_state
+            except Exception as exc:
+                marker.update(
+                    {
+                        "status": "failed" if not state_committed else "resume-pending",
+                        "failed_at": utc_now(),
+                        "error": str(exc)[:500],
+                    }
+                )
+                self._write_marker(marker)
+                if state_committed:
+                    raise
+                rollback_error: Exception | None = None
+                try:
+                    marker["verification_database_cleanup"] = (
+                        self._reconcile_owned_verification_database(
+                            environment,
+                            recorded_database_inventory=marker.get(
+                                "database_inventory"
+                            ),
+                        )
+                    )
+                    self._write_marker(marker)
+                    if marker.get("database_change_started") is True:
+                        self._restore_previous_database(
+                            environment,
+                            previous_state,
+                            recorded_database_inventory=marker.get(
+                                "database_inventory"
+                            ),
+                        )
+                    elif marker.get("nginx_stopped") is True:
+                        self.controller.run(
+                            self.controller.compose(
+                                current_release,
+                                "up",
+                                "-d",
+                                "--no-build",
+                                "--wait",
+                                "--wait-timeout",
+                                "120",
+                                "nginx",
+                            ),
+                            env=environment,
+                        )
+                    self._resume_admission(
+                        environment,
+                        worker_was_drained=(
+                            worker_drained
+                            and marker.get("database_change_started") is not True
+                        ),
+                    )
+                except Exception as recovery_exc:  # fail closed with marker + drain
+                    rollback_error = recovery_exc
+                atomic_json(
+                    self.journal_path,
+                    {
+                        "schema_version": 1,
+                        "status": "failed",
+                        "operation_id": self.operation_id,
+                        "source_sha": self.document["source_sha"],
+                        "failed_at": marker["failed_at"],
+                        "error": marker["error"],
+                        "rollback": "failed" if rollback_error else "success",
+                        "rollback_error": str(rollback_error)[:500] if rollback_error else None,
+                    },
+                )
+                if rollback_error is not None:
+                    raise ReleaseError(
+                        "0012 maintenance failed and rollback is incomplete; admission remains drained"
+                    ) from rollback_error
+                durable_unlink(self.marker_path)
+                raise
 
 
 def parser() -> argparse.ArgumentParser:
@@ -3770,6 +6381,7 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--release-bundle", required=True)
     build.add_argument("--release-input", default="release-input.json")
     build.add_argument("--migration", action="append", default=[])
+    build.add_argument("--migration-manifest")
     build.add_argument("--output", required=True)
 
     verify = commands.add_parser("verify-manifest")
@@ -3781,6 +6393,18 @@ def parser() -> argparse.ArgumentParser:
     deploy.add_argument("--mode", choices=("auto", "bootstrap"), default="auto")
     deploy.add_argument("--production-root", default=os.environ.get("NEXPOLY_PRODUCTION_ROOT", str(PRODUCTION_ROOT)))
     deploy.add_argument("--apply", action="store_true")
+
+    contract = commands.add_parser(
+        "maintain-contract-0012",
+        help="archive, restore-verify, and apply only the checksum-pinned 0012 contract",
+    )
+    contract.add_argument("--manifest", required=True)
+    contract.add_argument("--operation-id", required=True)
+    contract.add_argument(
+        "--production-root",
+        default=os.environ.get("NEXPOLY_PRODUCTION_ROOT", str(PRODUCTION_ROOT)),
+    )
+    contract.add_argument("--apply", action="store_true")
 
     worker_identity = commands.add_parser(
         "worker-base-identity",
@@ -3799,6 +6423,13 @@ def main(argv: list[str] | None = None) -> int:
             document = verify_manifest_command(args)
         elif args.command == "deploy":
             document = ReleaseController(Path(args.production_root), Path(args.manifest), args.mode, args.apply).deploy()
+        elif args.command == "maintain-contract-0012":
+            document = PolytaoContractMaintenance(
+                Path(args.production_root),
+                Path(args.manifest),
+                args.operation_id,
+                args.apply,
+            ).run()
         elif args.command == "worker-base-identity":
             document = inspect_worker_base_python(args.python, None, os.environ.copy())
         else:  # pragma: no cover

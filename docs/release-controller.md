@@ -17,9 +17,9 @@ checkout into production.
    PostgreSQL instance. It then creates one release bundle containing the
    tested control tree, Monomer-MD Worker source and lock, and an offline
    wheelhouse.
-4. CI checks that the SHA is still current main. SSH deployment occurs only
-   when the `nexpoly-production` variable
-   `NEXPOLY_AUTODEPLOY_ENABLED` is exactly `true`.
+4. CI checks that the SHA is still current main. During the migration-epoch
+   bridge, push-triggered SSH deployment is forced off regardless of the legacy
+   `NEXPOLY_AUTODEPLOY_ENABLED` variable.
 5. `workflow_dispatch` has no SHA input. It accepts only `operation=bootstrap`,
    must be dispatched from main, and still repeats the current-main check.
 
@@ -37,8 +37,8 @@ Configure these GitHub environment secrets only on `nexpoly-production`:
 
 `NEXPOLY_SSH_KNOWN_HOSTS` is mandatory and must be reviewed out of band. The
 transport has no `ssh-keyscan` fallback. `NEXPOLY_SSH_PORT` is an optional
-environment variable. Keep `NEXPOLY_AUTODEPLOY_ENABLED=false` until the first
-bootstrap and rollback exercise have passed.
+environment variable. Keep `NEXPOLY_AUTODEPLOY_ENABLED=false`; re-enabling push
+deployment is a separate reviewed bridge-removal change.
 
 ## Release input, bundle, and manifest
 
@@ -74,7 +74,7 @@ python3 scripts/release_controller.py build-manifest \
   --web-image "$WEB_IMAGE_DIGEST" \
   --release-bundle "nexpoly-release-${RELEASE_SHA}.tar.gz" \
   --release-input release-input.json \
-  --migration 0009_monomer_md_job_leases:expand \
+  --migration-manifest backend/migrations/postgres/manifest.json \
   --output release-manifest.json
 
 python3 scripts/release_controller.py verify-manifest \
@@ -85,6 +85,12 @@ python3 scripts/release_controller.py verify-manifest \
 manifest, and that one bundle. It verifies the pair before SSH, uploads with
 mode `0600`, verifies it again remotely, extracts the controller from the
 verified bundle, and executes it under the server-side deployment lock.
+
+New manifests use schema V2. Every non-baseline migration record contains
+`version`, `kind`, `epoch`, the canonical newline-normalized `checksum`, and
+`requires_contracts` as `{version, checksum}` records. The controller continues
+to read schema V1 manifests throughout the rollback window, but V1 approvals
+cannot unlock an epoch-2 expansion.
 
 ## One-time production preparation
 
@@ -222,8 +228,8 @@ Complete the following during the reviewed maintenance window:
      ghcr.io/lzq390/nexpoly-backend@sha256:<reviewed-digest>
    ```
 
-   Run main CI once with `NEXPOLY_AUTODEPLOY_ENABLED=false` to publish and smoke
-   that digest without SSH. The label must equal the intended bootstrap SHA.
+   Run main CI once to publish and smoke that digest; the bridge gate forces
+   push-triggered SSH deployment off. The label must equal the intended bootstrap SHA.
    Repeat the pull check for the Web digest. A failed private pull blocks the
    maintenance window.
 5. Freeze `/home/devuser/miniconda3/envs/byteff2-repro`; never run pip in it.
@@ -279,7 +285,14 @@ Complete the following during the reviewed maintenance window:
    `/data/lzq/gith/nexpoly/ops/config/bootstrap-active-jobs-probe`. That probe
    must inspect the legacy runtime and print exactly one JSON object containing
    all eight job categories with zero counts. Do not install a probe that merely
-   prints canned zeroes.
+   prints canned zeroes. The optional protocol discriminator is named
+   `active_jobs_schema_version`: absence is legacy-only and must match the
+   caller's exact expected category set; integer `1` means the full eight-category
+   V1 set, while integer `2` adds `monomer_dft`. The legacy generic field
+   `schema_version`, dual fields, nulls, booleans, and unknown versions are rejected.
+   The bootstrap `postgres-init` follow-up is deliberately unversioned because
+   it rechecks only the two durable PostgreSQL categories after this global
+   proof; it must never claim to be a V1 full-category payload.
 
    `bootstrap-rollback` delegates to a separately audited, deploy-user-owned,
    mode-`0700` executable at
@@ -342,8 +355,51 @@ executes destructive migrations.
 
 After success, verify the state, running image digests, Worker identity, Web,
 PolyTAO, and Monomer-MD results. Remove the bootstrap-only environment entries,
-retain the hooks for audit, and set `NEXPOLY_AUTODEPLOY_ENABLED=true` only after
-an approved rollback exercise.
+retain the hooks for audit. Automatic deployment stays disabled for the epoch
+bridge; re-enabling it is a separate reviewed change after 0012 maintenance and
+rollback evidence are complete.
+
+## Checksum-pinned 0012 maintenance
+
+Production contract execution is not a deployment mode and cannot run an
+arbitrary pending contract. The dry-run plan is:
+
+```bash
+python3 scripts/release_controller.py maintain-contract-0012 \
+  --manifest /path/to/release-manifest.json \
+  --operation-id contract-0012-YYYYMMDD
+```
+
+With `--apply`, the command requires the exact production root and current
+immutable release manifest. It uses `deploy.lock`, drains all V1/V2 active-job
+categories, first hard-locks the target to `nexpoly`, rejects every unknown
+database or migration-ledger row, and requires the exact canonical ledger
+prefix through 0011. It verifies the expected 9-row archive (7 completed, 2 failed), writes
+full/table/schema backups and canonical digests, fsyncs the files and directory
+entries before destructive authorization, restores the full backup into
+an isolated database owned by the current operation's mode-0600 marker, and invokes only `postgres_migrations --mode
+contract-0012`. Success atomically stores
+`{version, checksum, operation_id, approved_at}`, a checksum-bound rollback
+floor and the epoch barrier. The durable in-progress marker drives idempotent
+resume or full database/state restoration after interruption; it also rebuilds
+the success journal from checksum-verified audit evidence if state committed
+immediately before a crash. A rolled-back attempt keeps its journal/audit
+identity; any explicit retry must use a new operation ID.
+
+The gate also requires the external read-only database inventory command and
+the two pinned audit-role identities documented in
+`postgres-migration-governance.md`. Production `nexpoly` remains the only
+writable target. The dev and health stacks must be reachable and exactly
+accounted for before the operation starts; their captured evidence is reused
+only for rollback after the destructive marker is durable.
+
+Contract approval authority comes only from a complete
+`{version, checksum, operation_id, approved_at}` record whose checksum, operation,
+timestamp, compatibility floor, and epoch barrier agree exactly. Migration
+history, a release/candidate manifest, a floor by itself, and the legacy
+name-only approval list never imply approval. For this operation, the only
+accepted identity is canonical 0012 at epoch 1 and `approved_at` must be the
+second-precision `+00:00` UTC form emitted by the controller.
 
 ## Automatic deployment state machine
 
@@ -359,8 +415,9 @@ fails before any state change. It then:
    PolyTAO, Monomer-MD and in-flight write category to reach zero;
 4. creates `pg_dump -Fc`, SHA-256 and JSON sidecars and runs
    `pg_restore --list`;
-5. applies expand migrations only. A contract suffix stays pending; a later
-   expand after a contract is rejected by CI/controller policy;
+5. applies expand migrations only. A contract may remain pending only while no
+   later epoch depends on it; dependency names and checksums are validated
+   before any later-epoch DDL;
 6. if the asset digest changed, rebuilds exactly the datasets from
    `release-input.json`, then atomically switches `ops/current-assets`;
 7. writes the target-SHA analytics snapshot, atomically switches `ops/current`,

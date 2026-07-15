@@ -26,8 +26,8 @@ by the tracked `release-input.json` digest.
 - Pull requests run secret-free Backend, Frontend, Worker, script, Compose and
   image-build checks.  The stable required status is `ci-gate`.
 - A push to protected `main` repeats the immutable-SHA gate, builds and pushes
-  Backend/Web images, tests their exact digests, creates one release bundle,
-  and automatically deploys it when `NEXPOLY_AUTODEPLOY_ENABLED=true`.
+  Backend/Web images, tests their exact digests, and creates one release bundle.
+  Production deployment is forced off during the migration-epoch bridge.
 - `workflow_dispatch` has no SHA input and is accepted only for the one-time
   bootstrap of the current `main` commit.
 
@@ -101,8 +101,9 @@ The controller performs the following under the non-blocking server lock:
    in-memory jobs, GPU queues, API writes and Worker jobs to reach zero.
 4. Create a custom-format PostgreSQL dump, SHA-256 sidecar, and successfully run
    `pg_restore --list`.
-5. Apply only expand migrations.  A trailing contract suffix remains pending;
-   an expand after a pending contract is rejected.
+5. Apply only expand migrations. A contract remains pending only while no later
+   epoch depends on its exact checksum; a missing/mismatched dependency rejects
+   the deployment before later-epoch DDL.
 6. If the asset digest changed, use the candidate asset root to run the explicit
    complete dataset set with `--rebuild`.  Otherwise skip imports.  Refresh the
    PostgreSQL analytics snapshot for the target SHA.
@@ -146,9 +147,10 @@ The initial asset release is
 `sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2`.
 Its file content matches the current production model/database/backend-data
 trees, so bootstrap treats it as the baseline pin and does not rebuild data.
-It applies migrations 0009-0011 and leaves 0012 pending.  After live smoke and
-one rollback rehearsal succeed, set repository variable
-`NEXPOLY_AUTODEPLOY_ENABLED=true`.
+It applies migrations 0009-0011 and leaves 0012 pending. Automatic deployment
+remains disabled during the epoch bridge. The checksum-pinned 0012 maintenance
+operation and the later automatic-deployment re-enable are separately reviewed
+changes.
 
 ## GitHub configuration
 
@@ -156,8 +158,9 @@ one rollback rehearsal succeed, set repository variable
   require `ci-gate`, and forbid force-push and deletion.
 - The current single-maintainer personal repository does not require an
   approval count or merge queue.
-- Restrict `nexpoly-production` to protected `main`, with no reviewer so normal
-  main releases remain automatic.
+- Restrict `nexpoly-production` to protected `main`, with no reviewer so the
+  explicitly dispatched bridge bootstrap does not require a second redundant
+  approval. Push-triggered production deployment remains disabled in CI.
 - Store `NEXPOLY_SSH_HOST`, `NEXPOLY_SSH_USER`,
   `NEXPOLY_SSH_PRIVATE_KEY`, and the independently verified
   `NEXPOLY_SSH_KNOWN_HOSTS` as environment secrets.  Store the SSH port as an
