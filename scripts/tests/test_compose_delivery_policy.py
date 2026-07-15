@@ -15,6 +15,24 @@ DIGEST_B = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
 
 
 class ComposeDeliveryPolicyTests(unittest.TestCase):
+    def test_blank_ci_database_and_production_takeover_use_distinct_migration_modes(self) -> None:
+        workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        controller = (REPOSITORY_ROOT / "scripts" / "release_controller.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("python -m app.postgres_migrations --mode bootstrap", workflow)
+        self.assertNotIn(
+            "python -m app.postgres_migrations --mode bootstrap-expand",
+            workflow,
+        )
+        self.assertIn(
+            'self.run_migrations(environment, mode="bootstrap-expand")',
+            controller,
+        )
+
     def test_tracked_compose_contract_has_no_production_default_password(self) -> None:
         base = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         production = (REPOSITORY_ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")

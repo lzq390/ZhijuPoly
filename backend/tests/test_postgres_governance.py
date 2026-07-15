@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import sys
+import uuid
 
+import psycopg
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
 from psycopg.errors import DependentObjectsStillExist
 import pytest
 
@@ -23,6 +28,7 @@ from app.model_asset_manifest import iter_model_asset_specs
 from app.postgres_database import postgres_connection
 from app.postgres_migrations import (
     MIGRATIONS_DIR,
+    apply_polytao_contract_migration,
     apply_postgres_migrations,
     migration_checksum,
 )
@@ -204,6 +210,308 @@ def test_migration_checksum_is_stable_across_line_endings(tmp_path: Path) -> Non
 
     assert migration_checksum(lf_path) == migration_checksum(crlf_path)
     assert migration_checksum(lf_path) == migration_checksum(bare_cr_path)
+
+
+def test_strict_preflight_blocks_known_dirty_image_0009_checksum(
+    tmp_path: Path,
+    postgres_dsn: str,
+) -> None:
+    version = "0009_monomer_md_job_leases"
+    dirty_image_checksum = (
+        "79a6956fc934794d61bc003f02a6b5280e9e8bd77a217b61a28d3dbdb8b7be0b"
+    )
+    canonical_checksum = migration_checksum(MIGRATIONS_DIR / f"{version}.sql")
+    assert canonical_checksum == (
+        "ef1757a81976f351459e8257bd492aa6267cbf507c4ea85506fefa2d465d2db8"
+    )
+    settings = _governance_settings(tmp_path, postgres_dsn)
+
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute(
+            "UPDATE governance.schema_migrations SET checksum = %s WHERE version = %s",
+            (dirty_image_checksum, version),
+        )
+
+    try:
+        report = postgres_preflight.run_preflight(
+            settings,
+            dsn=postgres_dsn,
+            mode="schema",
+            strict=True,
+        )
+        assert report["status"] == "failed"
+        assert report["strict_ok"] is False
+        assert report["migrations"]["checksum_mismatches"] == [
+            {
+                "version": version,
+                "expected": canonical_checksum,
+                "actual": dirty_image_checksum,
+            }
+        ]
+        assert any(version in error for error in report["strict_errors"])
+    finally:
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute(
+                "UPDATE governance.schema_migrations SET checksum = %s WHERE version = %s",
+                (canonical_checksum, version),
+            )
+
+
+def test_unknown_migration_ledger_entry_blocks_preflight_and_runner(
+    tmp_path: Path,
+    postgres_dsn: str,
+) -> None:
+    version = "9999_unreviewed"
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute(
+            "INSERT INTO governance.schema_migrations (version, checksum) VALUES (%s, %s)",
+            (version, "f" * 64),
+        )
+
+    try:
+        report = postgres_preflight.run_preflight(
+            settings,
+            dsn=postgres_dsn,
+            mode="schema",
+            strict=True,
+        )
+        assert report["status"] == "failed"
+        assert report["strict_ok"] is False
+        assert report["migrations"]["unknown_migrations"] == [version]
+        assert any("unknown version" in error for error in report["strict_errors"])
+
+        with pytest.raises(RuntimeError, match="absent from the canonical manifest"):
+            apply_postgres_migrations(
+                postgres_dsn,
+                allowed_kinds={"baseline", "expand"},
+                defer_trailing_contracts=True,
+            )
+    finally:
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute(
+                "DELETE FROM governance.schema_migrations WHERE version = %s",
+                (version,),
+            )
+
+
+def test_duplicate_migration_ledger_entry_blocks_preflight_and_runner(
+    tmp_path: Path,
+    postgres_dsn: str,
+) -> None:
+    version = "0008_polytao_backend_runtime"
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    with postgres_connection(postgres_dsn) as connection:
+        canonical_checksum = connection.execute(
+            "SELECT checksum FROM governance.schema_migrations WHERE version = %s",
+            (version,),
+        ).fetchone()["checksum"]
+        connection.execute(
+            "ALTER TABLE governance.schema_migrations "
+            "DROP CONSTRAINT schema_migrations_pkey"
+        )
+        connection.execute(
+            "INSERT INTO governance.schema_migrations (version, checksum) VALUES (%s, %s)",
+            (version, canonical_checksum),
+        )
+
+    try:
+        report = postgres_preflight.run_preflight(
+            settings,
+            dsn=postgres_dsn,
+            mode="schema",
+            strict=True,
+        )
+        assert report["status"] == "failed"
+        assert report["strict_ok"] is False
+        assert report["migrations"]["duplicate_migrations"] == [
+            {
+                "version": version,
+                "checksums": [canonical_checksum, canonical_checksum],
+            }
+        ]
+        assert any("duplicate version" in error for error in report["strict_errors"])
+
+        with pytest.raises(RuntimeError, match="duplicate versions"):
+            apply_postgres_migrations(
+                postgres_dsn,
+                allowed_kinds={"baseline", "expand"},
+                defer_trailing_contracts=True,
+            )
+    finally:
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute(
+                "DELETE FROM governance.schema_migrations WHERE version = %s",
+                (version,),
+            )
+            connection.execute(
+                "INSERT INTO governance.schema_migrations (version, checksum) VALUES (%s, %s)",
+                (version, canonical_checksum),
+            )
+            connection.execute(
+                "ALTER TABLE governance.schema_migrations "
+                "ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version)"
+            )
+
+
+def test_epoch_two_migration_requires_exact_prior_contract_before_any_ddl(
+    tmp_path: Path,
+    postgres_dsn: str,
+) -> None:
+    migrations_dir = tmp_path / "migrations"
+    shutil.copytree(MIGRATIONS_DIR, migrations_dir)
+    epoch_two_version = "0013_epoch_bridge_probe"
+    epoch_two_path = migrations_dir / f"{epoch_two_version}.sql"
+    epoch_two_path.write_text(
+        "CREATE TABLE governance.epoch_bridge_probe (id integer PRIMARY KEY);\n",
+        encoding="utf-8",
+    )
+    contract_version = "0012_drop_polytao_jobs"
+    contract_checksum = migration_checksum(migrations_dir / f"{contract_version}.sql")
+    epoch_two_checksum = migration_checksum(epoch_two_path)
+    manifest_path = migrations_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["migrations"].append(
+        {
+            "version": epoch_two_version,
+            "kind": "expand",
+            "epoch": 2,
+            "checksum": epoch_two_checksum,
+            "requires_contracts": [
+                {"version": contract_version, "checksum": contract_checksum}
+            ],
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    fresh_database = f"epoch_bridge_bootstrap_{uuid.uuid4().hex[:16]}"
+    fresh_dsn = make_conninfo(postgres_dsn, dbname=fresh_database)
+    with psycopg.connect(postgres_dsn, autocommit=True) as admin_connection:
+        admin_connection.execute(
+            sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
+                sql.Identifier(fresh_database)
+            )
+        )
+    try:
+        bootstrap_results = apply_postgres_migrations(
+            fresh_dsn,
+            migrations_dir,
+            allowed_kinds={"baseline", "expand"},
+            allow_contract_on_fresh_database=True,
+        )
+        assert [result.version for result in bootstrap_results if result.applied] == [
+            path.stem for path in sorted(migrations_dir.glob("*.sql"))
+        ]
+        repeated_bootstrap = apply_postgres_migrations(
+            fresh_dsn,
+            migrations_dir,
+            allowed_kinds={"baseline", "expand"},
+            allow_contract_on_fresh_database=True,
+        )
+        assert not any(result.applied for result in repeated_bootstrap)
+        with postgres_connection(fresh_dsn) as connection:
+            assert connection.execute(
+                "SELECT to_regclass('governance.epoch_bridge_probe') AS probe"
+            ).fetchone()["probe"] == "governance.epoch_bridge_probe"
+    finally:
+        with psycopg.connect(postgres_dsn, autocommit=True) as admin_connection:
+            admin_connection.execute(
+                """
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE datname = %s AND pid <> pg_backend_pid()
+                """,
+                (fresh_database,),
+            )
+            admin_connection.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                    sql.Identifier(fresh_database)
+                )
+            )
+
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute(
+            "DELETE FROM governance.schema_migrations WHERE version = %s",
+            (contract_version,),
+        )
+        connection.execute("DROP TABLE IF EXISTS governance.epoch_bridge_probe")
+
+    try:
+        with pytest.raises(RuntimeError, match="requires approved contract"):
+            apply_postgres_migrations(
+                postgres_dsn,
+                migrations_dir,
+                allowed_kinds={"expand"},
+                defer_trailing_contracts=True,
+            )
+
+        with postgres_connection(postgres_dsn) as connection:
+            blocked_state = connection.execute(
+                """
+                SELECT
+                  to_regclass('governance.epoch_bridge_probe') AS probe,
+                  EXISTS (
+                    SELECT 1 FROM governance.schema_migrations WHERE version = %s
+                  ) AS migration_recorded
+                """,
+                (epoch_two_version,),
+            ).fetchone()
+            assert blocked_state["probe"] is None
+            assert blocked_state["migration_recorded"] is False
+            connection.execute(
+                """
+                INSERT INTO governance.schema_migrations (version, checksum)
+                VALUES (%s, %s)
+                """,
+                (contract_version, contract_checksum),
+            )
+
+        first_results = apply_postgres_migrations(
+            postgres_dsn,
+            migrations_dir,
+            allowed_kinds={"expand"},
+            defer_trailing_contracts=True,
+        )
+        assert [result.version for result in first_results if result.applied] == [
+            epoch_two_version
+        ]
+
+        repeated_results = apply_postgres_migrations(
+            postgres_dsn,
+            migrations_dir,
+            allowed_kinds={"expand"},
+            defer_trailing_contracts=True,
+        )
+        assert not any(result.applied for result in repeated_results)
+
+        epoch_two_path.write_text(
+            "CREATE TABLE governance.epoch_bridge_probe (id bigint PRIMARY KEY);\n",
+            encoding="utf-8",
+        )
+        manifest["migrations"][-1]["checksum"] = migration_checksum(epoch_two_path)
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="was already applied with checksum"):
+            apply_postgres_migrations(
+                postgres_dsn,
+                migrations_dir,
+                allowed_kinds={"expand"},
+                defer_trailing_contracts=True,
+            )
+    finally:
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute("DROP TABLE IF EXISTS governance.epoch_bridge_probe")
+            connection.execute(
+                "DELETE FROM governance.schema_migrations WHERE version = %s",
+                (epoch_two_version,),
+            )
+            connection.execute(
+                """
+                INSERT INTO governance.schema_migrations (version, checksum)
+                VALUES (%s, %s)
+                ON CONFLICT (version) DO UPDATE SET checksum = excluded.checksum
+                """,
+                (contract_version, contract_checksum),
+            )
 
 
 def test_rebuild_is_rejected_for_governance_only_import(tmp_path: Path, postgres_dsn: str) -> None:
@@ -478,10 +786,7 @@ def test_bootstrap_expand_defers_trailing_contract_and_schema_preflight_passes(
         assert report["migrations"]["missing"] == []
         assert report["migrations"]["pending_contracts"] == [version]
     finally:
-        apply_postgres_migrations(
-            postgres_dsn,
-            allowed_kinds={"expand", "contract"},
-        )
+        apply_polytao_contract_migration(postgres_dsn)
 
 
 def test_polytao_contract_rolls_back_when_generation_schema_is_not_empty(
@@ -503,10 +808,7 @@ def test_polytao_contract_rolls_back_when_generation_schema_is_not_empty(
 
     try:
         with pytest.raises(DependentObjectsStillExist):
-            apply_postgres_migrations(
-                postgres_dsn,
-                allowed_kinds={"expand", "contract"},
-            )
+            apply_polytao_contract_migration(postgres_dsn)
 
         with postgres_connection(postgres_dsn) as connection:
             state = connection.execute(

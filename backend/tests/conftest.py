@@ -132,7 +132,11 @@ def postgres_test_dsn() -> str:
 
     try:
         try:
-            apply_postgres_migrations(test_dsn)
+            apply_postgres_migrations(
+                test_dsn,
+                allowed_kinds={"baseline", "expand"},
+                allow_contract_on_fresh_database=True,
+            )
         except Exception as exc:
             _fail_postgres_test_dependency("apply Postgres migrations to temporary test database", test_dsn, exc)
         yield test_dsn

@@ -12,6 +12,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_ROOT = REPOSITORY_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOW_ROOT / "ci.yml"
 RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
+RELEASE_CONTROLLER_PATH = REPOSITORY_ROOT / "scripts" / "release_controller.py"
 
 PINNED_ACTION = re.compile(
     r"^\s*-?\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s*#.*)?$"
@@ -131,7 +132,7 @@ def main() -> int:
             "ghcr.io/lzq390/nexpoly-web:sha-",
             "BACKEND_IMAGE=ghcr.io/lzq390/nexpoly-backend@${BACKEND_DIGEST}",
             "WEB_IMAGE=ghcr.io/lzq390/nexpoly-web@${WEB_DIGEST}",
-            "python -m app.postgres_migrations --mode bootstrap-expand",
+            "python -m app.postgres_migrations --mode bootstrap",
             "python -m app.postgres_preflight --mode schema --strict",
             "asset_path=\"$(grep -Eo",
             "python -m pip download --require-hashes --only-binary=:all:",
@@ -146,7 +147,7 @@ def main() -> int:
             "dist/release-manifest.json",
             "NEXPOLY_PRODUCTION_ROOT: /data/lzq/gith/nexpoly",
             "Reconfirm that this SHA is still current main",
-            "AUTODEPLOY_ENABLED: ${{ vars.NEXPOLY_AUTODEPLOY_ENABLED }}",
+            "Automatic production deployment is disabled during the migration-epoch bridge",
             "steps.deployment-gate.outputs.enabled == 'true'",
         ),
         failures,
@@ -165,6 +166,7 @@ def main() -> int:
         "release_sha:",
         "PR_MERGE_SHA",
         "dataset all",
+        "AUTODEPLOY_ENABLED",
     ):
         if forbidden in ci_text:
             failures.append(f"ci.yml contains forbidden legacy/implicit control: {forbidden}")
@@ -185,13 +187,15 @@ def main() -> int:
         failures.append("ci.yml must syntax-check and ShellCheck every tracked shell script")
     if "workers/polytao_worker" in ci_text or "POLYTAO_WORKER_BASE_URL" in ci_text:
         failures.append("ci.yml must not build or test the removed standalone PolyTAO Worker")
-    if re.search(
-        r"python -m app\.postgres_migrations --mode bootstrap(?:\s|$)",
-        ci_text,
-    ):
-        failures.append(
-            "automated image smoke must defer contract migrations with bootstrap-expand"
-        )
+    try:
+        controller_text = RELEASE_CONTROLLER_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        failures.append(f"release controller is unavailable: {exc}")
+    else:
+        if 'self.run_migrations(environment, mode="bootstrap-expand")' not in controller_text:
+            failures.append(
+                "production first-release takeover must retain bootstrap-expand"
+            )
 
     validate_release_input(failures)
 

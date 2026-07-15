@@ -359,7 +359,10 @@ Path(output).write_text(
         {
             "schema_version": 1,
             "source_schema_migration_version": source_version,
-            "schema_compatibility_floor": "0012_drop_polytao_jobs",
+            "schema_compatibility_floor": {
+                "version": "0012_drop_polytao_jobs",
+                "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728",
+            },
             "table": "generation.polytao_jobs",
             "row_count": int(row_count),
             "restored_row_count": int(restored_row_count),
@@ -375,7 +378,7 @@ Path(output).write_text(
 PY
   chmod 600 "$archive_dir/archive.json"
   "${COMPOSE[@]}" run --rm postgres-init \
-    python -m app.postgres_migrations --mode contract
+    python -m app.postgres_migrations --mode contract-0012
   "${COMPOSE[@]}" exec -T lab-postgres \
     psql -X -A -t -v ON_ERROR_STOP=1 -U nexpoly_dev -d nexpoly_dev \
       -c "SELECT version FROM governance.schema_migrations WHERE version = '0012_drop_polytao_jobs'" \

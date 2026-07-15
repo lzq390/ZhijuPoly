@@ -77,7 +77,15 @@ def main() -> None:
             state = get_drain_state(connection)
         jobs = aggregate_active_jobs(connection)
 
-    print(json.dumps({"drain": _state_payload(state), "active_jobs": jobs.counts, "active_total": jobs.total}))
+    print(
+        json.dumps(
+            {
+                "drain": _state_payload(state),
+                "active_jobs": jobs.counts,
+                "active_total": jobs.total,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

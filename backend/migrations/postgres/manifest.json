@@ -1,17 +1,89 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "migrations": [
-    {"version": "0001_app_data_governance", "kind": "baseline"},
-    {"version": "0002_lab_identity_defaults", "kind": "expand"},
-    {"version": "0003_runtime_postgres_cutover", "kind": "expand"},
-    {"version": "0004_monomer_md_jobs", "kind": "expand"},
-    {"version": "0005_byteff2_formal_monomer_md", "kind": "expand"},
-    {"version": "0006_property_filter_records", "kind": "expand"},
-    {"version": "0007_polytao_jobs", "kind": "expand"},
-    {"version": "0008_polytao_backend_runtime", "kind": "expand"},
-    {"version": "0009_monomer_md_job_leases", "kind": "expand"},
-    {"version": "0010_deployment_control", "kind": "expand"},
-    {"version": "0011_monomer_md_demo_steps", "kind": "expand"},
-    {"version": "0012_drop_polytao_jobs", "kind": "contract"}
+    {
+      "version": "0001_app_data_governance",
+      "kind": "baseline",
+      "epoch": 1,
+      "checksum": "d5fc9f3d063f1cba476834f3530519b7970cd54f3c3711d05aba1f1cb2fd34f9",
+      "requires_contracts": []
+    },
+    {
+      "version": "0002_lab_identity_defaults",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "580ed6dc7c34970aabd662bc47765e9d02446c28aea1c4fa8fb2a99f05b1ac2f",
+      "requires_contracts": []
+    },
+    {
+      "version": "0003_runtime_postgres_cutover",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "0888ac9abd1b6b642f0addd42274b5408981a26c27f1140b7b656ff34ad73ce3",
+      "requires_contracts": []
+    },
+    {
+      "version": "0004_monomer_md_jobs",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "b3ad64728f399f42b2bf9edb47ad035ac70f09fce6ced48e7b422ea74d5a7e8e",
+      "requires_contracts": []
+    },
+    {
+      "version": "0005_byteff2_formal_monomer_md",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "c9ec808c50915b82a696ab482ed676c62bc75f00a9af21baf9e7f66b185bacb5",
+      "requires_contracts": []
+    },
+    {
+      "version": "0006_property_filter_records",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "57b103dc656334cf5e52bdc9512576a303ae0044ec5fb64eb7cba802021eceaa",
+      "requires_contracts": []
+    },
+    {
+      "version": "0007_polytao_jobs",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "b15268a475e8daf8dd58be988a228a0440e59a31dbf11d5d6b52e0974c3daab5",
+      "requires_contracts": []
+    },
+    {
+      "version": "0008_polytao_backend_runtime",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "d0d8b2187aad8657269600873d3d2630e30c7d72da2f6662e18ab22031deff90",
+      "requires_contracts": []
+    },
+    {
+      "version": "0009_monomer_md_job_leases",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "ef1757a81976f351459e8257bd492aa6267cbf507c4ea85506fefa2d465d2db8",
+      "requires_contracts": []
+    },
+    {
+      "version": "0010_deployment_control",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "f7fad29bcf1da1c6903a688a7312a67216bc11002ac558209ff56e25f69cf7cd",
+      "requires_contracts": []
+    },
+    {
+      "version": "0011_monomer_md_demo_steps",
+      "kind": "expand",
+      "epoch": 1,
+      "checksum": "9a03f38329199aa707818c2099b9811d46366bafe0ddaeb39ae53bc20d0a68ed",
+      "requires_contracts": []
+    },
+    {
+      "version": "0012_drop_polytao_jobs",
+      "kind": "contract",
+      "epoch": 1,
+      "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728",
+      "requires_contracts": []
+    }
   ]
 }
