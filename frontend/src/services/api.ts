@@ -300,12 +300,12 @@ function normalizeMonomerMdJob(job: MonomerMdJobResponse): MonomerMdJobResponse 
     error: job.error ?? job.error_message ?? null
   };
 }
-export function fetchMonomerMdStatus(): Promise<MonomerMdServiceStatusResponse> {
-  return getJSON("/monomer-md/status");
+export function fetchMonomerMdStatus(signal?: AbortSignal): Promise<MonomerMdServiceStatusResponse> {
+  return getJSON("/monomer-md/status", { signal });
 }
 
-export function fetchMonomerMdProtocols(): Promise<MonomerMdProtocolCatalogResponse> {
-  return getJSON("/monomer-md/protocols");
+export function fetchMonomerMdProtocols(signal?: AbortSignal): Promise<MonomerMdProtocolCatalogResponse> {
+  return getJSON("/monomer-md/protocols", { signal });
 }
 
 export function createMonomerMdJob(payload: MonomerMdJobCreateRequest): Promise<MonomerMdJobCreateResponse> {
