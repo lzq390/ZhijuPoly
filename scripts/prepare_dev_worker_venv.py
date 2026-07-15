@@ -224,7 +224,7 @@ def verify_venv(
             str(python),
             "-I",
             "-c",
-            release_controller.WORKER_VENV_VERIFY_PROGRAM,
+                release_controller.DEV_WORKER_VENV_VERIFY_PROGRAM,
             str(venv),
             str(venv / LOCK_EXPECTATION_FILE),
         ],

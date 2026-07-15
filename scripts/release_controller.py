@@ -10,24 +10,42 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import datetime as dt
+import email.parser
+import errno
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
+import selectors
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
-from typing import Any, BinaryIO, Iterable
+from typing import Any, BinaryIO, Callable, Iterable, NamedTuple
 import urllib.parse
 import urllib.request
+
+
+CONTROLLER_DIRECTORY = Path(__file__).resolve().parent
+if str(CONTROLLER_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(CONTROLLER_DIRECTORY))
+
+from monomer_worker_env import (  # noqa: E402 - load the verified sibling helper
+    SAFE_SYSTEM_PATH,
+    WorkerEnvError,
+    build_worker_process_environment,
+    load_worker_env,
+)
 
 
 PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
@@ -49,6 +67,34 @@ OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
 POLYTAO_CONTRACT_PREVIOUS_VERSION = "0011_monomer_md_demo_steps"
 POLYTAO_SCHEMA_COMPATIBILITY_FLOOR = "0012_drop_polytao_jobs"
 POLYTAO_CONTRACT_CHECKSUM = "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+BYTEFF2_FORMAL_RUNTIME_ASSETS = (
+    (
+        "submodules/bytemol/bytemol/toolkit/infer_molecule/bond_length_ref.csv",
+        802,
+        "caa78ff02c7e65fb0c8bcf240382fa8d90b0dfea85a4d9888c96eab04cc4a40e",
+    ),
+    (
+        "byteff2/trained_models/fftrainer_config_in_use.yaml",
+        986,
+        "8245a5c6ad9b4aa9d180c8bb24d6f05c210f1724ffae93aec0ef4f88e5fd7ea3",
+    ),
+    (
+        "byteff2/trained_models/optimal.pt",
+        111_892_932,
+        "ae47a6e6860b563908a2e0a83d4a3f6adc1c36b48f544e2241d24066d43d539c",
+    ),
+)
+BYTEFF2_GIT_SOURCE = "https://github.com/ByteDance-Seed/byteff2.git"
+BYTEFF2_GIT_REVISION = "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2"
+BYTEFF2_AUDITED_OVERLAY_SOURCE = "https://huggingface.co/ByteDance-Seed/byteff2"
+BYTEFF2_AUDITED_OVERLAY_REVISION = "b92ac49058c113625012c1f50d98a7bf9cf4e46e"
+BYTEFF2_AUDITED_OVERLAY_ASSETS = BYTEFF2_FORMAL_RUNTIME_ASSETS[1:]
+BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS = {
+    "byteff2/trained_models/fftrainer_config_in_use.yaml": (
+        "trained_models/fftrainer_config_in_use.yaml"
+    ),
+    "byteff2/trained_models/optimal.pt": "trained_models/optimal.pt",
+}
 CONTRACT_0012_EXTERNAL_AUDIT_COMMAND = (
     "NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND"
 )
@@ -92,17 +138,53 @@ FORBIDDEN_DEPLOY_ENV_OVERRIDES = {
     "COMPOSE_PROJECT_NAME",
     # The reviewed release manifest is the sole target-asset identity.
     "NEXPOLY_ASSET_MANIFEST_DIGEST",
+    # Runtime readiness endpoints are a fixed production contract.  Neither
+    # deploy.env nor the inherited shell may redirect a strict gate.
+    "MONOMER_MD_WORKER_UDS",
+    "NEXPOLY_MONOMER_MD_PROTOCOLS_URL",
+    "NEXPOLY_MONOMER_MD_STATUS_URL",
+    "NEXPOLY_POLYTAO_STATUS_URL",
+    "NEXPOLY_WEB_BASE_URL",
 }
-FORBIDDEN_WORKER_ENV_OVERRIDES = {
-    "PATH",
-    "PYTHONHOME",
-    "PYTHONUSERBASE",
-    "VIRTUAL_ENV",
-    "LD_PRELOAD",
-    "LD_LIBRARY_PATH",
-    "BASH_ENV",
-    "ENV",
-}
+MONOMER_MD_REQUIRE_TRANSPORT_READY = "MONOMER_MD_REQUIRE_TRANSPORT_READY"
+MAX_RUNTIME_RESPONSE_BYTES = 64 * 1024
+PRODUCTION_WEB_BASE_URL = "http://127.0.0.1:9000"
+PRODUCTION_HEALTH_URL = f"{PRODUCTION_WEB_BASE_URL}/health"
+PRODUCTION_MONOMER_STATUS_URL = (
+    f"{PRODUCTION_WEB_BASE_URL}/api/v1/monomer-md/status"
+)
+PRODUCTION_MONOMER_PROTOCOLS_URL = (
+    f"{PRODUCTION_WEB_BASE_URL}/api/v1/monomer-md/protocols"
+)
+PRODUCTION_POLYTAO_STATUS_URL = (
+    f"{PRODUCTION_WEB_BASE_URL}/api/v1/conditional-generation/polytao/status"
+)
+RUNTIME_ENDPOINT_OVERRIDE_KEYS = frozenset(
+    {
+        "MONOMER_MD_WORKER_UDS",
+        "NEXPOLY_HEALTH_URLS",
+        "NEXPOLY_MONOMER_MD_PROTOCOLS_URL",
+        "NEXPOLY_MONOMER_MD_STATUS_URL",
+        "NEXPOLY_POLYTAO_STATUS_URL",
+        "NEXPOLY_WEB_BASE_URL",
+    }
+)
+PACKAGE_MANAGER_ENV_PREFIXES = ("PIP_", "UV_", "CONDA_")
+CANDIDATE_SAFE_INHERITED_KEYS = frozenset(
+    {"HOME", "LANG", "LC_ALL", "LOGNAME", "TMPDIR", "TZ", "USER"}
+)
+STABLE_WORKER_ENV_HELPER_NAME = "monomer_worker_env.py"
+PROVISIONING_OWNER_NAME = ".provisioning-owner.json"
+PROVISIONING_READY_NAME = "provisioning-ready.json"
+PROVISIONING_SCHEMA_VERSION = 1
+# The runtime owns a 10-second TERM window plus process-group/cgroup proof and
+# Broker lease release after its nominal probe deadline.  The controller's
+# outer watchdog must not interrupt that normal fenced cleanup path.
+CANDIDATE_PREFLIGHT_INTERNAL_CLEANUP_ALLOWANCE_SECONDS = 25.0
+CANDIDATE_PREFLIGHT_TERM_GRACE_SECONDS = 10.0
+CANDIDATE_PREFLIGHT_KILL_WAIT_SECONDS = 5.0
+PR_SET_CHILD_SUBREAPER = 36
+PR_GET_CHILD_SUBREAPER = 37
 WORKER_BASE_IDENTITY_FIELDS = {
     "schema_version",
     "configured_path",
@@ -199,7 +281,10 @@ print(
     )
 )
 '''
-WORKER_VENV_VERIFY_PROGRAM = r'''
+# Development-only verifier retained for ``prepare_dev_worker_venv.py``. The
+# production provision/deploy/recovery call graph uses the static filesystem
+# verifier and never executes this program.
+DEV_WORKER_VENV_VERIFY_PROGRAM = r'''
 import importlib.metadata
 import json
 from pathlib import Path
@@ -263,6 +348,22 @@ for requirement in requirements:
             f"locked Worker distribution is not installed exactly once in release venv: "
             f"{name}=={version} (local versions: {versions})"
         )
+'''
+CANDIDATE_EXEC_GATE_PROGRAM = r'''
+import os
+import sys
+
+try:
+    descriptor = int(os.environ.pop("NEXPOLY_GPU_EXEC_GATE_FD", ""))
+    admitted = os.read(descriptor, 1)
+finally:
+    try:
+        os.close(descriptor)
+    except (NameError, OSError):
+        pass
+if admitted != b"1" or len(sys.argv) < 3 or sys.argv[1] != "--":
+    raise SystemExit(126)
+os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
 '''
 CONTRACT_GPU_API_SMOKE_PROGRAM = r'''
 import json
@@ -609,6 +710,553 @@ print(json.dumps({"schema_version": 1, "verified": True}, sort_keys=True))
 
 class ReleaseError(RuntimeError):
     """A release contract or operation failed safely."""
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep loopback readiness probes on their reviewed origin."""
+
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+class _ProcessIdentity(NamedTuple):
+    pid: int
+    start_ticks: int
+    parent_pid: int
+    process_group: int
+    state: str
+
+
+def _read_process_identity(pid: int) -> _ProcessIdentity | None:
+    """Read a same-user Linux process identity without trusting PID alone."""
+
+    process_root = Path(f"/proc/{pid}")
+    try:
+        metadata = process_root.stat()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError as exc:
+        raise ReleaseError(
+            "candidate Worker runtime preflight process identity is unreadable"
+        ) from exc
+    if metadata.st_uid != os.geteuid():
+        raise ReleaseError(
+            "candidate Worker runtime preflight process owner is unexpected"
+        )
+    try:
+        raw = (process_root / "stat").read_text(encoding="utf-8")
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except (OSError, UnicodeError) as exc:
+        raise ReleaseError(
+            "candidate Worker runtime preflight process identity is unreadable"
+        ) from exc
+    closing_parenthesis = raw.rfind(")")
+    if closing_parenthesis < 0:
+        raise ReleaseError(
+            "candidate Worker runtime preflight process identity is malformed"
+        )
+    fields = raw[closing_parenthesis + 1 :].split()
+    if len(fields) <= 19:
+        raise ReleaseError(
+            "candidate Worker runtime preflight process identity is malformed"
+        )
+    try:
+        identity = _ProcessIdentity(
+            pid=pid,
+            start_ticks=int(fields[19]),
+            parent_pid=int(fields[1]),
+            process_group=int(fields[2]),
+            state=fields[0],
+        )
+    except (TypeError, ValueError) as exc:
+        raise ReleaseError(
+            "candidate Worker runtime preflight process identity is malformed"
+        ) from exc
+    if (
+        identity.start_ticks <= 0
+        or identity.parent_pid < 0
+        or identity.process_group <= 0
+        or len(identity.state) != 1
+    ):
+        raise ReleaseError(
+            "candidate Worker runtime preflight process identity is malformed"
+        )
+    return identity
+
+
+def _process_identity_is_live(identity: _ProcessIdentity) -> bool:
+    current = _read_process_identity(identity.pid)
+    return bool(
+        current is not None
+        and current.start_ticks == identity.start_ticks
+        and current.state != "Z"
+    )
+
+
+def _set_child_subreaper(enabled: bool) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    result = libc.prctl(
+        PR_SET_CHILD_SUBREAPER,
+        int(enabled),
+        0,
+        0,
+        0,
+    )
+    if result != 0:
+        raise ReleaseError(
+            "candidate Worker runtime preflight containment is unavailable"
+        )
+
+
+def _child_subreaper_enabled() -> bool:
+    libc = ctypes.CDLL(None, use_errno=True)
+    value = ctypes.c_int()
+    result = libc.prctl(
+        PR_GET_CHILD_SUBREAPER,
+        ctypes.byref(value),
+        0,
+        0,
+        0,
+    )
+    if result != 0:
+        raise ReleaseError(
+            "candidate Worker runtime preflight containment is unavailable"
+        )
+    return value.value == 1
+
+
+@contextlib.contextmanager
+def _candidate_child_subreaper() -> Iterable[dict[int, _ProcessIdentity]]:
+    """Adopt daemonized candidate descendants until cleanup is proven."""
+
+    baseline_children = _direct_child_identities(os.getpid())
+    if baseline_children:
+        raise ReleaseError(
+            "candidate Worker runtime preflight requires an exclusive child process scope"
+        )
+    was_enabled = _child_subreaper_enabled()
+    if not was_enabled:
+        _set_child_subreaper(True)
+    try:
+        yield baseline_children
+    finally:
+        consecutive_empty_scans = 0
+        for _attempt in range(4):
+            current_children = _direct_child_identities(os.getpid())
+            _reap_candidate_zombies(current_children)
+            current_children = _direct_child_identities(os.getpid())
+            if current_children:
+                raise ReleaseError(
+                    "candidate Worker runtime preflight process cleanup could not be proven"
+                )
+            consecutive_empty_scans += 1
+            if consecutive_empty_scans >= 2:
+                break
+            time.sleep(0.01)
+        if consecutive_empty_scans < 2:  # pragma: no cover - defensive
+            raise ReleaseError(
+                "candidate Worker runtime preflight process cleanup could not be proven"
+            )
+        if not was_enabled:
+            _set_child_subreaper(False)
+            if _child_subreaper_enabled():
+                raise ReleaseError(
+                    "candidate Worker runtime preflight containment could not be restored"
+                )
+
+
+@contextlib.contextmanager
+def _deferred_candidate_signals() -> Iterable[Callable[[], int | None]]:
+    """Turn controller termination signals into cooperative cleanup requests."""
+
+    received: list[int] = []
+    previous: dict[signal.Signals, Any] = {}
+
+    def defer(signal_number: int, _frame: Any) -> None:
+        received.append(signal_number)
+
+    for signal_number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        previous[signal_number] = signal.getsignal(signal_number)
+        signal.signal(signal_number, defer)
+    completed_normally = False
+    try:
+        yield lambda: received[-1] if received else None
+        completed_normally = True
+    finally:
+        for signal_number, handler in previous.items():
+            signal.signal(signal_number, handler)
+    if completed_normally and received:
+        raise ReleaseError(
+            "candidate Worker runtime preflight was interrupted safely"
+        )
+
+
+def _direct_process_children(pid: int) -> tuple[int, ...]:
+    try:
+        raw = Path(f"/proc/{pid}/task/{pid}/children").read_text(
+            encoding="ascii"
+        )
+    except (FileNotFoundError, ProcessLookupError) as exc:
+        if pid == os.getpid():
+            raise ReleaseError(
+                "candidate Worker runtime preflight child inventory is unavailable"
+            ) from exc
+        return ()
+    except (OSError, UnicodeError) as exc:
+        raise ReleaseError(
+            "candidate Worker runtime preflight child inventory is unreadable"
+        ) from exc
+    children: list[int] = []
+    for value in raw.split():
+        if not value.isascii() or not value.isdigit():
+            raise ReleaseError(
+                "candidate Worker runtime preflight child inventory is malformed"
+            )
+        child = int(value)
+        if child <= 0 or child in children:
+            raise ReleaseError(
+                "candidate Worker runtime preflight child inventory is malformed"
+            )
+        children.append(child)
+    return tuple(children)
+
+
+def _direct_child_identities(pid: int) -> dict[int, _ProcessIdentity]:
+    identities: dict[int, _ProcessIdentity] = {}
+    for child_pid in _direct_process_children(pid):
+        child = _read_process_identity(child_pid)
+        if child is not None:
+            identities[child_pid] = child
+    return identities
+
+
+def _adopt_candidate_children(
+    identities: dict[int, _ProcessIdentity],
+    baseline_children: dict[int, _ProcessIdentity],
+) -> None:
+    """Capture descendants reparented to this process by subreaper mode."""
+
+    for pid, child in _direct_child_identities(os.getpid()).items():
+        baseline = baseline_children.get(pid)
+        if baseline is not None and baseline.start_ticks == child.start_ticks:
+            continue
+        identities.setdefault(pid, child)
+    _extend_process_descendants(identities)
+
+
+def _reap_candidate_zombies(
+    identities: dict[int, _ProcessIdentity],
+    *,
+    excluded_pids: frozenset[int] = frozenset(),
+) -> None:
+    """Reap only verified candidate children adopted by this controller."""
+
+    for identity in identities.values():
+        if identity.pid in excluded_pids:
+            # A subprocess.Popen root must be reaped by poll()/wait() so its
+            # returncode and destructor state stay synchronized.
+            continue
+        current = _read_process_identity(identity.pid)
+        if (
+            current is None
+            or current.start_ticks != identity.start_ticks
+            or current.parent_pid != os.getpid()
+            or current.state != "Z"
+        ):
+            continue
+        try:
+            os.waitpid(identity.pid, os.WNOHANG)
+        except ChildProcessError:
+            continue
+
+
+def _extend_process_descendants(
+    identities: dict[int, _ProcessIdentity],
+) -> None:
+    """Add currently reachable descendants while preserving start identities."""
+
+    queue = list(identities)
+    visited: set[int] = set()
+    while queue:
+        pid = queue.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        parent = identities.get(pid)
+        if parent is None or not _process_identity_is_live(parent):
+            continue
+        for child_pid in _direct_process_children(pid):
+            if child_pid not in identities:
+                child = _read_process_identity(child_pid)
+                if child is None:
+                    continue
+                identities[child_pid] = child
+            queue.append(child_pid)
+
+
+def _pidfd_open(pid: int) -> int:
+    libc = ctypes.CDLL(None, use_errno=True)
+    descriptor = libc.pidfd_open(pid, 0)
+    if descriptor < 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+    return int(descriptor)
+
+
+def _pidfd_send_signal(
+    descriptor: int,
+    signal_number: signal.Signals,
+) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    result = libc.pidfd_send_signal(descriptor, int(signal_number), None, 0)
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+
+
+def _signal_verified_processes(
+    identities: dict[int, _ProcessIdentity],
+    signal_number: signal.Signals,
+) -> None:
+    for identity in identities.values():
+        current = _read_process_identity(identity.pid)
+        if current is None or current.start_ticks != identity.start_ticks:
+            continue
+        if current.pid == os.getpid() or current.state == "Z":
+            continue
+        try:
+            descriptor = _pidfd_open(identity.pid)
+        except ProcessLookupError:
+            continue
+        except OSError as exc:
+            raise ReleaseError(
+                "candidate Worker runtime preflight cleanup could not bind its process tree"
+            ) from exc
+        try:
+            # Close the PID-reuse window between /proc validation and signal.
+            current = _read_process_identity(identity.pid)
+            if current is None or current.start_ticks != identity.start_ticks:
+                continue
+            _pidfd_send_signal(descriptor, signal_number)
+        except ProcessLookupError:
+            continue
+        except OSError as exc:
+            raise ReleaseError(
+                "candidate Worker runtime preflight cleanup could not signal its process tree"
+            ) from exc
+        finally:
+            os.close(descriptor)
+
+
+def _freeze_candidate_process_tree(
+    identities: dict[int, _ProcessIdentity],
+    baseline_children: dict[int, _ProcessIdentity],
+) -> None:
+    """Stop a changing descendant tree before sending group termination."""
+
+    if not identities:
+        raise ReleaseError(
+            "candidate Worker runtime preflight cleanup could not identify its process"
+        )
+    stable_stopped_scans = 0
+    previous: set[int] | None = None
+    for _attempt in range(100):
+        _adopt_candidate_children(identities, baseline_children)
+        _signal_verified_processes(identities, signal.SIGSTOP)
+        _adopt_candidate_children(identities, baseline_children)
+        live_states = {
+            identity.pid: current.state
+            for identity in identities.values()
+            if (
+                (current := _read_process_identity(identity.pid)) is not None
+                and current.start_ticks == identity.start_ticks
+                and current.state != "Z"
+            )
+        }
+        current_pids = set(identities)
+        if (
+            current_pids == previous
+            and all(state in {"T", "t"} for state in live_states.values())
+        ):
+            stable_stopped_scans += 1
+        else:
+            stable_stopped_scans = 0
+        if stable_stopped_scans >= 2:
+            return
+        previous = current_pids
+        time.sleep(0.01)
+    raise ReleaseError(
+        "candidate Worker runtime preflight cleanup could not stabilize its process tree"
+    )
+
+
+def _wait_for_candidate_process_tree(
+    process: subprocess.Popen[bytes],
+    identities: dict[int, _ProcessIdentity],
+    baseline_children: dict[int, _ProcessIdentity],
+    timeout_seconds: float,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        process.poll()
+        _adopt_candidate_children(identities, baseline_children)
+        _reap_candidate_zombies(
+            identities,
+            excluded_pids=frozenset({process.pid}),
+        )
+        if not any(_process_identity_is_live(item) for item in identities.values()):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def normalized_deploy_boolean(value: object, name: str) -> bool:
+    """Normalize one deploy-only boolean without accepting implicit values."""
+
+    if not isinstance(value, str):
+        raise ReleaseError(f"{name} must be true or false")
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise ReleaseError(f"{name} must be true or false")
+
+
+def decode_bounded_json_object(payload: bytes, label: str) -> dict[str, Any]:
+    """Decode a bounded object without reflecting any response content."""
+
+    if len(payload) > MAX_RUNTIME_RESPONSE_BYTES:
+        raise ReleaseError(f"{label} exceeded the 64 KiB response limit")
+    try:
+        decoded = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise ReleaseError(f"{label} returned invalid JSON") from exc
+    if not isinstance(decoded, dict):
+        raise ReleaseError(f"{label} returned an invalid shape")
+    return decoded
+
+
+def worker_transport_is_strict_ready(payload: object) -> bool:
+    """Validate the strict Worker/status Transport readiness triple."""
+
+    if not isinstance(payload, dict):
+        return False
+    protocols = payload.get("protocols")
+    if not isinstance(protocols, dict):
+        return False
+    transport = protocols.get("Transport")
+    return bool(
+        isinstance(transport, dict)
+        and transport.get("supported") is True
+        and transport.get("runtime_ready") is True
+        and "runtime_error" in transport
+        and transport.get("runtime_error") is None
+    )
+
+
+def current_worker_allows_transport_repair(payload: object) -> bool:
+    """Allow only an isolated Transport degradation during strict repair.
+
+    The candidate is proven separately before any image, database, or release
+    mutation.  This narrow compatibility path lets that candidate repair an
+    older Worker whose top-level readiness included Transport, without
+    accepting recovery, Broker, ByteFF2-root, database, or other protocol
+    failures as a safe rollback target.
+    """
+
+    if not isinstance(payload, dict) or payload.get("status") != "degraded":
+        return False
+    active_jobs = payload.get("active_jobs")
+    if (
+        isinstance(active_jobs, bool)
+        or not isinstance(active_jobs, int)
+        or active_jobs < 0
+        or payload.get("runtime_ready") is not False
+        or payload.get("db_configured") is not True
+        or payload.get("byteff2_root_exists") is not True
+        or (
+            payload.get("gpu_broker_enabled") is True
+            and payload.get("gpu_broker_ready") is not True
+        )
+    ):
+        return False
+    protocols = payload.get("protocols")
+    if not isinstance(protocols, dict) or not protocols:
+        return False
+    transport = protocols.get("Transport")
+    if not isinstance(transport, dict):
+        return False
+    if (
+        transport.get("supported") is not True
+        or transport.get("runtime_ready") is not False
+        or not isinstance(transport.get("runtime_error"), str)
+        or not transport["runtime_error"]
+    ):
+        return False
+    other_protocols = 0
+    for protocol, health in protocols.items():
+        if protocol == "Transport":
+            continue
+        other_protocols += 1
+        if not isinstance(protocol, str) or not isinstance(health, dict):
+            return False
+        if (
+            health.get("supported") is not True
+            or health.get("runtime_ready") is not True
+            or "runtime_error" not in health
+            or health.get("runtime_error") is not None
+        ):
+            return False
+    return other_protocols > 0
+
+
+def protocol_catalog_transport_is_strict_ready(payload: object) -> bool:
+    """Validate exactly one strict Transport record in Backend /protocols."""
+
+    if not isinstance(payload, dict):
+        return False
+    protocols = payload.get("protocols")
+    if not isinstance(protocols, list):
+        return False
+    matches = [
+        item
+        for item in protocols
+        if isinstance(item, dict) and item.get("protocol") == "Transport"
+    ]
+    if len(matches) != 1:
+        return False
+    transport = matches[0]
+    return bool(
+        transport.get("supported") is True
+        and transport.get("runtime_ready") is True
+        and "runtime_error" in transport
+        and transport.get("runtime_error") is None
+    )
+
+
+def candidate_preflight_transport_is_strict_ready(payload: object) -> bool:
+    """Validate the candidate preflight's deliberately small safe schema."""
+
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "runtime_ready",
+        "transport",
+    }:
+        return False
+    transport = payload.get("transport")
+    return bool(
+        payload.get("schema_version") == 1
+        and not isinstance(payload.get("schema_version"), bool)
+        and payload.get("runtime_ready") is True
+        and isinstance(transport, dict)
+        and set(transport) == {"supported", "runtime_ready", "runtime_error"}
+        and transport.get("supported") is True
+        and transport.get("runtime_ready") is True
+        and transport.get("runtime_error") is None
+    )
 
 
 class DeploymentDeferred(ReleaseError):
@@ -1237,6 +1885,130 @@ def canonical_json_digest(value: object) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def directory_inventory_digest(
+    root: Path,
+    *,
+    excluded_top_level: frozenset[str] = frozenset(),
+) -> str:
+    """Hash one deploy-user-owned tree without following any symlink.
+
+    Records bind relative path, entry type, permissions, symlink target, file
+    size, and file content.  This is intentionally independent from mtimes so
+    a copied immutable bundle has the same identity, while any executable or
+    installed-package mutation is still detected before deployment.
+    """
+
+    try:
+        root_metadata = root.lstat()
+    except OSError as exc:
+        raise ReleaseError("provisioned directory inventory root is unavailable") from exc
+    if (
+        not stat.S_ISDIR(root_metadata.st_mode)
+        or root.is_symlink()
+        or root_metadata.st_uid != os.geteuid()
+    ):
+        raise ReleaseError("provisioned directory inventory root is unsafe")
+
+    records: list[dict[str, object]] = [
+        {
+            "path": ".",
+            "type": "directory",
+            "mode": stat.S_IMODE(root_metadata.st_mode),
+        }
+    ]
+    for current_raw, directories, files in os.walk(root, followlinks=False):
+        current = Path(current_raw)
+        relative_current = current.relative_to(root)
+        if relative_current.parts and relative_current.parts[0] in excluded_top_level:
+            directories[:] = []
+            continue
+        directories.sort()
+        files.sort()
+        retained_directories: list[str] = []
+        for name in directories:
+            relative = relative_current / name
+            if relative.parts[0] in excluded_top_level:
+                continue
+            path = current / name
+            try:
+                metadata = path.lstat()
+            except OSError as exc:
+                raise ReleaseError("provisioned directory inventory changed") from exc
+            if metadata.st_uid != os.geteuid():
+                raise ReleaseError("provisioned directory has a foreign owner")
+            if stat.S_ISLNK(metadata.st_mode):
+                try:
+                    target = os.readlink(path)
+                except OSError as exc:
+                    raise ReleaseError("provisioned directory symlink is unreadable") from exc
+                records.append(
+                    {
+                        "path": relative.as_posix(),
+                        "type": "symlink",
+                        "mode": stat.S_IMODE(metadata.st_mode),
+                        "target": target,
+                    }
+                )
+                continue
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ReleaseError("provisioned directory contains an unsafe entry")
+            records.append(
+                {
+                    "path": relative.as_posix(),
+                    "type": "directory",
+                    "mode": stat.S_IMODE(metadata.st_mode),
+                }
+            )
+            retained_directories.append(name)
+        directories[:] = retained_directories
+
+        for name in files:
+            relative = relative_current / name
+            if relative.parts[0] in excluded_top_level:
+                continue
+            path = current / name
+            try:
+                before = path.lstat()
+            except OSError as exc:
+                raise ReleaseError("provisioned file inventory changed") from exc
+            if before.st_uid != os.geteuid():
+                raise ReleaseError("provisioned file has a foreign owner")
+            if stat.S_ISLNK(before.st_mode):
+                try:
+                    target = os.readlink(path)
+                except OSError as exc:
+                    raise ReleaseError("provisioned file symlink is unreadable") from exc
+                records.append(
+                    {
+                        "path": relative.as_posix(),
+                        "type": "symlink",
+                        "mode": stat.S_IMODE(before.st_mode),
+                        "target": target,
+                    }
+                )
+                continue
+            if not stat.S_ISREG(before.st_mode):
+                raise ReleaseError("provisioned directory contains a non-file entry")
+            digest = sha256_file(path)
+            try:
+                after = path.lstat()
+            except OSError as exc:
+                raise ReleaseError("provisioned file changed while hashing") from exc
+            identity_fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+            if any(getattr(before, field) != getattr(after, field) for field in identity_fields):
+                raise ReleaseError("provisioned file changed while hashing")
+            records.append(
+                {
+                    "path": relative.as_posix(),
+                    "type": "file",
+                    "mode": stat.S_IMODE(before.st_mode),
+                    "size": before.st_size,
+                    "sha256": digest,
+                }
+            )
+    return canonical_json_digest(records)
+
+
 def canonical_distribution_name(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value):
         raise ReleaseError(f"invalid Worker distribution name in lock: {value}")
@@ -1512,6 +2284,110 @@ def inspect_worker_toolchain(
     )
 
 
+def validate_byteff2_audited_overlay(
+    value: object,
+    *,
+    require_exact_identity: bool,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"source", "revision", "files"}:
+        raise ReleaseError("pinned asset manifest has invalid ByteFF2 overlay metadata")
+    source = value.get("source")
+    revision = value.get("revision")
+    files = value.get("files")
+    if (
+        not isinstance(source, str)
+        or not source
+        or not isinstance(revision, str)
+        or SHA_RE.fullmatch(revision) is None
+        or not isinstance(files, list)
+    ):
+        raise ReleaseError("pinned asset manifest has invalid ByteFF2 overlay metadata")
+    normalized: dict[str, tuple[str, int, str]] = {}
+    for record in files:
+        if not isinstance(record, dict) or set(record) != {
+            "source_path",
+            "path",
+            "size",
+            "sha256",
+        }:
+            raise ReleaseError("pinned asset manifest has invalid ByteFF2 overlay metadata")
+        source_path = record.get("source_path")
+        relative = record.get("path")
+        size = record.get("size")
+        checksum = record.get("sha256")
+        source_pure = (
+            PurePosixPath(source_path)
+            if isinstance(source_path, str)
+            else PurePosixPath(".")
+        )
+        pure = PurePosixPath(relative) if isinstance(relative, str) else PurePosixPath(".")
+        if (
+            not isinstance(source_path, str)
+            or not source_path
+            or source_pure.is_absolute()
+            or ".." in source_pure.parts
+            or str(source_pure) != source_path
+            or not isinstance(relative, str)
+            or not relative
+            or pure.is_absolute()
+            or ".." in pure.parts
+            or str(pure) != relative
+            or relative in normalized
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 1
+            or not isinstance(checksum, str)
+            or re.fullmatch(r"[0-9a-f]{64}", checksum) is None
+        ):
+            raise ReleaseError("pinned asset manifest has invalid ByteFF2 overlay metadata")
+        normalized[relative] = (source_path, size, checksum)
+    if require_exact_identity:
+        expected = {
+            relative: (
+                BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS[relative],
+                size,
+                checksum,
+            )
+            for relative, size, checksum in BYTEFF2_AUDITED_OVERLAY_ASSETS
+        }
+        if (
+            source != BYTEFF2_AUDITED_OVERLAY_SOURCE
+            or revision != BYTEFF2_AUDITED_OVERLAY_REVISION
+            or normalized != expected
+        ):
+            raise ReleaseError(
+                "candidate asset manifest has the wrong ByteFF2 audited overlay contract"
+            )
+    return dict(value)
+
+
+def validate_byteff2_source(
+    value: Any,
+    *,
+    manifest_commit: str,
+    require_exact_identity: bool,
+) -> dict[str, str]:
+    """Bind a ByteFF2 tree to its authoritative Git source and revision."""
+
+    if not isinstance(value, dict) or set(value) != {"source", "revision"}:
+        raise ReleaseError("pinned asset manifest has invalid ByteFF2 source metadata")
+    source = value.get("source")
+    revision = value.get("revision")
+    if (
+        not isinstance(source, str)
+        or not isinstance(revision, str)
+        or SHA_RE.fullmatch(revision) is None
+        or source != BYTEFF2_GIT_SOURCE
+        or revision != manifest_commit
+    ):
+        raise ReleaseError("pinned asset manifest has invalid ByteFF2 source metadata")
+    if require_exact_identity and revision != BYTEFF2_GIT_REVISION:
+        raise ReleaseError(
+            "candidate asset manifest has the wrong ByteFF2 Git source contract"
+        )
+    return {"source": source, "revision": revision}
+
+
 def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
     asset_root = path.resolve()
     if not asset_root.is_dir():
@@ -1526,15 +2402,26 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ReleaseError("pinned asset manifest is not valid JSON") from exc
     expected_trees = {"model", "database", "backend-data", "byteff2"}
+    base_fields = {
+        "schema_version",
+        "byteff2_commit",
+        "byteff2_submodules",
+        "assets",
+    }
+    schema_version = document.get("schema_version") if isinstance(document, dict) else None
+    schema_valid = bool(
+        isinstance(document, dict)
+        and (
+            (schema_version == 1 and set(document) == base_fields)
+            or (
+                schema_version == 2
+                and set(document)
+                == base_fields | {"byteff2_source", "byteff2_audited_overlays"}
+            )
+        )
+    )
     if (
-        not isinstance(document, dict)
-        or document.get("schema_version") != 1
-        or set(document) != {
-            "schema_version",
-            "byteff2_commit",
-            "byteff2_submodules",
-            "assets",
-        }
+        not schema_valid
         or not isinstance(document.get("assets"), dict)
         or set(document["assets"]) != expected_trees
     ):
@@ -1552,6 +2439,16 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
         for name, commit in submodules.items()
     ):
         raise ReleaseError("pinned asset manifest has invalid ByteFF2 submodule metadata")
+    if schema_version == 2:
+        validate_byteff2_source(
+            document["byteff2_source"],
+            manifest_commit=manifest_commit,
+            require_exact_identity=False,
+        )
+        validate_byteff2_audited_overlay(
+            document["byteff2_audited_overlays"],
+            require_exact_identity=False,
+        )
     root_entries = {entry.name for entry in asset_root.iterdir()}
     if root_entries != expected_trees | {"ASSET-MANIFEST.json"}:
         raise ReleaseError("pinned asset release contains unmanifested root entries")
@@ -1624,6 +2521,167 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
     if byteff2_commit != manifest_commit:
         raise ReleaseError("BYTEFF2-COMMIT differs from the pinned asset manifest")
     return asset_root, digest, byteff2_commit
+
+
+def _verify_candidate_byteff2_runtime_file(
+    asset_root: Path,
+    relative_value: str,
+    expected_size: int,
+    expected_digest: str,
+) -> None:
+    relative = PurePosixPath(relative_value)
+    parent = asset_root / "byteff2"
+    for component in relative.parts[:-1]:
+        parent /= component
+        try:
+            parent_status = parent.lstat()
+        except OSError as exc:
+            raise ReleaseError(
+                "candidate ByteFF2 formal runtime asset is missing or unsafe"
+            ) from exc
+        if not stat.S_ISDIR(parent_status.st_mode) or parent.is_symlink():
+            raise ReleaseError(
+                "candidate ByteFF2 formal runtime asset is missing or unsafe"
+            )
+    path = parent / relative.name
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ReleaseError(
+            "candidate ByteFF2 formal runtime asset is missing or unsafe"
+        ) from exc
+    try:
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o222:
+                raise ReleaseError(
+                    "candidate ByteFF2 formal runtime asset must be a read-only regular file"
+                )
+            digest = hashlib.sha256()
+            size = 0
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                digest.update(chunk)
+            after = os.fstat(descriptor)
+        except OSError as exc:
+            raise ReleaseError(
+                "candidate ByteFF2 formal runtime asset could not be verified"
+            ) from exc
+    finally:
+        os.close(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if (
+        before_identity != after_identity
+        or size != before.st_size
+        or size != expected_size
+        or digest.hexdigest() != expected_digest
+    ):
+        raise ReleaseError(
+            "candidate ByteFF2 formal runtime asset differs from its fixed manifest contract"
+        )
+
+
+def validate_candidate_byteff2_runtime_assets(asset_root: Path) -> None:
+    """Require every exact asset needed by a formal ByteFF2 execution.
+
+    Protocol import already reads the bond table, while force-field model files
+    are loaded later. A content-addressed manifest can therefore be internally
+    consistent yet false-ready. This contract applies only to the resolved
+    candidate; the legacy current asset may be the defect the deployment fixes.
+    """
+
+    manifest_path = asset_root / "ASSET-MANIFEST.json"
+    try:
+        root_status = asset_root.lstat()
+        manifest_status = manifest_path.lstat()
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleaseError(
+            "candidate ByteFF2 formal runtime asset manifest is unavailable"
+        ) from exc
+    if (
+        not stat.S_ISDIR(root_status.st_mode)
+        or asset_root.is_symlink()
+        or not stat.S_ISREG(manifest_status.st_mode)
+        or manifest_path.is_symlink()
+    ):
+        raise ReleaseError(
+            "candidate ByteFF2 formal runtime asset manifest is unsafe"
+        )
+    assets = manifest.get("assets") if isinstance(manifest, dict) else None
+    records = assets.get("byteff2") if isinstance(assets, dict) else None
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 2:
+        raise ReleaseError(
+            "candidate asset manifest must use the audited ByteFF2 schema v2"
+        )
+    if not isinstance(records, list):
+        raise ReleaseError(
+            "candidate asset manifest omits a ByteFF2 formal runtime asset record"
+        )
+    if not isinstance(manifest, dict) or "byteff2_audited_overlays" not in manifest:
+        raise ReleaseError(
+            "candidate asset manifest omits the ByteFF2 audited overlay contract"
+        )
+    if "byteff2_source" not in manifest:
+        raise ReleaseError(
+            "candidate asset manifest omits the ByteFF2 Git source contract"
+        )
+    manifest_commit = require_sha(
+        str(manifest.get("byteff2_commit", "")),
+        "candidate asset ByteFF2 commit",
+    )
+    validate_byteff2_source(
+        manifest["byteff2_source"],
+        manifest_commit=manifest_commit,
+        require_exact_identity=True,
+    )
+    validate_byteff2_audited_overlay(
+        manifest["byteff2_audited_overlays"],
+        require_exact_identity=True,
+    )
+    for relative, fixed_size, fixed_digest in BYTEFF2_FORMAL_RUNTIME_ASSETS:
+        matches = [
+            record
+            for record in records
+            if isinstance(record, dict) and record.get("path") == relative
+        ]
+        if len(matches) != 1:
+            raise ReleaseError(
+                "candidate asset manifest omits a ByteFF2 formal runtime asset record"
+            )
+        record = matches[0]
+        if (
+            set(record) != {"path", "size", "sha256"}
+            or record.get("size") != fixed_size
+            or isinstance(record.get("size"), bool)
+            or record.get("sha256") != fixed_digest
+        ):
+            raise ReleaseError(
+                "candidate asset manifest has the wrong ByteFF2 formal runtime asset contract"
+            )
+        _verify_candidate_byteff2_runtime_file(
+            asset_root,
+            relative,
+            fixed_size,
+            fixed_digest,
+        )
 
 
 def inspect_managed_asset_pointer(
@@ -1700,7 +2758,11 @@ def inspect_managed_asset_pointer(
     return asset_root, actual_digest, byteff2_commit
 
 
-def inspect_managed_asset_release(configured_digest: str) -> tuple[Path, str, str]:
+def inspect_managed_asset_release(
+    configured_digest: str,
+    *,
+    require_byteff2_runtime_assets: bool,
+) -> tuple[Path, str, str]:
     """Resolve and verify a content-addressed candidate without moving the live pointer."""
 
     expected_digest = require_digest(configured_digest, "candidate asset digest")
@@ -1724,6 +2786,8 @@ def inspect_managed_asset_release(configured_digest: str) -> tuple[Path, str, st
     resolved, actual_digest, byteff2_commit = inspect_asset_release(target)
     if resolved != target or actual_digest != expected_digest:
         raise ReleaseError("candidate asset release directory and manifest digest disagree")
+    if require_byteff2_runtime_assets:
+        validate_candidate_byteff2_runtime_assets(resolved)
     return resolved, actual_digest, byteff2_commit
 
 
@@ -2109,6 +3173,82 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def rename_noreplace(source: Path, destination: Path) -> None:
+    """Atomically publish a Linux filesystem entry without replacement."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:  # pragma: no cover - production glibc contract
+        raise ReleaseError("atomic no-replace release publication is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        -100,  # AT_FDCWD
+        os.fsencode(source),
+        -100,
+        os.fsencode(destination),
+        1,  # RENAME_NOREPLACE
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            raise ReleaseError(
+                "release publication destination appeared concurrently"
+            )
+        raise ReleaseError("atomic no-replace release publication failed") from OSError(
+            error,
+            os.strerror(error),
+        )
+
+
+def fsync_tree(root: Path) -> None:
+    """Durably flush one private release tree without following symlinks."""
+
+    try:
+        root_metadata = root.lstat()
+    except OSError as exc:
+        raise ReleaseError("cannot inspect provisioned release before READY") from exc
+    if not stat.S_ISDIR(root_metadata.st_mode) or root.is_symlink():
+        raise ReleaseError("provisioned release is unsafe before READY")
+    directories: list[Path] = []
+    for current_raw, child_directories, files in os.walk(root, followlinks=False):
+        current = Path(current_raw)
+        directories.append(current)
+        child_directories.sort()
+        files.sort()
+        retained: list[str] = []
+        for name in child_directories:
+            child = current / name
+            metadata = child.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                continue
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ReleaseError("provisioned release contains an unsafe entry")
+            retained.append(name)
+        child_directories[:] = retained
+        for name in files:
+            path = current / name
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ReleaseError("provisioned release contains an unsafe entry")
+            flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+    for directory in reversed(directories):
+        fsync_directory(directory)
+
+
 def ensure_durable_directory(path: Path, mode: int = 0o700) -> None:
     """Create a real directory and durably persist every new parent entry."""
 
@@ -2196,8 +3336,27 @@ def atomic_text(path: Path, value: str, *, mode: int = 0o600) -> None:
         durable_unlink(temporary, missing_ok=True)
 
 
-def safe_extract_tar(archive: Path, destination: Path) -> None:
-    destination.mkdir(parents=True, exist_ok=False)
+def safe_extract_tar(
+    archive: Path,
+    destination: Path,
+    *,
+    existing_owned_directory: bool = False,
+    forbidden_top_level: frozenset[str] = frozenset(),
+) -> None:
+    if existing_owned_directory:
+        try:
+            metadata = destination.lstat()
+        except OSError as exc:
+            raise ReleaseError("archive destination is unavailable") from exc
+        if (
+            destination.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise ReleaseError("archive destination is not an owned private directory")
+    else:
+        destination.mkdir(parents=True, exist_ok=False)
     with tarfile.open(archive, "r:*") as source:
         members = source.getmembers()
         for member in members:
@@ -2206,6 +3365,10 @@ def safe_extract_tar(archive: Path, destination: Path) -> None:
                 continue
             if relative.is_absolute() or ".." in relative.parts or not relative.parts:
                 raise ReleaseError(f"unsafe archive path: {member.name}")
+            if relative.parts[0] in forbidden_top_level:
+                raise ReleaseError(
+                    f"archive contains a reserved release control path: {relative.parts[0]}"
+                )
             if member.issym() or member.islnk() or member.isdev() or member.isfifo():
                 raise ReleaseError(f"archive contains an unsupported entry: {member.name}")
         for member in members:
@@ -2249,7 +3412,10 @@ class ReleaseController:
         self.config_dir = self.ops / "config"
         self.release_dir = self.ops / "releases" / self.sha
         self.staging = self.ops / "releases" / f"{self.sha}.staging"
-        self.candidate_dir = self.staging
+        # Deploy and interrupted recovery consume only a separately
+        # provisioned, READY-sealed final release.  Provisioning temporarily
+        # overrides this while it owns ``<sha>.staging``.
+        self.candidate_dir = self.release_dir
         self.state_path = self.ops / "state" / "release-state.json"
         self.in_progress_path = self.ops / "state" / "deploy-in-progress.json"
         self.env_file = self.config_dir / "deploy.env"
@@ -2261,6 +3427,8 @@ class ReleaseController:
         self.worker_previous_instance: str | None = None
         self.worker_base_python_identity: dict[str, Any] | None = None
         self.worker_toolchain_identity: dict[str, Any] | None = None
+        self.deploy_transport_required = False
+        self.worker_values: dict[str, str] = {}
         self.bootstrap = False
         self.attempt_path: Path | None = None
 
@@ -2313,6 +3481,123 @@ class ReleaseController:
                 raise ReleaseError("another production deployment holds deploy.lock") from exc
             yield
 
+    def validate_stable_worker_env_helper(self) -> None:
+        """Bind systemd's stable parser to the reviewed candidate helper."""
+
+        source = CONTROLLER_DIRECTORY / STABLE_WORKER_ENV_HELPER_NAME
+        installed = self.config_dir / STABLE_WORKER_ENV_HELPER_NAME
+        for path, expected_mode, label in (
+            (source, 0o700, "candidate Worker environment helper"),
+            (installed, 0o700, "stable Worker environment helper"),
+        ):
+            try:
+                metadata = path.lstat()
+            except OSError as exc:
+                raise ReleaseError(f"{label} is missing or unsafe") from exc
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or path.is_symlink()
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != expected_mode
+            ):
+                raise ReleaseError(
+                    f"{label} must be a deploy-user-owned mode-{expected_mode:04o} regular file"
+                )
+        if sha256_file(source) != sha256_file(installed):
+            raise ReleaseError(
+                "stable Worker environment helper differs from the reviewed candidate"
+            )
+
+    def load_and_validate_worker_values(
+        self,
+        deploy_values: dict[str, str],
+    ) -> dict[str, str]:
+        """Validate worker.env without injecting it into this process."""
+
+        self.validate_stable_worker_env_helper()
+        worker_path = self.config_dir / "worker.env"
+        try:
+            worker_values = load_worker_env(worker_path)
+        except WorkerEnvError as exc:
+            raise ReleaseError(
+                f"worker.env contains forbidden or invalid configuration: {exc}"
+            ) from exc
+
+        worker_dsn = worker_values.get("APP_POSTGRES_DSN")
+        if not worker_dsn:
+            raise ReleaseError("worker.env is missing required non-empty value: APP_POSTGRES_DSN")
+        validate_postgres_dsn(
+            worker_dsn,
+            "worker.env APP_POSTGRES_DSN",
+            expected_user=deploy_values["NEXPOLY_POSTGRES_USER"],
+            expected_password=deploy_values["NEXPOLY_POSTGRES_PASSWORD"],
+            expected_host="127.0.0.1",
+            expected_port=55432,
+            expected_database=deploy_values["NEXPOLY_POSTGRES_DB"],
+        )
+        expected_worker_values = {
+            "MONOMER_MD_DEFAULT_STEPS": "300",
+            "MONOMER_MD_MAX_STEPS": "300",
+            "MONOMER_MD_MAX_ACTIVE_JOBS": "1",
+            "MONOMER_MD_MAX_CONCURRENT_JOBS": "1",
+            "BYTEFF2_ROOT": str(self.ops / "current-assets" / "byteff2"),
+            "BYTEFF2_PYTHON": "/home/devuser/miniconda3/envs/byteff2-repro/bin/python",
+            "PYTHONPATH": (
+                f"{self.ops / 'current'}:"
+                f"{self.ops / 'current-assets' / 'byteff2'}:"
+                f"{self.ops / 'current-assets' / 'byteff2' / 'submodules' / 'bytemol'}"
+            ),
+            "MONOMER_MD_PYTHON": str(
+                self.ops / "current" / "worker-venv" / "bin" / "python"
+            ),
+            "MONOMER_MD_JOB_ROOT": str(
+                self.ops / "state" / "monomer-md-worker-runs"
+            ),
+            "MONOMER_MD_WORKER_UDS": str(
+                self.ops / "state" / "monomer-md-worker-socket" / "worker.sock"
+            ),
+            "MONOMER_MD_WORKER_MODE": "real",
+            "MONOMER_MD_GPU_BROKER_ENVIRONMENT": "prod",
+            "MONOMER_MD_GPU_BROKER_SOCKET_PATH": str(
+                self.ops / "state" / "gpu-resource" / "broker.sock"
+            ),
+            "MONOMER_MD_GPU_MPS_PIPE_ROOT": str(
+                self.ops / "state" / "gpu-resource"
+            ),
+            "MONOMER_MD_GPU_BROKER_WAIT_TIMEOUT_SECONDS": "600",
+            "MONOMER_MD_GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS": "5",
+        }
+        for key, expected in expected_worker_values.items():
+            if worker_values.get(key) != expected:
+                raise ReleaseError(
+                    f"{key} must equal the pinned production Worker value {expected}"
+                )
+
+        normalized_deploy_boolean(
+            worker_values.get("MONOMER_MD_GPU_BROKER_ENABLED", "false"),
+            "MONOMER_MD_GPU_BROKER_ENABLED",
+        )
+        transport_smoke_enabled = normalized_deploy_boolean(
+            worker_values.get("MONOMER_MD_TRANSPORT_CUDA_SMOKE_ENABLED", "true"),
+            "MONOMER_MD_TRANSPORT_CUDA_SMOKE_ENABLED",
+        )
+        configured_openmm = worker_values.get("BYTEFF2_OPENMM_DIR", "")
+        if configured_openmm and not Path(configured_openmm).is_absolute():
+            raise ReleaseError("BYTEFF2_OPENMM_DIR must be an absolute path")
+        if self.deploy_transport_required:
+            if configured_openmm != (
+                "/home/devuser/miniconda3/envs/byteff2-repro/"
+                "byteff2_openmm/openmm"
+            ):
+                raise ReleaseError(
+                    "strict Transport deployment requires the pinned BYTEFF2_OPENMM_DIR"
+                )
+            if not transport_smoke_enabled:
+                raise ReleaseError(
+                    "strict Transport deployment requires the CUDA smoke probe"
+                )
+        return worker_values
+
     def environment(self) -> dict[str, str]:
         for directory in (self.config_dir, self.ops / "state", self.ops / "releases", self.root / "backups"):
             if not directory.is_dir() or directory.is_symlink():
@@ -2329,11 +3614,33 @@ class ReleaseController:
             if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
                 raise ReleaseError(f"private configuration must be owned by the deploy user and mode 0600: {path}")
         values = load_dotenv(self.env_file)
+        transport_setting = values.pop(
+            MONOMER_MD_REQUIRE_TRANSPORT_READY,
+            "false",
+        )
+        self.deploy_transport_required = normalized_deploy_boolean(
+            transport_setting,
+            MONOMER_MD_REQUIRE_TRANSPORT_READY,
+        )
+        if self.deploy_transport_required and not release_uses_worker(self.document):
+            raise ReleaseError(
+                "strict Transport readiness requires a Monomer-MD Worker release payload"
+            )
         forbidden_values = sorted(FORBIDDEN_DEPLOY_ENV_OVERRIDES.intersection(values))
         if forbidden_values:
             raise ReleaseError(
                 "deploy.env contains forbidden process/runtime overrides: "
                 + ", ".join(forbidden_values)
+            )
+        package_manager_values = sorted(
+            key
+            for key in values
+            if key.startswith(PACKAGE_MANAGER_ENV_PREFIXES)
+        )
+        if package_manager_values:
+            raise ReleaseError(
+                "deploy.env contains forbidden package-manager overrides: "
+                + ", ".join(package_manager_values)
             )
         required = {
             "NEXPOLY_POSTGRES_USER",
@@ -2380,6 +3687,15 @@ class ReleaseController:
             raise ReleaseError("production PostgreSQL host port must remain 55432")
         if values["POLYTAO_ENABLED"].strip().lower() != "true":
             raise ReleaseError("POLYTAO_ENABLED must be true for a full production release")
+        configured_health_url = values.get(
+            "NEXPOLY_HEALTH_URLS",
+            PRODUCTION_HEALTH_URL,
+        )
+        if configured_health_url != PRODUCTION_HEALTH_URL:
+            raise ReleaseError(
+                "NEXPOLY_HEALTH_URLS must use the fixed production health endpoint"
+            )
+        values["NEXPOLY_HEALTH_URLS"] = PRODUCTION_HEALTH_URL
         configured_hooks = sorted(
             key for key in FORBIDDEN_DEPLOY_HOOKS if values.get(key) or os.environ.get(key)
         )
@@ -2388,61 +3704,7 @@ class ReleaseController:
                 "custom production drain/job hooks are forbidden: " + ", ".join(configured_hooks)
             )
         if release_uses_worker(self.document):
-            worker_values = load_dotenv(self.config_dir / "worker.env")
-            forbidden_worker_values = sorted(
-                FORBIDDEN_WORKER_ENV_OVERRIDES.intersection(worker_values)
-            )
-            if forbidden_worker_values:
-                raise ReleaseError(
-                    "worker.env contains forbidden process/runtime overrides: "
-                    + ", ".join(forbidden_worker_values)
-                )
-            worker_dsn = worker_values.get("APP_POSTGRES_DSN")
-            if not worker_dsn:
-                raise ReleaseError("worker.env is missing required non-empty value: APP_POSTGRES_DSN")
-            validate_postgres_dsn(
-                worker_dsn,
-                "worker.env APP_POSTGRES_DSN",
-                expected_user=values["NEXPOLY_POSTGRES_USER"],
-                expected_password=values["NEXPOLY_POSTGRES_PASSWORD"],
-                expected_host="127.0.0.1",
-                expected_port=55432,
-                expected_database=values["NEXPOLY_POSTGRES_DB"],
-            )
-            expected_worker_values = {
-                "MONOMER_MD_DEFAULT_STEPS": "300",
-                "MONOMER_MD_MAX_STEPS": "300",
-                "MONOMER_MD_MAX_ACTIVE_JOBS": "1",
-                "MONOMER_MD_MAX_CONCURRENT_JOBS": "1",
-                "BYTEFF2_ROOT": str(self.ops / "current-assets" / "byteff2"),
-                "BYTEFF2_PYTHON": "/home/devuser/miniconda3/envs/byteff2-repro/bin/python",
-                "PYTHONPATH": (
-                    f"{self.ops / 'current'}:"
-                    f"{self.ops / 'current-assets' / 'byteff2'}:"
-                    f"{self.ops / 'current-assets' / 'byteff2' / 'submodules' / 'bytemol'}"
-                ),
-                "MONOMER_MD_PYTHON": str(self.ops / "current" / "worker-venv" / "bin" / "python"),
-                "MONOMER_MD_JOB_ROOT": str(self.ops / "state" / "monomer-md-worker-runs"),
-                "MONOMER_MD_WORKER_UDS": str(
-                    self.ops / "state" / "monomer-md-worker-socket" / "worker.sock"
-                ),
-                "MONOMER_MD_WORKER_MODE": "real",
-                "MONOMER_MD_GPU_BROKER_ENABLED": "false",
-                "MONOMER_MD_GPU_BROKER_ENVIRONMENT": "prod",
-                "MONOMER_MD_GPU_BROKER_SOCKET_PATH": str(
-                    self.ops / "state" / "gpu-resource" / "broker.sock"
-                ),
-                "MONOMER_MD_GPU_MPS_PIPE_ROOT": str(
-                    self.ops / "state" / "gpu-resource"
-                ),
-                "MONOMER_MD_GPU_BROKER_WAIT_TIMEOUT_SECONDS": "600",
-                "MONOMER_MD_GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS": "5",
-            }
-            for key, expected in expected_worker_values.items():
-                if worker_values.get(key) != expected:
-                    raise ReleaseError(
-                        f"{key} must equal the pinned production Worker value {expected}"
-                    )
+            self.worker_values = self.load_and_validate_worker_values(values)
         configured_asset_root = Path(values["NEXPOLY_ASSET_ROOT"])
         managed_asset_pointer = self.ops / "current-assets"
         if configured_asset_root != managed_asset_pointer:
@@ -2462,7 +3724,8 @@ class ReleaseController:
         )
         expected_digest = self.document.get("asset_manifest_digest") or actual_asset_digest
         target_asset_root, target_digest, target_byteff2_commit = inspect_managed_asset_release(
-            expected_digest
+            expected_digest,
+            require_byteff2_runtime_assets=release_uses_worker(self.document),
         )
         self.document["current_asset_manifest_digest"] = actual_asset_digest
         self.document["current_byteff2_commit"] = current_byteff2_commit
@@ -2471,6 +3734,22 @@ class ReleaseController:
         self.document["resolved_byteff2_commit"] = target_byteff2_commit
         self.document["resolved_asset_root"] = str(target_asset_root)
         environment = os.environ.copy()
+        for key in tuple(environment):
+            if (
+                key in FORBIDDEN_DEPLOY_ENV_OVERRIDES
+                or key in RUNTIME_ENDPOINT_OVERRIDE_KEYS
+                or key.startswith(PACKAGE_MANAGER_ENV_PREFIXES)
+                or key.startswith(("BASH_FUNC_", "LD_", "PYTHON"))
+            ):
+                environment.pop(key, None)
+        # Every release subprocess starts from one reviewed executable search
+        # path. In particular, venv creation/pip verification must not inherit
+        # a caller-controlled Python or dynamic-loader runtime.
+        environment["PATH"] = SAFE_SYSTEM_PATH
+        # The deployment gate is a controller decision sourced only from the
+        # validated deploy.env.  A same-named inherited shell variable must
+        # neither override that decision nor reach Docker/Worker children.
+        environment.pop(MONOMER_MD_REQUIRE_TRANSPORT_READY, None)
         environment.update(values)
         environment.update(
             {
@@ -2852,7 +4131,9 @@ class ReleaseController:
             *arguments,
         ]
 
-    def prepare_staging(self, environment: dict[str, str]) -> None:
+    def _provision_staging(self, environment: dict[str, str]) -> None:
+        """Extract and build one candidate; only ``provision-release`` calls this."""
+
         if self.release_dir.exists():
             raise ReleaseError(f"release directory already exists for {self.sha}")
         if self.staging.exists():
@@ -2862,15 +4143,65 @@ class ReleaseController:
             self.document["release_bundle"],
             "release bundle",
         )
-        safe_extract_tar(archive, self.staging)
+        unpublished = Path(
+            tempfile.mkdtemp(
+                prefix=f".{self.sha}.provisioning-",
+                dir=self.staging.parent,
+            )
+        )
+        os.chmod(unpublished, 0o700)
+        try:
+            atomic_json(
+                unpublished / PROVISIONING_OWNER_NAME,
+                {
+                    "schema_version": PROVISIONING_SCHEMA_VERSION,
+                    "source_sha": self.sha,
+                    "release_manifest_sha256": sha256_file(self.manifest_path),
+                    "release_bundle_sha256": self.document["release_bundle"]["sha256"],
+                    "owner_token": secrets.token_hex(32),
+                },
+            )
+            # Publish the staging name only after its durable owner identity
+            # exists. A crash before this rename leaves no ambiguous
+            # <sha>.staging; a crash after it always leaves a token that retry
+            # can validate.
+            rename_noreplace(unpublished, self.staging)
+        except BaseException:
+            if unpublished.exists() and unpublished.is_dir() and not unpublished.is_symlink():
+                shutil.rmtree(unpublished)
+            raise
+        fsync_directory(self.staging.parent)
+        safe_extract_tar(
+            archive,
+            self.staging,
+            existing_owned_directory=True,
+            forbidden_top_level=frozenset(
+                {
+                    PROVISIONING_OWNER_NAME,
+                    PROVISIONING_READY_NAME,
+                    "release-manifest.json",
+                    "worker-venv",
+                    "worker-lock-requirements.json",
+                    "worker-base-python-identity.json",
+                    "worker-toolchain-identity.json",
+                }
+            ),
+        )
+        self.candidate_dir = self.staging
         for required in ("docker-compose.yml", "docker-compose.prod.yml"):
             if not (self.staging / required).is_file():
                 raise ReleaseError(f"control archive is missing {required}")
         shutil.copy2(self.manifest_path, self.staging / "release-manifest.json")
         os.chmod(self.staging / "release-manifest.json", 0o600)
-        self.prepare_worker(environment)
+        self._validate_candidate_compose(self.staging, environment)
+
+    def _validate_candidate_compose(
+        self,
+        candidate: Path,
+        environment: dict[str, str],
+    ) -> None:
         rendered = subprocess.run(
-            self.compose(self.staging, "config", "--images"), cwd=self.root, env=environment,
+            self.compose(candidate, "config", "--images"), cwd=self.root, env=environment,
             check=True, text=True, stdout=subprocess.PIPE,
         ).stdout.splitlines()
         application_images = {self.document["images"]["backend"], self.document["images"]["web"]}
@@ -2879,7 +4210,7 @@ class ReleaseController:
         if any(image.startswith(("nexpoly-backend:", "nexpoly-nginx:")) or image.endswith(":latest") for image in rendered):
             raise ReleaseError("rendered production Compose contains a mutable application image")
         config_result = subprocess.run(
-            self.compose(self.staging, "config", "--format", "json"),
+            self.compose(candidate, "config", "--format", "json"),
             cwd=self.root,
             env=environment,
             check=True,
@@ -2915,6 +4246,296 @@ class ReleaseController:
             raise ReleaseError("production PostgreSQL must bind target 5432 only on 127.0.0.1")
 
     @staticmethod
+    def _load_private_provisioning_document(
+        path: Path,
+        label: str,
+    ) -> dict[str, Any]:
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise ReleaseError(f"{label} is missing or unsafe") from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_size > MAX_RUNTIME_RESPONSE_BYTES
+        ):
+            raise ReleaseError(f"{label} must be a deploy-user-owned mode-0600 file")
+        return load_manifest(path)
+
+    def _provisioning_owner(self, candidate: Path) -> dict[str, Any]:
+        owner = self._load_private_provisioning_document(
+            candidate / PROVISIONING_OWNER_NAME,
+            "release provisioning owner",
+        )
+        if set(owner) != {
+            "schema_version",
+            "source_sha",
+            "release_manifest_sha256",
+            "release_bundle_sha256",
+            "owner_token",
+        }:
+            raise ReleaseError("release provisioning owner has an invalid shape")
+        token = owner.get("owner_token")
+        if (
+            owner.get("schema_version") != PROVISIONING_SCHEMA_VERSION
+            or owner.get("source_sha") != self.sha
+            or owner.get("release_manifest_sha256") != sha256_file(self.manifest_path)
+            or owner.get("release_bundle_sha256")
+            != self.document["release_bundle"]["sha256"]
+            or not isinstance(token, str)
+            or re.fullmatch(r"[0-9a-f]{64}", token) is None
+        ):
+            raise ReleaseError("release provisioning owner identity does not match")
+        return owner
+
+    def _provisioning_evidence(
+        self,
+        candidate: Path,
+        environment: dict[str, str],
+        *,
+        require_bundle_artifact: bool = True,
+        sealed_ready: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Recompute every READY-bound identity without installing packages."""
+
+        self._require_safe_provisioned_release(candidate)
+
+        release_manifest = candidate / "release-manifest.json"
+        copied_manifest = self._load_private_provisioning_document(
+            release_manifest,
+            "provisioned release manifest",
+        )
+        supplied_manifest = validate_manifest(
+            load_manifest(self.manifest_path),
+            deployment_mode=self.mode,
+        )
+        validate_manifest(copied_manifest, deployment_mode=self.mode)
+        manifest_digest = sha256_file(self.manifest_path)
+        if (
+            copied_manifest != supplied_manifest
+            or sha256_file(release_manifest) != manifest_digest
+        ):
+            raise ReleaseError("provisioned release manifest differs from the deployment manifest")
+        if require_bundle_artifact:
+            verify_artifact(
+                self.manifest_path.parent,
+                self.document["release_bundle"],
+                "release bundle",
+            )
+
+        bundle = self.worker_bundle_dir(candidate)
+        wheelhouse = bundle / "wheelhouse"
+        if not wheelhouse.is_dir() or wheelhouse.is_symlink():
+            raise ReleaseError("provisioned Worker wheelhouse is missing or unsafe")
+        expectation_path = candidate / "worker-lock-requirements.json"
+        expectation = self._load_private_provisioning_document(
+            expectation_path,
+            "Worker lock expectation",
+        )
+        actual_expectation = self.worker_requirement_document(bundle)
+        if expectation != actual_expectation:
+            raise ReleaseError("provisioned Worker lock expectation differs from its lock")
+
+        base_identity = validate_worker_base_identity(
+            self._load_private_provisioning_document(
+                candidate / "worker-base-python-identity.json",
+                "Worker base Python identity",
+            )
+        )
+        toolchain_identity = validate_worker_toolchain_identity(
+            self._load_private_provisioning_document(
+                candidate / "worker-toolchain-identity.json",
+                "Worker toolchain identity",
+            )
+        )
+        current_base = inspect_worker_base_python(
+            environment.get("NEXPOLY_WORKER_BASE_PYTHON", ""),
+            environment.get("NEXPOLY_WORKER_BASE_PYTHON_IDENTITY_SHA256", ""),
+            environment,
+        )
+        current_toolchain = inspect_worker_toolchain(current_base, environment)
+        if current_base != base_identity or current_toolchain != toolchain_identity:
+            raise ReleaseError("provisioned Worker frozen runtime identity has changed")
+
+        venv = candidate / "worker-venv"
+        if not venv.is_dir() or venv.is_symlink():
+            raise ReleaseError("provisioned Worker venv is missing or unsafe")
+        try:
+            venv_prefix = venv.resolve(strict=True)
+        except OSError as exc:
+            raise ReleaseError("provisioned Worker venv cannot be resolved") from exc
+
+        # Hash every candidate-controlled byte before executing the candidate
+        # venv or parsing candidate Compose.  With a READY record this closes
+        # the otherwise dangerous ordering where tampered code could run first
+        # and only then be found to differ from its seal.
+        owner = self._provisioning_owner(candidate)
+        evidence = {
+            "schema_version": PROVISIONING_SCHEMA_VERSION,
+            "status": "ready",
+            "source_sha": self.sha,
+            "release_manifest_sha256": manifest_digest,
+            "release_bundle_sha256": self.document["release_bundle"]["sha256"],
+            "requirements_sha256": canonical_json_digest(expectation),
+            "wheelhouse_inventory_sha256": directory_inventory_digest(wheelhouse),
+            "payload_inventory_sha256": directory_inventory_digest(
+                candidate,
+                excluded_top_level=frozenset(
+                    {"worker-venv", PROVISIONING_READY_NAME}
+                ),
+            ),
+            "venv_inventory_sha256": directory_inventory_digest(venv),
+            "venv_prefix": str(venv_prefix),
+            "worker_base_identity_sha256": base_identity["identity_sha256"],
+            "worker_toolchain_identity_sha256": toolchain_identity["identity_sha256"],
+            "owner_token": owner["owner_token"],
+        }
+        if sealed_ready is not None and any(
+            sealed_ready.get(key) != value for key, value in evidence.items()
+        ):
+            raise ReleaseError(
+                "release provisioning READY evidence does not match candidate"
+            )
+
+        self.verify_worker_venv(venv, expectation, base_identity)
+
+        # Static verification never starts candidate Python or imports its
+        # site-packages. Re-establish every candidate and frozen-runtime
+        # boundary before Compose consumes the tree, then repeat the tree proof
+        # after Compose validation.
+        self._require_safe_provisioned_release(candidate)
+        post_runtime_base = inspect_worker_base_python(
+            environment.get("NEXPOLY_WORKER_BASE_PYTHON", ""),
+            environment.get("NEXPOLY_WORKER_BASE_PYTHON_IDENTITY_SHA256", ""),
+            environment,
+        )
+        post_runtime_toolchain = inspect_worker_toolchain(
+            post_runtime_base,
+            environment,
+        )
+        if post_runtime_base != base_identity or post_runtime_toolchain != toolchain_identity:
+            raise ReleaseError(
+                "provisioned Worker frozen runtime changed during verification"
+            )
+        post_runtime_inventories = {
+            "wheelhouse_inventory_sha256": directory_inventory_digest(wheelhouse),
+            "payload_inventory_sha256": directory_inventory_digest(
+                candidate,
+                excluded_top_level=frozenset(
+                    {"worker-venv", PROVISIONING_READY_NAME}
+                ),
+            ),
+            "venv_inventory_sha256": directory_inventory_digest(venv),
+        }
+        if any(
+            evidence[key] != value
+            for key, value in post_runtime_inventories.items()
+        ):
+            raise ReleaseError(
+                "provisioned candidate changed while its runtime was being verified"
+            )
+
+        self._validate_candidate_compose(candidate, environment)
+        self._require_safe_provisioned_release(candidate)
+        post_execution_inventories = {
+            "wheelhouse_inventory_sha256": directory_inventory_digest(wheelhouse),
+            "payload_inventory_sha256": directory_inventory_digest(
+                candidate,
+                excluded_top_level=frozenset(
+                    {"worker-venv", PROVISIONING_READY_NAME}
+                ),
+            ),
+            "venv_inventory_sha256": directory_inventory_digest(venv),
+        }
+        if any(
+            evidence[key] != value
+            for key, value in post_execution_inventories.items()
+        ):
+            raise ReleaseError(
+                "provisioned candidate changed while its runtime was being verified"
+            )
+        self.worker_base_python_identity = base_identity
+        self.worker_toolchain_identity = toolchain_identity
+        return evidence
+
+    def _require_safe_provisioned_release(self, candidate: Path) -> Path:
+        try:
+            candidate_metadata = candidate.lstat()
+            releases_root = (self.ops / "releases").resolve(strict=True)
+            resolved_candidate = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise ReleaseError("provisioned release directory is unavailable") from exc
+        if (
+            not stat.S_ISDIR(candidate_metadata.st_mode)
+            or candidate.is_symlink()
+            or candidate_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(candidate_metadata.st_mode) != 0o700
+            or resolved_candidate.parent != releases_root
+            or resolved_candidate.name != self.sha
+        ):
+            raise ReleaseError("provisioned release directory is unsafe")
+        return resolved_candidate
+
+    def _validate_provisioned_ready(
+        self,
+        environment: dict[str, str],
+        *,
+        require_bundle_artifact: bool,
+    ) -> None:
+        self.candidate_dir = self.release_dir
+        ready_path = self.release_dir / PROVISIONING_READY_NAME
+        ready = self._load_private_provisioning_document(
+            ready_path,
+            "release provisioning READY record",
+        )
+        ready_digest = sha256_file(ready_path)
+        expected_fields = {
+            "schema_version",
+            "status",
+            "source_sha",
+            "release_manifest_sha256",
+            "release_bundle_sha256",
+            "requirements_sha256",
+            "wheelhouse_inventory_sha256",
+            "payload_inventory_sha256",
+            "venv_inventory_sha256",
+            "venv_prefix",
+            "worker_base_identity_sha256",
+            "worker_toolchain_identity_sha256",
+            "owner_token",
+            "provisioned_at",
+        }
+        if set(ready) != expected_fields:
+            raise ReleaseError("release provisioning READY record has an invalid shape")
+        provisioned_at = ready.get("provisioned_at")
+        if not isinstance(provisioned_at, str) or not provisioned_at:
+            raise ReleaseError("release provisioning READY record has no timestamp")
+        evidence = self._provisioning_evidence(
+            self.release_dir,
+            environment,
+            require_bundle_artifact=require_bundle_artifact,
+            sealed_ready=ready,
+        )
+        if any(ready.get(key) != value for key, value in evidence.items()):
+            raise ReleaseError("release provisioning READY evidence does not match candidate")
+        if sha256_file(ready_path) != ready_digest:
+            raise ReleaseError(
+                "release provisioning READY record changed during validation"
+            )
+
+    def prepare_staging(self, environment: dict[str, str]) -> None:
+        """Validate a separately provisioned candidate; never build or install."""
+
+        if self.staging.exists() or self.staging.is_symlink():
+            raise ReleaseError("unfinished release provisioning staging exists")
+        self._validate_provisioned_ready(
+            environment,
+            require_bundle_artifact=True,
+        )
+
+    @staticmethod
     def worker_bundle_dir(release: Path) -> Path:
         nested = release / "worker-bundle"
         return nested if nested.is_dir() else release
@@ -2936,24 +4557,217 @@ class ReleaseController:
     def verify_worker_venv(
         self,
         venv: Path,
-        expectation_path: Path,
-        environment: dict[str, str],
+        expectation: dict[str, Any],
+        base_identity: dict[str, Any],
     ) -> None:
-        self.run(
-            [
-                str(venv / "bin" / "python"),
-                "-I",
-                "-c",
-                WORKER_VENV_VERIFY_PROGRAM,
-                str(venv),
-                str(expectation_path),
-            ],
-            env=environment,
+        """Statically verify a venv without importing candidate site hooks."""
+
+        if (
+            set(expectation) != {"schema_version", "requirements"}
+            or expectation.get("schema_version") != 1
+            or not isinstance(expectation.get("requirements"), list)
+        ):
+            raise ReleaseError("invalid Worker lock expectation document")
+        try:
+            metadata = venv.lstat()
+            resolved_venv = venv.resolve(strict=True)
+        except OSError as exc:
+            raise ReleaseError("Worker venv is missing or unsafe") from exc
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or venv.is_symlink()
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise ReleaseError("Worker venv is missing or unsafe")
+
+        configuration = venv / "pyvenv.cfg"
+        try:
+            configuration_metadata = configuration.lstat()
+            configuration_text = configuration.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise ReleaseError("Worker venv configuration is missing or unsafe") from exc
+        if (
+            not stat.S_ISREG(configuration_metadata.st_mode)
+            or configuration.is_symlink()
+            or configuration_metadata.st_uid != os.geteuid()
+            or configuration_metadata.st_size > 64 * 1024
+        ):
+            raise ReleaseError("Worker venv configuration is missing or unsafe")
+        configuration_values: dict[str, str] = {}
+        for raw_line in configuration_text.splitlines():
+            key, separator, value = raw_line.partition("=")
+            if not separator or not key.strip() or key.strip() in configuration_values:
+                raise ReleaseError("Worker venv configuration is malformed")
+            configuration_values[key.strip()] = value.strip()
+        if configuration_values.get("include-system-site-packages", "").lower() != "true":
+            raise ReleaseError("Worker venv must inherit the frozen base packages")
+        if f"{self.sha}.staging" in configuration_text:
+            raise ReleaseError("Worker venv configuration retains a staging path")
+
+        candidate_python = venv / "bin" / "python"
+        try:
+            python_metadata = candidate_python.lstat()
+            resolved_python = candidate_python.resolve(strict=True)
+            expected_python = Path(str(base_identity["resolved_path"])).resolve(
+                strict=True
+            )
+        except (KeyError, OSError) as exc:
+            raise ReleaseError("Worker venv Python identity is missing or unsafe") from exc
+        if (
+            not (stat.S_ISREG(python_metadata.st_mode) or stat.S_ISLNK(python_metadata.st_mode))
+            or not resolved_python.is_file()
+            or resolved_python != expected_python
+            or not os.access(candidate_python, os.X_OK)
+        ):
+            raise ReleaseError("Worker venv Python differs from the frozen base")
+        bin_directory = venv / "bin"
+        for script in sorted(bin_directory.iterdir(), key=lambda item: item.name):
+            try:
+                script_metadata = script.lstat()
+            except OSError as exc:
+                raise ReleaseError("Worker venv script inventory is unsafe") from exc
+            if stat.S_ISLNK(script_metadata.st_mode):
+                continue
+            if not stat.S_ISREG(script_metadata.st_mode):
+                raise ReleaseError("Worker venv script inventory is unsafe")
+            try:
+                with script.open("rb") as source:
+                    first_line = source.readline(16 * 1024)
+            except OSError as exc:
+                raise ReleaseError("Worker venv script is unreadable") from exc
+            if first_line.startswith(b"#!") and f"{self.sha}.staging".encode() in first_line:
+                raise ReleaseError("Worker venv script retains a staging shebang")
+
+        lib = venv / "lib"
+        if not lib.is_dir() or lib.is_symlink():
+            raise ReleaseError("Worker venv library root is missing or unsafe")
+        site_roots = sorted(lib.glob("python*/site-packages"))
+        if len(site_roots) != 1:
+            raise ReleaseError("Worker venv must have exactly one local site-packages")
+        site_root = site_roots[0]
+        try:
+            site_metadata = site_root.lstat()
+            resolved_site = site_root.resolve(strict=True)
+        except OSError as exc:
+            raise ReleaseError("Worker venv site-packages is missing or unsafe") from exc
+        if (
+            not stat.S_ISDIR(site_metadata.st_mode)
+            or site_root.is_symlink()
+            or site_metadata.st_uid != os.geteuid()
+            or not resolved_site.is_relative_to(resolved_venv)
+        ):
+            raise ReleaseError("Worker venv site-packages escapes the release venv")
+
+        local: dict[str, list[str]] = {}
+        metadata_directories = sorted(site_root.glob("*.dist-info")) + sorted(
+            site_root.glob("*.egg-info")
         )
+        for distribution in metadata_directories:
+            try:
+                distribution_metadata = distribution.lstat()
+                resolved_distribution = distribution.resolve(strict=True)
+            except OSError as exc:
+                raise ReleaseError("Worker distribution metadata is unsafe") from exc
+            if (
+                not stat.S_ISDIR(distribution_metadata.st_mode)
+                or distribution.is_symlink()
+                or distribution_metadata.st_uid != os.geteuid()
+                or not resolved_distribution.is_relative_to(resolved_site)
+            ):
+                raise ReleaseError("Worker distribution metadata is unsafe")
+            metadata_name = "METADATA" if distribution.name.endswith(".dist-info") else "PKG-INFO"
+            metadata_path = distribution / metadata_name
+            record_path = distribution / "RECORD"
+            try:
+                package_metadata = metadata_path.lstat()
+                payload = metadata_path.read_bytes()
+            except OSError as exc:
+                raise ReleaseError("Worker distribution metadata is incomplete") from exc
+            if (
+                not stat.S_ISREG(package_metadata.st_mode)
+                or metadata_path.is_symlink()
+                or package_metadata.st_uid != os.geteuid()
+                or len(payload) > 4 * 1024 * 1024
+            ):
+                raise ReleaseError("Worker distribution metadata is unsafe")
+            if distribution.name.endswith(".dist-info") and (
+                not record_path.is_file() or record_path.is_symlink()
+            ):
+                raise ReleaseError("Worker distribution RECORD is missing or unsafe")
+            parsed = email.parser.BytesParser().parsebytes(payload, headersonly=True)
+            raw_name = parsed.get("Name")
+            version = parsed.get("Version")
+            if not isinstance(raw_name, str) or not isinstance(version, str) or not version:
+                raise ReleaseError("Worker distribution identity is incomplete")
+            name = canonical_distribution_name(raw_name)
+            local.setdefault(name, []).append(version)
+
+        for requirement in expectation["requirements"]:
+            if (
+                not isinstance(requirement, dict)
+                or set(requirement) != {"name", "version"}
+                or not isinstance(requirement.get("name"), str)
+                or not isinstance(requirement.get("version"), str)
+            ):
+                raise ReleaseError("invalid Worker requirement record")
+            name = canonical_distribution_name(requirement["name"])
+            version = requirement["version"]
+            versions = local.get(name, [])
+            if versions != [version]:
+                raise ReleaseError(
+                    "locked Worker distribution is not installed exactly once in "
+                    f"release venv: {name}=={version} (local versions: {versions})"
+                )
+
+    @contextlib.contextmanager
+    def worker_build_environment(
+        self,
+        environment: dict[str, str],
+    ):
+        """Yield an isolated build environment whose scratch is outside READY."""
+
+        scratch_parent = self.ops / "state" / "worker-build-scratch"
+        scratch_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        parent_metadata = scratch_parent.lstat()
+        if (
+            scratch_parent.is_symlink()
+            or not stat.S_ISDIR(parent_metadata.st_mode)
+            or parent_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+        ):
+            raise ReleaseError("Worker build scratch parent is unsafe")
+        scratch = Path(
+            tempfile.mkdtemp(prefix=f"{self.sha}-", dir=scratch_parent)
+        )
+        os.chmod(scratch, 0o700)
+        build_home = scratch / "home"
+        build_tmp = scratch / "tmp"
+        build_home.mkdir(mode=0o700)
+        build_tmp.mkdir(mode=0o700)
+        build_environment = {
+            "HOME": str(build_home),
+            "PATH": SAFE_SYSTEM_PATH,
+            "PIP_CONFIG_FILE": os.devnull,
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            "PIP_NO_INPUT": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+            "TMPDIR": str(build_tmp),
+            "XDG_CACHE_HOME": str(build_home / ".cache"),
+            "XDG_CONFIG_HOME": str(build_home / ".config"),
+        }
+        for key in ("LANG", "LC_ALL", "TZ"):
+            if environment.get(key):
+                build_environment[key] = environment[key]
+        try:
+            yield build_environment
+        finally:
+            shutil.rmtree(scratch, ignore_errors=False)
 
     def prepare_worker(self, environment: dict[str, str]) -> None:
-        nested_bundle = self.staging / "worker-bundle"
-        bundle = nested_bundle if nested_bundle.is_dir() else self.staging
+        candidate = self.candidate_dir
+        nested_bundle = candidate / "worker-bundle"
+        bundle = nested_bundle if nested_bundle.is_dir() else candidate
         wheelhouse = bundle / "wheelhouse"
         root_lock = bundle / "requirements.lock"
         locks = [root_lock] if root_lock.is_file() else [
@@ -2978,28 +4792,43 @@ class ReleaseController:
             environment,
         )
         before_toolchain = inspect_worker_toolchain(before_identity, environment)
-        venv = self.staging / "worker-venv"
-        self.run(
-            [
+        venv = candidate / "worker-venv"
+        expectation_path = candidate / "worker-lock-requirements.json"
+        with self.worker_build_environment(environment) as build_environment:
+            self.run(
+                [
+                    before_identity["resolved_path"],
+                    "-I",
+                    "-m",
+                    "venv",
+                    "--system-site-packages",
+                    str(venv),
+                ],
+                env=build_environment,
+            )
+            self.verify_worker_venv(
+                venv,
+                {"schema_version": 1, "requirements": []},
+                before_identity,
+            )
+            command = [
                 before_identity["resolved_path"],
+                "-I",
                 "-m",
-                "venv",
-                "--system-site-packages",
-                str(venv),
-            ],
-            env=environment,
-        )
-        command = [
-            str(venv / "bin" / "python"), "-m", "pip", "install",
-            "--no-index", "--require-hashes", "--ignore-installed",
-            "--only-binary=:all:", "--find-links", str(wheelhouse),
-        ]
-        for lock in locks:
-            command.extend(["-r", str(lock)])
-        self.run(command, env=environment)
-        expectation_path = self.staging / "worker-lock-requirements.json"
-        atomic_json(expectation_path, self.worker_requirement_document(bundle))
-        self.verify_worker_venv(venv, expectation_path, environment)
+                "pip",
+                "--isolated",
+                "--python",
+                str(venv / "bin" / "python"),
+                "install",
+                "--no-index", "--require-hashes", "--ignore-installed",
+                "--no-cache-dir", "--only-binary=:all:", "--find-links", str(wheelhouse),
+            ]
+            for lock in locks:
+                command.extend(["-r", str(lock)])
+            self.run(command, env=build_environment)
+            expectation = self.worker_requirement_document(bundle)
+            atomic_json(expectation_path, expectation)
+            self.verify_worker_venv(venv, expectation, before_identity)
         after_identity = inspect_worker_base_python(
             base_python,
             expected_base_identity,
@@ -3013,13 +4842,616 @@ class ReleaseController:
         self.worker_base_python_identity = after_identity
         self.worker_toolchain_identity = after_toolchain
         atomic_json(
-            self.staging / "worker-base-python-identity.json",
+            candidate / "worker-base-python-identity.json",
             after_identity,
         )
         atomic_json(
-            self.staging / "worker-toolchain-identity.json",
+            candidate / "worker-toolchain-identity.json",
             after_toolchain,
         )
+
+    def candidate_worker_environment(
+        self,
+        environment: dict[str, str],
+        *,
+        preflight_job_root: Path,
+    ) -> dict[str, str]:
+        """Build a child-only environment bound to the provisioned release."""
+
+        if not self.worker_values:
+            raise ReleaseError("candidate Worker environment has not been validated")
+        candidate = self.candidate_dir
+        candidate_python = candidate / "worker-venv" / "bin" / "python"
+        candidate_module = (
+            candidate
+            / "workers"
+            / "monomer_md_worker"
+            / "app"
+            / "runtime_preflight.py"
+        )
+        if not candidate_python.is_file() or not os.access(candidate_python, os.X_OK):
+            raise ReleaseError("candidate Worker venv is missing or unsafe")
+        if not candidate_module.is_file() or candidate_module.is_symlink():
+            raise ReleaseError("candidate Worker runtime preflight module is missing or unsafe")
+        asset_root = Path(str(self.document.get("resolved_asset_root", "")))
+        byteff2_root = asset_root / "byteff2"
+        if not asset_root.is_absolute() or not byteff2_root.is_dir():
+            raise ReleaseError("candidate ByteFF2 asset root is missing or unsafe")
+        overrides = {
+            # Runtime preflight has no database role.  Remove its credential
+            # and bind any incidental output to disposable state scratch so the
+            # pre-mutation proof cannot write production job state.
+            "APP_POSTGRES_DSN": "",
+            "BYTEFF2_ROOT": str(byteff2_root),
+            "MONOMER_MD_JOB_ROOT": str(preflight_job_root),
+            "MONOMER_MD_PYTHON": str(candidate_python),
+            "MONOMER_MD_WORKER_ID": f"candidate-preflight-{self.sha[:12]}",
+            "PYTHONPATH": (
+                f"{candidate}:{byteff2_root}:"
+                f"{byteff2_root / 'submodules' / 'bytemol'}"
+            ),
+        }
+        candidate_inherited = {
+            key: environment[key]
+            for key in CANDIDATE_SAFE_INHERITED_KEYS
+            if environment.get(key)
+        }
+        try:
+            return build_worker_process_environment(
+                self.worker_values,
+                inherited=candidate_inherited,
+                overrides=overrides,
+            )
+        except WorkerEnvError as exc:
+            raise ReleaseError("candidate Worker environment could not be constructed") from exc
+
+    @staticmethod
+    def _nvidia_smi_rows(payload: str, columns: int) -> list[list[str]]:
+        rows: list[list[str]] = []
+        for raw in payload.splitlines():
+            line = raw.strip()
+            if not line or line.lower().startswith("no running processes"):
+                continue
+            values = [value.strip() for value in line.split(",")]
+            if len(values) != columns or any(not value for value in values):
+                raise ReleaseError("nvidia-smi returned an invalid inventory")
+            rows.append(values)
+        return rows
+
+    def _nvidia_smi_query(
+        self,
+        query: str,
+        environment: dict[str, str],
+    ) -> str:
+        try:
+            completed = subprocess.run(
+                ["nvidia-smi", query, "--format=csv,noheader,nounits"],
+                cwd=self.root,
+                env=environment,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ReleaseError("target GPU inventory is unavailable") from exc
+        if completed.returncode != 0 or len(completed.stdout) > MAX_RUNTIME_RESPONSE_BYTES:
+            raise ReleaseError("target GPU inventory is unavailable")
+        return completed.stdout
+
+    def assert_direct_transport_gpu_idle(
+        self,
+        candidate_environment: dict[str, str],
+    ) -> None:
+        """Fail closed on any compute process for direct (non-Broker) smoke."""
+
+        installed_rows = self._nvidia_smi_rows(
+            self._nvidia_smi_query("--query-gpu=index,uuid", candidate_environment),
+            2,
+        )
+        installed = {index: uuid for index, uuid in installed_rows}
+        if not installed or len(set(installed.values())) != len(installed):
+            raise ReleaseError("target GPU inventory is invalid")
+        device_spec = candidate_environment.get(
+            "MONOMER_MD_CUDA_VISIBLE_DEVICES",
+            candidate_environment.get("NEXPOLY_GPU_DEVICE", ""),
+        )
+        tokens = device_spec.split(",")
+        if any(not token or token != token.strip() for token in tokens):
+            raise ReleaseError("target Worker GPU selection is invalid")
+        selected: set[str] = set()
+        for token in tokens:
+            matches: list[str]
+            if token in installed:
+                matches = [installed[token]]
+            elif token.startswith("GPU-"):
+                matches = [uuid for uuid in installed.values() if uuid.startswith(token)]
+            else:
+                matches = []
+            if len(matches) != 1:
+                raise ReleaseError("target Worker GPU selection is invalid")
+            selected.add(matches[0])
+        if not selected:
+            raise ReleaseError("target Worker GPU selection is invalid")
+
+        process_rows = self._nvidia_smi_rows(
+            self._nvidia_smi_query(
+                "--query-compute-apps=pid,gpu_uuid",
+                candidate_environment,
+            ),
+            2,
+        )
+        for pid, gpu_uuid in process_rows:
+            if not pid.isdigit():
+                raise ReleaseError("target GPU process inventory is invalid")
+            if gpu_uuid in selected:
+                raise DeploymentDeferred(
+                    "strict Transport preflight deferred because the target GPU is busy"
+                )
+
+    def _terminate_candidate_preflight_process(
+        self,
+        process: subprocess.Popen[bytes],
+        identities: dict[int, _ProcessIdentity],
+        baseline_children: dict[int, _ProcessIdentity],
+        *,
+        broker_governed: bool,
+    ) -> None:
+        root = _read_process_identity(process.pid)
+        if root is not None:
+            identities.setdefault(root.pid, root)
+        root_only = (
+            {process.pid: identities[process.pid]}
+            if process.pid in identities
+            else {}
+        )
+        # The preflight root translates TERM into asyncio cancellation.  In
+        # Broker mode that cooperative path must run prepare_process_termination
+        # before any CUDA child receives a POSIX signal.
+        _signal_verified_processes(root_only, signal.SIGTERM)
+        if _wait_for_candidate_process_tree(
+            process,
+            identities,
+            baseline_children,
+            CANDIDATE_PREFLIGHT_TERM_GRACE_SECONDS,
+        ):
+            _reap_candidate_zombies(
+                identities,
+                excluded_pids=frozenset({process.pid}),
+            )
+            return
+
+        if broker_governed:
+            # Killing the outer Python root is safe; killing a registered CUDA
+            # descendant outside Broker cgroup/MPS cleanup is not.  Any such
+            # survivor keeps the release fail-closed for operator recovery.
+            _signal_verified_processes(root_only, signal.SIGKILL)
+            deadline = time.monotonic() + CANDIDATE_PREFLIGHT_KILL_WAIT_SECONDS
+            while process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            _adopt_candidate_children(identities, baseline_children)
+            process.poll()
+            _reap_candidate_zombies(
+                identities,
+                excluded_pids=frozenset({process.pid}),
+            )
+            if any(
+                _process_identity_is_live(identity)
+                for identity in identities.values()
+            ):
+                raise ReleaseError(
+                    "candidate Broker-governed runtime cleanup could not be proven"
+                )
+            return
+
+        # A launcher or CUDA helper may have called setsid() and ignored TERM.
+        # Direct mode has no Broker/MPS cgroup contract, so freeze the complete
+        # owned tree before the normal TERM-to-KILL escalation.
+        _freeze_candidate_process_tree(identities, baseline_children)
+        _signal_verified_processes(identities, signal.SIGTERM)
+        _signal_verified_processes(identities, signal.SIGCONT)
+        if _wait_for_candidate_process_tree(
+            process,
+            identities,
+            baseline_children,
+            CANDIDATE_PREFLIGHT_TERM_GRACE_SECONDS,
+        ):
+            _reap_candidate_zombies(
+                identities,
+                excluded_pids=frozenset({process.pid}),
+            )
+            return
+        _freeze_candidate_process_tree(identities, baseline_children)
+        _signal_verified_processes(identities, signal.SIGKILL)
+        if not _wait_for_candidate_process_tree(
+            process,
+            identities,
+            baseline_children,
+            CANDIDATE_PREFLIGHT_KILL_WAIT_SECONDS,
+        ):
+            raise ReleaseError(
+                "candidate Worker runtime preflight process cleanup could not be proven"
+            )
+        process.poll()
+        _reap_candidate_zombies(
+            identities,
+            excluded_pids=frozenset({process.pid}),
+        )
+
+    def _run_candidate_preflight_process(
+        self,
+        command: list[str],
+        environment: dict[str, str],
+        *,
+        timeout_seconds: float,
+        broker_governed: bool,
+    ) -> subprocess.CompletedProcess[bytes]:
+        output_reader = -1
+        output_writer = -1
+        gate_reader = -1
+        gate_writer = -1
+        selector: selectors.BaseSelector | None = None
+        try:
+            output_reader, output_writer = os.pipe2(os.O_CLOEXEC)
+            gate_reader, gate_writer = os.pipe2(os.O_CLOEXEC)
+            os.set_blocking(output_reader, False)
+            selector = selectors.DefaultSelector()
+            # Allocate and register every fallible output resource before the
+            # child exists. The child itself starts behind a separate exec gate.
+            selector.register(output_reader, selectors.EVENT_READ)
+
+            with (
+                _deferred_candidate_signals() as pending_signal,
+                _candidate_child_subreaper() as baseline_children,
+            ):
+                process: subprocess.Popen[bytes] | None = None
+                root_pidfd = -1
+                identities: dict[int, _ProcessIdentity] = {}
+                output = bytearray()
+                output_eof = False
+                gate_opened = False
+                termination_attempted = False
+                deadline = time.monotonic() + timeout_seconds
+
+                def terminate_root_handle() -> None:
+                    if process is None or process.poll() is not None:
+                        return
+                    try:
+                        if root_pidfd >= 0:
+                            _pidfd_send_signal(root_pidfd, signal.SIGTERM)
+                        else:
+                            process.terminate()
+                    except ProcessLookupError:
+                        return
+                    except OSError as exc:
+                        raise ReleaseError(
+                            "candidate Worker runtime preflight root cleanup failed"
+                        ) from exc
+                    term_deadline = (
+                        time.monotonic()
+                        + CANDIDATE_PREFLIGHT_TERM_GRACE_SECONDS
+                    )
+                    while process.poll() is None and time.monotonic() < term_deadline:
+                        time.sleep(0.05)
+                    if process.poll() is not None:
+                        return
+                    try:
+                        if root_pidfd >= 0:
+                            _pidfd_send_signal(root_pidfd, signal.SIGKILL)
+                        else:
+                            process.kill()
+                    except ProcessLookupError:
+                        return
+                    except OSError as exc:
+                        raise ReleaseError(
+                            "candidate Worker runtime preflight root cleanup failed"
+                        ) from exc
+                    kill_deadline = (
+                        time.monotonic()
+                        + CANDIDATE_PREFLIGHT_KILL_WAIT_SECONDS
+                    )
+                    while process.poll() is None and time.monotonic() < kill_deadline:
+                        time.sleep(0.05)
+                    if process.poll() is None:
+                        raise ReleaseError(
+                            "candidate Worker runtime preflight root cleanup "
+                            "could not be proven"
+                        )
+
+                def terminate_candidate() -> None:
+                    nonlocal termination_attempted
+                    if termination_attempted or process is None:
+                        return
+                    termination_attempted = True
+                    try:
+                        self._terminate_candidate_preflight_process(
+                            process,
+                            identities,
+                            baseline_children,
+                            broker_governed=broker_governed,
+                        )
+                    except BaseException:
+                        # pidfd remains an exact root handle even if /proc
+                        # becomes unreadable during containment.
+                        terminate_root_handle()
+                        raise
+
+                try:
+                    gate_environment = dict(environment)
+                    gate_environment["NEXPOLY_GPU_EXEC_GATE_FD"] = str(
+                        gate_reader
+                    )
+                    process = subprocess.Popen(
+                        [
+                            "/usr/bin/python3",
+                            "-I",
+                            "-S",
+                            "-c",
+                            CANDIDATE_EXEC_GATE_PROGRAM,
+                            "--",
+                            *command,
+                        ],
+                        cwd=self.candidate_dir,
+                        env=gate_environment,
+                        stdout=output_writer,
+                        stderr=subprocess.DEVNULL,
+                        pass_fds=(gate_reader,),
+                        start_new_session=True,
+                    )
+                    os.close(output_writer)
+                    output_writer = -1
+                    os.close(gate_reader)
+                    gate_reader = -1
+
+                    root_pidfd = _pidfd_open(process.pid)
+                    root = _read_process_identity(process.pid)
+                    if root is None:
+                        raise ReleaseError(
+                            "candidate Worker runtime preflight root exited before containment"
+                        )
+                    identities[root.pid] = root
+
+                    # Do not release candidate code into a signal/deadline
+                    # that became pending while its pidfd identity was being
+                    # established.  The closed gate lets the common finalizer
+                    # contain it without any runtime import or CUDA work.
+                    if pending_signal() is not None:
+                        raise ReleaseError(
+                            "candidate Worker runtime preflight was interrupted safely"
+                        )
+                    if time.monotonic() >= deadline:
+                        raise subprocess.TimeoutExpired(command, timeout_seconds)
+
+                    os.write(gate_writer, b"1")
+                    gate_opened = True
+                    os.close(gate_writer)
+                    gate_writer = -1
+
+                    while True:
+                        current_root = _read_process_identity(process.pid)
+                        if current_root is not None:
+                            identities.setdefault(current_root.pid, current_root)
+                        _adopt_candidate_children(identities, baseline_children)
+
+                        if pending_signal() is not None:
+                            terminate_candidate()
+                            raise ReleaseError(
+                                "candidate Worker runtime preflight was interrupted safely"
+                            )
+
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            terminate_candidate()
+                            raise subprocess.TimeoutExpired(command, timeout_seconds)
+
+                        events = selector.select(timeout=min(0.1, remaining))
+                        for key, _mask in events:
+                            remaining_capacity = (
+                                MAX_RUNTIME_RESPONSE_BYTES + 1 - len(output)
+                            )
+                            chunk = os.read(
+                                key.fd,
+                                max(1, min(64 * 1024, remaining_capacity)),
+                            )
+                            if chunk:
+                                output.extend(chunk)
+                                if len(output) > MAX_RUNTIME_RESPONSE_BYTES:
+                                    terminate_candidate()
+                                    raise ReleaseError(
+                                        "candidate Worker runtime preflight exceeded "
+                                        "the 64 KiB response limit"
+                                    )
+                            else:
+                                selector.unregister(output_reader)
+                                output_eof = True
+
+                        return_code = process.poll()
+                        if return_code is None:
+                            continue
+                        _adopt_candidate_children(identities, baseline_children)
+                        _reap_candidate_zombies(
+                            identities,
+                            excluded_pids=frozenset({process.pid}),
+                        )
+                        if any(
+                            _process_identity_is_live(identity)
+                            for identity in identities.values()
+                            if identity.pid != process.pid
+                        ):
+                            terminate_candidate()
+                            raise ReleaseError(
+                                "candidate Worker runtime preflight left a running descendant"
+                            )
+                        if not output_eof:
+                            # All verified writers have exited, so the bounded
+                            # pipe reports EOF without further output growth.
+                            continue
+                        return subprocess.CompletedProcess(
+                            args=command,
+                            returncode=return_code,
+                            stdout=bytes(output),
+                            stderr=None,
+                        )
+                except BaseException as original_error:
+                    if gate_writer >= 0:
+                        os.close(gate_writer)
+                        gate_writer = -1
+                    if process is not None:
+                        try:
+                            if not gate_opened:
+                                # Closing the gate prevents candidate code from
+                                # ever executing; the isolated gate exits 126.
+                                try:
+                                    process.wait(timeout=2.0)
+                                except subprocess.TimeoutExpired:
+                                    terminate_root_handle()
+                            else:
+                                terminate_candidate()
+                            _adopt_candidate_children(
+                                identities,
+                                baseline_children,
+                            )
+                            process.poll()
+                            _reap_candidate_zombies(
+                                identities,
+                                excluded_pids=frozenset({process.pid}),
+                            )
+                        except BaseException as cleanup_error:
+                            raise cleanup_error from original_error
+                    raise
+                finally:
+                    if root_pidfd >= 0:
+                        os.close(root_pidfd)
+                    if process is not None:
+                        process.poll()
+                    _reap_candidate_zombies(
+                        identities,
+                        excluded_pids=(
+                            frozenset({process.pid})
+                            if process is not None
+                            else frozenset()
+                        ),
+                    )
+        finally:
+            if selector is not None:
+                selector.close()
+            for descriptor in (
+                output_reader,
+                output_writer,
+                gate_reader,
+                gate_writer,
+            ):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+
+    def run_candidate_runtime_preflight(
+        self,
+        environment: dict[str, str],
+    ) -> dict[str, Any]:
+        """Prove candidate Transport readiness before Docker/DB/runtime changes."""
+
+        if not self.deploy_transport_required:
+            return {"required": False}
+        scratch_parent = self.ops / "state" / "candidate-preflight"
+        scratch_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        metadata = scratch_parent.lstat()
+        if (
+            scratch_parent.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise ReleaseError("candidate preflight scratch parent is unsafe")
+        preflight_job_root = Path(
+            tempfile.mkdtemp(prefix=f"{self.sha}-", dir=scratch_parent)
+        )
+        os.chmod(preflight_job_root, 0o700)
+        try:
+            return self._run_candidate_runtime_preflight_with_scratch(
+                environment,
+                preflight_job_root,
+            )
+        finally:
+            shutil.rmtree(preflight_job_root, ignore_errors=False)
+
+    def _run_candidate_runtime_preflight_with_scratch(
+        self,
+        environment: dict[str, str],
+        preflight_job_root: Path,
+    ) -> dict[str, Any]:
+        candidate_environment = self.candidate_worker_environment(
+            environment,
+            preflight_job_root=preflight_job_root,
+        )
+        broker_enabled = normalized_deploy_boolean(
+            self.worker_values.get("MONOMER_MD_GPU_BROKER_ENABLED", "false"),
+            "MONOMER_MD_GPU_BROKER_ENABLED",
+        )
+        if not broker_enabled:
+            self.assert_direct_transport_gpu_idle(candidate_environment)
+
+        raw_timeout = self.worker_values.get(
+            "MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS",
+            "30",
+        )
+        try:
+            probe_timeout = int(raw_timeout)
+        except ValueError as exc:
+            raise ReleaseError(
+                "MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS must be an integer"
+            ) from exc
+        if probe_timeout < 1 or probe_timeout > 30:
+            raise ReleaseError(
+                "MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS must be between 1 and 30"
+            )
+        command = [
+            str(self.candidate_dir / "worker-venv" / "bin" / "python"),
+            "-m",
+            "workers.monomer_md_worker.app.runtime_preflight",
+            "--require-transport-ready",
+        ]
+        try:
+            completed = self._run_candidate_preflight_process(
+                command,
+                candidate_environment,
+                timeout_seconds=(
+                    probe_timeout
+                    + CANDIDATE_PREFLIGHT_INTERNAL_CLEANUP_ALLOWANCE_SECONDS
+                ),
+                broker_governed=broker_enabled,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ReleaseError("candidate Worker runtime preflight timed out") from exc
+        except OSError as exc:
+            raise ReleaseError("candidate Worker runtime preflight could not start") from exc
+        if completed.returncode != 0:
+            raise ReleaseError("candidate Worker runtime preflight failed")
+        payload = decode_bounded_json_object(
+            completed.stdout,
+            "candidate Worker runtime preflight",
+        )
+        if not candidate_preflight_transport_is_strict_ready(payload):
+            raise ReleaseError(
+                "candidate Worker runtime preflight did not satisfy strict Transport readiness"
+            )
+        if not broker_enabled:
+            # Close the direct-mode TOCTOU window. Any external process that
+            # appeared while CUDA smoke ran invalidates the whole preflight.
+            self.assert_direct_transport_gpu_idle(candidate_environment)
+        print(
+            "[release-controller] candidate Worker preflight: "
+            "runtime_ready=true transport_ready=true"
+        )
+        return {
+            "required": True,
+            "runtime_ready": True,
+            "transport_ready": True,
+            "broker_governed": broker_enabled,
+        }
 
     def verify_image_labels(self, environment: dict[str, str]) -> None:
         for role, image in self.document["images"].items():
@@ -3192,16 +5624,23 @@ class ReleaseController:
             ),
             env=environment,
         )
-        for raw_url in environment.get("NEXPOLY_HEALTH_URLS", "http://127.0.0.1:9000/health").split(","):
-            url = raw_url.strip()
-            if not url:
-                continue
-            try:
-                with urllib.request.urlopen(url, timeout=20) as response:
-                    if response.status < 200 or response.status >= 300:
-                        raise ReleaseError(f"current health endpoint returned HTTP {response.status}: {url}")
-            except OSError as exc:
-                raise ReleaseError(f"current runtime is unhealthy: {url}: {exc}") from exc
+        # This is a fixed production endpoint, not a caller-controlled list.
+        # Disable proxies and redirects just as the candidate/post-switch gates
+        # do, so the legacy-current proof cannot be satisfied off-host.
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _NoRedirectHandler(),
+        )
+        try:
+            with opener.open(PRODUCTION_HEALTH_URL, timeout=20) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise ReleaseError(
+                        "current health endpoint returned a non-success status"
+                    )
+        except ReleaseError:
+            raise
+        except OSError as exc:
+            raise ReleaseError("current production runtime is unhealthy") from exc
         for service, role in (("backend", "backend"), ("nginx", "web")):
             container = self.resolve_single_running_container(previous, service, environment)
             configured_image = subprocess.run(
@@ -3214,7 +5653,15 @@ class ReleaseController:
         if release_uses_worker(manifest):
             worker = self.worker_request(environment, "GET", "/health")
             self.assert_worker_runtime_identity(worker, previous)
-            if worker.get("status") != "ok" or worker.get("runtime_ready") is not True:
+            healthy = (
+                worker.get("status") == "ok"
+                and worker.get("runtime_ready") is True
+            )
+            strict_transport_repair = (
+                self.deploy_transport_required
+                and current_worker_allows_transport_repair(worker)
+            )
+            if not healthy and not strict_transport_repair:
                 raise ReleaseError("current monomer MD Worker is unhealthy")
 
     def drain(self, environment: dict[str, str], enabled: bool) -> None:
@@ -3231,13 +5678,14 @@ class ReleaseController:
         self.run(self.compose(release, "run", "--rm", "--no-deps", "postgres-init", *cli), env=environment)
 
     def worker_request(self, environment: dict[str, str], method: str, path: str) -> dict[str, Any]:
-        socket_path = environment.get(
-            "MONOMER_MD_WORKER_UDS",
-            str(self.ops / "state" / "monomer-md-worker-socket" / "worker.sock"),
+        socket_path = str(
+            self.ops / "state" / "monomer-md-worker-socket" / "worker.sock"
         )
         completed = subprocess.run(
             [
-                "curl", "--fail", "--silent", "--show-error", "--max-time", "30",
+                "curl", "--disable", "--fail", "--silent", "--show-error",
+                "--noproxy", "*", "--proto", "=http", "--max-time", "30",
+                "--max-filesize", str(MAX_RUNTIME_RESPONSE_BYTES),
                 "--request", method, "--unix-socket", socket_path,
                 f"http://monomer-md-worker{path}",
             ],
@@ -3250,13 +5698,10 @@ class ReleaseController:
         )
         if completed.returncode != 0:
             raise ReleaseError(f"monomer MD worker {path} request failed")
-        try:
-            payload = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise ReleaseError(f"monomer MD worker {path} returned invalid JSON") from exc
-        if not isinstance(payload, dict):
-            raise ReleaseError(f"monomer MD worker {path} returned an invalid shape")
-        return payload
+        return decode_bounded_json_object(
+            completed.stdout.encode("utf-8"),
+            f"monomer MD worker {path}",
+        )
 
     def wait_for_worker_health(
         self,
@@ -3286,9 +5731,13 @@ class ReleaseController:
                     and worker.get("default_steps") == 300
                     and worker.get("max_steps") == 300
                     and instance_changed
+                    and (
+                        not self.deploy_transport_required
+                        or worker_transport_is_strict_ready(worker)
+                    )
                 ):
                     return worker
-                last_error = "worker reported a degraded runtime"
+                last_error = "worker did not satisfy the required readiness contract"
             except ReleaseError as exc:
                 last_error = str(exc)
             if time.monotonic() >= deadline:
@@ -3365,6 +5814,34 @@ class ReleaseController:
         ):
             raise ReleaseError("monomer MD worker returned an invalid drain response")
         return {"supported": True, "active_jobs": drained_active, "worker_instance_id": instance_id}
+
+    def wait_for_worker_idle(self, environment: dict[str, str]) -> dict[str, Any]:
+        """Wait for an already-drained Worker to release its execution slot."""
+
+        timeout = int(environment.get("NEXPOLY_DRAIN_TIMEOUT_SECONDS", "1800"))
+        if timeout < 1 or timeout > 3600:
+            raise ReleaseError("NEXPOLY_DRAIN_TIMEOUT_SECONDS must be between 1 and 3600")
+        deadline = time.monotonic() + timeout
+        while True:
+            health = self.worker_request(environment, "GET", "/health")
+            active_jobs = health.get("active_jobs")
+            if (
+                isinstance(active_jobs, bool)
+                or not isinstance(active_jobs, int)
+                or active_jobs < 0
+            ):
+                raise ReleaseError(
+                    "monomer MD worker did not report a valid active job count"
+                )
+            if health.get("draining") is not True or health.get("accepting_jobs") is not False:
+                raise ReleaseError("monomer MD worker did not remain in drain mode")
+            if active_jobs == 0:
+                return health
+            if time.monotonic() >= deadline:
+                raise DeploymentDeferred(
+                    "deployment deferred: monomer MD Worker still has active jobs"
+                )
+            time.sleep(min(5, max(1, deadline - time.monotonic())))
 
     def resume_worker(self, environment: dict[str, str]) -> None:
         resumed = self.worker_request(environment, "POST", "/resume")
@@ -3777,12 +6254,14 @@ class ReleaseController:
     def public_web_static_smoke(self, environment: dict[str, str]) -> None:
         """Verify the public Web root and one asset referenced by that exact HTML."""
 
-        web_base = environment.get(
-            "NEXPOLY_WEB_BASE_URL",
-            "http://127.0.0.1:9000",
-        ).rstrip("/")
+        del environment  # Endpoints are a fixed production release contract.
+        web_base = PRODUCTION_WEB_BASE_URL
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _NoRedirectHandler(),
+        )
         try:
-            with urllib.request.urlopen(f"{web_base}/", timeout=20) as response:
+            with opener.open(f"{web_base}/", timeout=20) as response:
                 html = response.read(2 * 1024 * 1024)
                 content_type = response.headers.get_content_type()
             if content_type != "text/html" or b'<div id="root">' not in html:
@@ -3791,12 +6270,45 @@ class ReleaseController:
             if not assets:
                 raise ReleaseError("web root did not reference a versioned static asset")
             asset_path = assets[0].decode("utf-8", "strict")
-            with urllib.request.urlopen(f"{web_base}{asset_path}", timeout=20) as response:
+            with opener.open(f"{web_base}{asset_path}", timeout=20) as response:
                 payload = response.read(1024)
                 if response.status != 200 or not payload:
                     raise ReleaseError("versioned static asset smoke failed")
         except (OSError, UnicodeError) as exc:
             raise ReleaseError(f"web static-resource smoke failed: {exc}") from exc
+
+    def fetch_local_json_object(
+        self,
+        url: str,
+        *,
+        label: str,
+        timeout: int = 30,
+    ) -> dict[str, Any]:
+        """Fetch one loopback-only bounded JSON object without logging its body."""
+
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "http" or parsed.hostname not in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }:
+            raise ReleaseError(f"{label} must use a loopback HTTP URL")
+        # Do not let inherited HTTP(S)_PROXY settings turn a nominally local
+        # readiness check into an external request carrying runtime metadata.
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _NoRedirectHandler(),
+        )
+        try:
+            with opener.open(url, timeout=timeout) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise ReleaseError(f"{label} returned a non-success HTTP status")
+                payload = response.read(MAX_RUNTIME_RESPONSE_BYTES + 1)
+        except ReleaseError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise ReleaseError(f"{label} request failed") from exc
+        return decode_bounded_json_object(payload, label)
 
     def healthcheck(self, environment: dict[str, str]) -> None:
         self.run(
@@ -3811,16 +6323,16 @@ class ReleaseController:
         health_timeout = int(environment.get("NEXPOLY_RUNTIME_HEALTH_TIMEOUT_SECONDS", "180"))
         if health_timeout < 1 or health_timeout > 600:
             raise ReleaseError("NEXPOLY_RUNTIME_HEALTH_TIMEOUT_SECONDS must be between 1 and 600")
-        urls = environment.get("NEXPOLY_HEALTH_URLS", "http://127.0.0.1:9000/health").split(",")
-        for raw_url in urls:
-            url = raw_url.strip()
-            if not url:
-                continue
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _NoRedirectHandler(),
+        )
+        for url in (PRODUCTION_HEALTH_URL,):
             deadline = time.monotonic() + health_timeout
             last_error = "no response"
             while True:
                 try:
-                    with urllib.request.urlopen(url, timeout=20) as response:
+                    with opener.open(url, timeout=20) as response:
                         if 200 <= response.status < 300:
                             break
                         last_error = f"HTTP {response.status}"
@@ -3832,19 +6344,12 @@ class ReleaseController:
 
         self.public_web_static_smoke(environment)
 
-        web_base = environment.get("NEXPOLY_WEB_BASE_URL", "http://127.0.0.1:9000").rstrip("/")
-
         polytao_enabled = environment.get("POLYTAO_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
         if polytao_enabled:
-            polytao_url = environment.get(
-                "NEXPOLY_POLYTAO_STATUS_URL",
-                f"{web_base}/api/v1/conditional-generation/polytao/status",
+            status = self.fetch_local_json_object(
+                PRODUCTION_POLYTAO_STATUS_URL,
+                label="PolyTAO status",
             )
-            try:
-                with urllib.request.urlopen(polytao_url, timeout=30) as response:
-                    status = json.load(response)
-            except (OSError, ValueError) as exc:
-                raise ReleaseError(f"PolyTAO status smoke failed: {exc}") from exc
             if not isinstance(status, dict) or status.get("enabled") is not True or status.get("available") is not True:
                 raise ReleaseError("PolyTAO is enabled but did not report an available runtime")
 
@@ -3863,24 +6368,40 @@ class ReleaseController:
                     previous_instance_id=self.worker_previous_instance,
                 )
 
-            monomer_status_url = environment.get(
-                "NEXPOLY_MONOMER_MD_STATUS_URL",
-                f"{web_base}/api/v1/monomer-md/status",
+            monomer_status = self.fetch_local_json_object(
+                PRODUCTION_MONOMER_STATUS_URL,
+                label="monomer MD status",
             )
-            try:
-                with urllib.request.urlopen(monomer_status_url, timeout=30) as response:
-                    monomer_status = json.load(response)
-            except (OSError, ValueError) as exc:
-                raise ReleaseError(f"monomer MD status smoke failed: {exc}") from exc
-            if not isinstance(monomer_status, dict) or monomer_status.get("default_steps") != 300:
+            if monomer_status.get("default_steps") != 300:
                 raise ReleaseError("monomer MD backend did not report the 300-step contract")
             if monomer_status.get("available") is not True:
                 raise ReleaseError("monomer MD backend did not report an available runtime")
+            if (
+                self.deploy_transport_required
+                and not worker_transport_is_strict_ready(monomer_status)
+            ):
+                raise ReleaseError(
+                    "monomer MD backend status did not satisfy strict Transport readiness"
+                )
             if self.worker_restart_deferred:
                 if monomer_status.get("draining") is not True or monomer_status.get("can_submit") is not False:
                     raise ReleaseError("monomer MD backend did not report deferred drain state")
             elif monomer_status.get("can_submit") is not True:
                 raise ReleaseError("monomer MD backend was not ready for smoke submission")
+
+            if self.deploy_transport_required:
+                protocol_catalog = self.fetch_local_json_object(
+                    PRODUCTION_MONOMER_PROTOCOLS_URL,
+                    label="monomer MD protocols",
+                )
+                if (
+                    protocol_catalog.get("enabled") is not True
+                    or protocol_catalog.get("available") is not True
+                    or not protocol_catalog_transport_is_strict_ready(protocol_catalog)
+                ):
+                    raise ReleaseError(
+                        "monomer MD protocol catalog did not satisfy strict Transport readiness"
+                    )
 
         self.verify_runtime_images(environment)
         self.verify_postgres_loopback(self.release_dir, environment)
@@ -3894,7 +6415,7 @@ class ReleaseController:
         fsync_directory(self.ops)
 
     def clear_failed_bootstrap_release(self) -> None:
-        """Return a rolled-back first deployment to a clean retryable state."""
+        """Detach a rolled-back bootstrap without deleting a READY release."""
 
         current = self.ops / "current"
         if current.exists() or current.is_symlink():
@@ -3911,7 +6432,14 @@ class ReleaseController:
         if self.release_dir.exists() or self.release_dir.is_symlink():
             if not self.release_dir.is_dir() or self.release_dir.is_symlink():
                 raise ReleaseError("failed bootstrap release path is not a safe directory")
-            shutil.rmtree(self.release_dir)
+            ready = self.release_dir / PROVISIONING_READY_NAME
+            if ready.exists() or ready.is_symlink():
+                if not ready.is_file() or ready.is_symlink():
+                    raise ReleaseError(
+                        "failed bootstrap release has an ambiguous READY record"
+                    )
+                return
+            self._remove_owned_incomplete_provisioning(self.release_dir)
 
     def switch_asset_pointer(self, target: Path) -> None:
         resolved, _, _ = inspect_asset_release(target)
@@ -4000,7 +6528,7 @@ class ReleaseController:
         self.validate_current_runtime(rollback_env)
 
     def cleanup_failed_release(self) -> None:
-        """Remove a rolled-back target so the exact same SHA can be retried."""
+        """Retain a READY rolled-back target so deploy can retry without pip."""
 
         if not self.release_dir.exists() and not self.release_dir.is_symlink():
             return
@@ -4013,33 +6541,19 @@ class ReleaseController:
                     raise ReleaseError("refusing to delete the release referenced by ops/current")
             except OSError as exc:
                 raise ReleaseError("cannot resolve ops/current while cleaning a failed release") from exc
-        shutil.rmtree(self.release_dir)
+        ready = self.release_dir / PROVISIONING_READY_NAME
+        if ready.exists() or ready.is_symlink():
+            if not ready.is_file() or ready.is_symlink():
+                raise ReleaseError("failed release has an ambiguous READY record")
+            return
+        self._remove_owned_incomplete_provisioning(self.release_dir)
 
     def cleanup_unrecorded_staging(self) -> None:
-        """Remove a pre-mutation staging tree left before the first marker write.
-
-        Bundle extraction, offline venv creation, image pull, label checks, and
-        the first main-SHA check do not change the running release.  A hard
-        interruption in that preparation window can therefore leave only the
-        target ``<sha>.staging`` directory.  With no deployment marker there is
-        no database/runtime transition to infer or roll back, so retry may
-        safely remove that one controlled directory while holding deploy.lock.
-        """
+        """Remove only a source/manifest/token-owned incomplete provisioning."""
 
         if not self.staging.exists() and not self.staging.is_symlink():
             return
-        if not self.staging.is_dir() or self.staging.is_symlink():
-            raise ReleaseError("unrecorded staging path is not a safe directory")
-        current = self.ops / "current"
-        if current.exists() or current.is_symlink():
-            try:
-                if current.resolve(strict=True) == self.staging.resolve(strict=True):
-                    raise ReleaseError("ops/current unexpectedly references unrecorded staging")
-            except OSError as exc:
-                raise ReleaseError(
-                    "cannot resolve ops/current while cleaning unrecorded staging"
-                ) from exc
-        shutil.rmtree(self.staging)
+        self._remove_owned_incomplete_provisioning(self.staging)
 
     def marker_backup(self, marker: dict[str, Any]) -> Path:
         raw_path = marker.get("database_backup")
@@ -4075,6 +6589,55 @@ class ReleaseController:
         self.bootstrap = marker.get("bootstrap") is True
         environment = self.environment()
 
+        # Recovery is an execution path, not a cleanup shortcut.  Re-establish
+        # the exact immutable candidate identity before running any target
+        # Compose command, Worker program, drain operation, or database action.
+        # A staging tree is never executable and is deliberately left for
+        # explicit owner-validated cleanup.
+        if self.staging.exists() or self.staging.is_symlink():
+            raise ReleaseError(
+                "interrupted deployment has an unfinished staging directory"
+            )
+        try:
+            release_metadata = self.release_dir.lstat()
+        except OSError as exc:
+            raise ReleaseError(
+                "interrupted deployment target release is unavailable"
+            ) from exc
+        if (
+            not stat.S_ISDIR(release_metadata.st_mode)
+            or self.release_dir.is_symlink()
+            or release_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(release_metadata.st_mode) != 0o700
+        ):
+            raise ReleaseError("interrupted deployment target release is unsafe")
+        ready_digest = require_digest(
+            str(marker.get("provisioning_ready_sha256", "")),
+            "interrupted deployment provisioning READY digest",
+        )
+        ready_path = self.release_dir / PROVISIONING_READY_NAME
+        try:
+            ready_metadata = ready_path.lstat()
+        except OSError as exc:
+            raise ReleaseError(
+                "interrupted deployment provisioning READY record is missing"
+            ) from exc
+        if (
+            not stat.S_ISREG(ready_metadata.st_mode)
+            or ready_path.is_symlink()
+            or ready_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(ready_metadata.st_mode) != 0o600
+            or sha256_file(ready_path) != ready_digest
+        ):
+            raise ReleaseError(
+                "interrupted deployment provisioning READY digest does not match"
+            )
+        self._validate_provisioned_ready(
+            environment,
+            require_bundle_artifact=False,
+        )
+        self.candidate_dir = self.release_dir
+
         # A verified target whose durable release state is already committed
         # only needs its admission gate resumed.  Re-running a database restore
         # here would discard writes accepted after a previous successful resume.
@@ -4094,13 +6657,8 @@ class ReleaseController:
             # interrupted response.  Clear it only when it is still owned by
             # this bootstrap SHA; a foreign maintenance drain stays untouched.
             if marker.get("drain_attempted") is True:
-                self.candidate_dir = (
-                    self.release_dir if self.release_dir.is_dir() else self.staging
-                )
                 self.drain(environment, False)
             self.clear_failed_bootstrap_release()
-            if self.staging.exists():
-                shutil.rmtree(self.staging)
             durable_unlink(self.in_progress_path)
             return
 
@@ -4111,11 +6669,6 @@ class ReleaseController:
         previous_release = self.ops / "releases" / previous_sha
         if not previous_release.is_dir() or previous_release.is_symlink():
             raise ReleaseError("interrupted deployment previous release is unavailable")
-        target_runtime = self.release_dir if self.release_dir.is_dir() else self.staging
-        if not target_runtime.is_dir() or target_runtime.is_symlink():
-            raise ReleaseError("interrupted deployment target release is unavailable")
-        self.candidate_dir = target_runtime
-
         data_change_started = marker.get("data_change_started") is True
         if data_change_started:
             self.backup_path = self.marker_backup(marker)
@@ -4135,7 +6688,7 @@ class ReleaseController:
             self.document["current_byteff2_commit"] = previous_byteff2_commit
             environment["NEXPOLY_ASSET_MANIFEST_DIGEST"] = previous_digest
             self.run(
-                self.compose(target_runtime, "stop", "nginx", "backend"),
+                self.compose(self.release_dir, "stop", "nginx", "backend"),
                 env=environment,
             )
             self.run(
@@ -4166,9 +6719,196 @@ class ReleaseController:
             self.resume_worker(environment)
         self.drain(environment, False)
         self.cleanup_failed_release()
-        if self.staging.exists():
-            shutil.rmtree(self.staging)
         durable_unlink(self.in_progress_path)
+
+    def _remove_owned_incomplete_provisioning(self, candidate: Path) -> None:
+        if not candidate.exists() and not candidate.is_symlink():
+            return
+        if not candidate.is_dir() or candidate.is_symlink():
+            raise ReleaseError("incomplete provisioning path is unsafe")
+        try:
+            releases_root = (self.ops / "releases").resolve(strict=True)
+            resolved_candidate = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise ReleaseError("incomplete provisioning path cannot be resolved") from exc
+        if (
+            resolved_candidate.parent != releases_root
+            or candidate.name not in {self.sha, f"{self.sha}.staging"}
+        ):
+            raise ReleaseError("incomplete provisioning path is outside its release slot")
+        if (candidate / PROVISIONING_READY_NAME).exists() or (
+            candidate / PROVISIONING_READY_NAME
+        ).is_symlink():
+            raise ReleaseError("refusing to remove a READY or ambiguous provisioned release")
+        self._provisioning_owner(candidate)
+        current = self.ops / "current"
+        if current.exists() or current.is_symlink():
+            try:
+                if current.resolve(strict=True) == candidate.resolve(strict=True):
+                    raise ReleaseError(
+                        "refusing to remove provisioning referenced by ops/current"
+                    )
+            except OSError as exc:
+                raise ReleaseError(
+                    "cannot resolve ops/current while cleaning provisioning"
+                ) from exc
+        tombstone = candidate.parent / (
+            f".{self.sha}.discard-{secrets.token_hex(16)}"
+        )
+        rename_noreplace(candidate, tombstone)
+        fsync_directory(candidate.parent)
+        self._remove_owned_provisioning_tombstone(tombstone)
+
+    def _remove_owned_provisioning_tombstone(self, tombstone: Path) -> None:
+        """Finish deletion while retaining owner proof until the final unlink."""
+
+        prefix = f".{self.sha}.discard-"
+        try:
+            releases_root = (self.ops / "releases").resolve(strict=True)
+            resolved = tombstone.resolve(strict=True)
+        except OSError as exc:
+            raise ReleaseError("provisioning tombstone is unavailable") from exc
+        if (
+            resolved.parent != releases_root
+            or not tombstone.name.startswith(prefix)
+            or not tombstone.is_dir()
+            or tombstone.is_symlink()
+        ):
+            raise ReleaseError("provisioning tombstone is unsafe")
+        ready = tombstone / PROVISIONING_READY_NAME
+        if ready.exists() or ready.is_symlink():
+            raise ReleaseError("provisioning tombstone unexpectedly contains READY")
+        self._provisioning_owner(tombstone)
+        owner = tombstone / PROVISIONING_OWNER_NAME
+        for child in sorted(tombstone.iterdir(), key=lambda item: item.name):
+            if child.name == PROVISIONING_OWNER_NAME:
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        owner.unlink()
+        tombstone.rmdir()
+        fsync_directory(tombstone.parent)
+
+    def _cleanup_owned_provisioning_tombstones(self) -> None:
+        releases = self.ops / "releases"
+        prefix = f".{self.sha}.discard-"
+        for candidate in sorted(releases.iterdir(), key=lambda item: item.name):
+            if candidate.name.startswith(prefix):
+                self._remove_owned_provisioning_tombstone(candidate)
+
+    def provision(self) -> dict[str, Any]:
+        """Explicitly build a per-SHA Worker venv without touching runtime state."""
+
+        self.ensure_root()
+        plan = {**self.plan(), "action": "provision-release"}
+        if not self.apply:
+            return plan
+        os.umask(0o077)
+        with self.deployment_lock():
+            if self.in_progress_path.exists() or self.in_progress_path.is_symlink():
+                if (
+                    not self.in_progress_path.is_file()
+                    or self.in_progress_path.is_symlink()
+                ):
+                    raise ReleaseError("interrupted deployment marker is unsafe")
+                interrupted = load_manifest(self.in_progress_path)
+                interrupted_sha = require_sha(
+                    str(interrupted.get("source_sha", "")),
+                    "interrupted release SHA",
+                )
+                interrupted_manifest_digest = require_digest(
+                    str(interrupted.get("release_manifest_sha256", "")),
+                    "interrupted release manifest digest",
+                )
+                interrupted_ready_digest = require_digest(
+                    str(interrupted.get("provisioning_ready_sha256", "")),
+                    "interrupted deployment provisioning READY digest",
+                )
+                if (
+                    interrupted_sha != self.sha
+                    or interrupted_manifest_digest != sha256_file(self.manifest_path)
+                    or (interrupted.get("bootstrap") is True)
+                    != (self.mode == "bootstrap")
+                    or interrupted.get("phase")
+                    not in {"prepared", "db-changed", "switched", "verified"}
+                ):
+                    raise ReleaseError(
+                        "release provisioning is forbidden during a different "
+                        "unfinished deployment"
+                    )
+                environment = self.environment()
+                self.prepare_staging(environment)
+                ready_path = self.release_dir / PROVISIONING_READY_NAME
+                if sha256_file(ready_path) != interrupted_ready_digest:
+                    raise ReleaseError(
+                        "interrupted deployment provisioning READY digest does not match"
+                    )
+                return {
+                    **plan,
+                    "status": "interrupted-ready",
+                    "release": str(self.release_dir),
+                }
+            environment = self.environment()
+            self._cleanup_owned_provisioning_tombstones()
+            if self.release_dir.exists() or self.release_dir.is_symlink():
+                if (self.release_dir / PROVISIONING_READY_NAME).is_file():
+                    self.prepare_staging(environment)
+                    self.assert_still_current_main(environment)
+                    return {
+                        **plan,
+                        "status": "already-ready",
+                        "release": str(self.release_dir),
+                    }
+                self._remove_owned_incomplete_provisioning(self.release_dir)
+            if self.staging.exists() or self.staging.is_symlink():
+                self._remove_owned_incomplete_provisioning(self.staging)
+
+            created_candidate = False
+            try:
+                created_candidate = True
+                self._provision_staging(environment)
+                self.assert_still_current_main(environment)
+                rename_noreplace(self.staging, self.release_dir)
+                fsync_directory(self.release_dir.parent)
+                self.candidate_dir = self.release_dir
+                # Create the venv only after the source tree is at its final
+                # immutable path.  Console-script shebangs, pyvenv.cfg, and
+                # bytecode filenames must never capture a disappearing
+                # <sha>.staging prefix.
+                self.prepare_worker(environment)
+                evidence = self._provisioning_evidence(
+                    self.release_dir,
+                    environment,
+                )
+                self.assert_still_current_main(environment)
+                fsync_tree(self.release_dir)
+                atomic_json(
+                    self.release_dir / PROVISIONING_READY_NAME,
+                    {**evidence, "provisioned_at": utc_now()},
+                )
+                # Recompute from disk after READY is durable; deploy performs
+                # this same validation and contains no package installation.
+                self.prepare_staging(environment)
+                return {
+                    **plan,
+                    "status": "ready",
+                    "release": str(self.release_dir),
+                    "venv_prefix": evidence["venv_prefix"],
+                }
+            except BaseException:
+                if created_candidate:
+                    for candidate in (self.staging, self.release_dir):
+                        if not (candidate.exists() or candidate.is_symlink()):
+                            continue
+                        ready = candidate / PROVISIONING_READY_NAME
+                        if ready.exists() or ready.is_symlink():
+                            # READY (including an ambiguous symlink) is never
+                            # removed by an exception path.
+                            continue
+                        self._remove_owned_incomplete_provisioning(candidate)
+                raise
 
     def deploy(self) -> dict[str, Any]:
         self.ensure_root()
@@ -4176,7 +6916,9 @@ class ReleaseController:
             return self.plan()
         os.umask(0o077)
         with self.deployment_lock():
-            if self.in_progress_path.exists():
+            if self.in_progress_path.exists() or self.in_progress_path.is_symlink():
+                if not self.in_progress_path.is_file() or self.in_progress_path.is_symlink():
+                    raise ReleaseError("interrupted deployment marker is unsafe")
                 interrupted = load_manifest(self.in_progress_path)
                 interrupted_sha = require_sha(
                     str(interrupted.get("source_sha", "")),
@@ -4184,10 +6926,24 @@ class ReleaseController:
                 )
                 interrupted_release = self.ops / "releases" / interrupted_sha
                 interrupted_staging = self.ops / "releases" / f"{interrupted_sha}.staging"
-                interrupted_root = (
-                    interrupted_release if interrupted_release.is_dir() else interrupted_staging
-                )
-                interrupted_manifest = interrupted_root / "release-manifest.json"
+                if interrupted_staging.exists() or interrupted_staging.is_symlink():
+                    raise ReleaseError(
+                        "interrupted deployment has an unfinished staging directory"
+                    )
+                try:
+                    interrupted_release_metadata = interrupted_release.lstat()
+                except OSError as exc:
+                    raise ReleaseError(
+                        "interrupted deployment target release is unavailable"
+                    ) from exc
+                if (
+                    not stat.S_ISDIR(interrupted_release_metadata.st_mode)
+                    or interrupted_release.is_symlink()
+                    or interrupted_release_metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(interrupted_release_metadata.st_mode) != 0o700
+                ):
+                    raise ReleaseError("interrupted deployment target release is unsafe")
+                interrupted_manifest = interrupted_release / "release-manifest.json"
                 if (
                     not interrupted_manifest.is_file()
                     or interrupted_manifest.is_symlink()
@@ -4196,6 +6952,19 @@ class ReleaseController:
                 ):
                     raise ReleaseError(
                         "interrupted deployment lacks a matching verified release manifest"
+                    )
+                interrupted_ready = interrupted_release / PROVISIONING_READY_NAME
+                interrupted_ready_digest = require_digest(
+                    str(interrupted.get("provisioning_ready_sha256", "")),
+                    "interrupted deployment provisioning READY digest",
+                )
+                if (
+                    not interrupted_ready.is_file()
+                    or interrupted_ready.is_symlink()
+                    or sha256_file(interrupted_ready) != interrupted_ready_digest
+                ):
+                    raise ReleaseError(
+                        "interrupted deployment lacks a matching provisioning READY record"
                     )
                 recovery = ReleaseController(
                     self.root,
@@ -4211,7 +6980,10 @@ class ReleaseController:
                         and recovered_state.get("status") == "success"
                     ):
                         return recovered_state
-            self.cleanup_unrecorded_staging()
+            if self.staging.exists() or self.staging.is_symlink():
+                raise ReleaseError(
+                    "unfinished release provisioning exists; rerun provision-release first"
+                )
             environment = self.environment()
             code_migration_mode = "expand"
             if self.state_path.exists():
@@ -4293,6 +7065,43 @@ class ReleaseController:
             actual_migrations: list[str] = []
             try:
                 self.prepare_staging(environment)
+                self.assert_still_current_main(environment)
+                state["provisioning_ready_sha256"] = sha256_file(
+                    self.release_dir / PROVISIONING_READY_NAME
+                )
+                # The separately provisioned READY tree is immutable,
+                # validated, and freshness-bound. Record its exact digest
+                # before the first Worker/Docker/database mutation.
+                self.write_attempt(state)
+                if self.deploy_transport_required:
+                    if not self.bootstrap:
+                        state["worker_drain_attempted"] = True
+                        self.write_attempt(state)
+                        self.worker_drain_info = self.drain_worker(environment)
+                        idle_health = self.wait_for_worker_idle(environment)
+                        self.worker_drain_info = {
+                            **self.worker_drain_info,
+                            "active_jobs": idle_health["active_jobs"],
+                        }
+                        state["worker_drain"] = self.worker_drain_info
+                        self.write_attempt(state)
+                    state["transport_preflight"] = self.run_candidate_runtime_preflight(
+                        environment
+                    )
+                    # Candidate code ran under the deploy user.  Re-seal the
+                    # complete payload before the first candidate Compose
+                    # command so a malicious/broken .pth or probe cannot alter
+                    # what Docker will consume.
+                    self.prepare_staging(environment)
+                    if (
+                        sha256_file(self.release_dir / PROVISIONING_READY_NAME)
+                        != state["provisioning_ready_sha256"]
+                    ):
+                        raise ReleaseError(
+                            "candidate provisioning READY record changed during preflight"
+                        )
+                    self.assert_still_current_main(environment)
+                    self.write_attempt(state)
                 self.run(
                     self.compose(
                         self.candidate_dir,
@@ -4306,7 +7115,6 @@ class ReleaseController:
                 )
                 self.verify_image_labels(environment)
                 self.assert_still_current_main(environment)
-                self.write_attempt(state)
                 if self.bootstrap:
                     # The first release must prove the already-running database
                     # is loopback-only before invoking any legacy quiesce hook,
@@ -4345,7 +7153,10 @@ class ReleaseController:
                     self.drain(environment, True)
                     state["drain_enabled"] = True
                     self.write_attempt(state)
-                    if release_uses_worker(self.document):
+                    if (
+                        release_uses_worker(self.document)
+                        and self.worker_drain_info is None
+                    ):
                         state["worker_drain_attempted"] = True
                         self.write_attempt(state)
                         self.worker_drain_info = self.drain_worker(environment)
@@ -4381,6 +7192,16 @@ class ReleaseController:
                 self.refresh_analytics_snapshot(candidate_environment)
                 # Close the workflow/API freshness TOCTOU at the last safe
                 # point before the old runtime is stopped and current moves.
+                # The potentially long drain/migration/rebuild window must not
+                # let a changed candidate escape its provisioning seal.
+                self.prepare_staging(environment)
+                if (
+                    sha256_file(self.release_dir / PROVISIONING_READY_NAME)
+                    != state["provisioning_ready_sha256"]
+                ):
+                    raise ReleaseError(
+                        "candidate provisioning READY record changed during deployment"
+                    )
                 self.assert_still_current_main(environment)
                 state["phase"] = "switched"
                 state["runtime_switch_started"] = True
@@ -4389,10 +7210,6 @@ class ReleaseController:
                     self.compose(self.candidate_dir, "stop", "nginx", "backend"),
                     env=environment,
                 )
-                if self.candidate_dir == self.staging:
-                    self.staging.replace(self.release_dir)
-                    fsync_directory(self.release_dir.parent)
-                    self.candidate_dir = self.release_dir
                 self.switch_current(self.release_dir)
                 state["runtime_switched"] = True
                 self.write_attempt(state)
@@ -4657,8 +7474,12 @@ class ReleaseController:
                     self.cleanup_failed_release()
                 if safe_to_resume:
                     durable_unlink(self.in_progress_path, missing_ok=True)
-                if self.staging.exists() and not self.in_progress_path.exists():
-                    shutil.rmtree(self.staging)
+                if (
+                    (self.staging.exists() or self.staging.is_symlink())
+                    and not self.in_progress_path.exists()
+                    and not self.in_progress_path.is_symlink()
+                ):
+                    self.cleanup_unrecorded_staging()
 
 
 class PolytaoContractMaintenance:
@@ -6405,6 +9226,18 @@ def parser() -> argparse.ArgumentParser:
     deploy.add_argument("--production-root", default=os.environ.get("NEXPOLY_PRODUCTION_ROOT", str(PRODUCTION_ROOT)))
     deploy.add_argument("--apply", action="store_true")
 
+    provision = commands.add_parser(
+        "provision-release",
+        help="explicitly build and seal the target-SHA Worker release before deploy",
+    )
+    provision.add_argument("--manifest", required=True)
+    provision.add_argument("--mode", choices=("auto", "bootstrap"), default="auto")
+    provision.add_argument(
+        "--production-root",
+        default=os.environ.get("NEXPOLY_PRODUCTION_ROOT", str(PRODUCTION_ROOT)),
+    )
+    provision.add_argument("--apply", action="store_true")
+
     contract = commands.add_parser(
         "maintain-contract-0012",
         help="archive, restore-verify, and apply only the checksum-pinned 0012 contract",
@@ -6434,6 +9267,13 @@ def main(argv: list[str] | None = None) -> int:
             document = verify_manifest_command(args)
         elif args.command == "deploy":
             document = ReleaseController(Path(args.production_root), Path(args.manifest), args.mode, args.apply).deploy()
+        elif args.command == "provision-release":
+            document = ReleaseController(
+                Path(args.production_root),
+                Path(args.manifest),
+                args.mode,
+                args.apply,
+            ).provision()
         elif args.command == "maintain-contract-0012":
             document = PolytaoContractMaintenance(
                 Path(args.production_root),

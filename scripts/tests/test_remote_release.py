@@ -32,8 +32,13 @@ class RemoteReleaseTransportTests(unittest.TestCase):
         info = tarfile.TarInfo("./scripts/release_controller.py")
         info.mode = 0o700
         info.size = len(controller)
+        worker_env_helper = b"#!/usr/bin/env python3\n"
+        helper_info = tarfile.TarInfo("./scripts/monomer_worker_env.py")
+        helper_info.mode = 0o700
+        helper_info.size = len(worker_env_helper)
         with tarfile.open(self.bundle, "w:gz") as archive:
             archive.addfile(info, io.BytesIO(controller))
+            archive.addfile(helper_info, io.BytesIO(worker_env_helper))
 
         bundle_bytes = self.bundle.read_bytes()
         self.manifest = self.root / "release-manifest.json"
@@ -102,6 +107,28 @@ class RemoteReleaseTransportTests(unittest.TestCase):
         self.assertEqual(calls.count("ssh"), 2)
         self.assertEqual(calls.count("scp"), 1)
         self.assertNotIn("test-private-key", "\n".join(calls))
+
+    def test_remote_stage_extracts_the_strict_worker_environment_helper(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("scripts/monomer_worker_env.py", script)
+        self.assertIn('worker_env_helper="$stage/monomer_worker_env.py"', script)
+        self.assertIn('chmod 700 "$controller.tmp" "$worker_env_helper.tmp"', script)
+        self.assertNotIn("\npython3 ", script)
+        self.assertGreaterEqual(script.count("/usr/bin/python3 -I"), 4)
+        provision = script.index('"$controller" provision-release --apply')
+        deploy = script.index('"$controller" deploy --apply')
+        self.assertLess(provision, deploy)
+        self.assertIn('--production-root "$production_root" &&\n/usr/bin/python3', script)
+        remote_prepare = script.split("<<'REMOTE_PREPARE'\n", 1)[1].split(
+            "\nREMOTE_PREPARE",
+            1,
+        )[0]
+        self.assertNotIn(
+            '[[ ! -e "$production_root/ops/state/release-state.json"',
+            remote_prepare,
+        )
+        self.assertNotIn('[[ ! -e "$production_root/ops/current"', remote_prepare)
+        self.assertNotIn("pip install", script)
 
     def test_tampered_bundle_is_rejected_before_transport(self) -> None:
         with self.bundle.open("ab") as destination:

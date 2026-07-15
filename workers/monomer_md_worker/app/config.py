@@ -75,6 +75,8 @@ class WorkerSettings:
     cuda_visible_devices: str
     worker_id: str
     worker_version: str
+    byteff2_openmm_dir: Path | None = None
+    transport_cuda_smoke_enabled: bool = True
     gpu_broker_enabled: bool = False
     gpu_broker_socket_path: str = "/run/user/1001/nexpoly-gpu/broker.sock"
     gpu_mps_pipe_root: Path = Path("/data/lzq/gith/nexpoly/ops/state/gpu-resource")
@@ -149,6 +151,8 @@ def load_settings() -> WorkerSettings:
             "and MONOMER_MD_MAX_ACTIVE_JOBS=1"
         )
 
+    byteff2_openmm_dir = os.getenv("BYTEFF2_OPENMM_DIR", "").strip()
+
     return WorkerSettings(
         mode=_get_mode(),
         app_postgres_dsn=os.getenv("APP_POSTGRES_DSN") or None,
@@ -190,7 +194,7 @@ def load_settings() -> WorkerSettings:
         report_interval=_get_int("MONOMER_MD_REPORT_INTERVAL", 10),
         timeout_seconds=_get_int("MONOMER_MD_TIMEOUT_SECONDS", 3600),
         formal_timeout_seconds=_get_int("MONOMER_MD_FORMAL_TIMEOUT_SECONDS", 43200),
-        health_probe_timeout_seconds=_get_int("MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS", 5),
+        health_probe_timeout_seconds=_get_int("MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS", 30),
         max_concurrent_jobs=max_concurrent_jobs,
         max_active_jobs=max_active_jobs,
         cuda_visible_devices=os.getenv(
@@ -199,6 +203,12 @@ def load_settings() -> WorkerSettings:
         ),
         worker_id=os.getenv("MONOMER_MD_WORKER_ID", "monomer-md-worker"),
         worker_version=os.getenv("MONOMER_MD_WORKER_VERSION", "0.1.0"),
+        byteff2_openmm_dir=(
+            Path(byteff2_openmm_dir) if byteff2_openmm_dir else None
+        ),
+        transport_cuda_smoke_enabled=_get_bool(
+            "MONOMER_MD_TRANSPORT_CUDA_SMOKE_ENABLED", True
+        ),
         gpu_broker_enabled=gpu_broker_enabled,
         gpu_broker_socket_path=gpu_broker_socket_path,
         gpu_mps_pipe_root=gpu_mps_pipe_root,

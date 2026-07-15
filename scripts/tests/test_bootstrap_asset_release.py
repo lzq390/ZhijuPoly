@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 import shutil
@@ -16,8 +17,85 @@ assert SPEC and SPEC.loader
 assets = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(assets)
 
+BYTEFF2_RUNTIME_ASSET_PATH = Path(assets.BYTEFF2_RUNTIME_REQUIRED_FILES[0][0])
+BYTEFF2_RUNTIME_ASSET = b"""elem_i,elem_j,length
+6,6,1.5363873
+6,7,1.4651788
+6,8,1.4313077
+6,16,1.834275
+7,7,1.4078844
+7,8,1.4093844
+8,8,1.4897662
+1,16,1.3495871
+16,16,2.0898104
+9,16,1.6
+16,17,2.1403589
+16,35,2.2360892
+16,53,2.5999999
+7,16,1.698557
+8,16,1.6829032
+1,15,1.4123673
+6,15,1.9002142
+7,15,1.6796112
+8,15,1.6054208
+15,16,2.1043606
+6,9,1.3551362
+6,17,1.8122059
+6,35,2.0027883
+6,53,2.2647898
+7,9,1.4233449
+7,17,1.8143761
+7,35,1.8648889
+7,53,2.0999999
+9,15,1.64
+15,17,2.0355189
+15,35,2.2727704
+15,53,2.5999999
+1,6,1.094539
+1,7,1.0124171
+1,8,0.9722268
+1,1,0.64
+1,9,0.96
+1,17,1.31
+1,35,1.46
+1,53,1.6500000000000001
+8,9,1.27
+8,17,1.62
+8,35,1.77
+8,53,1.96
+9,9,1.28
+9,17,1.63
+9,35,1.7799999999999998
+9,53,1.9700000000000002
+15,15,2.22
+17,17,1.98
+17,35,2.13
+17,53,2.3200000000000003
+35,35,2.28
+35,53,2.4699999999999998
+53,53,2.66
+"""
+PRODUCTION_BYTEFF2_AUDITED_OVERLAY_FILES = assets.BYTEFF2_AUDITED_OVERLAY_FILES
+TEST_BYTEFF2_AUDITED_OVERLAYS = (
+    ("byteff2/trained_models/fftrainer_config_in_use.yaml", b"fixture model config\n"),
+    ("byteff2/trained_models/optimal.pt", b"fixture model weights\n"),
+)
+TEST_BYTEFF2_AUDITED_OVERLAY_FILES = tuple(
+    (path, len(payload), hashlib.sha256(payload).hexdigest())
+    for path, payload in TEST_BYTEFF2_AUDITED_OVERLAYS
+)
+
 
 class AssetBootstrapTests(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = mock.patch.object(
+            assets,
+            "BYTEFF2_AUDITED_OVERLAY_FILES",
+            TEST_BYTEFF2_AUDITED_OVERLAY_FILES,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @staticmethod
     def git(root: Path, *arguments: str) -> str:
         return subprocess.run(
@@ -28,13 +106,50 @@ class AssetBootstrapTests(unittest.TestCase):
             stderr=subprocess.PIPE,
         ).stdout.strip()
 
-    def initialize_repository(self, root: Path, filename: str = "tracked.txt") -> str:
+    @staticmethod
+    def required_runtime_inventory() -> list[dict[str, object]]:
+        runtime_path, runtime_digest = assets.BYTEFF2_RUNTIME_REQUIRED_FILES[0]
+        return [
+            {
+                "path": runtime_path,
+                "size": len(BYTEFF2_RUNTIME_ASSET),
+                "sha256": runtime_digest,
+            },
+            *[
+                {"path": path, "size": size, "sha256": digest}
+                for path, size, digest in assets.BYTEFF2_AUDITED_OVERLAY_FILES
+            ],
+        ]
+
+    def initialize_repository(
+        self,
+        root: Path,
+        filename: str = "tracked.txt",
+        *,
+        runtime_asset: bytes | None = BYTEFF2_RUNTIME_ASSET,
+        audited_overlays: tuple[tuple[str, bytes], ...] = TEST_BYTEFF2_AUDITED_OVERLAYS,
+    ) -> str:
         root.mkdir(parents=True)
         self.git(root, "init", "--quiet")
         self.git(root, "config", "user.email", "ci@example.invalid")
         self.git(root, "config", "user.name", "CI")
         (root / filename).write_text(f"{root.name}\n", encoding="utf-8")
-        self.git(root, "add", filename)
+        overlay_paths = tuple(path for path, _size, _digest in assets.BYTEFF2_AUDITED_OVERLAY_FILES)
+        (root / ".gitignore").write_text(
+            "".join(f"/{path}\n" for path in overlay_paths),
+            encoding="utf-8",
+        )
+        for relative, payload in audited_overlays:
+            overlay_path = root / relative
+            overlay_path.parent.mkdir(parents=True, exist_ok=True)
+            overlay_path.write_bytes(payload)
+        tracked = [filename, ".gitignore"]
+        if runtime_asset is not None:
+            runtime_path = root / BYTEFF2_RUNTIME_ASSET_PATH
+            runtime_path.parent.mkdir(parents=True)
+            runtime_path.write_bytes(runtime_asset)
+            tracked.append(BYTEFF2_RUNTIME_ASSET_PATH.as_posix())
+        self.git(root, "add", "--", *tracked)
         self.git(root, "commit", "--quiet", "-m", "initial")
         return self.git(root, "rev-parse", "HEAD")
 
@@ -59,12 +174,196 @@ class AssetBootstrapTests(unittest.TestCase):
         parent = "a" * 40
         child = "b" * 40
         manifest = assets.build_manifest(
-            {"byteff2": []},
+            {"byteff2": self.required_runtime_inventory()},
             byteff2_commit=parent,
             byteff2_submodules={"vendor/nested": child},
         )
+        self.assertEqual(manifest["schema_version"], 2)
         self.assertEqual(manifest["byteff2_commit"], parent)
+        self.assertEqual(
+            manifest["byteff2_source"],
+            {
+                "source": assets.BYTEFF2_GIT_SOURCE,
+                "revision": parent,
+            },
+        )
         self.assertEqual(manifest["byteff2_submodules"], {"vendor/nested": child})
+        self.assertEqual(
+            manifest["byteff2_audited_overlays"],
+            assets.byteff2_audited_overlays_manifest(),
+        )
+
+    def test_manifest_rejects_missing_or_changed_required_runtime_asset(self) -> None:
+        runtime_path, _runtime_digest = assets.BYTEFF2_RUNTIME_REQUIRED_FILES[0]
+        cases = (
+            ([], "missing from manifest"),
+            (
+                [{"path": runtime_path, "size": 1, "sha256": "0" * 64}],
+                "manifest digest mismatch",
+            ),
+        )
+        for inventory, error in cases:
+            with self.subTest(error=error):
+                with self.assertRaisesRegex(assets.AssetError, error):
+                    assets.build_manifest(
+                        {"byteff2": inventory},
+                        byteff2_commit="a" * 40,
+                        byteff2_submodules={},
+                    )
+
+    def test_required_runtime_asset_contract_pins_audited_digest(self) -> None:
+        self.assertEqual(
+            assets.BYTEFF2_RUNTIME_REQUIRED_FILES,
+            (
+                (
+                    BYTEFF2_RUNTIME_ASSET_PATH.as_posix(),
+                    "caa78ff02c7e65fb0c8bcf240382fa8d90b0dfea85a4d9888c96eab04cc4a40e",
+                ),
+            ),
+        )
+        self.assertEqual(
+            hashlib.sha256(BYTEFF2_RUNTIME_ASSET).hexdigest(),
+            assets.BYTEFF2_RUNTIME_REQUIRED_FILES[0][1],
+        )
+
+    def test_byteff2_git_source_pins_official_v1_revision(self) -> None:
+        self.assertEqual(
+            assets.BYTEFF2_SOURCE,
+            Path("/data/lzq/nexpoly-assets/sources/byteff2-v1.0.0"),
+        )
+        self.assertEqual(
+            assets.BYTEFF2_GIT_SOURCE,
+            "https://github.com/ByteDance-Seed/byteff2.git",
+        )
+        self.assertEqual(
+            assets.BYTEFF2_GIT_REVISION,
+            "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2",
+        )
+        assets.require_approved_byteff2_revision(assets.BYTEFF2_GIT_REVISION)
+        with self.assertRaisesRegex(assets.AssetError, "official v1.0.0"):
+            assets.require_approved_byteff2_revision("0" * 40)
+
+    def test_audited_overlay_contract_pins_hugging_face_revision_size_and_digest(self) -> None:
+        self.assertEqual(
+            assets.BYTEFF2_AUDITED_OVERLAY_SOURCE,
+            "https://huggingface.co/ByteDance-Seed/byteff2",
+        )
+        self.assertEqual(
+            assets.BYTEFF2_AUDITED_OVERLAY_REVISION,
+            "b92ac49058c113625012c1f50d98a7bf9cf4e46e",
+        )
+        self.assertEqual(
+            PRODUCTION_BYTEFF2_AUDITED_OVERLAY_FILES,
+            (
+                (
+                    "byteff2/trained_models/fftrainer_config_in_use.yaml",
+                    986,
+                    "8245a5c6ad9b4aa9d180c8bb24d6f05c210f1724ffae93aec0ef4f88e5fd7ea3",
+                ),
+                (
+                    "byteff2/trained_models/optimal.pt",
+                    111_892_932,
+                    "ae47a6e6860b563908a2e0a83d4a3f6adc1c36b48f544e2241d24066d43d539c",
+                ),
+            ),
+        )
+        self.assertEqual(
+            assets.BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS,
+            {
+                "byteff2/trained_models/fftrainer_config_in_use.yaml": (
+                    "trained_models/fftrainer_config_in_use.yaml"
+                ),
+                "byteff2/trained_models/optimal.pt": "trained_models/optimal.pt",
+            },
+        )
+
+    def test_checkout_validation_rejects_missing_audited_overlay(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "byteff2"
+            self.initialize_repository(root, audited_overlays=TEST_BYTEFF2_AUDITED_OVERLAYS[:1])
+
+            with self.assertRaisesRegex(assets.AssetError, "runtime asset is missing"):
+                assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_validation_rejects_changed_audited_overlay_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "byteff2"
+            model_path, model_payload = TEST_BYTEFF2_AUDITED_OVERLAYS[1]
+            changed = (
+                TEST_BYTEFF2_AUDITED_OVERLAYS[0],
+                (model_path, b"x" * len(model_payload)),
+            )
+            self.initialize_repository(root, audited_overlays=changed)
+
+            with self.assertRaisesRegex(assets.AssetError, "overlay digest mismatch"):
+                assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_validation_rejects_missing_required_runtime_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "byteff2"
+            self.initialize_repository(root, runtime_asset=None)
+
+            with self.assertRaisesRegex(assets.AssetError, "must be Git-tracked"):
+                assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_validation_rejects_ignored_untracked_runtime_asset_lookalike(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "byteff2"
+            self.initialize_repository(root, runtime_asset=None)
+            with (root / ".gitignore").open("a", encoding="utf-8") as ignore_file:
+                ignore_file.write("**.csv\n")
+            self.git(root, "add", ".gitignore")
+            self.git(root, "commit", "--quiet", "-m", "ignore csv files")
+            runtime_path = root / BYTEFF2_RUNTIME_ASSET_PATH
+            runtime_path.parent.mkdir(parents=True)
+            runtime_path.write_bytes(BYTEFF2_RUNTIME_ASSET)
+
+            with self.assertRaisesRegex(assets.AssetError, "must be Git-tracked"):
+                assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_validation_rejects_wrong_runtime_asset_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "byteff2"
+            self.initialize_repository(root, runtime_asset=b"not the audited runtime data\n")
+
+            with self.assertRaisesRegex(assets.AssetError, "digest mismatch"):
+                assets.inspect_byteff2_checkout(root)
+
+    def test_valid_runtime_assets_survive_copy_and_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            source = workspace / "byteff2"
+            destination = workspace / "copied"
+            expected_commit = self.initialize_repository(source)
+
+            commit, submodules = assets.inspect_byteff2_checkout(source)
+            assets.copy_verified_byteff2(
+                source,
+                destination,
+                expected_commit=commit,
+                expected_submodules=submodules,
+            )
+            inventory = assets.inspect_tree(destination, hash_files=True)
+            manifest = assets.build_manifest(
+                {"byteff2": inventory},
+                byteff2_commit=expected_commit,
+                byteff2_submodules={},
+            )
+
+            runtime_path, runtime_digest = assets.BYTEFF2_RUNTIME_REQUIRED_FILES[0]
+            runtime_records = [
+                record for record in manifest["assets"]["byteff2"] if record["path"] == runtime_path
+            ]
+            self.assertEqual(
+                runtime_records,
+                [
+                    {
+                        "path": runtime_path,
+                        "size": len(BYTEFF2_RUNTIME_ASSET),
+                        "sha256": runtime_digest,
+                    }
+                ],
+            )
 
     def test_remove_git_metadata_removes_root_and_nested_forms(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -259,7 +558,8 @@ class AssetBootstrapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw) / "byteff2"
             self.initialize_repository(root)
-            (root / ".gitignore").write_text("ignored.bin\n", encoding="utf-8")
+            with (root / ".gitignore").open("a", encoding="utf-8") as ignore_file:
+                ignore_file.write("ignored.bin\n")
             self.git(root, "add", ".gitignore")
             self.git(root, "commit", "--quiet", "-m", "ignore generated content")
             (root / "ignored.bin").write_bytes(b"not committed")

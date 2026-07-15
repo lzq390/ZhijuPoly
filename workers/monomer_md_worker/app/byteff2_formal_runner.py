@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from .byteff2_env import ByteFF2SubprocessEnvironment, build_byteff2_environment
 from .config import WorkerSettings
 from .formal_protocols import (
     estimate_requested_steps,
@@ -26,8 +26,14 @@ class FormalProtocolRunResult:
 
 
 class ByteFF2FormalRunner:
-    def __init__(self, settings: WorkerSettings) -> None:
+    def __init__(
+        self,
+        settings: WorkerSettings,
+        *,
+        environment: ByteFF2SubprocessEnvironment | None = None,
+    ) -> None:
         self._settings = settings
+        self._environment = environment or build_byteff2_environment(settings)
 
     async def run(
         self,
@@ -51,8 +57,12 @@ class ByteFF2FormalRunner:
         if not run_md_path.exists():
             raise RuntimeError(f"ByteFF2 run_md.py was not found: {run_md_path}")
 
-        env = os.environ.copy()
-        env["BYTEFF2_ROOT"] = str(self._settings.byteff2_root)
+        environment = self._environment
+        if protocol == "Transport" and environment.transport_error is not None:
+            raise RuntimeError(environment.transport_error)
+        env = environment.as_dict()
+        if self._settings.gpu_broker_enabled and execution_lease is None:
+            raise RuntimeError("Broker-governed MD execution requires an active GPU lease")
         if execution_lease is not None:
             env.update(
                 mps_client_environment(
@@ -62,12 +72,8 @@ class ByteFF2FormalRunner:
             )
             result_gpu_device = str(execution_lease.lease.gpu_index)
         else:
-            env["CUDA_VISIBLE_DEVICES"] = self._settings.cuda_visible_devices
             env["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = "50"
             result_gpu_device = self._settings.cuda_visible_devices
-        env["PYTHONPATH"] = os.pathsep.join(
-            [str(self._settings.byteff2_root), env.get("PYTHONPATH", "")]
-        ).strip(os.pathsep)
 
         stdout_path = output_dir / "worker_stdout.log"
         stderr_path = output_dir / "worker_stderr.log"

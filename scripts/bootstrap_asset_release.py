@@ -19,9 +19,39 @@ from typing import Any
 
 PRODUCTION_SOURCE = Path("/data/lzq/gith/nexpoly")
 ASSET_STORE = Path("/data/lzq/nexpoly-assets")
-BYTEFF2_SOURCE = Path("/data/lzq/gith/byteff2")
+BYTEFF2_SOURCE = Path(
+    "/data/lzq/nexpoly-assets/sources/byteff2-v1.0.0"
+)
 MAPPINGS = (("model", "model"), ("database", "database"), ("backend/data", "backend-data"))
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+BYTEFF2_GIT_SOURCE = "https://github.com/ByteDance-Seed/byteff2.git"
+BYTEFF2_GIT_REVISION = "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2"
+BYTEFF2_RUNTIME_REQUIRED_FILES = (
+    (
+        "submodules/bytemol/bytemol/toolkit/infer_molecule/bond_length_ref.csv",
+        "caa78ff02c7e65fb0c8bcf240382fa8d90b0dfea85a4d9888c96eab04cc4a40e",
+    ),
+)
+BYTEFF2_AUDITED_OVERLAY_SOURCE = "https://huggingface.co/ByteDance-Seed/byteff2"
+BYTEFF2_AUDITED_OVERLAY_REVISION = "b92ac49058c113625012c1f50d98a7bf9cf4e46e"
+BYTEFF2_AUDITED_OVERLAY_FILES = (
+    (
+        "byteff2/trained_models/fftrainer_config_in_use.yaml",
+        986,
+        "8245a5c6ad9b4aa9d180c8bb24d6f05c210f1724ffae93aec0ef4f88e5fd7ea3",
+    ),
+    (
+        "byteff2/trained_models/optimal.pt",
+        111_892_932,
+        "ae47a6e6860b563908a2e0a83d4a3f6adc1c36b48f544e2241d24066d43d539c",
+    ),
+)
+BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS = {
+    "byteff2/trained_models/fftrainer_config_in_use.yaml": (
+        "trained_models/fftrainer_config_in_use.yaml"
+    ),
+    "byteff2/trained_models/optimal.pt": "trained_models/optimal.pt",
+}
 
 
 class AssetError(RuntimeError):
@@ -125,6 +155,261 @@ def git_output(root: Path, *arguments: str) -> str:
     ).stdout
 
 
+def _git_index_entries(root: Path, relative: str) -> list[bytes]:
+    output = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+            f":(literal){relative}",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+    return [entry for entry in output.split(b"\0") if entry]
+
+
+def _require_git_tracked_regular_file(root: Path, relative: str) -> None:
+    """Require *relative* to be a stage-zero regular file in *root*'s index."""
+    entries = _git_index_entries(root, relative)
+    if len(entries) != 1:
+        raise AssetError(f"required ByteFF2 runtime asset must be Git-tracked: {relative}")
+    try:
+        metadata, raw_path = entries[0].split(b"\t", 1)
+        mode, _sha, stage = metadata.split(b" ", 2)
+        indexed_path = raw_path.decode("utf-8")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise AssetError(
+            f"cannot parse required ByteFF2 runtime asset index entry: {relative}"
+        ) from exc
+    if indexed_path != relative or stage != b"0" or mode not in {b"100644", b"100755"}:
+        raise AssetError(
+            f"required ByteFF2 runtime asset must be tracked as a regular file: {relative}"
+        )
+
+
+def _require_git_ignored_overlay(root: Path, relative: str) -> None:
+    """Require an audited overlay to be ignored and absent from the Git index."""
+    if _git_index_entries(root, relative):
+        raise AssetError(f"audited ByteFF2 overlay must not be Git-tracked: {relative}")
+    ignored = subprocess.run(
+        ["git", "-C", str(root), "check-ignore", "--quiet", "--", relative],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    if ignored.returncode == 1:
+        raise AssetError(f"audited ByteFF2 overlay must be explicitly ignored: {relative}")
+    if ignored.returncode != 0:
+        raise AssetError(f"cannot verify audited ByteFF2 overlay ignore state: {relative}")
+
+
+def git_status_entries(root: Path) -> list[str]:
+    output = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=matching",
+            "--ignore-submodules=all",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+    try:
+        return [entry.decode("utf-8") for entry in output.split(b"\0") if entry]
+    except UnicodeDecodeError as exc:
+        raise AssetError(f"cannot parse Git status entries in {root}") from exc
+
+
+def unexpected_git_status_entries(
+    root: Path,
+    *,
+    allowed_ignored: tuple[str, ...] = (),
+) -> list[str]:
+    allowed = {f"!! {relative}" for relative in allowed_ignored}
+    return [entry for entry in git_status_entries(root) if entry not in allowed]
+
+
+def _inspect_required_regular_file(root: Path, relative: str) -> dict[str, Any]:
+    """Hash one required file without following it or any parent symlink."""
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or not relative_path.parts or ".." in relative_path.parts:
+        raise AssetError(f"invalid required ByteFF2 runtime asset path: {relative}")
+
+    current = root
+    for component in relative_path.parts[:-1]:
+        current /= component
+        try:
+            metadata = current.lstat()
+        except OSError as exc:
+            raise AssetError(f"required ByteFF2 runtime asset is missing: {relative}") from exc
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise AssetError(
+                f"required ByteFF2 runtime asset must not traverse a symlink: {relative}"
+            )
+
+    path = root / relative_path
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise AssetError(f"required ByteFF2 runtime asset is missing: {relative}") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise AssetError(f"required ByteFF2 runtime asset must be a regular file: {relative}")
+
+    digest = hashlib.sha256()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise AssetError(f"cannot open required ByteFF2 runtime asset safely: {relative}") from exc
+    try:
+        before = os.fstat(descriptor)
+        identity_before = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_size,
+            before.st_mtime_ns,
+        )
+        identity_from_path = (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+        )
+        if not stat.S_ISREG(before.st_mode) or identity_before != identity_from_path:
+            raise AssetError(f"required ByteFF2 runtime asset changed before hashing: {relative}")
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        identity_after = (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_size,
+            after.st_mtime_ns,
+        )
+        if identity_after != identity_before or total != after.st_size:
+            raise AssetError(f"required ByteFF2 runtime asset changed while hashing: {relative}")
+    except OSError as exc:
+        raise AssetError(f"cannot hash required ByteFF2 runtime asset safely: {relative}") from exc
+    finally:
+        os.close(descriptor)
+    return {"path": relative, "size": total, "sha256": digest.hexdigest()}
+
+
+def inspect_required_byteff2_runtime_files(
+    root: Path,
+    *,
+    require_git_tracking: bool,
+) -> list[dict[str, Any]]:
+    """Validate the audited files required to import and run ByteFF2 protocols."""
+    records: list[dict[str, Any]] = []
+    for relative, expected_digest in BYTEFF2_RUNTIME_REQUIRED_FILES:
+        if require_git_tracking:
+            _require_git_tracked_regular_file(root, relative)
+        record = _inspect_required_regular_file(root, relative)
+        if record["sha256"] != expected_digest:
+            raise AssetError(f"required ByteFF2 runtime asset digest mismatch: {relative}")
+        records.append(record)
+    return records
+
+
+def inspect_byteff2_audited_overlays(
+    root: Path,
+    *,
+    require_git_ignored: bool,
+) -> list[dict[str, Any]]:
+    """Validate fixed Hugging Face files overlaid onto the ByteFF2 checkout."""
+    records: list[dict[str, Any]] = []
+    for relative, expected_size, expected_digest in BYTEFF2_AUDITED_OVERLAY_FILES:
+        if require_git_ignored:
+            _require_git_ignored_overlay(root, relative)
+        record = _inspect_required_regular_file(root, relative)
+        if record["size"] != expected_size:
+            raise AssetError(f"audited ByteFF2 overlay size mismatch: {relative}")
+        if record["sha256"] != expected_digest:
+            raise AssetError(f"audited ByteFF2 overlay digest mismatch: {relative}")
+        records.append(record)
+    return records
+
+
+def validate_byteff2_runtime_manifest(records: list[dict[str, Any]]) -> None:
+    """Require the manifest inventory to preserve every audited runtime file."""
+    records_by_path: dict[str, dict[str, Any]] = {}
+    required_files = tuple(
+        (relative, None, digest) for relative, digest in BYTEFF2_RUNTIME_REQUIRED_FILES
+    ) + BYTEFF2_AUDITED_OVERLAY_FILES
+    required_paths = {relative for relative, _size, _digest in required_files}
+    for record in records:
+        path = record.get("path")
+        if isinstance(path, str) and path in required_paths:
+            if path in records_by_path:
+                raise AssetError(
+                    f"duplicate required ByteFF2 runtime asset manifest record: {path}"
+                )
+            records_by_path[path] = record
+    for relative, expected_size, expected_digest in required_files:
+        record = records_by_path.get(relative)
+        if record is None:
+            raise AssetError(f"required ByteFF2 runtime asset missing from manifest: {relative}")
+        if expected_size is not None and record.get("size") != expected_size:
+            raise AssetError(f"required ByteFF2 runtime asset manifest size mismatch: {relative}")
+        if record.get("sha256") != expected_digest:
+            raise AssetError(f"required ByteFF2 runtime asset manifest digest mismatch: {relative}")
+
+
+def byteff2_audited_overlays_manifest() -> dict[str, Any]:
+    if not FULL_SHA.fullmatch(BYTEFF2_AUDITED_OVERLAY_REVISION):
+        raise AssetError("ByteFF2 audited overlay revision must be a full commit SHA")
+    return {
+        "source": BYTEFF2_AUDITED_OVERLAY_SOURCE,
+        "revision": BYTEFF2_AUDITED_OVERLAY_REVISION,
+        "files": [
+            {
+                "source_path": BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS[relative],
+                "path": relative,
+                "size": size,
+                "sha256": digest,
+            }
+            for relative, size, digest in BYTEFF2_AUDITED_OVERLAY_FILES
+        ],
+    }
+
+
+def byteff2_source_manifest(revision: str) -> dict[str, str]:
+    if not FULL_SHA.fullmatch(revision):
+        raise AssetError("ByteFF2 source revision must be a full commit SHA")
+    return {
+        "source": BYTEFF2_GIT_SOURCE,
+        "revision": revision,
+    }
+
+
+def require_approved_byteff2_revision(revision: str) -> None:
+    if revision != BYTEFF2_GIT_REVISION:
+        raise AssetError(
+            "ByteFF2 checkout must use the approved official v1.0.0 revision"
+        )
+
+
 def indexed_submodules(root: Path) -> list[tuple[str, str]]:
     """Return the path and pinned commit for each direct gitlink in *root*."""
     output = subprocess.run(
@@ -161,18 +446,18 @@ def inspect_byteff2_checkout(root: Path) -> tuple[str, dict[str, str]]:
         raise AssetError(f"ByteFF2 root must be the Git top-level directory: {root}")
 
     commits: dict[str, str] = {}
+    overlay_paths = tuple(relative for relative, _size, _digest in BYTEFF2_AUDITED_OVERLAY_FILES)
 
     def inspect_repository(repository: Path, relative: str) -> str:
         commit = git_output(repository, "rev-parse", "--verify", "HEAD^{commit}").strip()
         if not FULL_SHA.fullmatch(commit):
             raise AssetError(f"repository does not resolve to a full commit SHA: {repository}")
-        dirty = git_output(
+        if not relative:
+            inspect_required_byteff2_runtime_files(root, require_git_tracking=True)
+            inspect_byteff2_audited_overlays(root, require_git_ignored=True)
+        dirty = unexpected_git_status_entries(
             repository,
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--ignored=matching",
-            "--ignore-submodules=all",
+            allowed_ignored=overlay_paths if not relative else (),
         )
         if dirty:
             label = "ByteFF2 checkout" if not relative else f"ByteFF2 submodule {relative}"
@@ -205,14 +490,13 @@ def inspect_byteff2_checkout(root: Path) -> tuple[str, dict[str, str]]:
                     f"ByteFF2 submodule commit does not match parent gitlink: {child_relative}"
                 )
             commits[child_relative] = actual_commit
+        if not relative:
+            inspect_required_byteff2_runtime_files(root, require_git_tracking=True)
+            inspect_byteff2_audited_overlays(root, require_git_ignored=True)
         final_commit = git_output(repository, "rev-parse", "--verify", "HEAD^{commit}").strip()
-        final_dirty = git_output(
+        final_dirty = unexpected_git_status_entries(
             repository,
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--ignored=matching",
-            "--ignore-submodules=all",
+            allowed_ignored=overlay_paths if not relative else (),
         )
         if final_commit != commit or final_dirty or indexed_submodules(repository) != direct_submodules:
             label = "ByteFF2 checkout" if not relative else f"ByteFF2 submodule {relative}"
@@ -303,6 +587,8 @@ def copy_verified_byteff2(
         raise AssetError("ByteFF2 checkout identity changed while copying")
     remove_git_metadata(destination)
     (destination / "BYTEFF2-COMMIT").write_text(expected_commit + "\n", encoding="ascii")
+    inspect_required_byteff2_runtime_files(destination, require_git_tracking=False)
+    inspect_byteff2_audited_overlays(destination, require_git_ignored=False)
 
 
 def build_manifest(
@@ -315,10 +601,16 @@ def build_manifest(
         raise AssetError("ByteFF2 root does not resolve to a full commit SHA")
     if any(not FULL_SHA.fullmatch(commit) for commit in byteff2_submodules.values()):
         raise AssetError("ByteFF2 submodule does not resolve to a full commit SHA")
+    byteff2_assets = assets.get("byteff2")
+    if not isinstance(byteff2_assets, list):
+        raise AssetError("asset manifest must contain a ByteFF2 inventory")
+    validate_byteff2_runtime_manifest(byteff2_assets)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "byteff2_commit": byteff2_commit,
         "byteff2_submodules": dict(sorted(byteff2_submodules.items())),
+        "byteff2_source": byteff2_source_manifest(byteff2_commit),
+        "byteff2_audited_overlays": byteff2_audited_overlays_manifest(),
         "assets": assets,
     }
 
@@ -354,6 +646,7 @@ def main(argv: list[str] | None = None) -> int:
         sources = [(source / source_name, target_name) for source_name, target_name in MAPPINGS]
         sources.append((byteff2, "byteff2"))
         byteff2_commit, byteff2_submodules = inspect_byteff2_checkout(byteff2)
+        require_approved_byteff2_revision(byteff2_commit)
         for source_path, target_name in sources:
             records = inspect_tree(
                 source_path,
@@ -365,7 +658,10 @@ def main(argv: list[str] | None = None) -> int:
             "action": "bootstrap-asset-release", "apply": args.apply,
             "source_root": str(source), "byteff2_root": str(byteff2),
             "asset_store": str(store), "byteff2_commit": byteff2_commit,
-            "byteff2_submodules": byteff2_submodules, "summary": summary,
+            "byteff2_source": byteff2_source_manifest(byteff2_commit),
+            "byteff2_submodules": byteff2_submodules,
+            "byteff2_audited_overlays": byteff2_audited_overlays_manifest(),
+            "summary": summary,
         }
         if not args.apply:
             print(json.dumps(plan, indent=2, sort_keys=True))
