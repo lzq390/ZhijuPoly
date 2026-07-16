@@ -11,6 +11,11 @@ import tempfile
 from typing import Any
 import unittest
 
+from scripts import bootstrap_asset_release, release_controller
+from workers.monomer_md_worker.app.byteff2_runtime_assets import (
+    BYTEFF2_RUNTIME_ASSETS,
+)
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BASE_COMPOSE = REPOSITORY_ROOT / "docker-compose.yml"
@@ -120,6 +125,35 @@ class ComposeWorkerRuntimeTests(unittest.TestCase):
 
 
 class WorkerHostRuntimeTests(unittest.TestCase):
+    def test_byteff2_runtime_asset_contract_is_identical_across_delivery_layers(
+        self,
+    ) -> None:
+        worker_contract = tuple(
+            (asset.relative_path.as_posix(), asset.size, asset.sha256)
+            for asset in BYTEFF2_RUNTIME_ASSETS
+        )
+
+        self.assertEqual(
+            worker_contract,
+            release_controller.BYTEFF2_FORMAL_RUNTIME_ASSETS,
+        )
+        self.assertEqual(
+            tuple((path, digest) for path, _size, digest in worker_contract[:1]),
+            bootstrap_asset_release.BYTEFF2_RUNTIME_REQUIRED_FILES,
+        )
+        self.assertEqual(
+            worker_contract[1:],
+            bootstrap_asset_release.BYTEFF2_AUDITED_OVERLAY_FILES,
+        )
+        self.assertEqual(
+            release_controller.BYTEFF2_GIT_SOURCE,
+            bootstrap_asset_release.BYTEFF2_GIT_SOURCE,
+        )
+        self.assertEqual(
+            release_controller.BYTEFF2_GIT_REVISION,
+            bootstrap_asset_release.BYTEFF2_GIT_REVISION,
+        )
+
     def test_legacy_user_service_installer_is_a_fail_closed_shim(self) -> None:
         source = LEGACY_INSTALLER.read_text(encoding="utf-8")
         self.assertNotIn("systemctl --user", source)
@@ -176,16 +210,21 @@ class WorkerHostRuntimeTests(unittest.TestCase):
             "WorkingDirectory=/data/lzq/gith/nexpoly/ops/current/workers/monomer_md_worker",
             unit,
         )
-        self.assertIn(f'Environment="PATH={FROZEN_BASE_BIN}:', unit)
-        self.assertIn(f'Environment="BYTEFF2_ROOT={CURRENT_ASSET_BYTEFF2}"', unit)
+        # The unit must not parse worker.env or duplicate runtime values.  Its
+        # fixed, isolated stdlib helper validates the owner-only literal file,
+        # scrubs inherited loader/Python variables, and then execs the venv.
+        self.assertNotIn("EnvironmentFile=", unit)
+        self.assertNotIn('Environment="PATH=', unit)
+        self.assertNotIn('Environment="BYTEFF2_ROOT=', unit)
+        self.assertNotIn('Environment="PYTHONPATH=', unit)
         self.assertIn(
-            f'Environment="PYTHONPATH={CURRENT_ASSET_BYTEFF2}:{CURRENT_ASSET_BYTEFF2}/submodules/bytemol"',
+            "ExecStart=/usr/bin/python3 -I "
+            "/data/lzq/gith/nexpoly/ops/config/monomer_worker_env.py exec "
+            "/data/lzq/gith/nexpoly/ops/config/worker.env -- "
+            "/data/lzq/gith/nexpoly/ops/current/worker-venv/bin/python -m uvicorn",
             unit,
         )
-        self.assertIn(
-            "ExecStart=/data/lzq/gith/nexpoly/ops/current/worker-venv/bin/python -m uvicorn",
-            unit,
-        )
+        self.assertIn("UnsetEnvironment=", unit)
         self.assertIn("/usr/bin/flock -n \"$2\" /usr/bin/true", unit)
         self.assertIn(
             "/data/lzq/gith/nexpoly/ops/state/deploy-in-progress.json ",
@@ -204,7 +243,14 @@ class WorkerHostRuntimeTests(unittest.TestCase):
         self.assertEqual(worker["BYTEFF2_PYTHON"], f"{FROZEN_BASE_BIN}/python")
         self.assertEqual(
             worker["PYTHONPATH"],
+            "/data/lzq/gith/nexpoly/ops/current:"
             f"{CURRENT_ASSET_BYTEFF2}:{CURRENT_ASSET_BYTEFF2}/submodules/bytemol",
+        )
+        self.assertEqual(worker["MONOMER_MD_GPU_BROKER_ENABLED"], "false")
+        self.assertEqual(worker["MONOMER_MD_GPU_BROKER_ENVIRONMENT"], "prod")
+        self.assertEqual(
+            worker["MONOMER_MD_GPU_MPS_PIPE_ROOT"],
+            "/data/lzq/gith/nexpoly/ops/state/gpu-resource",
         )
         self.assertEqual(
             worker["MONOMER_MD_PYTHON"],

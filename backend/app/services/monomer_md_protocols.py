@@ -155,6 +155,8 @@ def validate_formal_config(config: dict[str, Any], expected_protocol: str) -> di
         raise ValueError("config_json.temperature must be a positive number")
     if isinstance(natoms, bool) or not isinstance(natoms, int) or natoms <= 0:
         raise ValueError("config_json.natoms must be a positive integer")
+    if natoms > 10_000:
+        raise ValueError("config_json.natoms must be <= 10000")
     if expected_protocol == "HVap" and len(components) != 1:
         raise ValueError("HVap formal protocol only supports one component")
     if expected_protocol == "Dielectric":

@@ -15,6 +15,10 @@ import type {
   MonomerMdServiceStatusResponse,
   MonomerMdSimulationResult
 } from "../types";
+import {
+  MonomerMdStatusLoader,
+  monomerMdStatusLoadError
+} from "./monomerMdStatusLoader";
 
 type MonomerMdSimulationState = {
   isLoading: boolean;
@@ -119,37 +123,35 @@ export function useMonomerMdSimulation() {
     artifactDeleteError: null
   });
   const pollTokenRef = useRef(0);
-  const statusTokenRef = useRef(0);
+  const statusLoaderRef = useRef<MonomerMdStatusLoader | null>(null);
+  if (statusLoaderRef.current === null) {
+    statusLoaderRef.current = new MonomerMdStatusLoader(fetchMonomerMdStatus, fetchMonomerMdProtocols);
+  }
 
   const refreshStatus = useCallback(async () => {
-    const token = statusTokenRef.current + 1;
-    statusTokenRef.current = token;
-    setState((current) => ({ ...current, isStatusLoading: true, statusError: null }));
-    try {
-      const serviceStatus = await fetchMonomerMdStatus();
-      const protocolCatalog = await fetchMonomerMdProtocols();
-      if (statusTokenRef.current !== token) {
-        return;
-      }
-      setState((current) => ({
-        ...current,
-        serviceStatus,
-        protocolCatalog,
-        isStatusLoading: false,
-        statusError: null,
-        protocolsError: null
-      }));
-    } catch (error) {
-      if (statusTokenRef.current !== token) {
-        return;
-      }
-      setState((current) => ({
-        ...current,
-        isStatusLoading: false,
-        statusError: error instanceof Error ? error.message : "检查单体 MD 服务状态失败。",
-        protocolsError: error instanceof Error ? error.message : "检查 ByteFF2 协议列表失败。"
-      }));
+    setState((current) => ({ ...current, isStatusLoading: true, statusError: null, protocolsError: null }));
+    const result = await statusLoaderRef.current?.load();
+    if (!result) {
+      return;
     }
+    setState((current) => ({
+      ...current,
+      serviceStatus: result.status.status === "fulfilled" ? result.status.value : current.serviceStatus,
+      protocolCatalog: result.protocols.status === "fulfilled" ? result.protocols.value : current.protocolCatalog,
+      isStatusLoading: false,
+      statusError: monomerMdStatusLoadError(
+        result.status,
+        result.timedOut,
+        "检查单体 MD 服务状态失败。",
+        "检查单体 MD 服务状态超时（10 秒）。"
+      ),
+      protocolsError: monomerMdStatusLoadError(
+        result.protocols,
+        result.timedOut,
+        "检查 ByteFF2 协议列表失败。",
+        "检查 ByteFF2 协议列表超时（10 秒）。"
+      )
+    }));
   }, []);
 
   useEffect(() => {
@@ -173,7 +175,7 @@ export function useMonomerMdSimulation() {
     void refreshStatus();
     return () => {
       pollTokenRef.current += 1;
-      statusTokenRef.current += 1;
+      statusLoaderRef.current?.cancel();
     };
   }, [refreshStatus]);
 

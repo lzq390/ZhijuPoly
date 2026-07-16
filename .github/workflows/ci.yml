@@ -127,7 +127,11 @@ jobs:
           docker compose -f docker-compose.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+          GPU_BROKER_ENVIRONMENT=dev docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.gpu-governed.yml config --quiet
+          GPU_BROKER_ENVIRONMENT=prod docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.gpu-governed.yml config --quiet
           docker compose -f docker-compose.monomer-md-worker.yml config --quiet
+          docker compose -f docker-compose.monomer-md-worker.yml -f docker-compose.monomer-md-worker.gpu-governed.prod.yml config --quiet
+          docker compose -f docker-compose.monomer-md-worker.yml -f docker-compose.monomer-md-worker.gpu-governed.dev.yml config --quiet
 
   script-tests:
     name: Release and deployment script tests
@@ -252,7 +256,9 @@ jobs:
       - name: Install locked Worker dependencies
         run: python -m pip install --require-hashes -r workers/monomer_md_worker/requirements-ci.lock
       - name: Run Worker tests
-        run: python -m pytest workers/monomer_md_worker/tests
+        run: |
+          python -m pytest workers/monomer_md_worker/tests
+          python -m pytest ops/gpu_broker/tests
 
   image-build:
     name: Build ${{ matrix.name }} image without publishing
@@ -464,7 +470,7 @@ jobs:
             -e POLYTAO_ENABLED=false -e RETRO_MODEL_ENABLED=false -e MONOMER_MD_SUBMIT_ENABLED=false
           )
           docker run --rm --network "$network" "${common_env[@]}" "$BACKEND_IMAGE" \
-            python -m app.postgres_migrations --mode bootstrap-expand
+            python -m app.postgres_migrations --mode bootstrap
           docker run --rm --network "$network" "${common_env[@]}" "$BACKEND_IMAGE" \
             python -m app.postgres_preflight --mode schema --strict
           docker run -d --name "$backend" --network "$network" --network-alias backend \
@@ -506,17 +512,6 @@ jobs:
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
             -C "$staging" -czf "$bundle" .
           tar -tzf "$bundle" >/dev/null
-          migration_args=()
-          while IFS=: read -r name kind; do
-            [[ "$kind" == baseline ]] || migration_args+=(--migration "${name}:${kind}")
-          done < <(python3 - <<'PY'
-          import json
-
-          with open("backend/migrations/postgres/manifest.json", encoding="utf-8") as source:
-              for migration in json.load(source)["migrations"]:
-                  print(f"{migration['version']}:{migration['kind']}")
-          PY
-          )
           python3 scripts/release_controller.py build-manifest \
             --sha "$RELEASE_SHA" \
             --ci-run-id "$GITHUB_RUN_ID" \
@@ -524,7 +519,7 @@ jobs:
             --web-image "$WEB_IMAGE" \
             --release-bundle "$bundle" \
             --release-input release-input.json \
-            "${migration_args[@]}" \
+            --migration-manifest backend/migrations/postgres/manifest.json \
             --output dist/release-manifest.json
           python3 scripts/release_controller.py verify-manifest \
             --manifest dist/release-manifest.json --sha "$RELEASE_SHA"
@@ -551,16 +546,13 @@ jobs:
         if: steps.freshness.outputs.superseded == 'false'
         env:
           EVENT_NAME: ${{ github.event_name }}
-          AUTODEPLOY_ENABLED: ${{ vars.NEXPOLY_AUTODEPLOY_ENABLED }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
             echo "enabled=true" >>"$GITHUB_OUTPUT"
-          elif [[ "$AUTODEPLOY_ENABLED" == true ]]; then
-            echo "enabled=true" >>"$GITHUB_OUTPUT"
           else
             echo "enabled=false" >>"$GITHUB_OUTPUT"
-            echo "Images and the release bundle passed smoke, but NEXPOLY_AUTODEPLOY_ENABLED is not true; production was not changed." >>"$GITHUB_STEP_SUMMARY"
+            echo "Automatic production deployment is disabled during the migration-epoch bridge; production was not changed." >>"$GITHUB_STEP_SUMMARY"
           fi
       - name: Deploy bundle over pinned-host-key SSH
         if: >-

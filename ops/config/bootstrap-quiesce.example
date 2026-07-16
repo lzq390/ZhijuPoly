@@ -34,7 +34,7 @@ python3 - "$evidence" <<'PY'
 import json
 import sys
 
-categories = (
+categories_v1 = (
     "monomer_md",
     "polytao",
     "online_knowledge",
@@ -44,20 +44,32 @@ categories = (
     "gpu_waiting",
     "inflight_api_writes",
 )
+categories_v2 = (*categories_v1, "monomer_dft")
 with open(sys.argv[1], encoding="utf-8") as source:
     document = json.load(source)
-if not isinstance(document, dict) or set(document) != {
-    "schema_version", "ingress_isolated", "active_jobs", "active_total"
+required_fields = {"ingress_isolated", "active_jobs", "active_total"}
+if not isinstance(document, dict) or frozenset(document) not in {
+    frozenset(required_fields),
+    frozenset((*required_fields, "active_jobs_schema_version")),
 }:
     raise SystemExit("bootstrap probe returned an invalid object")
 jobs = document["active_jobs"]
-if document["schema_version"] != 1 or document["ingress_isolated"] is not True:
+schema_version = document.get("active_jobs_schema_version", 1)
+if (
+    isinstance(schema_version, bool)
+    or not isinstance(schema_version, int)
+    or schema_version not in {1, 2}
+):
+    raise SystemExit("bootstrap probe returned an unsupported schema version")
+if document["ingress_isolated"] is not True:
     raise SystemExit("bootstrap probe did not confirm isolated ingress")
+categories = categories_v2 if schema_version == 2 else categories_v1
 if not isinstance(jobs, dict) or set(jobs) != set(categories):
     raise SystemExit("bootstrap probe did not cover every active-job category")
 if any(isinstance(jobs[name], bool) or not isinstance(jobs[name], int) or jobs[name] != 0 for name in categories):
     raise SystemExit("bootstrap probe found active work or an invalid count")
 if isinstance(document["active_total"], bool) or document["active_total"] != 0:
     raise SystemExit("bootstrap probe active_total must be zero")
+document["active_jobs_schema_version"] = schema_version
 print(json.dumps(document, sort_keys=True, separators=(",", ":")))
 PY

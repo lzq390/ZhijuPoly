@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.config import Settings
-from app.migration_policy import load_migration_manifest
+from app.migration_policy import validate_migration_manifest_entries
 from app.postgres_database import PostgresUnavailableError, postgres_connection
 
 SQLITE_TABLES = {
@@ -46,9 +46,28 @@ POSTGRES_TABLES = [
 _MIGRATION_MANIFEST = (
     Path(__file__).resolve().parents[1] / "migrations" / "postgres" / "manifest.json"
 )
-_MIGRATION_POLICY = load_migration_manifest(_MIGRATION_MANIFEST)
+_MIGRATION_POLICY = validate_migration_manifest_entries(_MIGRATION_MANIFEST.parent)
+_MIGRATION_CHECKSUMS = {
+    migration.version: str(migration.checksum) for migration in _MIGRATION_POLICY
+}
+_EXPAND_MIGRATIONS = tuple(
+    migration.version
+    for migration in _MIGRATION_POLICY
+    if migration.kind in {"baseline", "expand"}
+)
+_REQUIRED_CONTRACT_DEPENDENCIES = frozenset(
+    requirement.version
+    for migration in _MIGRATION_POLICY
+    if migration.kind in {"baseline", "expand"}
+    for requirement in migration.requires_contracts
+)
 STRICT_REQUIRED_MIGRATIONS = tuple(
-    migration.version for migration in _MIGRATION_POLICY if migration.kind in {"baseline", "expand"}
+    migration.version
+    for migration in _MIGRATION_POLICY
+    if (
+        migration.version in _EXPAND_MIGRATIONS
+        or migration.version in _REQUIRED_CONTRACT_DEPENDENCIES
+    )
 )
 KNOWN_CONTRACT_MIGRATIONS = tuple(
     migration.version for migration in _MIGRATION_POLICY if migration.kind == "contract"
@@ -99,13 +118,27 @@ def _postgres_count(connection, schema: str, table: str) -> int | None:
     return int(row["count"])
 
 
-def _postgres_applied_migrations(connection) -> list[str]:
+def _postgres_applied_migrations(
+    connection,
+) -> tuple[dict[str, str], list[dict[str, object]]]:
     if not _postgres_table_exists(connection, "governance", "schema_migrations"):
-        return []
+        return {}, []
     rows = connection.execute(
-        "SELECT version FROM governance.schema_migrations ORDER BY version"
+        "SELECT version, checksum FROM governance.schema_migrations ORDER BY version, checksum"
     ).fetchall()
-    return [str(row["version"]) for row in rows]
+    applied: dict[str, str] = {}
+    checksums_by_version: dict[str, list[str]] = {}
+    for row in rows:
+        version = str(row["version"])
+        checksum = str(row["checksum"])
+        checksums_by_version.setdefault(version, []).append(checksum)
+        applied.setdefault(version, checksum)
+    duplicates = [
+        {"version": version, "checksums": checksums}
+        for version, checksums in sorted(checksums_by_version.items())
+        if len(checksums) > 1
+    ]
+    return applied, duplicates
 
 
 SNAPSHOT_ROW_COMPARISONS = {
@@ -181,6 +214,24 @@ def strict_preflight_errors(report: dict[str, object]) -> list[str]:
     else:
         for version in migrations.get("missing", []):
             errors.append(f"Required Postgres migration is missing: {version}")
+        for mismatch in migrations.get("checksum_mismatches", []):
+            if isinstance(mismatch, dict):
+                errors.append(
+                    "Postgres migration checksum differs from the canonical source: "
+                    f"{mismatch.get('version')}"
+                )
+        for version in migrations.get("unknown_migrations", []):
+            errors.append(
+                f"Postgres migration ledger contains an unknown version: {version}"
+            )
+        for duplicate in migrations.get("duplicate_migrations", []):
+            if isinstance(duplicate, dict):
+                errors.append(
+                    "Postgres migration ledger contains a duplicate version: "
+                    f"{duplicate.get('version')}"
+                )
+        for dependency in migrations.get("dependency_errors", []):
+            errors.append(f"Postgres migration contract dependency is not satisfied: {dependency}")
 
     tables = postgres.get("tables")
     if not isinstance(tables, dict):
@@ -256,6 +307,10 @@ def run_preflight(
             "applied": [],
             "missing": list(STRICT_REQUIRED_MIGRATIONS),
             "pending_contracts": list(KNOWN_CONTRACT_MIGRATIONS),
+            "checksum_mismatches": [],
+            "dependency_errors": [],
+            "unknown_migrations": [],
+            "duplicate_migrations": [],
         },
         "files": {},
     }
@@ -298,7 +353,28 @@ def run_preflight(
     try:
         with postgres_connection(target_dsn) as connection:
             version = connection.execute("SELECT current_database() AS database, current_user AS user, version() AS version").fetchone()
-            applied_migrations = _postgres_applied_migrations(connection)
+            applied_migrations, duplicate_migrations = _postgres_applied_migrations(
+                connection
+            )
+            checksum_mismatches = [
+                {
+                    "version": version,
+                    "expected": expected,
+                    "actual": applied_migrations[version],
+                }
+                for version, expected in _MIGRATION_CHECKSUMS.items()
+                if version in applied_migrations and applied_migrations[version] != expected
+            ]
+            dependency_errors = [
+                f"{migration.version} requires {requirement.version}@{requirement.checksum}"
+                for migration in _MIGRATION_POLICY
+                if migration.version in applied_migrations
+                for requirement in migration.requires_contracts
+                if applied_migrations.get(requirement.version) != requirement.checksum
+            ]
+            unknown_migrations = sorted(
+                set(applied_migrations).difference(_MIGRATION_CHECKSUMS)
+            )
             report["postgres"] = {
                 "reachable": True,
                 "database": version["database"],
@@ -312,13 +388,17 @@ def run_preflight(
             report["migrations"] = {
                 "required": list(STRICT_REQUIRED_MIGRATIONS),
                 "contracts": list(KNOWN_CONTRACT_MIGRATIONS),
-                "applied": applied_migrations,
-                "missing": [version for version in STRICT_REQUIRED_MIGRATIONS if version not in set(applied_migrations)],
+                "applied": list(applied_migrations),
+                "missing": [version for version in STRICT_REQUIRED_MIGRATIONS if version not in applied_migrations],
                 "pending_contracts": [
                     version
                     for version in KNOWN_CONTRACT_MIGRATIONS
-                    if version not in set(applied_migrations)
+                    if version not in applied_migrations
                 ],
+                "checksum_mismatches": checksum_mismatches,
+                "dependency_errors": dependency_errors,
+                "unknown_migrations": unknown_migrations,
+                "duplicate_migrations": duplicate_migrations,
             }
             report["analytics_snapshot"] = _analytics_snapshot_report(connection)
     except PostgresUnavailableError as exc:

@@ -4,22 +4,37 @@ import asyncio
 import csv
 import hashlib
 import json
-import os
 import re
-import signal
 import shlex
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .byteff2_env import ByteFF2SubprocessEnvironment, build_byteff2_environment
 from .config import WorkerSettings
 from .byteff2_formal_runner import ByteFF2FormalRunner, resolve_byteff2_commit
 from .models import JobRequest
+from .process_control import (
+    await_safety_cleanup,
+    create_fenced_subprocess_exec,
+    wait_for_process_group,
+)
+from gpu_resource import (
+    GpuBrokerClient,
+    GpuBrokerClientError,
+    ManagedGpuLease,
+    mps_client_environment,
+)
 
 NOT_PHYSICAL_WARNING = (
     "Density demo output is not equilibrated and is not a physical density estimate."
 )
+STABLE_ACQUIRE_COLLECTION_GRACE_SECONDS = 1.0
+STABLE_ACQUIRE_SCHEDULING_ALLOWANCE_SECONDS = 2.0
+DEFAULT_BROKER_CLIENT_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -30,15 +45,441 @@ class DemoRunResult:
 
 
 class MonomerMdRunner:
-    def __init__(self, settings: WorkerSettings) -> None:
+    def __init__(
+        self,
+        settings: WorkerSettings,
+        *,
+        gpu_broker_client: GpuBrokerClient | None = None,
+    ) -> None:
         self._settings = settings
-        self._formal_runner = ByteFF2FormalRunner(settings)
+        self._byteff2_environment = build_byteff2_environment(settings)
+        self._formal_runner = ByteFF2FormalRunner(
+            settings,
+            environment=self._byteff2_environment,
+        )
+        self._gpu_broker_client = gpu_broker_client
+        if settings.gpu_broker_enabled and self._gpu_broker_client is None:
+            self._gpu_broker_client = GpuBrokerClient(settings.gpu_broker_socket_path)
+        self._gpu_admission_uncertain = False
 
-    async def run(self, request: JobRequest, steps: int) -> DemoRunResult:
+    @property
+    def gpu_admission_uncertain(self) -> bool:
+        return self._gpu_admission_uncertain
+
+    @property
+    def byteff2_environment(self) -> ByteFF2SubprocessEnvironment:
+        return self._byteff2_environment
+
+    async def acquire_execution_lease(self, job_id: str) -> ManagedGpuLease | None:
+        if self._settings.mode != "real" or not self._settings.gpu_broker_enabled:
+            return None
+        job_token = hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:16]
+        client_id = f"md-{self._settings.gpu_broker_environment}-{job_token}"
+        request_id = f"md:{self._settings.gpu_broker_environment}:{job_token}"
+        client_timeout = float(
+            getattr(
+                self._gpu_broker_client,
+                "timeout_seconds",
+                DEFAULT_BROKER_CLIENT_TIMEOUT_SECONDS,
+            )
+        )
+        local_timeout_seconds = (
+            self._settings.gpu_broker_wait_timeout_seconds
+            + (2.0 * max(client_timeout, 0.0))
+            + STABLE_ACQUIRE_SCHEDULING_ALLOWANCE_SECONDS
+        )
+        return await self._acquire_md_execution_lease(
+            client_id=client_id,
+            request_id=request_id,
+            wait_timeout_seconds=self._settings.gpu_broker_wait_timeout_seconds,
+            # The Broker owns the queue wait budget.  Keep a small transport
+            # allowance, but never let an ambiguous/lost response strand a
+            # submitted job forever; timeout cleanup resolves the exact
+            # request id or degrades this Worker fail-closed.
+            local_timeout_seconds=local_timeout_seconds,
+        )
+
+    async def acquire_runtime_probe_lease(
+        self,
+        worker_instance_id: str,
+        *,
+        timeout_seconds: float,
+    ) -> ManagedGpuLease | None:
+        if self._settings.mode != "real" or not self._settings.gpu_broker_enabled:
+            return None
+        if timeout_seconds <= 0:
+            raise asyncio.TimeoutError
+        probe_token = hashlib.sha256(
+            f"runtime-probe:{worker_instance_id}".encode("utf-8")
+        ).hexdigest()[:16]
+        client_id = (
+            f"md-{self._settings.gpu_broker_environment}-probe-{probe_token}"
+        )
+        request_id = (
+            f"md:{self._settings.gpu_broker_environment}:probe:{probe_token}"
+        )
+        return await self._acquire_md_execution_lease(
+            client_id=client_id,
+            request_id=request_id,
+            wait_timeout_seconds=min(
+                self._settings.gpu_broker_wait_timeout_seconds,
+                timeout_seconds,
+            ),
+            local_timeout_seconds=timeout_seconds,
+        )
+
+    async def _acquire_md_execution_lease(
+        self,
+        *,
+        client_id: str,
+        request_id: str,
+        wait_timeout_seconds: float,
+        local_timeout_seconds: float | None = None,
+    ) -> ManagedGpuLease:
+        if self._gpu_broker_client is None:  # pragma: no cover - constructor invariant
+            raise RuntimeError("GPU broker client is unavailable")
+        if self._gpu_admission_uncertain:
+            raise GpuBrokerClientError(
+                "gpu_runtime_unhealthy",
+                "a previous GPU admission has unresolved ownership",
+            )
+        # One long-lived Broker waiter preserves global Prod-before-Dev FIFO.
+        # Repeated zero-timeout polling would create a fresh queue sequence and
+        # can starve or leapfrog other governed workloads.
+        cancellation_requested = threading.Event()
+        cancellation_authoritative = threading.Event()
+        cancellation_decided = threading.Event()
+        acquire_arguments = {
+            "kind": "execution",
+            "placement": "any",
+            "component": "md",
+            "environment": self._settings.gpu_broker_environment,
+            "client_id": client_id,
+            "memory_mib": 8_192,
+            "thread_percent": 50,
+            "wait_timeout_seconds": wait_timeout_seconds,
+            "heartbeat_interval_seconds": self._settings.gpu_broker_heartbeat_interval_seconds,
+            "request_id": request_id,
+        }
+        acquire_task = self._start_stable_acquire(
+            acquire_arguments,
+            cancellation_requested,
+            cancellation_authoritative,
+            cancellation_decided,
+        )
+        try:
+            shielded_acquire = asyncio.shield(acquire_task)
+            if local_timeout_seconds is None:
+                managed = await shielded_acquire
+            else:
+                managed = await asyncio.wait_for(
+                    shielded_acquire,
+                    timeout=local_timeout_seconds,
+                )
+        except asyncio.CancelledError:
+            # Explicitly cancel the stable waiter, then collect a raced
+            # allocation before propagating cancellation.  No reservation is
+            # allowed to become an unobserved background-thread result.
+            await await_safety_cleanup(
+                self._cancel_acquire_and_collect(
+                    request_id,
+                    acquire_task,
+                    cancellation_requested,
+                    cancellation_authoritative,
+                    cancellation_decided,
+                )
+            )
+            raise
+        except asyncio.TimeoutError:
+            await await_safety_cleanup(
+                self._cancel_acquire_and_collect(
+                    request_id,
+                    acquire_task,
+                    cancellation_requested,
+                    cancellation_authoritative,
+                    cancellation_decided,
+                )
+            )
+            raise asyncio.TimeoutError(
+                "GPU admission timed out within its bounded local deadline"
+            ) from None
+        gpu_uuids = {
+            1: "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+            2: "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+            3: "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5",
+        }
+        policy = (
+            (2, 3, 1)
+            if self._settings.gpu_broker_environment == "prod"
+            else (1, 3)
+        )
+        lease_payload = managed.lease
+        valid_identity = (
+            isinstance(getattr(lease_payload, "lease_id", None), str)
+            and bool(lease_payload.lease_id)
+            and isinstance(getattr(lease_payload, "fencing_token", None), int)
+            and not isinstance(lease_payload.fencing_token, bool)
+            and lease_payload.fencing_token > 0
+            and isinstance(getattr(lease_payload, "broker_instance_id", None), str)
+            and bool(lease_payload.broker_instance_id)
+        )
+        expected_metadata = {
+            "kind": "execution",
+            "placement": "any",
+            "component": "md",
+            "environment": self._settings.gpu_broker_environment,
+            "client_id": client_id,
+            "memory_mib": 8_192,
+            "thread_percent": 50,
+            "parent_lease_id": None,
+            "status": "active",
+            "request_id": request_id,
+        }
+        gpu_index = getattr(lease_payload, "gpu_index", None)
+        valid_gpu = (
+            isinstance(gpu_index, int)
+            and not isinstance(gpu_index, bool)
+            and gpu_index in policy
+            and getattr(lease_payload, "gpu_uuid", None) == gpu_uuids[gpu_index]
+            and getattr(lease_payload, "preferred", None) == (gpu_index == policy[0])
+        )
+        if not valid_identity or not valid_gpu or any(
+            getattr(lease_payload, name, object()) != expected
+            for name, expected in expected_metadata.items()
+        ):
+            await await_safety_cleanup(self._close_execution_lease(managed))
+            raise RuntimeError("GPU broker returned invalid MD execution lease metadata")
+        return managed
+
+    def _acquire_managed_stable(
+        self,
+        acquire_arguments: dict[str, Any],
+        cancellation_requested: threading.Event,
+        cancellation_authoritative: threading.Event,
+        cancellation_decided: threading.Event,
+    ) -> ManagedGpuLease:
+        """Recover one ambiguous Broker response with the exact request ID.
+
+        A disconnected or truncated UDS response is not proof that admission
+        failed.  The Broker binds the request ID to either its waiter or its
+        lease, so only same-ID recovery can avoid orphaning live-owner GPU
+        budget.  After the admission deadline, and after cancellation, all
+        retries are zero-wait identity probes.
+        """
+
+        if self._gpu_broker_client is None:  # pragma: no cover - invariant
+            raise RuntimeError("GPU broker client is unavailable")
+        original_timeout = max(
+            0.0,
+            float(acquire_arguments["wait_timeout_seconds"]),
+        )
+        admission_deadline = time.monotonic() + original_timeout
+        recovery_backoff_seconds = 0.05
+        first_attempt = True
+        while True:
+            if cancellation_requested.is_set():
+                # A cancel RPC may already be linearized in the Broker while
+                # its True response is still in transit.  Do not issue a new
+                # same-ID recovery RPC until that decision is known: doing so
+                # could create a post-cancel grant whose response is lost.
+                cancellation_decided.wait()
+                if cancellation_authoritative.is_set():
+                    raise GpuBrokerClientError(
+                        "acquire_cancelled",
+                        "GPU acquire was authoritatively cancelled",
+                    )
+            call_arguments = dict(acquire_arguments)
+            call_arguments["wait_timeout_seconds"] = (
+                0.0
+                if cancellation_requested.is_set()
+                else (
+                    original_timeout
+                    if first_attempt
+                    else max(0.0, admission_deadline - time.monotonic())
+                )
+            )
+            first_attempt = False
+            try:
+                managed = self._gpu_broker_client.acquire_managed(**call_arguments)
+            except GpuBrokerClientError as exc:
+                if exc.code not in {
+                    "gpu_broker_unavailable",
+                    "invalid_response",
+                }:
+                    raise
+                # Transport uncertainty may hide a grant.  Continue until the
+                # same ID yields that exact lease or an authoritative error.
+                time.sleep(recovery_backoff_seconds)
+                recovery_backoff_seconds = min(
+                    recovery_backoff_seconds * 2.0,
+                    1.0,
+                )
+                continue
+            if not cancellation_requested.is_set():
+                return managed
+            try:
+                managed.close()
+            except BaseException as exc:
+                try:
+                    managed.fail_closed()
+                except Exception:
+                    pass
+                raise GpuBrokerClientError(
+                    "gpu_runtime_unhealthy",
+                    "a raced GPU lease could not be released safely",
+                ) from exc
+            raise GpuBrokerClientError(
+                "acquire_cancelled",
+                "GPU acquire was cancelled after a raced grant",
+            )
+
+    def _start_stable_acquire(
+        self,
+        acquire_arguments: dict[str, Any],
+        cancellation_requested: threading.Event,
+        cancellation_authoritative: threading.Event,
+        cancellation_decided: threading.Event,
+    ) -> asyncio.Future[ManagedGpuLease]:
+        """Run ambiguous-response recovery in a daemon ownership thread."""
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[ManagedGpuLease] = loop.create_future()
+
+        def publish_result(
+            managed: ManagedGpuLease | None,
+            error: BaseException | None,
+        ) -> None:
+            if future.done():
+                if managed is not None:
+                    self._close_detached_managed_lease(managed)
+                return
+            if error is not None:
+                future.set_exception(error)
+            elif managed is not None:
+                future.set_result(managed)
+            else:  # pragma: no cover - thread invariant
+                future.set_exception(RuntimeError("GPU acquire returned no result"))
+
+        def acquire_owner() -> None:
+            managed: ManagedGpuLease | None = None
+            error: BaseException | None = None
+            try:
+                managed = self._acquire_managed_stable(
+                    acquire_arguments,
+                    cancellation_requested,
+                    cancellation_authoritative,
+                    cancellation_decided,
+                )
+            except BaseException as exc:
+                error = exc
+            try:
+                loop.call_soon_threadsafe(publish_result, managed, error)
+            except RuntimeError:
+                # The event loop is already gone. A cancellation-aware helper
+                # closes any raced grant itself; abrupt process exit lets the
+                # Broker reclaim this exact owner PID.
+                if managed is not None:
+                    self._close_detached_managed_lease(managed)
+
+        threading.Thread(
+            target=acquire_owner,
+            name=f"md-gpu-acquire-{str(acquire_arguments['request_id'])[-12:]}",
+            daemon=True,
+        ).start()
+        return future
+
+    @staticmethod
+    def _close_detached_managed_lease(managed: ManagedGpuLease) -> None:
+        try:
+            managed.close()
+        except BaseException:
+            try:
+                managed.fail_closed()
+            except Exception:
+                pass
+
+    async def _cancel_acquire_and_collect(
+        self,
+        request_id: str,
+        acquire_task: asyncio.Future[ManagedGpuLease],
+        cancellation_requested: threading.Event,
+        cancellation_authoritative: threading.Event,
+        cancellation_decided: threading.Event,
+    ) -> None:
+        if self._gpu_broker_client is None:  # pragma: no cover - constructor invariant
+            return
+        cancellation_requested.set()
+        try:
+            cancelled = await asyncio.to_thread(
+                self._gpu_broker_client.cancel_acquire,
+                request_id,
+            )
+            if cancelled is True:
+                cancellation_authoritative.set()
+        except GpuBrokerClientError:
+            pass
+        finally:
+            # Release the ownership-thread barrier for both authoritative and
+            # ambiguous cancel decisions.
+            cancellation_decided.set()
+        try:
+            acquired = await asyncio.wait_for(
+                asyncio.shield(acquire_task),
+                timeout=STABLE_ACQUIRE_COLLECTION_GRACE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            self._gpu_admission_uncertain = True
+            acquire_task.add_done_callback(self._consume_detached_acquire)
+            return
+        except (GpuBrokerClientError, asyncio.CancelledError):
+            return
+        try:
+            await asyncio.to_thread(acquired.close)
+        except Exception:
+            acquired.fail_closed()
+
+    def _consume_detached_acquire(
+        self,
+        acquire_task: asyncio.Future[ManagedGpuLease],
+    ) -> None:
+        try:
+            managed = acquire_task.result()
+        except BaseException:
+            return
+        threading.Thread(
+            target=self._close_detached_managed_lease,
+            args=(managed,),
+            name="md-gpu-late-grant-close",
+            daemon=True,
+        ).start()
+
+    async def release_execution_lease(self, lease: ManagedGpuLease | None) -> None:
+        if lease is not None:
+            await await_safety_cleanup(self._close_execution_lease(lease))
+
+    @staticmethod
+    async def _close_execution_lease(lease: ManagedGpuLease) -> None:
+        try:
+            await asyncio.to_thread(lease.close)
+        except Exception:
+            lease.fail_closed()
+            raise
+
+    async def run(
+        self,
+        request: JobRequest,
+        steps: int,
+        *,
+        execution_lease: ManagedGpuLease | None = None,
+    ) -> DemoRunResult:
         output_dir = self._job_output_dir(request.job_id)
         output_dir.mkdir(parents=True, exist_ok=True)
         if request.run_mode == "formal":
-            formal_result = await self._formal_runner.run(request, output_dir)
+            formal_result = await self._formal_runner.run(
+                request,
+                output_dir,
+                execution_lease=execution_lease,
+            )
             return DemoRunResult(
                 result=formal_result.result,
                 output_dir=output_dir,
@@ -46,7 +487,12 @@ class MonomerMdRunner:
             )
         if self._settings.mode == "dry-run":
             return await asyncio.to_thread(self._run_dry_run, request, steps, output_dir)
-        return await self._run_real(request, steps, output_dir)
+        return await self._run_real(
+            request,
+            steps,
+            output_dir,
+            execution_lease=execution_lease,
+        )
 
     def _run_dry_run(
         self, request: JobRequest, steps: int, output_dir: Path
@@ -115,43 +561,55 @@ class MonomerMdRunner:
         return DemoRunResult(result=result, output_dir=output_dir, completed_steps=steps)
 
     async def _run_real(
-        self, request: JobRequest, steps: int, output_dir: Path
+        self,
+        request: JobRequest,
+        steps: int,
+        output_dir: Path,
+        *,
+        execution_lease: ManagedGpuLease | None,
     ) -> DemoRunResult:
         if not self._settings.byteff2_root.exists():
             raise RuntimeError(f"ByteFF2 root does not exist: {self._settings.byteff2_root}")
 
         command = self._build_real_command(request, steps, output_dir)
-        env = os.environ.copy()
-        env["BYTEFF2_ROOT"] = str(self._settings.byteff2_root)
-        env["CUDA_VISIBLE_DEVICES"] = self._settings.cuda_visible_devices
+        environment = self._byteff2_environment
+        env = environment.as_dict()
+        if self._settings.gpu_broker_enabled and execution_lease is None:
+            raise RuntimeError("Broker-governed MD execution requires an active GPU lease")
+        if execution_lease is not None:
+            env.update(
+                mps_client_environment(
+                    execution_lease.lease,
+                    pipe_root=self._settings.gpu_mps_pipe_root,
+                )
+            )
+            result_gpu_device = str(execution_lease.lease.gpu_index)
+        else:
+            env["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = "50"
+            result_gpu_device = self._settings.cuda_visible_devices
         env["MONOMER_MD_DEMO_NOT_EQUILIBRATED"] = "1"
-        env["PYTHONPATH"] = os.pathsep.join(
-            [str(self._settings.byteff2_root), env.get("PYTHONPATH", "")]
-        ).strip(os.pathsep)
 
         stdout_path = output_dir / "worker_stdout.log"
         stderr_path = output_dir / "worker_stderr.log"
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            process = await asyncio.create_subprocess_exec(
-                *command,
+            process = await create_fenced_subprocess_exec(
+                command,
+                execution_lease=execution_lease,
                 cwd=self._settings.byteff2_root,
                 env=env,
                 stdout=stdout,
                 stderr=stderr,
-                start_new_session=True,
             )
             try:
-                return_code = await asyncio.wait_for(
-                    process.wait(), timeout=self._settings.timeout_seconds
+                return_code = await wait_for_process_group(
+                    process,
+                    timeout_seconds=self._settings.timeout_seconds,
+                    execution_lease=execution_lease,
                 )
             except asyncio.TimeoutError as exc:
-                await _terminate_process_group(process)
                 raise RuntimeError(
                     f"ByteFF2 density demo timed out after {self._settings.timeout_seconds}s"
                 ) from exc
-            except asyncio.CancelledError:
-                await _terminate_process_group(process)
-                raise
 
         if return_code != 0:
             raise RuntimeError(
@@ -178,8 +636,12 @@ class MonomerMdRunner:
         result = self._normalize_result(
             raw_result, request=request, steps=steps, output_dir=output_dir
         )
+        result["gpu_device"] = result_gpu_device
+        if execution_lease is not None:
+            result.update(_lease_provenance(execution_lease))
         self._write_json(result_path, result)
         return DemoRunResult(result=result, output_dir=output_dir, completed_steps=steps)
+
     def output_dir_for_job(self, job_id: str) -> Path:
         return self._job_output_dir(job_id)
 
@@ -402,24 +864,15 @@ class MonomerMdRunner:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
         tmp_path.replace(path)
-
-
-async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is not None:
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        await process.wait()
-        return
-    try:
-        await asyncio.wait_for(process.wait(), timeout=10)
-        return
-    except asyncio.TimeoutError:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        await process.wait()
-        return
-    await process.wait()
+def _lease_provenance(execution_lease: ManagedGpuLease) -> dict[str, Any]:
+    lease = execution_lease.lease
+    return {
+        "execution_path": "broker",
+        "gpu_uuid": lease.gpu_uuid,
+        "gpu_budget_mib": lease.memory_mib,
+        "gpu_thread_percent": lease.thread_percent,
+        "gpu_lease_id": lease.lease_id,
+        "gpu_fencing_token": lease.fencing_token,
+        "gpu_broker_instance_id": lease.broker_instance_id,
+        "gpu_preferred_device": lease.preferred,
+    }

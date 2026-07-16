@@ -99,6 +99,11 @@ def sanitize_formal_config(config: dict[str, Any], protocol: str, job_root: str)
         raise ValueError(f"unsupported formal ByteFF2 protocol: {protocol}")
     if config.get("protocol") != protocol:
         raise ValueError("config_json.protocol must match the selected protocol")
+    natoms = config.get("natoms")
+    if isinstance(natoms, bool) or not isinstance(natoms, int) or natoms <= 0:
+        raise ValueError("config_json.natoms must be a positive integer")
+    if natoms > 10_000:
+        raise ValueError("config_json.natoms must be <= 10000")
     sanitized = copy.deepcopy(config)
     sanitized["params_dir"] = f"{job_root}/params"
     sanitized["output_dir"] = f"{job_root}/outputs"

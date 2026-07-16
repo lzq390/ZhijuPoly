@@ -111,6 +111,12 @@ class Settings:
         gpu_max_waiting_inferences: int | None = None,
         gpu_sync_queue_timeout_seconds: float | None = None,
         gpu_async_queue_timeout_seconds: float | None = None,
+        gpu_broker_enabled: bool | None = None,
+        gpu_broker_socket_path: str | None = None,
+        gpu_mps_pipe_root: str | None = None,
+        gpu_broker_environment: str | None = None,
+        gpu_broker_wait_timeout_seconds: float | None = None,
+        gpu_broker_heartbeat_interval_seconds: float | None = None,
         polytao_enabled: bool | None = None,
         polytao_model_dir: str | None = None,
         polytao_device: str | None = None,
@@ -468,6 +474,43 @@ class Settings:
                 str(env_values.get("GPU_ASYNC_QUEUE_TIMEOUT_SECONDS", "600")),
             )
         )
+        raw_gpu_broker_enabled = gpu_broker_enabled
+        if raw_gpu_broker_enabled is None:
+            raw_gpu_broker_enabled = os.getenv(
+                "GPU_BROKER_ENABLED",
+                str(env_values.get("GPU_BROKER_ENABLED", "false")),
+            ).strip().lower() in {"1", "true", "yes", "on"}
+        raw_gpu_broker_socket_path = gpu_broker_socket_path or os.getenv(
+            "GPU_BROKER_SOCKET_PATH",
+            env_values.get("GPU_BROKER_SOCKET_PATH", "/run/user/1001/nexpoly-gpu/broker.sock"),
+        )
+        raw_gpu_mps_pipe_root = gpu_mps_pipe_root or os.getenv(
+            "GPU_MPS_PIPE_ROOT",
+            env_values.get(
+                "GPU_MPS_PIPE_ROOT",
+                "/data/lzq/gith/nexpoly/ops/state/gpu-resource",
+            ),
+        )
+        raw_gpu_broker_environment = gpu_broker_environment or os.getenv(
+            "GPU_BROKER_ENVIRONMENT",
+            env_values.get("GPU_BROKER_ENVIRONMENT", "dev"),
+        )
+        raw_gpu_broker_wait_timeout_seconds = (
+            str(gpu_broker_wait_timeout_seconds)
+            if gpu_broker_wait_timeout_seconds is not None
+            else os.getenv(
+                "GPU_BROKER_WAIT_TIMEOUT_SECONDS",
+                str(env_values.get("GPU_BROKER_WAIT_TIMEOUT_SECONDS", "45")),
+            )
+        )
+        raw_gpu_broker_heartbeat_interval_seconds = (
+            str(gpu_broker_heartbeat_interval_seconds)
+            if gpu_broker_heartbeat_interval_seconds is not None
+            else os.getenv(
+                "GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS",
+                str(env_values.get("GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS", "5")),
+            )
+        )
         raw_polytao_enabled = polytao_enabled
         if raw_polytao_enabled is None:
             raw_polytao_enabled_value = os.getenv(
@@ -671,6 +714,22 @@ class Settings:
         self.gpu_max_waiting_inferences = max(0, int(raw_gpu_max_waiting_inferences))
         self.gpu_sync_queue_timeout_seconds = max(0.001, float(raw_gpu_sync_queue_timeout_seconds))
         self.gpu_async_queue_timeout_seconds = max(0.001, float(raw_gpu_async_queue_timeout_seconds))
+        self.gpu_broker_enabled = bool(raw_gpu_broker_enabled)
+        self.gpu_broker_socket_path = str(raw_gpu_broker_socket_path).strip()
+        if not self.gpu_broker_socket_path:
+            raise ValueError("GPU_BROKER_SOCKET_PATH must not be empty")
+        self.gpu_mps_pipe_root = str(raw_gpu_mps_pipe_root).strip()
+        if not self.gpu_mps_pipe_root:
+            raise ValueError("GPU_MPS_PIPE_ROOT must not be empty")
+        self.gpu_broker_environment = str(raw_gpu_broker_environment).strip().lower()
+        if self.gpu_broker_environment not in {"prod", "dev"}:
+            raise ValueError("GPU_BROKER_ENVIRONMENT must be one of: prod, dev")
+        self.gpu_broker_wait_timeout_seconds = max(
+            0.0, float(raw_gpu_broker_wait_timeout_seconds)
+        )
+        self.gpu_broker_heartbeat_interval_seconds = max(
+            0.1, float(raw_gpu_broker_heartbeat_interval_seconds)
+        )
         self.polytao_enabled = bool(raw_polytao_enabled)
         self.polytao_submit_enabled = self.polytao_enabled
         self.polytao_model_dir = _resolve_from_root(raw_polytao_model_dir)

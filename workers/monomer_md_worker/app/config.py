@@ -21,6 +21,18 @@ def _get_int(name: str, default: int, *, minimum: int = 1) -> int:
     return value
 
 
+def _get_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
 def _get_mode() -> WorkerMode:
     raw = os.getenv("MONOMER_MD_WORKER_MODE", "dry-run").strip().lower()
     if raw not in {"dry-run", "real"}:
@@ -63,6 +75,14 @@ class WorkerSettings:
     cuda_visible_devices: str
     worker_id: str
     worker_version: str
+    byteff2_openmm_dir: Path | None = None
+    transport_cuda_smoke_enabled: bool = True
+    gpu_broker_enabled: bool = False
+    gpu_broker_socket_path: str = "/run/user/1001/nexpoly-gpu/broker.sock"
+    gpu_mps_pipe_root: Path = Path("/data/lzq/gith/nexpoly/ops/state/gpu-resource")
+    gpu_broker_environment: str = "dev"
+    gpu_broker_wait_timeout_seconds: float = 600.0
+    gpu_broker_heartbeat_interval_seconds: float = 5.0
     formal_timeout_seconds: int = 43200
     protocol_column: str = "protocol"
     run_mode_column: str = "run_mode"
@@ -88,6 +108,50 @@ def load_settings() -> WorkerSettings:
     max_steps = _get_int("MONOMER_MD_MAX_STEPS", default_steps)
     if max_steps < default_steps:
         raise ValueError("MONOMER_MD_MAX_STEPS must be >= MONOMER_MD_DEFAULT_STEPS")
+
+    gpu_broker_environment = os.getenv("MONOMER_MD_GPU_BROKER_ENVIRONMENT", "dev").strip().lower()
+    if gpu_broker_environment not in {"prod", "dev"}:
+        raise ValueError("MONOMER_MD_GPU_BROKER_ENVIRONMENT must be 'prod' or 'dev'")
+    gpu_broker_socket_path = os.getenv(
+        "MONOMER_MD_GPU_BROKER_SOCKET_PATH",
+        "/run/user/1001/nexpoly-gpu/broker.sock",
+    ).strip()
+    if not gpu_broker_socket_path:
+        raise ValueError("MONOMER_MD_GPU_BROKER_SOCKET_PATH must not be empty")
+    gpu_mps_pipe_root = Path(
+        os.getenv(
+            "MONOMER_MD_GPU_MPS_PIPE_ROOT",
+            "/data/lzq/gith/nexpoly/ops/state/gpu-resource",
+        )
+    )
+    if not gpu_mps_pipe_root.is_absolute():
+        raise ValueError("MONOMER_MD_GPU_MPS_PIPE_ROOT must be absolute")
+
+    gpu_broker_wait_timeout_seconds = float(
+        os.getenv("MONOMER_MD_GPU_BROKER_WAIT_TIMEOUT_SECONDS", "600")
+    )
+    if gpu_broker_wait_timeout_seconds < 0:
+        raise ValueError("MONOMER_MD_GPU_BROKER_WAIT_TIMEOUT_SECONDS must be >= 0")
+    gpu_broker_heartbeat_interval_seconds = float(
+        os.getenv("MONOMER_MD_GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS", "5")
+    )
+    if gpu_broker_heartbeat_interval_seconds <= 0:
+        raise ValueError("MONOMER_MD_GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS must be > 0")
+    gpu_broker_enabled = _get_bool("MONOMER_MD_GPU_BROKER_ENABLED")
+    max_concurrent_jobs = _get_int("MONOMER_MD_MAX_CONCURRENT_JOBS", 1)
+    max_active_jobs = _get_int(
+        "MONOMER_MD_MAX_ACTIVE_JOBS",
+        max_concurrent_jobs,
+    )
+    if gpu_broker_enabled and (
+        max_concurrent_jobs != 1 or max_active_jobs != 1
+    ):
+        raise ValueError(
+            "Broker-governed MD requires MONOMER_MD_MAX_CONCURRENT_JOBS=1 "
+            "and MONOMER_MD_MAX_ACTIVE_JOBS=1"
+        )
+
+    byteff2_openmm_dir = os.getenv("BYTEFF2_OPENMM_DIR", "").strip()
 
     return WorkerSettings(
         mode=_get_mode(),
@@ -130,18 +194,27 @@ def load_settings() -> WorkerSettings:
         report_interval=_get_int("MONOMER_MD_REPORT_INTERVAL", 10),
         timeout_seconds=_get_int("MONOMER_MD_TIMEOUT_SECONDS", 3600),
         formal_timeout_seconds=_get_int("MONOMER_MD_FORMAL_TIMEOUT_SECONDS", 43200),
-        health_probe_timeout_seconds=_get_int("MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS", 5),
-        max_concurrent_jobs=_get_int("MONOMER_MD_MAX_CONCURRENT_JOBS", 1),
-        max_active_jobs=_get_int(
-            "MONOMER_MD_MAX_ACTIVE_JOBS",
-            _get_int("MONOMER_MD_MAX_CONCURRENT_JOBS", 1),
-        ),
+        health_probe_timeout_seconds=_get_int("MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS", 30),
+        max_concurrent_jobs=max_concurrent_jobs,
+        max_active_jobs=max_active_jobs,
         cuda_visible_devices=os.getenv(
             "MONOMER_MD_CUDA_VISIBLE_DEVICES",
             os.getenv("NEXPOLY_GPU_DEVICE", "2"),
         ),
         worker_id=os.getenv("MONOMER_MD_WORKER_ID", "monomer-md-worker"),
         worker_version=os.getenv("MONOMER_MD_WORKER_VERSION", "0.1.0"),
+        byteff2_openmm_dir=(
+            Path(byteff2_openmm_dir) if byteff2_openmm_dir else None
+        ),
+        transport_cuda_smoke_enabled=_get_bool(
+            "MONOMER_MD_TRANSPORT_CUDA_SMOKE_ENABLED", True
+        ),
+        gpu_broker_enabled=gpu_broker_enabled,
+        gpu_broker_socket_path=gpu_broker_socket_path,
+        gpu_mps_pipe_root=gpu_mps_pipe_root,
+        gpu_broker_environment=gpu_broker_environment,
+        gpu_broker_wait_timeout_seconds=gpu_broker_wait_timeout_seconds,
+        gpu_broker_heartbeat_interval_seconds=gpu_broker_heartbeat_interval_seconds,
         protocol_column=os.getenv("MONOMER_MD_PROTOCOL_COLUMN", "protocol"),
         run_mode_column=os.getenv("MONOMER_MD_RUN_MODE_COLUMN", "run_mode"),
         artifact_manifest_column=os.getenv("MONOMER_MD_ARTIFACT_MANIFEST_COLUMN", "artifact_manifest"),
