@@ -49,7 +49,7 @@ done
 # Validate the local pair before any SSH connection.  The same validation is
 # repeated remotely after transfer; neither the SSH channel nor a filename is
 # treated as artifact identity.
-python3 - "$manifest" "$release_bundle" "$NEXPOLY_RELEASE_SHA" <<'PY'
+/usr/bin/python3 -I - "$manifest" "$release_bundle" "$NEXPOLY_RELEASE_SHA" <<'PY'
 import hashlib
 import json
 import os
@@ -108,12 +108,9 @@ operation="$4"
 [[ "$production_root" == /data/lzq/gith/nexpoly ]]
 case "$remote_parent" in "$production_root"/ops/incoming/*) ;; *) exit 2 ;; esac
 case "$remote_stage" in "$remote_parent"/*) ;; *) exit 2 ;; esac
-if [[ "$operation" == bootstrap ]]; then
-  [[ ! -e "$production_root/ops/state/release-state.json" && ! -e "$production_root/ops/current" ]] || {
-    echo "bootstrap is forbidden after production release state is initialized" >&2
-    exit 2
-  }
-fi
+# Bootstrap/retry state is decided only by the locked release controller.  A
+# verified-resume-pending or interrupted bootstrap may legitimately have both
+# release-state.json and ops/current and still need recovery.
 install -d -m 700 "$production_root/ops/incoming" "$remote_parent"
 mkdir -m 700 "$remote_stage"
 REMOTE_PREPARE
@@ -142,8 +139,10 @@ esac
 trap 'rm -rf -- "$stage"' EXIT
 chmod 600 "$stage/$manifest_name" "$stage/$bundle_name"
 controller="$stage/release_controller.py"
+worker_env_helper="$stage/monomer_worker_env.py"
 
-python3 - "$stage/$manifest_name" "$stage/$bundle_name" "$controller.tmp" "$release_sha" <<'PY'
+/usr/bin/python3 -I - "$stage/$manifest_name" "$stage/$bundle_name" \
+  "$controller.tmp" "$worker_env_helper.tmp" "$release_sha" <<'PY'
 import hashlib
 import json
 import os
@@ -151,7 +150,7 @@ import stat
 import sys
 import tarfile
 
-manifest_path, bundle_path, output_path, expected_sha = sys.argv[1:]
+manifest_path, bundle_path, controller_output, helper_output, expected_sha = sys.argv[1:]
 with open(manifest_path, encoding="utf-8") as source:
     document = json.load(source)
 if document.get("source_sha") != expected_sha:
@@ -171,26 +170,51 @@ with open(bundle_path, "rb") as source:
 if f"sha256:{digest.hexdigest()}" != record["sha256"]:
     raise SystemExit("release bundle digest differs from manifest")
 with tarfile.open(bundle_path, "r:gz") as archive:
-    matches = [
-        member
-        for member in archive.getmembers()
-        if member.name in {"scripts/release_controller.py", "./scripts/release_controller.py"}
-    ]
-    if len(matches) != 1 or not matches[0].isfile() or matches[0].size > 2 * 1024 * 1024:
-        raise SystemExit("release bundle has an unsafe release controller entry")
-    source = archive.extractfile(matches[0])
-    if source is None:
-        raise SystemExit("cannot read release controller from release bundle")
-    payload = source.read()
-descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
-with os.fdopen(descriptor, "wb") as destination:
-    destination.write(payload)
+    members = archive.getmembers()
+    required = (
+        (
+            {"scripts/release_controller.py", "./scripts/release_controller.py"},
+            controller_output,
+            2 * 1024 * 1024,
+            "release controller",
+        ),
+        (
+            {"scripts/monomer_worker_env.py", "./scripts/monomer_worker_env.py"},
+            helper_output,
+            256 * 1024,
+            "Worker environment helper",
+        ),
+    )
+    for accepted_names, output_path, size_limit, label in required:
+        matches = [member for member in members if member.name in accepted_names]
+        if (
+            len(matches) != 1
+            or not matches[0].isfile()
+            or matches[0].size > size_limit
+        ):
+            raise SystemExit(f"release bundle has an unsafe {label} entry")
+        source = archive.extractfile(matches[0])
+        if source is None:
+            raise SystemExit(f"cannot read {label} from release bundle")
+        payload = source.read(size_limit + 1)
+        if len(payload) != matches[0].size or len(payload) > size_limit:
+            raise SystemExit(f"release bundle has an unsafe {label} payload")
+        descriptor = os.open(
+            output_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o700,
+        )
+        with os.fdopen(descriptor, "wb") as destination:
+            destination.write(payload)
 PY
 
-chmod 700 "$controller.tmp"
+chmod 700 "$controller.tmp" "$worker_env_helper.tmp"
 mv "$controller.tmp" "$controller"
-python3 "$controller" verify-manifest \
+mv "$worker_env_helper.tmp" "$worker_env_helper"
+/usr/bin/python3 -I "$controller" verify-manifest \
   --manifest "$stage/$manifest_name" --sha "$release_sha"
-python3 "$controller" deploy --apply --mode "$mode" \
+/usr/bin/python3 -I "$controller" provision-release --apply --mode "$mode" \
+  --manifest "$stage/$manifest_name" --production-root "$production_root" &&
+/usr/bin/python3 -I "$controller" deploy --apply --mode "$mode" \
   --manifest "$stage/$manifest_name" --production-root "$production_root"
 REMOTE_DEPLOY

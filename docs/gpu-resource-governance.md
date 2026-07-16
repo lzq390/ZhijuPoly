@@ -142,11 +142,14 @@ does not create it and therefore fails closed if delegation is absent.
   `false` in the production Worker template. When enabled, each real job stays
   submitted while it waits for an 8192 MiB execution lease. The selected host
   device is injected into the ByteFF2/OpenMM child only after admission, and
-  the whole dedicated cgroup is gone before release. Health checks perform
-  CPU/filesystem delivery checks only and never import OpenMM or initialize
-  CUDA before a job lease. A
-  one-byte exec gate prevents the child from importing CUDA code until its
-  workload identity is registered and persisted by the Broker.
+  the whole dedicated cgroup is gone before release. Once per Worker process,
+  startup acquires a temporary execution lease and records an immutable
+  ByteFF2/OpenMM/CUDA/Transport snapshot; hot health checks only read that
+  snapshot plus live Broker/capacity state. A one-byte exec gate prevents the
+  probe or job child from importing CUDA code until its workload identity is
+  registered and persisted by the Broker. The configured startup deadline
+  stops admission of further probe work; mandatory cgroup and lease cleanup
+  is still awaited if host safety needs longer than that deadline.
 - Backend and Worker independently reject formal MD configurations with more
   than 10000 atoms.
 

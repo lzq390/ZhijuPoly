@@ -11,7 +11,9 @@ status instead.
 
 ## Immutable production runtime
 
-The frozen ByteFF2 Conda environment is a read-only base. Deployment never runs
+The ByteFF2 Conda environment is an operationally frozen base: its host
+permissions are not assumed to be read-only, so release automation fingerprints
+it before and after provisioning and never writes to it. Deployment never runs
 pip against it. CI puts the Worker source, runtime hash lock, and offline
 wheelhouse into `nexpoly-release-<sha>.tar.gz`. For each release the controller
 creates:
@@ -20,13 +22,26 @@ creates:
 /data/lzq/gith/nexpoly/ops/releases/<sha>/worker-venv
 ```
 
-with `--system-site-packages`, then installs every locked NexPoly distribution
+with `--system-site-packages`. The explicit `provision-release` phase installs
+every locked NexPoly distribution
 into that venv using
 `--no-index --require-hashes --ignore-installed --only-binary=:all:`. A
-post-install check searches only the venv's own site-packages, so a matching
-package inherited from the frozen base cannot satisfy the check. The user
+post-install check statically parses only the venv's own distribution metadata;
+it never starts candidate Python or loads candidate `.pth`/`sitecustomize`, so
+a matching package inherited from the frozen base cannot satisfy the check.
+The user
 systemd unit starts from `ops/current`, so switching or rolling back the symlink
 selects the matching source and venv together.
+
+Provisioning writes a deploy-user-owned mode-0600 `provisioning-ready.json`
+only after it has bound the source SHA, manifest/bundle, locks, wheelhouse,
+complete venv file inventory, and frozen base/toolchain identities. The later
+`deploy` command recomputes that evidence and never creates a venv or invokes
+pip. Recovery accepts only the exact final `<sha>` directory whose mode-0600
+READY digest is recorded in `deploy-in-progress.json`; `.staging` is never an
+executable recovery target. Build and candidate-preflight scratch live below
+`ops/state`, not inside
+the sealed release tree.
 
 `deploy.env` pins both the absolute base Python path and the
 `NEXPOLY_WORKER_BASE_PYTHON_IDENTITY_SHA256` produced by
@@ -66,7 +81,8 @@ systemctl --user daemon-reload
 systemctl --user enable nexpoly-monomer-md-worker.service
 ```
 
-Start it only after the first release has prepared `ops/current/worker-venv`.
+Start it only after the first release has been explicitly provisioned and
+`ops/current/worker-venv` is selected.
 The unit prepends the frozen ByteFF2 environment to `PATH`, so `gmx` resolves
 without activating or modifying Conda. It also requires the ByteFF2 asset tree
 through `ops/current-assets`, creates the socket directory with mode `0700`, and
@@ -78,13 +94,14 @@ never receives the Worker control socket.
 
 Before any runtime switch the release controller:
 
-1. enables application write drain;
-2. calls the Worker `POST /drain`, which stops new Worker jobs;
-3. waits for Monomer MD and every other active job class to reach zero;
-4. defers the entire release after 30 minutes rather than stopping a busy
+1. validates the separately provisioned READY release without installing;
+2. enables application write drain;
+3. calls the Worker `POST /drain`, which stops new Worker jobs;
+4. waits for Monomer MD and every other active job class to reach zero;
+5. defers the entire release after 30 minutes rather than stopping a busy
    Worker, calls `POST /resume`, and reopens the unchanged API;
-5. restarts systemd from the new `ops/current` only after backup and migration;
-6. requires `/health` to report `status=ok` and `runtime_ready=true`.
+6. restarts systemd from the new `ops/current` only after backup and migration;
+7. requires `/health` to report `status=ok` and `runtime_ready=true`.
 
 The backup, migration, `ops/current` switch, and Worker restart all occur only
 after every active-job category is zero. A 30-minute timeout therefore changes

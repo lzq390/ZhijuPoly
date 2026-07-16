@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +11,10 @@ from workers.monomer_md_worker.app.byteff2_formal_runner import ByteFF2FormalRun
 from workers.monomer_md_worker.app.config import WorkerSettings
 from workers.monomer_md_worker.app.models import JobRequest
 from workers.monomer_md_worker.app.repository import JobUpdateResult, PostgresJobRepository
+from workers.monomer_md_worker.app.runtime_health import (
+    ProtocolRuntimeSnapshot,
+    RuntimeSnapshot,
+)
 
 
 RELEASE_SHA = "a" * 40
@@ -76,6 +78,28 @@ def _settings(
     )
 
 
+def _runtime_snapshot(
+    *,
+    ready: bool = True,
+    error: str | None = None,
+    transport_ready: bool = True,
+) -> RuntimeSnapshot:
+    protocols = tuple(
+        ProtocolRuntimeSnapshot(
+            protocol,
+            True,
+            ready and (transport_ready if protocol == "Transport" else True),
+            (
+                "velocityverletplugin is not importable"
+                if protocol == "Transport" and not transport_ready
+                else error
+            ),
+        )
+        for protocol in ("Density", "Transport", "HVap", "Dielectric", "Compressibility")
+    )
+    return RuntimeSnapshot(True, ready, error, protocols)
+
+
 def test_health_exposes_source_and_venv_identity(tmp_path: Path, monkeypatch):
     settings = _settings(tmp_path)
     identity = worker_main.RuntimeIdentity(
@@ -89,12 +113,113 @@ def test_health_exposes_source_and_venv_identity(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(worker_main, "active_jobs", {})
     monkeypatch.setattr(worker_main, "recovery_ready", True)
 
-    response = worker_main._build_health_response()
+    response = asyncio.run(worker_main._build_health_response())
 
     assert response.source_sha is None
     assert response.source_root == identity.source_root
     assert response.venv_prefix == identity.venv_prefix
     assert response.python_executable == identity.python_executable
+
+
+def test_lifespan_starts_runtime_probe_and_initial_recovery_concurrently(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _settings(tmp_path)
+    snapshot = _runtime_snapshot()
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "runtime_probe_initialized", False)
+    monkeypatch.setattr(worker_main, "recovery_ready", False)
+    monkeypatch.setattr(worker_main, "draining", False)
+    started: set[str] = set()
+
+    async def fake_probe(*_args, **_kwargs):
+        started.add("probe")
+        while "recovery" not in started:
+            await asyncio.sleep(0)
+        return snapshot
+
+    async def fake_recovery() -> bool:
+        started.add("recovery")
+        while "probe" not in started:
+            await asyncio.sleep(0)
+        worker_main.recovery_ready = True
+        return True
+
+    monkeypatch.setattr(worker_main, "probe_runtime_snapshot", fake_probe)
+    monkeypatch.setattr(worker_main, "_attempt_recovery", fake_recovery)
+
+    async def scenario() -> None:
+        async with worker_main.lifespan(worker_main.app):
+            assert started == {"probe", "recovery"}
+            assert worker_main.runtime_snapshot is snapshot
+            assert worker_main.recovery_ready is True
+
+    asyncio.run(scenario())
+
+
+def test_probe_failure_does_not_disable_recovery_or_worker_lifecycle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "runtime_probe_initialized", False)
+    monkeypatch.setattr(worker_main, "recovery_ready", False)
+    monkeypatch.setattr(worker_main, "draining", False)
+
+    async def failed_probe(*_args, **_kwargs):
+        raise RuntimeError("private runtime path")
+
+    async def successful_recovery() -> bool:
+        worker_main.recovery_ready = True
+        return True
+
+    monkeypatch.setattr(worker_main, "probe_runtime_snapshot", failed_probe)
+    monkeypatch.setattr(worker_main, "_attempt_recovery", successful_recovery)
+
+    async def scenario() -> None:
+        async with worker_main.lifespan(worker_main.app):
+            assert worker_main.recovery_ready is True
+            assert worker_main.runtime_snapshot.runtime_ready is False
+            assert worker_main.runtime_snapshot.runtime_error == (
+                "monomer MD runtime startup probe failed"
+            )
+            assert "private runtime path" not in (
+                worker_main.runtime_snapshot.runtime_error or ""
+            )
+
+    asyncio.run(scenario())
+
+
+def test_runtime_snapshot_initializes_once_and_hot_readiness_never_reprobes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _settings(tmp_path)
+    snapshot = _runtime_snapshot()
+    calls = 0
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "runtime_probe_initialized", False)
+    monkeypatch.setattr(worker_main, "recovery_ready", True)
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    monkeypatch.setattr(worker_main, "draining", False)
+
+    async def fake_probe(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return snapshot
+
+    monkeypatch.setattr(worker_main, "probe_runtime_snapshot", fake_probe)
+
+    async def scenario() -> None:
+        await worker_main._initialize_runtime_snapshot()
+        await worker_main._initialize_runtime_snapshot()
+        request = JobRequest(job_id="hot-read", smiles="CCO")
+        for _ in range(30):
+            response = await worker_main._build_health_response()
+            assert worker_main._job_rejection_message(response, request) is None
+            await worker_main.resume_worker()
+
+    asyncio.run(scenario())
+    assert calls == 1
 
 
 def test_production_runtime_identity_uses_manifest_and_sys_prefix(tmp_path: Path):
@@ -153,56 +278,39 @@ def test_real_health_reports_runtime_probe_failure(tmp_path: Path, monkeypatch):
     settings.byteff2_root.mkdir()
     monkeypatch.setattr(worker_main, "settings", settings)
 
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=1,
-            stdout="",
-            stderr="ModuleNotFoundError: No module named 'openmm'\n",
-        )
+    monkeypatch.setattr(
+        worker_main,
+        "runtime_snapshot",
+        _runtime_snapshot(ready=False, error="runtime import and CUDA probe exited with code 1"),
+    )
 
-    monkeypatch.setattr(worker_main.subprocess, "run", fake_run)
-
-    response = worker_main._build_health_response()
+    response = asyncio.run(worker_main._build_health_response())
 
     assert response.status == "degraded"
     assert response.mode == "real"
     assert response.db_configured is True
     assert response.byteff2_root_exists is True
     assert response.runtime_ready is False
-    assert "openmm" in (response.runtime_error or "")
+    assert response.runtime_error == "runtime import and CUDA probe exited with code 1"
 
 
 def test_real_health_reports_missing_gmx_after_import_probe(tmp_path: Path, monkeypatch):
     settings = _settings(tmp_path, mode="real", app_postgres_dsn="postgresql://db/app")
     settings.byteff2_root.mkdir()
     monkeypatch.setattr(worker_main, "settings", settings)
-    calls = []
-    envs = []
+    monkeypatch.setattr(
+        worker_main,
+        "runtime_snapshot",
+        _runtime_snapshot(ready=False, error="gmx probe exited with code 127"),
+    )
 
-    def fake_run(args, **kwargs):
-        calls.append(args)
-        envs.append(kwargs.get("env", {}))
-        if args[0] == settings.byteff2_python:
-            return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
-        return subprocess.CompletedProcess(
-            args=args,
-            returncode=127,
-            stdout="",
-            stderr="gmx: command not found\n",
-        )
-
-    monkeypatch.setattr(worker_main.subprocess, "run", fake_run)
-
-    response = worker_main._build_health_response()
+    response = asyncio.run(worker_main._build_health_response())
 
     assert response.status == "degraded"
     assert response.runtime_ready is False
     assert "gmx" in (response.runtime_error or "")
     assert response.protocols["Density"]["runtime_ready"] is False
     assert "gmx" in response.protocols["Density"]["runtime_error"]
-    assert any(call == ["gmx", "--version"] for call in calls)
-    assert all(env.get("CUDA_VISIBLE_DEVICES") == "2" for env in envs if env)
 
 
 def test_real_health_reports_missing_configured_demo_entry(tmp_path: Path, monkeypatch):
@@ -211,12 +319,16 @@ def test_real_health_reports_missing_configured_demo_entry(tmp_path: Path, monke
     monkeypatch.setattr(worker_main, "settings", settings)
     monkeypatch.setenv("BYTEFF2_DENSITY_DEMO_ENTRY", "missing_demo.py")
 
-    def fake_run(*args, **kwargs):
-        raise AssertionError("runtime probes should not run when the configured demo entry is missing")
+    monkeypatch.setattr(
+        worker_main,
+        "runtime_snapshot",
+        _runtime_snapshot(
+            ready=False,
+            error="BYTEFF2_DENSITY_DEMO_ENTRY does not exist",
+        ),
+    )
 
-    monkeypatch.setattr(worker_main.subprocess, "run", fake_run)
-
-    response = worker_main._build_health_response()
+    response = asyncio.run(worker_main._build_health_response())
 
     assert response.status == "degraded"
     assert response.runtime_ready is False
@@ -228,19 +340,11 @@ def test_submit_rejects_unready_formal_protocol(tmp_path: Path, monkeypatch):
     settings.byteff2_root.mkdir()
     monkeypatch.setattr(worker_main, "settings", settings)
     monkeypatch.setattr(worker_main, "active_jobs", {})
-    protocols = {
-        protocol: {
-            "protocol": protocol,
-            "run_mode": "formal",
-            "supported": True,
-            "runtime_ready": True,
-            "runtime_error": None,
-        }
-        for protocol in ("Density", "HVap", "Compressibility", "Dielectric", "Transport")
-    }
-    protocols["Transport"]["runtime_ready"] = False
-    protocols["Transport"]["runtime_error"] = "velocityverletplugin is not importable"
-    monkeypatch.setattr(worker_main, "_probe_real_runtime", lambda: (True, None, protocols))
+    monkeypatch.setattr(
+        worker_main,
+        "runtime_snapshot",
+        _runtime_snapshot(transport_ready=False),
+    )
 
     client = TestClient(worker_main.app)
     response = client.post(
@@ -259,6 +363,50 @@ def test_submit_rejects_unready_formal_protocol(tmp_path: Path, monkeypatch):
     assert response.status_code == 503
     assert "velocityverletplugin" in response.json()["detail"]
     assert worker_main.active_jobs == {}
+
+
+def test_submit_accepts_ready_transport_with_a_stub_runner(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _settings(
+        tmp_path,
+        mode="real",
+        app_postgres_dsn="postgresql://db/app",
+    )
+    settings.byteff2_root.mkdir()
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "runtime_snapshot", _runtime_snapshot())
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    monkeypatch.setattr(worker_main, "active_formal_jobs", set())
+    monkeypatch.setattr(worker_main, "recovery_ready", True)
+    monkeypatch.setattr(worker_main, "draining", False)
+
+    async def updated(*_args, **_kwargs):
+        return JobUpdateResult.UPDATED
+
+    async def stub_run(*_args, **_kwargs):
+        await asyncio.Future()
+
+    monkeypatch.setattr(worker_main, "_safe_update_status", updated)
+    monkeypatch.setattr(worker_main, "_run_job", stub_run)
+    request = JobRequest(
+        job_id="formal-transport-ready",
+        smiles="{}",
+        canonical_smiles="{}",
+        steps=15_000_000,
+        protocol="Transport",
+        run_mode="formal",
+        config_json={"protocol": "Transport"},
+    )
+
+    async def scenario() -> None:
+        accepted = await worker_main.submit_job(request)
+        assert accepted.status == "submitted"
+        task = worker_main.active_jobs[request.job_id]
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 def test_submit_rejects_when_active_capacity_is_full(tmp_path: Path, monkeypatch):
@@ -283,17 +431,7 @@ def test_submit_rejects_when_formal_capacity_is_full(tmp_path: Path, monkeypatch
     monkeypatch.setattr(worker_main, "settings", settings)
     monkeypatch.setattr(worker_main, "active_jobs", {"formal-busy": object()})
     monkeypatch.setattr(worker_main, "active_formal_jobs", {"formal-busy"})
-    protocols = {
-        protocol: {
-            "protocol": protocol,
-            "run_mode": "formal",
-            "supported": True,
-            "runtime_ready": True,
-            "runtime_error": None,
-        }
-        for protocol in ("Density", "HVap", "Compressibility", "Dielectric", "Transport")
-    }
-    monkeypatch.setattr(worker_main, "_probe_real_runtime", lambda: (True, None, protocols))
+    monkeypatch.setattr(worker_main, "runtime_snapshot", _runtime_snapshot())
 
     client = TestClient(worker_main.app)
     response = client.post(
@@ -319,7 +457,7 @@ def test_submit_rejects_real_degraded_worker(tmp_path: Path, monkeypatch):
     settings.byteff2_root.mkdir()
     monkeypatch.setattr(worker_main, "settings", settings)
     monkeypatch.setattr(worker_main, "active_jobs", {})
-    monkeypatch.setattr(worker_main, "_probe_real_runtime", lambda: (True, None))
+    monkeypatch.setattr(worker_main, "runtime_snapshot", _runtime_snapshot())
 
     client = TestClient(worker_main.app)
     response = client.post(
@@ -542,7 +680,7 @@ def test_health_accepting_jobs_respects_capacity(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(worker_main, "draining", False)
     monkeypatch.setattr(worker_main, "active_jobs", {"busy-job": object()})
 
-    response = worker_main._build_health_response()
+    response = asyncio.run(worker_main._build_health_response())
 
     assert response.accepting_jobs is False
     assert response.active_jobs == 1
@@ -601,7 +739,7 @@ def test_health_reports_capacity_instance_and_lease(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(worker_main, "draining", False)
     monkeypatch.setattr(worker_main, "active_jobs", {})
 
-    response = worker_main._build_health_response()
+    response = asyncio.run(worker_main._build_health_response())
 
     assert response.max_active_jobs == 2
     assert response.worker_instance_id == worker_main.worker_instance_id
@@ -663,3 +801,7 @@ def test_heartbeat_renews_active_instance_jobs(tmp_path: Path, monkeypatch):
         raise AssertionError("heartbeat loop did not stop after the test iteration")
 
     assert calls == [(["job-1"], worker_main.worker_instance_id)]
+
+
+def test_empty_asyncio_timeout_is_classified_as_timeout() -> None:
+    assert worker_main._classify_error(asyncio.TimeoutError()) == "timeout"

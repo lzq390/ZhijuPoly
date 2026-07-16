@@ -115,7 +115,10 @@ ops/state/deploy-in-progress.json
 ops/state/deploy.lock
 ```
 
-There is no `ops/state/releases` inventory.
+Transient `ops/state/worker-build-scratch/` and
+`ops/state/candidate-preflight/` directories are private, disposable scratch;
+they are not release inventory or recovery authority. There is no
+`ops/state/releases` inventory.
 
 Complete the following during the reviewed maintenance window:
 
@@ -208,7 +211,10 @@ Complete the following during the reviewed maintenance window:
    `127.0.0.1:55432`.
 3. Install `ops/config/deploy.env.example`, `app.env.example`, and
    `worker.env.example` as `deploy.env`, `app.env`, and `worker.env`, owned by
-   the deployment user with mode `0600`. Replace every placeholder.
+   the deployment user with mode `0600`. Replace every placeholder. The
+   deploy-only `MONOMER_MD_REQUIRE_TRANSPORT_READY` belongs only in
+   `deploy.env`; the strict Worker parser rejects it, OpenMM derived variables,
+   quoting, continuation, duplicate keys, and unknown keys in `worker.env`.
 4. Configure a dedicated GHCR credential for the production deployment user.
    It must have package read permission only; do not put the raw token in the
    repository, `deploy.env`, shell history, a command argument, or this runbook.
@@ -240,21 +246,32 @@ Complete the following during the reviewed maintenance window:
      --python /home/devuser/miniconda3/envs/byteff2-repro/bin/python
    ```
 
-6. Create the baseline read-only asset release. The command audits first; the
-   apply form requires all exact-path confirmations:
+6. Prepare a clean, disposable ByteFF2 source tree for the asset release. It
+   must be the official `https://github.com/ByteDance-Seed/byteff2.git` tree at
+   commit `8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2` (v1.0.0), including its
+   recursively pinned submodules. Overlay only
+   `byteff2/trained_models/fftrainer_config_in_use.yaml` and
+   `byteff2/trained_models/optimal.pt` from the immutable Hugging Face revision
+   `b92ac49058c113625012c1f50d98a7bf9cf4e46e`. The bootstrap verifies their
+   exact sizes/hashes and requires them to remain Git-ignored; it also verifies
+   the tracked `bond_length_ref.csv`. Do not repair the frozen Conda environment
+   or a mutable development checkout in place.
+
+   Create the baseline read-only asset release from that prepared tree. The
+   command audits first; the apply form requires all exact-path confirmations:
 
    ```bash
    python3 scripts/bootstrap_asset_release.py \
      --source-root /data/lzq/gith/nexpoly \
-     --byteff2-root /data/lzq/gith/byteff2 \
+     --byteff2-root /data/lzq/nexpoly-assets/sources/byteff2-v1.0.0 \
      --asset-store /data/lzq/nexpoly-assets
 
    python3 scripts/bootstrap_asset_release.py --apply \
      --source-root /data/lzq/gith/nexpoly \
-     --byteff2-root /data/lzq/gith/byteff2 \
+     --byteff2-root /data/lzq/nexpoly-assets/sources/byteff2-v1.0.0 \
      --asset-store /data/lzq/nexpoly-assets \
      --confirm-source-root /data/lzq/gith/nexpoly \
-     --confirm-byteff2-root /data/lzq/gith/byteff2 \
+     --confirm-byteff2-root /data/lzq/nexpoly-assets/sources/byteff2-v1.0.0 \
      --confirm-asset-store /data/lzq/nexpoly-assets
    ```
 
@@ -262,14 +279,25 @@ Complete the following during the reviewed maintenance window:
    `/data/lzq/nexpoly-assets/releases/<digest>` and use the same digest in
    `release-input.json`. The controller injects that verified manifest value at
    runtime; do not duplicate it in `deploy.env`. Bootstrap rejects a different
-   target.
-7. Stage the tracked candidate user unit without replacing the running legacy
-   unit yet:
+   target. A schema-v1 current asset remains readable only for legacy rollback;
+   every candidate release carrying the Worker is blocked until a complete
+   schema-v2 asset has been provisioned and selected.
+7. Install the stable strict Worker environment helper and stage the tracked
+   candidate user unit without replacing the running legacy unit yet:
 
    ```bash
+   install -m 0700 scripts/monomer_worker_env.py \
+     /data/lzq/gith/nexpoly/ops/config/monomer_worker_env.py
    install -m 0644 ops/systemd/nexpoly-monomer-md-worker.service \
      /data/lzq/gith/nexpoly/ops/config/nexpoly-monomer-md-worker.candidate.service
    ```
+
+   The unit never uses `EnvironmentFile=` and invokes this fixed helper path,
+   so rollback does not depend on whether an older `ops/current` release
+   contains the helper. Every candidate controller verifies the installed
+   helper is deploy-user-owned, mode `0700`, non-symlink, and byte-identical to
+   the reviewed release copy. Updating it therefore requires an explicit
+   maintenance step; normal deployment never mutates the stable helper.
 
 8. From a verified archive of the exact bootstrap SHA—not the mutable
    development checkout—install and audit the bootstrap hooks:
@@ -406,37 +434,68 @@ second-precision `+00:00` UTC form emitted by the controller.
 The controller holds non-blocking `ops/state/deploy.lock`; a second deployment
 fails before any state change. It then:
 
-1. verifies the manifest/bundle, production paths and permissions, asset digest,
-   frozen Worker Python/Conda/GROMACS identity, Compose digest policy, image
-   labels, disk space, and current main SHA;
-2. extracts `<sha>.staging`, pulls exact Backend/Web digests, and builds the
-   release venv offline without modifying the frozen Conda environment;
-3. enables API and Worker drain and waits up to 30 minutes for every API, GPU,
+1. verifies the manifest/bundle, production paths and permissions, strict
+   literal Worker configuration/stable helper, asset digest, frozen Worker
+   Python/Conda/GROMACS identity, Compose digest policy, disk space, and current
+   main SHA. For every release carrying the Worker payload, the resolved
+   candidate asset—not the legacy current asset—must use schema v2 and include
+   the exact inventory records, sizes, and fixed SHA-256 values for ByteFF2's
+   three formal/Density runtime assets. The ByteFF2 tree must be bound to the
+   approved official Git source and exact v1.0.0 commit in the top-level
+   `byteff2_source` contract. The two model files must additionally match the
+   audited Hugging Face source, immutable revision, source paths, and runtime
+   target paths recorded by the top-level `byteff2_audited_overlays` contract;
+2. the explicit `provision-release` command extracts the candidate, builds its
+   per-SHA release venv offline without modifying the operationally frozen
+   Conda environment, statically verifies local distribution metadata without
+   importing candidate site hooks, moves all scratch outside the release, and
+   seals exact
+   payload/wheelhouse/venv/base/toolchain evidence in a mode-0600 READY record;
+3. `deploy` recomputes that READY evidence and contains no venv creation or pip
+   installation. When strict Transport is required, it drains the old Worker, waits for zero
+   active Worker jobs, and runs the candidate runtime preflight before Docker,
+   database, asset-pointer, or runtime changes. Direct mode requires an idle
+   selected GPU; Broker mode must acquire a temporary fenced execution lease.
+   Failure resumes the unchanged Worker. The outer watchdog leaves a separate
+   cleanup allowance after the probe budget. The controller acts as a temporary
+   child subreaper, adopts even fast double-fork/`setsid()` descendants, binds
+   exact PID/start-time identities to pidfds, and repeatedly freezes and scans
+   the owned tree before signalling it. Candidate stdout uses a bounded pipe
+   with backpressure. Cleanup must prove that every adopted child is gone before
+   the controller restores its signal handlers/subreaper state or continues;
+4. pulls the exact Backend/Web digests and verifies their labels, then enables
+   API drain (and Worker drain when not already active) and waits up to 30
+   minutes for every API, GPU,
    PolyTAO, Monomer-MD and in-flight write category to reach zero;
-4. creates `pg_dump -Fc`, SHA-256 and JSON sidecars and runs
+5. creates `pg_dump -Fc`, SHA-256 and JSON sidecars and runs
    `pg_restore --list`;
-5. applies expand migrations only. A contract may remain pending only while no
+6. applies expand migrations only. A contract may remain pending only while no
    later epoch depends on it; dependency names and checksums are validated
    before any later-epoch DDL;
-6. if the asset digest changed, rebuilds exactly the datasets from
+7. if the asset digest changed, rebuilds exactly the datasets from
    `release-input.json`, then atomically switches `ops/current-assets`;
-7. writes the target-SHA analytics snapshot, atomically switches `ops/current`,
+8. writes the target-SHA analytics snapshot, atomically switches `ops/current`,
    starts Backend and the release Worker, and keeps public nginx stopped;
-8. runs strict PostgreSQL and GPU preflight, real Conditional Generation and
-   PolyTAO generation, the 300-step Monomer-MD ByteFF2/GROMACS smoke, an
-   isolated Web/static-asset smoke, and final public health checks;
-9. rechecks current main before each irreversible exposure point, atomically
+9. runs strict PostgreSQL and GPU preflight, Worker/Backend Transport triple
+   gates, real Conditional Generation and PolyTAO generation, the 300-step
+   Monomer-MD ByteFF2/GROMACS smoke, an isolated Web/static-asset smoke, and
+   final public health checks;
+10. rechecks current main before each irreversible exposure point, atomically
    writes `release-state.json`, removes `deploy-in-progress.json`, and resumes
    admission only after success.
 
 `deploy-in-progress.json` records `prepared`, `db-changed`, `switched`, or
-`verified`. A later invocation must complete fail-closed recovery before it may
-start another release.
+`verified`, including the exact provisioning READY digest. A later invocation
+must revalidate the final `<sha>` directory and that READY evidence, reject any
+`.staging` fallback, and complete fail-closed recovery before it may start
+another release.
 
 ## Failure and rollback runbook
 
-- Before database change: the target is discarded; the existing runtime and
-  assets remain selected. Any supported Worker drain is resumed.
+- Before database change: the sealed READY target is retained and fully
+  revalidated on retry; only owner-validated incomplete provisioning is
+  removed. The existing runtime and assets remain selected, and any supported
+  Worker drain is resumed.
 - After expand migration with unchanged assets: the controller restores the
   previous Backend/Web digest, `ops/current`, Worker venv and Worker process.
   Compatible expand migrations remain. It regenerates the previous-SHA
@@ -467,7 +526,19 @@ docker compose -p nexpoly \
   -f /data/lzq/gith/nexpoly/ops/current/docker-compose.prod.yml \
   --env-file /data/lzq/gith/nexpoly/ops/config/deploy.env config --images
 systemctl --user status nexpoly-monomer-md-worker.service
+
+OPENMM_ROOT=/home/devuser/miniconda3/envs/byteff2-repro/byteff2_openmm/openmm
+ldd "$OPENMM_ROOT/lib/libOpenMMVelocityVerlet.so" \
+  "$OPENMM_ROOT/lib/plugins/libOpenMMCUDA.so" \
+  "$OPENMM_ROOT/lib/plugins/libVelocityVerletPluginCUDA.so"
 ```
+
+The `ldd` output must contain no `not found`. The same three-component linkage
+check runs inside the bounded Transport startup probe before `VVIntegrator`
+import and the one-step CUDA context smoke. Record the frozen base/toolchain
+identity before the maintenance window; “frozen” is an operational no-write
+contract backed by before/after fingerprints, not a claim that the existing
+Conda directory has OS-level read-only permissions.
 
 Every application image printed by `config --images` must contain `@sha256:`;
 the Backend/Web labels, release state and Worker identities must report the same

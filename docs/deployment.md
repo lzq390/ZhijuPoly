@@ -19,6 +19,13 @@ package from the network on that host.
 - Monomer-MD Worker: a per-release venv layered on the frozen
   `/home/devuser/miniconda3/envs/byteff2-repro` environment.
 
+Production `worker.env` is not a shell file and is not a systemd
+`EnvironmentFile`. A stable owner-only Python wrapper accepts only literal,
+allowlisted `KEY=VALUE` lines and supplies the same child environment to
+systemd and candidate preflight. OpenMM loader variables are derived from
+`BYTEFF2_OPENMM_DIR`; `OPENMM_DIR`, `OPENMM_PLUGIN_DIR`, `LD_LIBRARY_PATH`, and
+the deploy-only Transport gate are forbidden in `worker.env`.
+
 The two PostgreSQL volumes remain independent.  A deployment must never copy
 models or data directly from the development checkout into production.  New
 assets are first sealed in the content-addressed asset store and then selected
@@ -95,28 +102,60 @@ another deployment or Worker start.
 
 ## Automatic deployment
 
-The controller performs the following under the non-blocking server lock:
+The remote release flow invokes two fail-stop controller commands under the
+same non-blocking server lock contract. `provision-release --apply` completes
+first; only then may `deploy --apply` run.
+
+The controller performs the following:
 
 1. Verify the production root, current `main` SHA, manifest, images, bundle,
    asset manifest and free space.
-2. Pull the two image digests, unpack staging, and build the Worker venv from
-   the offline wheelhouse.  Verify the frozen Python/Conda identity, `gmx`,
-   ByteFF2 commit and imports before changing the running release.
-3. Drain Backend and Worker, then wait up to 30 minutes for persistent jobs,
+2. In the explicit provisioning command, unpack the candidate and build the
+   per-SHA Worker venv from the offline wheelhouse. Verify the frozen
+   Python/Conda identity, `gmx`, ByteFF2 commit,
+   strict literal Worker configuration, and stable systemd wrapper. For every
+   release carrying the Worker payload, before any drain the resolved candidate
+   asset must use manifest schema v2 and contain all three fixed ByteFF2 runtime
+   assets: the tracked `bond_length_ref.csv` table plus the audited upstream
+   trainer YAML and model overlay. The ByteFF2 Git source and approved v1.0.0
+   commit, plus the overlay source, revision, source paths, runtime target
+   paths, sizes, and SHA-256 values,
+   are exact contract fields. This candidate-only check
+   intentionally does not reject a broken legacy schema-v1 current asset that
+   the candidate repairs. Seal a mode-0600 READY record over the manifest,
+   bundle, lock, wheelhouse, payload, venv inventory, final prefix and frozen
+   runtime identities. Provisioning scratch stays under `ops/state`.
+3. Start `deploy` by recomputing the READY evidence. This path performs no
+   venv creation, pip invocation, or candidate-Python import; venv distribution
+   metadata is checked statically before the governed runtime preflight. When
+   the deploy-only Transport gate is
+   enabled, drain the old Worker and
+   wait for its active jobs to reach zero, then run the candidate runtime
+   preflight before pulling images or changing PostgreSQL/runtime state. Direct
+   mode requires an idle selected GPU; Broker mode obtains a temporary fenced
+   execution lease and never runs an ungoverned CUDA probe. The outer controller
+   contains the candidate with a temporary child-subreaper scope, exact pidfds,
+   repeated freeze/adoption scans, and a bounded stdout pipe, so a quick
+   double-fork/`setsid()` cannot escape timeout cleanup. A failure resumes the
+   unchanged Worker.
+4. Pull the two image digests. Drain Backend (and the Worker if it was not
+   already drained), then wait up to 30 minutes for persistent jobs,
    in-memory jobs, GPU queues, API writes and Worker jobs to reach zero.
-4. Create a custom-format PostgreSQL dump, SHA-256 sidecar, and successfully run
+5. Create a custom-format PostgreSQL dump, SHA-256 sidecar, and successfully run
    `pg_restore --list`.
-5. Apply only expand migrations. A contract remains pending only while no later
+6. Apply only expand migrations. A contract remains pending only while no later
    epoch depends on its exact checksum; a missing/mismatched dependency rejects
    the deployment before later-epoch DDL.
-6. If the asset digest changed, use the candidate asset root to run the explicit
+7. If the asset digest changed, use the candidate asset root to run the explicit
    complete dataset set with `--rebuild`.  Otherwise skip imports.  Refresh the
    PostgreSQL analytics snapshot for the target SHA.
-7. Atomically switch `current-assets` and `current`, start the target Worker and
+8. Atomically switch `current-assets` and `current`, start the target Worker and
    digest-pinned Backend/Web, and keep public ingress isolated.
-8. Run strict PostgreSQL/GPU checks, Backend and versioned Web asset health,
-   PolyTAO smoke, and the 300-step Monomer-MD/ByteFF2/GROMACS smoke.
-9. Commit `release-state.json`, remove the crash marker, and resume ingress.
+9. Run strict PostgreSQL/GPU checks, Worker health, Backend status and protocol
+   catalog gates, versioned Web asset health, PolyTAO smoke, and the 300-step
+   Monomer-MD/ByteFF2/GROMACS smoke. Strict Transport readiness requires
+   `supported=true`, `runtime_ready=true`, and `runtime_error=null` everywhere.
+10. Commit `release-state.json`, remove the crash marker, and resume ingress.
 
 If draining times out, the old release is resumed without backup, migration or
 switch.  The Worker is never force-killed while it reports an active job.

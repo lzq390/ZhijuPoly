@@ -4,11 +4,45 @@ import asyncio
 import os
 import signal
 import sys
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from gpu_resource import GpuBrokerClientError, ManagedGpuLease
+
+
+_CleanupResult = TypeVar("_CleanupResult")
+
+
+async def await_safety_cleanup(
+    awaitable: Awaitable[_CleanupResult],
+) -> _CleanupResult:
+    """Finish one host-safety operation before propagating cancellation.
+
+    A Worker shutdown can cancel a job more than once (for example, the
+    outer shutdown timeout can cancel a task that is already unwinding).  A
+    single ``asyncio.shield`` only survives the first request.  Keep the
+    cleanup in its own task, absorb every caller-side cancellation until that
+    task has an authoritative result, then propagate the most recent request.
+    """
+
+    cleanup_task = asyncio.ensure_future(awaitable)
+    deferred_cancellation: asyncio.CancelledError | None = None
+    while True:
+        try:
+            result = await asyncio.shield(cleanup_task)
+            break
+        except asyncio.CancelledError as exc:
+            if cleanup_task.done():
+                # If the cleanup itself was cancelled, result() re-raises and
+                # must not be mistaken for a caller-side deferred request.
+                result = cleanup_task.result()
+                deferred_cancellation = exc
+                break
+            deferred_cancellation = exc
+    if deferred_cancellation is not None:
+        raise deferred_cancellation
+    return result
 
 
 async def create_fenced_subprocess_exec(
@@ -28,24 +62,37 @@ async def create_fenced_subprocess_exec(
     gate_reader, gate_writer = os.pipe()
     env = dict(kwargs.pop("env", os.environ))
     repository_root = Path(__file__).resolve().parents[3]
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(repository_root), env.get("PYTHONPATH", "")]
-    ).strip(os.pathsep)
+    exec_gate = repository_root / "gpu_resource" / "exec_gate.py"
+    if not exec_gate.is_file() or exec_gate.is_symlink():
+        _close_fd(gate_reader)
+        _close_fd(gate_writer)
+        raise GpuBrokerClientError(
+            "gpu_runtime_unhealthy",
+            "audited GPU execution gate is unavailable",
+        )
     env["NEXPOLY_GPU_EXEC_GATE_FD"] = str(gate_reader)
     try:
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "gpu_resource.exec_gate",
-            "--",
-            *command,
-            env=env,
-            pass_fds=(gate_reader,),
-            start_new_session=True,
-            **kwargs,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                # Isolated/no-site startup is part of the fence.  In
+                # particular, target PYTHONPATH/sitecustomize must not run
+                # before the Broker has registered this exact host PID.
+                sys.executable,
+                "-I",
+                "-S",
+                str(exec_gate),
+                "--",
+                *command,
+                env=env,
+                pass_fds=(gate_reader,),
+                start_new_session=True,
+                **kwargs,
+            )
+        except BaseException:
+            _close_fd(gate_writer)
+            raise
     finally:
-        os.close(gate_reader)
+        _close_fd(gate_reader)
     registration_task = asyncio.create_task(
         asyncio.to_thread(execution_lease.register_workload, process.pid)
     )
@@ -56,33 +103,21 @@ async def create_fenced_subprocess_exec(
         # the exec gate closed, collect the authoritative registration result,
         # and prove the dedicated cgroup empty before returning control.
         _close_fd(gate_writer)
-        registered = False
-        try:
-            await asyncio.shield(registration_task)
-            registered = True
-        except Exception:
-            pass
-        try:
-            await asyncio.wait_for(process.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
-            if registered:
-                await _prepare_termination_shielded(execution_lease)
-            else:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            await process.wait()
+        await await_safety_cleanup(
+            _cleanup_failed_fenced_spawn(
+                process,
+                registration_task,
+                execution_lease,
+            )
+        )
         raise
     try:
         os.write(gate_writer, b"1")
     except Exception:
         _close_fd(gate_writer)
-        try:
-            await asyncio.wait_for(process.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
-            await _prepare_termination_shielded(execution_lease)
-            await process.wait()
+        await await_safety_cleanup(
+            _cleanup_registered_fenced_spawn(process, execution_lease)
+        )
         raise
     finally:
         _close_fd(gate_writer)
@@ -142,10 +177,27 @@ async def wait_for_process_group(
         for task in waiters:
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*waiters, return_exceptions=True)
+        await await_safety_cleanup(
+            asyncio.gather(*waiters, return_exceptions=True)
+        )
 
 
 async def terminate_process_group(
+    process: asyncio.subprocess.Process,
+    *,
+    process_already_waited: bool = False,
+    execution_lease: ManagedGpuLease | None = None,
+) -> None:
+    await await_safety_cleanup(
+        _terminate_process_group(
+            process,
+            process_already_waited=process_already_waited,
+            execution_lease=execution_lease,
+        )
+    )
+
+
+async def _terminate_process_group(
     process: asyncio.subprocess.Process,
     *,
     process_already_waited: bool = False,
@@ -232,17 +284,44 @@ async def _wait_for_lease_loss(execution_lease: ManagedGpuLease) -> None:
 async def _prepare_termination_shielded(
     execution_lease: ManagedGpuLease,
 ) -> None:
-    task = asyncio.create_task(
+    await await_safety_cleanup(
         asyncio.to_thread(execution_lease.prepare_process_termination)
     )
+
+
+async def _cleanup_failed_fenced_spawn(
+    process: asyncio.subprocess.Process,
+    registration_task: asyncio.Task[Any],
+    execution_lease: ManagedGpuLease,
+) -> None:
+    registered = False
     try:
-        await asyncio.shield(task)
-    except asyncio.CancelledError:
-        # Never leave a cgroup freeze/kill operation unobserved.  A second
-        # cancellation is propagated only after the host safety decision is
-        # known.
-        await asyncio.shield(task)
-        raise
+        await registration_task
+        registered = True
+    except Exception:
+        pass
+    try:
+        await asyncio.wait_for(process.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        if registered:
+            await _prepare_termination_shielded(execution_lease)
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        await process.wait()
+
+
+async def _cleanup_registered_fenced_spawn(
+    process: asyncio.subprocess.Process,
+    execution_lease: ManagedGpuLease,
+) -> None:
+    try:
+        await asyncio.wait_for(process.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        await _prepare_termination_shielded(execution_lease)
+        await process.wait()
 
 
 def _close_fd(descriptor: int) -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
 import signal
 import sys
 import threading
@@ -161,6 +163,8 @@ def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -
         )
         assert await asyncio.to_thread(started.wait, 1)
         task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
         allow_registration.set()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -168,3 +172,122 @@ def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -
     asyncio.run(scenario())
     assert lease.workload_pid is not None
     assert process_control._process_group_alive(lease.workload_pid) is False
+
+
+def test_fenced_spawn_does_not_run_sitecustomize_before_registration(
+    tmp_path: Path,
+) -> None:
+    registration_started = threading.Event()
+    allow_registration = threading.Event()
+    sitecustomize_marker = tmp_path / "sitecustomize-ran"
+    target_marker = tmp_path / "target-ran"
+    (tmp_path / "sitecustomize.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(sitecustomize_marker)!r}).write_text('ran')\n",
+        encoding="utf-8",
+    )
+
+    class Lease:
+        def register_workload(self, _workload_pid: int) -> None:
+            registration_started.set()
+            allow_registration.wait(timeout=2)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            process_control.create_fenced_subprocess_exec(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "from pathlib import Path; "
+                        f"Path({str(target_marker)!r}).write_text('ran')"
+                    ),
+                ],
+                execution_lease=Lease(),  # type: ignore[arg-type]
+                env={**os.environ, "PYTHONPATH": str(tmp_path)},
+            )
+        )
+        assert await asyncio.to_thread(registration_started.wait, 1)
+        await asyncio.sleep(0.05)
+        assert not sitecustomize_marker.exists()
+        assert not target_marker.exists()
+        allow_registration.set()
+        process = await task
+        assert await process.wait() == 0
+
+    asyncio.run(scenario())
+    assert sitecustomize_marker.is_file()
+    assert target_marker.is_file()
+
+
+def test_fenced_spawn_failure_closes_both_gate_descriptors(monkeypatch) -> None:
+    async def fail_spawn(*_args, **_kwargs):
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(
+        process_control.asyncio,
+        "create_subprocess_exec",
+        fail_spawn,
+    )
+
+    class Lease:
+        pass
+
+    async def scenario() -> None:
+        before = len(list(Path("/proc/self/fd").iterdir()))
+        for _ in range(64):
+            with pytest.raises(OSError, match="spawn failed"):
+                await process_control.create_fenced_subprocess_exec(
+                    [sys.executable, "-c", "pass"],
+                    execution_lease=Lease(),  # type: ignore[arg-type]
+                )
+        after = len(list(Path("/proc/self/fd").iterdir()))
+        assert after <= before + 1
+
+    asyncio.run(scenario())
+
+
+def test_repeated_cancel_waits_for_mps_and_process_cleanup(monkeypatch) -> None:
+    prepare_started = threading.Event()
+    allow_prepare = threading.Event()
+    events: list[object] = []
+    group_states = iter((True, False))
+    monkeypatch.setattr(
+        process_control,
+        "_process_group_alive",
+        lambda _pid: next(group_states, False),
+    )
+    monkeypatch.setattr(
+        process_control.os,
+        "killpg",
+        lambda _pid, sent_signal: events.append(sent_signal),
+    )
+
+    class BlockingLease(_Lease):
+        def prepare_process_termination(self) -> dict[str, object]:
+            prepare_started.set()
+            allow_prepare.wait(timeout=2)
+            return super().prepare_process_termination()
+
+    lease = BlockingLease(events)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            process_control.terminate_process_group(
+                _Process(),  # type: ignore[arg-type]
+                process_already_waited=True,
+                execution_lease=lease,  # type: ignore[arg-type]
+            )
+        )
+        assert await asyncio.to_thread(prepare_started.wait, 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        allow_prepare.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert events == ["mps-terminate-client", signal.SIGTERM]
+    assert lease.failed_closed is False
