@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+production_root=/data/lzq/gith/nexpoly
+resume=/data/lzq/gith/nexpoly-runtime/config/bootstrap-legacy-runtime-resume-unchanged
+: "${NEXPOLY_BOOTSTRAP_LEGACY_RUNTIME_SHA256:?set the audited legacy runtime digest}"
+
+[[ "$PWD" == "$production_root" ]] || {
+  echo "bootstrap unchanged resume must run from $production_root" >&2
+  exit 2
+}
+[[ -f "$resume" && ! -L "$resume" && -x "$resume" ]] || {
+  echo "install an audited executable bootstrap-legacy-runtime-resume-unchanged" >&2
+  exit 2
+}
+[[ "$(stat -c '%u:%a' "$resume")" == "$(id -u):700" ]] || {
+  echo "bootstrap-legacy-runtime-resume-unchanged must be deploy-user-owned and mode 0700" >&2
+  exit 2
+}
+
+# This site-specific helper may start only the previously stopped ingress
+# container. It must not recreate, restart, stop, or signal the legacy Backend
+# or Worker. It records the Backend container ID and Worker MainPID before and
+# after ingress recovery so the controller can reject a destructive restart.
+evidence="$(mktemp)"
+trap 'rm -f "$evidence"' EXIT
+"$resume" >"$evidence"
+[[ -s "$evidence" && "$(stat -c '%s' "$evidence")" -le 65536 ]] || {
+  echo "legacy unchanged-resume evidence is empty or too large" >&2
+  exit 2
+}
+
+python3 - "$evidence" <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    document = json.load(source)
+expected = {
+    "schema_version",
+    "legacy_runtime_unchanged",
+    "backend_image_id",
+    "web_image_id",
+    "worker_unit_sha256",
+    "backend_container_id_before",
+    "backend_container_id_after",
+    "backend_pid_before",
+    "backend_pid_after",
+    "backend_started_at_before",
+    "backend_started_at_after",
+    "backend_restart_count_before",
+    "backend_restart_count_after",
+    "worker_main_pid_before",
+    "worker_main_pid_after",
+    "worker_invocation_id_before",
+    "worker_invocation_id_after",
+    "worker_active_enter_monotonic_before",
+    "worker_active_enter_monotonic_after",
+    "backend_healthy",
+    "web_healthy",
+    "worker_healthy",
+    "ingress_restored",
+}
+if not isinstance(document, dict) or set(document) != expected:
+    raise SystemExit("legacy unchanged-resume returned an invalid evidence object")
+if document["schema_version"] != 1:
+    raise SystemExit("legacy unchanged-resume evidence has an unsupported schema")
+for field in (
+    "legacy_runtime_unchanged",
+    "backend_healthy",
+    "web_healthy",
+    "worker_healthy",
+    "ingress_restored",
+):
+    if document[field] is not True:
+        raise SystemExit(f"legacy unchanged-resume did not prove {field}")
+digest = re.compile(r"^sha256:[0-9a-f]{64}$")
+identity = {}
+for field in ("backend_image_id", "web_image_id", "worker_unit_sha256"):
+    value = document[field]
+    if not isinstance(value, str) or not digest.fullmatch(value):
+        raise SystemExit(f"legacy unchanged-resume returned an invalid {field}")
+    identity[field] = value
+payload = json.dumps(
+    identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+).encode("utf-8")
+actual_identity = "sha256:" + hashlib.sha256(payload).hexdigest()
+if actual_identity != os.environ["NEXPOLY_BOOTSTRAP_LEGACY_RUNTIME_SHA256"]:
+    raise SystemExit("legacy unchanged-resume selected the wrong saved identity")
+container = document["backend_container_id_before"]
+if (
+    not isinstance(container, str)
+    or re.fullmatch(r"[0-9a-f]{64}", container) is None
+    or document["backend_container_id_after"] != container
+):
+    raise SystemExit("legacy unchanged-resume restarted or replaced the Backend")
+backend_pid = document["backend_pid_before"]
+backend_started_at = document["backend_started_at_before"]
+restart_count = document["backend_restart_count_before"]
+if (
+    isinstance(backend_pid, bool)
+    or not isinstance(backend_pid, int)
+    or backend_pid <= 0
+    or document["backend_pid_after"] != backend_pid
+    or not isinstance(backend_started_at, str)
+    or not backend_started_at
+    or document["backend_started_at_after"] != backend_started_at
+    or isinstance(restart_count, bool)
+    or not isinstance(restart_count, int)
+    or restart_count < 0
+    or document["backend_restart_count_after"] != restart_count
+):
+    raise SystemExit("legacy unchanged-resume restarted the Backend process")
+pid = document["worker_main_pid_before"]
+if (
+    isinstance(pid, bool)
+    or not isinstance(pid, int)
+    or pid <= 0
+    or document["worker_main_pid_after"] != pid
+):
+    raise SystemExit("legacy unchanged-resume restarted or replaced the Worker")
+invocation = document["worker_invocation_id_before"]
+entered = document["worker_active_enter_monotonic_before"]
+if (
+    not isinstance(invocation, str)
+    or not invocation
+    or document["worker_invocation_id_after"] != invocation
+    or isinstance(entered, bool)
+    or not isinstance(entered, int)
+    or entered <= 0
+    or document["worker_active_enter_monotonic_after"] != entered
+):
+    raise SystemExit("legacy unchanged-resume restarted the Worker invocation")
+print(json.dumps(document, sort_keys=True, separators=(",", ":")))
+PY

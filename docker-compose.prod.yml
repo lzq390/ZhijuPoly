@@ -1,8 +1,8 @@
 name: nexpoly
 
 # Production must always be rendered together with docker-compose.yml.  This
-# override removes every application build context; release_controller.py also
-# rejects image references that are not immutable sha256 digests.
+# override removes every application build context; the pull-deploy controller
+# also rejects image references that are not immutable sha256 digests.
 x-production-environment: &production-environment
   WEB_CONCURRENCY: "1"
   APP_POSTGRES_DSN: "${APP_POSTGRES_DSN:?APP_POSTGRES_DSN is required}"
@@ -40,14 +40,14 @@ x-production-volumes: &production-volumes
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
-  - /data/lzq/gith/nexpoly/ops/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
+  - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
 
 services:
   postgres-init:
     image: "${NEXPOLY_BACKEND_IMAGE:?NEXPOLY_BACKEND_IMAGE must be an image digest}"
     build: !reset null
     env_file: !override
-      - path: "${NEXPOLY_APP_ENV_FILE:-/data/lzq/gith/nexpoly/ops/config/app.env}"
+      - path: "${NEXPOLY_APP_ENV_FILE:?NEXPOLY_APP_ENV_FILE is required}"
         required: true
     environment: *production-environment
     volumes: !override
@@ -63,7 +63,7 @@ services:
     image: "${NEXPOLY_BACKEND_IMAGE:?NEXPOLY_BACKEND_IMAGE must be an image digest}"
     build: !reset null
     env_file: !override
-      - path: "${NEXPOLY_APP_ENV_FILE:-/data/lzq/gith/nexpoly/ops/config/app.env}"
+      - path: "${NEXPOLY_APP_ENV_FILE:?NEXPOLY_APP_ENV_FILE is required}"
         required: true
     environment: *production-environment
     volumes: !override
@@ -73,7 +73,7 @@ services:
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
-      - /data/lzq/gith/nexpoly/ops/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
+      - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
     depends_on: !override
       lab-postgres:
         condition: service_healthy

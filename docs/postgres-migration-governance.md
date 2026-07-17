@@ -23,9 +23,12 @@ is empty; it never uses `CASCADE`. A genuinely fresh database bootstrap may
 apply the full baseline/expand/contract chain to reach the final schema. A
 database with any recorded migration may expose only the checksum-pinned
 `--mode contract-0012` runner operation, and production invokes it only through
-`release_controller.py maintain-contract-0012`. There is no generic "run
-pending contracts" CLI. Automatic CI/CD never grants destructive approval and
-`--mode bootstrap` is not a destructive-upgrade shortcut.
+a dedicated pull-state maintenance adapter. The legacy
+`release_controller.py maintain-contract-0012` entry is intentionally retired:
+it requires `ops/releases` and a source bundle and therefore cannot authorize a
+live-checkout deployment. There is no generic "run pending contracts" CLI.
+Automatic CI/CD never grants destructive approval and `--mode bootstrap` is not
+a destructive-upgrade shortcut.
 
 The one-time controller cutover uses `--mode bootstrap-expand`. On the audited
 production ledger through 0008 it applies 0009-0011, then defers the trailing
@@ -33,7 +36,7 @@ production ledger through 0008 it applies 0009-0011, then defers the trailing
 unexpected baseline, ordering, or checksum must stop the cutover. The resulting
 release state lists 0012 as pending rather than applied.
 
-Automatic production releases use `--mode expand`; it applies compatible
+Governed production Pull deployments use `--mode expand`; it applies compatible
 expansions and may defer only contracts that do not gate a later epoch.
 `bootstrap-expand` and `restore-expand` use the same rule for first cutover and
 isolated restore checks. If 0012 is missing or has a different checksum, every
@@ -43,7 +46,8 @@ Before epoch 2 exists, strict preflight requires 0001-0011. It reports an unappl
 `migrations.pending_contracts` but does not treat it as a missing required
 migration. This lets the Backend run and be tested without converting a health
 check or a merge to `main` into destructive-migration approval. The minimal
-automatic delivery path deliberately leaves 0012 pending.
+initial Pull deployment path deliberately leaves 0012 pending. CI builds and
+validates candidates and images; it never executes a production migration.
 
 ## Checksum Policy
 
@@ -120,15 +124,41 @@ accepted-checksum list.
 
 ## Production 0012 Maintenance
 
-The only production destructive command is dry-run by default:
+No production destructive command is exposed by the retired bundle controller.
+The private runtime bootstrap installs the dedicated pull-state adapter and a
+byte-identical governance core; invoking the old `maintain-contract-0012`
+command still fails closed. Operators must not recreate `ops/releases`,
+synthesize a legacy release manifest, or edit the ledger to bypass the adapter.
+
+After the production Pull deployment and the separate Dev checksum repair have
+passed their own gates, run the read-only plan first:
 
 ```bash
-python3 scripts/release_controller.py maintain-contract-0012 \
-  --manifest /path/to/release-manifest.json \
-  --operation-id contract-0012-YYYYMMDD
+/data/lzq/gith/nexpoly-runtime/bin/nexpoly-pull-contract-0012 plan \
+  --operation-id contract-0012-<utc-timestamp>
 ```
 
-Adding `--apply` is accepted only at `/data/lzq/gith/nexpoly`. While holding the
+The `apply` subcommand is also a dry-run unless the explicit mutation flag and
+both exact-root confirmations are present. During the authorized maintenance
+window, use the same reviewed operation ID:
+
+```bash
+/data/lzq/gith/nexpoly-runtime/bin/nexpoly-pull-contract-0012 apply \
+  --operation-id contract-0012-<utc-timestamp> \
+  --apply \
+  --confirm-production-root /data/lzq/gith/nexpoly \
+  --confirm-runtime-root /data/lzq/gith/nexpoly-runtime
+```
+
+Both commands fail closed unless the deployment state contains the exact,
+ordered canonical history from 0001 through 0011. The plan records the adapter,
+governance-core, sealed descriptor, source SHA/tree and manifest identities;
+apply persists the same authority inside the private audit manifest.
+
+The pull-state adapter accepts only a sealed deployment descriptor/current
+state, the clean live-checkout source SHA/tree, and its canonical migration
+manifest. Its dry-run is the only allowed first step; `--apply` must be accepted
+only at `/data/lzq/gith/nexpoly`. While holding the
 same deployment lock used by code releases, the controller drains admission and
 workers, verifies all active-job categories are zero, and before any destructive
 action proves that the current database is exactly `nexpoly`, inventories the
@@ -154,10 +184,11 @@ only checksum-pinned 0012, verifies the ledger and removed schema, runs strict
 preflight and an ingress-isolated production smoke, and atomically records the
 approval, epoch barrier, rollback floor, operation journal, and audit manifest.
 
-`ops/state/contract-0012-in-progress.json` is a durable recovery marker. A retry
-with the same immutable manifest and operation ID either resumes a fully
-committed operation (including reconstructing a success journal if interruption
-occurred between the atomic release-state write and journal write) or restores
+`/data/lzq/gith/nexpoly-runtime/state/contract-0012-in-progress.json` is the
+required durable recovery marker. A retry with the same sealed pull descriptor,
+live source identity and operation ID either resumes a fully committed operation
+(including reconstructing a success journal if interruption occurred between
+the atomic deployment-state write and journal write) or restores
 the verified full dump and previous release state before asking for an explicit
 retry under a new operation ID, preserving the failed/recovered journal and
 audit evidence. Failed recovery keeps admission drained and retains the marker;

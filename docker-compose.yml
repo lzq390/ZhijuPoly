@@ -16,7 +16,7 @@ x-backend-environment: &backend-environment
   GPU_ASYNC_QUEUE_TIMEOUT_SECONDS: "${GPU_ASYNC_QUEUE_TIMEOUT_SECONDS:-600}"
   GPU_BROKER_ENABLED: "${GPU_BROKER_ENABLED:-false}"
   GPU_BROKER_SOCKET_PATH: "${GPU_BROKER_SOCKET_PATH:-/run/user/1001/nexpoly-gpu/broker.sock}"
-  GPU_MPS_PIPE_ROOT: "${GPU_MPS_PIPE_ROOT:-/data/lzq/gith/nexpoly/ops/state/gpu-resource}"
+  GPU_MPS_PIPE_ROOT: "${GPU_MPS_PIPE_ROOT:-./.runtime/gpu-resource}"
   GPU_BROKER_ENVIRONMENT: "${GPU_BROKER_ENVIRONMENT:-dev}"
   GPU_BROKER_WAIT_TIMEOUT_SECONDS: "${GPU_BROKER_WAIT_TIMEOUT_SECONDS:-45}"
   GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS: "${GPU_BROKER_HEARTBEAT_INTERVAL_SECONDS:-5}"
@@ -67,7 +67,7 @@ x-backend-volumes: &backend-volumes
   - ${NEXPOLY_ASSET_ROOT:-.}/model/conditional_generation:/app/model/conditional_generation:ro
   - ${NEXPOLY_ASSET_ROOT:-.}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
   - ${NEXPOLY_ASSET_ROOT:-.}/model/polytao:/app/model/polytao:ro
-  - ${MONOMER_MD_WORKER_SOCKET_DIR:-./ops/state/monomer-md-worker-socket}:/app/monomer-md-worker:ro
+  - ${MONOMER_MD_WORKER_SOCKET_DIR:-./.runtime/monomer-md-worker-socket}:/app/monomer-md-worker:ro
 
 services:
   postgres-init:

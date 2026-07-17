@@ -30,10 +30,12 @@ BACKEND_DIGEST = "ghcr.io/lzq390/nexpoly-backend@sha256:" + "a" * 64
 WEB_DIGEST = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
 PRODUCTION_SOCKET_TARGET = "/app/monomer-md-worker"
 PRODUCTION_SOCKET = (
-    "/data/lzq/gith/nexpoly/ops/state/monomer-md-worker-socket/worker.sock"
+    "/data/lzq/gith/nexpoly-runtime/state/monomer-md-worker-socket/worker.sock"
 )
 FROZEN_BASE_BIN = "/home/devuser/miniconda3/envs/byteff2-repro/bin"
-CURRENT_ASSET_BYTEFF2 = "/data/lzq/gith/nexpoly/ops/current-assets/byteff2"
+CURRENT_ASSET_BYTEFF2 = (
+    "/data/lzq/gith/nexpoly-runtime/state/current-assets/byteff2"
+)
 
 
 def _env_values(path: Path) -> dict[str, str]:
@@ -81,6 +83,7 @@ class ComposeWorkerRuntimeTests(unittest.TestCase):
                     "LAB_DATA_POSTGRES_DSN": "postgresql://nexpoly:test@lab-postgres:5432/nexpoly",
                     "NEXPOLY_APP_ENV_FILE": str(app_env),
                     "NEXPOLY_ASSET_ROOT": str(root / "assets"),
+                    "NEXPOLY_RUNTIME_ROOT": "/data/lzq/gith/nexpoly-runtime",
                     "POLYTAO_ENABLED": "true",
                 }
             )
@@ -177,8 +180,10 @@ class WorkerHostRuntimeTests(unittest.TestCase):
         self.assertEqual(completed.stdout, "")
         self.assertIn("legacy installer is disabled and made no changes", completed.stderr)
         self.assertIn("docs/release-controller.md", completed.stderr)
-        self.assertIn("scripts/bootstrap_release_root.py", completed.stderr)
-        self.assertIn("operation=bootstrap", completed.stderr)
+        self.assertIn("scripts/bootstrap_pull_deploy.py", completed.stderr)
+        self.assertIn("--production-root /data/lzq/gith/nexpoly", completed.stderr)
+        self.assertIn("--runtime-root /data/lzq/gith/nexpoly-runtime", completed.stderr)
+        self.assertNotIn("--source-root", completed.stderr)
         self.assertIn("docs/monomer-md-worker.md", completed.stderr)
 
     @unittest.skipUnless(shutil.which("flock"), "flock is not available")
@@ -204,10 +209,10 @@ class WorkerHostRuntimeTests(unittest.TestCase):
             marker.unlink()
             self.assertEqual(subprocess.run(command, check=False).returncode, 0)
 
-    def test_systemd_starts_release_venv_with_frozen_runtime_and_private_socket(self) -> None:
+    def test_systemd_starts_active_ab_venv_through_stable_launcher(self) -> None:
         unit = SYSTEMD_UNIT.read_text(encoding="utf-8")
         self.assertIn(
-            "WorkingDirectory=/data/lzq/gith/nexpoly/ops/current/workers/monomer_md_worker",
+            "WorkingDirectory=/data/lzq/gith/nexpoly",
             unit,
         )
         # The unit must not parse worker.env or duplicate runtime values.  Its
@@ -218,21 +223,26 @@ class WorkerHostRuntimeTests(unittest.TestCase):
         self.assertNotIn('Environment="BYTEFF2_ROOT=', unit)
         self.assertNotIn('Environment="PYTHONPATH=', unit)
         self.assertIn(
-            "ExecStart=/usr/bin/python3 -I "
-            "/data/lzq/gith/nexpoly/ops/config/monomer_worker_env.py exec "
-            "/data/lzq/gith/nexpoly/ops/config/worker.env -- "
-            "/data/lzq/gith/nexpoly/ops/current/worker-venv/bin/python -m uvicorn",
+            "ExecStart=/usr/bin/python3 -I -B "
+            "/data/lzq/gith/nexpoly-runtime/bin/control_runtime_selector.py "
+            "run monomer-md",
             unit,
         )
         self.assertIn("UnsetEnvironment=", unit)
         self.assertIn("/usr/bin/flock -n \"$2\" /usr/bin/true", unit)
+        self.assertIn('/usr/bin/test ! -L "$1"', unit)
+        self.assertIn('/usr/bin/test ! -L "$2"', unit)
+        self.assertIn('$(/usr/bin/id -u):600', unit)
         self.assertIn(
-            "/data/lzq/gith/nexpoly/ops/state/deploy-in-progress.json ",
+            "/data/lzq/gith/nexpoly-runtime/state/deploy-in-progress.json ",
             unit,
         )
-        self.assertIn("/data/lzq/gith/nexpoly/ops/state/deploy.lock", unit)
-        self.assertIn(f"--uds {PRODUCTION_SOCKET}", unit)
-        self.assertIn("ExecStartPre=/usr/bin/install -d -m 0700", unit)
+        self.assertIn("/data/lzq/gith/nexpoly-runtime/state/deploy.lock", unit)
+        self.assertIn("/nexpoly-runtime/state/active-control.json", unit)
+        self.assertNotIn("/nexpoly-runtime/bin/worker_slot_runtime.py", unit)
+        self.assertNotIn("ops/current", unit)
+        self.assertNotIn("ops/releases", unit)
+        self.assertNotIn("worker-venv/bin/python", unit)
         self.assertIn("UMask=0077", unit)
         self.assertNotIn("pip install", unit)
 
@@ -243,19 +253,16 @@ class WorkerHostRuntimeTests(unittest.TestCase):
         self.assertEqual(worker["BYTEFF2_PYTHON"], f"{FROZEN_BASE_BIN}/python")
         self.assertEqual(
             worker["PYTHONPATH"],
-            "/data/lzq/gith/nexpoly/ops/current:"
+            "/data/lzq/gith/nexpoly:"
             f"{CURRENT_ASSET_BYTEFF2}:{CURRENT_ASSET_BYTEFF2}/submodules/bytemol",
         )
         self.assertEqual(worker["MONOMER_MD_GPU_BROKER_ENABLED"], "false")
         self.assertEqual(worker["MONOMER_MD_GPU_BROKER_ENVIRONMENT"], "prod")
         self.assertEqual(
             worker["MONOMER_MD_GPU_MPS_PIPE_ROOT"],
-            "/data/lzq/gith/nexpoly/ops/state/gpu-resource",
+            "/data/lzq/gith/nexpoly-runtime/state/gpu-resource",
         )
-        self.assertEqual(
-            worker["MONOMER_MD_PYTHON"],
-            "/data/lzq/gith/nexpoly/ops/current/worker-venv/bin/python",
-        )
+        self.assertNotIn("MONOMER_MD_PYTHON", worker)
         self.assertEqual(worker["MONOMER_MD_WORKER_UDS"], PRODUCTION_SOCKET)
         self.assertEqual(deploy["NEXPOLY_WORKER_BASE_PYTHON"], f"{FROZEN_BASE_BIN}/python")
         self.assertEqual(deploy["NEXPOLY_WORKER_GMX"], f"{FROZEN_BASE_BIN}/gmx")

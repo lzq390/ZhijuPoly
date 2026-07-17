@@ -106,7 +106,7 @@ PolyTAO 的最大公开参数保持不变，但内部按最多 2 条序列的微
 - 正式 Monomer-MD 所需的 ByteFF2/OpenMM/GROMACS 环境；
 - 与目标机器匹配的 dev overlay 或生产环境配置。
 
-不要在 README 复制容易漂移的完整资产列表。模型清单以 [`backend/app/model_asset_manifest.py`](backend/app/model_asset_manifest.py) 为准，生产资产以只读 `ASSET-MANIFEST.json` 为准，部署检查以 [`scripts/release_controller.py`](scripts/release_controller.py) 及发布控制器文档为准。
+不要在 README 复制容易漂移的完整资产列表。模型清单以 [`backend/app/model_asset_manifest.py`](backend/app/model_asset_manifest.py) 为准，生产资产以只读 `ASSET-MANIFEST.json` 为准，部署检查以 [`scripts/pull_deploy_controller.py`](scripts/pull_deploy_controller.py) 及发布控制器文档为准。
 
 ## 仓库目录
 
@@ -150,7 +150,7 @@ docker compose config --quiet
 
 ## 权威文档
 
-- [生产部署与不可变发布控制器](docs/release-controller.md)
+- [生产 Pull 部署控制器](docs/release-controller.md)
 - [CI/CD 与生产部署入口](docs/deployment.md)
 - [PostgreSQL 迁移治理](docs/postgres-migration-governance.md)
 - [Monomer-MD Worker](docs/monomer-md-worker.md)

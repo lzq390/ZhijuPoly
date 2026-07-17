@@ -5,13 +5,18 @@ cat >&2 <<'EOF'
 [nexpoly-worker-systemd] ERROR: this legacy installer is disabled and made no changes.
 
 Production Worker installation is part of the reviewed one-time release bootstrap.
-Follow "One-time production preparation" in docs/release-controller.md, beginning with:
+Follow the bootstrap procedure in docs/deployment.md, beginning with a read-only plan:
 
-  python3 scripts/bootstrap_release_root.py \
-    --production-root /data/lzq/gith/nexpoly
+  ./scripts/bootstrap_pull_deploy.py \
+    --sha <40-character-main-sha> \
+    --production-root /data/lzq/gith/nexpoly \
+    --runtime-root /data/lzq/gith/nexpoly-runtime
 
-Install the audited candidate unit only during that maintenance-window procedure,
-then dispatch the CI workflow from main with operation=bootstrap as documented.
+Do not chmod, replace, reload, or install the Worker unit manually. The reviewed
+bootstrap command takes over the exact confirmed unit and records its authority.
+Then run the owner-only pull-deploy command on the production host as documented.
+The controller state machine and recovery contract are detailed in
+docs/release-controller.md.
 For local development, follow docs/monomer-md-worker.md and run:
 
   scripts/dev_server_gpu.sh worker-venv

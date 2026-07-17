@@ -2370,7 +2370,12 @@ class ReleaseControllerTests(unittest.TestCase):
             maintenance._validate_success_journal(journal, approval),
             journal,
         )
-        run.assert_called_once_with(["compose"], env={})
+        # Recovery now stops nginx, temporarily resumes the internal API for
+        # the governed canary, re-drains it, and only then restores nginx.
+        self.assertEqual(run.call_count, 5)
+        self.assertTrue(
+            all(call == mock.call(["compose"], env={}) for call in run.call_args_list)
+        )
         resume.assert_called_once_with({}, worker_was_drained=True)
 
     def test_0012_rollback_recovery_journals_before_requiring_new_operation_id(self) -> None:
@@ -5222,25 +5227,30 @@ class ReleaseControllerTests(unittest.TestCase):
             self.assertIn(str(previous / "docker-compose.yml"), call.args[0])
             self.assertNotIn(str(controller.release_dir / "docker-compose.yml"), call.args[0])
 
-    def test_cli_matches_workflow_contract(self) -> None:
-        output = self.root / "cli.json"
-        result = subprocess.run(
-            [
-                sys.executable, str(CONTROLLER_PATH), "build-manifest",
-                "--sha", SHA, "--ci-run-id", "101",
-                "--backend-image", BACKEND_IMAGE, "--web-image", WEB_IMAGE,
-                "--release-bundle", str(self.release_bundle),
-                "--release-input", str(self.release_input),
-                "--output", str(output),
-            ],
-            text=True, capture_output=True,
+    def test_legacy_release_cli_commands_are_retired_fail_closed(self) -> None:
+        for command in (
+            "build-manifest",
+            "verify-manifest",
+            "deploy",
+            "provision-release",
+            "maintain-contract-0012",
+        ):
+            result = subprocess.run(
+                [sys.executable, str(CONTROLLER_PATH), command],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 2, command)
+            self.assertIn("legacy command is retired", result.stderr)
+            self.assertIn("nexpoly-pull-deploy", result.stderr)
+
+    def test_parser_exposes_no_legacy_release_command(self) -> None:
+        choices = next(
+            action.choices
+            for action in release_controller.parser()._actions
+            if isinstance(action, argparse._SubParsersAction)
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        verify = subprocess.run(
-            [sys.executable, str(CONTROLLER_PATH), "verify-manifest", "--manifest", str(output), "--sha", SHA],
-            text=True, capture_output=True,
-        )
-        self.assertEqual(verify.returncode, 0, verify.stderr)
+        self.assertEqual(set(choices), {"worker-base-identity"})
 
     def test_worker_drain_reports_active_job_without_stopping_it(self) -> None:
         manifest = self.build()

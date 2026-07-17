@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "protocol_version": 1,
+  "compatibility": {
+    "handoff_protocol_versions": [1],
+    "descriptor_schema_versions": [2],
+    "current_state_schema_versions": [2],
+    "marker_schema_versions": [2],
+    "worker_slot_schema_versions": [2]
+  },
+  "entrypoints": {
+    "deploy": {
+      "kind": "python",
+      "file": "pull_deploy_controller.py"
+    },
+    "contract-0012": {
+      "kind": "python",
+      "file": "pull_contract_0012.py"
+    },
+    "monomer-md": {
+      "kind": "worker",
+      "environment_loader": "monomer_worker_env.py",
+      "launcher": "monomer_md_worker_launcher.py",
+      "config_relative": "config/worker.env"
+    }
+  },
+  "files": [
+    {
+      "name": "monomer_md_worker_launcher.py",
+      "source": "scripts/monomer_md_worker_launcher.py",
+      "mode": 448
+    },
+    {
+      "name": "monomer_worker_env.py",
+      "source": "scripts/monomer_worker_env.py",
+      "mode": 448
+    },
+    {
+      "name": "pull_contract_0012.py",
+      "source": "scripts/pull_contract_0012.py",
+      "mode": 448
+    },
+    {
+      "name": "pull_deploy_controller.py",
+      "source": "scripts/pull_deploy_controller.py",
+      "mode": 448
+    },
+    {
+      "name": "release_controller.py",
+      "source": "scripts/release_controller.py",
+      "mode": 448
+    },
+    {
+      "name": "worker_slot_runtime.py",
+      "source": "scripts/worker_slot_runtime.py",
+      "mode": 448
+    }
+  ]
+}

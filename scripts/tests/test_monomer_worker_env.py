@@ -228,7 +228,7 @@ class WorkerEnvironmentTests(unittest.TestCase):
             {"marker": "1", "socket": "/run/user/1001/gpu.sock"},
         )
 
-    def test_systemd_uses_only_the_stable_literal_environment_wrapper(self) -> None:
+    def test_systemd_uses_only_the_immutable_control_selector(self) -> None:
         unit = SYSTEMD_UNIT.read_text(encoding="utf-8")
         active_lines = [
             line
@@ -238,11 +238,14 @@ class WorkerEnvironmentTests(unittest.TestCase):
         self.assertFalse(any(line.startswith("EnvironmentFile=") for line in active_lines))
         exec_start = next(line for line in active_lines if line.startswith("ExecStart="))
         self.assertIn(
-            "/ops/config/monomer_worker_env.py exec "
-            "/data/lzq/gith/nexpoly/ops/config/worker.env --",
+            "/usr/bin/python3 -I -B "
+            "/data/lzq/gith/nexpoly-runtime/bin/control_runtime_selector.py "
+            "run monomer-md",
             exec_start,
         )
-        self.assertNotIn("/ops/current/scripts/monomer_worker_env.py", exec_start)
+        self.assertNotIn("monomer_worker_env.py", exec_start)
+        self.assertNotIn("monomer_md_worker_launcher.py", exec_start)
+        self.assertNotIn("/ops/current", exec_start)
 
 
 if __name__ == "__main__":

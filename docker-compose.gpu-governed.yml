@@ -12,4 +12,4 @@ services:
       com.nexpoly.gpu.component: "backend"
       com.nexpoly.gpu.environment: "${GPU_BROKER_ENVIRONMENT:-dev}"
     volumes:
-      - ${NEXPOLY_GPU_STATE_ROOT:-/data/lzq/gith/nexpoly/ops/state/gpu-resource}:/app/gpu-mps:rw
+      - ${NEXPOLY_GPU_STATE_ROOT:-/data/lzq/gith/nexpoly-runtime/state/gpu-resource}:/app/gpu-mps:rw

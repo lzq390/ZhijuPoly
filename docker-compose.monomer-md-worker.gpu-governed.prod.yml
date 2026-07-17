@@ -15,7 +15,7 @@ services:
       com.nexpoly.gpu.component: "md"
       com.nexpoly.gpu.environment: "prod"
     volumes:
-      - ${NEXPOLY_GPU_STATE_ROOT:-/data/lzq/gith/nexpoly/ops/state/gpu-resource}:/app/gpu-mps:rw
+      - ${NEXPOLY_GPU_STATE_ROOT:-/data/lzq/gith/nexpoly-runtime/state/gpu-resource}:/app/gpu-mps:rw
     gpus: !override
       - driver: nvidia
         device_ids: ["1", "2", "3"]

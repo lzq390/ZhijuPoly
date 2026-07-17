@@ -1,0 +1,630 @@
+from __future__ import annotations
+
+import importlib.util
+import fcntl
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts/control_runtime_selector.py"
+SPEC = importlib.util.spec_from_file_location("control_runtime_selector_test", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
+SELECTOR = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(SELECTOR)
+
+
+class SelectorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="control-selector-")
+        self.addCleanup(self.temporary.cleanup)
+        self.runtime = Path(self.temporary.name) / "runtime"
+        for relative in ("bin", "control-releases", "state", "state/prepared"):
+            path = self.runtime / relative
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(path, 0o700)
+        self.immutable: dict[str, str] = {}
+        for name in SELECTOR.BOOTSTRAP_IMMUTABLE_FILES:
+            payload = f"fixture {name}\n".encode()
+            self._write(self.runtime / "bin" / name, payload, 0o700)
+            self.immutable[name] = SELECTOR.sha256_bytes(payload)
+
+    @staticmethod
+    def _write(path: Path, payload: bytes, mode: int) -> None:
+        path.write_bytes(payload)
+        os.chmod(path, mode)
+
+    def release(
+        self,
+        *,
+        source_sha: str,
+        source_tree: str,
+        variant: str,
+        dft: bool = False,
+        imports_sibling: bool = False,
+    ) -> tuple[dict[str, object], Path]:
+        payloads = {
+            "deploy.py": (
+                (
+                    "import importlib.util\n"
+                    "from pathlib import Path\n"
+                    "p=Path(__file__).with_name('env.py')\n"
+                    "s=importlib.util.spec_from_file_location('sealed_env', p)\n"
+                    "m=importlib.util.module_from_spec(s)\n"
+                    "s.loader.exec_module(m)\n"
+                ).encode()
+                if imports_sibling
+                else f"# deploy {variant}\n".encode()
+            ),
+            "env.py": f"# env {variant}\n".encode(),
+            "md.py": f"# md {variant}\n".encode(),
+        }
+        entrypoints: dict[str, object] = {
+            "deploy": {"kind": "python", "file": "deploy.py"},
+            "monomer-md": {
+                "kind": "worker",
+                "environment_loader": "env.py",
+                "launcher": "md.py",
+                "config_relative": "config/worker.env",
+            },
+        }
+        if dft:
+            payloads["dft.py"] = f"# dft {variant}\n".encode()
+            entrypoints["monomer-dft"] = {
+                "kind": "worker",
+                "environment_loader": "env.py",
+                "launcher": "dft.py",
+                "config_relative": "config/dft-worker.env",
+            }
+        files = {
+            name: {
+                "sha256": SELECTOR.sha256_bytes(payload),
+                "size": len(payload),
+                "mode": 0o700,
+            }
+            for name, payload in payloads.items()
+        }
+        identity = {
+            "schema_version": 1,
+            "protocol_version": 1,
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+            "compatibility": {
+                "handoff_protocol_versions": [1],
+                "descriptor_schema_versions": [2],
+                "current_state_schema_versions": [2],
+                "marker_schema_versions": [2, 3],
+                "worker_slot_schema_versions": [2],
+            },
+            "entrypoints": entrypoints,
+            "files": files,
+        }
+        release_id = SELECTOR.release_identity(identity)
+        manifest = {**identity, "release_id": release_id}
+        root = self.runtime / "control-releases" / release_id
+        root.mkdir(mode=0o700)
+        for name, payload in payloads.items():
+            self._write(root / name, payload, 0o700)
+        self._write(
+            root / SELECTOR.CONTROL_MANIFEST_NAME,
+            SELECTOR.canonical_json_bytes(manifest) + b"\n",
+            0o600,
+        )
+        SELECTOR.load_control_release(self.runtime, release_id)
+        return manifest, root
+
+    def candidate(
+        self, manifest: dict[str, object], *, operation_id: str
+    ) -> dict[str, object]:
+        root = self.runtime / "control-releases" / str(manifest["release_id"])
+        return {
+            "schema_version": 1,
+            "protocol_version": 1,
+            "component": "deployment-controls",
+            "release_id": manifest["release_id"],
+            "source_sha": manifest["source_sha"],
+            "source_tree": manifest["source_tree"],
+            "manifest_sha256": SELECTOR.sha256_file(
+                root / SELECTOR.CONTROL_MANIFEST_NAME
+            ),
+            "operation_id": operation_id,
+            "prepared_at": "2026-07-16T00:00:00+00:00",
+        }
+
+    def activate(
+        self, manifest: dict[str, object], *, operation_id: str, generation: int = 1
+    ) -> dict[str, object]:
+        candidate = self.candidate(manifest, operation_id=operation_id)
+        active = {
+            "schema_version": 1,
+            "protocol_version": 1,
+            "component": "deployment-controls",
+            "generation": generation,
+            "release_id": candidate["release_id"],
+            "source_sha": candidate["source_sha"],
+            "source_tree": candidate["source_tree"],
+            "manifest_sha256": candidate["manifest_sha256"],
+            "operation_id": operation_id,
+            "previous_release_id": None,
+            "activated_at": "2026-07-16T00:00:00+00:00",
+        }
+        self._write(
+            self.runtime / "state/active-control.json",
+            SELECTOR.canonical_json_bytes(active) + b"\n",
+            0o600,
+        )
+        authority = self.runtime / "state/bootstrap-control.json"
+        if not authority.exists():
+            self._write(
+                authority,
+                SELECTOR.canonical_json_bytes(
+                    {
+                        "schema_version": 1,
+                        "status": "completed",
+                        "source_sha": candidate["source_sha"],
+                        "source_tree": candidate["source_tree"],
+                        "delivery_gate": {"fixture": True},
+                        "production_repository": {"fixture": True},
+                        "immutable_files": self.immutable,
+                        "worker_unit_takeover": {"fixture": True},
+                        "candidate_control": candidate,
+                        "active_control": active,
+                    }
+                )
+                + b"\n",
+                0o600,
+            )
+        return active
+
+    def test_manifest_inventory_hash_mode_and_extra_are_fail_closed(self) -> None:
+        manifest, root = self.release(
+            source_sha="1" * 40, source_tree="2" * 40, variant="a"
+        )
+        self.activate(manifest, operation_id="bootstrap-controls-a")
+        active, loaded, loaded_root = SELECTOR.load_active_control(self.runtime)
+        self.assertEqual(active["release_id"], manifest["release_id"])
+        self.assertEqual(loaded, manifest)
+        self.assertEqual(loaded_root, root)
+        extra = root / "extra.py"
+        self._write(extra, b"# extra\n", 0o700)
+        with self.assertRaisesRegex(SELECTOR.ControlRuntimeError, "inventory"):
+            SELECTOR.load_active_control(self.runtime)
+        extra.unlink()
+        (root / "deploy.py").write_text("tampered\n", encoding="utf-8")
+        with self.assertRaisesRegex(SELECTOR.ControlRuntimeError, "differs"):
+            SELECTOR.load_active_control(self.runtime)
+
+    def test_active_control_is_unusable_until_bootstrap_authority_completes(self) -> None:
+        manifest, _root = self.release(
+            source_sha="1" * 40, source_tree="2" * 40, variant="prepared"
+        )
+        self.activate(manifest, operation_id="bootstrap-controls-prepared")
+        authority_path = self.runtime / "state/bootstrap-control.json"
+        authority = SELECTOR._load_private_json(authority_path)
+        authority["status"] = "prepared"
+        self._write(
+            authority_path,
+            SELECTOR.canonical_json_bytes(authority) + b"\n",
+            0o600,
+        )
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError, "completed bootstrap authority"
+        ):
+            SELECTOR.load_active_control(self.runtime)
+
+    def test_ready_routes_apply_to_exact_candidate_and_rejects_duplicate_operation(self) -> None:
+        first, _ = self.release(
+            source_sha="1" * 40, source_tree="2" * 40, variant="a"
+        )
+        second, second_root = self.release(
+            source_sha="3" * 40, source_tree="4" * 40, variant="b"
+        )
+        self.activate(first, operation_id="bootstrap-controls-a")
+        operation = "deploy-20260716-0001"
+        candidate = self.candidate(second, operation_id=operation)
+        prepared = self.runtime / "state/prepared" / operation
+        prepared.mkdir(mode=0o700)
+        ready = {
+            "schema_version": 1,
+            "status": "ready",
+            "operation_id": operation,
+            "executor_control": candidate,
+            "executor_control_sha256": SELECTOR.canonical_json_digest(candidate),
+        }
+        self._write(
+            prepared / "ready.json",
+            SELECTOR.canonical_json_bytes(ready) + b"\n",
+            0o600,
+        )
+        _manifest, selected = SELECTOR._selected_release(
+            self.runtime,
+            "deploy",
+            ["apply", "--sha", "3" * 40, "--operation-id", operation],
+        )
+        self.assertEqual(selected, second_root)
+        with self.assertRaisesRegex(SELECTOR.ControlRuntimeError, "exactly once"):
+            SELECTOR._selected_release(
+                self.runtime,
+                "deploy",
+                [
+                    "apply",
+                    "--operation-id",
+                    operation,
+                    "--operation-id",
+                    "deploy-20260716-0002",
+                ],
+            )
+
+    def test_marker_routes_supported_future_schema_and_fences_operation(self) -> None:
+        first, _ = self.release(
+            source_sha="1" * 40, source_tree="2" * 40, variant="a"
+        )
+        second, second_root = self.release(
+            source_sha="3" * 40, source_tree="4" * 40, variant="b"
+        )
+        self.activate(first, operation_id="bootstrap-controls-a")
+        operation = "deploy-20260716-0001"
+        candidate = self.candidate(second, operation_id=operation)
+        marker = {
+            "schema_version": 3,
+            "action": "deploy",
+            "operation_id": operation,
+            "executor_control": candidate,
+            "executor_control_sha256": SELECTOR.canonical_json_digest(candidate),
+        }
+        self._write(
+            self.runtime / "state/deploy-in-progress.json",
+            SELECTOR.canonical_json_bytes(marker) + b"\n",
+            0o600,
+        )
+        _manifest, selected = SELECTOR._selected_release(
+            self.runtime,
+            "deploy",
+            ["apply", "--operation-id", operation, "--sha", "3" * 40],
+        )
+        self.assertEqual(selected, second_root)
+        with self.assertRaisesRegex(SELECTOR.ControlRuntimeError, "differs"):
+            SELECTOR._selected_release(
+                self.runtime,
+                "deploy",
+                ["apply", "--operation-id", "deploy-20260716-0002"],
+            )
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError, "blocked by an interrupted"
+        ):
+            SELECTOR._selected_release(self.runtime, "contract-0012", ["apply"])
+
+    def test_dynamic_dft_role_and_environment_allowlist_need_no_router_change(self) -> None:
+        manifest, root = self.release(
+            source_sha="5" * 40,
+            source_tree="6" * 40,
+            variant="dft",
+            dft=True,
+        )
+        self.activate(manifest, operation_id="bootstrap-controls-dft")
+        captured: dict[str, object] = {}
+
+        def fake_exec(path: str, argv: list[str], environment: dict[str, str]) -> None:
+            captured.update(path=path, argv=argv, environment=environment)
+            raise RuntimeError("captured")
+
+        with mock.patch.object(SELECTOR.os, "execve", fake_exec):
+            with self.assertRaisesRegex(RuntimeError, "captured"):
+                SELECTOR._exec_role(
+                    "monomer-dft",
+                    [],
+                    {
+                        "HOME": "/evil",
+                        "LD_PRELOAD": "/tmp/evil.so",
+                        "LC_ALL": "C",
+                        "NEXPOLY_ALLOW_TEST_ROOT": "1",
+                        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1001/bus",
+                    },
+                    runtime_root=self.runtime,
+                )
+        argv = captured["argv"]
+        environment = captured["environment"]
+        self.assertIn(str(root / "dft.py"), argv)
+        self.assertNotIn("LD_PRELOAD", environment)
+        self.assertNotIn("NEXPOLY_ALLOW_TEST_ROOT", environment)
+        self.assertEqual(environment["HOME"], "/home/devuser")
+        self.assertEqual(environment["LC_ALL"], "C.UTF-8")
+        self.assertEqual(
+            environment["NEXPOLY_ACTIVE_CONTROL_RELEASE_ID"],
+            manifest["release_id"],
+        )
+
+    def test_python_roles_are_bytecode_free_and_release_inventory_stays_exact(self) -> None:
+        manifest, root = self.release(
+            source_sha="7" * 40,
+            source_tree="8" * 40,
+            variant="imports",
+            imports_sibling=True,
+        )
+        self.activate(manifest, operation_id="bootstrap-controls-bytecode-free")
+        captured: dict[str, object] = {}
+
+        def fake_exec(path: str, argv: list[str], environment: dict[str, str]) -> None:
+            captured.update(path=path, argv=argv, environment=environment)
+            raise RuntimeError("captured")
+
+        with mock.patch.object(SELECTOR.os, "execve", fake_exec):
+            with self.assertRaisesRegex(RuntimeError, "captured"):
+                SELECTOR._exec_role(
+                    "deploy", ["plan"], {}, runtime_root=self.runtime
+                )
+        argv = list(captured["argv"])
+        environment = dict(captured["environment"])
+        self.assertEqual(argv[:3], ["/usr/bin/python3", "-I", "-B"])
+        self.assertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
+        for _ in range(2):
+            completed = subprocess.run(
+                argv,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            SELECTOR.load_active_control(self.runtime)
+        self.assertFalse((root / "__pycache__").exists())
+        self.assertEqual(
+            {path.name for path in root.iterdir()},
+            {SELECTOR.CONTROL_MANIFEST_NAME, "deploy.py", "env.py", "md.py"},
+        )
+
+    def test_three_immutable_releases_preserve_old_rollback_targets(self) -> None:
+        releases = [
+            self.release(
+                source_sha=str(index) * 40,
+                source_tree=str(index + 3) * 40,
+                variant=str(index),
+            )
+            for index in (1, 2, 3)
+        ]
+        self.activate(releases[-1][0], operation_id="deploy-20260716-0003")
+        for manifest, root in releases:
+            loaded, loaded_root = SELECTOR.load_control_release(
+                self.runtime, manifest["release_id"]
+            )
+            self.assertEqual(loaded, manifest)
+            self.assertEqual(loaded_root, root)
+
+    def test_worker_role_binds_current_state_and_marker_owned_transition(self) -> None:
+        manifest, root = self.release(
+            source_sha="9" * 40,
+            source_tree="a" * 40,
+            variant="worker-authority",
+        )
+        operation = "deploy-20260716-worker-authority"
+        active = self.activate(manifest, operation_id=operation)
+        asset = self.runtime / "asset-release"
+        asset.mkdir(mode=0o700)
+        (self.runtime / "state/current-assets").symlink_to(asset)
+        launcher = manifest["files"]["md.py"]["sha256"]
+        unit = {
+            "control_release_id": manifest["release_id"],
+            "launcher_sha256": launcher,
+        }
+        slot = {
+            "source_sha": manifest["source_sha"],
+            "source_tree": manifest["source_tree"],
+            "operation_id": operation,
+        }
+        current = {
+            "schema_version": 2,
+            "operation_id": operation,
+            "source_sha": manifest["source_sha"],
+            "source_tree": manifest["source_tree"],
+            "active_control": active,
+            "monomer_md_systemd_unit": unit,
+            "active_monomer_md_slot": slot,
+            "asset_identity": {"root": str(asset)},
+        }
+        self._write(
+            self.runtime / "state/current-deployment.json",
+            SELECTOR.canonical_json_bytes(current) + b"\n",
+            0o600,
+        )
+        selected, selected_root = SELECTOR._selected_release(
+            self.runtime, "monomer-md", []
+        )
+        self.assertEqual(selected, manifest)
+        self.assertEqual(selected_root, root)
+
+        candidate = self.candidate(manifest, operation_id=operation)
+        descriptor = {
+            "repository": {
+                "target_sha": manifest["source_sha"],
+                "target_tree": manifest["source_tree"],
+            },
+            "controller": {
+                "executor_control": candidate,
+                "executor_control_sha256": SELECTOR.canonical_json_digest(candidate),
+                "previous_active_control": None,
+            },
+            "monomer_md": {"systemd_unit": unit, "slot_record": slot},
+            "release_input": {"asset": {"root": str(asset)}},
+            "previous_deployment": None,
+        }
+        prepared = self.runtime / "state/prepared" / operation
+        prepared.mkdir(mode=0o700)
+        descriptor_path = prepared / "descriptor.json"
+        self._write(
+            descriptor_path,
+            SELECTOR.canonical_json_bytes(descriptor) + b"\n",
+            0o600,
+        )
+        marker = {
+            "schema_version": 2,
+            "action": "deploy",
+            "operation_id": operation,
+            "descriptor_sha256": SELECTOR.sha256_file(descriptor_path),
+            "executor_control": candidate,
+            "executor_control_sha256": SELECTOR.canonical_json_digest(candidate),
+            "runtime_stopped": True,
+            "source_switched": True,
+            "slot_switched": True,
+            "unit_switched": True,
+            "control_switched": True,
+            "asset_switched": False,
+        }
+        marker_path = self.runtime / "state/deploy-in-progress.json"
+        self._write(
+            marker_path,
+            SELECTOR.canonical_json_bytes(marker) + b"\n",
+            0o600,
+        )
+        lock_path = self.runtime / "state/deploy.lock"
+        self._write(lock_path, b"", 0o600)
+        with lock_path.open("rb") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            with self.assertRaisesRegex(
+                SELECTOR.ControlRuntimeError,
+                "differ from governed deployment authority",
+            ):
+                SELECTOR._selected_release(self.runtime, "monomer-md", [])
+            marker["asset_switched"] = True
+            self._write(
+                marker_path,
+                SELECTOR.canonical_json_bytes(marker) + b"\n",
+                0o600,
+            )
+            selected, selected_root = SELECTOR._selected_release(
+                self.runtime, "monomer-md", []
+            )
+            self.assertEqual(selected, manifest)
+            self.assertEqual(selected_root, root)
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError, "not lock-owned"
+        ):
+            SELECTOR._selected_release(self.runtime, "monomer-md", [])
+
+    def test_worker_pre_stop_marker_routes_exact_unchanged_previous_runtime(self) -> None:
+        previous_manifest, previous_root = self.release(
+            source_sha="1" * 40,
+            source_tree="2" * 40,
+            variant="pre-stop-previous",
+        )
+        candidate_manifest, _candidate_root = self.release(
+            source_sha="3" * 40,
+            source_tree="4" * 40,
+            variant="pre-stop-candidate",
+        )
+        previous_operation = "deploy-20260716-previous"
+        operation = "deploy-20260716-pre-stop"
+        active = self.activate(
+            previous_manifest, operation_id=previous_operation
+        )
+        asset = self.runtime / "pre-stop-asset"
+        asset.mkdir(mode=0o700)
+        (self.runtime / "state/current-assets").symlink_to(asset)
+        previous = {
+            "schema_version": 2,
+            "operation_id": previous_operation,
+            "source_sha": previous_manifest["source_sha"],
+            "source_tree": previous_manifest["source_tree"],
+            "active_control": active,
+            "monomer_md_systemd_unit": {
+                "control_release_id": previous_manifest["release_id"],
+                "launcher_sha256": previous_manifest["files"]["md.py"]["sha256"],
+            },
+            "active_monomer_md_slot": {
+                "source_sha": previous_manifest["source_sha"],
+                "source_tree": previous_manifest["source_tree"],
+                "operation_id": previous_operation,
+            },
+            "asset_identity": {"root": str(asset)},
+        }
+        current_path = self.runtime / "state/current-deployment.json"
+        self._write(
+            current_path,
+            SELECTOR.canonical_json_bytes(previous) + b"\n",
+            0o600,
+        )
+        candidate = self.candidate(
+            candidate_manifest, operation_id=operation
+        )
+        descriptor = {
+            "repository": {
+                "target_sha": candidate_manifest["source_sha"],
+                "target_tree": candidate_manifest["source_tree"],
+            },
+            "controller": {
+                "executor_control": candidate,
+                "executor_control_sha256": SELECTOR.canonical_json_digest(
+                    candidate
+                ),
+                "previous_active_control": active,
+            },
+            "monomer_md": {},
+            "release_input": {},
+            "previous_deployment": previous,
+        }
+        prepared = self.runtime / "state/prepared" / operation
+        prepared.mkdir(mode=0o700)
+        descriptor_path = prepared / "descriptor.json"
+        self._write(
+            descriptor_path,
+            SELECTOR.canonical_json_bytes(descriptor) + b"\n",
+            0o600,
+        )
+        base_marker = {
+            "schema_version": 2,
+            "action": "deploy",
+            "operation_id": operation,
+            "descriptor_sha256": SELECTOR.sha256_file(descriptor_path),
+            "executor_control": candidate,
+            "executor_control_sha256": SELECTOR.canonical_json_digest(candidate),
+            "runtime_stopped": False,
+            "source_switched": False,
+            "slot_switched": False,
+            "unit_switched": False,
+            "control_switched": False,
+            "asset_switched": False,
+            "database_change_started": False,
+        }
+        marker_path = self.runtime / "state/deploy-in-progress.json"
+        lock_path = self.runtime / "state/deploy.lock"
+        self._write(lock_path, b"", 0o600)
+        with lock_path.open("rb") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            for phase, failed_phase in (
+                ("prepared", None),
+                ("drain-started", None),
+                ("drained", None),
+                ("failed", "drained"),
+            ):
+                marker = {**base_marker, "phase": phase}
+                if failed_phase is not None:
+                    marker["failed_phase"] = failed_phase
+                self._write(
+                    marker_path,
+                    SELECTOR.canonical_json_bytes(marker) + b"\n",
+                    0o600,
+                )
+                selected, selected_root = SELECTOR._selected_release(
+                    self.runtime, "monomer-md", []
+                )
+                self.assertEqual(selected, previous_manifest)
+                self.assertEqual(selected_root, previous_root)
+
+            marker = {**base_marker, "phase": "drained", "asset_switched": True}
+            self._write(
+                marker_path,
+                SELECTOR.canonical_json_bytes(marker) + b"\n",
+                0o600,
+            )
+            with self.assertRaisesRegex(
+                SELECTOR.ControlRuntimeError,
+                "differ from governed deployment authority",
+            ):
+                SELECTOR._selected_release(self.runtime, "monomer-md", [])
+
+
+if __name__ == "__main__":
+    unittest.main()

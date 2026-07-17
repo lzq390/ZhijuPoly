@@ -3,13 +3,10 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
-import json
-import stat
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -21,29 +18,11 @@ SPEC.loader.exec_module(BOOTSTRAP)
 
 
 class BootstrapReleaseRootTests(unittest.TestCase):
-    def test_layout_has_only_minimal_state_and_no_release_inventory(self) -> None:
-        self.assertIn("ops/state", BOOTSTRAP.DIRECTORIES)
-        self.assertNotIn("ops/state/releases", BOOTSTRAP.DIRECTORIES)
-        self.assertEqual(BOOTSTRAP.DIRECTORIES["ops/state"], 0o700)
-
-    def test_dry_run_reports_no_runtime_mutation(self) -> None:
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            result = BOOTSTRAP.main(["--production-root", "/tmp/nexpoly-plan"])
-        self.assertEqual(result, 0)
-        document = json.loads(output.getvalue())
-        self.assertFalse(document["apply"])
-        self.assertNotIn("/tmp/nexpoly-plan/ops/state/releases", document["directories"])
-        self.assertIn("change running services", document["excluded_actions"])
-
-    def test_apply_creates_private_directories_and_lock_only(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="nexpoly-bootstrap-root-") as temporary:
-            root = Path(temporary).resolve()
-            output = io.StringIO()
-            with (
-                mock.patch.object(BOOTSTRAP, "PRODUCTION_ROOT", root),
-                contextlib.redirect_stdout(output),
-            ):
+    def test_retired_shim_always_fails_closed_without_creating_old_layout(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nexpoly-retired-bootstrap-") as temporary:
+            root = Path(temporary) / "production"
+            error = io.StringIO()
+            with contextlib.redirect_stderr(error):
                 result = BOOTSTRAP.main(
                     [
                         "--apply",
@@ -53,20 +32,34 @@ class BootstrapReleaseRootTests(unittest.TestCase):
                         str(root),
                     ]
                 )
-            self.assertEqual(result, 0)
-            self.assertEqual(json.loads(output.getvalue())["status"], "initialized")
-            for relative, mode in BOOTSTRAP.DIRECTORIES.items():
-                path = root / relative
-                self.assertTrue(path.is_dir())
-                self.assertEqual(stat.S_IMODE(path.stat().st_mode), mode)
-            lock = root / "ops/state/deploy.lock"
-            self.assertTrue(lock.is_file())
-            self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
-            self.assertFalse((root / "ops/state/releases").exists())
-            self.assertFalse((root / "ops/current").exists())
+
+            self.assertEqual(result, 2)
+            self.assertIn("retired", error.getvalue())
+            self.assertIn("./scripts/bootstrap_pull_deploy.py", error.getvalue())
+            self.assertNotIn("python3 scripts/bootstrap_pull_deploy.py", error.getvalue())
+            self.assertFalse(root.exists())
+
+    def test_retired_shim_dry_run_is_also_fail_closed(self) -> None:
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            result = BOOTSTRAP.main([])
+
+        self.assertEqual(result, 2)
+        self.assertIn("nexpoly-runtime", error.getvalue())
 
     def test_bootstrap_hook_templates_are_secret_free_valid_shell(self) -> None:
-        for name in ("bootstrap-quiesce.example", "bootstrap-rollback.example"):
+        names = {
+            "bootstrap-quiesce.example",
+            "bootstrap-status.example",
+            "bootstrap-resume-unchanged.example",
+            "bootstrap-rollback.example",
+        }
+        actual = {
+            path.name
+            for path in (REPOSITORY_ROOT / "ops/config").glob("bootstrap-*.example")
+        }
+        self.assertEqual(actual, names)
+        for name in sorted(names):
             path = REPOSITORY_ROOT / "ops/config" / name
             result = subprocess.run(
                 ["bash", "-n", str(path)],

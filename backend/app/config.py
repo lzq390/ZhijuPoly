@@ -488,7 +488,7 @@ class Settings:
             "GPU_MPS_PIPE_ROOT",
             env_values.get(
                 "GPU_MPS_PIPE_ROOT",
-                "/data/lzq/gith/nexpoly/ops/state/gpu-resource",
+                "/data/lzq/gith/nexpoly-runtime/state/gpu-resource",
             ),
         )
         raw_gpu_broker_environment = gpu_broker_environment or os.getenv(

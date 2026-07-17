@@ -1,216 +1,282 @@
-# NexPoly deployment
+# NexPoly production deployment
 
-GPU Broker/MPS accounting, fixed budgets, and the separately authorized
-activation sequence are documented in
-[GPU resource governance](gpu-resource-governance.md). The units ship disabled;
-normal release automation must not change production compute mode.
+Production is updated by a reviewed, commit-pinned pull on the server. GitHub
+Actions validates every candidate and publishes the Backend and Web images, but
+it never contacts or mutates the production host. An operator runs the stable
+deployment command during an authorized maintenance window.
 
-NexPoly uses one CI/CD workflow for application code, the host Monomer-MD
-Worker, and the immutable model/data asset pin.  Production remains rooted at
-`/data/lzq/gith/nexpoly`, but a deployment never builds an image or installs a
-package from the network on that host.
+## Filesystem boundaries
 
-## Environment boundaries
-
-- Development: `/data/lzq/gith/nexpoly-dev`, Compose project `nexpoly_dev`.
-- Production: `/data/lzq/gith/nexpoly`, Compose project `nexpoly`.
-- Immutable assets: `/data/lzq/nexpoly-assets/releases/<manifest-sha256>`.
-- Backend and Web releases: private GHCR images referenced by `@sha256`.
-- Monomer-MD Worker: a per-release venv layered on the frozen
-  `/home/devuser/miniconda3/envs/byteff2-repro` environment.
-
-Production `worker.env` is not a shell file and is not a systemd
-`EnvironmentFile`. A stable owner-only Python wrapper accepts only literal,
-allowlisted `KEY=VALUE` lines and supplies the same child environment to
-systemd and candidate preflight. OpenMM loader variables are derived from
-`BYTEFF2_OPENMM_DIR`; `OPENMM_DIR`, `OPENMM_PLUGIN_DIR`, `LD_LIBRARY_PATH`, and
-the deploy-only Transport gate are forbidden in `worker.env`.
-
-The two PostgreSQL volumes remain independent.  A deployment must never copy
-models or data directly from the development checkout into production.  New
-assets are first sealed in the content-addressed asset store and then selected
-by the tracked `release-input.json` digest.
-
-## The single workflow
-
-`.github/workflows/ci.yml` is the only delivery workflow.
-
-- Pull requests run secret-free Backend, Frontend, Worker, script, Compose and
-  image-build checks.  The stable required status is `ci-gate`.
-- A push to protected `main` repeats the immutable-SHA gate, builds and pushes
-  Backend/Web images, tests their exact digests, and creates one release bundle.
-  Production deployment is forced off during the migration-epoch bridge.
-- `workflow_dispatch` has no SHA input and is accepted only for the one-time
-  bootstrap of the current `main` commit.
-
-All Actions are pinned to full commits.  PR jobs have no secrets.  The deploy
-step alone receives the `nexpoly-production` SSH secrets and requires a pinned
-`known_hosts`; host-key discovery is forbidden.  GitHub concurrency and the
-server `deploy.lock` prevent overlapping production changes.
-
-There is no `workflow_run` hand-off, control/Worker OCI image, Actions release
-inventory, standalone data workflow, or manual arbitrary-SHA redeploy path.
-
-## Release input and bundle
-
-`release-input.json` has this public contract:
-
-```json
-{
-  "schema_version": 1,
-  "asset_manifest_digest": "sha256:<64 lowercase hex>",
-  "datasets_on_asset_change": ["governance", "core"]
-}
-```
-
-Dataset names must be explicit, unique and supported by
-`python -m app.import_postgres`; `all` and `none` are forbidden.  The repository
-uses the complete explicit set so an asset change can rebuild governed data
-without relying on an implicit default.  When the asset digest is unchanged,
-the deployment runs no import at all.
-
-The main release job creates:
-
-- a manifest containing the source SHA, CI run, Backend/Web digests, the single
-  release-bundle digest, asset digest, datasets and migrations;
-- a release bundle containing the exact Compose/control files, Worker source,
-  hash lock and offline wheelhouse.
-
-The bundle is hashed and copied over the pinned SSH connection.  The server
-validates the manifest, file type, size, hash and archive paths before using any
-content.  Application containers are still sourced only from GHCR digest
-references.
-
-## Production state
-
-Only these mutable control records are required:
+The source checkout is fixed at:
 
 ```text
-ops/current -> releases/<sha>
-ops/current-assets -> /data/lzq/nexpoly-assets/releases/<digest>
-ops/state/release-state.json
-ops/state/deploy-in-progress.json
-ops/state/deploy.lock
+/data/lzq/gith/nexpoly
 ```
 
-`release-state.json` records the current and previous release identities,
-Backend/Web digests, the single release-bundle digest, Worker base/toolchain
-identity, asset digest, migrations and the verified pre-deploy backup. It is the
-only persistent source of the active asset digest. `deploy-in-progress.json` is
-a small crash marker, not a journal; an unfinished marker is reconciled before
-another deployment or Worker start.
+It must track `origin/main` and be completely clean: no tracked changes, no
+ordinary untracked paths, and no ignored paths. Before the first takeover,
+inventory every existing ignored path with its hash, owner and mode, then move
+secrets, models, caches, journals and results to the runtime root below. Verify
+the external pointers and configuration after the move. Never use `git clean`
+to satisfy this gate. Runtime state is never stored in that checkout:
 
-## Automatic deployment
+```text
+/data/lzq/gith/nexpoly-runtime/
+├── bin/
+├── config/
+├── state/
+├── audit/
+├── backups/
+├── wheel-cache/
+└── worker-venvs/
+    ├── md-a/
+    ├── md-b/
+    ├── dft-a/
+    └── dft-b/
+```
 
-The remote release flow invokes two fail-stop controller commands under the
-same non-blocking server lock contract. `provision-release --apply` completes
-first; only then may `deploy --apply` run.
+The runtime root, configuration, state, audit data, backups, cached wheels and
+Worker environments are deploy-user-owned and private. Model and database
+assets remain in their content-addressed asset store; only the reviewed pointer
+under `nexpoly-runtime/state/current-assets` is used by production.
 
-The controller performs the following:
+PostgreSQL data, Worker journals, sockets, caches and calculation results are
+outside Git. A source update must not copy, delete or recreate them.
 
-1. Verify the production root, current `main` SHA, manifest, images, bundle,
-   asset manifest and free space.
-2. In the explicit provisioning command, unpack the candidate and build the
-   per-SHA Worker venv from the offline wheelhouse. Verify the frozen
-   Python/Conda identity, `gmx`, ByteFF2 commit,
-   strict literal Worker configuration, and stable systemd wrapper. For every
-   release carrying the Worker payload, before any drain the resolved candidate
-   asset must use manifest schema v2 and contain all three fixed ByteFF2 runtime
-   assets: the tracked `bond_length_ref.csv` table plus the audited upstream
-   trainer YAML and model overlay. The ByteFF2 Git source and approved v1.0.0
-   commit, plus the overlay source, revision, source paths, runtime target
-   paths, sizes, and SHA-256 values,
-   are exact contract fields. This candidate-only check
-   intentionally does not reject a broken legacy schema-v1 current asset that
-   the candidate repairs. Seal a mode-0600 READY record over the manifest,
-   bundle, lock, wheelhouse, payload, venv inventory, final prefix and frozen
-   runtime identities. Provisioning scratch stays under `ops/state`.
-3. Start `deploy` by recomputing the READY evidence. This path performs no
-   venv creation, pip invocation, or candidate-Python import; venv distribution
-   metadata is checked statically before the governed runtime preflight. When
-   the deploy-only Transport gate is
-   enabled, drain the old Worker and
-   wait for its active jobs to reach zero, then run the candidate runtime
-   preflight before pulling images or changing PostgreSQL/runtime state. Direct
-   mode requires an idle selected GPU; Broker mode obtains a temporary fenced
-   execution lease and never runs an ungoverned CUDA probe. The outer controller
-   contains the candidate with a temporary child-subreaper scope, exact pidfds,
-   repeated freeze/adoption scans, and a bounded stdout pipe, so a quick
-   double-fork/`setsid()` cannot escape timeout cleanup. A failure resumes the
-   unchanged Worker.
-4. Pull the two image digests. Drain Backend (and the Worker if it was not
-   already drained), then wait up to 30 minutes for persistent jobs,
-   in-memory jobs, GPU queues, API writes and Worker jobs to reach zero.
-5. Create a custom-format PostgreSQL dump, SHA-256 sidecar, and successfully run
-   `pg_restore --list`.
-6. Apply only expand migrations. A contract remains pending only while no later
-   epoch depends on its exact checksum; a missing/mismatched dependency rejects
-   the deployment before later-epoch DDL.
-7. If the asset digest changed, use the candidate asset root to run the explicit
-   complete dataset set with `--rebuild`.  Otherwise skip imports.  Refresh the
-   PostgreSQL analytics snapshot for the target SHA.
-8. Atomically switch `current-assets` and `current`, start the target Worker and
-   digest-pinned Backend/Web, and keep public ingress isolated.
-9. Run strict PostgreSQL/GPU checks, Worker health, Backend status and protocol
-   catalog gates, versioned Web asset health, PolyTAO smoke, and the 300-step
-   Monomer-MD/ByteFF2/GROMACS smoke. Strict Transport readiness requires
-   `supported=true`, `runtime_ready=true`, and `runtime_error=null` everywhere.
-10. Commit `release-state.json`, remove the crash marker, and resume ingress.
+## CI contract
 
-If draining times out, the old release is resumed without backup, migration or
-switch.  The Worker is never force-killed while it reports an active job.
+The single `.github/workflows/ci.yml` runs for pull requests and pushes to
+`main`.
 
-## Rollback
+- Pull requests run policy, Backend, Frontend, Worker and image-build checks.
+- A push to `main` builds and publishes exactly two images tagged with the full
+  commit SHA.
+- Both images carry `revision`, `source` and `version` OCI labels.
+- CI resolves the pushed tags to immutable digests and smokes those exact
+  digests against PostgreSQL 16.
+- CI has no production environment, host credentials or production execution
+  step.
 
-- For a code-only failure, restore the previous Backend/Web images, Worker
-  release and pointers.  Compatible expand migrations remain.  Regenerate the
-  previous SHA analytics snapshot with the previous image and run all previous
-  release preflights before resuming.
-- If an asset pointer changed or a dataset import began, first restore the
-  verified pre-change dump, then restore the old asset and all old runtimes.
-- If rollback cannot be verified, keep drain/ingress isolation in place and
-  fail closed.
+Production always uses the digest references resolved from the requested SHA;
+it never uses `latest` and never builds application images on the server.
 
-All health helpers receive the release they are checking explicitly.  A failed
-target must never be used to run the previous release's PostgreSQL or GPU
-preflight.
+## Production configuration
 
-## One-time bootstrap
+Install the examples as private files:
 
-Bootstrap is a reviewed maintenance-window operation for current `main` only.
-It creates private `ops` directories, stores read-only GHCR credentials, binds
-PostgreSQL to `127.0.0.1:55432`, rotates the `polyprop` password in App and
-Worker configuration, installs the `ops/current` Worker systemd unit, and
-records the legacy Backend/Web image IDs and Worker unit as one canonical
-rollback identity. The audited rollback helper must restore and health-check
-all three runtimes plus ingress; merely restarting nginx is rejected. See
-[`release-controller.md`](release-controller.md) for the capture, GHCR pull
-credential, rehearsal, and evidence procedure.
+```text
+/data/lzq/gith/nexpoly-runtime/config/deploy.env
+/data/lzq/gith/nexpoly-runtime/config/app.env
+/data/lzq/gith/nexpoly-runtime/config/worker.env
+```
 
-The initial asset release is
-`sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2`.
-Its file content matches the current production model/database/backend-data
-trees, so bootstrap treats it as the baseline pin and does not rebuild data.
-It applies migrations 0009-0011 and leaves 0012 pending. Automatic deployment
-remains disabled during the epoch bridge. The checksum-pinned 0012 maintenance
-operation and the later automatic-deployment re-enable are separately reviewed
-changes.
+`deploy.env` must define:
 
-## GitHub configuration
+```dotenv
+NEXPOLY_RUNTIME_ROOT=/data/lzq/gith/nexpoly-runtime
+NEXPOLY_APP_ENV_FILE=/data/lzq/gith/nexpoly-runtime/config/app.env
+NEXPOLY_GPU_STATE_ROOT=/data/lzq/gith/nexpoly-runtime/state/gpu-resource
+NEXPOLY_ASSET_ROOT=/data/lzq/gith/nexpoly-runtime/state/current-assets
+```
 
-- Protect `main`: require a pull request, require the branch to be up to date,
-  require `ci-gate`, and forbid force-push and deletion.
-- The current single-maintainer personal repository does not require an
-  approval count or merge queue.
-- Restrict `nexpoly-production` to protected `main`, with no reviewer so the
-  explicitly dispatched bridge bootstrap does not require a second redundant
-  approval. Push-triggered production deployment remains disabled in CI.
-- Store `NEXPOLY_SSH_HOST`, `NEXPOLY_SSH_USER`,
-  `NEXPOLY_SSH_PRIVATE_KEY`, and the independently verified
-  `NEXPOLY_SSH_KNOWN_HOSTS` as environment secrets.  Store the SSH port as an
-  environment variable.  Remove the old repository-scoped SSH secrets only
-  after a successful bootstrap.
+Secret values are read from private files or the environment. They are never
+accepted as command-line arguments or recorded in audit JSON.
 
-Off-host backups, blue/green deployment, full ByteFF2 containerization,
-scheduled restore drills and automatic retention are deliberately outside this
-minimal delivery path.
+The production Git remote uses a dedicated read-only deploy identity and a
+pinned host key. Personal credential helpers are not permitted. The source
+checkout and its Git metadata must not be group- or world-writable.
+
+## Operator workflow
+
+The stable entry point is installed outside the checkout:
+
+```text
+/data/lzq/gith/nexpoly-runtime/bin/nexpoly-pull-deploy
+```
+
+Before bootstrap, provision the following deploy-user-owned files outside the
+checkout. Directories are mode `0700`; credential/config files are mode `0600`;
+bootstrap executables are mode `0700`:
+
+- `config/git-deploy-key`: a repository-scoped, read-only GitHub deploy key;
+- `config/known_hosts`: a reviewed, pre-pinned GitHub host key (runtime
+  `ssh-keyscan` is forbidden);
+- `config/github-api-token`: a token limited to reading Actions run/check
+  evidence;
+- `config/docker/config.json`: inline read-only GHCR authentication for
+  `ghcr.io`, with no external credential helper;
+- `config/deploy.env` and `config/app.env`: production control and application
+  values; passwords, tokens and DSNs are never command-line arguments;
+- four reviewed wrappers: `config/bootstrap-quiesce`,
+  `config/bootstrap-status`, `config/bootstrap-resume-unchanged`, and
+  `config/bootstrap-rollback`;
+- four site-specific helpers: `config/bootstrap-active-jobs-probe`,
+  `config/bootstrap-legacy-runtime-status`,
+  `config/bootstrap-legacy-runtime-resume-unchanged`, and
+  `config/bootstrap-legacy-runtime-restore`.
+
+All eight executables are fixed-name, deploy-user-owned mode `0700` files. The
+deployment descriptor seals every hash. The status helper is read-only; the
+unchanged-resume helper may restore ingress only and must prove the Backend and
+Worker processes did not restart; the full restore helper is reserved for a
+runtime already stopped or partially replaced. Each helper must be idempotent
+across a lost response. There are no configurable shell-command selector
+variables.
+
+The initial controller must be installed from a clean temporary standalone
+clone at the reviewed base SHA/tree, beneath an owner-controlled directory that
+is not group/world writable. A shared Git worktree is rejected because its
+common local config is outside the clone boundary. The clone must contain no
+ignored paths, executable Git filters or writable Git policy files. Do not
+bootstrap from a dirty development worktree or with a personal credential
+helper. Git alternates, `commondir`, `--shared`, `--reference` and locally
+hard-linked object databases are rejected; clone from the canonical remote (or
+use `--no-local`) into a source path disjoint from both production and runtime.
+For example, create the source under a private parent with `umask 077`:
+
+```bash
+umask 077
+git clone --no-local git@github.com:lzq390/ZhijuPoly.git \
+  /home/devuser/nexpoly-bootstrap/source
+```
+
+Invoke the script
+directly through its fixed isolated-Python shebang, or explicitly with
+`/usr/bin/python3 -I -B`; ordinary `python3 scripts/...` is rejected. First run
+the non-mutating plan:
+
+```bash
+./scripts/bootstrap_pull_deploy.py \
+  --sha <main-sha> \
+  --production-root /data/lzq/gith/nexpoly \
+  --runtime-root /data/lzq/gith/nexpoly-runtime
+```
+
+After checking the reported source tree, CI attempt, filesystem inventory and
+current Worker unit SHA-256, initialize the control plane. The dry-run does not
+execute Git from the still-writable production checkout; exact branch, remote,
+HEAD, tree, clean/ignored state and fast-forward validation occurs during the
+confirmed apply only after Bootstrap has locked directory writes, rejected
+executable Git policy and atomically replaced Git config/attributes with
+private inodes:
+
+```bash
+./scripts/bootstrap_pull_deploy.py \
+  --sha <main-sha> \
+  --apply \
+  --production-root /data/lzq/gith/nexpoly \
+  --runtime-root /data/lzq/gith/nexpoly-runtime \
+  --confirm-production-root /data/lzq/gith/nexpoly \
+  --confirm-runtime-root /data/lzq/gith/nexpoly-runtime \
+  --confirm-source-tree <40-character-tree> \
+  --confirm-worker-unit-sha256 sha256:<64-lowercase-hex>
+```
+
+Bootstrap itself backs up the exact existing mode-`0664` Worker unit, makes it
+private, atomically replaces the pathname with a new verified inode, runs
+`daemon-reload`, and records the takeover authority. Never pre-`chmod`, replace
+or manually reload that unit. Remove the temporary bootstrap source only after
+the installed immutable inventory and completed bootstrap authority verify.
+
+Every attempt uses a unique lowercase operation ID and the full 40-character
+SHA currently at `origin/main`:
+
+```bash
+nexpoly-pull-deploy plan \
+  --sha <main-sha> \
+  --operation-id deploy-<utc-timestamp>
+
+nexpoly-pull-deploy prepare \
+  --sha <main-sha> \
+  --operation-id deploy-<utc-timestamp>
+
+nexpoly-pull-deploy apply \
+  --sha <main-sha> \
+  --operation-id deploy-<utc-timestamp>
+```
+
+`plan` and `prepare` do not interrupt serving traffic. `prepare` must finish
+before the maintenance window. It verifies the protected-main candidate and CI
+checks, resolves image digests and labels, validates assets and migrations,
+downloads locked wheels, and builds the inactive Worker environment directly
+at its final A/B slot path.
+
+`apply` obtains the exclusive deployment lock and then:
+
+1. Enables Backend and Worker drain and waits for all active work to finish.
+2. Isolates public ingress and stops Backend, Web, MD Worker and DFT Worker.
+   PostgreSQL remains running.
+3. Creates a private PostgreSQL backup and proves it can be restored in an
+   isolated PostgreSQL 16 instance.
+4. Records the previous source SHA, tree, image digests, asset pointer and
+   active Worker slots.
+5. Fetches again, revalidates the target and fast-forwards the production
+   checkout to that exact `origin/main` SHA.
+6. Verifies HEAD, tree hash, remote identity and clean worktree before running
+   target code.
+7. Pulls the recorded image digests, applies only allowed expand migrations and
+   runs strict schema preflight.
+8. Switches the prepared A/B slots, starts Workers, Backend and Web, and runs
+   required model, database, API, UI and calculation smokes.
+9. Writes the successful deployment state atomically before restoring ingress.
+
+All processes that import or execute checkout files are stopped before the Git
+working tree changes. Updating a running source tree in place is forbidden.
+
+## Migrations and first takeover
+
+An empty database uses the complete bootstrap mode. The first takeover of the
+existing production database uses the governed bootstrap-expand path and stops
+before a trailing contract migration.
+
+Destructive migrations are separate, checksum-pinned maintenance operations.
+They require their own operation ID, drain, backup, isolated restore proof,
+approval record, epoch barrier and rollback floor. A normal source deployment
+must never infer or execute a pending contract. See
+`docs/postgres-migration-governance.md`.
+
+The first governed deployment must additionally prove the legacy runtime
+identity and install and seal all eight bootstrap executables listed above. If
+the production ledger, registered database inventory, asset identity or
+rollback evidence differs from the reviewed plan, the operation stops before
+mutation.
+
+> **PR1 stop condition:** merging the Pull bridge installs capability only.
+> Production currently contains the known duplicate
+> `0005_polytao_jobs` ledger alias. Until the dedicated, reviewed PR2 CAS tool
+> has backed up, restore-tested, and removed exactly that alias, operators must
+> not run the first production `apply` or `bootstrap-expand`.
+
+## Rollback and interrupted attempts
+
+Rollback is explicit:
+
+```bash
+nexpoly-pull-deploy rollback \
+  --operation-id deploy-<utc-timestamp>
+```
+
+The controller stops candidate services, restores the previous source SHA,
+image digests, asset pointer and Worker slots, and runs the old runtime smokes
+before restoring ingress. Compatible expand migrations may remain. A database
+change that is not backward-compatible requires restoration from the verified
+backup before the previous runtime can accept writes.
+
+The deployment marker and journal are stored below
+`nexpoly-runtime/state`. An interrupted or ambiguous operation fails closed;
+the operator must run the matching recovery or rollback command under the same
+deployment lock. Never delete the marker, edit the migration ledger, run
+`git clean`, or start services manually to bypass recovery.
+
+The controller may perform a controlled checkout of the recorded previous SHA
+only in the dedicated production checkout. That authority never applies to a
+development worktree, DFT worktree or AIMNet source tree.
+
+## GPU services
+
+GPU Broker and MPS units read code from the stopped-and-verified production
+checkout and keep all writable state under
+`/data/lzq/gith/nexpoly-runtime/state/gpu-resource`. They are installed as
+disabled capabilities. Enabling MPS/Broker, enabling a production DFT Worker,
+and opening DFT admission are distinct reviewed maintenance changes; a normal
+pull deployment does not enable them.
