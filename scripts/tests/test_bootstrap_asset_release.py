@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -424,6 +426,75 @@ class AssetBootstrapTests(unittest.TestCase):
                     script_path="builder.py",
                     expected_source=assets.BUILD_SOURCE_REPOSITORY,
                 )
+
+    def test_canonical_isolated_invocation_creates_no_ignored_bytecode(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "fresh"
+            root.mkdir()
+            tracked = subprocess.run(
+                ["git", "-C", str(REPOSITORY_ROOT), "ls-files", "-z"],
+                check=True,
+                stdout=subprocess.PIPE,
+            ).stdout.split(b"\0")
+            for encoded in tracked:
+                if not encoded:
+                    continue
+                relative = Path(os.fsdecode(encoded))
+                source = REPOSITORY_ROOT / relative
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+            self.git(root, "init", "--quiet")
+            self.git(root, "config", "user.email", "ci@example.invalid")
+            self.git(root, "config", "user.name", "CI")
+            self.git(root, "add", "-f", "--all")
+            self.git(root, "commit", "--quiet", "-m", "fresh builder source")
+            command = [
+                sys.executable,
+                "-I",
+                "-B",
+                str(root / assets.BUILD_SOURCE_SCRIPT),
+                "--help",
+            ]
+            completed = subprocess.run(
+                command,
+                cwd=root,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            status = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                    "--ignored=matching",
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+            ).stdout
+            self.assertEqual(status, b"")
+
+            unsafe = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / assets.BUILD_SOURCE_SCRIPT),
+                    "--help",
+                ],
+                cwd=root,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(unsafe.returncode, 2)
+            self.assertIn(b"python3 -I -B", unsafe.stderr)
 
     def test_audited_overlay_contract_pins_hugging_face_revision_size_and_digest(self) -> None:
         self.assertEqual(

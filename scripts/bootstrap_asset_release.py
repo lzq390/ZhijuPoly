@@ -32,6 +32,7 @@ BYTEFF2_GIT_REVISION = "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2"
 BYTEFF2_GIT_TREE = "2d9ab46fc185e0e830be53c0ad077100e693ce68"
 BUILD_SOURCE_REPOSITORY = "https://github.com/lzq390/ZhijuPoly.git"
 BUILD_SOURCE_SCRIPT = "scripts/bootstrap_asset_release.py"
+CANONICAL_BUILD_COMMAND = ("python3", "-I", "-B", BUILD_SOURCE_SCRIPT)
 BYTEFF2_RUNTIME_REQUIRED_FILES = (
     (
         "submodules/bytemol/bytemol/toolkit/infer_molecule/bond_length_ref.csv",
@@ -1094,6 +1095,14 @@ def asset_store_lock():
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.flags.isolated != 1 or not sys.dont_write_bytecode:
+        print(
+            "bootstrap-asset-release: error: invoke exactly through "
+            f"`{' '.join(CANONICAL_BUILD_COMMAND)}` so source readiness "
+            "cannot be dirtied by imported bytecode",
+            file=sys.stderr,
+        )
+        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--asset-store", default=str(ASSET_STORE))
     parser.add_argument("--predecessor-digest", default=PREDECESSOR_ASSET_DIGEST)
