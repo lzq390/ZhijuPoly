@@ -27,6 +27,19 @@ RELEASE_TREE = "b" * 40
 DIGEST = "sha256:" + "c" * 64
 
 
+def _install_short_process_group_grace(monkeypatch) -> None:
+    monkeypatch.setattr(
+        process_control,
+        "MAX_TERMINATION_GRACE_SECONDS",
+        0.1,
+    )
+    monkeypatch.setattr(
+        process_control,
+        "PROCESS_GROUP_KILL_OBSERVE_SECONDS",
+        0.2,
+    )
+
+
 def _production_runtime_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
     source = tmp_path / "source"
     module = source / "workers" / "monomer_md_worker" / "app" / "main.py"

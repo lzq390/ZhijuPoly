@@ -43,6 +43,8 @@ export class MonomerMdStatusLoader {
       controller.abort();
     }, this.timeoutMs);
 
+    // Schedule both calls before awaiting either one so a slow endpoint cannot
+    // prevent the other endpoint from returning useful state.
     const statusPromise = Promise.resolve().then(() => this.fetchStatus(controller.signal));
     const protocolsPromise = Promise.resolve().then(() => this.fetchProtocols(controller.signal));
     const [status, protocols] = await Promise.allSettled([statusPromise, protocolsPromise]);

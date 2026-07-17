@@ -40,18 +40,6 @@ def _get_mode() -> WorkerMode:
     return raw  # type: ignore[return-value]
 
 
-def _get_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be a boolean")
-
-
 @dataclass(frozen=True)
 class WorkerSettings:
     mode: WorkerMode

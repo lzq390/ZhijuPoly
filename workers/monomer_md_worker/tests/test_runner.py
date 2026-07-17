@@ -8,7 +8,6 @@ import sys
 import pytest
 
 from workers.monomer_md_worker.app import process_control
-from workers.monomer_md_worker.app import runner as runner_module
 from workers.monomer_md_worker.app.byteff2_env import REQUIRED_OPENMM_FILES
 from workers.monomer_md_worker.app.config import WorkerSettings
 from workers.monomer_md_worker.app.models import JobRequest
@@ -54,14 +53,16 @@ def _settings(tmp_path: Path) -> WorkerSettings:
 
 
 def _install_short_process_group_grace(monkeypatch) -> None:
-    async def terminate_quickly(process, *, process_group_id: int) -> None:
-        await process_control.terminate_process_group(
-            process,
-            process_group_id=process_group_id,
-            grace_seconds=0.1,
-        )
-
-    monkeypatch.setattr(runner_module, "terminate_process_group", terminate_quickly)
+    monkeypatch.setattr(
+        process_control,
+        "MAX_TERMINATION_GRACE_SECONDS",
+        0.1,
+    )
+    monkeypatch.setattr(
+        process_control,
+        "PROCESS_GROUP_KILL_OBSERVE_SECONDS",
+        0.2,
+    )
 
 
 def _write_stubborn_process_tree(
@@ -139,6 +140,7 @@ def test_real_density_runner_receives_openmm_environment(tmp_path: Path, monkeyp
 
     class CompletedProcess:
         pid = 12345
+        returncode = 0
 
         async def wait(self):
             return 0
