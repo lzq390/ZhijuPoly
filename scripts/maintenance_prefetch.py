@@ -1096,16 +1096,26 @@ def validate_ready_evidence(
     readiness = document.get("source_readiness")
     if (
         not isinstance(readiness, dict)
+        or readiness.get("schema_version") != 2
         or readiness.get("ready") is not True
         or readiness.get("source_sha") != authority["sha"]
         or readiness.get("source_tree") != authority["tree"]
         or readiness.get("branch") != "main"
         or readiness.get("origin") != bootstrap_pull_deploy.REPOSITORY_SSH_URL
+        or readiness.get("remote_names") != ["origin"]
+        or readiness.get("origin_fetch_urls")
+        != [bootstrap_pull_deploy.REPOSITORY_SSH_URL]
+        or readiness.get("origin_push_urls")
+        != [bootstrap_pull_deploy.REPOSITORY_SSH_URL]
+        or readiness.get("origin_main_sha") != authority["sha"]
         or readiness.get("standalone_object_database") is not True
         or readiness.get("shallow") is not False
         or readiness.get("dirty_entries") != 0
         or readiness.get("ignored_entries") != 0
         or readiness.get("unreachable_objects") != 0
+        or readiness.get("replace_refs") != 0
+        or readiness.get("special_index_entries") != 0
+        or readiness.get("sparse_index") is not False
         or readiness.get("group_or_world_writable") is not False
         or (
             "owner_private" in readiness

@@ -900,15 +900,22 @@ def _validate_bootstrap_authority(runtime_root: Path) -> dict[str, Any]:
             "source_tree",
             "branch",
             "origin",
+            "remote_names",
+            "origin_fetch_urls",
+            "origin_push_urls",
+            "origin_main_sha",
             "standalone_object_database",
             "shallow",
             "dirty_entries",
             "ignored_entries",
             "unreachable_objects",
+            "replace_refs",
+            "special_index_entries",
+            "sparse_index",
             "owner_private",
             "group_or_world_writable",
         }
-        or readiness.get("schema_version") != 1
+        or readiness.get("schema_version") != 2
         or readiness.get("ready") is not True
         or not isinstance(readiness.get("source_root"), str)
         or not Path(readiness["source_root"]).is_absolute()
@@ -916,11 +923,20 @@ def _validate_bootstrap_authority(runtime_root: Path) -> dict[str, Any]:
         or readiness.get("source_tree") != record.get("source_tree")
         or readiness.get("branch") != "main"
         or readiness.get("origin") != "git@github.com:lzq390/ZhijuPoly.git"
+        or readiness.get("remote_names") != ["origin"]
+        or readiness.get("origin_fetch_urls")
+        != ["git@github.com:lzq390/ZhijuPoly.git"]
+        or readiness.get("origin_push_urls")
+        != ["git@github.com:lzq390/ZhijuPoly.git"]
+        or readiness.get("origin_main_sha") != record.get("source_sha")
         or readiness.get("standalone_object_database") is not True
         or readiness.get("shallow") is not False
         or readiness.get("dirty_entries") != 0
         or readiness.get("ignored_entries") != 0
         or readiness.get("unreachable_objects") != 0
+        or readiness.get("replace_refs") != 0
+        or readiness.get("special_index_entries") != 0
+        or readiness.get("sparse_index") is not False
         or readiness.get("owner_private") is not True
         or readiness.get("group_or_world_writable") is not False
         or record.get("source_readiness_sha256")

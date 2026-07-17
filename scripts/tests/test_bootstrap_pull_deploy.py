@@ -186,6 +186,16 @@ class BootstrapPullDeployTests(unittest.TestCase):
             cwd=source,
             check=True,
         )
+        subprocess.run(
+            [
+                "git",
+                "update-ref",
+                "refs/remotes/origin/main",
+                "HEAD",
+            ],
+            cwd=source,
+            check=True,
+        )
         return source
 
     def test_dry_run_is_non_mutating_and_lists_external_layout(self) -> None:
@@ -746,9 +756,14 @@ class BootstrapPullDeployTests(unittest.TestCase):
             expected_sha=sha,
         )
         self.assertTrue(report["ready"])
+        self.assertEqual(report["schema_version"], 2)
         self.assertEqual(report["source_sha"], sha)
+        self.assertEqual(report["origin_fetch_urls"], [BOOTSTRAP.REPOSITORY_SSH_URL])
+        self.assertEqual(report["origin_push_urls"], [BOOTSTRAP.REPOSITORY_SSH_URL])
         self.assertEqual(report["ignored_entries"], 0)
         self.assertEqual(report["unreachable_objects"], 0)
+        self.assertEqual(report["replace_refs"], 0)
+        self.assertEqual(report["special_index_entries"], 0)
         with self.assertRaisesRegex(
             BOOTSTRAP.BootstrapError, "commit identity"
         ):
@@ -781,6 +796,11 @@ class BootstrapPullDeployTests(unittest.TestCase):
             cwd=ignored,
             check=True,
         )
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd=ignored,
+            check=True,
+        )
         cache = ignored / "runtime-cache"
         cache.mkdir(mode=0o700)
         (cache / "value").write_text("ignored\n", encoding="utf-8")
@@ -800,6 +820,96 @@ class BootstrapPullDeployTests(unittest.TestCase):
             BOOTSTRAP.BootstrapError, "dangling or unreachable"
         ):
             BOOTSTRAP.bootstrap_source_readiness(dangling)
+
+    def test_source_readiness_rejects_replace_refs_and_hidden_index_bits(
+        self,
+    ) -> None:
+        replacement = self.ready_private_repo(self.root / "replace-source")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=replacement,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        tree = subprocess.run(
+            ["git", "rev-parse", "HEAD^{tree}"],
+            cwd=replacement,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        alternate = subprocess.run(
+            [
+                "git",
+                "commit-tree",
+                tree,
+                "-p",
+                head,
+                "-m",
+                "replacement fixture",
+            ],
+            cwd=replacement,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "replace", head, alternate],
+            cwd=replacement,
+            check=True,
+        )
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError,
+            "replacement refs",
+        ):
+            BOOTSTRAP.bootstrap_source_readiness(replacement)
+
+        hidden = self.ready_private_repo(self.root / "hidden-index-source")
+        subprocess.run(
+            ["git", "update-index", "--skip-worktree", "control.txt"],
+            cwd=hidden,
+            check=True,
+        )
+        (hidden / "control.txt").write_text("hidden drift\n", encoding="utf-8")
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError,
+            "sparse or hidden",
+        ):
+            BOOTSTRAP.bootstrap_source_readiness(hidden)
+
+        assumed = self.ready_private_repo(self.root / "assume-index-source")
+        subprocess.run(
+            ["git", "update-index", "--assume-unchanged", "control.txt"],
+            cwd=assumed,
+            check=True,
+        )
+        (assumed / "control.txt").write_text("assumed drift\n", encoding="utf-8")
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError,
+            "sparse or hidden",
+        ):
+            BOOTSTRAP.bootstrap_source_readiness(assumed)
+
+    def test_source_readiness_rejects_ambiguous_remote_urls(self) -> None:
+        source = self.ready_private_repo(self.root / "multi-url-source")
+        subprocess.run(
+            [
+                "git",
+                "remote",
+                "set-url",
+                "--add",
+                "origin",
+                BOOTSTRAP.REPOSITORY_SSH_URL,
+            ],
+            cwd=source,
+            check=True,
+        )
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError,
+            "one canonical",
+        ):
+            BOOTSTRAP.bootstrap_source_readiness(source)
 
     def test_source_readiness_rejects_worktree_and_group_writable_clone(self) -> None:
         source = self.ready_private_repo(self.root / "worktree-owner")

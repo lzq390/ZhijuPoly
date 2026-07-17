@@ -43,6 +43,7 @@ REPOSITORY_API_ROOT = "https://api.github.com/repos/lzq390/ZhijuPoly"
 SYSTEM_CA_BUNDLE = Path("/etc/ssl/certs/ca-certificates.crt")
 GIT_EXTERNAL_STORAGE_MARKERS = (
     Path(".git/commondir"),
+    Path(".git/info/grafts"),
     Path(".git/objects/info/alternates"),
     Path(".git/objects/info/http-alternates"),
 )
@@ -628,9 +629,14 @@ def _git_environment(root: Path, *, home: str) -> dict[str, str]:
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_NO_LAZY_FETCH": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_PROTOCOL_FROM_USER": "0",
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_ASKPASS": "/bin/false",
+        "GIT_SSH_COMMAND": "/bin/false",
+        "SSH_ASKPASS": "/bin/false",
         "GIT_PAGER": "cat",
         "GIT_EDITOR": "/bin/false",
     }
@@ -638,7 +644,7 @@ def _git_environment(root: Path, *, home: str) -> dict[str, str]:
 
 def _git_command(root: Path, *arguments: str) -> list[str]:
     return [
-        "git",
+        "/usr/bin/git",
         "-c",
         "credential.helper=",
         "-c",
@@ -650,12 +656,19 @@ def _git_command(root: Path, *arguments: str) -> list[str]:
         "-c",
         "core.attributesFile=/dev/null",
         "-c",
+        "protocol.allow=never",
+        "-c",
         f"core.worktree={root.absolute()}",
         *arguments,
     ]
 
 
-def _validate_local_git_config(payload: bytes, *, label: str) -> None:
+def _validate_local_git_config(
+    payload: bytes,
+    *,
+    label: str,
+    allow_runtime_overrides: bool,
+) -> None:
     """Reject local Git policy that can execute code or redirect identity."""
 
     if len(payload) > 1024 * 1024:
@@ -673,16 +686,16 @@ def _validate_local_git_config(payload: bytes, *, label: str) -> None:
             "logallrefupdates",
             "ignorecase",
             "precomposeunicode",
-            # These three are explicitly overridden on every Git invocation.
-            "worktree",
-            "fsmonitor",
-            "untrackedcache",
         },
         'remote "origin"': {"url", "fetch", "tagopt"},
         # VS Code records only a ref name here; Git does not execute it.
         'branch "main"': {"remote", "merge", "vscode-merge-base"},
         "user": {"name", "email"},
     }
+    if allow_runtime_overrides:
+        # The legacy production checkout may contain these values. Every
+        # takeover Git call overrides them before the files are sealed.
+        allowed["core"].update({"worktree", "fsmonitor", "untrackedcache"})
     for section in parser.sections():
         normalized = section.lower()
         permitted = allowed.get(normalized)
@@ -833,11 +846,37 @@ def bootstrap_source_readiness(
 
     try:
         branch = str(git("symbolic-ref", "--short", "HEAD")).strip()
-        origin = str(git("remote", "get-url", "origin")).strip()
+        remote_names = str(git("remote")).splitlines()
+        origin_fetch_urls = str(
+            git("remote", "get-url", "--all", "origin")
+        ).splitlines()
+        origin_push_urls = str(
+            git("remote", "get-url", "--push", "--all", "origin")
+        ).splitlines()
         source_sha = str(git("rev-parse", "HEAD")).strip()
         source_tree = str(git("rev-parse", "HEAD^{tree}")).strip()
         local_main = str(git("rev-parse", "refs/heads/main")).strip()
-        dirty = str(git("status", "--porcelain=v1", "--untracked-files=all"))
+        origin_main = str(
+            git("rev-parse", "refs/remotes/origin/main")
+        ).strip()
+        replace_refs = str(
+            git(
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/replace/",
+            )
+        ).splitlines()
+        index_entries = bytes(
+            git("ls-files", "--sparse", "-v", "-z", text=False)
+        ).split(b"\0")
+        dirty = str(
+            git(
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            )
+        )
         ignored = bytes(
             git(
                 "ls-files",
@@ -865,10 +904,16 @@ def bootstrap_source_readiness(
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise BootstrapError("cannot establish bootstrap source readiness") from exc
-    if branch != "main" or local_main != source_sha:
+    if branch != "main" or local_main != source_sha or origin_main != source_sha:
         raise BootstrapError("bootstrap source must be the exact local main checkout")
-    if origin != REPOSITORY_SSH_URL:
-        raise BootstrapError("bootstrap source must use the canonical deploy-key SSH origin")
+    if (
+        remote_names != ["origin"]
+        or origin_fetch_urls != [REPOSITORY_SSH_URL]
+        or origin_push_urls != [REPOSITORY_SSH_URL]
+    ):
+        raise BootstrapError(
+            "bootstrap source must use one canonical deploy-key SSH remote"
+        )
     if (
         SHA_RE.fullmatch(source_sha) is None
         or SHA_RE.fullmatch(source_tree) is None
@@ -880,30 +925,53 @@ def bootstrap_source_readiness(
         raise BootstrapError("bootstrap source contains tracked or untracked changes")
     if ignored:
         raise BootstrapError("bootstrap source contains ignored paths")
+    if replace_refs:
+        raise BootstrapError("bootstrap source contains Git replacement refs")
+    special_index_entries = [
+        entry
+        for entry in index_entries
+        if entry and not entry.startswith(b"H ")
+    ]
+    if special_index_entries:
+        raise BootstrapError(
+            "bootstrap source index contains sparse or hidden entries"
+        )
     unreachable_output = unreachable.stdout + unreachable.stderr
     if unreachable_output.strip():
         raise BootstrapError(
             "bootstrap source contains dangling or unreachable Git objects"
         )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "ready": True,
         "source_root": str(root),
         "source_sha": source_sha,
         "source_tree": source_tree,
         "branch": branch,
-        "origin": origin,
+        "origin": origin_fetch_urls[0],
+        "remote_names": remote_names,
+        "origin_fetch_urls": origin_fetch_urls,
+        "origin_push_urls": origin_push_urls,
+        "origin_main_sha": origin_main,
         "standalone_object_database": True,
         "shallow": False,
         "dirty_entries": 0,
         "ignored_entries": 0,
         "unreachable_objects": 0,
+        "replace_refs": 0,
+        "special_index_entries": 0,
+        "sparse_index": False,
         "owner_private": True,
         "group_or_world_writable": False,
     }
 
 
-def _read_git_policy(path: Path, *, root: Path) -> tuple[bytes, int]:
+def _read_git_policy(
+    path: Path,
+    *,
+    root: Path,
+    allow_runtime_overrides: bool = False,
+) -> tuple[bytes, int]:
     try:
         metadata = path.lstat()
         payload = path.read_bytes()
@@ -917,7 +985,11 @@ def _read_git_policy(path: Path, *, root: Path) -> tuple[bytes, int]:
     ):
         raise BootstrapError(f"Git policy file is unsafe: {path}")
     if path.name in {"config", "config.worktree"} and path.parent == root / ".git":
-        _validate_local_git_config(payload, label=str(path))
+        _validate_local_git_config(
+            payload,
+            label=str(path),
+            allow_runtime_overrides=allow_runtime_overrides,
+        )
         return payload, 0o600
     _validate_git_attributes(payload, label=str(path))
     return payload, stat.S_IMODE(metadata.st_mode) & ~0o022
@@ -1218,7 +1290,11 @@ def _harden_checkout(root: Path) -> None:
             else:
                 raise BootstrapError(f"special production Git entry: {child}")
     policy_payloads = {
-        path: _read_git_policy(path, root=root)
+        path: _read_git_policy(
+            path,
+            root=root,
+            allow_runtime_overrides=True,
+        )
         for path in _git_policy_paths(root)
     }
     for path, (payload, mode) in policy_payloads.items():
@@ -1851,18 +1927,25 @@ def main(argv: list[str] | None = None) -> int:
         else:
             source_sha, source_tree = _source_identity(allow_test=True)
             source_readiness = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "ready": True,
                 "source_root": str(REPOSITORY_ROOT),
                 "source_sha": source_sha,
                 "source_tree": source_tree,
                 "branch": "main",
                 "origin": REPOSITORY_SSH_URL,
+                "remote_names": ["origin"],
+                "origin_fetch_urls": [REPOSITORY_SSH_URL],
+                "origin_push_urls": [REPOSITORY_SSH_URL],
+                "origin_main_sha": source_sha,
                 "standalone_object_database": True,
                 "shallow": False,
                 "dirty_entries": 0,
                 "ignored_entries": 0,
                 "unreachable_objects": 0,
+                "replace_refs": 0,
+                "special_index_entries": 0,
+                "sparse_index": False,
                 "owner_private": True,
                 "group_or_world_writable": False,
             }

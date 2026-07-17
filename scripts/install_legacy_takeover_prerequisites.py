@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 from contextlib import contextmanager
 import fcntl
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -16,12 +16,14 @@ import secrets
 import stat
 import subprocess
 import sys
+import types
 from typing import Any, Callable, Iterator
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
+REPOSITORY_SSH_URL = "git@github.com:lzq390/ZhijuPoly.git"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SITE_IMPLEMENTATION_MARKER = b"SITE_IMPLEMENTATION_REQUIRED"
 REVIEWED_WRAPPERS = {
@@ -97,13 +99,157 @@ def sha256_bytes(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
-def _load_module(name: str, path: Path) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise PrerequisiteInstallError(f"cannot load source module: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+def _module_from_payload(
+    name: str,
+    payload: bytes,
+    *,
+    filename: str,
+    injected_modules: dict[str, Any] | None = None,
+) -> Any:
+    """Compile only commit-bound bytes, never a mutable worktree module."""
+
+    module = types.ModuleType(name)
+    module.__file__ = filename
+    module.__package__ = ""
+    replacements = {name: module, **(injected_modules or {})}
+    previous = {
+        key: sys.modules.get(key)
+        for key in replacements
+    }
+    missing = {
+        key
+        for key in replacements
+        if key not in sys.modules
+    }
+    try:
+        sys.modules.update(replacements)
+        exec(compile(payload, filename, "exec"), module.__dict__)
+    except BaseException as exc:
+        raise PrerequisiteInstallError(
+            f"cannot compile F authority module: {filename}"
+        ) from exc
+    finally:
+        for key in replacements:
+            if key in missing:
+                sys.modules.pop(key, None)
+            else:
+                sys.modules[key] = previous[key]
     return module
+
+
+def _assert_minimal_private_source(root: Path) -> tuple[Path, Path]:
+    """Reject unsafe/external Git layouts before the first Git invocation."""
+
+    root = root.absolute()
+    git_dir = root / ".git"
+    try:
+        parent = root.parent.lstat()
+        root_metadata = root.lstat()
+        git_metadata = git_dir.lstat()
+        objects_metadata = (git_dir / "objects").lstat()
+    except OSError as exc:
+        raise PrerequisiteInstallError(
+            "fresh F source layout is unavailable"
+        ) from exc
+    for path, metadata in (
+        (root.parent, parent),
+        (root, root_metadata),
+        (git_dir, git_metadata),
+        (git_dir / "objects", objects_metadata),
+    ):
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o077
+        ):
+            raise PrerequisiteInstallError(
+                "fresh F source must be an owner-private standalone clone"
+            )
+    for relative in (
+        ".git/commondir",
+        ".git/info/grafts",
+        ".git/objects/info/alternates",
+        ".git/objects/info/http-alternates",
+    ):
+        marker = root / relative
+        if marker.exists() or marker.is_symlink():
+            raise PrerequisiteInstallError(
+                "fresh F source uses external Git storage"
+            )
+    config = git_dir / "config"
+    try:
+        config_metadata = config.lstat()
+        config_payload = config.read_bytes()
+    except OSError as exc:
+        raise PrerequisiteInstallError(
+            "fresh F source Git config is unavailable"
+        ) from exc
+    if (
+        not stat.S_ISREG(config_metadata.st_mode)
+        or config.is_symlink()
+        or config_metadata.st_uid != os.geteuid()
+        or config_metadata.st_mode & 0o077
+        or len(config_payload) > 1024 * 1024
+    ):
+        raise PrerequisiteInstallError(
+            "fresh F source Git config is unsafe"
+        )
+    parser = configparser.RawConfigParser(interpolation=None, strict=False)
+    try:
+        parser.read_string(config_payload.decode("utf-8"))
+    except (UnicodeError, configparser.Error) as exc:
+        raise PrerequisiteInstallError(
+            "fresh F source Git config is malformed"
+        ) from exc
+    allowed: dict[str, set[str]] = {
+        "core": {
+            "repositoryformatversion",
+            "filemode",
+            "bare",
+            "logallrefupdates",
+            "ignorecase",
+            "precomposeunicode",
+        },
+        'remote "origin"': {"url", "fetch", "tagopt"},
+        'branch "main"': {"remote", "merge", "vscode-merge-base"},
+        "user": {"name", "email"},
+    }
+    for section in parser.sections():
+        permitted = allowed.get(section.lower())
+        keys = {
+            key.lower()
+            for key, _value in parser.items(section, raw=True)
+        }
+        if permitted is None or not keys.issubset(permitted):
+            raise PrerequisiteInstallError(
+                "fresh F source Git config contains unsupported policy"
+            )
+    return git_dir, root
+
+
+def _authority_git_environment(root: Path) -> dict[str, str]:
+    git_dir, work_tree = _assert_minimal_private_source(root)
+    return {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/nonexistent",
+        "LC_ALL": "C",
+        "GIT_DIR": str(git_dir),
+        "GIT_WORK_TREE": str(work_tree),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_PROTOCOL_FROM_USER": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_ASKPASS": "/bin/false",
+        "GIT_SSH_COMMAND": "/bin/false",
+        "SSH_ASKPASS": "/bin/false",
+        "GIT_PAGER": "cat",
+        "GIT_EDITOR": "/bin/false",
+    }
 
 
 def _private_directory(path: Path, *, create: bool = False) -> None:
@@ -197,15 +343,42 @@ def _validate_mutable_pgpass(payload: bytes) -> None:
 
 
 def _authority_payload(root: Path, authority_sha: str, relative: str) -> bytes:
+    if SHA_RE.fullmatch(authority_sha) is None:
+        raise PrerequisiteInstallError("full F authority SHA is required")
+    relative_path = Path(relative)
+    if (
+        relative_path.is_absolute()
+        or ".." in relative_path.parts
+        or relative_path.as_posix() != relative
+    ):
+        raise PrerequisiteInstallError("F authority path is invalid")
     try:
         result = subprocess.run(
             [
                 "/usr/bin/git",
-                "-C",
-                str(root),
-                "show",
+                "--no-replace-objects",
+                "-c",
+                "credential.helper=",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.untrackedCache=false",
+                "-c",
+                "core.attributesFile=/dev/null",
+                "-c",
+                f"core.worktree={root.absolute()}",
+                "-c",
+                "protocol.allow=never",
+                "-c",
+                "remote.origin.promisor=false",
+                "cat-file",
+                "blob",
                 f"{authority_sha}:{relative}",
             ],
+            cwd=root,
+            env=_authority_git_environment(root),
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -359,6 +532,7 @@ def verify_fresh_source(
     authority_sha: str,
     authority_tree: str,
     readiness: Callable[..., dict[str, Any]] | None = None,
+    authority_reader: Callable[[Path, str, str], bytes] = _authority_payload,
 ) -> dict[str, Any]:
     if (
         SHA_RE.fullmatch(authority_sha) is None
@@ -366,9 +540,17 @@ def verify_fresh_source(
     ):
         raise PrerequisiteInstallError("full F commit and tree are required")
     if readiness is None:
-        bootstrap = _load_module(
+        bootstrap_payload = authority_reader(
+            source_root,
+            authority_sha,
+            "scripts/bootstrap_pull_deploy.py",
+        )
+        bootstrap = _module_from_payload(
             "legacy_takeover_bootstrap_readiness",
-            source_root / "scripts/bootstrap_pull_deploy.py",
+            bootstrap_payload,
+            filename=(
+                f"git:{authority_sha}:scripts/bootstrap_pull_deploy.py"
+            ),
         )
         readiness = bootstrap.bootstrap_source_readiness
     try:
@@ -379,13 +561,23 @@ def verify_fresh_source(
         ) from exc
     if (
         not isinstance(report, dict)
+        or report.get("schema_version") != 2
         or report.get("ready") is not True
         or report.get("source_sha") != authority_sha
         or report.get("source_tree") != authority_tree
+        or report.get("branch") != "main"
+        or report.get("origin") != REPOSITORY_SSH_URL
+        or report.get("remote_names") != ["origin"]
+        or report.get("origin_fetch_urls") != [REPOSITORY_SSH_URL]
+        or report.get("origin_push_urls") != [REPOSITORY_SSH_URL]
+        or report.get("origin_main_sha") != authority_sha
         or report.get("standalone_object_database") is not True
         or report.get("dirty_entries") != 0
         or report.get("ignored_entries") != 0
         or report.get("unreachable_objects") != 0
+        or report.get("replace_refs") != 0
+        or report.get("special_index_entries") != 0
+        or report.get("sparse_index") is not False
     ):
         raise PrerequisiteInstallError("fresh F source identity differs")
     return report
@@ -410,10 +602,18 @@ def _install_prerequisites_locked(
         authority_sha=authority_sha,
         authority_tree=authority_tree,
         readiness=readiness,
+        authority_reader=authority_reader,
     )
-    contracts = _load_module(
+    contracts_payload = _bound_source_payload(
+        source_root,
+        authority_sha,
+        "scripts/site_helper_contracts.py",
+        authority_reader,
+    )
+    contracts = _module_from_payload(
         "legacy_takeover_install_contracts",
-        source_root / "scripts/site_helper_contracts.py",
+        contracts_payload,
+        filename=f"git:{authority_sha}:scripts/site_helper_contracts.py",
     )
     site_names = sorted(set(contracts.HELPERS) - set(REVIEWED_WRAPPERS))
     staging = runtime_root / "bootstrap-input"
@@ -437,6 +637,7 @@ def _install_prerequisites_locked(
         authority_sha=authority_sha,
         authority_tree=authority_tree,
         readiness=readiness,
+        authority_reader=authority_reader,
     )
     plan = {
         "schema_version": 1,
@@ -476,9 +677,11 @@ def _install_prerequisites_locked(
         staging / CLASSIFICATION_NAME,
         0o600,
     )
-    legacy = _load_module(
+    legacy = _module_from_payload(
         "legacy_takeover_install_validator",
-        source_root / "scripts/legacy_takeover.py",
+        source_payloads["legacy_takeover.py"],
+        filename=f"git:{authority_sha}:scripts/legacy_takeover.py",
+        injected_modules={"site_helper_contracts": contracts},
     )
     if ignored_paths is None:
         try:
@@ -582,6 +785,7 @@ def _install_prerequisites_locked(
         authority_sha=authority_sha,
         authority_tree=authority_tree,
         readiness=readiness,
+        authority_reader=authority_reader,
     )
     manifest = {
         "schema_version": 1,

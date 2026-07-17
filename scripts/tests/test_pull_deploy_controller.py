@@ -898,7 +898,7 @@ class FixtureController(CONTROLLER.PullDeployController):
         }
         CONTROLLER.atomic_json(self.active_control_path, active)
         source_readiness = {
-            "schema_version": 1,
+            "schema_version": 2,
             "ready": True,
             "source_root": str(
                 self.runtime_root / "fixture-bootstrap-source"
@@ -907,11 +907,18 @@ class FixtureController(CONTROLLER.PullDeployController):
             "source_tree": candidate["source_tree"],
             "branch": "main",
             "origin": CONTROLLER.REPOSITORY_SSH_URL,
+            "remote_names": ["origin"],
+            "origin_fetch_urls": [CONTROLLER.REPOSITORY_SSH_URL],
+            "origin_push_urls": [CONTROLLER.REPOSITORY_SSH_URL],
+            "origin_main_sha": candidate["source_sha"],
             "standalone_object_database": True,
             "shallow": False,
             "dirty_entries": 0,
             "ignored_entries": 0,
             "unreachable_objects": 0,
+            "replace_refs": 0,
+            "special_index_entries": 0,
+            "sparse_index": False,
             "owner_private": True,
             "group_or_world_writable": False,
         }

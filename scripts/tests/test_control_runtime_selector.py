@@ -167,7 +167,7 @@ class SelectorTests(unittest.TestCase):
         authority = self.runtime / "state/bootstrap-control.json"
         if not authority.exists():
             source_readiness = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "ready": True,
                 "source_root": str(
                     self.runtime.parent / "bootstrap-source"
@@ -176,11 +176,22 @@ class SelectorTests(unittest.TestCase):
                 "source_tree": candidate["source_tree"],
                 "branch": "main",
                 "origin": "git@github.com:lzq390/ZhijuPoly.git",
+                "remote_names": ["origin"],
+                "origin_fetch_urls": [
+                    "git@github.com:lzq390/ZhijuPoly.git"
+                ],
+                "origin_push_urls": [
+                    "git@github.com:lzq390/ZhijuPoly.git"
+                ],
+                "origin_main_sha": candidate["source_sha"],
                 "standalone_object_database": True,
                 "shallow": False,
                 "dirty_entries": 0,
                 "ignored_entries": 0,
                 "unreachable_objects": 0,
+                "replace_refs": 0,
+                "special_index_entries": 0,
+                "sparse_index": False,
                 "owner_private": True,
                 "group_or_world_writable": False,
             }

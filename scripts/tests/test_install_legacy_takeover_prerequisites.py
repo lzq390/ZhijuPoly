@@ -5,8 +5,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -100,13 +102,23 @@ class InstallerFixture:
             else AUTHORITY_TREE
         )
         return {
+            "schema_version": 2,
             "ready": True,
             "source_sha": expected_sha,
             "source_tree": tree,
+            "branch": "main",
+            "origin": INSTALLER.REPOSITORY_SSH_URL,
+            "remote_names": ["origin"],
+            "origin_fetch_urls": [INSTALLER.REPOSITORY_SSH_URL],
+            "origin_push_urls": [INSTALLER.REPOSITORY_SSH_URL],
+            "origin_main_sha": expected_sha,
             "standalone_object_database": True,
             "dirty_entries": 0,
             "ignored_entries": 0,
             "unreachable_objects": 0,
+            "replace_refs": 0,
+            "special_index_entries": 0,
+            "sparse_index": False,
         }
 
     @staticmethod
@@ -139,6 +151,208 @@ class InstallerFixture:
 
 
 class LegacyTakeoverPrerequisiteInstallerTests(unittest.TestCase):
+    def test_real_authority_readiness_runs_from_commit_bound_blob(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="legacy-installer-real-readiness-"
+        ) as temporary:
+            source = Path(temporary) / "source"
+            previous_umask = os.umask(0o077)
+            try:
+                (source / "scripts").mkdir(parents=True, mode=0o700)
+                (source / "scripts/bootstrap_pull_deploy.py").write_bytes(
+                    (ROOT / "scripts/bootstrap_pull_deploy.py").read_bytes()
+                )
+                subprocess.run(
+                    ["git", "init", "--quiet", "--initial-branch=main"],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "config", "user.name", "Fixture"],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "config", "user.email", "fixture@example.invalid"],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(["git", "add", "."], cwd=source, check=True)
+                subprocess.run(
+                    ["git", "commit", "--quiet", "-m", "authority"],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(
+                    [
+                        "git",
+                        "remote",
+                        "add",
+                        "origin",
+                        INSTALLER.REPOSITORY_SSH_URL,
+                    ],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(
+                    [
+                        "git",
+                        "update-ref",
+                        "refs/remotes/origin/main",
+                        "HEAD",
+                    ],
+                    cwd=source,
+                    check=True,
+                )
+            finally:
+                os.umask(previous_umask)
+            authority_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=source,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            authority_tree = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=source,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            report = INSTALLER.verify_fresh_source(
+                source,
+                authority_sha=authority_sha,
+                authority_tree=authority_tree,
+            )
+
+            self.assertEqual(report["schema_version"], 2)
+            self.assertEqual(report["source_sha"], authority_sha)
+            self.assertEqual(report["source_tree"], authority_tree)
+
+    def test_readiness_executes_authority_bytes_before_live_source(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="legacy-installer-authority-module-"
+        ) as temporary:
+            source = Path(temporary)
+            marker = source / "live-module-executed"
+            live = source / "scripts/bootstrap_pull_deploy.py"
+            live.parent.mkdir()
+            live.write_text(
+                f"from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed')\n",
+                encoding="utf-8",
+            )
+            authority = f"""
+def bootstrap_source_readiness(root, *, expected_sha):
+    return {{
+        "schema_version": 2,
+        "ready": True,
+        "source_sha": expected_sha,
+        "source_tree": {AUTHORITY_TREE!r},
+        "branch": "main",
+        "origin": {INSTALLER.REPOSITORY_SSH_URL!r},
+        "remote_names": ["origin"],
+        "origin_fetch_urls": [{INSTALLER.REPOSITORY_SSH_URL!r}],
+        "origin_push_urls": [{INSTALLER.REPOSITORY_SSH_URL!r}],
+        "origin_main_sha": expected_sha,
+        "standalone_object_database": True,
+        "dirty_entries": 0,
+        "ignored_entries": 0,
+        "unreachable_objects": 0,
+        "replace_refs": 0,
+        "special_index_entries": 0,
+        "sparse_index": False,
+    }}
+""".encode()
+
+            report = INSTALLER.verify_fresh_source(
+                source,
+                authority_sha=AUTHORITY_SHA,
+                authority_tree=AUTHORITY_TREE,
+                authority_reader=lambda *_arguments: authority,
+            )
+
+            self.assertTrue(report["ready"])
+            self.assertFalse(marker.exists())
+
+    def test_authority_reader_ignores_replace_refs_and_host_git_env(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="legacy-installer-authority-git-"
+        ) as temporary:
+            source = Path(temporary) / "source"
+            previous_umask = os.umask(0o077)
+            try:
+                source.mkdir(mode=0o700)
+                subprocess.run(
+                    ["git", "init", "--quiet", "--initial-branch=main"],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "config", "user.name", "Fixture"],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "config", "user.email", "fixture@example.invalid"],
+                    cwd=source,
+                    check=True,
+                )
+                payload = source / "payload.txt"
+                payload.write_text("trusted\n", encoding="utf-8")
+                subprocess.run(["git", "add", "payload.txt"], cwd=source, check=True)
+                subprocess.run(
+                    ["git", "commit", "--quiet", "-m", "trusted"],
+                    cwd=source,
+                    check=True,
+                )
+                trusted = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=source,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                payload.write_text("replacement\n", encoding="utf-8")
+                subprocess.run(["git", "commit", "-qam", "replacement"], cwd=source, check=True)
+                replacement = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=source,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                subprocess.run(
+                    ["git", "reset", "--quiet", "--hard", trusted],
+                    cwd=source,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "replace", trusted, replacement],
+                    cwd=source,
+                    check=True,
+                )
+            finally:
+                os.umask(previous_umask)
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "GIT_DIR": "/definitely/untrusted",
+                    "GIT_WORK_TREE": "/definitely/untrusted",
+                    "GIT_NO_REPLACE_OBJECTS": "0",
+                    "GIT_CONFIG_GLOBAL": "/definitely/untrusted",
+                },
+            ):
+                observed = INSTALLER._authority_payload(
+                    source,
+                    trusted,
+                    "payload.txt",
+                )
+            self.assertEqual(observed, b"trusted\n")
+
     def test_source_pinned_install_is_complete_and_idempotent(self) -> None:
         fixture = InstallerFixture()
         self.addCleanup(fixture.close)

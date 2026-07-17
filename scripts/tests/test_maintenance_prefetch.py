@@ -340,18 +340,29 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
     def _document(self) -> dict[str, object]:
         policy = self._policy()
         source_readiness = {
-            "schema_version": 1,
+            "schema_version": 2,
             "ready": True,
             "source_root": "/private/source",
             "source_sha": AUTHORITY_SHA,
             "source_tree": AUTHORITY_TREE,
             "branch": "main",
             "origin": PREFETCH.bootstrap_pull_deploy.REPOSITORY_SSH_URL,
+            "remote_names": ["origin"],
+            "origin_fetch_urls": [
+                PREFETCH.bootstrap_pull_deploy.REPOSITORY_SSH_URL
+            ],
+            "origin_push_urls": [
+                PREFETCH.bootstrap_pull_deploy.REPOSITORY_SSH_URL
+            ],
+            "origin_main_sha": AUTHORITY_SHA,
             "standalone_object_database": True,
             "shallow": False,
             "dirty_entries": 0,
             "ignored_entries": 0,
             "unreachable_objects": 0,
+            "replace_refs": 0,
+            "special_index_entries": 0,
+            "sparse_index": False,
             "owner_private": True,
             "group_or_world_writable": False,
         }
