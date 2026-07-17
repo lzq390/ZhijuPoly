@@ -110,6 +110,34 @@ class SiteHelperContractTests(unittest.TestCase):
         with self.assertRaisesRegex(CONTRACTS.SiteHelperContractError, "unsafe"):
             CONTRACTS.inspect_helper_installation(self.runtime)
 
+    def test_external_media_templates_are_complete_and_non_destructive(self) -> None:
+        registry = json.loads(
+            (
+                ROOT / "ops/config/postgres-media-registry.json.example"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(registry["schema_version"], 1)
+        self.assertIn(
+            "/data/lzq/gith/nexpoly/backups",
+            registry["legacy_backup_roots"],
+        )
+        helper = (
+            ROOT / "ops/config/contract-0012-external-database-audit.example"
+        ).read_text(encoding="utf-8")
+        for required in (
+            'docker("volume", "ls"',
+            "expected_media_ids",
+            "discovered_media_ids",
+            "source_identity_before",
+            "source_identity_after",
+            "requires_0014",
+            "FORBIDDEN_OPERATION_BACKUP_ROOT",
+            "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        ):
+            self.assertIn(required, helper)
+        self.assertNotIn("docker volume rm", helper)
+        self.assertNotIn("docker system prune", helper)
+
     def test_active_jobs_contract_rejects_unknown_boolean_and_bad_total(self) -> None:
         document = {
             "active_jobs_schema_version": 2,
@@ -337,23 +365,135 @@ class SiteHelperContractTests(unittest.TestCase):
                 "ledger": [
                     {
                         "version": "0001_app_data_governance",
-                        "checksum": "a" * 64,
+                        "checksum": CONTRACTS.CANONICAL_MIGRATION_LEDGER[0][1],
                     }
                 ],
                 "legacy_relation_present": stack == "nexpoly_md_health_opt",
             }
 
+        backup_digest = "sha256:" + "b" * 64
+        volume_id = "docker-volume:nexpoly_app_postgres_data"
+        media_id = "postgres-backup:/private/backups/nexpoly.dump"
+        media_ids = [volume_id, media_id]
         document = {
-            "schema_version": 1,
+            "schema_version": 2,
             "inventory_complete": True,
             "writable_target": {
                 "stack": "production",
                 "database": "nexpoly",
             },
+            "media_registry": {
+                "schema_version": 1,
+                "sha256": "sha256:" + "c" * 64,
+                "captured_at": "2026-07-17T12:00:00Z",
+                "expected_media_ids": media_ids,
+                "discovered_media_ids": media_ids,
+            },
             "databases": [
                 record("nexpoly_md_health_opt", "health_auditor"),
                 record("nexpoly_dev", "dev_auditor"),
             ],
+            "media": [
+                {
+                    "media_id": volume_id,
+                    "kind": "docker_volume",
+                    "database": "nexpoly",
+                    "source_identity_before": {
+                        "name": "nexpoly_app_postgres_data",
+                        "driver": "local",
+                        "mountpoint": (
+                            "/var/lib/docker/volumes/"
+                            "nexpoly_app_postgres_data/_data"
+                        ),
+                        "labels_sha256": "sha256:" + "1" * 64,
+                        "inspect_sha256": "sha256:" + "2" * 64,
+                        "attached_container_ids": ["3" * 64],
+                    },
+                    "source_identity_after": {
+                        "name": "nexpoly_app_postgres_data",
+                        "driver": "local",
+                        "mountpoint": (
+                            "/var/lib/docker/volumes/"
+                            "nexpoly_app_postgres_data/_data"
+                        ),
+                        "labels_sha256": "sha256:" + "1" * 64,
+                        "inspect_sha256": "sha256:" + "2" * 64,
+                        "attached_container_ids": ["3" * 64],
+                    },
+                    "source_content_sha256": "sha256:" + "4" * 64,
+                    "audit": {
+                        "method": "live-read-only",
+                        "complete": True,
+                        "evidence_sha256": "sha256:" + "5" * 64,
+                        "auditor_sha256": "sha256:" + "6" * 64,
+                        "postgres_major": 16,
+                        "audited_at": "2026-07-17T12:00:00Z",
+                    },
+                    "ledger": [
+                        {
+                            "version": "0001_app_data_governance",
+                            "checksum": (
+                                CONTRACTS.CANONICAL_MIGRATION_LEDGER[0][1]
+                            ),
+                        }
+                    ],
+                    "ledger_analysis": {
+                        "status": "canonical",
+                        "checksum_mismatches": [],
+                    },
+                    "legacy_relation_present": True,
+                    "migration_0013": {"state": "absent", "checksum": None},
+                    "disposition": "writable-target",
+                },
+                {
+                    "media_id": media_id,
+                    "kind": "postgres_backup",
+                    "database": "nexpoly",
+                    "source_identity_before": {
+                        "path": "/private/backups/nexpoly.dump",
+                        "device": 1,
+                        "inode": 2,
+                        "size_bytes": 3,
+                        "mtime_ns": 4,
+                        "mode": 0o600,
+                        "uid": os.geteuid(),
+                        "sha256": backup_digest,
+                    },
+                    "source_identity_after": {
+                        "path": "/private/backups/nexpoly.dump",
+                        "device": 1,
+                        "inode": 2,
+                        "size_bytes": 3,
+                        "mtime_ns": 4,
+                        "mode": 0o600,
+                        "uid": os.geteuid(),
+                        "sha256": backup_digest,
+                    },
+                    "source_content_sha256": backup_digest,
+                    "audit": {
+                        "method": "isolated-backup-restore-read-only",
+                        "complete": True,
+                        "evidence_sha256": "sha256:" + "d" * 64,
+                        "auditor_sha256": "sha256:" + "e" * 64,
+                        "postgres_major": 16,
+                        "audited_at": "2026-07-17T12:00:00Z",
+                    },
+                    "ledger": [
+                        {
+                            "version": "0001_app_data_governance",
+                            "checksum": CONTRACTS.CANONICAL_MIGRATION_LEDGER[0][1],
+                        }
+                    ],
+                    "ledger_analysis": {
+                        "status": "canonical",
+                        "checksum_mismatches": [],
+                    },
+                    "legacy_relation_present": True,
+                    "migration_0013": {"state": "absent", "checksum": None},
+                    "disposition": "retained-private-isolated",
+                }
+            ],
+            "requires_0014": False,
         }
         expected_users = {
             "nexpoly_dev": "dev_auditor",
@@ -362,11 +502,56 @@ class SiteHelperContractTests(unittest.TestCase):
         validated = CONTRACTS.validate_external_database_audit(
             document,
             expected_users=expected_users,
+            expected_media_registry_digest="sha256:" + "c" * 64,
         )
         self.assertEqual(
             [value["stack"] for value in validated["databases"]],
             ["nexpoly_dev", "nexpoly_md_health_opt"],
         )
+        dirty = json.loads(json.dumps(document))
+        dirty["media"][1]["ledger"] = [
+            {"version": version, "checksum": checksum}
+            for version, checksum in CONTRACTS.CANONICAL_MIGRATION_LEDGER[:8]
+        ] + [
+            {
+                "version": "0009_monomer_md_job_leases",
+                "checksum": CONTRACTS.KNOWN_DIRTY_0009_CHECKSUM,
+            }
+        ]
+        dirty["media"][1]["ledger_analysis"] = {
+            "status": "known-isolated-dirty",
+            "checksum_mismatches": [
+                {
+                    "version": "0009_monomer_md_job_leases",
+                    "expected_checksum": (
+                        CONTRACTS.CANONICAL_MIGRATION_LEDGER[8][1]
+                    ),
+                    "observed_checksum": CONTRACTS.KNOWN_DIRTY_0009_CHECKSUM,
+                    "status": "known-isolated-dirty",
+                }
+            ],
+        }
+        self.assertEqual(
+            CONTRACTS.validate_external_database_audit(
+                dirty,
+                expected_users=expected_users,
+                expected_media_registry_digest="sha256:" + "c" * 64,
+            )["media"][1]["ledger_analysis"]["status"],
+            "known-isolated-dirty",
+        )
+
+        no_writable = json.loads(json.dumps(document))
+        no_writable["media"][0]["disposition"] = "read-only-online"
+        with self.assertRaisesRegex(
+            CONTRACTS.SiteHelperContractError,
+            "one production writable volume",
+        ):
+            CONTRACTS.validate_external_database_audit(
+                no_writable,
+                expected_users=expected_users,
+                expected_media_registry_digest="sha256:" + "c" * 64,
+            )
+
         document["databases"][0]["transaction_read_only"] = False
         with self.assertRaisesRegex(
             CONTRACTS.SiteHelperContractError,
@@ -375,6 +560,61 @@ class SiteHelperContractTests(unittest.TestCase):
             CONTRACTS.validate_external_database_audit(
                 document,
                 expected_users=expected_users,
+                expected_media_registry_digest="sha256:" + "c" * 64,
+            )
+
+        document["databases"][0]["transaction_read_only"] = True
+        document["media_registry"]["discovered_media_ids"] = []
+        with self.assertRaisesRegex(
+            CONTRACTS.SiteHelperContractError,
+            "discovery differs",
+        ):
+            CONTRACTS.validate_external_database_audit(
+                document,
+                expected_users=expected_users,
+                expected_media_registry_digest="sha256:" + "c" * 64,
+            )
+
+        document["media_registry"]["discovered_media_ids"] = media_ids
+        document["media"][1]["ledger"].append(
+            {
+                "version": "0013_monomer_dft_jobs",
+                "checksum": CONTRACTS.SUPERSEDED_0013_CHECKSUM,
+            }
+        )
+        document["media"][1]["migration_0013"] = {
+            "state": "superseded-requires-0014",
+            "checksum": CONTRACTS.SUPERSEDED_0013_CHECKSUM,
+        }
+        document["media"][1]["ledger_analysis"] = {
+            "status": "superseded-requires-0014",
+            "checksum_mismatches": [
+                {
+                    "version": "0013_monomer_dft_jobs",
+                    "expected_checksum": CONTRACTS.CANONICAL_0013_CHECKSUM,
+                    "observed_checksum": CONTRACTS.SUPERSEDED_0013_CHECKSUM,
+                    "status": "superseded-requires-0014",
+                }
+            ],
+        }
+        document["requires_0014"] = True
+        self.assertTrue(
+            CONTRACTS.validate_external_database_audit(
+                document,
+                expected_users=expected_users,
+                expected_media_registry_digest="sha256:" + "c" * 64,
+            )["requires_0014"]
+        )
+
+        document["media"][1]["ledger"][-1]["checksum"] = "f" * 64
+        with self.assertRaisesRegex(
+            CONTRACTS.SiteHelperContractError,
+            "unknown checksum",
+        ):
+            CONTRACTS.validate_external_database_audit(
+                document,
+                expected_users=expected_users,
+                expected_media_registry_digest="sha256:" + "c" * 64,
             )
 
     def test_mutable_data_audit_binds_exact_tables_and_one_snapshot(self) -> None:

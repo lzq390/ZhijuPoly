@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "legacy_backup_roots": [
+    "/data/lzq/gith/nexpoly/backups"
+  ],
+  "media": [
+    {
+      "media_id": "docker-volume:nexpoly_app_postgres_data",
+      "kind": "docker_volume",
+      "evidence_path": "/data/lzq/gith/nexpoly-runtime/audit/postgres-media/nexpoly_app_postgres_data.json",
+      "evidence_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "media_id": "postgres-backup:/data/lzq/gith/nexpoly/backups/nexpoly-b875829c3f00.dump",
+      "kind": "postgres_backup",
+      "evidence_path": "/data/lzq/gith/nexpoly-runtime/audit/postgres-media/nexpoly-b875829c3f00.dump.json",
+      "evidence_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

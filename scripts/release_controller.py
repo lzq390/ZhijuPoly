@@ -48,6 +48,10 @@ from monomer_worker_env import (  # noqa: E402 - load the verified sibling helpe
     build_worker_process_environment,
     load_worker_env,
 )
+from site_helper_contracts import (  # noqa: E402 - load the verified sibling helper
+    SiteHelperContractError,
+    validate_external_database_audit,
+)
 
 
 PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
@@ -130,6 +134,9 @@ BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS = {
 }
 CONTRACT_0012_EXTERNAL_AUDIT_COMMAND = (
     "NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND"
+)
+CONTRACT_0012_MEDIA_REGISTRY_DIGEST = (
+    "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256"
 )
 CONTRACT_0012_EXTERNAL_AUDIT_USERS = {
     "nexpoly_dev": "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER",
@@ -9117,61 +9124,10 @@ class PolytaoContractMaintenance:
         payload: object,
         environment: dict[str, str],
     ) -> dict[str, Any]:
-        """Validate mandatory, read-only evidence from independent DB stacks."""
+        """Validate complete online and offline PostgreSQL media evidence."""
 
-        if not isinstance(payload, dict) or set(payload) != {
-            "schema_version",
-            "inventory_complete",
-            "writable_target",
-            "databases",
-        }:
-            raise ReleaseError("external database inventory has an invalid shape")
-        if (
-            payload.get("schema_version") != 1
-            or payload.get("inventory_complete") is not True
-        ):
-            raise ReleaseError("external database inventory is incomplete")
-        if payload.get("writable_target") != {
-            "stack": "production",
-            "database": "nexpoly",
-        }:
-            raise ReleaseError(
-                "external database registry must identify production/nexpoly as its only writable target"
-            )
-        raw_databases = payload.get("databases")
-        if not isinstance(raw_databases, list):
-            raise ReleaseError("external database inventory has no database list")
-
-        expected_databases = set(CONTRACT_0012_EXTERNAL_AUDIT_USERS)
-        records: dict[str, dict[str, Any]] = {}
-        expected_fields = {
-            "stack",
-            "database",
-            "current_user",
-            "transaction_read_only",
-            "role_superuser",
-            "role_create_db",
-            "role_create_role",
-            "ledger",
-            "legacy_relation_present",
-        }
-        for record in raw_databases:
-            if not isinstance(record, dict) or set(record) != expected_fields:
-                raise ReleaseError(
-                    "external database inventory contains an invalid record"
-                )
-            stack = record.get("stack")
-            database = record.get("database")
-            if (
-                not isinstance(stack, str)
-                or stack not in expected_databases
-                or stack in records
-                or database != stack
-            ):
-                raise ReleaseError(
-                    "external database inventory contains an unknown, duplicate, or mismatched stack"
-                )
-            user_key = CONTRACT_0012_EXTERNAL_AUDIT_USERS[stack]
+        expected_users: dict[str, str] = {}
+        for stack, user_key in CONTRACT_0012_EXTERNAL_AUDIT_USERS.items():
             expected_user = environment.get(user_key)
             if (
                 not isinstance(expected_user, str)
@@ -9180,18 +9136,29 @@ class PolytaoContractMaintenance:
                 raise ReleaseError(
                     f"0012 maintenance requires a pinned read-only audit user in {user_key}"
                 )
-            if (
-                record.get("transaction_read_only") is not True
-                or record.get("role_superuser") is not False
-                or record.get("role_create_db") is not False
-                or record.get("role_create_role") is not False
-            ):
-                raise ReleaseError(
-                    f"external database audit for {stack} is not provably read-only"
-                )
+            expected_users[stack] = expected_user
+        registry_digest = environment.get(CONTRACT_0012_MEDIA_REGISTRY_DIGEST)
+        if (
+            not isinstance(registry_digest, str)
+            or DIGEST_RE.fullmatch(registry_digest) is None
+        ):
+            raise ReleaseError(
+                "0012 maintenance requires the pinned external media registry digest"
+            )
+        try:
+            normalized_inventory = validate_external_database_audit(
+                payload,
+                expected_users=expected_users,
+                expected_media_registry_digest=registry_digest,
+            )
+        except SiteHelperContractError as exc:
+            raise ReleaseError(f"external database inventory is unsafe: {exc}") from exc
+
+        for record in normalized_inventory["databases"]:
+            stack = record["stack"]
             normalized = {
                 "schema_version": 1,
-                "database": database,
+                "database": record["database"],
                 "current_user": record.get("current_user"),
                 "transaction_read_only": record.get("transaction_read_only"),
                 "ledger": record.get("ledger"),
@@ -9201,25 +9168,9 @@ class PolytaoContractMaintenance:
                 normalized,
                 environment,
                 stack,
-                expected_user=expected_user,
+                expected_user=expected_users[stack],
             )
-            records[stack] = dict(record)
-
-        if set(records) != expected_databases:
-            missing = sorted(expected_databases.difference(records))
-            raise ReleaseError(
-                "external database inventory is missing required stacks: "
-                + ", ".join(missing)
-            )
-        return {
-            "schema_version": 1,
-            "inventory_complete": True,
-            "writable_target": {
-                "stack": "production",
-                "database": "nexpoly",
-            },
-            "databases": [records[name] for name in sorted(records)],
-        }
+        return normalized_inventory
 
     def _capture_external_database_inventory(
         self,

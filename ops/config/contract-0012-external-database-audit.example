@@ -2,24 +2,49 @@
 set -euo pipefail
 umask 077
 
-# Secrets stay in this deploy-user-owned libpq service file (mode 0600).
+# Install this template as the fixed, deploy-user-owned mode-0700 helper.  The
+# libpq file contains credentials; the media registry and per-medium evidence
+# contain identities and hashes only.  All three are private runtime files.
 service_file=/data/lzq/gith/nexpoly-runtime/config/pg_service.conf
+registry_file=/data/lzq/gith/nexpoly-runtime/config/postgres-media-registry.json
 [[ -f "$service_file" && ! -L "$service_file" ]] || {
   echo "install the private libpq service file" >&2
   exit 2
 }
-[[ "$(stat -c '%u:%a' "$service_file")" == "$(id -u):600" ]] || {
-  echo "pg_service.conf must be deploy-user-owned mode 0600" >&2
+[[ -f "$registry_file" && ! -L "$registry_file" ]] || {
+  echo "install the complete private PostgreSQL media registry" >&2
   exit 2
 }
+for private_file in "$service_file" "$registry_file"; do
+  [[ "$(stat -c '%u:%a' "$private_file")" == "$(id -u):600" ]] || {
+    echo "$private_file must be deploy-user-owned mode 0600" >&2
+    exit 2
+  }
+done
 export PGSERVICEFILE="$service_file"
+export NEXPOLY_POSTGRES_MEDIA_REGISTRY="$registry_file"
 
-# The service entries contain credentials; their non-secret fixed names are:
-# [nexpoly_dev_audit] and [nexpoly_md_health_opt_audit].
 /usr/bin/python3 -I -B <<'PY'
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
 import json
 import os
+from pathlib import Path
+import stat
 import subprocess
+
+
+MAX_PRIVATE_JSON_BYTES = 256 * 1024
+FORBIDDEN_OPERATION_BACKUP_ROOT = Path(
+    "/data/lzq/gith/nexpoly-runtime/backups"
+)
+ALLOWED_LEGACY_BACKUP_PARENTS = (
+    Path("/data/lzq/gith/nexpoly"),
+    Path("/data/lzq/gith/nexpoly-runtime"),
+    Path("/data/lzq/recovery"),
+)
 
 SQL = r"""
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE;
@@ -47,22 +72,165 @@ COMMIT;
 """
 
 
-def inspect(stack: str, service: str) -> dict[str, object]:
-    environment = {
+def canonical(value: object) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+
+
+def digest_bytes(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def digest_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        before = os.fstat(descriptor)
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        ):
+            raise SystemExit(f"file changed while hashing: {path}")
+    finally:
+        os.close(descriptor)
+    return "sha256:" + digest.hexdigest()
+
+
+def load_private_json(path: Path, expected_digest: str | None = None) -> tuple[dict, bytes]:
+    metadata = path.lstat()
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_size <= 0
+        or metadata.st_size > MAX_PRIVATE_JSON_BYTES
+    ):
+        raise SystemExit(f"private JSON is unsafe: {path}")
+    payload = path.read_bytes()
+    if expected_digest is not None and digest_bytes(payload) != expected_digest:
+        raise SystemExit(f"private JSON digest differs: {path}")
+    value = json.loads(payload.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise SystemExit(f"private JSON root is invalid: {path}")
+    return value, payload
+
+
+def fixed_environment(**extra: str) -> dict[str, str]:
+    return {
         "PATH": "/usr/bin:/bin",
         "LANG": "C",
         "LC_ALL": "C",
-        "PGSERVICEFILE": os.environ["PGSERVICEFILE"],
-        "PGSERVICE": service,
-        "PGCONNECT_TIMEOUT": "10",
+        "HOME": "/nonexistent",
+        **extra,
     }
+
+
+def docker(*arguments: str) -> str:
+    return subprocess.run(
+        ["/usr/bin/docker", *arguments],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=fixed_environment(),
+        timeout=60,
+    ).stdout
+
+
+def volume_identity(name: str) -> dict[str, object]:
+    values = json.loads(docker("volume", "inspect", "--", name))
+    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
+        raise SystemExit(f"volume inspect returned an invalid identity: {name}")
+    value = values[0]
+    attached = sorted(
+        line
+        for line in docker(
+            "ps",
+            "-aq",
+            "--no-trunc",
+            "--filter",
+            f"volume={name}",
+        ).splitlines()
+        if line
+    )
+    labels = value.get("Labels")
+    if labels is None:
+        labels = {}
+    if not isinstance(labels, dict):
+        raise SystemExit(f"volume labels are invalid: {name}")
+    return {
+        "name": value.get("Name"),
+        "driver": value.get("Driver"),
+        "mountpoint": value.get("Mountpoint"),
+        "labels_sha256": digest_bytes(canonical(labels)),
+        "inspect_sha256": digest_bytes(canonical(value)),
+        "attached_container_ids": attached,
+    }
+
+
+def backup_identity(path: Path) -> dict[str, object]:
+    metadata = path.lstat()
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(f"registered PostgreSQL backup is unsafe: {path}")
+    before = {
+        "path": str(path),
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "size_bytes": metadata.st_size,
+        "mtime_ns": metadata.st_mtime_ns,
+        "mode": stat.S_IMODE(metadata.st_mode),
+        "uid": metadata.st_uid,
+        "sha256": digest_file(path),
+    }
+    final = path.lstat()
+    if (
+        final.st_dev,
+        final.st_ino,
+        final.st_size,
+        final.st_mtime_ns,
+        stat.S_IMODE(final.st_mode),
+        final.st_uid,
+    ) != (
+        before["device"],
+        before["inode"],
+        before["size_bytes"],
+        before["mtime_ns"],
+        before["mode"],
+        before["uid"],
+    ):
+        raise SystemExit(f"registered PostgreSQL backup changed: {path}")
+    return before
+
+
+def inspect_database(stack: str, service: str) -> dict[str, object]:
     completed = subprocess.run(
         ["/usr/bin/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1"],
         input=SQL,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=environment,
+        env=fixed_environment(
+            PGSERVICEFILE=os.environ["PGSERVICEFILE"],
+            PGSERVICE=service,
+            PGCONNECT_TIMEOUT="10",
+        ),
         check=True,
         timeout=60,
     )
@@ -78,17 +246,130 @@ def inspect(stack: str, service: str) -> dict[str, object]:
     return {"stack": stack, **value}
 
 
+registry_path = Path(os.environ["NEXPOLY_POSTGRES_MEDIA_REGISTRY"])
+registry, registry_bytes = load_private_json(registry_path)
+if set(registry) != {
+    "schema_version",
+    "legacy_backup_roots",
+    "media",
+} or registry.get("schema_version") != 1:
+    raise SystemExit("PostgreSQL media registry has an invalid shape")
+backup_roots = registry.get("legacy_backup_roots")
+if (
+    not isinstance(backup_roots, list)
+    or not backup_roots
+    or backup_roots != sorted(set(backup_roots))
+    or any(
+        not Path(root).is_absolute()
+        or Path(root) == FORBIDDEN_OPERATION_BACKUP_ROOT
+        or not any(
+            Path(root).is_relative_to(parent)
+            for parent in ALLOWED_LEGACY_BACKUP_PARENTS
+        )
+        for root in backup_roots
+    )
+):
+    raise SystemExit("PostgreSQL backup-root registry is incomplete")
+
+descriptors = registry.get("media")
+if not isinstance(descriptors, list) or not descriptors:
+    raise SystemExit("PostgreSQL media registry is empty")
+by_id: dict[str, dict] = {}
+for descriptor in descriptors:
+    if (
+        not isinstance(descriptor, dict)
+        or set(descriptor)
+        != {"media_id", "kind", "evidence_path", "evidence_sha256"}
+        or not isinstance(descriptor.get("media_id"), str)
+        or descriptor["media_id"] in by_id
+        or descriptor.get("kind") not in {"docker_volume", "postgres_backup"}
+        or not isinstance(descriptor.get("evidence_path"), str)
+        or not Path(descriptor["evidence_path"]).is_absolute()
+        or not isinstance(descriptor.get("evidence_sha256"), str)
+    ):
+        raise SystemExit("PostgreSQL media descriptor is invalid")
+    by_id[descriptor["media_id"]] = descriptor
+
+volume_names = sorted(
+    name
+    for name in docker("volume", "ls", "--format", "{{.Name}}").splitlines()
+    if name.startswith("nexpoly")
+)
+discovered_ids = {f"docker-volume:{name}" for name in volume_names}
+for raw_root in backup_roots:
+    root = Path(raw_root)
+    if not root.is_dir() or root.is_symlink():
+        raise SystemExit(f"registered PostgreSQL backup root is unavailable: {root}")
+    for path in sorted(root.rglob("*.dump")):
+        discovered_ids.add(f"postgres-backup:{path}")
+if discovered_ids != set(by_id):
+    raise SystemExit("discovered PostgreSQL media differs from the private registry")
+
+media: list[dict] = []
+for media_id in sorted(by_id):
+    descriptor = by_id[media_id]
+    evidence, _payload = load_private_json(
+        Path(descriptor["evidence_path"]),
+        descriptor["evidence_sha256"],
+    )
+    if (
+        evidence.get("media_id") != media_id
+        or evidence.get("kind") != descriptor["kind"]
+    ):
+        raise SystemExit(f"PostgreSQL media evidence identity differs: {media_id}")
+    if descriptor["kind"] == "docker_volume":
+        name = media_id.removeprefix("docker-volume:")
+        before = volume_identity(name)
+        if (
+            evidence.get("source_identity_before") != before
+            or evidence.get("source_identity_after") != before
+        ):
+            raise SystemExit(f"PostgreSQL volume identity differs: {media_id}")
+        after = volume_identity(name)
+    else:
+        path = Path(media_id.removeprefix("postgres-backup:"))
+        before = backup_identity(path)
+        if (
+            evidence.get("source_identity_before") != before
+            or evidence.get("source_identity_after") != before
+        ):
+            raise SystemExit(f"PostgreSQL backup identity differs: {media_id}")
+        after = backup_identity(path)
+    if before != after:
+        raise SystemExit(f"PostgreSQL media changed while auditing: {media_id}")
+    media.append(evidence)
+
+requires_0014 = any(
+    value.get("migration_0013", {}).get("state")
+    == "superseded-requires-0014"
+    for value in media
+)
+captured_at = (
+    dt.datetime.now(dt.timezone.utc)
+    .replace(microsecond=0)
+    .isoformat()
+    .replace("+00:00", "Z")
+)
 document = {
-    "schema_version": 1,
+    "schema_version": 2,
     "inventory_complete": True,
     "writable_target": {"stack": "production", "database": "nexpoly"},
+    "media_registry": {
+        "schema_version": 1,
+        "sha256": digest_bytes(registry_bytes),
+        "captured_at": captured_at,
+        "expected_media_ids": sorted(by_id),
+        "discovered_media_ids": sorted(discovered_ids),
+    },
     "databases": [
-        inspect("nexpoly_dev", "nexpoly_dev_audit"),
-        inspect(
+        inspect_database("nexpoly_dev", "nexpoly_dev_audit"),
+        inspect_database(
             "nexpoly_md_health_opt",
             "nexpoly_md_health_opt_audit",
         ),
     ],
+    "media": media,
+    "requires_0014": requires_0014,
 }
 print(json.dumps(document, sort_keys=True, separators=(",", ":")))
 PY

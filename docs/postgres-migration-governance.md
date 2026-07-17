@@ -208,20 +208,42 @@ audit evidence. Failed recovery keeps admission drained and retains the marker;
 operators must never manufacture a ledger row.
 
 The production-cluster inventory is not treated as a global inventory. Before
-the destructive marker is created, the controller must also execute the pinned,
+the destructive marker is created, the controller must execute the pinned,
 deploy-user-owned mode-0700 command configured by
-`NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND`. Its two sessions use
-the configured, non-superuser/non-CREATEDB/non-CREATEROLE audit users and must
-prove `transaction_read_only=true`. The JSON inventory must be complete and
-contain exactly `nexpoly_dev` and `nexpoly_md_health_opt`; a missing, unreachable,
-duplicate, or additional stack blocks maintenance. If either database is also
-visible in the production cluster, both observations must agree byte-for-byte
-on the ledger and legacy relation. The registry must additionally bind its one
-and only writable target to `{stack: production, database: nexpoly}`. Every
-same-cluster dev/health audit starts with `SET TRANSACTION READ ONLY` and must
-report `transaction_read_only=true`; it never authorizes a write outside the
-production target.
+`NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND`. Its two online sessions
+use non-superuser/non-CREATEDB/non-CREATEROLE audit users and prove
+`transaction_read_only=true`. It also consumes the deploy-user-owned mode-0600
+`postgres-media-registry.json`, discovers every Nexpoly Docker volume and every
+custom PostgreSQL dump below the declared frozen legacy roots, and requires
+`expected_media_ids == discovered_media_ids`. Missing, additional, unreachable
+or duplicate media blocks maintenance.
 
+The generic `/data/lzq/gith/nexpoly-runtime/backups` operation root is
+deliberately forbidden as a legacy discovery root. Pull's newly created
+rollback dump is bound separately by the prepared descriptor and must not make
+the external-media set drift after preparation. A takeover instead registers
+the exact preserved legacy backup directory (and any reviewed recovery
+snapshot directory) that existed before the current operation.
+
+The raw SHA-256 of that private registry is configured as
+`NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256`. Preparation seals the same digest
+into the bridge descriptor, one-time token and current-state transition.
+Preflight, the gate immediately before 0012, completion, rollback and B→F resume
+all compare-and-swap the same value. Changing only `deploy.env` never authorizes
+a different registry.
+
+Every volume record binds its name, driver, mountpoint, labels, complete Docker
+inspect output, attached container IDs and content digest before and after the
+audit. Every backup record binds its absolute path, device, inode, size,
+nanosecond mtime, mode, owner and complete file digest. Per-medium evidence also
+binds the auditor digest, PostgreSQL major, audit time and isolated-restore or
+isolated-copy method. Dumps and evidence are private; the registry contains no
+credentials or dump contents. Dormant volumes and backups are never attached to
+the production database and are never migrated.
+
+The online database list contains exactly `nexpoly_dev` and
+`nexpoly_md_health_opt`. If either is also visible in the production cluster,
+both observations must agree byte-for-byte on the ledger and legacy relation.
 `nexpoly_dev` must already have the exact canonical 0012 checksum and removed
 legacy relation. `nexpoly_md_health_opt` may be at any non-empty, ordered,
 checksum-exact canonical prefix through 0012; relation presence is derived from
@@ -231,47 +253,39 @@ cleaned. The validated inventory is stored as
 reuses that durable pre-change external evidence so an unrelated audit-stack
 outage cannot prevent restoration of the production database.
 
-The external command prints exactly this field envelope; the empty ledger
-arrays below are illustrative and must be replaced by the complete canonical
-rows required for each database:
+The command emits schema v2. The repository templates
+`ops/config/contract-0012-external-database-audit.example` and
+`ops/config/postgres-media-registry.json.example` define the complete envelope.
+Its top-level identity is:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "inventory_complete": true,
-  "writable_target": {
-    "stack": "production",
-    "database": "nexpoly"
+  "writable_target": {"stack": "production", "database": "nexpoly"},
+  "media_registry": {
+    "schema_version": 1,
+    "sha256": "sha256:<private registry digest>",
+    "captured_at": "<UTC timestamp>",
+    "expected_media_ids": ["<sorted complete IDs>"],
+    "discovered_media_ids": ["<same sorted complete IDs>"]
   },
-  "databases": [
-    {
-      "stack": "nexpoly_dev",
-      "database": "nexpoly_dev",
-      "current_user": "nexpoly_dev_auditor",
-      "transaction_read_only": true,
-      "role_superuser": false,
-      "role_create_db": false,
-      "role_create_role": false,
-      "ledger": [],
-      "legacy_relation_present": false
-    },
-    {
-      "stack": "nexpoly_md_health_opt",
-      "database": "nexpoly_md_health_opt",
-      "current_user": "nexpoly_health_auditor",
-      "transaction_read_only": true,
-      "role_superuser": false,
-      "role_create_db": false,
-      "role_create_role": false,
-      "ledger": [],
-      "legacy_relation_present": true
-    }
-  ]
+  "databases": ["<two complete read-only online records>"],
+  "media": ["<one complete identity/audit/ledger record per discovered medium>"],
+  "requires_0014": false
 }
 ```
 
-The maintenance inventory is explicit and must be captured with the immutable
-operation evidence before `--apply`:
+Raw media ledgers must contain unique known migration names. The historical
+`0005_polytao_jobs` alias and the quarantined dirty 0009 checksum are explicit
+known identities; the dirty 0009 medium must remain isolated. A canonical
+`ab633a62…` 0013 is accepted. The superseded `a60cbf66…` checksum sets
+`requires_0014=true`; any other or multiple 0013 rows fail closed. The registry
+and evidence must be regenerated in the actual maintenance window, not reused
+from development-time discovery.
+
+The maintenance inventory is captured with immutable operation evidence before
+`--apply`:
 
 - `nexpoly` is the only destructive target; archive its legacy history and move
   it through checksum-pinned 0012.
@@ -280,8 +294,8 @@ operation evidence before `--apply`:
   isolated until the separately authorized repair above.
 - `nexpoly_md_health_opt` is an independent temporary stack and remains
   read-only during this maintenance.
-- Any database outside the reviewed inventory blocks the window. Do not let a
-  migration runner discover and mutate databases implicitly.
+- Any database, volume or backup outside the reviewed inventory blocks the
+  window. Do not let a migration runner discover or mutate media implicitly.
 
 ## Safe Reconcile Rule
 

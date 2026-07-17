@@ -2049,13 +2049,25 @@ class ReleaseControllerTests(unittest.TestCase):
             **environment,
             "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER": "nexpoly_dev_auditor",
             "NEXPOLY_CONTRACT_0012_MD_HEALTH_AUDIT_USER": "nexpoly_health_auditor",
+            "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256": "sha256:" + "c" * 64,
         }
+        backup_digest = "sha256:" + "b" * 64
+        volume_id = "docker-volume:nexpoly_app_postgres_data"
+        media_id = "postgres-backup:/private/backups/nexpoly.dump"
+        media_ids = [volume_id, media_id]
         external_inventory = {
-            "schema_version": 1,
+            "schema_version": 2,
             "inventory_complete": True,
             "writable_target": {
                 "stack": "production",
                 "database": "nexpoly",
+            },
+            "media_registry": {
+                "schema_version": 1,
+                "sha256": "sha256:" + "c" * 64,
+                "captured_at": "2026-07-17T12:00:00Z",
+                "expected_media_ids": media_ids,
+                "discovered_media_ids": media_ids,
             },
             "databases": [
                 {
@@ -2081,6 +2093,95 @@ class ReleaseControllerTests(unittest.TestCase):
                     "legacy_relation_present": True,
                 },
             ],
+            "media": [
+                {
+                    "media_id": volume_id,
+                    "kind": "docker_volume",
+                    "database": "nexpoly",
+                    "source_identity_before": {
+                        "name": "nexpoly_app_postgres_data",
+                        "driver": "local",
+                        "mountpoint": (
+                            "/var/lib/docker/volumes/"
+                            "nexpoly_app_postgres_data/_data"
+                        ),
+                        "labels_sha256": "sha256:" + "1" * 64,
+                        "inspect_sha256": "sha256:" + "2" * 64,
+                        "attached_container_ids": ["3" * 64],
+                    },
+                    "source_identity_after": {
+                        "name": "nexpoly_app_postgres_data",
+                        "driver": "local",
+                        "mountpoint": (
+                            "/var/lib/docker/volumes/"
+                            "nexpoly_app_postgres_data/_data"
+                        ),
+                        "labels_sha256": "sha256:" + "1" * 64,
+                        "inspect_sha256": "sha256:" + "2" * 64,
+                        "attached_container_ids": ["3" * 64],
+                    },
+                    "source_content_sha256": "sha256:" + "4" * 64,
+                    "audit": {
+                        "method": "live-read-only",
+                        "complete": True,
+                        "evidence_sha256": "sha256:" + "5" * 64,
+                        "auditor_sha256": "sha256:" + "6" * 64,
+                        "postgres_major": 16,
+                        "audited_at": "2026-07-17T12:00:00Z",
+                    },
+                    "ledger": through_0008,
+                    "ledger_analysis": {
+                        "status": "canonical",
+                        "checksum_mismatches": [],
+                    },
+                    "legacy_relation_present": True,
+                    "migration_0013": {"state": "absent", "checksum": None},
+                    "disposition": "writable-target",
+                },
+                {
+                    "media_id": media_id,
+                    "kind": "postgres_backup",
+                    "database": "nexpoly",
+                    "source_identity_before": {
+                        "path": "/private/backups/nexpoly.dump",
+                        "device": 1,
+                        "inode": 2,
+                        "size_bytes": 3,
+                        "mtime_ns": 4,
+                        "mode": 0o600,
+                        "uid": os.geteuid(),
+                        "sha256": backup_digest,
+                    },
+                    "source_identity_after": {
+                        "path": "/private/backups/nexpoly.dump",
+                        "device": 1,
+                        "inode": 2,
+                        "size_bytes": 3,
+                        "mtime_ns": 4,
+                        "mode": 0o600,
+                        "uid": os.geteuid(),
+                        "sha256": backup_digest,
+                    },
+                    "source_content_sha256": backup_digest,
+                    "audit": {
+                        "method": "isolated-backup-restore-read-only",
+                        "complete": True,
+                        "evidence_sha256": "sha256:" + "d" * 64,
+                        "auditor_sha256": "sha256:" + "e" * 64,
+                        "postgres_major": 16,
+                        "audited_at": "2026-07-17T12:00:00Z",
+                    },
+                    "ledger": through_0008,
+                    "ledger_analysis": {
+                        "status": "canonical",
+                        "checksum_mismatches": [],
+                    },
+                    "legacy_relation_present": True,
+                    "migration_0013": {"state": "absent", "checksum": None},
+                    "disposition": "retained-private-isolated",
+                }
+            ],
+            "requires_0014": False,
         }
         self.assertEqual(
             maintenance._validate_external_database_inventory(
@@ -2091,14 +2192,14 @@ class ReleaseControllerTests(unittest.TestCase):
         )
         missing_stack = json.loads(json.dumps(external_inventory))
         missing_stack["databases"].pop()
-        with self.assertRaisesRegex(release_controller.ReleaseError, "missing required stacks"):
+        with self.assertRaisesRegex(release_controller.ReleaseError, "inventory differs"):
             maintenance._validate_external_database_inventory(
                 missing_stack,
                 external_environment,
             )
         writable_stack = json.loads(json.dumps(external_inventory))
         writable_stack["databases"][0]["transaction_read_only"] = False
-        with self.assertRaisesRegex(release_controller.ReleaseError, "not provably read-only"):
+        with self.assertRaisesRegex(release_controller.ReleaseError, "transaction_read_only"):
             maintenance._validate_external_database_inventory(
                 writable_stack,
                 external_environment,
@@ -2108,7 +2209,7 @@ class ReleaseControllerTests(unittest.TestCase):
             "stack": "nexpoly_dev",
             "database": "nexpoly_dev",
         }
-        with self.assertRaisesRegex(release_controller.ReleaseError, "only writable target"):
+        with self.assertRaisesRegex(release_controller.ReleaseError, "inventory is incomplete"):
             maintenance._validate_external_database_inventory(
                 wrong_writable_target,
                 external_environment,
@@ -2121,7 +2222,7 @@ class ReleaseControllerTests(unittest.TestCase):
                 "database": "nexpoly_shadow",
             }
         )
-        with self.assertRaisesRegex(release_controller.ReleaseError, "unknown"):
+        with self.assertRaisesRegex(release_controller.ReleaseError, "inventory differs"):
             maintenance._validate_external_database_inventory(
                 unknown_stack,
                 external_environment,
