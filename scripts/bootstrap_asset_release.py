@@ -155,14 +155,79 @@ def inspect_tree(
     return records
 
 
-def git_output(root: Path, *arguments: str) -> str:
+def git_environment() -> dict[str, str]:
+    """Return a fixed, non-networked Git environment for asset identity."""
+
+    return {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/nonexistent",
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_PROTOCOL_FROM_USER": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_ASKPASS": "/bin/false",
+        "GIT_SSH_COMMAND": "/bin/false",
+        "SSH_ASKPASS": "/bin/false",
+        "GIT_PAGER": "cat",
+        "GIT_EDITOR": "/bin/false",
+    }
+
+
+def git_command(root: Path, *arguments: str) -> list[str]:
+    return [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "-c",
+        "core.attributesFile=/dev/null",
+        "-c",
+        "core.excludesFile=/dev/null",
+        "-c",
+        "fsck.skipList=/dev/null",
+        "-c",
+        "protocol.allow=never",
+        "-C",
+        str(root),
+        *arguments,
+    ]
+
+
+def git_run(
+    root: Path,
+    *arguments: str,
+    check: bool = True,
+    text: bool = False,
+    stdout: int | None = subprocess.PIPE,
+    stderr: int | None = subprocess.PIPE,
+) -> subprocess.CompletedProcess[Any]:
     return subprocess.run(
-        ["git", "-C", str(root), *arguments],
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    ).stdout
+        git_command(root, *arguments),
+        cwd=root,
+        env=git_environment(),
+        check=check,
+        text=text,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def git_output(root: Path, *arguments: str) -> str:
+    output = git_run(root, *arguments, text=True).stdout
+    if not isinstance(output, str):
+        raise AssetError("Git text output has an invalid type")
+    return output
 
 
 def git_tree(root: Path) -> str:
@@ -255,27 +320,67 @@ def inspect_builder_source(
         )
     if git_output(root, "rev-parse", "--is-shallow-repository").strip() != "false":
         raise AssetError("builder source must contain complete Git history")
-    partial = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "config",
-            "--get-regexp",
-            r"^(extensions\.partialClone|remote\..*\.promisor)$",
-        ],
+    partial = git_run(
+        root,
+        "config",
+        "--local",
+        "--no-includes",
+        "--get-regexp",
+        r"^(extensions\.partialClone|remote\..*\.promisor)$",
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
     )
     if partial.returncode not in {1} or partial.stdout:
         raise AssetError("builder source must not use promisor or partial objects")
     if git_output(root, "for-each-ref", "--format=%(refname)", "refs/replace").strip():
         raise AssetError("builder source must not contain replacement objects")
-    source = git_output(root, "remote", "get-url", "origin").strip()
-    if source != expected_source:
+    remotes = git_output(root, "remote").splitlines()
+    fetch_urls = git_output(
+        root,
+        "remote",
+        "get-url",
+        "--all",
+        "origin",
+    ).splitlines()
+    push_urls = git_output(
+        root,
+        "remote",
+        "get-url",
+        "--push",
+        "--all",
+        "origin",
+    ).splitlines()
+    raw_fetch_urls = git_run(
+        root,
+        "config",
+        "--local",
+        "--no-includes",
+        "--get-all",
+        "remote.origin.url",
+        check=False,
+        text=True,
+    )
+    raw_push_urls = git_run(
+        root,
+        "config",
+        "--local",
+        "--no-includes",
+        "--get-all",
+        "remote.origin.pushurl",
+        check=False,
+        text=True,
+    )
+    if (
+        remotes != ["origin"]
+        or fetch_urls != [expected_source]
+        or push_urls != [expected_source]
+        or raw_fetch_urls.returncode != 0
+        or raw_fetch_urls.stdout.splitlines() != [expected_source]
+        or raw_push_urls.returncode != 1
+        or raw_push_urls.stdout
+    ):
         raise AssetError("builder source origin differs from the approved repository")
+    source = fetch_urls[0]
     commit = git_output(root, "rev-parse", "--verify", "HEAD^{commit}").strip()
     tree = git_tree(root)
     if not FULL_SHA.fullmatch(commit):
@@ -304,21 +409,15 @@ def inspect_builder_source(
         raise AssetError(
             "builder source must be an exact checkout of origin/main"
         )
-    fsck = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "fsck",
-            "--full",
-            "--strict",
-            "--no-reflogs",
-            "--unreachable",
-        ],
+    fsck = git_run(
+        root,
+        "fsck",
+        "--full",
+        "--strict",
+        "--no-reflogs",
+        "--unreachable",
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
     )
     if fsck.returncode != 0 or fsck.stdout or fsck.stderr:
         raise AssetError(
@@ -353,26 +452,22 @@ def inspect_builder_source(
     worktree_blob = git_output(root, "hash-object", "--", script_path).strip()
     if committed_blob != blob or worktree_blob != blob:
         raise AssetError("builder script differs from its committed source")
-    status = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
-            "--ignore-submodules=none",
-        ],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    status = git_run(
+        root,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--ignore-submodules=none",
     ).stdout
     if status:
         raise AssetError("builder source must contain no modified, untracked, or ignored content")
     index_flags = git_output(root, "ls-files", "-v", "-z")
-    if any(entry and (entry[0] == "S" or entry[0].islower()) for entry in index_flags.split("\0")):
+    if any(
+        entry and not entry.startswith("H ")
+        for entry in index_flags.split("\0")
+    ):
         raise AssetError("builder source contains hidden index state")
     if (
         git_output(root, "rev-parse", "--verify", "HEAD^{commit}").strip() != commit
@@ -397,20 +492,13 @@ def inspect_builder_source(
 
 
 def _git_index_entries(root: Path, relative: str) -> list[bytes]:
-    output = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "ls-files",
-            "--stage",
-            "-z",
-            "--",
-            f":(literal){relative}",
-        ],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    output = git_run(
+        root,
+        "ls-files",
+        "--stage",
+        "-z",
+        "--",
+        f":(literal){relative}",
     ).stdout
     return [entry for entry in output.split(b"\0") if entry]
 
@@ -438,11 +526,14 @@ def _require_git_ignored_overlay(root: Path, relative: str) -> None:
     """Require an audited overlay to be ignored and absent from the Git index."""
     if _git_index_entries(root, relative):
         raise AssetError(f"audited ByteFF2 overlay must not be Git-tracked: {relative}")
-    ignored = subprocess.run(
-        ["git", "-C", str(root), "check-ignore", "--quiet", "--", relative],
+    ignored = git_run(
+        root,
+        "check-ignore",
+        "--quiet",
+        "--",
+        relative,
         check=False,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
     )
     if ignored.returncode == 1:
         raise AssetError(f"audited ByteFF2 overlay must be explicitly ignored: {relative}")
@@ -451,21 +542,14 @@ def _require_git_ignored_overlay(root: Path, relative: str) -> None:
 
 
 def git_status_entries(root: Path) -> list[str]:
-    output = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
-            "--ignore-submodules=all",
-        ],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    output = git_run(
+        root,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--ignore-submodules=all",
     ).stdout
     try:
         return [entry.decode("utf-8") for entry in output.split(b"\0") if entry]
@@ -694,12 +778,7 @@ def inspect_byteff2_tree_identity(
 
 def indexed_submodules(root: Path) -> list[tuple[str, str]]:
     """Return the path and pinned commit for each direct gitlink in *root*."""
-    output = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "--stage", "-z"],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    ).stdout
+    output = git_run(root, "ls-files", "--stage", "-z").stdout
     result: list[tuple[str, str]] = []
     for raw_entry in output.split(b"\0"):
         if not raw_entry:
@@ -718,6 +797,67 @@ def indexed_submodules(root: Path) -> list[tuple[str, str]]:
     return sorted(result)
 
 
+def validate_byteff2_git_policy(repository: Path, relative: str) -> None:
+    """Reject object indirection and incomplete history before reading objects."""
+
+    label = "ByteFF2 checkout" if not relative else f"ByteFF2 submodule {relative}"
+    if (
+        git_output(
+            repository,
+            "rev-parse",
+            "--is-shallow-repository",
+        ).strip()
+        != "false"
+    ):
+        raise AssetError(f"{label} must contain complete Git history")
+    partial = git_run(
+        repository,
+        "config",
+        "--local",
+        "--no-includes",
+        "--get-regexp",
+        r"^(extensions\.partialClone|remote\..*\.promisor)$",
+        check=False,
+        text=True,
+    )
+    if partial.returncode != 1 or partial.stdout:
+        raise AssetError(f"{label} must not use promisor or partial objects")
+    if git_output(
+        repository,
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/replace",
+    ).strip():
+        raise AssetError(f"{label} must not contain replacement objects")
+    for git_path, description in (
+        ("objects/info/alternates", "alternate object databases"),
+        ("info/grafts", "Git grafts"),
+    ):
+        value = git_output(
+            repository,
+            "rev-parse",
+            "--git-path",
+            git_path,
+        ).strip()
+        path = Path(value)
+        if not path.is_absolute():
+            path = repository / path
+        if path.exists() or path.is_symlink():
+            raise AssetError(f"{label} must not use {description}")
+    fsck = git_run(
+        repository,
+        "fsck",
+        "--full",
+        "--strict",
+        "--no-dangling",
+        "HEAD",
+        check=False,
+        text=True,
+    )
+    if fsck.returncode != 0:
+        raise AssetError(f"{label} object database failed strict verification")
+
+
 def inspect_byteff2_checkout(root: Path) -> tuple[str, dict[str, str]]:
     """Validate a clean ByteFF2 checkout and every recursively pinned submodule."""
     root = root.resolve()
@@ -731,6 +871,7 @@ def inspect_byteff2_checkout(root: Path) -> tuple[str, dict[str, str]]:
     overlay_paths = tuple(relative for relative, _size, _digest in BYTEFF2_AUDITED_OVERLAY_FILES)
 
     def inspect_repository(repository: Path, relative: str) -> str:
+        validate_byteff2_git_policy(repository, relative)
         commit = git_output(repository, "rev-parse", "--verify", "HEAD^{commit}").strip()
         if not FULL_SHA.fullmatch(commit):
             raise AssetError(f"repository does not resolve to a full commit SHA: {repository}")
@@ -746,7 +887,10 @@ def inspect_byteff2_checkout(root: Path) -> tuple[str, dict[str, str]]:
             raise AssetError(f"{label} must be clean")
 
         index_flags = git_output(repository, "ls-files", "-v", "-z")
-        if any(entry and (entry[0] == "S" or entry[0].islower()) for entry in index_flags.split("\0")):
+        if any(
+            entry and not entry.startswith("H ")
+            for entry in index_flags.split("\0")
+        ):
             label = "ByteFF2 checkout" if not relative else f"ByteFF2 submodule {relative}"
             raise AssetError(f"{label} contains hidden index state")
 
@@ -852,6 +996,335 @@ def copy_verified_tree(
     return copied
 
 
+def _git_blob_payload(repository: Path, object_id: str) -> bytes:
+    if not FULL_SHA.fullmatch(object_id):
+        raise AssetError("Git tree contains an invalid blob identity")
+    payload = git_run(repository, "cat-file", "blob", object_id).stdout
+    if not isinstance(payload, bytes):
+        raise AssetError("Git blob output has an invalid type")
+    identity = hashlib.sha1(
+        b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload
+    ).hexdigest()
+    if identity != object_id:
+        raise AssetError("Git blob payload differs from its object identity")
+    return payload
+
+
+def _safe_git_tree_path(raw: bytes) -> str:
+    try:
+        value = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise AssetError("Git tree path is not UTF-8") from exc
+    path = Path(value)
+    if (
+        not value
+        or "\x00" in value
+        or path.is_absolute()
+        or not path.parts
+        or ".." in path.parts
+        or path.as_posix() != value
+    ):
+        raise AssetError("Git tree contains an unsafe path")
+    return value
+
+
+def _private_parent(root: Path, relative: Path) -> Path:
+    current = root
+    for component in relative.parts:
+        current /= component
+        if current.exists() or current.is_symlink():
+            metadata = current.lstat()
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or current.is_symlink()
+                or metadata.st_uid != os.geteuid()
+            ):
+                raise AssetError(
+                    f"Git materialization path conflicts: {current}"
+                )
+        else:
+            current.mkdir(mode=0o700)
+    return current
+
+
+def _write_git_blob(
+    destination: Path,
+    relative: str,
+    payload: bytes,
+    *,
+    mode: int,
+) -> None:
+    relative_path = Path(relative)
+    parent = _private_parent(destination, relative_path.parent)
+    path = parent / relative_path.name
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(path, flags, mode)
+    except OSError as exc:
+        raise AssetError(f"cannot materialize Git blob: {relative}") from exc
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != mode
+            or metadata.st_size != len(payload)
+        ):
+            raise AssetError(f"materialized Git blob is unsafe: {relative}")
+    finally:
+        os.close(descriptor)
+
+
+def _git_tree_entries(
+    repository: Path,
+    commit: str,
+) -> list[tuple[str, str, str, str]]:
+    if not FULL_SHA.fullmatch(commit):
+        raise AssetError("Git archive commit identity is invalid")
+    output = git_run(
+        repository,
+        "ls-tree",
+        "-r",
+        "-z",
+        "--full-tree",
+        commit,
+    ).stdout
+    if not isinstance(output, bytes):
+        raise AssetError("Git tree output has an invalid type")
+    entries: list[tuple[str, str, str, str]] = []
+    paths: set[str] = set()
+    for raw in output.split(b"\0"):
+        if not raw:
+            continue
+        try:
+            metadata, raw_path = raw.split(b"\t", 1)
+            raw_mode, raw_type, raw_object = metadata.split(b" ", 2)
+            mode = raw_mode.decode("ascii")
+            object_type = raw_type.decode("ascii")
+            object_id = raw_object.decode("ascii")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise AssetError("cannot parse Git tree entry") from exc
+        path = _safe_git_tree_path(raw_path)
+        if path in paths:
+            raise AssetError("Git tree contains a duplicate path")
+        paths.add(path)
+        entries.append((mode, object_type, object_id, path))
+    return sorted(entries, key=lambda entry: entry[3])
+
+
+def _copy_audited_overlay(
+    source: Path,
+    destination: Path,
+    relative: str,
+) -> None:
+    before = _inspect_required_regular_file(source, relative)
+    relative_path = Path(relative)
+    descriptors: list[int] = []
+    try:
+        current = os.open(
+            source,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_DIRECTORY", 0),
+        )
+        descriptors.append(current)
+        for component in relative_path.parts[:-1]:
+            current = os.open(
+                component,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_DIRECTORY", 0),
+                dir_fd=current,
+            )
+            descriptors.append(current)
+        file_descriptor = os.open(
+            relative_path.name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=current,
+        )
+        descriptors.append(file_descriptor)
+        metadata = os.fstat(file_descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or metadata.st_size != before["size"]
+        ):
+            raise AssetError(
+                f"audited ByteFF2 overlay is unsafe: {relative}"
+            )
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(file_descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        payload = b"".join(chunks)
+        final_metadata = os.fstat(file_descriptor)
+        if (
+            _stat_identity(final_metadata) != _stat_identity(metadata)
+            or len(payload) != metadata.st_size
+            or hashlib.sha256(payload).hexdigest() != before["sha256"]
+        ):
+            raise AssetError(
+                f"audited ByteFF2 overlay changed while reading: {relative}"
+            )
+    except OSError as exc:
+        raise AssetError(
+            f"cannot read audited ByteFF2 overlay safely: {relative}"
+        ) from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+    target = destination / relative
+    _write_git_blob(
+        destination,
+        relative,
+        payload,
+        mode=0o600,
+    )
+    after = _inspect_required_regular_file(source, relative)
+    copied = _inspect_required_regular_file(destination, relative)
+    if before != after or copied != before:
+        target.unlink(missing_ok=True)
+        raise AssetError(
+            f"audited ByteFF2 overlay changed while copying: {relative}"
+        )
+
+
+def materialize_byteff2_git_objects(
+    source: Path,
+    destination: Path,
+    *,
+    expected_commit: str,
+    expected_submodules: dict[str, str],
+) -> None:
+    """Materialize only fixed Git objects plus the digest-pinned HF overlay."""
+
+    if destination.exists() or destination.is_symlink():
+        raise AssetError(
+            f"ByteFF2 materialization destination already exists: {destination}"
+        )
+    destination.mkdir(mode=0o700)
+    seen_submodules: dict[str, str] = {}
+    approved_symlinks: dict[str, str] = {}
+
+    def materialize_repository(
+        repository: Path,
+        commit: str,
+        *,
+        prefix: str,
+    ) -> None:
+        validate_byteff2_git_policy(repository, prefix)
+        if (
+            git_output(
+                repository,
+                "rev-parse",
+                "--verify",
+                "HEAD^{commit}",
+            ).strip()
+            != commit
+        ):
+            raise AssetError("ByteFF2 repository changed before materialization")
+        for mode, object_type, object_id, path in _git_tree_entries(
+            repository,
+            commit,
+        ):
+            relative = f"{prefix}/{path}" if prefix else path
+            if mode in {"100644", "100755"} and object_type == "blob":
+                _write_git_blob(
+                    destination,
+                    relative,
+                    _git_blob_payload(repository, object_id),
+                    mode=0o700 if mode == "100755" else 0o600,
+                )
+            elif mode == "120000" and object_type == "blob":
+                try:
+                    target = _git_blob_payload(
+                        repository,
+                        object_id,
+                    ).decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise AssetError(
+                        f"ByteFF2 symlink target is not UTF-8: {relative}"
+                    ) from exc
+                expected_target = BYTEFF2_MATERIALIZED_SYMLINKS.get(relative)
+                if expected_target is None or target != expected_target:
+                    raise AssetError(
+                        f"ByteFF2 tree contains an unaudited symlink: {relative}"
+                    )
+                approved_symlinks[relative] = target
+            elif mode == "160000" and object_type == "commit":
+                expected = expected_submodules.get(relative)
+                if expected != object_id:
+                    raise AssetError(
+                        f"ByteFF2 Git tree has an unexpected submodule: {relative}"
+                    )
+                seen_submodules[relative] = object_id
+                child = source / relative
+                if not child.is_dir() or child.is_symlink():
+                    raise AssetError(
+                        f"ByteFF2 submodule object source is unavailable: {relative}"
+                    )
+                _private_parent(destination, Path(relative))
+                materialize_repository(
+                    child,
+                    object_id,
+                    prefix=relative,
+                )
+            else:
+                raise AssetError(
+                    f"ByteFF2 Git tree contains unsupported mode/type: {relative}"
+                )
+        if (
+            git_output(
+                repository,
+                "rev-parse",
+                "--verify",
+                "HEAD^{commit}",
+            ).strip()
+            != commit
+        ):
+            raise AssetError("ByteFF2 repository changed during materialization")
+
+    materialize_repository(source, expected_commit, prefix="")
+    if seen_submodules != expected_submodules:
+        raise AssetError("ByteFF2 recursive submodule materialization is incomplete")
+    for relative, expected_target in sorted(approved_symlinks.items()):
+        link = destination / relative
+        target = (link.parent / expected_target).resolve()
+        try:
+            target.relative_to(destination.resolve())
+        except ValueError as exc:
+            raise AssetError(
+                f"audited ByteFF2 symlink target escapes release: {relative}"
+            ) from exc
+        if not target.is_dir() or target.is_symlink():
+            raise AssetError(
+                f"audited ByteFF2 symlink target is unsafe: {relative}"
+            )
+        copy_verified_tree(target, link)
+    for relative, _expected_size, _expected_digest in (
+        BYTEFF2_AUDITED_OVERLAY_FILES
+    ):
+        _copy_audited_overlay(source, destination, relative)
+
+
 def copy_verified_byteff2(
     source: Path,
     destination: Path,
@@ -859,49 +1332,25 @@ def copy_verified_byteff2(
     expected_commit: str,
     expected_submodules: dict[str, str],
 ) -> None:
-    """Copy a clean checkout and prove it kept the reviewed recursive identity."""
+    """Build from fixed Git objects and prove the source stayed unchanged."""
     before_commit, before_submodules = inspect_byteff2_checkout(source)
     if before_commit != expected_commit or before_submodules != expected_submodules:
         raise AssetError("ByteFF2 checkout identity changed before copying")
-    for relative, expected_target in BYTEFF2_MATERIALIZED_SYMLINKS.items():
-        entries = _git_index_entries(source, relative)
-        if len(entries) != 1:
-            raise AssetError(f"audited ByteFF2 symlink is not tracked: {relative}")
-        metadata, raw_path = entries[0].split(b"\t", 1)
-        mode, _sha, stage = metadata.split(b" ", 2)
-        path = source / relative
-        if (
-            raw_path.decode("utf-8") != relative
-            or mode != b"120000"
-            or stage != b"0"
-            or not path.is_symlink()
-            or os.readlink(path) != expected_target
-        ):
-            raise AssetError(f"audited ByteFF2 symlink identity differs: {relative}")
-        target = (path.parent / expected_target).resolve()
-        try:
-            target.relative_to(source.resolve())
-        except ValueError as exc:
-            raise AssetError(f"audited ByteFF2 symlink escapes checkout: {relative}") from exc
-        if not target.is_dir() or target.is_symlink():
-            raise AssetError(f"audited ByteFF2 symlink target is unsafe: {relative}")
-    copy_tree(source, destination)
+    materialize_byteff2_git_objects(
+        source,
+        destination,
+        expected_commit=expected_commit,
+        expected_submodules=expected_submodules,
+    )
     after_commit, after_submodules = inspect_byteff2_checkout(source)
     if after_commit != expected_commit or after_submodules != expected_submodules:
         raise AssetError("ByteFF2 checkout identity changed while copying")
-    remove_git_metadata(destination)
-    for relative, expected_target in BYTEFF2_MATERIALIZED_SYMLINKS.items():
-        link = destination / relative
-        if not link.is_symlink() or os.readlink(link) != expected_target:
-            raise AssetError(f"copied ByteFF2 symlink identity differs: {relative}")
-        target = (link.parent / expected_target).resolve()
-        try:
-            target.relative_to(destination.resolve())
-        except ValueError as exc:
-            raise AssetError(f"copied ByteFF2 symlink escapes release: {relative}") from exc
-        link.unlink()
-        copy_tree(target, link)
-    (destination / "BYTEFF2-COMMIT").write_text(expected_commit + "\n", encoding="ascii")
+    _write_git_blob(
+        destination,
+        "BYTEFF2-COMMIT",
+        (expected_commit + "\n").encode("ascii"),
+        mode=0o600,
+    )
     inspect_tree(destination, hash_files=False)
     inspect_required_byteff2_runtime_files(destination, require_git_tracking=False)
     inspect_byteff2_audited_overlays(destination, require_git_ignored=False)
@@ -990,7 +1439,9 @@ def build_manifest(
                 "predecessor_all_trees_rehashed": list(ASSET_KEYS),
                 "unchanged_trees_byte_identical": list(UNCHANGED_ASSET_TREES),
                 "asset_tree_digest_algorithm": "canonical-manifest-inventory-v1",
-                "byteff2_source_verification": "clean-recursive-commit-and-tree",
+                "byteff2_source_verification": (
+                    "clean-recursive-commit-object-materialization-v1"
+                ),
                 "staging_directory_mode": "0700",
                 "file_and_directory_fsync": True,
                 "publication": "atomic-rename",
@@ -1690,11 +2141,10 @@ def main(argv: list[str] | None = None) -> int:
             raise AssetError("approved ByteFF2 revision has the wrong Git tree")
         byteff2_tracked_entries = [
             entry
-            for entry in subprocess.run(
-                ["git", "-C", str(byteff2), "ls-files", "-z"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            for entry in git_run(
+                byteff2,
+                "ls-files",
+                "-z",
             ).stdout.split(b"\0")
             if entry
         ]

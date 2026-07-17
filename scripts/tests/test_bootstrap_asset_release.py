@@ -344,7 +344,9 @@ class AssetBootstrapTests(unittest.TestCase):
                 "predecessor_all_trees_rehashed": list(assets.ASSET_KEYS),
                 "unchanged_trees_byte_identical": list(assets.UNCHANGED_ASSET_TREES),
                 "asset_tree_digest_algorithm": "canonical-manifest-inventory-v1",
-                "byteff2_source_verification": "clean-recursive-commit-and-tree",
+                "byteff2_source_verification": (
+                    "clean-recursive-commit-object-materialization-v1"
+                ),
                 "staging_directory_mode": "0700",
                 "file_and_directory_fsync": True,
                 "publication": "atomic-rename",
@@ -918,11 +920,32 @@ class AssetBootstrapTests(unittest.TestCase):
             destination = workspace / "copied"
             expected_commit = self.initialize_repository(source)
 
-            def commit_switching_copy(copy_source: Path, copy_destination: Path) -> None:
-                shutil.copytree(copy_source, copy_destination)
-                self.git(copy_source, "commit", "--quiet", "--allow-empty", "-m", "concurrent commit")
+            materialize = assets.materialize_byteff2_git_objects
 
-            with mock.patch.object(assets, "copy_tree", side_effect=commit_switching_copy):
+            def commit_switching_copy(
+                copy_source: Path,
+                copy_destination: Path,
+                **kwargs: object,
+            ) -> None:
+                materialize(
+                    copy_source,
+                    copy_destination,
+                    **kwargs,
+                )
+                self.git(
+                    copy_source,
+                    "commit",
+                    "--quiet",
+                    "--allow-empty",
+                    "-m",
+                    "concurrent commit",
+                )
+
+            with mock.patch.object(
+                assets,
+                "materialize_byteff2_git_objects",
+                side_effect=commit_switching_copy,
+            ):
                 with self.assertRaisesRegex(assets.AssetError, "identity changed while copying"):
                     assets.copy_verified_byteff2(
                         source,
@@ -1005,14 +1028,28 @@ class AssetBootstrapTests(unittest.TestCase):
             self.git(parent, "commit", "--quiet", "-am", "pin child")
             parent_commit = self.git(parent, "rev-parse", "HEAD")
 
-            def submodule_switching_copy(copy_source: Path, copy_destination: Path) -> None:
-                shutil.copytree(copy_source, copy_destination)
+            materialize = assets.materialize_byteff2_git_objects
+
+            def submodule_switching_copy(
+                copy_source: Path,
+                copy_destination: Path,
+                **kwargs: object,
+            ) -> None:
+                materialize(
+                    copy_source,
+                    copy_destination,
+                    **kwargs,
+                )
                 checkout = copy_source / "vendor" / "child"
                 self.git(checkout, "config", "user.email", "ci@example.invalid")
                 self.git(checkout, "config", "user.name", "CI")
                 self.git(checkout, "commit", "--quiet", "--allow-empty", "-m", "concurrent commit")
 
-            with mock.patch.object(assets, "copy_tree", side_effect=submodule_switching_copy):
+            with mock.patch.object(
+                assets,
+                "materialize_byteff2_git_objects",
+                side_effect=submodule_switching_copy,
+            ):
                 with self.assertRaisesRegex(assets.AssetError, "does not match parent gitlink"):
                     assets.copy_verified_byteff2(
                         parent,
@@ -1037,6 +1074,98 @@ class AssetBootstrapTests(unittest.TestCase):
             self.git(root, "update-index", "--skip-worktree", "tracked.txt")
             with self.assertRaisesRegex(assets.AssetError, "hidden index state"):
                 assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_validation_rejects_indirect_or_incomplete_objects(self) -> None:
+        for mutation, message in (
+            ("promisor", "promisor or partial"),
+            ("replace", "replacement objects"),
+            ("alternates", "alternate object databases"),
+            ("grafts", "Git grafts"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as raw:
+                workspace = Path(raw)
+                root = workspace / "byteff2"
+                commit = self.initialize_repository(root)
+                if mutation == "promisor":
+                    self.git(root, "config", "remote.origin.promisor", "true")
+                elif mutation == "replace":
+                    self.git(root, "replace", commit, commit)
+                elif mutation == "alternates":
+                    alternate = root / ".git" / "objects" / "info" / "alternates"
+                    alternate.write_text(
+                        str(workspace / "external-objects") + "\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    (root / ".git" / "info" / "grafts").write_text(
+                        commit + "\n",
+                        encoding="ascii",
+                    )
+
+                with self.assertRaisesRegex(assets.AssetError, message):
+                    assets.inspect_byteff2_checkout(root)
+
+    def test_git_object_materialization_ignores_dirty_worktree_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            source = workspace / "byteff2"
+            destination = workspace / "materialized"
+            expected_commit = self.initialize_repository(source)
+            (source / "tracked.txt").write_text(
+                "uncommitted attacker-controlled bytes\n",
+                encoding="utf-8",
+            )
+
+            assets.materialize_byteff2_git_objects(
+                source,
+                destination,
+                expected_commit=expected_commit,
+                expected_submodules={},
+            )
+
+            self.assertEqual(
+                (destination / "tracked.txt").read_text(encoding="utf-8"),
+                "byteff2\n",
+            )
+            self.assertFalse((destination / ".git").exists())
+
+    def test_git_commands_ignore_inherited_config_and_structural_environment(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            root = workspace / "byteff2"
+            expected_commit = self.initialize_repository(root)
+            marker = workspace / "fsmonitor-ran"
+            hook = workspace / "hostile-fsmonitor"
+            hook.write_text(
+                f"#!/bin/sh\n: > {marker}\nexit 1\n",
+                encoding="utf-8",
+            )
+            hook.chmod(0o700)
+            hostile_config = workspace / "hostile.gitconfig"
+            hostile_config.write_text(
+                f"[core]\n\tfsmonitor = {hook}\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "GIT_CONFIG_GLOBAL": str(hostile_config),
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "core.fsmonitor",
+                    "GIT_CONFIG_VALUE_0": str(hook),
+                    "GIT_DIR": str(workspace / "wrong-git-dir"),
+                    "GIT_OBJECT_DIRECTORY": str(workspace / "wrong-objects"),
+                },
+                clear=False,
+            ):
+                commit, submodules = assets.inspect_byteff2_checkout(root)
+
+            self.assertEqual(commit, expected_commit)
+            self.assertEqual(submodules, {})
+            self.assertFalse(marker.exists())
 
     def test_staging_cleanup_unlinks_symlink_without_chmod_outside_target(
         self,
