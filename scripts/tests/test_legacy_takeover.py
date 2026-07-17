@@ -1043,11 +1043,143 @@ print("authenticated")
         ):
             path = fixture.runtime / relative
             self.assertFalse(path.exists() or path.is_symlink())
+        replacement_by_path = {
+            record["relative_path"]: record for record in replacement
+        }
+        for index, relative in (
+            (TAKEOVER.CONTROL_LAYOUT_RELATIVE_PATHS.index("audit"), "audit"),
+            (
+                TAKEOVER.CONTROL_LAYOUT_RELATIVE_PATHS.index("backups"),
+                "backups",
+            ),
+        ):
+            archive = (
+                fixture.external["runtime"]
+                / ".takeover-preserved-control"
+                / OPERATION_ID
+                / str(index)
+            )
+            TAKEOVER.verify_path_seal(
+                archive,
+                replacement_by_path[relative]["seal"],
+            )
         status = fixture.controller.status(OPERATION_ID)
         self.assertEqual(
             status["control_layout_replacement_sha256"],
             replacement_digest,
         )
+
+    def test_preserved_control_archive_rejects_tampering_on_resume(self) -> None:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        fixture.seal()
+        fixture.controller.apply(OPERATION_ID)
+        audit = fixture.runtime / "audit"
+        audit.mkdir(mode=0o700)
+        evidence = audit / "success.json"
+        evidence.write_text('{"status":"success"}\n', encoding="utf-8")
+        os.chmod(evidence, 0o600)
+        replacement = fixture.controller._snapshot_control_layout()
+        replacement_digest = fixture.controller._control_layout_digest(
+            replacement
+        )
+        audit_index = TAKEOVER.CONTROL_LAYOUT_RELATIVE_PATHS.index("audit")
+        checkpoints = Checkpoints(
+            f"restore:control-layout-{audit_index}:archived"
+        )
+        with self.assertRaises(InjectedCrash):
+            fixture.recreate_controller(checkpoints).restore(
+                OPERATION_ID,
+                expected_control_layout_sha256=replacement_digest,
+            )
+        archive = (
+            fixture.external["runtime"]
+            / ".takeover-preserved-control"
+            / OPERATION_ID
+            / str(audit_index)
+        )
+        archived_evidence = archive / "success.json"
+        archived_evidence.write_text(
+            '{"status":"tampered"}\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            TAKEOVER.LegacyTakeoverError,
+            "seal",
+        ):
+            fixture.recreate_controller().restore(
+                OPERATION_ID,
+                expected_control_layout_sha256=replacement_digest,
+            )
+
+    def test_restore_removes_every_bootstrap_created_runtime_tree(
+        self,
+    ) -> None:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        sealed = fixture.seal()
+        fixture.controller.apply(OPERATION_ID)
+
+        absent = [
+            record["relative_path"]
+            for record in sealed["control_layout"]
+            if not record["present"]
+        ]
+        for relative in absent:
+            path = fixture.runtime / relative
+            if path.suffix == ".json":
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                path.write_text('{"candidate":true}\n', encoding="utf-8")
+                os.chmod(path, 0o600)
+            else:
+                path.mkdir(parents=True, exist_ok=True, mode=0o700)
+                evidence = path / "candidate-evidence"
+                evidence.write_text("candidate\n", encoding="utf-8")
+                os.chmod(evidence, 0o600)
+        replacement = fixture.controller._snapshot_control_layout()
+        replacement_digest = fixture.controller._control_layout_digest(
+            replacement
+        )
+        fixture.controller.restore(
+            OPERATION_ID,
+            expected_control_layout_sha256=replacement_digest,
+        )
+        for relative in absent:
+            path = fixture.runtime / relative
+            self.assertFalse(
+                path.exists() or path.is_symlink(),
+                relative,
+            )
+
+    def test_control_layout_covers_all_bootstrap_owned_directories(
+        self,
+    ) -> None:
+        bootstrap_script = ROOT / "scripts/bootstrap_pull_deploy.py"
+        bootstrap_spec = importlib.util.spec_from_file_location(
+            "bootstrap_layout_coverage_test",
+            bootstrap_script,
+        )
+        assert bootstrap_spec is not None and bootstrap_spec.loader is not None
+        bootstrap = importlib.util.module_from_spec(bootstrap_spec)
+        bootstrap_spec.loader.exec_module(bootstrap)
+        roots = set(TAKEOVER.CONTROL_LAYOUT_RELATIVE_PATHS)
+        for relative in bootstrap.DIRECTORIES:
+            if relative in {"config", "state"}:
+                continue
+            self.assertTrue(
+                any(
+                    relative == root
+                    or relative.startswith(root + "/")
+                    for root in roots
+                ),
+                relative,
+            )
+        for left in roots:
+            for right in roots - {left}:
+                self.assertFalse(
+                    right.startswith(left + "/"),
+                    (left, right),
+                )
 
     def test_restore_cas_restores_recursive_checkout_permissions(self) -> None:
         fixture = Fixture()

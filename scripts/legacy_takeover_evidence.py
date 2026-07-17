@@ -19,6 +19,26 @@ DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 OPERATION_RE = re.compile(r"^takeover-[a-z0-9][a-z0-9-]{7,79}$")
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_STATUS_BYTES = 16 * 1024 * 1024
+CONTROL_LAYOUT_RELATIVE_PATHS = (
+    "bin",
+    "config/docker",
+    "control-releases",
+    "state/prepared",
+    "state/control-handoffs",
+    "state/worker-slots",
+    "state/contract-operations",
+    "state/contract-verification-databases",
+    "state/maintenance",
+    "state/monomer-md-worker-socket",
+    "state/monomer-md-worker-runs",
+    "state/gpu-resource",
+    "state/active-control.json",
+    "state/bootstrap-control.json",
+    "audit",
+    "backups",
+    "wheel-cache",
+    "worker-venvs",
+)
 
 REVIEWED_WRAPPERS = {
     "bootstrap-quiesce",
@@ -35,10 +55,15 @@ SITE_HELPERS = {
     "deployment-mutable-data-audit",
 }
 RECOVERY_FILES = {
+    "bootstrap_pull_deploy.py",
+    "bridge_deploy_core.py",
     "legacy_takeover.py",
     "legacy_takeover_evidence.py",
+    "maintenance_prefetch.py",
+    "worker_slot_runtime.py",
     "site_helper_contracts.py",
     "nexpoly-legacy-takeover",
+    "nexpoly-maintenance-prefetch",
 }
 PRIVATE_CONFIG_FILES = {
     "legacy-takeover-classification.json",
@@ -499,7 +524,16 @@ def validate_status_document(
                 "legacy takeover active-job fence differs"
             )
         backups = fence.get("control_layout_backups")
-        if not isinstance(backups, list) or len(backups) != 7:
+        if (
+            not isinstance(backups, list)
+            or len(backups) != len(CONTROL_LAYOUT_RELATIVE_PATHS)
+            or [
+                record.get("relative_path")
+                for record in backups
+                if isinstance(record, dict)
+            ]
+            != list(CONTROL_LAYOUT_RELATIVE_PATHS)
+        ):
             raise LegacyTakeoverEvidenceError(
                 "legacy takeover control backup inventory differs"
             )
@@ -699,6 +733,91 @@ def validate_completed(
             "checkout_permissions_sha256"
         ],
         "applied_record_sha256": status["applied_record_sha256"],
+    }
+    return {
+        **binding,
+        "binding_sha256": sha256_bytes(canonical_json_bytes(binding)),
+    }
+
+
+def validate_restored(
+    runtime_root: Path,
+    operation_id: str,
+    authority_sha: str,
+    authority_tree: str,
+    *,
+    expected_git_identity: dict[str, str] | None = None,
+    status_document: object | None = None,
+) -> dict[str, Any]:
+    """Validate the exact terminal legacy restore after a failed first Pull."""
+
+    manifest = validate_install_manifest(
+        runtime_root,
+        authority_sha,
+        authority_tree,
+    )
+    status = (
+        load_status(runtime_root, operation_id)
+        if status_document is None
+        else validate_status_document(status_document, operation_id)
+    )
+    if (
+        status["apply_phase"] != "complete"
+        or status["restore_phase"] != "restored"
+        or status["active"] is not False
+        or status["applied_record_sha256"] is None
+        or status["pre_stopped_fence_sha256"] is None
+        or status["pre_stopped_fence"] is None
+        or status["control_layout_replacement_sha256"] is None
+        or status["checkout_permissions_replacement_sha256"] is None
+        or status["restored_terminal_sha256"] is None
+        or any(
+            move["status"] != "externalized"
+            or move["restore_status"] != "restored"
+            for move in status["moves"]
+        )
+        or status["classification_sha256"]
+        != manifest["classification_sha256"]
+    ):
+        raise LegacyTakeoverEvidenceError(
+            "legacy takeover is not an exact terminal restore"
+        )
+    if (
+        expected_git_identity is not None
+        and status["git_identity"] != expected_git_identity
+    ):
+        raise LegacyTakeoverEvidenceError(
+            "restored legacy takeover Git authority differs"
+        )
+    binding = {
+        "schema_version": 1,
+        "operation_id": operation_id,
+        "authority_sha": authority_sha,
+        "authority_tree": authority_tree,
+        "install_manifest_sha256": sha256_file(
+            runtime_root
+            / "legacy-takeover/INSTALL-MANIFEST.json"
+        ),
+        "classification_sha256": status["classification_sha256"],
+        "runtime_identity_sha256": status["runtime_identity_sha256"],
+        "git_identity": status["git_identity"],
+        "pre_stopped_fence_sha256": status[
+            "pre_stopped_fence_sha256"
+        ],
+        "control_layout_sha256": status["control_layout_sha256"],
+        "control_layout_replacement_sha256": status[
+            "control_layout_replacement_sha256"
+        ],
+        "checkout_permissions_sha256": status[
+            "checkout_permissions_sha256"
+        ],
+        "checkout_permissions_replacement_sha256": status[
+            "checkout_permissions_replacement_sha256"
+        ],
+        "applied_record_sha256": status["applied_record_sha256"],
+        "restored_terminal_sha256": status[
+            "restored_terminal_sha256"
+        ],
     }
     return {
         **binding,

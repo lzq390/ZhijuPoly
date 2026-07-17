@@ -127,6 +127,67 @@ class LegacyTakeoverEvidenceTests(unittest.TestCase):
             status,
         )
 
+    def test_restored_binding_requires_exact_terminal_restore(self) -> None:
+        installer = InstallerFixture()
+        takeover = Fixture()
+        self.addCleanup(installer.close)
+        self.addCleanup(takeover.close)
+        installer.install()
+        takeover.seal()
+        takeover.controller.apply(OPERATION_ID)
+        (takeover.runtime / "bin").mkdir(mode=0o700)
+        replacement = takeover.runtime / "bin/candidate"
+        replacement.write_text("candidate\n", encoding="utf-8")
+        os.chmod(replacement, 0o700)
+        os.chmod(takeover.repository / ".git", 0o755)
+        control = EVIDENCE.snapshot_current_control_layout(
+            takeover.runtime
+        )
+        permissions = EVIDENCE.snapshot_current_checkout_permissions(
+            takeover.runtime,
+            OPERATION_ID,
+        )
+        takeover.controller.restore(
+            OPERATION_ID,
+            expected_control_layout_sha256=control["sha256"],
+            expected_checkout_permissions_sha256=permissions["sha256"],
+        )
+        status = takeover.controller.status(OPERATION_ID)
+        manifest = EVIDENCE.validate_install_manifest(
+            installer.runtime,
+            AUTHORITY_SHA,
+            AUTHORITY_TREE,
+        )
+        status["classification_sha256"] = manifest[
+            "classification_sha256"
+        ]
+        binding = EVIDENCE.validate_restored(
+            installer.runtime,
+            OPERATION_ID,
+            AUTHORITY_SHA,
+            AUTHORITY_TREE,
+            expected_git_identity=status["git_identity"],
+            status_document=status,
+        )
+        self.assertEqual(
+            binding["restored_terminal_sha256"],
+            status["restored_terminal_sha256"],
+        )
+
+        incomplete = dict(status)
+        incomplete["restore_phase"] = "runtime-restore-intent"
+        with self.assertRaisesRegex(
+            EVIDENCE.LegacyTakeoverEvidenceError,
+            "terminal restore",
+        ):
+            EVIDENCE.validate_restored(
+                installer.runtime,
+                OPERATION_ID,
+                AUTHORITY_SHA,
+                AUTHORITY_TREE,
+                status_document=incomplete,
+            )
+
     def test_control_layout_snapshot_matches_takeover_algorithm(self) -> None:
         fixture = Fixture()
         self.addCleanup(fixture.close)

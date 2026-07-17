@@ -33,10 +33,15 @@ REVIEWED_WRAPPERS = {
     "bootstrap-rollback": "ops/config/bootstrap-rollback.example",
 }
 RECOVERY_FILES = {
+    "bootstrap_pull_deploy.py": "scripts/bootstrap_pull_deploy.py",
+    "bridge_deploy_core.py": "scripts/bridge_deploy_core.py",
     "legacy_takeover.py": "scripts/legacy_takeover.py",
     "legacy_takeover_evidence.py": "scripts/legacy_takeover_evidence.py",
+    "maintenance_prefetch.py": "scripts/maintenance_prefetch.py",
+    "worker_slot_runtime.py": "scripts/worker_slot_runtime.py",
     "site_helper_contracts.py": "scripts/site_helper_contracts.py",
     "nexpoly-legacy-takeover": "scripts/nexpoly-legacy-takeover",
+    "nexpoly-maintenance-prefetch": "scripts/nexpoly-maintenance-prefetch",
 }
 ATTESTATION_FILES = {
     "install_legacy_takeover_prerequisites.py": (

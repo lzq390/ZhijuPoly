@@ -88,12 +88,23 @@ RESTORE_MOVE_STATUSES = {
 }
 CONTROL_LAYOUT_RELATIVE_PATHS = (
     "bin",
+    "config/docker",
     "control-releases",
+    "state/prepared",
+    "state/control-handoffs",
+    "state/worker-slots",
+    "state/contract-operations",
+    "state/contract-verification-databases",
+    "state/maintenance",
+    "state/monomer-md-worker-socket",
+    "state/monomer-md-worker-runs",
+    "state/gpu-resource",
     "state/active-control.json",
     "state/bootstrap-control.json",
-    "audit/bootstrap-worker-unit/takeover-intent.json",
-    "audit/bootstrap-worker-unit/takeover.json",
-    "backups/bootstrap-worker-unit",
+    "audit",
+    "backups",
+    "wheel-cache",
+    "worker-venvs",
 )
 CONTROL_LAYOUT_RESTORE_STATUSES = {
     "pending",
@@ -102,6 +113,7 @@ CONTROL_LAYOUT_RESTORE_STATUSES = {
     "copy-intent",
     "restored",
 }
+PRESERVED_CONTROL_LAYOUT_PATHS = {"audit", "backups"}
 CHECKOUT_PERMISSION_RESTORE_STATUSES = {
     "pending",
     "restore-intent",
@@ -877,6 +889,40 @@ def _ensure_detached_removed(
         or trash.is_symlink()
     ):
         raise LegacyTakeoverError(f"detached legacy path was not removed: {path}")
+
+
+def _ensure_detached_archived(
+    path: Path,
+    archive: Path,
+    expected: dict[str, Any],
+    *,
+    private_anchor: Path,
+    after_detach: Callable[[], None],
+) -> None:
+    """Atomically retain exact audit/backup evidence outside live controls."""
+
+    _ensure_private_descendant(archive.parent, private_anchor)
+    path_exists = path.exists() or path.is_symlink()
+    archive_exists = archive.exists() or archive.is_symlink()
+    if path_exists and archive_exists:
+        raise LegacyTakeoverError(
+            f"both live path and preserved archive exist: {path}"
+        )
+    if path_exists:
+        verify_path_seal(path, expected)
+        _rename_noreplace(path, archive)
+        _fsync_directory(path.parent)
+        after_detach()
+        archive_exists = True
+    if not archive_exists:
+        raise LegacyTakeoverError(
+            f"preserved control archive is unavailable: {path}"
+        )
+    verify_path_seal(archive, expected)
+    if path.exists() or path.is_symlink():
+        raise LegacyTakeoverError(
+            f"preserved live control path remains: {path}"
+        )
 
 
 def _normal_relative_path(value: object) -> str:
@@ -2592,6 +2638,7 @@ class LegacyTakeover:
         return sha256_bytes(canonical_json_bytes(evidence))
 
     def _restored_terminal_digest(self, state: dict[str, Any]) -> str:
+        replacement_layout = state.get("control_layout_replacement") or []
         evidence = {
             "schema_version": 1,
             "operation_id": state["operation_id"],
@@ -2618,6 +2665,26 @@ class LegacyTakeover:
             "checkout_permissions_replacement_sha256": state.get(
                 "checkout_permissions_replacement_sha256"
             ),
+            "preserved_replacement_controls": [
+                {
+                    "relative_path": replacement["relative_path"],
+                    "archive": str(
+                        self.external_roots["runtime"]
+                        / ".takeover-preserved-control"
+                        / state["operation_id"]
+                        / str(index)
+                    ),
+                    "seal_sha256": replacement["seal"]["digest"],
+                }
+                for index, replacement in enumerate(replacement_layout)
+                if replacement["relative_path"]
+                in PRESERVED_CONTROL_LAYOUT_PATHS
+                and replacement["present"]
+                and not self._same_control_layout_record(
+                    state["control_layout"][index],
+                    replacement,
+                )
+            ],
             "restored_paths": [
                 {
                     "path": move["path"],
@@ -3332,15 +3399,35 @@ class LegacyTakeover:
                 self._checkpoint(f"restore:{label}:remove-intent")
         if record["restore_status"] == "remove-intent":
             if replacement["present"]:
-                _ensure_detached_removed(
-                    path,
-                    trash,
-                    replacement["seal"],
-                    private_anchor=self.external_roots["runtime"],
-                    after_detach=lambda: self._checkpoint(
-                        f"restore:{label}:detached"
-                    ),
-                )
+                if (
+                    record["relative_path"]
+                    in PRESERVED_CONTROL_LAYOUT_PATHS
+                ):
+                    archive = (
+                        self.external_roots["runtime"]
+                        / ".takeover-preserved-control"
+                        / state["operation_id"]
+                        / str(record["index"])
+                    )
+                    _ensure_detached_archived(
+                        path,
+                        archive,
+                        replacement["seal"],
+                        private_anchor=self.external_roots["runtime"],
+                        after_detach=lambda: self._checkpoint(
+                            f"restore:{label}:archived"
+                        ),
+                    )
+                else:
+                    _ensure_detached_removed(
+                        path,
+                        trash,
+                        replacement["seal"],
+                        private_anchor=self.external_roots["runtime"],
+                        after_detach=lambda: self._checkpoint(
+                            f"restore:{label}:detached"
+                        ),
+                    )
             elif (
                 path.exists()
                 or path.is_symlink()

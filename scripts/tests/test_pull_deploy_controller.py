@@ -781,7 +781,22 @@ class FixtureController(CONTROLLER.PullDeployController):
                     CONTROLLER.canonical_json_digest(source_readiness)
                 ),
                 "legacy_takeover": takeover,
-                "delivery_gate": {"fixture": True},
+                "delivery_gate": {
+                    "remote_main": candidate["source_sha"],
+                    "ci": {
+                        "workflow_run_id": 42,
+                        "run_attempt": 1,
+                        "head_sha": candidate["source_sha"],
+                        "head_branch": "main",
+                        "event": "push",
+                        "path": ".github/workflows/ci.yml",
+                        "conclusion": "success",
+                        "required_jobs": [
+                            "Publish and smoke immutable main images",
+                            "ci-gate",
+                        ],
+                    },
+                },
                 "production_repository": {"fixture": True},
                 "immutable_files": {
                     name: CONTROLLER.sha256_file(self.bin_dir / name)
@@ -1171,6 +1186,96 @@ class PullDeployTestCase(unittest.TestCase):
 
 
 class RepositoryAndEvidenceTests(PullDeployTestCase):
+    def test_stopped_bridge_guard_rejects_every_network_fetch_path(
+        self,
+    ) -> None:
+        bundle = self.runtime / "sealed.bundle"
+        write_private(bundle, "fixture bundle\n")
+        guarded = CONTROLLER.OfflineBridgeRunner(GitRunner())
+
+        for command in (
+            [
+                "git",
+                "ls-remote",
+                CONTROLLER.REPOSITORY_SSH_URL,
+                "refs/heads/main",
+            ],
+            ["git", "fetch", CONTROLLER.REPOSITORY_SSH_URL],
+            ["docker", "pull", "ghcr.io/example/image@sha256:" + "1" * 64],
+            ["python3", "-m", "pip", "download", "fixture"],
+            ["python3", "-m", "pip", "install", "fixture"],
+            ["ssh", "production.example"],
+            ["curl", "https://api.github.com/repos/example/project"],
+        ):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "offline bridge revalidation",
+                ):
+                    guarded.run(command)
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "GitHub API",
+        ):
+            guarded.request_json("https://api.github.com", "token")
+        CONTROLLER.OfflineBridgeRunner._validate_command(
+            [
+                "git",
+                "-c",
+                "credential.helper=",
+                "fetch",
+                "--no-tags",
+                str(bundle),
+                "+refs/heads/main:refs/nexpoly/prefetch/test/authority",
+            ]
+        )
+        CONTROLLER.OfflineBridgeRunner._validate_command(
+            ["docker", "image", "inspect", CONTROLLER.POSTGRES16_IMAGE]
+        )
+        CONTROLLER.OfflineBridgeRunner._validate_command(
+            [
+                "python3",
+                "-m",
+                "pip",
+                "install",
+                "--no-index",
+                "--find-links",
+                str(self.runtime / "wheel-cache"),
+                "fixture",
+            ]
+        )
+
+    def test_bridge_ci_comes_only_from_sealed_bootstrap_publication(
+        self,
+    ) -> None:
+        controller = self.controller()
+        expected = controller.bootstrap_ci_evidence(
+            authority_sha=TARGET_SHA,
+            required_jobs={
+                "ci-gate",
+                "Publish and smoke immutable main images",
+            },
+        )
+        self.assertEqual(expected["workflow_run_id"], 42)
+        self.assertEqual(expected["head_sha"], TARGET_SHA)
+
+        path = controller.state_dir / "bootstrap-control.json"
+        changed = CONTROLLER.load_private_json(path)
+        changed["delivery_gate"]["ci"]["required_jobs"] = ["ci-gate"]
+        CONTROLLER.atomic_json(path, changed)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "exact required F CI jobs",
+        ):
+            controller.bootstrap_ci_evidence(
+                authority_sha=TARGET_SHA,
+                required_jobs={
+                    "ci-gate",
+                    "Publish and smoke immutable main images",
+                },
+            )
+
     def test_ambient_test_mode_cannot_authorize_production_roots(self) -> None:
         with self.assertRaisesRegex(
             CONTROLLER.PullDeployError, "forbidden for production paths"
@@ -1687,7 +1792,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         )
         descriptor["legacy_takeover"] = takeover
         prefetch = {
-            "schema_version": 1,
+            "schema_version": 2,
             "operation_id": "prefetch-fixture-operation",
             "ready_path": str(
                 controller.runtime_root
@@ -1706,8 +1811,11 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 },
             },
             "source_readiness_sha256": "sha256:" + "4" * 64,
+            "controller_sha256": "sha256:" + "b" * 64,
             "policy_sha256": descriptor["bridge"]["policy_sha256"],
-            "docker_config_sha256": "sha256:" + "5" * 64,
+            "docker_config_path": str(
+                controller.runtime_root / "config/docker"
+            ),
             "git_bundle_sha256": "sha256:" + "6" * 64,
             "images_sha256": "sha256:" + "7" * 64,
             "wheel_caches_sha256": "sha256:" + "8" * 64,
@@ -1716,6 +1824,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             ],
             "asset_inventory_sha256": "sha256:" + "9" * 64,
             "recovery_tools_sha256": "sha256:" + "a" * 64,
+            "created_at": "2026-07-17T00:00:00Z",
         }
         prefetch["binding_sha256"] = CONTROLLER.canonical_json_digest(
             prefetch
@@ -2073,6 +2182,289 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             merge,
             ("merge", "--ff-only", f"refs/nexpoly/bridge-target/{TARGET_SHA}"),
         )
+
+    def test_first_bridge_restore_inherits_lock_and_seals_every_cas(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        sealed = descriptor["legacy_takeover"]
+        unit = descriptor["monomer_md"]["systemd_unit"]
+        target_unit = Path(unit["target_path"])
+        target_unit.write_bytes(Path(unit["candidate_path"]).read_bytes())
+        os.chmod(target_unit, 0o600)
+        status = {
+            "apply_phase": "complete",
+            "restore_phase": None,
+            "active": False,
+            "classification_sha256": sealed["classification_sha256"],
+            "runtime_identity_sha256": sealed["runtime_identity_sha256"],
+            "git_identity": sealed["git_identity"],
+            "pre_stopped_fence_sha256": sealed[
+                "pre_stopped_fence_sha256"
+            ],
+            "pre_stopped_fence": {
+                "worker_unit_seal_sha256": "sha256:" + "2" * 64,
+            },
+            "control_layout_sha256": sealed[
+                "control_layout_sha256"
+            ],
+            "checkout_permissions_sha256": sealed[
+                "checkout_permissions_sha256"
+            ],
+            "applied_record_sha256": sealed[
+                "applied_record_sha256"
+            ],
+        }
+        restored = {
+            **{
+                key: sealed[key]
+                for key in (
+                    "operation_id",
+                    "authority_sha",
+                    "authority_tree",
+                    "install_manifest_sha256",
+                    "classification_sha256",
+                    "runtime_identity_sha256",
+                    "git_identity",
+                    "pre_stopped_fence_sha256",
+                    "control_layout_sha256",
+                    "checkout_permissions_sha256",
+                    "applied_record_sha256",
+                )
+            },
+            "control_layout_replacement_sha256": "sha256:" + "3" * 64,
+            "checkout_permissions_replacement_sha256": "sha256:" + "4" * 64,
+            "restored_terminal_sha256": "sha256:" + "5" * 64,
+            "binding_sha256": "sha256:" + "6" * 64,
+        }
+        marker = {
+            "database_change_started": False,
+            "source_switched": True,
+            "slot_switched": False,
+            "control_switched": True,
+            "unit_switched": True,
+            "asset_switched": False,
+            "runtime_stopped": True,
+            "updated_at": CONTROLLER.utc_now(),
+        }
+        captured: dict[str, object] = {}
+
+        def invoke(
+            command: list[str],
+            *,
+            deploy_lock_fd: int,
+        ) -> subprocess.CompletedProcess[str]:
+            captured["command"] = command
+            captured["fd"] = deploy_lock_fd
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps({"fixture": "terminal"}),
+                "",
+            )
+
+        controller._held_deploy_lock_fd = 91
+        controller._run_legacy_takeover_restore = invoke  # type: ignore[method-assign]
+        with (
+            mock.patch.object(
+                controller,
+                "_probe_restored_legacy_takeover",
+                side_effect=[None, restored],
+            ),
+            mock.patch.object(
+                CONTROLLER._legacy_takeover_evidence,
+                "validate_install_manifest",
+                return_value={"fixture": True},
+            ),
+            mock.patch.object(
+                CONTROLLER._legacy_takeover_evidence,
+                "load_status",
+                return_value=status,
+            ),
+            mock.patch.object(
+                CONTROLLER._legacy_takeover_evidence,
+                "snapshot_current_control_layout",
+                return_value={"sha256": "sha256:" + "3" * 64},
+            ),
+            mock.patch.object(
+                CONTROLLER._legacy_takeover_evidence,
+                "snapshot_current_checkout_permissions",
+                return_value={"sha256": "sha256:" + "4" * 64},
+            ),
+            mock.patch.object(
+                CONTROLLER._legacy_takeover_evidence,
+                "validate_status_document",
+                return_value={"fixture": "terminal"},
+            ),
+        ):
+            result = controller._restore_legacy_takeover(
+                descriptor,
+                marker,
+            )
+        controller._held_deploy_lock_fd = None
+
+        self.assertEqual(result, restored)
+        self.assertEqual(captured["fd"], 91)
+        command = captured["command"]
+        self.assertEqual(command[-2:], ["--parent-deploy-lock-fd", "91"])
+        self.assertEqual(
+            marker["takeover_restore_started"],
+            {
+                "operation_id": sealed["operation_id"],
+                "worker_unit_sha256": descriptor["monomer_md"][
+                    "systemd_unit"
+                ]["sha256"],
+                "control_layout_sha256": "sha256:" + "3" * 64,
+                "checkout_permissions_sha256": "sha256:" + "4" * 64,
+                "started_at": marker["takeover_restore_started"][
+                    "started_at"
+                ],
+            },
+        )
+        self.assertEqual(
+            marker["takeover_restored_terminal_sha256"],
+            restored["restored_terminal_sha256"],
+        )
+        self.assertFalse(marker["runtime_stopped"])
+
+    def test_takeover_subprocess_receives_only_inherited_lock_fd(
+        self,
+    ) -> None:
+        controller = self.controller()
+        completed = subprocess.CompletedProcess(
+            ["restore"],
+            0,
+            "{}",
+            "",
+        )
+        with mock.patch.object(
+            CONTROLLER.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            self.assertEqual(
+                controller._run_legacy_takeover_restore(
+                    ["/private/nexpoly-legacy-takeover", "restore"],
+                    deploy_lock_fd=17,
+                ),
+                completed,
+            )
+        self.assertEqual(run.call_args.kwargs["pass_fds"], (17,))
+        self.assertEqual(run.call_args.kwargs["env"]["PATH"], CONTROLLER.SAFE_PATH)
+        self.assertNotIn("SSH_AUTH_SOCK", run.call_args.kwargs["env"])
+
+    def test_lost_takeover_restore_response_precedes_git_reconciliation(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        descriptor_digest = CONTROLLER.canonical_json_digest(descriptor)
+        restored = {
+            "restored_terminal_sha256": "sha256:" + "7" * 64,
+        }
+        marker = {
+            "schema_version": 2,
+            "action": "deploy",
+            "operation_id": OPERATION_ID,
+            "source_sha": TARGET_SHA,
+            "descriptor_sha256": descriptor_digest,
+            "executor_control": descriptor["controller"][
+                "executor_control"
+            ],
+            "executor_control_sha256": descriptor["controller"][
+                "executor_control_sha256"
+            ],
+            "phase": "failed",
+            "started_at": CONTROLLER.utc_now(),
+            "updated_at": CONTROLLER.utc_now(),
+            "runtime_stopped": True,
+            "source_switched": True,
+            "slot_switched": False,
+            "control_switched": True,
+            "unit_switched": True,
+            "asset_switched": False,
+            "database_change_started": False,
+        }
+        CONTROLLER.atomic_json(controller.marker_path, marker)
+        with (
+            mock.patch.object(
+                controller,
+                "_load_prepared",
+                return_value=(descriptor, descriptor_digest),
+            ),
+            mock.patch.object(
+                controller,
+                "_probe_restored_legacy_takeover",
+                return_value=restored,
+            ),
+            mock.patch.object(
+                controller,
+                "_reconcile_effect_commit_windows",
+                side_effect=AssertionError(
+                    "Git reconciliation must not run after restore"
+                ),
+            ),
+        ):
+            self.assertIsNone(controller.recover_interrupted())
+        self.assertFalse(controller.marker_path.exists())
+        terminal_dir = (
+            controller.runtime_root
+            / "legacy-takeover"
+            / "runtime"
+            / "pull-terminal"
+            / OPERATION_ID
+        )
+        outcome = CONTROLLER.load_private_json(
+            terminal_dir / "operation-state.json"
+        )
+        self.assertEqual(outcome["outcome"], "failed")
+        self.assertEqual(
+            controller._load_operation_state(OPERATION_ID),
+            outcome,
+        )
+        self.assertFalse(
+            (controller.audit_dir / OPERATION_ID).exists()
+        )
+
+    def test_first_bridge_pre_stopped_rollback_never_drains_again(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        descriptor = self.bridge_descriptor(controller)
+        marker = {
+            "database_change_started": False,
+            "runtime_stopped": True,
+            "source_switched": False,
+            "slot_switched": False,
+            "control_switched": False,
+            "unit_switched": False,
+            "asset_switched": False,
+            "updated_at": CONTROLLER.utc_now(),
+        }
+        with (
+            mock.patch.object(
+                controller,
+                "_probe_restored_legacy_takeover",
+                return_value=None,
+            ),
+            mock.patch.object(
+                controller,
+                "_reconcile_effect_commit_windows",
+            ),
+            mock.patch.object(
+                controller,
+                "_restore_previous_asset_pointer",
+            ),
+            mock.patch.object(
+                controller,
+                "_restore_legacy_takeover",
+            ) as restore,
+        ):
+            controller._rollback_first_bridge(descriptor, marker)
+        restore.assert_called_once_with(descriptor, marker)
+        self.assertEqual(lifecycle.events, [])
 
     def test_bridge_commit_intent_crash_finishes_exact_current_state(
         self,

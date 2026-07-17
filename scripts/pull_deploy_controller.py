@@ -664,6 +664,141 @@ class PullDeployError(RuntimeError):
     """A fail-closed deployment validation or operation error."""
 
 
+class OfflineBridgeRunner:
+    """Reject network-capable commands during the post-stop bridge gate.
+
+    The first F -> B deployment has already stopped every legacy source
+    reader.  From that point onward all Git objects, OCI images, wheels and
+    policy evidence must come from the sealed prefetch record.  Keeping this
+    guard at the runner boundary makes an accidental future call to GitHub,
+    SSH, ``docker pull`` or an online package installer fail closed.
+    """
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+
+    @staticmethod
+    def _is_local_bundle_fetch(arguments: list[str]) -> bool:
+        try:
+            index = arguments.index("fetch")
+        except ValueError:
+            return False
+        tail = arguments[index + 1 :]
+        if any(
+            value.startswith("--upload-pack")
+            or value in {"--all", "--multiple"}
+            for value in tail
+        ):
+            return False
+        candidates = [
+            value
+            for value in tail
+            if value
+            and not value.startswith("-")
+            and not value.startswith("+")
+        ]
+        if len(candidates) != 1:
+            return False
+        bundle = Path(candidates[0])
+        return bool(
+            bundle.is_absolute()
+            and bundle.suffix == ".bundle"
+            and bundle.is_file()
+            and not bundle.is_symlink()
+        )
+
+    @classmethod
+    def _validate_command(cls, command: object) -> None:
+        if (
+            not isinstance(command, (list, tuple))
+            or not command
+            or any(not isinstance(value, (str, os.PathLike)) for value in command)
+        ):
+            raise PullDeployError(
+                "offline bridge revalidation received an unsafe command"
+            )
+        arguments = [os.fspath(value) for value in command]
+        executable = Path(arguments[0]).name
+        if executable == "git":
+            prohibited = {
+                "ls-remote",
+                "pull",
+                "push",
+                "clone",
+                "submodule",
+                "archive",
+            }
+            if prohibited.intersection(arguments):
+                raise PullDeployError(
+                    "offline bridge revalidation forbids Git network access"
+                )
+            if "fetch" in arguments and not cls._is_local_bundle_fetch(
+                arguments
+            ):
+                raise PullDeployError(
+                    "offline bridge revalidation only permits the sealed local bundle"
+                )
+        if executable in {"ssh", "scp", "sftp", "rsync"}:
+            raise PullDeployError(
+                "offline bridge revalidation forbids remote shell access"
+            )
+        if executable in {"docker", "podman"} and {
+            "pull",
+            "push",
+            "login",
+            "logout",
+            "build",
+            "buildx",
+        }.intersection(arguments[1:]):
+            raise PullDeployError(
+                "offline bridge revalidation forbids registry or build access"
+            )
+        if "pip" in arguments:
+            if "download" in arguments or (
+                "install" in arguments and "--no-index" not in arguments
+            ):
+                raise PullDeployError(
+                    "offline bridge revalidation forbids package network access"
+                )
+        if executable == "uv" and not {
+            "--offline",
+            "cache",
+        }.intersection(arguments[1:]):
+            raise PullDeployError(
+                "offline bridge revalidation forbids uv network access"
+            )
+        if executable in {"curl", "wget"}:
+            raise PullDeployError(
+                "offline bridge revalidation forbids HTTP access"
+            )
+        for value in arguments:
+            lowered = value.lower()
+            if (
+                "https://" in lowered
+                or "git@" in lowered
+                or (
+                    "http://" in lowered
+                    and "http://127.0.0.1" not in lowered
+                    and "http://localhost" not in lowered
+                )
+            ):
+                raise PullDeployError(
+                    "offline bridge revalidation forbids network endpoints"
+                )
+
+    def run(self, command: list[str], **kwargs: Any) -> Any:
+        self._validate_command(command)
+        return self._delegate.run(command, **kwargs)
+
+    def request_json(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise PullDeployError(
+            "offline bridge revalidation forbids GitHub API access"
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+
 class CommandRunner(Protocol):
     def run(
         self,
@@ -829,14 +964,16 @@ PREFETCH_BINDING_FIELDS = {
     "identity_sha256",
     "source",
     "source_readiness_sha256",
+    "controller_sha256",
     "policy_sha256",
-    "docker_config_sha256",
+    "docker_config_path",
     "git_bundle_sha256",
     "images_sha256",
     "wheel_caches_sha256",
     "asset_manifest_sha256",
     "asset_inventory_sha256",
     "recovery_tools_sha256",
+    "created_at",
     "binding_sha256",
 }
 
@@ -888,11 +1025,15 @@ def validate_prefetch_binding(document: object) -> dict[str, Any]:
     if (
         not isinstance(document, dict)
         or set(document) != PREFETCH_BINDING_FIELDS
-        or document.get("schema_version") != 1
+        or document.get("schema_version") != 2
         or not isinstance(document.get("operation_id"), str)
         or not document["operation_id"].startswith("prefetch-")
         or not isinstance(document.get("ready_path"), str)
         or not Path(document["ready_path"]).is_absolute()
+        or not isinstance(document.get("docker_config_path"), str)
+        or not Path(document["docker_config_path"]).is_absolute()
+        or not isinstance(document.get("created_at"), str)
+        or not document["created_at"]
     ):
         raise PullDeployError("maintenance prefetch binding has an invalid shape")
     source = document.get("source")
@@ -909,6 +1050,8 @@ def validate_prefetch_binding(document: object) -> dict[str, Any]:
         "operation_id",
         "ready_path",
         "source",
+        "docker_config_path",
+        "created_at",
     }:
         require_digest(document.get(name), f"prefetch {name}")
     identity = {
@@ -3106,6 +3249,54 @@ def validate_recovery_marker(
             raise PullDeployError("interrupted deployment restore flag is invalid")
     if "pre_stop_abort" in marker and marker["pre_stop_abort"] is not True:
         raise PullDeployError("interrupted deployment pre-stop abort flag is invalid")
+    if "takeover_pre_stopped_fence_sha256" in marker:
+        if (
+            descriptor.get("schema_version")
+            != BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            or marker["takeover_pre_stopped_fence_sha256"]
+            != descriptor["legacy_takeover"][
+                "pre_stopped_fence_sha256"
+            ]
+        ):
+            raise PullDeployError(
+                "interrupted takeover stop fence differs"
+            )
+    if "takeover_restore_started" in marker:
+        restore = marker["takeover_restore_started"]
+        if (
+            descriptor.get("schema_version")
+            != BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            or not isinstance(restore, dict)
+            or set(restore)
+            != {
+                "operation_id",
+                "worker_unit_sha256",
+                "control_layout_sha256",
+                "checkout_permissions_sha256",
+                "started_at",
+            }
+            or restore.get("operation_id")
+            != descriptor["legacy_takeover"]["operation_id"]
+            or not isinstance(restore.get("started_at"), str)
+            or not restore["started_at"]
+        ):
+            raise PullDeployError(
+                "interrupted takeover restore intent is invalid"
+            )
+        for name in (
+            "worker_unit_sha256",
+            "control_layout_sha256",
+            "checkout_permissions_sha256",
+        ):
+            require_digest(
+                restore.get(name),
+                f"takeover restore {name}",
+            )
+    if "takeover_restored_terminal_sha256" in marker:
+        require_digest(
+            marker["takeover_restored_terminal_sha256"],
+            "takeover restored terminal digest",
+        )
     if "runtime_start_intent" in marker:
         intent = marker["runtime_start_intent"]
         if (
@@ -6364,6 +6555,20 @@ class PullDeployController:
             finally:
                 self._held_deploy_lock_fd = None
 
+    @contextlib.contextmanager
+    def offline_bridge_revalidation(self) -> Iterable[None]:
+        """Enforce cache-only validation for the stopped first bridge."""
+
+        if isinstance(self.runner, OfflineBridgeRunner):
+            yield
+            return
+        original = self.runner
+        self.runner = OfflineBridgeRunner(original)
+        try:
+            yield
+        finally:
+            self.runner = original
+
     def _clean_environment(self) -> dict[str, str]:
         environment = {
             **self.control_environment(),
@@ -8768,7 +8973,7 @@ class PullDeployController:
                 "maintenance prefetch belongs to another F/B policy"
             )
         binding: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "operation_id": operation_id,
             "ready_path": str(ready_path),
             "ready_sha256": sha256_file(ready_path),
@@ -8777,10 +8982,11 @@ class PullDeployController:
             "source_readiness_sha256": ready[
                 "source_readiness_sha256"
             ],
+            "controller_sha256": canonical_json_digest(
+                ready["controller"]
+            ),
             "policy_sha256": ready["policy_sha256"],
-            "docker_config_sha256": ready["docker_config"][
-                "config_sha256"
-            ],
+            "docker_config_path": ready["docker_config"]["path"],
             "git_bundle_sha256": ready["git_bundle"]["sha256"],
             "images_sha256": canonical_json_digest(ready["images"]),
             "wheel_caches_sha256": canonical_json_digest(
@@ -8791,6 +8997,7 @@ class PullDeployController:
             "recovery_tools_sha256": canonical_json_digest(
                 ready["recovery_tools"]
             ),
+            "created_at": ready["created_at"],
         }
         binding["binding_sha256"] = canonical_json_digest(binding)
         return ready, validate_prefetch_binding(binding)
@@ -8904,15 +9111,31 @@ class PullDeployController:
         try:
             values = json.loads(str(result.stdout))
             image = values[0]
-        except (json.JSONDecodeError, IndexError, TypeError) as exc:
+            labels = image.get("Config", {}).get("Labels") or {}
+            current = {
+                "digest_ref": POSTGRES16_IMAGE,
+                "oci_reference_digest": POSTGRES16_IMAGE.split("@", 1)[1],
+                "local_image_id": image.get("Id"),
+                "repo_digests": sorted(
+                    set(image.get("RepoDigests") or [])
+                ),
+                "revision": labels.get(
+                    "org.opencontainers.image.revision"
+                ),
+                "source": labels.get("org.opencontainers.image.source"),
+                "version": labels.get("org.opencontainers.image.version"),
+            }
+            current = _prefetch_evidence.validate_image_evidence(
+                current,
+                expected_reference=POSTGRES16_IMAGE,
+                expected_revision=None,
+                enforce_revision=False,
+            )
+        except Exception as exc:
             raise PullDeployError(
                 "prefetched PostgreSQL image is unavailable"
             ) from exc
-        if (
-            len(values) != 1
-            or image.get("Id") != record["local_image_id"]
-            or POSTGRES16_IMAGE not in image.get("RepoDigests", [])
-        ):
+        if len(values) != 1 or current != record:
             raise PullDeployError(
                 "prefetched PostgreSQL image material changed"
             )
@@ -9080,15 +9303,72 @@ class PullDeployController:
         )
         return dict(backup)
 
-    def _operation_state_path(self, operation_id: str) -> Path:
+    def _operation_directories(self, operation_id: str) -> tuple[Path, Path]:
+        operation_id = require_operation_id(operation_id)
         return (
-            self.audit_dir / require_operation_id(operation_id) / "operation-state.json"
+            self.audit_dir / operation_id,
+            self.runtime_root
+            / "legacy-takeover"
+            / "runtime"
+            / "pull-terminal"
+            / operation_id,
         )
 
+    def _operation_state_path(
+        self,
+        operation_id: str,
+        *,
+        restored_takeover: bool = False,
+    ) -> Path:
+        normal, external = self._operation_directories(operation_id)
+        return (
+            external if restored_takeover else normal
+        ) / "operation-state.json"
+
+    def _ensure_private_operation_directory(self, path: Path) -> None:
+        try:
+            relative = path.relative_to(self.runtime_root)
+        except ValueError as exc:
+            raise PullDeployError(
+                "terminal operation audit escapes the runtime root"
+            ) from exc
+        ensure_private_directory(self.runtime_root)
+        current = self.runtime_root
+        for component in relative.parts:
+            current = current / component
+            ensure_private_directory(current, create=True)
+
+    def _use_restored_takeover_audit(self, operation_id: str) -> bool:
+        _normal, external = self._operation_directories(operation_id)
+        if external.exists() or external.is_symlink():
+            ensure_private_directory(external)
+            return True
+        if not (self.marker_path.exists() or self.marker_path.is_symlink()):
+            return False
+        marker = load_private_json(self.marker_path)
+        if marker.get("operation_id") != operation_id:
+            return False
+        terminal = marker.get("takeover_restored_terminal_sha256")
+        if terminal is None:
+            return False
+        require_digest(terminal, "legacy takeover restored terminal digest")
+        return True
+
     def _load_operation_state(self, operation_id: str) -> dict[str, Any] | None:
-        path = self._operation_state_path(operation_id)
-        if not path.exists() and not path.is_symlink():
+        paths = [
+            directory / "operation-state.json"
+            for directory in self._operation_directories(operation_id)
+        ]
+        present = [
+            path for path in paths if path.exists() or path.is_symlink()
+        ]
+        if not present:
             return None
+        if len(present) != 1:
+            raise PullDeployError(
+                "terminal deployment operation exists in multiple audit roots"
+            )
+        path = present[0]
         document = load_private_json(path)
         if (
             set(document) != OPERATION_STATE_FIELDS
@@ -9111,8 +9391,9 @@ class PullDeployController:
             raise PullDeployError(
                 f"operation ID is terminal ({state['outcome']}) and cannot {action}"
             )
-        audit = self.audit_dir / operation_id
-        if audit.exists() or audit.is_symlink():
+        for audit in self._operation_directories(operation_id):
+            if not (audit.exists() or audit.is_symlink()):
+                continue
             ensure_private_directory(audit)
             terminal_files = sorted(
                 path.name
@@ -9151,8 +9432,13 @@ class PullDeployController:
                 raise PullDeployError(
                     "terminal deployment operation transition is invalid"
                 )
-        operation_dir = self.audit_dir / operation_id
-        ensure_private_directory(operation_dir, create=True)
+        normal, external = self._operation_directories(operation_id)
+        operation_dir = (
+            external
+            if self._use_restored_takeover_audit(operation_id)
+            else normal
+        )
+        self._ensure_private_operation_directory(operation_dir)
         document = {
             "schema_version": 1,
             "operation_id": operation_id,
@@ -10722,6 +11008,19 @@ class PullDeployController:
             )
 
     def _revalidate_pre_switch(self, descriptor: dict[str, Any]) -> None:
+        if (
+            descriptor.get("schema_version")
+            == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+        ):
+            with self.offline_bridge_revalidation():
+                self._revalidate_pre_switch_inner(descriptor)
+            return
+        self._revalidate_pre_switch_inner(descriptor)
+
+    def _revalidate_pre_switch_inner(
+        self,
+        descriptor: dict[str, Any],
+    ) -> None:
         self._assert_no_ignored_runtime()
         if self.production_config_evidence(check_free_space=True) != descriptor.get(
             "production_config"
@@ -11232,8 +11531,17 @@ class PullDeployController:
         }
 
     def _audit_attempt(self, marker: dict[str, Any], status: str) -> None:
-        operation_dir = self.audit_dir / marker["operation_id"]
-        ensure_private_directory(operation_dir, create=True)
+        operation_id = require_operation_id(marker["operation_id"])
+        normal, external = self._operation_directories(operation_id)
+        if marker.get("takeover_restored_terminal_sha256") is not None:
+            require_digest(
+                marker["takeover_restored_terminal_sha256"],
+                "legacy takeover restored terminal digest",
+            )
+            operation_dir = external
+        else:
+            operation_dir = normal
+        self._ensure_private_operation_directory(operation_dir)
         atomic_json(
             operation_dir / f"{status}.json",
             {**marker, "status": status, "recorded_at": utc_now()},
@@ -11431,6 +11739,14 @@ class PullDeployController:
 
         if descriptor["schema_version"] != BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
             return False
+        if (
+            self._is_first_bridge(descriptor)
+            and self._probe_restored_legacy_takeover(descriptor)
+            is not None
+        ):
+            # The legacy origin/files/runtime are active again.  Reusing this
+            # prepared operation would bypass a new sealed takeover.
+            return False
         try:
             token = _bridge_core.load_token_authority(self.state_dir)
         except Exception as exc:
@@ -11608,6 +11924,312 @@ class PullDeployController:
         marker["updated_at"] = utc_now()
         self._write_marker(marker)
 
+    @staticmethod
+    def _is_first_bridge(descriptor: dict[str, Any]) -> bool:
+        return bool(
+            descriptor.get("schema_version")
+            == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            and descriptor.get("previous_deployment") is None
+        )
+
+    def _probe_restored_legacy_takeover(
+        self,
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Recognize an exact completed restore without touching live Git."""
+
+        if not self._is_first_bridge(descriptor):
+            return None
+        sealed = validate_legacy_takeover_binding(
+            descriptor["legacy_takeover"]
+        )
+        try:
+            status = _legacy_takeover_evidence.load_status(
+                self.runtime_root,
+                sealed["operation_id"],
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "legacy takeover restore status is unavailable"
+            ) from exc
+        if status.get("restore_phase") != "restored":
+            return None
+        try:
+            restored = _legacy_takeover_evidence.validate_restored(
+                self.runtime_root,
+                sealed["operation_id"],
+                sealed["authority_sha"],
+                sealed["authority_tree"],
+                expected_git_identity=sealed["git_identity"],
+                status_document=status,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "legacy takeover terminal restore is invalid"
+            ) from exc
+        for name in (
+            "operation_id",
+            "authority_sha",
+            "authority_tree",
+            "install_manifest_sha256",
+            "classification_sha256",
+            "runtime_identity_sha256",
+            "git_identity",
+            "pre_stopped_fence_sha256",
+            "control_layout_sha256",
+            "checkout_permissions_sha256",
+            "applied_record_sha256",
+        ):
+            if restored.get(name) != sealed.get(name):
+                raise PullDeployError(
+                    "legacy takeover terminal restore belongs to another authority"
+                )
+        return restored
+
+    def _finalize_restored_legacy_takeover(
+        self,
+        descriptor: dict[str, Any],
+        marker: dict[str, Any],
+        restored: dict[str, Any],
+    ) -> None:
+        """Commit marker truth after takeover already reopened legacy."""
+
+        if (
+            self.current_state_path.exists()
+            or self.current_state_path.is_symlink()
+        ):
+            raise PullDeployError(
+                "legacy takeover restored after candidate state committed"
+            )
+        if marker.get("database_change_started") is True and (
+            marker.get("database_restored") is not True
+            or marker.get("mutable_data_restored") is None
+        ):
+            raise PullDeployError(
+                "legacy takeover restored before database rollback committed"
+            )
+        if marker.get("asset_switched") is not False:
+            raise PullDeployError(
+                "legacy takeover restored before asset pointer rollback committed"
+            )
+        if marker.get("slot_switched") is not False:
+            raise PullDeployError(
+                "legacy takeover restored before Worker slot rollback committed"
+            )
+        if self._active_slot() is not None:
+            raise PullDeployError(
+                "legacy takeover restored with a governed Worker slot active"
+            )
+        terminal = require_digest(
+            restored.get("restored_terminal_sha256"),
+            "legacy takeover restored terminal digest",
+        )
+        existing = marker.get("takeover_restored_terminal_sha256")
+        if existing is not None and existing != terminal:
+            raise PullDeployError(
+                "legacy takeover terminal restore digest changed"
+            )
+        marker["source_switched"] = False
+        marker["slot_switched"] = False
+        marker["control_switched"] = False
+        marker["unit_switched"] = False
+        marker["asset_switched"] = False
+        marker["runtime_stopped"] = False
+        marker["takeover_restored_terminal_sha256"] = terminal
+        marker.pop("runtime_start_intent", None)
+        marker.pop("verification", None)
+        marker["updated_at"] = utc_now()
+        self._write_marker(marker)
+
+    def _run_legacy_takeover_restore(
+        self,
+        command: list[str],
+        *,
+        deploy_lock_fd: int,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={
+                "HOME": str(DEPLOY_USER_HOME),
+                "USER": "devuser",
+                "LOGNAME": "devuser",
+                "PATH": SAFE_PATH,
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+            pass_fds=(deploy_lock_fd,),
+            timeout=1800,
+        )
+
+    def _restore_legacy_takeover(
+        self,
+        descriptor: dict[str, Any],
+        marker: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Restore exact legacy state under Pull's already-held deploy lock."""
+
+        if not self._is_first_bridge(descriptor):
+            raise PullDeployError(
+                "legacy takeover restore is restricted to the first bridge"
+            )
+        if self._held_deploy_lock_fd is None:
+            raise PullDeployError(
+                "legacy takeover restore lacks inherited deploy.lock ownership"
+            )
+        already = self._probe_restored_legacy_takeover(descriptor)
+        if already is not None:
+            self._finalize_restored_legacy_takeover(
+                descriptor,
+                marker,
+                already,
+            )
+            return already
+        sealed = validate_legacy_takeover_binding(
+            descriptor["legacy_takeover"]
+        )
+        try:
+            _legacy_takeover_evidence.validate_install_manifest(
+                self.runtime_root,
+                sealed["authority_sha"],
+                sealed["authority_tree"],
+            )
+            status = _legacy_takeover_evidence.load_status(
+                self.runtime_root,
+                sealed["operation_id"],
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "legacy takeover restore authority is unavailable"
+            ) from exc
+        if (
+            status.get("apply_phase") != "complete"
+            or status.get("active") is not False
+            or status.get("classification_sha256")
+            != sealed["classification_sha256"]
+            or status.get("runtime_identity_sha256")
+            != sealed["runtime_identity_sha256"]
+            or status.get("git_identity") != sealed["git_identity"]
+            or status.get("pre_stopped_fence_sha256")
+            != sealed["pre_stopped_fence_sha256"]
+            or status.get("control_layout_sha256")
+            != sealed["control_layout_sha256"]
+            or status.get("checkout_permissions_sha256")
+            != sealed["checkout_permissions_sha256"]
+            or status.get("applied_record_sha256")
+            != sealed["applied_record_sha256"]
+        ):
+            raise PullDeployError(
+                "legacy takeover changed before exact restore"
+            )
+        intent = marker.get("takeover_restore_started")
+        if intent is None:
+            if status.get("restore_phase") is not None:
+                raise PullDeployError(
+                    "legacy takeover restore advanced without durable Pull intent"
+                )
+            try:
+                control = (
+                    _legacy_takeover_evidence.snapshot_current_control_layout(
+                        self.runtime_root
+                    )
+                )
+                permissions = (
+                    _legacy_takeover_evidence.snapshot_current_checkout_permissions(
+                        self.runtime_root,
+                        sealed["operation_id"],
+                    )
+                )
+            except Exception as exc:
+                raise PullDeployError(
+                    "cannot seal bootstrap replacement state for restore"
+                ) from exc
+            unit = Path(
+                descriptor["monomer_md"]["systemd_unit"]["target_path"]
+            )
+            try:
+                metadata = unit.lstat()
+            except OSError as exc:
+                raise PullDeployError(
+                    "Worker unit replacement is unavailable for restore"
+                ) from exc
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or unit.is_symlink()
+                or metadata.st_uid != os.geteuid()
+            ):
+                raise PullDeployError(
+                    "Worker unit replacement is unsafe for restore"
+                )
+            worker_digest = sha256_file(unit)
+            legacy_worker_digest = status["pre_stopped_fence"].get(
+                "worker_unit_seal_sha256"
+            )
+            if worker_digest not in {
+                descriptor["monomer_md"]["systemd_unit"]["sha256"],
+                legacy_worker_digest,
+            }:
+                raise PullDeployError(
+                    "Worker unit is neither sealed legacy nor candidate"
+                )
+            intent = {
+                "operation_id": sealed["operation_id"],
+                "worker_unit_sha256": worker_digest,
+                "control_layout_sha256": control["sha256"],
+                "checkout_permissions_sha256": permissions["sha256"],
+                "started_at": utc_now(),
+            }
+            marker["takeover_restore_started"] = intent
+            marker["updated_at"] = utc_now()
+            self._write_marker(marker)
+        launcher = (
+            self.runtime_root
+            / "legacy-takeover/bin/nexpoly-legacy-takeover"
+        )
+        command = [
+            str(launcher),
+            "restore",
+            "--operation-id",
+            sealed["operation_id"],
+            "--expected-worker-unit-sha256",
+            intent["worker_unit_sha256"],
+            "--expected-control-layout-sha256",
+            intent["control_layout_sha256"],
+            "--expected-checkout-permissions-sha256",
+            intent["checkout_permissions_sha256"],
+            "--parent-deploy-lock-fd",
+            str(self._held_deploy_lock_fd),
+        ]
+        try:
+            completed = self._run_legacy_takeover_restore(
+                command,
+                deploy_lock_fd=self._held_deploy_lock_fd,
+            )
+            response = json.loads(completed.stdout)
+            _legacy_takeover_evidence.validate_status_document(
+                response,
+                sealed["operation_id"],
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "exact legacy takeover restore did not complete"
+            ) from exc
+        restored = self._probe_restored_legacy_takeover(descriptor)
+        if restored is None:
+            raise PullDeployError(
+                "legacy takeover restore lacks terminal evidence"
+            )
+        self._finalize_restored_legacy_takeover(
+            descriptor,
+            marker,
+            restored,
+        )
+        return restored
+
     def _is_pre_stop_abort_marker(
         self,
         descriptor: dict[str, Any],
@@ -11656,6 +12278,65 @@ class PullDeployController:
             and load_private_json(self.current_state_path) == previous
         )
 
+    def _rollback_first_bridge(
+        self,
+        descriptor: dict[str, Any],
+        marker: dict[str, Any],
+    ) -> None:
+        """Roll the failed F -> B attempt back through exact takeover state."""
+
+        restored = self._probe_restored_legacy_takeover(descriptor)
+        if restored is not None:
+            self._finalize_restored_legacy_takeover(
+                descriptor,
+                marker,
+                restored,
+            )
+            return
+        restore_intent = marker.get("takeover_restore_started")
+        if restore_intent is not None:
+            # Database, asset and slot rollback commit before the external
+            # takeover restore is ever invoked.  A partial restore can already
+            # have returned Git to HTTPS and restored ignored files, so it
+            # must resume directly without generic SSH/clean-tree inspection.
+            if (
+                marker.get("asset_switched") is not False
+                or marker.get("slot_switched") is not False
+                or marker.get("database_change_started") is True
+                and marker.get("database_restored") is not True
+            ):
+                raise PullDeployError(
+                    "partial takeover restore lacks prerequisite rollback commits"
+                )
+            self._restore_legacy_takeover(descriptor, marker)
+            return
+
+        self._reconcile_effect_commit_windows(descriptor, marker)
+        candidate_may_be_live = bool(
+            marker.get("runtime_start_intent") is not None
+            or marker.get("verification") is not None
+        )
+        if candidate_may_be_live:
+            # This is the governed candidate runtime, not the pre-stopped
+            # legacy runtime.  Isolate and drain only this exact instance.
+            recovery = self._prepare_runtime_recovery(
+                marker,
+                descriptor,
+                allow_unfenced=True,
+            )
+            if recovery["runtime_state"] == "drained":
+                self._stop_runtime(marker, descriptor)
+            marker["runtime_stopped"] = True
+            marker["updated_at"] = utc_now()
+            self._write_marker(marker)
+        self._restore_database_after_failed_apply(descriptor, marker)
+        if marker.get("slot_switched") is True:
+            self._restore_previous_slot(descriptor)
+        self._record_restored_effect(marker, "slot_switched")
+        self._restore_previous_asset_pointer(descriptor)
+        self._record_restored_effect(marker, "asset_switched")
+        self._restore_legacy_takeover(descriptor, marker)
+
     def _rollback_failed_attempt(
         self, descriptor: dict[str, Any], marker: dict[str, Any]
     ) -> None:
@@ -11678,6 +12359,10 @@ class PullDeployController:
             marker["pre_stop_abort"] = True
             marker["updated_at"] = utc_now()
             self._write_marker(marker)
+            return
+
+        if self._is_first_bridge(descriptor):
+            self._rollback_first_bridge(descriptor, marker)
             return
 
         self._reconcile_effect_commit_windows(descriptor, marker)
@@ -12101,6 +12786,45 @@ class PullDeployController:
             return self._recover_explicit_rollback(
                 descriptor, descriptor_digest, marker
             )
+        if self._is_first_bridge(descriptor):
+            restored_takeover = (
+                self._probe_restored_legacy_takeover(descriptor)
+            )
+            if restored_takeover is not None:
+                # This must precede repository/effect reconciliation: exact
+                # restore intentionally brought back HTTPS origin, ignored
+                # legacy content and the old open runtime.
+                self._finalize_restored_legacy_takeover(
+                    descriptor,
+                    marker,
+                    restored_takeover,
+                )
+                self._audit_attempt(
+                    marker,
+                    "recovered-takeover-restore",
+                )
+                self._record_operation_outcome(
+                    operation_id=operation_id,
+                    descriptor_sha256=descriptor_digest,
+                    outcome="failed",
+                )
+                self.marker_path.unlink()
+                fsync_directory(self.marker_path.parent)
+                return None
+            if marker.get("takeover_restore_started") is not None:
+                self._rollback_failed_attempt(descriptor, marker)
+                self._audit_attempt(
+                    marker,
+                    "recovered-partial-takeover-restore",
+                )
+                self._record_operation_outcome(
+                    operation_id=operation_id,
+                    descriptor_sha256=descriptor_digest,
+                    outcome="failed",
+                )
+                self.marker_path.unlink()
+                fsync_directory(self.marker_path.parent)
+                return None
         if self._is_pre_stop_abort_marker(descriptor, marker):
             # This path must precede effect reconciliation.  Candidate and
             # previous releases may share unit or asset bytes, and inspecting

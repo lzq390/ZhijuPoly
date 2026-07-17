@@ -57,7 +57,9 @@ REQUIRED_RECOVERY_PATHS = {
     "scripts/control_runtime_selector.py",
     "scripts/install_legacy_takeover_prerequisites.py",
     "scripts/legacy_takeover.py",
+    "scripts/legacy_takeover_evidence.py",
     "scripts/nexpoly-legacy-takeover",
+    "scripts/nexpoly-maintenance-prefetch",
     "scripts/pull_deploy_controller.py",
     "scripts/site_helper_contracts.py",
 }
