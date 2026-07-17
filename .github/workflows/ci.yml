@@ -19,7 +19,7 @@ env:
 jobs:
   resolve-sha:
     name: Resolve immutable candidate SHA
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       candidate_sha: ${{ steps.resolve.outputs.candidate_sha }}
@@ -58,11 +58,11 @@ jobs:
   policy:
     name: Workflow, shell, compose, dependency, and migration policy
     needs: resolve-sha
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out candidate
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
           persist-credentials: false
@@ -117,11 +117,11 @@ jobs:
   script-tests:
     name: Release and deployment script tests
     needs: resolve-sha
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out candidate
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
           persist-credentials: false
@@ -140,7 +140,7 @@ jobs:
   production-alias-integration:
     name: Production 0005 alias PostgreSQL 16 isolation integration
     needs: resolve-sha
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       NEXPOLY_ALIAS_DOCKER_INTEGRATION: "1"
@@ -148,7 +148,7 @@ jobs:
       NEXPOLY_ALIAS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
     steps:
       - name: Check out candidate
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
           persist-credentials: false
@@ -171,7 +171,7 @@ jobs:
   backend-tests:
     name: Backend tests (shard ${{ matrix.shard }})
     needs: resolve-sha
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -199,7 +199,7 @@ jobs:
       PYTHONPATH: backend
     steps:
       - name: Check out candidate
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
           persist-credentials: false
@@ -224,11 +224,11 @@ jobs:
   frontend:
     name: Frontend Vitest and build
     needs: resolve-sha
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Check out candidate
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
           persist-credentials: false
@@ -253,11 +253,11 @@ jobs:
   worker-tests:
     name: Monomer-MD Worker tests
     needs: resolve-sha
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Check out candidate
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
           persist-credentials: false
@@ -295,7 +295,7 @@ jobs:
     name: Build ${{ matrix.name }} image without publishing
     if: github.event_name == 'pull_request'
     needs: resolve-sha
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -311,7 +311,7 @@ jobs:
             lock_pattern: frontend/package-lock.json
     steps:
       - name: Check out candidate
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
           persist-credentials: false
@@ -345,7 +345,7 @@ jobs:
       - frontend
       - worker-tests
       - image-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every applicable CI job to succeed
@@ -379,14 +379,14 @@ jobs:
       needs.ci-gate.result == 'success' &&
       github.event_name == 'push'
     needs: [resolve-sha, ci-gate]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
       contents: read
       packages: write
     steps:
       - name: Check out release SHA
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
           persist-credentials: false
