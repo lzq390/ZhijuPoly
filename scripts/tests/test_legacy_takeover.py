@@ -601,6 +601,58 @@ class LegacyTakeoverTests(unittest.TestCase):
         fixture.controller.restore(OPERATION_ID)
         return list(fixture.checkpoint.labels)
 
+    @staticmethod
+    def prepare_group_writable_checkout_restore(
+        fixture: Fixture,
+    ) -> str:
+        os.chmod(fixture.repository, 0o775)
+        fixture.seal()
+        fixture.controller.apply(OPERATION_ID)
+        os.chmod(fixture.repository, 0o700)
+        replacement = fixture.controller._current_checkout_permissions(
+            fixture.controller._load(OPERATION_ID)
+        )
+        return TAKEOVER.checkout_permissions_digest(replacement)
+
+    def labels_for_group_writable_checkout_restore(self) -> list[str]:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        replacement_digest = (
+            self.prepare_group_writable_checkout_restore(fixture)
+        )
+        fixture.checkpoint.labels.clear()
+        fixture.controller.restore(
+            OPERATION_ID,
+            expected_checkout_permissions_sha256=replacement_digest,
+        )
+        self.assertEqual(
+            fixture.repository.stat().st_mode & 0o7777,
+            0o775,
+        )
+        return list(fixture.checkpoint.labels)
+
+    def test_restore_phase_order_keeps_checkout_private_until_files_are_back(
+        self,
+    ) -> None:
+        labels = self.labels_for_restore()
+        ordered_phases = [
+            "restore:origin-restored",
+            "restore:files-restoring",
+            "restore:files-restored",
+            "restore:control-layout-restore-intent",
+            "restore:control-layout-restored",
+            "restore:worker-unit-restore-intent",
+            "restore:worker-unit-restored",
+            "restore:checkout-permissions-restore-intent",
+            "restore:checkout-permissions-restored",
+            "restore:runtime-restore-intent",
+            "restore:restored",
+        ]
+        self.assertEqual(
+            [labels.index(label) for label in ordered_phases],
+            sorted(labels.index(label) for label in ordered_phases),
+        )
+
     def test_full_takeover_and_restore_preserve_exact_path_seals(self) -> None:
         fixture = Fixture()
         self.addCleanup(fixture.close)
@@ -680,6 +732,108 @@ class LegacyTakeoverTests(unittest.TestCase):
                     fixture.assert_restored()
                 finally:
                     fixture.close()
+
+    def test_group_writable_checkout_restore_resumes_at_every_boundary(
+        self,
+    ) -> None:
+        labels = self.labels_for_group_writable_checkout_restore()
+        self.assertGreater(len(labels), 15)
+        for label in labels:
+            with self.subTest(label=label):
+                checkpoints = Checkpoints(label)
+                fixture = Fixture()
+                try:
+                    replacement_digest = (
+                        self.prepare_group_writable_checkout_restore(
+                            fixture
+                        )
+                    )
+                    controller = fixture.recreate_controller(checkpoints)
+                    with self.assertRaises(InjectedCrash):
+                        controller.restore(
+                            OPERATION_ID,
+                            expected_checkout_permissions_sha256=(
+                                replacement_digest
+                            ),
+                        )
+                    state = fixture.recreate_controller().restore(
+                        OPERATION_ID,
+                        expected_checkout_permissions_sha256=(
+                            replacement_digest
+                        ),
+                    )
+                    self.assertEqual(
+                        state["restore_phase"],
+                        "restored",
+                    )
+                    fixture.assert_restored()
+                    self.assertEqual(
+                        fixture.repository.stat().st_mode & 0o7777,
+                        0o775,
+                    )
+                finally:
+                    fixture.close()
+
+    def test_checkout_replacement_remains_bound_through_worker_restore(
+        self,
+    ) -> None:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        replacement_digest = (
+            self.prepare_group_writable_checkout_restore(fixture)
+        )
+        checkpoints = Checkpoints("restore:worker-unit-restored")
+        with self.assertRaises(InjectedCrash):
+            fixture.recreate_controller(checkpoints).restore(
+                OPERATION_ID,
+                expected_checkout_permissions_sha256=replacement_digest,
+            )
+        os.chmod(fixture.repository, 0o750)
+        with self.assertRaisesRegex(
+            TAKEOVER.LegacyTakeoverError,
+            "checkout permissions changed before restore",
+        ):
+            fixture.recreate_controller().restore(
+                OPERATION_ID,
+                expected_checkout_permissions_sha256=replacement_digest,
+            )
+
+    def test_control_replacement_is_original_before_checkout_restore(
+        self,
+    ) -> None:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        fixture.seal()
+        fixture.controller.apply(OPERATION_ID)
+        candidate = fixture.runtime / "bin"
+        candidate.mkdir(mode=0o700)
+        launcher = candidate / "nexpoly-pull-deploy"
+        launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        os.chmod(launcher, 0o700)
+        replacement = fixture.controller._snapshot_control_layout()
+        replacement_digest = fixture.controller._control_layout_digest(
+            replacement
+        )
+        checkpoints = Checkpoints(
+            "restore:checkout-permissions-restore-intent"
+        )
+        with self.assertRaises(InjectedCrash):
+            fixture.recreate_controller(checkpoints).restore(
+                OPERATION_ID,
+                expected_control_layout_sha256=replacement_digest,
+            )
+        candidate.mkdir(mode=0o700)
+        tampered = candidate / "unexpected"
+        tampered.write_text("tampered\n", encoding="utf-8")
+        os.chmod(tampered, 0o600)
+        with self.assertRaisesRegex(
+            TAKEOVER.LegacyTakeoverError,
+            "bootstrap control layout changed",
+        ):
+            fixture.recreate_controller().restore(
+                OPERATION_ID,
+                expected_control_layout_sha256=replacement_digest,
+            )
 
     def test_classification_rejects_missing_extra_duplicate_and_overlap(self) -> None:
         base = {

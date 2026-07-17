@@ -137,14 +137,46 @@ APPLY_PHASES = {
 RESTORE_PHASES = {
     "origin-restore-intent",
     "origin-restored",
-    "checkout-permissions-restore-intent",
-    "checkout-permissions-restored",
     "files-restoring",
     "files-restored",
     "control-layout-restore-intent",
     "control-layout-restored",
     "worker-unit-restore-intent",
     "worker-unit-restored",
+    "checkout-permissions-restore-intent",
+    "checkout-permissions-restored",
+    "runtime-restore-intent",
+    "restored",
+}
+CONTROL_REPLACEMENT_PENDING_PHASES = {
+    None,
+    "origin-restore-intent",
+    "origin-restored",
+    "files-restoring",
+    "files-restored",
+}
+CONTROL_REPLACEMENT_RESTORED_PHASES = {
+    "control-layout-restored",
+    "worker-unit-restore-intent",
+    "worker-unit-restored",
+    "checkout-permissions-restore-intent",
+    "checkout-permissions-restored",
+    "runtime-restore-intent",
+    "restored",
+}
+CHECKOUT_REPLACEMENT_PENDING_PHASES = {
+    None,
+    "origin-restore-intent",
+    "origin-restored",
+    "files-restoring",
+    "files-restored",
+    "control-layout-restore-intent",
+    "control-layout-restored",
+    "worker-unit-restore-intent",
+    "worker-unit-restored",
+}
+CHECKOUT_REPLACEMENT_RESTORED_PHASES = {
+    "checkout-permissions-restored",
     "runtime-restore-intent",
     "restored",
 }
@@ -3150,13 +3182,10 @@ class LegacyTakeover:
                 raise LegacyTakeoverError(
                     "bootstrap control replacement digest changed"
                 )
-            if state["restore_phase"] in {
-                None,
-                "origin-restore-intent",
-                "origin-restored",
-                "files-restoring",
-                "files-restored",
-            }:
+            if (
+                state["restore_phase"]
+                in CONTROL_REPLACEMENT_PENDING_PHASES
+            ):
                 current = self._snapshot_control_layout()
                 if (
                     self._control_layout_digest(current) != stored_digest
@@ -3172,13 +3201,10 @@ class LegacyTakeover:
                     raise LegacyTakeoverError(
                         "bootstrap control replacement changed before restore"
                     )
-            elif state["restore_phase"] in {
-                "control-layout-restored",
-                "worker-unit-restore-intent",
-                "worker-unit-restored",
-                "runtime-restore-intent",
-                "restored",
-            }:
+            elif (
+                state["restore_phase"]
+                in CONTROL_REPLACEMENT_RESTORED_PHASES
+            ):
                 self._verify_original_control_layout(state)
             return
 
@@ -3237,11 +3263,10 @@ class LegacyTakeover:
                 raise LegacyTakeoverError(
                     "checkout permission replacement digest changed"
                 )
-            if state["restore_phase"] in {
-                None,
-                "origin-restore-intent",
-                "origin-restored",
-            }:
+            if (
+                state["restore_phase"]
+                in CHECKOUT_REPLACEMENT_PENDING_PHASES
+            ):
                 current = self._current_checkout_permissions(state)
                 if (
                     checkout_permissions_digest(current) != stored_digest
@@ -3250,17 +3275,10 @@ class LegacyTakeover:
                     raise LegacyTakeoverError(
                         "checkout permissions changed before restore"
                     )
-            elif state["restore_phase"] in {
-                "checkout-permissions-restored",
-                "files-restoring",
-                "files-restored",
-                "control-layout-restore-intent",
-                "control-layout-restored",
-                "worker-unit-restore-intent",
-                "worker-unit-restored",
-                "runtime-restore-intent",
-                "restored",
-            }:
+            elif (
+                state["restore_phase"]
+                in CHECKOUT_REPLACEMENT_RESTORED_PHASES
+            ):
                 self._verify_original_checkout_permissions(state)
             return
         current = self._current_checkout_permissions(state)
@@ -3672,24 +3690,6 @@ class LegacyTakeover:
             self._transition(
                 state,
                 "restore_phase",
-                "checkout-permissions-restore-intent",
-                "restore:checkout-permissions-restore-intent",
-            )
-        if (
-            state["restore_phase"]
-            == "checkout-permissions-restore-intent"
-        ):
-            self._restore_checkout_permissions(state)
-            self._transition(
-                state,
-                "restore_phase",
-                "checkout-permissions-restored",
-                "restore:checkout-permissions-restored",
-            )
-        if state["restore_phase"] == "checkout-permissions-restored":
-            self._transition(
-                state,
-                "restore_phase",
                 "files-restoring",
                 "restore:files-restoring",
             )
@@ -3746,6 +3746,24 @@ class LegacyTakeover:
                 "restore:worker-unit-restored",
             )
         if state["restore_phase"] == "worker-unit-restored":
+            self._transition(
+                state,
+                "restore_phase",
+                "checkout-permissions-restore-intent",
+                "restore:checkout-permissions-restore-intent",
+            )
+        if (
+            state["restore_phase"]
+            == "checkout-permissions-restore-intent"
+        ):
+            self._restore_checkout_permissions(state)
+            self._transition(
+                state,
+                "restore_phase",
+                "checkout-permissions-restored",
+                "restore:checkout-permissions-restored",
+            )
+        if state["restore_phase"] == "checkout-permissions-restored":
             self._transition(
                 state,
                 "restore_phase",
