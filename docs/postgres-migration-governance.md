@@ -179,8 +179,10 @@ dump plus table/schema archives in a mode-0700 audit directory, fsyncs each
 file and every newly created directory entry before recording an audit
 manifest, records a
 canonical row and structure digest (columns, indexes, constraints, and triggers)
-for the reviewed 9 rows (7 completed, 2 failed), and restores the full dump into
-an isolated verification database. A pre-existing verification database may be
+for every PolyTAO business row present after the maintenance-window drain and
+active-job lock; row totals and per-status counts are sealed dynamically rather
+than fixed in code. It then restores the full dump into an isolated verification
+database. A pre-existing verification database may be
 cleaned only when a mode-0600 marker binds its exact name to the current operation
 ID and immutable source SHA and proves the database was absent before the
 create intent. A crash after `createdb` but before the marker advances to

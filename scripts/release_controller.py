@@ -8286,8 +8286,10 @@ class ReleaseController:
 class PolytaoContractMaintenance:
     """Execute the one reviewed destructive migration as a recoverable operation."""
 
-    EXPECTED_ROWS = 9
-    EXPECTED_STATUS_COUNTS = {"completed": 7, "failed": 2}
+    BUSINESS_RELATION = "generation.polytao_jobs"
+    BUSINESS_STATUSES = frozenset(
+        {"pending", "submitted", "running", "completed", "failed", "cancelled"}
+    )
 
     def __init__(
         self,
@@ -8357,9 +8359,11 @@ class PolytaoContractMaintenance:
                 "checksum": self.contract_record["checksum"],
                 "epoch": self.contract_record["epoch"],
             },
-            "expected_archive": {
-                "rows": self.EXPECTED_ROWS,
-                "status_counts": self.EXPECTED_STATUS_COUNTS,
+            "archive_policy": {
+                "relation": self.BUSINESS_RELATION,
+                "rows": "all-at-maintenance-window",
+                "status_counts": "dynamic",
+                "seal_after": "admission-drained-and-active-jobs-zero",
             },
             "audit_dir": str(self.audit_dir),
         }
@@ -9078,13 +9082,26 @@ class PolytaoContractMaintenance:
             "structure_counts",
         }:
             raise ReleaseError("0012 archive evidence has an invalid shape")
+        row_count = payload.get("row_count")
+        status_counts = payload.get("status_counts")
         if (
             payload.get("schema_version") != 2
-            or payload.get("row_count") != self.EXPECTED_ROWS
-            or payload.get("status_counts") != self.EXPECTED_STATUS_COUNTS
+            or isinstance(row_count, bool)
+            or not isinstance(row_count, int)
+            or row_count < 0
+            or not isinstance(status_counts, dict)
+            or any(
+                not isinstance(status, str)
+                or status not in self.BUSINESS_STATUSES
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count <= 0
+                for status, count in status_counts.items()
+            )
+            or sum(status_counts.values()) != row_count
         ):
             raise ReleaseError(
-                "0012 archive evidence differs from the reviewed 9-row history"
+                "0012 archive evidence does not seal the complete dynamic business-row set"
             )
         for key in ("rows_sha256", "schema_sha256"):
             value = payload.get(key)

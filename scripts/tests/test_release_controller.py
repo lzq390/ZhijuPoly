@@ -1478,6 +1478,58 @@ class ReleaseControllerTests(unittest.TestCase):
                 "epoch": 1,
             },
         )
+        self.assertEqual(
+            plan["archive_policy"],
+            {
+                "relation": "generation.polytao_jobs",
+                "rows": "all-at-maintenance-window",
+                "status_counts": "dynamic",
+                "seal_after": "admission-drained-and-active-jobs-zero",
+            },
+        )
+
+    def test_0012_archive_evidence_seals_dynamic_business_rows(self) -> None:
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            "contract-0012-fixture",
+            False,
+        )
+        evidence = {
+            "schema_version": 2,
+            "row_count": 37,
+            "status_counts": {
+                "completed": 20,
+                "failed": 7,
+                "cancelled": 10,
+            },
+            "rows_sha256": "a" * 64,
+            "schema_sha256": "b" * 64,
+            "structure_counts": {
+                "columns": 1,
+                "indexes": 1,
+                "constraints": 1,
+                "triggers": 0,
+            },
+        }
+
+        self.assertEqual(maintenance._validate_archive_evidence(evidence), evidence)
+
+        incomplete = json.loads(json.dumps(evidence))
+        incomplete["status_counts"]["completed"] = 19
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "complete dynamic business-row set",
+        ):
+            maintenance._validate_archive_evidence(incomplete)
+
+        unknown_status = json.loads(json.dumps(evidence))
+        unknown_status["status_counts"] = {"completed": 36, "unexpected": 1}
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "complete dynamic business-row set",
+        ):
+            maintenance._validate_archive_evidence(unknown_status)
 
     def test_0012_maintenance_rejects_name_only_release_manifest(self) -> None:
         with self.assertRaisesRegex(release_controller.ReleaseError, "V2 release manifest"):
