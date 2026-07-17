@@ -5,6 +5,7 @@ import importlib.util
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -869,6 +870,169 @@ class AssetBootstrapTests(unittest.TestCase):
             self.git(root, "update-index", "--skip-worktree", "tracked.txt")
             with self.assertRaisesRegex(assets.AssetError, "hidden index state"):
                 assets.inspect_byteff2_checkout(root)
+
+    def test_staging_cleanup_unlinks_symlink_without_chmod_outside_target(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            outside = workspace / "outside"
+            outside.mkdir()
+            outside_file = outside / "keep.txt"
+            outside_file.write_text("keep\n", encoding="utf-8")
+            outside_file.chmod(0o444)
+            outside.chmod(0o555)
+            staging = workspace / ".asset-release-v2.interrupted"
+            staging.mkdir(mode=0o700)
+            (staging / "escape").symlink_to(outside, target_is_directory=True)
+            nested = staging / "nested"
+            nested.mkdir(mode=0o700)
+            (nested / "temporary.bin").write_bytes(b"temporary")
+
+            assets.remove_private_staging_tree(staging)
+
+            self.assertFalse(staging.exists())
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o555)
+            self.assertEqual(stat.S_IMODE(outside_file.stat().st_mode), 0o444)
+            self.assertEqual(outside_file.read_text(encoding="utf-8"), "keep\n")
+
+    def test_staging_cleanup_rejects_special_file(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            staging = Path(raw) / ".asset-release-v2.interrupted"
+            staging.mkdir(mode=0o700)
+            os.mkfifo(staging / "unexpected.fifo", mode=0o600)
+
+            with self.assertRaisesRegex(assets.AssetError, "special file"):
+                assets.remove_private_staging_tree(staging)
+
+            self.assertTrue(staging.exists())
+            self.assertTrue((staging / "unexpected.fifo").exists())
+
+    def test_asset_store_lock_rejects_concurrent_builder(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            runtime = Path(raw)
+            runtime.chmod(0o700)
+            with mock.patch.dict(
+                os.environ,
+                {"XDG_RUNTIME_DIR": str(runtime)},
+                clear=False,
+            ):
+                with assets.asset_store_lock():
+                    with self.assertRaisesRegex(
+                        assets.AssetError,
+                        "another schema-v2 asset build is active",
+                    ):
+                        with assets.asset_store_lock():
+                            self.fail("concurrent builder unexpectedly acquired lock")
+
+    def test_read_only_sealing_rejects_symlink_without_chmod_target(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            outside = workspace / "outside"
+            outside.mkdir()
+            outside.chmod(0o555)
+            staging = workspace / ".asset-release-v2.seal"
+            staging.mkdir(mode=0o700)
+            (staging / "escape").symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaisesRegex(assets.AssetError, "symlink"):
+                assets.make_read_only(staging)
+
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o555)
+
+    def test_read_only_sealing_rejects_file_to_symlink_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            outside = workspace / "outside.bin"
+            outside.write_bytes(b"outside")
+            outside.chmod(0o444)
+            staging = workspace / ".asset-release-v2.race"
+            staging.mkdir(mode=0o700)
+            (staging / "asset.bin").write_bytes(b"staging")
+            original_open = assets._open_verified_regular
+            swapped = False
+
+            def swap_before_open(
+                name: str,
+                *,
+                directory_fd: int,
+                expected_uid: int,
+            ) -> tuple[int, os.stat_result]:
+                nonlocal swapped
+                if name == "asset.bin" and not swapped:
+                    swapped = True
+                    os.unlink(name, dir_fd=directory_fd)
+                    os.symlink(outside, name, dir_fd=directory_fd)
+                return original_open(
+                    name,
+                    directory_fd=directory_fd,
+                    expected_uid=expected_uid,
+                )
+
+            with mock.patch.object(
+                assets,
+                "_open_verified_regular",
+                side_effect=swap_before_open,
+            ):
+                with self.assertRaisesRegex(assets.AssetError, "unsafe"):
+                    assets.make_read_only(staging)
+
+            self.assertTrue(swapped)
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o444)
+            self.assertEqual(outside.read_bytes(), b"outside")
+
+    def test_existing_release_requires_exact_sealed_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            release = Path(raw) / ".asset-release-v2.fixture"
+            release.mkdir(mode=0o700)
+            manifest_assets: dict[str, list[dict[str, object]]] = {}
+            for tree_name in assets.ASSET_KEYS:
+                tree = release / tree_name
+                tree.mkdir()
+                (tree / "asset.bin").write_bytes(tree_name.encode("ascii"))
+                manifest_assets[tree_name] = assets.inspect_tree(
+                    tree,
+                    hash_files=True,
+                )
+            manifest = {
+                "schema_version": 2,
+                "assets": manifest_assets,
+            }
+            payload = assets.canonical(manifest)
+            (release / "ASSET-MANIFEST.json").write_bytes(payload)
+            digest = hashlib.sha256(payload).hexdigest()
+            assets.make_read_only(release)
+            assets.validate_existing_release(
+                release,
+                expected_manifest=manifest,
+                expected_digest=digest,
+            )
+
+            model = release / "model"
+            model.chmod(0o700)
+            extra = model / "empty-extra"
+            extra.mkdir(mode=0o500)
+            model.chmod(0o500)
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "unmanifested entries",
+            ):
+                assets.validate_existing_release(
+                    release,
+                    expected_manifest=manifest,
+                    expected_digest=digest,
+                )
+            model.chmod(0o700)
+            extra.rmdir()
+            file_path = model / "asset.bin"
+            file_path.chmod(0o440)
+            model.chmod(0o500)
+            with self.assertRaisesRegex(assets.AssetError, "sealed asset file"):
+                assets.validate_existing_release(
+                    release,
+                    expected_manifest=manifest,
+                    expected_digest=digest,
+                )
 
 
 if __name__ == "__main__":

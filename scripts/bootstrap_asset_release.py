@@ -975,52 +975,422 @@ def load_verified_predecessor(
 
 
 def _fsync_path(path: Path, *, directory: bool) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    try:
+        path_metadata = path.lstat()
+    except OSError as exc:
+        raise AssetError(f"cannot inspect path before fsync: {path}") from exc
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     if directory:
         flags |= getattr(os, "O_DIRECTORY", 0)
-    descriptor = os.open(path, flags)
     try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise AssetError(f"cannot open path safely for fsync: {path}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            (directory and not stat.S_ISDIR(metadata.st_mode))
+            or (not directory and not stat.S_ISREG(metadata.st_mode))
+            or _stat_identity(metadata) != _stat_identity(path_metadata)
+        ):
+            raise AssetError(f"path changed before fsync: {path}")
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
 
 
+def _stat_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _open_verified_directory(
+    path: str | Path,
+    *,
+    directory_fd: int | None = None,
+    expected_uid: int | None = None,
+) -> tuple[int, os.stat_result]:
+    try:
+        path_metadata = os.stat(
+            path,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+    except OSError as exc:
+        raise AssetError(f"asset directory is unavailable or unsafe: {path}") from exc
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or _stat_identity(metadata) != _stat_identity(path_metadata)
+        or expected_uid is not None
+        and metadata.st_uid != expected_uid
+    ):
+        os.close(descriptor)
+        raise AssetError(f"asset directory changed or is unsafe: {path}")
+    return descriptor, metadata
+
+
+def _open_verified_regular(
+    name: str,
+    *,
+    directory_fd: int,
+    expected_uid: int,
+) -> tuple[int, os.stat_result]:
+    try:
+        path_metadata = os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+    except OSError as exc:
+        raise AssetError(f"asset file is unavailable or unsafe: {name}") from exc
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != expected_uid
+        or metadata.st_nlink != 1
+        or _stat_identity(metadata) != _stat_identity(path_metadata)
+    ):
+        os.close(descriptor)
+        raise AssetError(f"asset file changed or is unsafe: {name}")
+    return descriptor, metadata
+
+
+def _fsync_tree_descriptor(
+    directory_fd: int,
+    *,
+    display: Path,
+    expected_uid: int,
+) -> None:
+    for name in sorted(os.listdir(directory_fd)):
+        try:
+            metadata = os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise AssetError(f"asset staging entry is unavailable: {display / name}") from exc
+        if stat.S_ISDIR(metadata.st_mode):
+            child_fd, child_metadata = _open_verified_directory(
+                name,
+                directory_fd=directory_fd,
+                expected_uid=expected_uid,
+            )
+            try:
+                if _stat_identity(child_metadata) != _stat_identity(metadata):
+                    raise AssetError(
+                        f"asset staging directory changed: {display / name}"
+                    )
+                _fsync_tree_descriptor(
+                    child_fd,
+                    display=display / name,
+                    expected_uid=expected_uid,
+                )
+            finally:
+                os.close(child_fd)
+        elif stat.S_ISREG(metadata.st_mode):
+            file_fd, file_metadata = _open_verified_regular(
+                name,
+                directory_fd=directory_fd,
+                expected_uid=expected_uid,
+            )
+            try:
+                if _stat_identity(file_metadata) != _stat_identity(metadata):
+                    raise AssetError(f"asset staging file changed: {display / name}")
+                os.fsync(file_fd)
+            finally:
+                os.close(file_fd)
+        else:
+            raise AssetError(
+                f"asset staging contains a symlink or special file: {display / name}"
+            )
+    os.fsync(directory_fd)
+
+
 def fsync_tree(root: Path) -> None:
-    directories: list[Path] = []
-    for current, child_directories, files in os.walk(root, followlinks=False):
-        current_path = Path(current)
-        directories.append(current_path)
-        for name in files:
-            path = current_path / name
-            if path.is_symlink() or not path.is_file():
-                raise AssetError(f"asset staging contains an unsafe file: {path}")
-            _fsync_path(path, directory=False)
-        for name in child_directories:
-            path = current_path / name
-            if path.is_symlink():
-                raise AssetError(f"asset staging contains an unsafe directory: {path}")
-    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
-        _fsync_path(directory, directory=True)
+    expected_uid = os.geteuid()
+    descriptor, metadata = _open_verified_directory(
+        root,
+        expected_uid=expected_uid,
+    )
+    try:
+        _fsync_tree_descriptor(
+            descriptor,
+            display=root,
+            expected_uid=expected_uid,
+        )
+        try:
+            final_path = root.lstat()
+        except OSError as exc:
+            raise AssetError("asset staging root disappeared during fsync") from exc
+        if _stat_identity(os.fstat(descriptor)) != _stat_identity(final_path):
+            raise AssetError("asset staging root changed during fsync")
+    finally:
+        os.close(descriptor)
+
+
+def _seal_tree_descriptor(
+    directory_fd: int,
+    *,
+    display: Path,
+    expected_uid: int,
+) -> None:
+    for name in sorted(os.listdir(directory_fd)):
+        try:
+            metadata = os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise AssetError(f"asset staging entry is unavailable: {display / name}") from exc
+        if stat.S_ISDIR(metadata.st_mode):
+            child_fd, child_metadata = _open_verified_directory(
+                name,
+                directory_fd=directory_fd,
+                expected_uid=expected_uid,
+            )
+            try:
+                if _stat_identity(child_metadata) != _stat_identity(metadata):
+                    raise AssetError(
+                        f"asset staging directory changed: {display / name}"
+                    )
+                _seal_tree_descriptor(
+                    child_fd,
+                    display=display / name,
+                    expected_uid=expected_uid,
+                )
+            finally:
+                os.close(child_fd)
+        elif stat.S_ISREG(metadata.st_mode):
+            file_fd, file_metadata = _open_verified_regular(
+                name,
+                directory_fd=directory_fd,
+                expected_uid=expected_uid,
+            )
+            try:
+                if _stat_identity(file_metadata) != _stat_identity(metadata):
+                    raise AssetError(f"asset staging file changed: {display / name}")
+                os.fchmod(file_fd, 0o400)
+                os.fsync(file_fd)
+                if stat.S_IMODE(os.fstat(file_fd).st_mode) != 0o400:
+                    raise AssetError(
+                        f"asset staging file did not become read-only: {display / name}"
+                    )
+            finally:
+                os.close(file_fd)
+        else:
+            raise AssetError(
+                f"asset staging contains a symlink or special file: {display / name}"
+            )
+    os.fchmod(directory_fd, 0o500)
+    os.fsync(directory_fd)
 
 
 def make_read_only(root: Path) -> None:
-    for current, directories, files in os.walk(root):
-        for name in files:
-            os.chmod(Path(current) / name, 0o400)
-        for name in directories:
-            os.chmod(Path(current) / name, 0o500)
-    os.chmod(root, 0o500)
+    expected_uid = os.geteuid()
+    descriptor, metadata = _open_verified_directory(
+        root,
+        expected_uid=expected_uid,
+    )
+    try:
+        _seal_tree_descriptor(
+            descriptor,
+            display=root,
+            expected_uid=expected_uid,
+        )
+        try:
+            final_path = root.lstat()
+        except OSError as exc:
+            raise AssetError("asset staging root disappeared while sealing") from exc
+        final_metadata = os.fstat(descriptor)
+        if (
+            final_metadata.st_dev != metadata.st_dev
+            or final_metadata.st_ino != metadata.st_ino
+            or _stat_identity(final_metadata) != _stat_identity(final_path)
+            or stat.S_IMODE(final_metadata.st_mode) != 0o500
+        ):
+            raise AssetError("asset staging root changed while sealing")
+    finally:
+        os.close(descriptor)
 
 
-def make_private_writable(root: Path) -> None:
-    if root.is_symlink():
-        raise AssetError(f"refusing to recover symlink staging path: {root}")
-    for current, directories, files in os.walk(root):
-        os.chmod(current, 0o700)
-        for name in directories:
-            os.chmod(Path(current) / name, 0o700)
-        for name in files:
-            os.chmod(Path(current) / name, 0o600)
+def _remove_staging_entries(
+    directory_fd: int,
+    *,
+    display: Path,
+    expected_uid: int,
+) -> None:
+    os.fchmod(directory_fd, 0o700)
+    for name in sorted(os.listdir(directory_fd)):
+        try:
+            metadata = os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise AssetError(f"staging entry is unavailable: {display / name}") from exc
+        if stat.S_ISDIR(metadata.st_mode):
+            child_fd, child_metadata = _open_verified_directory(
+                name,
+                directory_fd=directory_fd,
+                expected_uid=expected_uid,
+            )
+            try:
+                if _stat_identity(child_metadata) != _stat_identity(metadata):
+                    raise AssetError(f"staging directory changed: {display / name}")
+                _remove_staging_entries(
+                    child_fd,
+                    display=display / name,
+                    expected_uid=expected_uid,
+                )
+                final_child_path = os.stat(
+                    name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                if (
+                    _stat_identity(os.fstat(child_fd))
+                    != _stat_identity(final_child_path)
+                    or list(os.listdir(child_fd))
+                ):
+                    raise AssetError(
+                        f"staging directory changed during removal: {display / name}"
+                    )
+                os.rmdir(name, dir_fd=directory_fd)
+            finally:
+                os.close(child_fd)
+        elif stat.S_ISREG(metadata.st_mode):
+            if metadata.st_uid != expected_uid or metadata.st_nlink != 1:
+                raise AssetError(f"staging file is unsafe: {display / name}")
+            os.unlink(name, dir_fd=directory_fd)
+        elif stat.S_ISLNK(metadata.st_mode):
+            # Unlink the directory entry itself.  Never chmod, resolve, open,
+            # or traverse a stale link left by an interrupted source copy.
+            os.unlink(name, dir_fd=directory_fd)
+        else:
+            raise AssetError(f"staging contains a special file: {display / name}")
+    os.fsync(directory_fd)
+
+
+def remove_private_staging_tree(root: Path) -> None:
+    """Delete only one owned staging tree without following any symlink."""
+
+    if not root.name.startswith(".asset-release-v2."):
+        raise AssetError(f"refusing to remove a non-staging path: {root}")
+    expected_uid = os.geteuid()
+    parent_fd, parent_metadata = _open_verified_directory(
+        root.parent,
+        expected_uid=expected_uid,
+    )
+    descriptor: int | None = None
+    try:
+        if parent_metadata.st_mode & 0o022:
+            raise AssetError("asset staging parent is writable by another principal")
+        try:
+            path_metadata = os.stat(
+                root.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise AssetError(f"asset staging path is unavailable: {root}") from exc
+        descriptor, metadata = _open_verified_directory(
+            root.name,
+            directory_fd=parent_fd,
+            expected_uid=expected_uid,
+        )
+        if (
+            _stat_identity(metadata) != _stat_identity(path_metadata)
+            or stat.S_IMODE(metadata.st_mode) not in {0o500, 0o700}
+        ):
+            raise AssetError(f"asset staging root is unsafe: {root}")
+        _remove_staging_entries(
+            descriptor,
+            display=root,
+            expected_uid=expected_uid,
+        )
+        final_path = os.stat(
+            root.name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        final_metadata = os.fstat(descriptor)
+        if (
+            final_metadata.st_dev != metadata.st_dev
+            or final_metadata.st_ino != metadata.st_ino
+            or _stat_identity(final_metadata) != _stat_identity(final_path)
+            or list(os.listdir(descriptor))
+        ):
+            raise AssetError("asset staging root changed during safe removal")
+        os.rmdir(root.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent_fd)
+
+
+def _sealed_tree_identities(root: Path) -> dict[str, tuple[int, ...]]:
+    identities: dict[str, tuple[int, ...]] = {}
+    expected_uid = os.geteuid()
+    for current, directories, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        current_metadata = current_path.lstat()
+        current_relative = current_path.relative_to(root).as_posix()
+        if (
+            not stat.S_ISDIR(current_metadata.st_mode)
+            or current_path.is_symlink()
+            or current_metadata.st_uid != expected_uid
+            or stat.S_IMODE(current_metadata.st_mode) != 0o500
+        ):
+            raise AssetError(f"sealed asset directory is unsafe: {current_path}")
+        identities[f"D:{current_relative}"] = _stat_identity(current_metadata)
+        directories.sort()
+        for name in sorted(files):
+            path = current_path / name
+            metadata = path.lstat()
+            relative = path.relative_to(root).as_posix()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or path.is_symlink()
+                or metadata.st_uid != expected_uid
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o400
+            ):
+                raise AssetError(f"sealed asset file is unsafe: {path}")
+            identities[f"F:{relative}"] = _stat_identity(metadata)
+    return identities
 
 
 def validate_existing_release(
@@ -1031,19 +1401,48 @@ def validate_existing_release(
 ) -> None:
     manifest_path = destination / "ASSET-MANIFEST.json"
     try:
+        identities_before = _sealed_tree_identities(destination)
         metadata = destination.lstat()
         manifest_metadata = manifest_path.lstat()
-        manifest_bytes = manifest_path.read_bytes()
+        manifest_descriptor = os.open(
+            manifest_path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened_manifest_metadata = os.fstat(manifest_descriptor)
+            if (
+                _stat_identity(opened_manifest_metadata)
+                != _stat_identity(manifest_metadata)
+            ):
+                raise AssetError("existing asset manifest changed before reading")
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(manifest_descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            if _stat_identity(os.fstat(manifest_descriptor)) != _stat_identity(
+                opened_manifest_metadata
+            ):
+                raise AssetError("existing asset manifest changed while reading")
+            manifest_bytes = b"".join(chunks)
+        finally:
+            os.close(manifest_descriptor)
         document = json.loads(manifest_bytes)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise AssetError("existing asset release cannot be validated") from exc
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or destination.is_symlink()
-        or metadata.st_mode & 0o222
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o500
         or not stat.S_ISREG(manifest_metadata.st_mode)
         or manifest_path.is_symlink()
-        or manifest_metadata.st_mode & 0o222
+        or manifest_metadata.st_uid != os.geteuid()
+        or manifest_metadata.st_nlink != 1
+        or stat.S_IMODE(manifest_metadata.st_mode) != 0o400
         or hashlib.sha256(manifest_bytes).hexdigest() != expected_digest
         or document != expected_manifest
         or {entry.name for entry in destination.iterdir()}
@@ -1053,13 +1452,36 @@ def validate_existing_release(
     assets = document.get("assets")
     if not isinstance(assets, dict) or set(assets) != set(ASSET_KEYS):
         raise AssetError("existing asset release inventory is invalid")
+    expected_entries = {
+        "D:.",
+        "F:ASSET-MANIFEST.json",
+        *(f"D:{tree_name}" for tree_name in ASSET_KEYS),
+    }
     for tree_name in ASSET_KEYS:
         expected = assets[tree_name]
-        if not isinstance(expected, list) or normalized_inventory(
+        if not isinstance(expected, list):
+            raise AssetError(f"existing asset release tree is invalid: {tree_name}")
+        normalized = normalized_inventory(expected, label=tree_name)
+        for record in normalized:
+            relative = Path(str(record["path"]))
+            expected_entries.add(f"F:{tree_name}/{relative.as_posix()}")
+            parent = relative.parent
+            while parent != Path("."):
+                expected_entries.add(f"D:{tree_name}/{parent.as_posix()}")
+                parent = parent.parent
+        if normalized_inventory(
             inspect_tree(destination / tree_name, hash_files=True),
             label=tree_name,
-        ) != normalized_inventory(expected, label=tree_name):
+        ) != normalized:
             raise AssetError(f"existing asset release tree is invalid: {tree_name}")
+    identities_after = _sealed_tree_identities(destination)
+    if (
+        identities_after != identities_before
+        or set(identities_after) != expected_entries
+    ):
+        raise AssetError(
+            "existing asset release changed or contains unmanifested entries"
+        )
 
 
 @contextlib.contextmanager
@@ -1211,10 +1633,10 @@ def main(argv: list[str] | None = None) -> int:
                     stale.is_symlink()
                     or not stat.S_ISDIR(metadata.st_mode)
                     or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) not in {0o500, 0o700}
                 ):
                     raise AssetError(f"stale schema-v2 staging path is unsafe: {stale}")
-                make_private_writable(stale)
-                shutil.rmtree(stale)
+                remove_private_staging_tree(stale)
             staging = Path(tempfile.mkdtemp(prefix=".asset-release-v2.", dir=releases))
             os.chmod(staging, 0o700)
             try:
@@ -1280,10 +1702,14 @@ def main(argv: list[str] | None = None) -> int:
                 fsync_tree(staging)
                 make_read_only(staging)
                 fsync_tree(staging)
+                validate_existing_release(
+                    staging,
+                    expected_manifest=manifest,
+                    expected_digest=digest,
+                )
                 destination = releases / digest
                 if destination.exists() or destination.is_symlink():
-                    make_private_writable(staging)
-                    shutil.rmtree(staging)
+                    remove_private_staging_tree(staging)
                     validate_existing_release(
                         destination,
                         expected_manifest=manifest,
@@ -1303,8 +1729,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except Exception:
                 if staging.exists():
-                    make_private_writable(staging)
-                    shutil.rmtree(staging)
+                    remove_private_staging_tree(staging)
                 raise
         print(json.dumps(plan, indent=2, sort_keys=True))
         return 0
