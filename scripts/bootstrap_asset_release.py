@@ -855,8 +855,19 @@ def validate_existing_release(
 
 
 @contextlib.contextmanager
-def asset_store_lock(releases: Path):
-    lock_path = releases / ".schema-v2-build.lock"
+def asset_store_lock():
+    runtime = Path(
+        os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.geteuid()}")
+    )
+    runtime_metadata = runtime.lstat()
+    if (
+        not stat.S_ISDIR(runtime_metadata.st_mode)
+        or runtime.is_symlink()
+        or runtime_metadata.st_uid != os.geteuid()
+        or runtime_metadata.st_mode & 0o077
+    ):
+        raise AssetError("private runtime directory for the asset build lock is unsafe")
+    lock_path = runtime / "nexpoly-schema-v2-asset-build.lock"
     descriptor = os.open(
         lock_path,
         os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
@@ -961,7 +972,7 @@ def main(argv: list[str] | None = None) -> int:
                 or metadata.st_mode & 0o022
             ):
                 raise AssetError(f"{label} directory is unsafe")
-        with asset_store_lock(releases):
+        with asset_store_lock():
             for stale in releases.glob(".asset-release-v2.*"):
                 metadata = stale.lstat()
                 if (
