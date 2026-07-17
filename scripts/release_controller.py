@@ -54,7 +54,7 @@ PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
 ASSET_RELEASES_ROOT = Path("/data/lzq/nexpoly-assets/releases")
 MAIN_REPOSITORY_URL = "https://github.com/lzq390/ZhijuPoly.git"
 SCHEMA_V2_ASSET_MANIFEST_DIGEST = (
-    "sha256:15600f50c9aa720e8ae72352191f60b9e9f013613f152fc8df317ff9ee599d1e"
+    "sha256:6206954724efe3d98b0122afcfc5b4aa5b04c1ca3601a56f1735fdd30603c951"
 )
 SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST = (
     "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
@@ -2886,9 +2886,13 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
             schema_version == 2
             and set(document) == provenance_schema_v2_fields
         ):
+            canonical_records = sorted(
+                records,
+                key=lambda record: str(record["path"]),
+            )
             inventory_payload = (
                 json.dumps(
-                    {"files": records},
+                    {"files": canonical_records},
                     sort_keys=True,
                     separators=(",", ":"),
                 )

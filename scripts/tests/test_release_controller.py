@@ -576,11 +576,19 @@ class ReleaseControllerTests(unittest.TestCase):
         release = self.make_asset_release()
         manifest_path = release / "ASSET-MANIFEST.json"
         document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        document["assets"]["byteff2"] = list(
+            reversed(document["assets"]["byteff2"])
+        )
         tree_digests = {
             tree: release_controller.sha256_bytes(
                 (
                     json.dumps(
-                        {"files": document["assets"][tree]},
+                        {
+                            "files": sorted(
+                                document["assets"][tree],
+                                key=lambda record: str(record["path"]),
+                            )
+                        },
                         sort_keys=True,
                         separators=(",", ":"),
                     )
