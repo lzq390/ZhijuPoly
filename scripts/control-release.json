@@ -13,6 +13,10 @@
       "kind": "python",
       "file": "pull_deploy_controller.py"
     },
+    "site-helper-readiness": {
+      "kind": "python",
+      "file": "site_helper_contracts.py"
+    },
     "contract-0012": {
       "kind": "python",
       "file": "pull_contract_0012.py"
@@ -57,6 +61,11 @@
     {
       "name": "release_controller.py",
       "source": "scripts/release_controller.py",
+      "mode": 448
+    },
+    {
+      "name": "site_helper_contracts.py",
+      "source": "scripts/site_helper_contracts.py",
       "mode": 448
     },
     {

@@ -114,14 +114,29 @@ bootstrap executables are mode `0700`:
   `config/bootstrap-legacy-runtime-status`,
   `config/bootstrap-legacy-runtime-resume-unchanged`, and
   `config/bootstrap-legacy-runtime-restore`.
+- the read-only `config/contract-0012-external-database-audit` helper used to
+  enumerate the independent dev/health database stacks.
 
-All eight executables are fixed-name, deploy-user-owned mode `0700` files. The
-deployment descriptor seals every hash. The status helper is read-only; the
-unchanged-resume helper may restore ingress only and must prove the Backend and
-Worker processes did not restart; the full restore helper is reserved for a
-runtime already stopped or partially replaced. Each helper must be idempotent
-across a lost response. There are no configurable shell-command selector
-variables.
+All nine executables are fixed-name, deploy-user-owned mode `0700` files. The
+deployment descriptor seals every bootstrap hash and the 0012 adapter
+independently seals its audit-helper hash. The status and database-audit helpers
+are read-only; the unchanged-resume helper may restore ingress only and must
+prove the Backend and Worker processes did not restart; the full restore helper
+is reserved for a runtime already stopped or partially replaced. Each helper
+must be idempotent across a lost response. There are no configurable
+shell-command selector variables.
+
+The installed content-addressed control release exposes a non-executing
+readiness check. It verifies owner/mode/path identity and hashes every helper,
+but deliberately does not invoke recovery helpers:
+
+```bash
+/data/lzq/gith/nexpoly-runtime/bin/control_runtime_selector.py \
+  run site-helper-readiness readiness
+```
+
+Captured site-helper JSON can be validated separately with
+`site-helper-readiness validate --helper <fixed-name> --input <private-json>`.
 
 The initial controller must be installed from a clean temporary standalone
 clone at the reviewed base SHA/tree, beneath an owner-controlled directory that
@@ -307,10 +322,10 @@ must never infer or execute a pending contract. See
 `docs/postgres-migration-governance.md`.
 
 The first governed deployment must additionally prove the legacy runtime
-identity and install and seal all eight bootstrap executables listed above. If
-the production ledger, registered database inventory, asset identity or
-rollback evidence differs from the reviewed plan, the operation stops before
-mutation.
+identity and install and seal all eight bootstrap executables plus the
+read-only external-database audit helper listed above. If the production
+ledger, registered database inventory, asset identity or rollback evidence
+differs from the reviewed plan, the operation stops before mutation.
 
 > **First-deployment stop condition:** control bootstrap alone is permitted.
 > Until the dedicated reconciliation control has backed up, restore-tested and
