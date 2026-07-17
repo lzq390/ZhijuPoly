@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -17,13 +19,14 @@ import tempfile
 from typing import Any
 
 
-PRODUCTION_SOURCE = Path("/data/lzq/gith/nexpoly")
 ASSET_STORE = Path("/data/lzq/nexpoly-assets")
-BYTEFF2_SOURCE = Path(
-    "/data/lzq/nexpoly-assets/sources/byteff2-v1.0.0"
+PREDECESSOR_ASSET_DIGEST = (
+    "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
 )
-MAPPINGS = (("model", "model"), ("database", "database"), ("backend/data", "backend-data"))
+UNCHANGED_ASSET_TREES = ("model", "database", "backend-data")
+ASSET_KEYS = (*UNCHANGED_ASSET_TREES, "byteff2")
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+SHA256_DIGEST = re.compile(r"^sha256:([0-9a-f]{64})$")
 BYTEFF2_GIT_SOURCE = "https://github.com/ByteDance-Seed/byteff2.git"
 BYTEFF2_GIT_REVISION = "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2"
 BYTEFF2_RUNTIME_REQUIRED_FILES = (
@@ -51,6 +54,9 @@ BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS = {
         "trained_models/fftrainer_config_in_use.yaml"
     ),
     "byteff2/trained_models/optimal.pt": "trained_models/optimal.pt",
+}
+BYTEFF2_MATERIALIZED_SYMLINKS = {
+    "bytemol": "submodules/bytemol/bytemol/",
 }
 
 
@@ -581,12 +587,46 @@ def copy_verified_byteff2(
     before_commit, before_submodules = inspect_byteff2_checkout(source)
     if before_commit != expected_commit or before_submodules != expected_submodules:
         raise AssetError("ByteFF2 checkout identity changed before copying")
-    copy_verified_tree(source, destination, ignore_git_metadata=True)
+    for relative, expected_target in BYTEFF2_MATERIALIZED_SYMLINKS.items():
+        entries = _git_index_entries(source, relative)
+        if len(entries) != 1:
+            raise AssetError(f"audited ByteFF2 symlink is not tracked: {relative}")
+        metadata, raw_path = entries[0].split(b"\t", 1)
+        mode, _sha, stage = metadata.split(b" ", 2)
+        path = source / relative
+        if (
+            raw_path.decode("utf-8") != relative
+            or mode != b"120000"
+            or stage != b"0"
+            or not path.is_symlink()
+            or os.readlink(path) != expected_target
+        ):
+            raise AssetError(f"audited ByteFF2 symlink identity differs: {relative}")
+        target = (path.parent / expected_target).resolve()
+        try:
+            target.relative_to(source.resolve())
+        except ValueError as exc:
+            raise AssetError(f"audited ByteFF2 symlink escapes checkout: {relative}") from exc
+        if not target.is_dir() or target.is_symlink():
+            raise AssetError(f"audited ByteFF2 symlink target is unsafe: {relative}")
+    copy_tree(source, destination)
     after_commit, after_submodules = inspect_byteff2_checkout(source)
     if after_commit != expected_commit or after_submodules != expected_submodules:
         raise AssetError("ByteFF2 checkout identity changed while copying")
     remove_git_metadata(destination)
+    for relative, expected_target in BYTEFF2_MATERIALIZED_SYMLINKS.items():
+        link = destination / relative
+        if not link.is_symlink() or os.readlink(link) != expected_target:
+            raise AssetError(f"copied ByteFF2 symlink identity differs: {relative}")
+        target = (link.parent / expected_target).resolve()
+        try:
+            target.relative_to(destination.resolve())
+        except ValueError as exc:
+            raise AssetError(f"copied ByteFF2 symlink escapes release: {relative}") from exc
+        link.unlink()
+        copy_tree(target, link)
     (destination / "BYTEFF2-COMMIT").write_text(expected_commit + "\n", encoding="ascii")
+    inspect_tree(destination, hash_files=False)
     inspect_required_byteff2_runtime_files(destination, require_git_tracking=False)
     inspect_byteff2_audited_overlays(destination, require_git_ignored=False)
 
@@ -596,6 +636,8 @@ def build_manifest(
     *,
     byteff2_commit: str,
     byteff2_submodules: dict[str, str],
+    predecessor_digest: str,
+    predecessor_tree_digests: dict[str, str],
 ) -> dict[str, Any]:
     if not FULL_SHA.fullmatch(byteff2_commit):
         raise AssetError("ByteFF2 root does not resolve to a full commit SHA")
@@ -605,8 +647,15 @@ def build_manifest(
     if not isinstance(byteff2_assets, list):
         raise AssetError("asset manifest must contain a ByteFF2 inventory")
     validate_byteff2_runtime_manifest(byteff2_assets)
+    if predecessor_digest != PREDECESSOR_ASSET_DIGEST:
+        raise AssetError("asset manifest predecessor is not the approved schema-v1 release")
+    if set(predecessor_tree_digests) != set(UNCHANGED_ASSET_TREES):
+        raise AssetError("asset manifest predecessor tree evidence is incomplete")
     return {
         "schema_version": 2,
+        "predecessor_asset_digest": predecessor_digest,
+        "changed_asset_trees": ["byteff2"],
+        "unchanged_asset_tree_digests": dict(sorted(predecessor_tree_digests.items())),
         "byteff2_commit": byteff2_commit,
         "byteff2_submodules": dict(sorted(byteff2_submodules.items())),
         "byteff2_source": byteff2_source_manifest(byteff2_commit),
@@ -619,45 +668,270 @@ def canonical(document: dict[str, Any]) -> bytes:
     return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
+def require_sha256_digest(value: str, *, label: str) -> str:
+    match = SHA256_DIGEST.fullmatch(value)
+    if match is None:
+        raise AssetError(f"{label} must be a full sha256 digest")
+    return match.group(1)
+
+
+def tree_inventory_digest(records: list[dict[str, Any]]) -> str:
+    return "sha256:" + hashlib.sha256(canonical({"files": records})).hexdigest()
+
+
+def normalized_inventory(
+    records: list[dict[str, Any]],
+    *,
+    label: str,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    paths: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict) or set(record) != {"path", "size", "sha256"}:
+            raise AssetError(f"{label} inventory record is invalid")
+        path = record.get("path")
+        size = record.get("size")
+        digest = record.get("sha256")
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or ".." in Path(path).parts
+            or path in paths
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size < 0
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            raise AssetError(f"{label} inventory record is invalid")
+        paths.add(path)
+        normalized.append({"path": path, "size": size, "sha256": digest})
+    return sorted(normalized, key=lambda record: str(record["path"]))
+
+
+def load_verified_predecessor(
+    store: Path,
+    predecessor_digest: str,
+) -> tuple[Path, dict[str, Any], dict[str, list[dict[str, Any]]], dict[str, str]]:
+    digest = require_sha256_digest(
+        predecessor_digest,
+        label="predecessor asset digest",
+    )
+    if predecessor_digest != PREDECESSOR_ASSET_DIGEST:
+        raise AssetError("only the approved schema-v1 predecessor may be upgraded")
+    predecessor = store / "releases" / digest
+    if (
+        not predecessor.is_dir()
+        or predecessor.is_symlink()
+        or predecessor.resolve().parent != (store / "releases").resolve()
+    ):
+        raise AssetError("approved schema-v1 predecessor release is unavailable")
+    manifest_path = predecessor / "ASSET-MANIFEST.json"
+    try:
+        manifest_metadata = manifest_path.lstat()
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise AssetError("schema-v1 predecessor manifest is unavailable") from exc
+    if (
+        not stat.S_ISREG(manifest_metadata.st_mode)
+        or manifest_path.is_symlink()
+        or hashlib.sha256(manifest_bytes).hexdigest() != digest
+        or canonical(manifest) != manifest_bytes
+        or not isinstance(manifest, dict)
+        or set(manifest)
+        != {"schema_version", "byteff2_commit", "byteff2_submodules", "assets"}
+        or manifest.get("schema_version") != 1
+    ):
+        raise AssetError("schema-v1 predecessor manifest identity is invalid")
+    manifest_assets = manifest.get("assets")
+    if not isinstance(manifest_assets, dict) or set(manifest_assets) != set(ASSET_KEYS):
+        raise AssetError("schema-v1 predecessor asset set is invalid")
+    root_entries = {entry.name for entry in predecessor.iterdir()}
+    if root_entries != set(ASSET_KEYS) | {"ASSET-MANIFEST.json"}:
+        raise AssetError("schema-v1 predecessor has unmanifested entries")
+    verified: dict[str, list[dict[str, Any]]] = {}
+    for tree_name in ASSET_KEYS:
+        expected = manifest_assets.get(tree_name)
+        if not isinstance(expected, list):
+            raise AssetError(f"schema-v1 predecessor inventory is invalid: {tree_name}")
+        actual = inspect_tree(predecessor / tree_name, hash_files=True)
+        if normalized_inventory(actual, label=tree_name) != normalized_inventory(
+            expected,
+            label=tree_name,
+        ):
+            raise AssetError(f"schema-v1 predecessor tree differs from manifest: {tree_name}")
+        verified[tree_name] = [dict(record) for record in expected]
+    tree_digests = {
+        tree_name: tree_inventory_digest(verified[tree_name])
+        for tree_name in UNCHANGED_ASSET_TREES
+    }
+    return predecessor, manifest, verified, tree_digests
+
+
+def _fsync_path(path: Path, *, directory: bool) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if directory:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def fsync_tree(root: Path) -> None:
+    directories: list[Path] = []
+    for current, child_directories, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        directories.append(current_path)
+        for name in files:
+            path = current_path / name
+            if path.is_symlink() or not path.is_file():
+                raise AssetError(f"asset staging contains an unsafe file: {path}")
+            _fsync_path(path, directory=False)
+        for name in child_directories:
+            path = current_path / name
+            if path.is_symlink():
+                raise AssetError(f"asset staging contains an unsafe directory: {path}")
+    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+        _fsync_path(directory, directory=True)
+
+
 def make_read_only(root: Path) -> None:
     for current, directories, files in os.walk(root):
         for name in files:
-            os.chmod(Path(current) / name, 0o444)
+            os.chmod(Path(current) / name, 0o400)
         for name in directories:
-            os.chmod(Path(current) / name, 0o555)
-    os.chmod(root, 0o555)
+            os.chmod(Path(current) / name, 0o500)
+    os.chmod(root, 0o500)
+
+
+def make_private_writable(root: Path) -> None:
+    if root.is_symlink():
+        raise AssetError(f"refusing to recover symlink staging path: {root}")
+    for current, directories, files in os.walk(root):
+        os.chmod(current, 0o700)
+        for name in directories:
+            os.chmod(Path(current) / name, 0o700)
+        for name in files:
+            os.chmod(Path(current) / name, 0o600)
+
+
+def validate_existing_release(
+    destination: Path,
+    *,
+    expected_manifest: dict[str, Any],
+    expected_digest: str,
+) -> None:
+    manifest_path = destination / "ASSET-MANIFEST.json"
+    try:
+        metadata = destination.lstat()
+        manifest_metadata = manifest_path.lstat()
+        manifest_bytes = manifest_path.read_bytes()
+        document = json.loads(manifest_bytes)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise AssetError("existing asset release cannot be validated") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or destination.is_symlink()
+        or metadata.st_mode & 0o222
+        or not stat.S_ISREG(manifest_metadata.st_mode)
+        or manifest_path.is_symlink()
+        or manifest_metadata.st_mode & 0o222
+        or hashlib.sha256(manifest_bytes).hexdigest() != expected_digest
+        or document != expected_manifest
+        or {entry.name for entry in destination.iterdir()}
+        != set(ASSET_KEYS) | {"ASSET-MANIFEST.json"}
+    ):
+        raise AssetError("existing asset release conflicts with the requested release")
+    assets = document.get("assets")
+    if not isinstance(assets, dict) or set(assets) != set(ASSET_KEYS):
+        raise AssetError("existing asset release inventory is invalid")
+    for tree_name in ASSET_KEYS:
+        if inspect_tree(destination / tree_name, hash_files=True) != assets[tree_name]:
+            raise AssetError(f"existing asset release tree is invalid: {tree_name}")
+
+
+@contextlib.contextmanager
+def asset_store_lock(releases: Path):
+    lock_path = releases / ".schema-v2-build.lock"
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise AssetError("schema-v2 asset build lock is unsafe")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AssetError("another schema-v2 asset build is active") from exc
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-root", default=str(PRODUCTION_SOURCE))
     parser.add_argument("--asset-store", default=str(ASSET_STORE))
-    parser.add_argument("--byteff2-root", default=str(BYTEFF2_SOURCE))
+    parser.add_argument("--predecessor-digest", default=PREDECESSOR_ASSET_DIGEST)
+    parser.add_argument("--byteff2-root", required=True)
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--confirm-source-root")
     parser.add_argument("--confirm-asset-store")
+    parser.add_argument("--confirm-predecessor-digest")
     parser.add_argument("--confirm-byteff2-root")
     args = parser.parse_args(argv)
-    source = Path(args.source_root).resolve()
     store = Path(args.asset_store).resolve()
     byteff2 = Path(args.byteff2_root).resolve()
     try:
-        summary: dict[str, Any] = {}
-        sources = [(source / source_name, target_name) for source_name, target_name in MAPPINGS]
-        sources.append((byteff2, "byteff2"))
+        predecessor, predecessor_manifest, predecessor_assets, tree_digests = (
+            load_verified_predecessor(store, args.predecessor_digest)
+        )
         byteff2_commit, byteff2_submodules = inspect_byteff2_checkout(byteff2)
         require_approved_byteff2_revision(byteff2_commit)
-        for source_path, target_name in sources:
-            records = inspect_tree(
-                source_path,
-                hash_files=False,
-                ignore_git_metadata=target_name == "byteff2",
-            )
-            summary[target_name] = {"files": len(records), "bytes": sum(record["size"] for record in records)}
+        byteff2_tracked_entries = [
+            entry
+            for entry in subprocess.run(
+                ["git", "-C", str(byteff2), "ls-files", "-z"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ).stdout.split(b"\0")
+            if entry
+        ]
+        summary = {
+            tree_name: {
+                "files": len(predecessor_assets[tree_name]),
+                "bytes": sum(
+                    int(record["size"]) for record in predecessor_assets[tree_name]
+                ),
+                "source": "predecessor",
+            }
+            for tree_name in UNCHANGED_ASSET_TREES
+        }
+        summary["byteff2"] = {
+            "tracked_entries": len(byteff2_tracked_entries),
+            "audited_overlay_bytes": sum(
+                size for _path, size, _digest in BYTEFF2_AUDITED_OVERLAY_FILES
+            ),
+            "materialized_symlinks": dict(BYTEFF2_MATERIALIZED_SYMLINKS),
+            "source": "official-clean-checkout",
+        }
         plan = {
-            "action": "bootstrap-asset-release", "apply": args.apply,
-            "source_root": str(source), "byteff2_root": str(byteff2),
-            "asset_store": str(store), "byteff2_commit": byteff2_commit,
+            "action": "bootstrap-schema-v2-asset-release",
+            "apply": args.apply,
+            "predecessor_asset_digest": args.predecessor_digest,
+            "predecessor_release": str(predecessor),
+            "predecessor_byteff2_commit": predecessor_manifest["byteff2_commit"],
+            "unchanged_asset_tree_digests": tree_digests,
+            "changed_asset_trees": ["byteff2"],
+            "byteff2_root": str(byteff2),
+            "asset_store": str(store),
+            "byteff2_commit": byteff2_commit,
             "byteff2_source": byteff2_source_manifest(byteff2_commit),
             "byteff2_submodules": byteff2_submodules,
             "byteff2_audited_overlays": byteff2_audited_overlays_manifest(),
@@ -667,57 +941,125 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(plan, indent=2, sort_keys=True))
             return 0
         if (
-            source != PRODUCTION_SOURCE or store != ASSET_STORE or byteff2 != BYTEFF2_SOURCE
-            or args.confirm_source_root != str(PRODUCTION_SOURCE)
+            store != ASSET_STORE
+            or args.predecessor_digest != PREDECESSOR_ASSET_DIGEST
             or args.confirm_asset_store != str(ASSET_STORE)
-            or args.confirm_byteff2_root != str(BYTEFF2_SOURCE)
+            or args.confirm_predecessor_digest != PREDECESSOR_ASSET_DIGEST
+            or args.confirm_byteff2_root != str(byteff2)
         ):
-            raise AssetError("apply requires exact production, ByteFF2, and asset-store paths plus all confirmations")
-        releases = store / "releases"
-        releases.mkdir(parents=True, exist_ok=True)
-        os.chmod(store, 0o755)
-        os.chmod(releases, 0o755)
-        staging = Path(tempfile.mkdtemp(prefix=".asset-release.", dir=releases))
-        try:
-            for source_path, target_name in sources:
-                if target_name == "byteff2":
-                    copy_verified_byteff2(
-                        source_path,
-                        staging / target_name,
-                        expected_commit=byteff2_commit,
-                        expected_submodules=byteff2_submodules,
-                    )
-                else:
-                    copy_verified_tree(source_path, staging / target_name)
-            assets: dict[str, Any] = {}
-            for _, target_name in sources:
-                assets[target_name] = inspect_tree(staging / target_name, hash_files=True)
-            manifest = build_manifest(
-                assets,
-                byteff2_commit=byteff2_commit,
-                byteff2_submodules=byteff2_submodules,
+            raise AssetError(
+                "apply requires the exact asset store, approved predecessor, "
+                "clean ByteFF2 path, and all confirmations"
             )
-            manifest_bytes = canonical(manifest)
-            digest = hashlib.sha256(manifest_bytes).hexdigest()
-            manifest_path = staging / "ASSET-MANIFEST.json"
-            manifest_path.write_bytes(manifest_bytes)
-            destination = releases / digest
-            if destination.exists():
-                raise AssetError(f"asset release already exists: {destination}")
-            make_read_only(staging)
-            staging.replace(destination)
-            plan.update({"status": "created", "asset_digest": f"sha256:{digest}", "release_path": str(destination)})
-        except Exception:
-            if staging.exists():
-                # make_read_only may already have run before an atomic rename failed.
-                for current, directories, files in os.walk(staging):
-                    os.chmod(current, 0o700)
-                    for name in directories:
-                        os.chmod(Path(current) / name, 0o700)
-                    for name in files:
-                        os.chmod(Path(current) / name, 0o600)
-                shutil.rmtree(staging)
-            raise
+        releases = store / "releases"
+        for path, label in ((store, "asset store"), (releases, "asset releases")):
+            metadata = path.lstat()
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or path.is_symlink()
+                or metadata.st_uid not in {0, os.geteuid()}
+                or metadata.st_mode & 0o022
+            ):
+                raise AssetError(f"{label} directory is unsafe")
+        with asset_store_lock(releases):
+            for stale in releases.glob(".asset-release-v2.*"):
+                metadata = stale.lstat()
+                if (
+                    stale.is_symlink()
+                    or not stat.S_ISDIR(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                ):
+                    raise AssetError(f"stale schema-v2 staging path is unsafe: {stale}")
+                make_private_writable(stale)
+                shutil.rmtree(stale)
+            staging = Path(tempfile.mkdtemp(prefix=".asset-release-v2.", dir=releases))
+            os.chmod(staging, 0o700)
+            try:
+                for tree_name in UNCHANGED_ASSET_TREES:
+                    copied = copy_verified_tree(
+                        predecessor / tree_name,
+                        staging / tree_name,
+                    )
+                    if normalized_inventory(
+                        copied,
+                        label=tree_name,
+                    ) != normalized_inventory(
+                        predecessor_assets[tree_name],
+                        label=tree_name,
+                    ):
+                        raise AssetError(
+                            f"unchanged predecessor tree drifted while copying: {tree_name}"
+                        )
+                copy_verified_byteff2(
+                    byteff2,
+                    staging / "byteff2",
+                    expected_commit=byteff2_commit,
+                    expected_submodules=byteff2_submodules,
+                )
+                assets = {
+                    tree_name: (
+                        [dict(record) for record in predecessor_assets[tree_name]]
+                        if tree_name in UNCHANGED_ASSET_TREES
+                        else inspect_tree(
+                            staging / tree_name,
+                            hash_files=True,
+                        )
+                    )
+                    for tree_name in ASSET_KEYS
+                }
+                for tree_name in UNCHANGED_ASSET_TREES:
+                    actual = inspect_tree(staging / tree_name, hash_files=True)
+                    if normalized_inventory(
+                        actual,
+                        label=tree_name,
+                    ) != normalized_inventory(
+                        predecessor_assets[tree_name],
+                        label=tree_name,
+                    ):
+                        raise AssetError(
+                            f"schema-v2 changed an inherited asset tree: {tree_name}"
+                        )
+                manifest = build_manifest(
+                    assets,
+                    byteff2_commit=byteff2_commit,
+                    byteff2_submodules=byteff2_submodules,
+                    predecessor_digest=args.predecessor_digest,
+                    predecessor_tree_digests=tree_digests,
+                )
+                manifest_bytes = canonical(manifest)
+                digest = hashlib.sha256(manifest_bytes).hexdigest()
+                manifest_path = staging / "ASSET-MANIFEST.json"
+                manifest_path.write_bytes(manifest_bytes)
+                os.chmod(manifest_path, 0o600)
+                fsync_tree(staging)
+                make_read_only(staging)
+                fsync_tree(staging)
+                destination = releases / digest
+                if destination.exists() or destination.is_symlink():
+                    make_private_writable(staging)
+                    shutil.rmtree(staging)
+                    validate_existing_release(
+                        destination,
+                        expected_manifest=manifest,
+                        expected_digest=digest,
+                    )
+                    status = "already-present"
+                else:
+                    staging.replace(destination)
+                    _fsync_path(releases, directory=True)
+                    status = "created"
+                plan.update(
+                    {
+                        "status": status,
+                        "asset_digest": f"sha256:{digest}",
+                        "release_path": str(destination),
+                    }
+                )
+            except Exception:
+                if staging.exists():
+                    make_private_writable(staging)
+                    shutil.rmtree(staging)
+                raise
         print(json.dumps(plan, indent=2, sort_keys=True))
         return 0
     except (AssetError, OSError, subprocess.CalledProcessError) as exc:

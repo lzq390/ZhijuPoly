@@ -88,13 +88,20 @@ TEST_BYTEFF2_AUDITED_OVERLAY_FILES = tuple(
 
 class AssetBootstrapTests(unittest.TestCase):
     def setUp(self) -> None:
-        patcher = mock.patch.object(
+        overlay_patcher = mock.patch.object(
             assets,
             "BYTEFF2_AUDITED_OVERLAY_FILES",
             TEST_BYTEFF2_AUDITED_OVERLAY_FILES,
         )
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        symlink_patcher = mock.patch.object(
+            assets,
+            "BYTEFF2_MATERIALIZED_SYMLINKS",
+            {},
+        )
+        overlay_patcher.start()
+        symlink_patcher.start()
+        self.addCleanup(overlay_patcher.stop)
+        self.addCleanup(symlink_patcher.stop)
 
     @staticmethod
     def git(root: Path, *arguments: str) -> str:
@@ -120,6 +127,13 @@ class AssetBootstrapTests(unittest.TestCase):
                 for path, size, digest in assets.BYTEFF2_AUDITED_OVERLAY_FILES
             ],
         ]
+
+    @staticmethod
+    def predecessor_tree_digests() -> dict[str, str]:
+        return {
+            tree_name: "sha256:" + hashlib.sha256(tree_name.encode("ascii")).hexdigest()
+            for tree_name in assets.UNCHANGED_ASSET_TREES
+        }
 
     def initialize_repository(
         self,
@@ -153,6 +167,33 @@ class AssetBootstrapTests(unittest.TestCase):
         self.git(root, "commit", "--quiet", "-m", "initial")
         return self.git(root, "rev-parse", "HEAD")
 
+    def initialize_predecessor(
+        self,
+        store: Path,
+    ) -> tuple[str, Path, dict[str, list[dict[str, object]]]]:
+        staging = store / "predecessor-staging"
+        staging.mkdir(parents=True)
+        inventories: dict[str, list[dict[str, object]]] = {}
+        for tree_name in assets.ASSET_KEYS:
+            tree = staging / tree_name
+            tree.mkdir()
+            (tree / "asset.bin").write_bytes(tree_name.encode("ascii"))
+            inventories[tree_name] = assets.inspect_tree(tree, hash_files=True)
+        manifest = {
+            "schema_version": 1,
+            "byteff2_commit": "c" * 40,
+            "byteff2_submodules": {},
+            "assets": inventories,
+        }
+        manifest_bytes = assets.canonical(manifest)
+        digest = hashlib.sha256(manifest_bytes).hexdigest()
+        (staging / "ASSET-MANIFEST.json").write_bytes(manifest_bytes)
+        releases = store / "releases"
+        releases.mkdir()
+        destination = releases / digest
+        staging.replace(destination)
+        return f"sha256:{digest}", destination, inventories
+
     def test_tree_inventory_is_stable_and_rejects_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -164,6 +205,49 @@ class AssetBootstrapTests(unittest.TestCase):
             (root / "link").symlink_to("nested/model.bin")
             with self.assertRaisesRegex(assets.AssetError, "symlinks"):
                 assets.inspect_tree(root, hash_files=False)
+
+    def test_predecessor_is_fully_rehashed_and_rejects_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw) / "assets"
+            predecessor_digest, predecessor, inventories = self.initialize_predecessor(
+                store
+            )
+            with mock.patch.object(
+                assets,
+                "PREDECESSOR_ASSET_DIGEST",
+                predecessor_digest,
+            ):
+                loaded_path, _manifest, verified, tree_digests = (
+                    assets.load_verified_predecessor(store, predecessor_digest)
+                )
+                self.assertEqual(loaded_path, predecessor)
+                self.assertEqual(verified, inventories)
+                self.assertEqual(set(tree_digests), set(assets.UNCHANGED_ASSET_TREES))
+
+                (predecessor / "model" / "asset.bin").write_bytes(b"drift")
+                with self.assertRaisesRegex(
+                    assets.AssetError,
+                    "tree differs from manifest",
+                ):
+                    assets.load_verified_predecessor(store, predecessor_digest)
+
+    def test_predecessor_rejects_unapproved_digest_and_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw) / "assets"
+            predecessor_digest, predecessor, _inventories = (
+                self.initialize_predecessor(store)
+            )
+            with self.assertRaisesRegex(assets.AssetError, "only the approved"):
+                assets.load_verified_predecessor(store, predecessor_digest)
+            predecessor.rename(predecessor.with_name("real-release"))
+            predecessor.symlink_to("real-release", target_is_directory=True)
+            with mock.patch.object(
+                assets,
+                "PREDECESSOR_ASSET_DIGEST",
+                predecessor_digest,
+            ):
+                with self.assertRaisesRegex(assets.AssetError, "unavailable"):
+                    assets.load_verified_predecessor(store, predecessor_digest)
 
     def test_manifest_digest_is_canonical(self) -> None:
         left = assets.canonical({"schema_version": 1, "assets": {"model": []}})
@@ -177,8 +261,15 @@ class AssetBootstrapTests(unittest.TestCase):
             {"byteff2": self.required_runtime_inventory()},
             byteff2_commit=parent,
             byteff2_submodules={"vendor/nested": child},
+            predecessor_digest=assets.PREDECESSOR_ASSET_DIGEST,
+            predecessor_tree_digests=self.predecessor_tree_digests(),
         )
         self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(
+            manifest["predecessor_asset_digest"],
+            assets.PREDECESSOR_ASSET_DIGEST,
+        )
+        self.assertEqual(manifest["changed_asset_trees"], ["byteff2"])
         self.assertEqual(manifest["byteff2_commit"], parent)
         self.assertEqual(
             manifest["byteff2_source"],
@@ -209,6 +300,8 @@ class AssetBootstrapTests(unittest.TestCase):
                         {"byteff2": inventory},
                         byteff2_commit="a" * 40,
                         byteff2_submodules={},
+                        predecessor_digest=assets.PREDECESSOR_ASSET_DIGEST,
+                        predecessor_tree_digests=self.predecessor_tree_digests(),
                     )
 
     def test_required_runtime_asset_contract_pins_audited_digest(self) -> None:
@@ -228,8 +321,8 @@ class AssetBootstrapTests(unittest.TestCase):
 
     def test_byteff2_git_source_pins_official_v1_revision(self) -> None:
         self.assertEqual(
-            assets.BYTEFF2_SOURCE,
-            Path("/data/lzq/nexpoly-assets/sources/byteff2-v1.0.0"),
+            assets.PREDECESSOR_ASSET_DIGEST,
+            "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2",
         )
         self.assertEqual(
             assets.BYTEFF2_GIT_SOURCE,
@@ -348,6 +441,8 @@ class AssetBootstrapTests(unittest.TestCase):
                 {"byteff2": inventory},
                 byteff2_commit=expected_commit,
                 byteff2_submodules={},
+                predecessor_digest=assets.PREDECESSOR_ASSET_DIGEST,
+                predecessor_tree_digests=self.predecessor_tree_digests(),
             )
 
             runtime_path, runtime_digest = assets.BYTEFF2_RUNTIME_REQUIRED_FILES[0]
@@ -517,6 +612,39 @@ class AssetBootstrapTests(unittest.TestCase):
             )
             self.assertFalse((destination / ".git").exists())
             self.assertEqual((destination / "tracked.txt").read_text(encoding="utf-8"), "byteff2\n")
+
+    def test_byteff2_copy_materializes_only_the_audited_internal_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            source = workspace / "byteff2"
+            self.initialize_repository(source)
+            target = source / "submodules" / "bytemol" / "bytemol"
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "__init__.py").write_text("AUDITED = True\n", encoding="utf-8")
+            (source / "bytemol").symlink_to("submodules/bytemol/bytemol/")
+            self.git(source, "add", "bytemol", "submodules/bytemol/bytemol/__init__.py")
+            self.git(source, "commit", "--quiet", "-m", "add audited import symlink")
+            expected_commit = self.git(source, "rev-parse", "HEAD")
+            destination = workspace / "copied"
+
+            with mock.patch.object(
+                assets,
+                "BYTEFF2_MATERIALIZED_SYMLINKS",
+                {"bytemol": "submodules/bytemol/bytemol/"},
+            ):
+                assets.copy_verified_byteff2(
+                    source,
+                    destination,
+                    expected_commit=expected_commit,
+                    expected_submodules={},
+                )
+
+            self.assertTrue((destination / "bytemol").is_dir())
+            self.assertFalse((destination / "bytemol").is_symlink())
+            self.assertEqual(
+                (destination / "bytemol" / "__init__.py").read_text(encoding="utf-8"),
+                "AUDITED = True\n",
+            )
 
     def test_byteff2_copy_rechecks_recursive_submodule_after_copy(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
