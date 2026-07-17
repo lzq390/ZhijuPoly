@@ -17,6 +17,8 @@ cache drift instead of downloading artifacts after the old readers stop.
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
 import contextlib
 import datetime as dt
 import fcntl
@@ -32,14 +34,17 @@ import subprocess
 import sys
 import tempfile
 from typing import Any, Mapping, Sequence
+import zipfile
 
 import bootstrap_pull_deploy
 import bridge_deploy_core
+import worker_slot_runtime
 from worker_slot_runtime import WorkerSlotError, inspect_base_python_identity
 
 
-PREFETCH_SCHEMA_VERSION = 1
+PREFETCH_SCHEMA_VERSION = 2
 PREFETCH_STATUS = "ready"
+SOURCE_URL = "https://github.com/lzq390/ZhijuPoly"
 POSTGRES16_IMAGE = (
     "postgres:16-alpine@"
     "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
@@ -56,6 +61,12 @@ REQUIRED_RECOVERY_PATHS = {
     "scripts/pull_deploy_controller.py",
     "scripts/site_helper_contracts.py",
 }
+PREFETCH_CONTROLLER_PATHS = {
+    "scripts/bootstrap_pull_deploy.py",
+    "scripts/bridge_deploy_core.py",
+    "scripts/maintenance_prefetch.py",
+    "scripts/worker_slot_runtime.py",
+}
 SAFE_PATH = "/usr/local/bin:/usr/bin:/bin"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -69,6 +80,7 @@ READY_FIELDS = {
     "source",
     "source_readiness",
     "source_readiness_sha256",
+    "controller",
     "policy",
     "policy_sha256",
     "docker_config",
@@ -115,6 +127,64 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def fsync_file(path: Path) -> None:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        current = path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or (metadata.st_dev, metadata.st_ino)
+            != (current.st_dev, current.st_ino)
+        ):
+            raise MaintenancePrefetchError(
+                f"file changed while being made durable: {path}"
+            )
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def fsync_private_tree(root: Path) -> None:
+    """Flush every private artifact before a durable readiness record exists."""
+
+    require_private_directory(root)
+    directories = [root]
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        metadata = path.lstat()
+        if stat.S_ISDIR(metadata.st_mode):
+            require_private_directory(path)
+            directories.append(path)
+        elif stat.S_ISREG(metadata.st_mode):
+            if (
+                path.is_symlink()
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o077
+                or metadata.st_nlink != 1
+            ):
+                raise MaintenancePrefetchError(
+                    f"artifact file is unsafe before fsync: {path}"
+                )
+            fsync_file(path)
+        else:
+            raise MaintenancePrefetchError(
+                f"artifact tree contains a symlink or special file: {path}"
+            )
+    for directory in sorted(
+        directories,
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        fsync_directory(directory)
+
+
 def atomic_bytes(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
     temporary = path.parent / f".{path.name}.{secrets.token_hex(16)}.tmp"
     descriptor = os.open(
@@ -157,6 +227,9 @@ def require_private_directory(path: Path, *, create: bool = False) -> None:
         or stat.S_IMODE(metadata.st_mode) != 0o700
     ):
         raise MaintenancePrefetchError(f"private directory is unsafe: {path}")
+    if create:
+        fsync_directory(path)
+        fsync_directory(path.parent)
 
 
 def require_private_file(path: Path, *, mode: int = 0o600) -> None:
@@ -172,6 +245,36 @@ def require_private_file(path: Path, *, mode: int = 0o600) -> None:
         or metadata.st_nlink != 1
     ):
         raise MaintenancePrefetchError(f"private file is unsafe: {path}")
+
+
+def parse_private_literal_env(path: Path) -> dict[str, str]:
+    require_private_file(path)
+    result: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise MaintenancePrefetchError(
+            f"private deployment configuration is unreadable: {path}"
+        ) from exc
+    for number, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise MaintenancePrefetchError(
+                f"invalid deployment configuration line {number}"
+            )
+        key, value = line.split("=", 1)
+        if (
+            re.fullmatch(r"[A-Z][A-Z0-9_]*", key) is None
+            or key in result
+            or any(character in value for character in ("\x00", "\r", "\n"))
+        ):
+            raise MaintenancePrefetchError(
+                f"invalid deployment configuration line {number}"
+            )
+        result[key] = value
+    return result
 
 
 def remove_private_tree(path: Path) -> None:
@@ -234,7 +337,12 @@ def clean_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
         "PATH": SAFE_PATH,
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
         "GIT_TERMINAL_PROMPT": "0",
         "PYTHONNOUSERSITE": "1",
     }
@@ -253,7 +361,7 @@ def private_umask():  # type: ignore[no-untyped-def]
 
 
 def directory_inventory_digest(root: Path) -> tuple[str, int]:
-    """Match Pull's cache digest while rejecting symlinks and special files."""
+    """Bind private artifact content and mode while rejecting unsafe entries."""
 
     require_private_directory(root)
     digest = hashlib.sha256()
@@ -270,7 +378,13 @@ def directory_inventory_digest(root: Path) -> tuple[str, int]:
                 raise MaintenancePrefetchError(
                     f"inventory directory is unsafe: {path}"
                 )
-            digest.update(b"D\0" + relative + b"\0")
+            digest.update(
+                b"D\0"
+                + relative
+                + b"\0"
+                + format(stat.S_IMODE(metadata.st_mode), "04o").encode("ascii")
+                + b"\0"
+            )
         elif stat.S_ISREG(metadata.st_mode):
             if (
                 path.is_symlink()
@@ -280,7 +394,13 @@ def directory_inventory_digest(root: Path) -> tuple[str, int]:
             ):
                 raise MaintenancePrefetchError(f"inventory file is unsafe: {path}")
             file_count += 1
-            digest.update(b"F\0" + relative + b"\0")
+            digest.update(
+                b"F\0"
+                + relative
+                + b"\0"
+                + format(stat.S_IMODE(metadata.st_mode), "04o").encode("ascii")
+                + b"\0"
+            )
             with path.open("rb") as stream:
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                     digest.update(chunk)
@@ -305,6 +425,14 @@ def validate_image_reference(reference: object, role: str) -> str:
     return reference
 
 
+def canonical_repo_digest(reference: str) -> str:
+    named, digest = reference.rsplit("@", 1)
+    last_slash = named.rfind("/")
+    last_colon = named.rfind(":")
+    repository = named[:last_colon] if last_colon > last_slash else named
+    return f"{repository}@{digest}"
+
+
 def validate_image_evidence(
     document: object,
     *,
@@ -318,6 +446,8 @@ def validate_image_evidence(
         "local_image_id",
         "repo_digests",
         "revision",
+        "source",
+        "version",
     }
     if not isinstance(document, dict) or set(document) != fields:
         raise MaintenancePrefetchError("prefetched image evidence is malformed")
@@ -330,10 +460,11 @@ def validate_image_evidence(
     if IMAGE_ID_RE.fullmatch(local_id) is None:
         raise MaintenancePrefetchError("local Docker image ID is malformed")
     repo_digests = document.get("repo_digests")
+    canonical_reference = canonical_repo_digest(expected_reference)
     if (
         not isinstance(repo_digests, list)
         or repo_digests != sorted(set(repo_digests))
-        or expected_reference not in repo_digests
+        or canonical_reference not in repo_digests
         or any(
             not isinstance(value, str)
             or value.count("@") != 1
@@ -353,12 +484,32 @@ def validate_image_evidence(
         raise MaintenancePrefetchError("prefetched image revision label is malformed")
     if enforce_revision and revision != expected_revision:
         raise MaintenancePrefetchError("prefetched image revision label differs")
+    source = document.get("source")
+    version = document.get("version")
+    if enforce_revision and (
+        source != SOURCE_URL
+        or version != f"sha-{expected_revision}"
+    ):
+        raise MaintenancePrefetchError(
+            "prefetched application image source/version labels differ"
+        )
+    if not enforce_revision and (
+        source is not None
+        and (not isinstance(source, str) or len(source) > 1024)
+        or version is not None
+        and (not isinstance(version, str) or len(version) > 256)
+    ):
+        raise MaintenancePrefetchError(
+            "prefetched restore image labels are malformed"
+        )
     return {
         "digest_ref": expected_reference,
         "oci_reference_digest": expected_reference.split("@", 1)[1],
         "local_image_id": local_id,
         "repo_digests": list(repo_digests),
         "revision": revision,
+        "source": source,
+        "version": version,
     }
 
 
@@ -391,6 +542,141 @@ def wheel_cache_key(
         "base_python_identity_sha256": identity,
         "platform": platform,
     }
+
+
+def wheel_archive_evidence(path: Path) -> dict[str, Any]:
+    require_private_file(path)
+    if path.suffix != ".whl":
+        raise MaintenancePrefetchError(f"wheel cache has a non-wheel file: {path}")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            records = [
+                name
+                for name in names
+                if name.endswith(".dist-info/RECORD")
+            ]
+            if len(records) != 1 or len(names) != len(set(names)):
+                raise MaintenancePrefetchError(
+                    f"wheel RECORD inventory is invalid: {path.name}"
+                )
+            record_payload = archive.read(records[0])
+            rows = list(
+                csv.reader(record_payload.decode("utf-8").splitlines())
+            )
+            if not rows or any(len(row) != 3 or not row[0] for row in rows):
+                raise MaintenancePrefetchError(
+                    f"wheel RECORD rows are invalid: {path.name}"
+                )
+            by_name = {name: archive.read(name) for name in names}
+            recorded_paths = {row[0] for row in rows}
+            if recorded_paths != set(names):
+                raise MaintenancePrefetchError(
+                    f"wheel RECORD paths are incomplete: {path.name}"
+                )
+            for member, hash_value, size_value in rows:
+                payload = by_name[member]
+                if member == records[0]:
+                    if hash_value or size_value:
+                        raise MaintenancePrefetchError(
+                            f"wheel RECORD self-entry is not empty: {path.name}"
+                        )
+                    continue
+                if not hash_value.startswith("sha256="):
+                    raise MaintenancePrefetchError(
+                        f"wheel RECORD hash is not sha256: {path.name}"
+                    )
+                encoded = hash_value.split("=", 1)[1]
+                padding = "=" * (-len(encoded) % 4)
+                try:
+                    expected = base64.urlsafe_b64decode(encoded + padding)
+                except ValueError as exc:
+                    raise MaintenancePrefetchError(
+                        f"wheel RECORD hash is malformed: {path.name}"
+                    ) from exc
+                if (
+                    hashlib.sha256(payload).digest() != expected
+                    or size_value != str(len(payload))
+                ):
+                    raise MaintenancePrefetchError(
+                        f"wheel RECORD content differs: {path.name}"
+                    )
+    except (OSError, UnicodeError, zipfile.BadZipFile, KeyError) as exc:
+        raise MaintenancePrefetchError(
+            f"wheel archive is invalid: {path.name}"
+        ) from exc
+    return {
+        "filename": path.name,
+        "sha256": sha256_file(path),
+        "size_bytes": path.stat().st_size,
+        "record_path": records[0],
+        "record_sha256": sha256_bytes(record_payload),
+        "member_count": len(names),
+    }
+
+
+def validate_wheel_cache_completion(
+    root: Path,
+    *,
+    wheel_cache_key_value: str,
+    worker_lock_sha256: str,
+    base_python_identity_sha256: str,
+) -> dict[str, Any]:
+    complete_path = root / ".complete.json"
+    lock_path = root / "requirements.lock"
+    require_private_file(complete_path)
+    require_private_file(lock_path)
+    try:
+        document = json.loads(complete_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise MaintenancePrefetchError(
+            "wheel cache completion marker is invalid"
+        ) from exc
+    fields = {
+        "schema_version",
+        "wheel_cache_key",
+        "worker_lock_sha256",
+        "base_python_identity_sha256",
+        "offline_install_verified",
+        "pip_check_verified",
+        "wheels",
+    }
+    wheels = document.get("wheels") if isinstance(document, dict) else None
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != 1
+        or document.get("wheel_cache_key") != wheel_cache_key_value
+        or document.get("worker_lock_sha256") != worker_lock_sha256
+        or sha256_file(lock_path) != worker_lock_sha256
+        or document.get("base_python_identity_sha256")
+        != base_python_identity_sha256
+        or document.get("offline_install_verified") is not True
+        or document.get("pip_check_verified") is not True
+        or not isinstance(wheels, list)
+        or not wheels
+    ):
+        raise MaintenancePrefetchError(
+            "wheel cache completion binding differs"
+        )
+    actual_wheels = sorted(root.glob("*.whl"), key=lambda path: path.name)
+    observed = [wheel_archive_evidence(path) for path in actual_wheels]
+    if wheels != observed:
+        raise MaintenancePrefetchError(
+            "wheel cache exact archive inventory differs"
+        )
+    expected_names = {
+        ".complete.json",
+        ".owner.json",
+        "requirements.lock",
+        *(record["filename"] for record in observed),
+    }
+    actual_names = {path.name for path in root.iterdir()}
+    if actual_names != expected_names or any(path.is_dir() for path in root.iterdir()):
+        raise MaintenancePrefetchError(
+            "wheel cache contains missing or extra entries"
+        )
+    return dict(document)
 
 
 def _validate_source_record(document: object, label: str) -> dict[str, str]:
@@ -495,11 +781,19 @@ def validate_wheel_record(
     ):
         raise MaintenancePrefetchError("wheel cache path differs")
     inventory, count = directory_inventory_digest(cache)
+    validate_wheel_cache_completion(
+        cache,
+        wheel_cache_key_value=str(document["wheel_cache_key"]),
+        worker_lock_sha256=str(document["worker_lock_sha256"]),
+        base_python_identity_sha256=str(
+            document["base_python_identity_sha256"]
+        ),
+    )
     if (
         document.get("inventory_sha256") != inventory
         or document.get("file_count") != count
         or not isinstance(count, int)
-        or count < 2
+        or count < 4
     ):
         raise MaintenancePrefetchError("wheel cache inventory differs")
     return dict(document)
@@ -537,7 +831,7 @@ def validate_asset_evidence(
         or root.is_symlink()
         or not stat.S_ISDIR(root_metadata.st_mode)
         or root_metadata.st_uid != os.geteuid()
-        or root_metadata.st_mode & 0o222
+        or stat.S_IMODE(root_metadata.st_mode) != 0o500
         or document.get("manifest_path") != str(manifest)
         or document.get("manifest_sha256") != expected_digest
         or sha256_file(manifest) != expected_digest
@@ -607,7 +901,7 @@ def validate_asset_evidence(
                 not stat.S_ISREG(metadata.st_mode)
                 or path.is_symlink()
                 or metadata.st_uid != os.geteuid()
-                or metadata.st_mode & 0o222
+                or stat.S_IMODE(metadata.st_mode) != 0o400
                 or metadata.st_nlink != 1
                 or metadata.st_size != record["size"]
                 or sha256_file(path).removeprefix("sha256:") != record["sha256"]
@@ -626,7 +920,7 @@ def validate_asset_evidence(
             if (
                 path.is_symlink()
                 or metadata.st_uid != os.geteuid()
-                or metadata.st_mode & 0o222
+                or stat.S_IMODE(metadata.st_mode) != 0o500
             ):
                 raise MaintenancePrefetchError("asset directory is unsafe or writable")
             actual_directories.add(relative.decode("utf-8"))
@@ -635,7 +929,7 @@ def validate_asset_evidence(
             if (
                 path.is_symlink()
                 or metadata.st_uid != os.geteuid()
-                or metadata.st_mode & 0o222
+                or stat.S_IMODE(metadata.st_mode) != 0o400
                 or metadata.st_nlink != 1
             ):
                 raise MaintenancePrefetchError("asset file is unsafe or writable")
@@ -707,10 +1001,75 @@ def validate_recovery_tools(
     return result
 
 
+def validate_controller_evidence(
+    document: object,
+    *,
+    source_root: Path,
+    authority: Mapping[str, str],
+) -> dict[str, Any]:
+    fields = {"source_root", "source_sha", "source_tree", "files"}
+    if not isinstance(document, dict) or set(document) != fields:
+        raise MaintenancePrefetchError("prefetch controller evidence is malformed")
+    if (
+        document.get("source_root") != str(source_root)
+        or document.get("source_sha") != authority["sha"]
+        or document.get("source_tree") != authority["tree"]
+    ):
+        raise MaintenancePrefetchError(
+            "prefetch controller is not bound to authority F"
+        )
+    files = document.get("files")
+    if (
+        not isinstance(files, dict)
+        or set(files) != PREFETCH_CONTROLLER_PATHS
+    ):
+        raise MaintenancePrefetchError(
+            "prefetch controller file evidence is incomplete"
+        )
+    for relative, digest in files.items():
+        require_digest(digest, f"controller file {relative}")
+        path = source_root / relative
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise MaintenancePrefetchError(
+                f"prefetch controller file is unavailable: {relative}"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o022
+            or metadata.st_nlink != 1
+            or sha256_file(path) != digest
+        ):
+            raise MaintenancePrefetchError(
+                f"prefetch controller file changed: {relative}"
+            )
+    return dict(document)
+
+
+def validate_created_at(value: object) -> str:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise MaintenancePrefetchError("prefetch timestamp is invalid")
+    try:
+        parsed = dt.datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
+    except ValueError as exc:
+        raise MaintenancePrefetchError("prefetch timestamp is invalid") from exc
+    if (
+        parsed.tzinfo is None
+        or parsed.utcoffset() != dt.timedelta(0)
+        or parsed.microsecond != 0
+        or parsed > dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)
+    ):
+        raise MaintenancePrefetchError("prefetch timestamp is not canonical UTC")
+    return value
+
+
 def ready_identity(document: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: document[key]
-        for key in sorted(READY_FIELDS - {"created_at", "identity_sha256"})
+        for key in sorted(READY_FIELDS - {"identity_sha256"})
     }
 
 
@@ -745,13 +1104,22 @@ def validate_ready_evidence(
         or readiness.get("dirty_entries") != 0
         or readiness.get("ignored_entries") != 0
         or readiness.get("unreachable_objects") != 0
-        or readiness.get("owner_private") is not True
+        or readiness.get("group_or_world_writable") is not False
+        or (
+            "owner_private" in readiness
+            and readiness.get("owner_private") is not True
+        )
     ):
         raise MaintenancePrefetchError("bootstrap source readiness is incomplete")
     if document.get("source_readiness_sha256") != sha256_bytes(
         canonical_json_bytes(readiness)
     ):
         raise MaintenancePrefetchError("bootstrap source readiness digest differs")
+    validate_controller_evidence(
+        document.get("controller"),
+        source_root=Path(str(readiness.get("source_root", ""))),
+        authority=authority,
+    )
     try:
         policy = bridge_deploy_core.validate_policy(document.get("policy"))
     except Exception as exc:
@@ -766,15 +1134,10 @@ def validate_ready_evidence(
     expected_docker_config = runtime_root / "config/docker"
     if (
         not isinstance(docker_config, dict)
-        or set(docker_config) != {"path", "config_sha256"}
+        or set(docker_config) != {"path"}
         or docker_config.get("path") != str(expected_docker_config)
     ):
         raise MaintenancePrefetchError("private Docker configuration binding differs")
-    require_private_directory(expected_docker_config)
-    config_path = expected_docker_config / "config.json"
-    require_private_file(config_path)
-    if docker_config.get("config_sha256") != sha256_file(config_path):
-        raise MaintenancePrefetchError("private Docker configuration changed")
     validate_git_bundle_evidence(
         document.get("git_bundle"),
         runtime_root=runtime_root,
@@ -847,8 +1210,7 @@ def validate_ready_evidence(
         operation_id=operation_id,
         expected_sources={"authority": authority, "target": target},
     )
-    if not isinstance(document.get("created_at"), str):
-        raise MaintenancePrefetchError("prefetch timestamp is invalid")
+    validate_created_at(document.get("created_at"))
     if document.get("identity_sha256") != sha256_bytes(
         canonical_json_bytes(ready_identity(document))
     ):
@@ -889,9 +1251,22 @@ class MaintenancePrefetch:
         base_python: Path,
         base_python_identity_sha256: str,
         runner: CommandRunner | None = None,
+        allow_test: bool = False,
     ) -> None:
         self.source_root = source_root.absolute()
         self.runtime_root = runtime_root.absolute()
+        self.allow_test = allow_test
+        if (
+            not allow_test
+            and (
+                self.runtime_root != bootstrap_pull_deploy.RUNTIME_ROOT
+                or self.runtime_root.resolve()
+                != bootstrap_pull_deploy.RUNTIME_ROOT
+            )
+        ):
+            raise MaintenancePrefetchError(
+                "production prefetch requires the fixed runtime root"
+            )
         self.operation_id = require_operation_id(operation_id)
         if set(authority_images) != set(ROLE_IMAGE_ROOTS):
             raise MaintenancePrefetchError("authority image set is incomplete")
@@ -916,6 +1291,38 @@ class MaintenancePrefetch:
         self.prefetch_root = self.runtime_root / "prefetch"
         self.operation_root = self.prefetch_root / self.operation_id
         self.ready_path = self.operation_root / "ready.json"
+
+    def _validate_controller_root(self) -> None:
+        if self.allow_test:
+            return
+        expected = self.source_root.resolve()
+        module_paths = {
+            Path(__file__).resolve(),
+            Path(str(bootstrap_pull_deploy.__file__)).resolve(),
+            Path(str(bridge_deploy_core.__file__)).resolve(),
+            Path(str(worker_slot_runtime.__file__)).resolve(),
+        }
+        if any(path.parents[1] != expected for path in module_paths):
+            raise MaintenancePrefetchError(
+                "prefetch executable/imports are not loaded from authority F"
+            )
+
+    def _validate_production_contract(self) -> None:
+        if self.allow_test:
+            return
+        values = parse_private_literal_env(
+            self.runtime_root / "config/deploy.env"
+        )
+        if (
+            values.get("NEXPOLY_RUNTIME_ROOT") != str(self.runtime_root)
+            or values.get("NEXPOLY_WORKER_BASE_PYTHON")
+            != str(self.base_python)
+            or values.get("NEXPOLY_WORKER_BASE_PYTHON_IDENTITY_SHA256")
+            != self.base_python_identity_sha256
+        ):
+            raise MaintenancePrefetchError(
+                "prefetch Python/runtime parameters differ from sealed deploy.env"
+            )
 
     def _git(
         self,
@@ -995,6 +1402,47 @@ class MaintenancePrefetch:
             )
         return readiness, authority, target, policy
 
+    def _controller_evidence(
+        self,
+        *,
+        authority: Mapping[str, str],
+    ) -> dict[str, Any]:
+        self._validate_controller_root()
+        files: dict[str, str] = {}
+        for relative in sorted(PREFETCH_CONTROLLER_PATHS):
+            path = self.source_root / relative
+            payload = self._git_show(authority["sha"], relative)
+            try:
+                metadata = path.lstat()
+                current = path.read_bytes()
+            except OSError as exc:
+                raise MaintenancePrefetchError(
+                    f"authority controller file is unavailable: {relative}"
+                ) from exc
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or path.is_symlink()
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o022
+                or metadata.st_nlink != 1
+                or current != payload
+            ):
+                raise MaintenancePrefetchError(
+                    f"running controller differs from authority F: {relative}"
+                )
+            files[relative] = sha256_bytes(payload)
+        document = {
+            "source_root": str(self.source_root),
+            "source_sha": authority["sha"],
+            "source_tree": authority["tree"],
+            "files": files,
+        }
+        return validate_controller_evidence(
+            document,
+            source_root=self.source_root,
+            authority=authority,
+        )
+
     def _publish_bundle(
         self,
         *,
@@ -1025,12 +1473,14 @@ class MaintenancePrefetch:
             )
             os.chmod(temporary, 0o600)
             require_private_file(temporary)
+            fsync_file(temporary)
             self._verify_bundle(
                 temporary,
                 authority=authority,
                 target=target,
             )
             os.replace(temporary, final)
+            fsync_file(final)
             fsync_directory(root)
         self._verify_bundle(
             final,
@@ -1060,6 +1510,24 @@ class MaintenancePrefetch:
             cwd=self.source_root,
             env=clean_environment(),
         )
+        listed = self.runner.run(
+            ["git", "bundle", "list-heads", str(path)],
+            cwd=self.source_root,
+            env=clean_environment(),
+        )
+        advertised: dict[str, str] = {}
+        for line in str(listed.stdout).splitlines():
+            try:
+                sha, reference = line.split(maxsplit=1)
+            except ValueError as exc:
+                raise MaintenancePrefetchError(
+                    "Git bundle advertised refs are malformed"
+                ) from exc
+            advertised[reference] = require_sha(sha, "bundle advertised SHA")
+        if advertised != {"refs/heads/main": authority["sha"]}:
+            raise MaintenancePrefetchError(
+                "Git bundle advertised main differs from captured authority F"
+            )
         with tempfile.TemporaryDirectory(
             prefix=".verify-",
             dir=path.parent,
@@ -1071,11 +1539,23 @@ class MaintenancePrefetch:
                     "clone",
                     "--quiet",
                     "--no-checkout",
+                    "--template=/dev/null",
                     str(path),
                     str(clone),
                 ],
                 env=clean_environment(),
             )
+            common = str(
+                self.runner.run(
+                    ["git", "-C", str(clone), "rev-parse", "--git-common-dir"],
+                    env=clean_environment(),
+                ).stdout
+            ).strip()
+            alternates = clone / ".git/objects/info/alternates"
+            if common not in {".git", str(clone / ".git")} or alternates.exists():
+                raise MaintenancePrefetchError(
+                    "temporary bundle clone uses shared/external Git objects"
+                )
             for identity in (authority, target):
                 observed = str(
                     self.runner.run(
@@ -1137,6 +1617,8 @@ class MaintenancePrefetch:
             "local_image_id": value.get("Id"),
             "repo_digests": sorted(set(value.get("RepoDigests") or [])),
             "revision": labels.get("org.opencontainers.image.revision"),
+            "source": labels.get("org.opencontainers.image.source"),
+            "version": labels.get("org.opencontainers.image.version"),
         }
         return validate_image_evidence(
             record,
@@ -1231,6 +1713,8 @@ class MaintenancePrefetch:
             lock_path = staging / "requirements.lock"
             atomic_bytes(lock_path, lock_payload)
             try:
+                network_home = self.operation_root / "network-home"
+                require_private_directory(network_home, create=True)
                 self.runner.run(
                     [
                         str(base_identity["resolved_path"]),
@@ -1247,19 +1731,61 @@ class MaintenancePrefetch:
                     ],
                     env=clean_environment(
                         {
+                            "HOME": str(network_home),
+                            "NETRC": os.devnull,
                             "PIP_CONFIG_FILE": os.devnull,
                             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                            "PIP_KEYRING_PROVIDER": "disabled",
+                            "PIP_NO_CACHE_DIR": "1",
                             "PIP_NO_INPUT": "1",
                         }
                     ),
                 )
-                lock_path.unlink()
-                fsync_directory(staging)
-                if len(list(staging.iterdir())) < 2:
+                wheel_records = [
+                    wheel_archive_evidence(path)
+                    for path in sorted(
+                        staging.glob("*.whl"),
+                        key=lambda path: path.name,
+                    )
+                ]
+                if not wheel_records:
                     raise MaintenancePrefetchError(
                         "Worker wheel prefetch produced no wheel files"
                     )
+                self._verify_offline_wheel_install(
+                    cache=staging,
+                    lock_path=lock_path,
+                    base_identity=base_identity,
+                )
+                atomic_json(
+                    staging / ".complete.json",
+                    {
+                        "schema_version": 1,
+                        "wheel_cache_key": identities["wheel_cache_key"],
+                        "worker_lock_sha256": identities[
+                            "worker_lock_sha256"
+                        ],
+                        "base_python_identity_sha256": (
+                            self.base_python_identity_sha256
+                        ),
+                        "offline_install_verified": True,
+                        "pip_check_verified": True,
+                        "wheels": wheel_records,
+                    },
+                )
+                validate_wheel_cache_completion(
+                    staging,
+                    wheel_cache_key_value=identities["wheel_cache_key"],
+                    worker_lock_sha256=identities[
+                        "worker_lock_sha256"
+                    ],
+                    base_python_identity_sha256=(
+                        self.base_python_identity_sha256
+                    ),
+                )
+                fsync_private_tree(staging)
                 os.replace(staging, cache)
+                fsync_private_tree(cache)
                 fsync_directory(cache_root)
             except BaseException:
                 if staging.exists() and staging.is_dir() and not staging.is_symlink():
@@ -1282,6 +1808,12 @@ class MaintenancePrefetch:
             or not isinstance(owner.get("operation_id"), str)
         ):
             raise MaintenancePrefetchError("wheel cache ownership differs")
+        validate_wheel_cache_completion(
+            cache,
+            wheel_cache_key_value=identities["wheel_cache_key"],
+            worker_lock_sha256=identities["worker_lock_sha256"],
+            base_python_identity_sha256=self.base_python_identity_sha256,
+        )
         inventory, count = directory_inventory_digest(cache)
         return {
             "source_sha": source["sha"],
@@ -1293,6 +1825,82 @@ class MaintenancePrefetch:
             "inventory_sha256": inventory,
             "file_count": count,
         }
+
+    def _verify_offline_wheel_install(
+        self,
+        *,
+        cache: Path,
+        lock_path: Path,
+        base_identity: Mapping[str, Any],
+    ) -> None:
+        scratch_root = self.operation_root / "wheel-verify"
+        require_private_directory(scratch_root, create=True)
+        scratch = scratch_root / f".venv-{secrets.token_hex(12)}"
+        if scratch.exists() or scratch.is_symlink():
+            raise MaintenancePrefetchError(
+                "wheel verification scratch path already exists"
+            )
+        network_home = self.operation_root / "network-home"
+        require_private_directory(network_home, create=True)
+        environment = clean_environment(
+            {
+                "HOME": str(network_home),
+                "NETRC": os.devnull,
+                "PIP_CONFIG_FILE": os.devnull,
+                "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                "PIP_KEYRING_PROVIDER": "disabled",
+                "PIP_NO_CACHE_DIR": "1",
+                "PIP_NO_INDEX": "1",
+                "PIP_NO_INPUT": "1",
+            }
+        )
+        try:
+            self.runner.run(
+                [
+                    str(base_identity["resolved_path"]),
+                    "-I",
+                    "-m",
+                    "venv",
+                    "--copies",
+                    str(scratch),
+                ],
+                env=environment,
+            )
+            python = scratch / "bin/python"
+            self.runner.run(
+                [
+                    str(python),
+                    "-I",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--require-hashes",
+                    "--no-index",
+                    "--find-links",
+                    str(cache),
+                    "-r",
+                    str(lock_path),
+                ],
+                env=environment,
+            )
+            self.runner.run(
+                [str(python), "-I", "-m", "pip", "check"],
+                env=environment,
+            )
+        finally:
+            if scratch.exists() or scratch.is_symlink():
+                metadata = scratch.lstat()
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or scratch.is_symlink()
+                    or metadata.st_uid != os.geteuid()
+                    or metadata.st_mode & 0o077
+                ):
+                    raise MaintenancePrefetchError(
+                        "wheel verification scratch tree is unsafe"
+                    )
+                shutil.rmtree(scratch)
+            fsync_directory(scratch_root)
 
     def _prefetch_wheels(
         self,
@@ -1330,7 +1938,11 @@ class MaintenancePrefetch:
             metadata = path.lstat()
             relative = path.relative_to(root).as_posix().encode("utf-8")
             if stat.S_ISDIR(metadata.st_mode):
-                if path.is_symlink() or metadata.st_mode & 0o222:
+                if (
+                    path.is_symlink()
+                    or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o500
+                ):
                     raise MaintenancePrefetchError(
                         "asset directory is unsafe or writable"
                     )
@@ -1338,7 +1950,8 @@ class MaintenancePrefetch:
             elif stat.S_ISREG(metadata.st_mode):
                 if (
                     path.is_symlink()
-                    or metadata.st_mode & 0o222
+                    or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o400
                     or metadata.st_nlink != 1
                 ):
                     raise MaintenancePrefetchError("asset file is unsafe or writable")
@@ -1438,6 +2051,8 @@ class MaintenancePrefetch:
             raise MaintenancePrefetchError(
                 "recovery-tool staging contains missing or extra files"
             )
+        fsync_private_tree(root)
+        fsync_directory(root.parent)
         inventory, count = directory_inventory_digest(root)
         return {
             "source_sha": source["sha"],
@@ -1552,8 +2167,59 @@ class MaintenancePrefetch:
 
     def _open_lock(self):  # type: ignore[no-untyped-def]
         lock = self.runtime_root / "state/deploy.lock"
-        require_private_file(lock)
-        return lock.open("r+b", buffering=0)
+        flags = (
+            os.O_RDWR
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            descriptor = os.open(lock, flags)
+        except OSError as exc:
+            raise MaintenancePrefetchError(
+                "deploy.lock is unavailable or unsafe"
+            ) from exc
+        try:
+            metadata = os.fstat(descriptor)
+            current = lock.lstat()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 1
+                or (metadata.st_dev, metadata.st_ino)
+                != (current.st_dev, current.st_ino)
+            ):
+                raise MaintenancePrefetchError("deploy.lock is unsafe")
+            stream = os.fdopen(descriptor, "r+b", buffering=0)
+            descriptor = -1
+            return stream
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    def _assert_lock_inode(self, descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        current = (self.runtime_root / "state/deploy.lock").lstat()
+        if (
+            (metadata.st_dev, metadata.st_ino)
+            != (current.st_dev, current.st_ino)
+            or not stat.S_ISREG(current.st_mode)
+            or current.st_uid != os.geteuid()
+            or stat.S_IMODE(current.st_mode) != 0o600
+            or current.st_nlink != 1
+        ):
+            raise MaintenancePrefetchError(
+                "deploy.lock path changed while locked"
+            )
+
+    def _remove_ephemeral_network_state(self) -> None:
+        for path in (
+            self.operation_root / "network-home",
+            self.operation_root / "wheel-verify",
+        ):
+            if not path.exists() and not path.is_symlink():
+                continue
+            remove_private_tree(path)
 
     def run(self) -> dict[str, Any]:
         with private_umask():
@@ -1571,6 +2237,8 @@ class MaintenancePrefetch:
                 raise MaintenancePrefetchError(
                     "another deployment holds deploy.lock"
                 ) from exc
+            self._assert_lock_inode(stream.fileno())
+            self._validate_production_contract()
             require_private_directory(self.prefetch_root, create=True)
             require_private_directory(self.operation_root, create=True)
             for stale in self.operation_root.glob(".ready.json.*.tmp"):
@@ -1587,6 +2255,7 @@ class MaintenancePrefetch:
                     ) from exc
                 return self._revalidate_ready(existing)
             readiness, authority, target, policy = self._source_and_policy()
+            controller = self._controller_evidence(authority=authority)
             document: dict[str, Any] = {
                 "schema_version": PREFETCH_SCHEMA_VERSION,
                 "status": PREFETCH_STATUS,
@@ -1599,11 +2268,11 @@ class MaintenancePrefetch:
                 "source_readiness_sha256": sha256_bytes(
                     canonical_json_bytes(readiness)
                 ),
+                "controller": controller,
                 "policy": policy,
                 "policy_sha256": sha256_bytes(canonical_json_bytes(policy)),
                 "docker_config": {
                     "path": str(self.docker_config),
-                    "config_sha256": sha256_file(docker_config_path),
                 },
                 "git_bundle": self._publish_bundle(
                     authority=authority,
@@ -1626,9 +2295,25 @@ class MaintenancePrefetch:
                 "created_at": utc_now(),
                 "identity_sha256": "",
             }
+            self._remove_ephemeral_network_state()
             document["identity_sha256"] = sha256_bytes(
                 canonical_json_bytes(ready_identity(document))
             )
+            final_readiness, final_authority, final_target, final_policy = (
+                self._source_and_policy()
+            )
+            if (
+                final_readiness != readiness
+                or final_authority != authority
+                or final_target != target
+                or final_policy != policy
+                or self._controller_evidence(authority=authority) != controller
+            ):
+                raise MaintenancePrefetchError(
+                    "authority source/policy changed during prefetch"
+                )
+            self._assert_lock_inode(stream.fileno())
+            fsync_private_tree(self.operation_root)
             validated = validate_ready_evidence(
                 document,
                 runtime_root=self.runtime_root,

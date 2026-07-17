@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import importlib.util
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,8 +48,10 @@ def image_record(
         "digest_ref": reference,
         "oci_reference_digest": reference.split("@", 1)[1],
         "local_image_id": local_id,
-        "repo_digests": [reference],
+        "repo_digests": [PREFETCH.canonical_repo_digest(reference)],
         "revision": revision,
+        "source": PREFETCH.SOURCE_URL if revision is not None else None,
+        "version": f"sha-{revision}" if revision is not None else None,
     }
 
 
@@ -97,6 +102,21 @@ class MaintenancePrefetchPrimitiveTests(unittest.TestCase):
                 expected_reference=reference,
                 expected_revision=AUTHORITY_SHA,
             )
+
+    def test_postgres_tagged_reference_uses_canonical_repo_digest(self) -> None:
+        reference = PREFETCH.POSTGRES16_IMAGE
+        record = image_record(reference, revision=None)
+        self.assertNotEqual(record["repo_digests"], [reference])
+        validated = PREFETCH.validate_image_evidence(
+            record,
+            expected_reference=reference,
+            expected_revision=None,
+            enforce_revision=False,
+        )
+        self.assertEqual(
+            validated["repo_digests"],
+            [PREFETCH.canonical_repo_digest(reference)],
+        )
 
     def test_wheel_cache_key_binds_raw_lock_base_python_and_platform(self) -> None:
         first = PREFETCH.wheel_cache_key(
@@ -171,6 +191,137 @@ class MaintenancePrefetchPrimitiveTests(unittest.TestCase):
             ):
                 PREFETCH.directory_inventory_digest(root)
 
+    def test_private_inventory_binds_executable_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            os.chmod(root, 0o700)
+            executable = root / "tool"
+            executable.write_bytes(b"tool\n")
+            os.chmod(executable, 0o600)
+            first, _ = PREFETCH.directory_inventory_digest(root)
+            os.chmod(executable, 0o700)
+            second, _ = PREFETCH.directory_inventory_digest(root)
+            self.assertNotEqual(first, second)
+
+    def test_wheel_completion_rejects_extra_or_tampered_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            os.chmod(root, 0o700)
+            owner = root / ".owner.json"
+            owner.write_text("{}\n", encoding="utf-8")
+            os.chmod(owner, 0o600)
+            lock = root / "requirements.lock"
+            lock.write_bytes(b"fixture==1\n")
+            os.chmod(lock, 0o600)
+            package = b"VALUE = 1\n"
+            encoded = PREFETCH.base64.urlsafe_b64encode(
+                hashlib.sha256(package).digest()
+            ).decode("ascii").rstrip("=")
+            record_path = "fixture-1.dist-info/RECORD"
+            record = (
+                f"fixture/__init__.py,sha256={encoded},{len(package)}\n"
+                f"{record_path},,\n"
+            ).encode("utf-8")
+            wheel = root / "fixture-1-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr("fixture/__init__.py", package)
+                archive.writestr(record_path, record)
+            os.chmod(wheel, 0o600)
+            wheel_evidence = PREFETCH.wheel_archive_evidence(wheel)
+            complete = root / ".complete.json"
+            completion = {
+                "schema_version": 1,
+                "wheel_cache_key": DIGEST_A,
+                "worker_lock_sha256": PREFETCH.sha256_file(lock),
+                "base_python_identity_sha256": DIGEST_B,
+                "offline_install_verified": True,
+                "pip_check_verified": True,
+                "wheels": [wheel_evidence],
+            }
+            PREFETCH.atomic_json(complete, completion)
+
+            PREFETCH.validate_wheel_cache_completion(
+                root,
+                wheel_cache_key_value=DIGEST_A,
+                worker_lock_sha256=PREFETCH.sha256_file(lock),
+                base_python_identity_sha256=DIGEST_B,
+            )
+            extra = root / "extra.whl"
+            extra.write_bytes(b"not a wheel")
+            os.chmod(extra, 0o600)
+            with self.assertRaises(PREFETCH.MaintenancePrefetchError):
+                PREFETCH.validate_wheel_cache_completion(
+                    root,
+                    wheel_cache_key_value=DIGEST_A,
+                    worker_lock_sha256=PREFETCH.sha256_file(lock),
+                    base_python_identity_sha256=DIGEST_B,
+                )
+
+    def test_bundle_rejects_advertised_main_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "source"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main", root], check=True)
+            subprocess.run(
+                ["git", "-C", root, "config", "user.name", "Test"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", root, "config", "user.email", "test@example.invalid"],
+                check=True,
+            )
+            (root / "tracked").write_text("one\n", encoding="utf-8")
+            subprocess.run(["git", "-C", root, "add", "tracked"], check=True)
+            subprocess.run(["git", "-C", root, "commit", "-qm", "one"], check=True)
+            first = (
+                subprocess.run(
+                    ["git", "-C", root, "rev-parse", "HEAD"],
+                    check=True,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                )
+                .stdout.strip()
+            )
+            first_tree = (
+                subprocess.run(
+                    ["git", "-C", root, "rev-parse", "HEAD^{tree}"],
+                    check=True,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                )
+                .stdout.strip()
+            )
+            bundle = Path(raw) / "main.bundle"
+            subprocess.run(
+                ["git", "-C", root, "bundle", "create", bundle, "refs/heads/main"],
+                check=True,
+            )
+            os.chmod(bundle, 0o600)
+            controller = PREFETCH.MaintenancePrefetch(
+                source_root=root,
+                runtime_root=Path(raw) / "runtime",
+                operation_id=OPERATION_ID,
+                authority_images={
+                    "backend": (
+                        f"{PREFETCH.ROLE_IMAGE_ROOTS['backend']}@{DIGEST_A}"
+                    ),
+                    "web": f"{PREFETCH.ROLE_IMAGE_ROOTS['web']}@{DIGEST_B}",
+                },
+                docker_config=Path(raw) / "runtime/config/docker",
+                base_python=Path("/private/python"),
+                base_python_identity_sha256=DIGEST_A,
+                allow_test=True,
+            )
+            with self.assertRaisesRegex(
+                PREFETCH.MaintenancePrefetchError,
+                "advertised main",
+            ):
+                controller._verify_bundle(
+                    bundle,
+                    authority={"sha": "f" * 40, "tree": first_tree},
+                    target={"sha": first, "tree": first_tree},
+                )
+
 
 class MaintenancePrefetchEvidenceTests(unittest.TestCase):
     def _policy(self) -> dict[str, object]:
@@ -189,7 +340,9 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
     def _document(self) -> dict[str, object]:
         policy = self._policy()
         source_readiness = {
+            "schema_version": 1,
             "ready": True,
+            "source_root": "/private/source",
             "source_sha": AUTHORITY_SHA,
             "source_tree": AUTHORITY_TREE,
             "branch": "main",
@@ -200,6 +353,7 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
             "ignored_entries": 0,
             "unreachable_objects": 0,
             "owner_private": True,
+            "group_or_world_writable": False,
         }
         authority_backend = (
             f"{PREFETCH.ROLE_IMAGE_ROOTS['backend']}@{DIGEST_A}"
@@ -222,13 +376,21 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
             "source_readiness_sha256": PREFETCH.sha256_bytes(
                 PREFETCH.canonical_json_bytes(source_readiness)
             ),
+            "controller": {
+                "source_root": "/private/source",
+                "source_sha": AUTHORITY_SHA,
+                "source_tree": AUTHORITY_TREE,
+                "files": {
+                    relative: DIGEST_A
+                    for relative in PREFETCH.PREFETCH_CONTROLLER_PATHS
+                },
+            },
             "policy": policy,
             "policy_sha256": PREFETCH.sha256_bytes(
                 PREFETCH.canonical_json_bytes(policy)
             ),
             "docker_config": {
                 "path": "/private/runtime/config/docker",
-                "config_sha256": DIGEST_B,
             },
             "git_bundle": {"mocked": True},
             "images": {
@@ -288,6 +450,7 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 return_value=self._policy(),
             ),
             mock.patch.object(PREFETCH, "validate_git_bundle_evidence"),
+            mock.patch.object(PREFETCH, "validate_controller_evidence"),
             mock.patch.object(PREFETCH, "validate_asset_evidence"),
             mock.patch.object(PREFETCH, "validate_recovery_tools"),
             mock.patch.object(PREFETCH, "require_private_directory"),
@@ -307,9 +470,8 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
 
     def test_ready_evidence_rejects_tampering_and_missing_f_or_b_wheels(self) -> None:
         document = self._document()
-        document["created_at"] = "2030-01-01T00:00:00Z"
-        # Timestamp is deliberately outside the stable identity. Artifact
-        # tampering, unlike display time, must invalidate the readiness record.
+        document["created_at"] = "2026-07-17T00:00:01Z"
+        # Timestamp and every artifact field are part of the stable identity.
         document["images"]["target"]["backend"]["local_image_id"] = (
             "sha256:" + "9" * 64
         )
@@ -320,6 +482,7 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 return_value=self._policy(),
             ),
             mock.patch.object(PREFETCH, "validate_git_bundle_evidence"),
+            mock.patch.object(PREFETCH, "validate_controller_evidence"),
             mock.patch.object(PREFETCH, "validate_asset_evidence"),
             mock.patch.object(PREFETCH, "validate_recovery_tools"),
             mock.patch.object(PREFETCH, "require_private_directory"),
@@ -355,6 +518,7 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 return_value=self._policy(),
             ),
             mock.patch.object(PREFETCH, "validate_git_bundle_evidence"),
+            mock.patch.object(PREFETCH, "validate_controller_evidence"),
             mock.patch.object(PREFETCH, "validate_asset_evidence"),
             mock.patch.object(PREFETCH, "validate_recovery_tools"),
             mock.patch.object(PREFETCH, "require_private_directory"),
@@ -392,6 +556,7 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 docker_config=Path("/private/runtime/config/docker"),
                 base_python=Path("/private/python"),
                 base_python_identity_sha256=DIGEST_A,
+                allow_test=True,
             )
         with self.assertRaisesRegex(
             PREFETCH.MaintenancePrefetchError,
@@ -410,6 +575,7 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 docker_config=Path("/private/runtime/config/docker"),
                 base_python=Path("/private/python"),
                 base_python_identity_sha256=DIGEST_A,
+                allow_test=True,
             )
 
     def test_shared_deploy_lock_blocks_before_any_prefetch_action(self) -> None:
@@ -440,6 +606,7 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 docker_config=docker_config,
                 base_python=Path("/private/python"),
                 base_python_identity_sha256=DIGEST_A,
+                allow_test=True,
             )
             with lock.open("r+b", buffering=0) as stream:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -486,6 +653,7 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 docker_config=docker_config,
                 base_python=Path("/private/python"),
                 base_python_identity_sha256=DIGEST_A,
+                allow_test=True,
             )
             policy = self._policy()
             with (
@@ -502,6 +670,11 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 mock.patch.object(
                     controller,
                     "_publish_bundle",
+                    return_value={"complete": True},
+                ),
+                mock.patch.object(
+                    controller,
+                    "_controller_evidence",
                     return_value={"complete": True},
                 ),
                 mock.patch.object(
