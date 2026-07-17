@@ -80,8 +80,9 @@ during planning.
 `prepare` performs reversible work while the current runtime stays online:
 
 - revalidates the plan under the deployment lock;
-- fetches the target, proves it is a fast-forward and validates the successful
-  `ci-gate` and immutable image-publication jobs;
+- fetches the target, proves it is a fast-forward and validates the single
+  shared CI contract: `ci-gate`, immutable image publication and
+  `bridge-validation`;
 - pulls the two application image digests and records their local identities;
 - validates the target asset input, migration policy and production Compose
   files directly from the fetched Git objects;

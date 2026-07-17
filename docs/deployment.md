@@ -56,6 +56,8 @@ The single `.github/workflows/ci.yml` runs for pull requests and pushes to
 - Both images carry `revision`, `source` and `version` OCI labels.
 - CI resolves the pushed tags to immutable digests and smokes those exact
   digests against PostgreSQL 16.
+- The named `bridge-validation` job is part of the same required-job contract
+  consumed by bootstrap, Pull and the F→B bridge policy.
 - CI has no production environment, host credentials or production execution
   step.
 

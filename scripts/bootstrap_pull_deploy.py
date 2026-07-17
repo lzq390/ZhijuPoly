@@ -298,16 +298,19 @@ def _delivery_gate(
     allow_test: bool,
     sealed: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    required = set(
+        _required_ci_jobs(
+            source_sha=source_sha,
+            allow_test=allow_test,
+        )
+    )
     if allow_test:
         evidence = {
             "remote_main": source_sha,
             "ci": {
                 "head_sha": source_sha,
                 "conclusion": "success",
-                "required_jobs": [
-                    "Publish and smoke immutable main images",
-                    "ci-gate",
-                ],
+                "required_jobs": sorted(required),
             },
         }
         if sealed is not None and sealed != evidence:
@@ -416,7 +419,6 @@ def _delivery_gate(
         for job in jobs
         if isinstance(job, dict) and job.get("conclusion") == "success"
     }
-    required = {"ci-gate", "Publish and smoke immutable main images"}
     if not required.issubset(successful):
         raise BootstrapError("target CI lacks required successful jobs")
     ci = {
@@ -433,6 +435,34 @@ def _delivery_gate(
     if sealed is not None and evidence != sealed:
         raise BootstrapError("sealed bootstrap delivery evidence changed")
     return evidence
+
+
+def _required_ci_jobs(*, source_sha: str, allow_test: bool) -> tuple[str, ...]:
+    """Read the sole required-job contract from exact F authority bytes."""
+
+    payload = _read_reviewed_source(
+        "scripts/bridge_deploy_core.py",
+        source_sha=source_sha,
+        allow_test=allow_test,
+    )
+    module = types.ModuleType("nexpoly_bootstrap_bridge_ci_contract")
+    module.__file__ = f"git:{source_sha}:scripts/bridge_deploy_core.py"
+    try:
+        exec(compile(payload, module.__file__, "exec"), module.__dict__)
+    except BaseException as exc:
+        raise BootstrapError("F bridge CI contract cannot be loaded") from exc
+    raw = getattr(module, "REQUIRED_CI_JOBS", None)
+    if (
+        not isinstance(raw, (set, frozenset))
+        or not raw
+        or len(raw) > 32
+        or any(not isinstance(value, str) or not value for value in raw)
+    ):
+        raise BootstrapError("F bridge CI contract is invalid")
+    jobs = tuple(sorted(raw))
+    if len(jobs) != len(raw):
+        raise BootstrapError("F bridge CI contract contains duplicate jobs")
+    return jobs
 
 
 def _safe_source(path: Path) -> bytes:

@@ -8092,7 +8092,7 @@ class PullDeployController:
             if isinstance(job, dict) and job.get("conclusion") == "success"
         }
         required = (
-            {"ci-gate", "Publish and smoke immutable main images"}
+            set(_bridge_core.REQUIRED_CI_JOBS)
             if required_jobs is None
             else set(required_jobs)
         )

@@ -333,6 +333,26 @@ jobs:
           cache-from: type=gha,scope=ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}
           cache-to: type=gha,mode=max,scope=ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}
 
+  bridge-validation:
+    name: bridge-validation
+    needs: resolve-sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Validate exact bridge policy and schema compatibility states
+        run: >-
+          python3 -m unittest -v
+          scripts/tests/test_bridge_deploy_core.py
+          scripts/tests/test_pull_contract_0012.py
+          scripts/tests/test_pull_deploy_controller.py
+
   ci-gate:
     name: ci-gate
     if: always()
@@ -345,6 +365,7 @@ jobs:
       - frontend
       - worker-tests
       - image-build
+      - bridge-validation
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

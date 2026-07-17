@@ -531,11 +531,10 @@ class GithubRunner:
         if "/jobs?" in url:
             return {
                 "jobs": [
-                    {"name": "ci-gate", "conclusion": "success"},
-                    {
-                        "name": "Publish and smoke immutable main images",
-                        "conclusion": "success",
-                    },
+                    {"name": name, "conclusion": "success"}
+                    for name in sorted(
+                        CONTROLLER._bridge_core.REQUIRED_CI_JOBS
+                    )
                 ]
             }
         return {
@@ -966,10 +965,9 @@ class FixtureController(CONTROLLER.PullDeployController):
                         "event": "push",
                         "path": ".github/workflows/ci.yml",
                         "conclusion": "success",
-                        "required_jobs": [
-                            "Publish and smoke immutable main images",
-                            "ci-gate",
-                        ],
+                        "required_jobs": sorted(
+                            CONTROLLER._bridge_core.REQUIRED_CI_JOBS
+                        ),
                     },
                 },
                 "production_repository": {"fixture": True},
@@ -1017,7 +1015,9 @@ class FixtureController(CONTROLLER.PullDeployController):
             "event": "push",
             "path": ".github/workflows/ci.yml",
             "conclusion": "success",
-            "required_jobs": ["Publish and smoke immutable main images", "ci-gate"],
+            "required_jobs": sorted(
+                CONTROLLER._bridge_core.REQUIRED_CI_JOBS
+            ),
         }
 
     def image_evidence(self, role: str, target_sha: str) -> dict[str, str]:
@@ -1427,10 +1427,7 @@ class RepositoryAndEvidenceTests(PullDeployTestCase):
         controller = self.controller()
         expected = controller.bootstrap_ci_evidence(
             authority_sha=TARGET_SHA,
-            required_jobs={
-                "ci-gate",
-                "Publish and smoke immutable main images",
-            },
+            required_jobs=CONTROLLER._bridge_core.REQUIRED_CI_JOBS,
         )
         self.assertEqual(expected["workflow_run_id"], 42)
         self.assertEqual(expected["head_sha"], TARGET_SHA)
@@ -1445,10 +1442,7 @@ class RepositoryAndEvidenceTests(PullDeployTestCase):
         ):
             controller.bootstrap_ci_evidence(
                 authority_sha=TARGET_SHA,
-                required_jobs={
-                    "ci-gate",
-                    "Publish and smoke immutable main images",
-                },
+                required_jobs=CONTROLLER._bridge_core.REQUIRED_CI_JOBS,
             )
 
     def test_ambient_test_mode_cannot_authorize_production_roots(self) -> None:
@@ -1491,7 +1485,7 @@ class RepositoryAndEvidenceTests(PullDeployTestCase):
         ):
             controller.plan(target_sha="5" * 40, operation_id=OPERATION_ID)
 
-    def test_ci_gate_binds_successful_main_push_and_both_required_jobs(self) -> None:
+    def test_ci_gate_binds_successful_main_push_and_all_required_jobs(self) -> None:
         runner = GithubRunner()
         controller = CONTROLLER.PullDeployController(
             self.production, self.runtime, runner=runner, apply=False
@@ -1501,22 +1495,43 @@ class RepositoryAndEvidenceTests(PullDeployTestCase):
         self.assertEqual(evidence["conclusion"], "success")
         self.assertEqual(len(runner.urls), 2)
 
-    def test_ci_gate_rejects_missing_image_publication_job(self) -> None:
-        runner = GithubRunner()
-        original = runner.request_json
+    def test_ci_gate_rejects_each_missing_contract_job(self) -> None:
+        for missing in sorted(CONTROLLER._bridge_core.REQUIRED_CI_JOBS):
+            with self.subTest(missing=missing):
+                runner = GithubRunner()
+                original = runner.request_json
 
-        def incomplete(url: str, token: str):  # type: ignore[no-untyped-def]
-            payload = original(url, token)
-            if "/jobs?" in url:
-                return {"jobs": [{"name": "ci-gate", "conclusion": "success"}]}
-            return payload
+                def incomplete(
+                    url: str,
+                    token: str,
+                    *,
+                    omitted: str = missing,
+                ):  # type: ignore[no-untyped-def]
+                    payload = original(url, token)
+                    if "/jobs?" in url:
+                        return {
+                            "jobs": [
+                                {"name": name, "conclusion": "success"}
+                                for name in sorted(
+                                    CONTROLLER._bridge_core.REQUIRED_CI_JOBS
+                                )
+                                if name != omitted
+                            ]
+                        }
+                    return payload
 
-        runner.request_json = incomplete  # type: ignore[method-assign]
-        controller = CONTROLLER.PullDeployController(
-            self.production, self.runtime, runner=runner, apply=False
-        )
-        with self.assertRaisesRegex(CONTROLLER.PullDeployError, "lacks a successful"):
-            controller.ci_evidence(TARGET_SHA)
+                runner.request_json = incomplete  # type: ignore[method-assign]
+                controller = CONTROLLER.PullDeployController(
+                    self.production,
+                    self.runtime,
+                    runner=runner,
+                    apply=False,
+                )
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "lacks a successful",
+                ):
+                    controller.ci_evidence(TARGET_SHA)
 
     def test_image_gate_resolves_digest_and_rejects_wrong_revision(self) -> None:
         runner = ImageRunner()

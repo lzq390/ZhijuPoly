@@ -1074,7 +1074,20 @@ class BootstrapPullDeployTests(unittest.TestCase):
     def test_sealed_delivery_gate_revalidates_exact_workflow_attempt(self) -> None:
         run_id = 77
         attempt = 1
-        required = ["Publish and smoke immutable main images", "ci-gate"]
+        required = list(
+            BOOTSTRAP._required_ci_jobs(
+                source_sha=SOURCE_SHA,
+                allow_test=True,
+            )
+        )
+        self.assertEqual(
+            required,
+            [
+                "Publish and smoke immutable main images",
+                "bridge-validation",
+                "ci-gate",
+            ],
+        )
         sealed = {
             "remote_main": SOURCE_SHA,
             "ci": {
@@ -1122,6 +1135,11 @@ class BootstrapPullDeployTests(unittest.TestCase):
         with (
             mock.patch.object(BOOTSTRAP, "_github_token", return_value="token"),
             mock.patch.object(
+                BOOTSTRAP,
+                "_required_ci_jobs",
+                return_value=tuple(required),
+            ),
+            mock.patch.object(
                 BOOTSTRAP, "_request_github_json", side_effect=github
             ),
         ):
@@ -1135,6 +1153,56 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertEqual(evidence, sealed)
         self.assertTrue(any("/attempts/1" in value for value in urls))
         self.assertFalse(any("filter=latest" in value for value in urls))
+        for missing in required:
+            with self.subTest(missing=missing):
+                def incomplete(
+                    url: str,
+                    token: str,
+                    *,
+                    omitted: str = missing,
+                ) -> dict[str, object]:
+                    document = github(url, token)
+                    if url.endswith(
+                        f"/actions/runs/{run_id}/attempts/{attempt}/jobs"
+                        "?per_page=100"
+                    ):
+                        document = {
+                            "jobs": [
+                                {"name": name, "conclusion": "success"}
+                                for name in required
+                                if name != omitted
+                            ]
+                        }
+                    return document
+
+                with (
+                    mock.patch.object(
+                        BOOTSTRAP,
+                        "_github_token",
+                        return_value="token",
+                    ),
+                    mock.patch.object(
+                        BOOTSTRAP,
+                        "_required_ci_jobs",
+                        return_value=tuple(required),
+                    ),
+                    mock.patch.object(
+                        BOOTSTRAP,
+                        "_request_github_json",
+                        side_effect=incomplete,
+                    ),
+                    self.assertRaisesRegex(
+                        BOOTSTRAP.BootstrapError,
+                        "lacks required successful jobs",
+                    ),
+                ):
+                    BOOTSTRAP._delivery_gate(
+                        self.production,
+                        self.runtime,
+                        SOURCE_SHA,
+                        allow_test=False,
+                        sealed=sealed,
+                    )
 
     def test_apply_rejects_symlink_runtime_root_before_chmod(self) -> None:
         target = self.root / "runtime-target"

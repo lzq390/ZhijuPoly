@@ -111,6 +111,11 @@ def main() -> int:
             "push:",
             "branches: [main]",
             "[[ \"$EVENT_REF\" == refs/pull/*/merge ]]",
+            "  bridge-validation:\n"
+            "    name: bridge-validation\n"
+            "    needs: resolve-sha\n"
+            "    runs-on: ubuntu-24.04",
+            "Validate exact bridge policy and schema compatibility states",
             "name: ci-gate",
             "  release:\n"
             "    name: Publish and smoke immutable main images\n"
@@ -139,6 +144,7 @@ def main() -> int:
             "docker pull \"$POSTGRES_IMAGE\"",
             "test_reconcile_production_0005_polytao_alias_integration.py",
             "      - production-alias-integration",
+            "      - bridge-validation",
             "python3 scripts/ci/validate_dependency_locks.py",
             "python3 -m app.migration_policy",
             "docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet",
