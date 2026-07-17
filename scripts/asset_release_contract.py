@@ -98,12 +98,40 @@ BUILD_EVIDENCE = {
         "backend-data",
     ],
     "asset_tree_digest_algorithm": "canonical-manifest-inventory-v1",
-    "byteff2_source_verification": "clean-recursive-commit-and-tree",
+    "byteff2_source_verification": (
+        "clean-recursive-commit-object-materialization-v1"
+    ),
     "staging_directory_mode": "0700",
     "file_and_directory_fsync": True,
     "publication": "atomic-rename",
     "existing_target": "full-content-revalidation",
 }
+GIT_EXECUTABLE = "/usr/bin/git"
+ISOLATED_GIT_OPTIONS = (
+    "--no-replace-objects",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.untrackedCache=false",
+    "-c",
+    "core.attributesFile=/dev/null",
+    "-c",
+    "core.excludesFile=/dev/null",
+    "-c",
+    "fetch.fsckObjects=true",
+    "-c",
+    "transfer.fsckObjects=true",
+    "-c",
+    "fsck.skipList=/dev/null",
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "submodule.recurse=false",
+)
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 HEX_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -806,13 +834,29 @@ def _private_file_digest(path: Path, *, expected_uid: int) -> str:
 
 def _git_environment(home: Path) -> dict[str, str]:
     return {
-        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "PATH": "/usr/bin:/bin",
         "HOME": str(home),
-        "LANG": "C.UTF-8",
-        "LC_ALL": "C.UTF-8",
+        "XDG_CONFIG_HOME": str(home / "xdg"),
+        "LANG": "C",
+        "LC_ALL": "C",
         "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CEILING_DIRECTORIES": str(home),
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_PROTOCOL_FROM_USER": "0",
         "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ATTR_NOSYSTEM": "1",
         "GIT_ALLOW_PROTOCOL": "file",
+        "GIT_ASKPASS": "/bin/false",
+        "GIT_SSH_COMMAND": "/bin/false",
+        "SSH_ASKPASS": "/bin/false",
+        "SSH_ASKPASS_REQUIRE": "never",
+        "GIT_PAGER": "cat",
+        "GIT_EDITOR": "/bin/false",
+        "PAGER": "cat",
         "http_proxy": "",
         "https_proxy": "",
         "HTTP_PROXY": "",
@@ -820,6 +864,18 @@ def _git_environment(home: Path) -> dict[str, str]:
         "ALL_PROXY": "",
         "NO_PROXY": "*",
     }
+
+
+def _isolated_git_command(arguments: list[str]) -> list[str]:
+    if not arguments or arguments[0] != GIT_EXECUTABLE:
+        raise AssetContractError(
+            "offline Git proof must use the fixed Git executable"
+        )
+    return [
+        GIT_EXECUTABLE,
+        *ISOLATED_GIT_OPTIONS,
+        *arguments[1:],
+    ]
 
 
 def _git_run(
@@ -831,7 +887,7 @@ def _git_run(
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
-            arguments,
+            _isolated_git_command(arguments),
             cwd=cwd,
             env=dict(environment),
             check=check,
@@ -899,41 +955,59 @@ def verify_builder_from_bundle(
         environment = _git_environment(scratch)
         verifier = scratch / "verify.git"
         _git_run(
-            ["git", "init", "--bare", "--quiet", str(verifier)],
-            cwd=None,
+            [GIT_EXECUTABLE, "init", "--bare", "--quiet", str(verifier)],
+            cwd=scratch,
             environment=environment,
         )
         _git_run(
-            ["git", "-C", str(verifier), "bundle", "verify", str(bundle_path)],
-            cwd=None,
+            [
+                GIT_EXECUTABLE,
+                "-C",
+                str(verifier),
+                "bundle",
+                "verify",
+                str(bundle_path),
+            ],
+            cwd=scratch,
             environment=environment,
         )
         heads = _git_run(
-            ["git", "bundle", "list-heads", str(bundle_path)],
-            cwd=None,
+            [GIT_EXECUTABLE, "bundle", "list-heads", str(bundle_path)],
+            cwd=scratch,
             environment=environment,
         ).stdout.splitlines()
         if heads != [f"{authority_sha} refs/heads/main"]:
             raise AssetContractError("offline bundle advertises another F main")
         clone = scratch / "clone"
+        template = scratch / "template"
+        template.mkdir(mode=0o700)
         _git_run(
             [
-                "git",
+                GIT_EXECUTABLE,
                 "-c",
                 "protocol.file.allow=always",
                 "clone",
                 "--quiet",
                 "--no-checkout",
-                "--template=/dev/null",
+                "--single-branch",
+                "--branch",
+                "main",
+                f"--template={template}",
                 str(bundle_path),
                 str(clone),
             ],
-            cwd=None,
+            cwd=scratch,
             environment=environment,
         )
         common = _git_run(
-            ["git", "-C", str(clone), "rev-parse", "--git-common-dir"],
-            cwd=None,
+            [
+                GIT_EXECUTABLE,
+                "-C",
+                str(clone),
+                "rev-parse",
+                "--git-common-dir",
+            ],
+            cwd=scratch,
             environment=environment,
         ).stdout.strip()
         if (
@@ -943,14 +1017,14 @@ def verify_builder_from_bundle(
             raise AssetContractError("offline proof clone uses external Git objects")
         partial = _git_run(
             [
-                "git",
+                GIT_EXECUTABLE,
                 "-C",
                 str(clone),
                 "config",
                 "--get-regexp",
                 r"^(extensions\.partialClone|remote\..*\.promisor)$",
             ],
-            cwd=None,
+            cwd=scratch,
             environment=environment,
             check=False,
         )
@@ -958,25 +1032,38 @@ def verify_builder_from_bundle(
             raise AssetContractError(
                 "offline proof clone is partial or promisor-backed"
             )
-        _git_run(
-            ["git", "-C", str(clone), "fsck", "--full", "--strict"],
-            cwd=None,
+        fsck = _git_run(
+            [
+                GIT_EXECUTABLE,
+                "-C",
+                str(clone),
+                "fsck",
+                "--full",
+                "--strict",
+                "--no-progress",
+            ],
+            cwd=scratch,
             environment=environment,
+            check=False,
         )
+        if fsck.returncode != 0 or fsck.stdout or fsck.stderr:
+            raise AssetContractError(
+                "offline proof clone object database failed strict verification"
+            )
         for sha, tree, label in (
             (builder_sha, builder_tree, "B0 builder"),
             (target_sha, target_tree, "B1 target"),
             (authority_sha, authority_tree, "F authority"),
         ):
             commit_type_result = _git_run(
-                ["git", "-C", str(clone), "cat-file", "-t", sha],
-                cwd=None,
+                [GIT_EXECUTABLE, "-C", str(clone), "cat-file", "-t", sha],
+                cwd=scratch,
                 environment=environment,
                 check=False,
             )
             tree_type_result = _git_run(
-                ["git", "-C", str(clone), "cat-file", "-t", tree],
-                cwd=None,
+                [GIT_EXECUTABLE, "-C", str(clone), "cat-file", "-t", tree],
+                cwd=scratch,
                 environment=environment,
                 check=False,
             )
@@ -990,26 +1077,39 @@ def verify_builder_from_bundle(
                     f"{label} does not name an exact commit and tree"
                 )
             observed = _git_run(
-                ["git", "-C", str(clone), "rev-parse", f"{sha}^{{tree}}"],
-                cwd=None,
+                [
+                    GIT_EXECUTABLE,
+                    "-C",
+                    str(clone),
+                    "rev-parse",
+                    f"{sha}^{{tree}}",
+                ],
+                cwd=scratch,
                 environment=environment,
             ).stdout.strip()
             if observed != tree:
                 raise AssetContractError(f"{label} tree differs in offline bundle")
         observed_blob = _git_run(
             [
-                "git",
+                GIT_EXECUTABLE,
                 "-C",
                 str(clone),
                 "rev-parse",
                 f"{builder_sha}:{BUILD_SOURCE_SCRIPT}",
             ],
-            cwd=None,
+            cwd=scratch,
             environment=environment,
         ).stdout.strip()
         blob_type_result = _git_run(
-            ["git", "-C", str(clone), "cat-file", "-t", builder_blob],
-            cwd=None,
+            [
+                GIT_EXECUTABLE,
+                "-C",
+                str(clone),
+                "cat-file",
+                "-t",
+                builder_blob,
+            ],
+            cwd=scratch,
             environment=environment,
             check=False,
         )
@@ -1026,7 +1126,7 @@ def verify_builder_from_bundle(
         ):
             relation = _git_run(
                 [
-                    "git",
+                    GIT_EXECUTABLE,
                     "-C",
                     str(clone),
                     "merge-base",
@@ -1034,7 +1134,7 @@ def verify_builder_from_bundle(
                     ancestor,
                     descendant,
                 ],
-                cwd=None,
+                cwd=scratch,
                 environment=environment,
                 check=False,
             )

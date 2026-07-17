@@ -721,6 +721,121 @@ class AssetBootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(assets.AssetError, "overlay digest mismatch"):
                 assets.inspect_byteff2_checkout(root)
 
+    def test_checkout_policy_rejects_local_include_and_includeif(self) -> None:
+        for key in (
+            "include.path",
+            "includeIf.onbranch:main.path",
+        ):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as raw:
+                workspace = Path(raw)
+                root = workspace / "byteff2"
+                self.initialize_repository(root)
+                hostile = workspace / "hostile.gitconfig"
+                hostile.write_text(
+                    "[fsck]\n\tmissingEmail = ignore\n",
+                    encoding="utf-8",
+                )
+                self.git(
+                    root,
+                    "config",
+                    "--local",
+                    key,
+                    str(hostile),
+                )
+
+                with self.assertRaisesRegex(
+                    assets.AssetError,
+                    "must not use local include or includeIf config",
+                ):
+                    assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_policy_rejects_local_fsck_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "byteff2"
+            self.initialize_repository(root)
+            self.git(
+                root,
+                "config",
+                "--local",
+                "fsck.missingEmail",
+                "ignore",
+            )
+
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "must not override strict fsck policy",
+            ):
+                assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_policy_rejects_worktree_local_include(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            root = workspace / "byteff2"
+            self.initialize_repository(root)
+            hostile = workspace / "hostile.gitconfig"
+            hostile.write_text(
+                "[fsck]\n\tmissingEmail = ignore\n",
+                encoding="utf-8",
+            )
+            self.git(
+                root,
+                "config",
+                "--local",
+                "extensions.worktreeConfig",
+                "true",
+            )
+            self.git(
+                root,
+                "config",
+                "--worktree",
+                "include.path",
+                str(hostile),
+            )
+
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "must not use local include or includeIf config",
+            ):
+                assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_policy_rejects_any_fsck_output(self) -> None:
+        for stream in ("stdout", "stderr"):
+            with self.subTest(stream=stream), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw) / "byteff2"
+                self.initialize_repository(root)
+                real_git_run = assets.git_run
+
+                def noisy_git_run(
+                    repository: Path,
+                    *arguments: str,
+                    **kwargs: object,
+                ) -> subprocess.CompletedProcess[str]:
+                    if arguments and arguments[0] == "fsck":
+                        return subprocess.CompletedProcess(
+                            ["/usr/bin/git", *arguments],
+                            0,
+                            stdout="unexpected fsck output\n"
+                            if stream == "stdout"
+                            else "",
+                            stderr="unexpected fsck error\n"
+                            if stream == "stderr"
+                            else "",
+                        )
+                    return real_git_run(repository, *arguments, **kwargs)
+
+                with (
+                    mock.patch.object(
+                        assets,
+                        "git_run",
+                        side_effect=noisy_git_run,
+                    ),
+                    self.assertRaisesRegex(
+                        assets.AssetError,
+                        "object database failed strict verification",
+                    ),
+                ):
+                    assets.validate_byteff2_git_policy(root, "")
+
     def test_checkout_validation_rejects_missing_required_runtime_asset(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw) / "byteff2"

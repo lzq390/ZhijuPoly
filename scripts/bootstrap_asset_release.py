@@ -797,10 +797,76 @@ def indexed_submodules(root: Path) -> list[tuple[str, str]]:
     return sorted(result)
 
 
+def local_git_policy_keys(repository: Path, label: str) -> set[str]:
+    """Read only repository-local key names without following includes."""
+
+    def read_scope(scope: str) -> set[str]:
+        result = git_run(
+            repository,
+            "config",
+            scope,
+            "--no-includes",
+            "--null",
+            "--name-only",
+            "--get-regexp",
+            ".*",
+            check=False,
+            text=True,
+        )
+        if (
+            result.returncode not in {0, 1}
+            or result.stderr
+            or (result.returncode == 1 and result.stdout)
+        ):
+            raise AssetError(
+                f"{label} local Git policy cannot be inspected safely"
+            )
+        return {
+            key.casefold()
+            for key in result.stdout.split("\0")
+            if key
+        }
+
+    keys = read_scope("--local")
+    worktree_config = git_run(
+        repository,
+        "config",
+        "--local",
+        "--no-includes",
+        "--type=bool",
+        "--get",
+        "extensions.worktreeConfig",
+        check=False,
+        text=True,
+    )
+    if (
+        worktree_config.returncode not in {0, 1}
+        or worktree_config.stderr
+        or (
+            worktree_config.returncode == 0
+            and worktree_config.stdout.strip() not in {"true", "false"}
+        )
+        or (worktree_config.returncode == 1 and worktree_config.stdout)
+    ):
+        raise AssetError(f"{label} local Git policy cannot be inspected safely")
+    if worktree_config.stdout.strip() == "true":
+        keys.update(read_scope("--worktree"))
+    return keys
+
+
 def validate_byteff2_git_policy(repository: Path, relative: str) -> None:
     """Reject object indirection and incomplete history before reading objects."""
 
     label = "ByteFF2 checkout" if not relative else f"ByteFF2 submodule {relative}"
+    local_keys = local_git_policy_keys(repository, label)
+    if any(
+        key == "include.path"
+        or (key.startswith("includeif.") and key.endswith(".path"))
+        for key in local_keys
+    ):
+        raise AssetError(f"{label} must not use local include or includeIf config")
+    if any(key.startswith("fsck.") for key in local_keys):
+        raise AssetError(f"{label} must not override strict fsck policy")
     if (
         git_output(
             repository,
@@ -854,7 +920,7 @@ def validate_byteff2_git_policy(repository: Path, relative: str) -> None:
         check=False,
         text=True,
     )
-    if fsck.returncode != 0:
+    if fsck.returncode != 0 or fsck.stdout or fsck.stderr:
         raise AssetError(f"{label} object database failed strict verification")
 
 
@@ -863,6 +929,9 @@ def inspect_byteff2_checkout(root: Path) -> tuple[str, dict[str, str]]:
     root = root.resolve()
     if not root.is_dir() or root.is_symlink():
         raise AssetError(f"ByteFF2 root must be a real directory: {root}")
+    # The first repository-aware command must be the no-includes local policy
+    # scan.  Do not let a hostile include influence even top-level discovery.
+    validate_byteff2_git_policy(root, "")
     top_level = Path(git_output(root, "rev-parse", "--show-toplevel").strip()).resolve()
     if top_level != root:
         raise AssetError(f"ByteFF2 root must be the Git top-level directory: {root}")
@@ -871,7 +940,8 @@ def inspect_byteff2_checkout(root: Path) -> tuple[str, dict[str, str]]:
     overlay_paths = tuple(relative for relative, _size, _digest in BYTEFF2_AUDITED_OVERLAY_FILES)
 
     def inspect_repository(repository: Path, relative: str) -> str:
-        validate_byteff2_git_policy(repository, relative)
+        if relative:
+            validate_byteff2_git_policy(repository, relative)
         commit = git_output(repository, "rev-parse", "--verify", "HEAD^{commit}").strip()
         if not FULL_SHA.fullmatch(commit):
             raise AssetError(f"repository does not resolve to a full commit SHA: {repository}")

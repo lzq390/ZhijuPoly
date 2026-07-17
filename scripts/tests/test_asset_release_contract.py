@@ -5,9 +5,11 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,6 +21,14 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC is not None and SPEC.loader is not None
 ASSET = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ASSET)
+BUILDER_SCRIPT = ROOT / "scripts/bootstrap_asset_release.py"
+BUILDER_SPEC = importlib.util.spec_from_file_location(
+    "bootstrap_asset_release_integration_test",
+    BUILDER_SCRIPT,
+)
+assert BUILDER_SPEC is not None and BUILDER_SPEC.loader is not None
+BUILDER = importlib.util.module_from_spec(BUILDER_SPEC)
+BUILDER_SPEC.loader.exec_module(BUILDER)
 
 
 def digest_bytes(payload: bytes) -> str:
@@ -253,6 +263,87 @@ class AssetReleaseValidationTests(unittest.TestCase):
         self.assertEqual(evidence["predecessor_manifest_sha256"], fixture.v1_digest)
         self.assertTrue(evidence["read_only"])
 
+    def test_bootstrap_builder_output_passes_schema_v2_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            fixture = AssetFixture(Path(raw))
+            runtime_payload = fixture.v2_contents["byteff2"]["runtime.bin"]
+            overlay_payload = fixture.v2_contents["byteff2"][
+                "byteff2/overlay.bin"
+            ]
+            with mock.patch.multiple(
+                BUILDER,
+                PREDECESSOR_ASSET_DIGEST=fixture.v1_digest,
+                BYTEFF2_GIT_SOURCE=fixture.contract["byteff2_source"][
+                    "source"
+                ],
+                BYTEFF2_AUDITED_OVERLAY_SOURCE=fixture.contract[
+                    "byteff2_audited_overlays"
+                ]["source"],
+                BYTEFF2_AUDITED_OVERLAY_REVISION=fixture.contract[
+                    "byteff2_audited_overlays"
+                ]["revision"],
+                BYTEFF2_AUDITED_OVERLAY_FILES=(
+                    (
+                        "byteff2/overlay.bin",
+                        len(overlay_payload),
+                        digest_bytes(overlay_payload),
+                    ),
+                ),
+                BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS={
+                    "byteff2/overlay.bin": "overlay.bin"
+                },
+                BYTEFF2_RUNTIME_REQUIRED_FILES=(
+                    ("runtime.bin", digest_bytes(runtime_payload)),
+                ),
+            ):
+                document = BUILDER.build_manifest(
+                    fixture.v2_assets,
+                    byteff2_commit=fixture.contract["byteff2_commit"],
+                    byteff2_tree=fixture.contract["byteff2_tree"],
+                    byteff2_submodules=fixture.contract[
+                        "byteff2_submodules"
+                    ],
+                    byteff2_submodule_trees=fixture.contract[
+                        "byteff2_submodule_trees"
+                    ],
+                    predecessor_digest=fixture.v1_digest,
+                    predecessor_tree_digests=fixture.contract[
+                        "unchanged_asset_tree_digests"
+                    ],
+                    builder_source=fixture.builder,
+                )
+
+            fixture.v2_root.chmod(0o700)
+            for path in fixture.v2_root.rglob("*"):
+                path.chmod(0o700 if path.is_dir() else 0o600)
+            shutil.rmtree(fixture.v2_root)
+            staging = fixture.releases / ".builder-output"
+            staging.mkdir(mode=0o700)
+            AssetFixture._write_contents(staging, fixture.v2_contents)
+            payload = ASSET.canonical_json_bytes(document, newline=True)
+            (staging / "ASSET-MANIFEST.json").write_bytes(payload)
+            digest = ASSET.sha256_bytes(payload)
+            release = fixture.releases / digest.removeprefix("sha256:")
+            staging.rename(release)
+            AssetFixture._seal(
+                release,
+                directory_mode=0o500,
+                file_mode=0o400,
+            )
+
+            evidence = ASSET.validate_schema_v2_release(
+                release,
+                expected_digest=digest,
+                releases_root=fixture.releases,
+                contract=fixture.contract,
+            )
+
+        self.assertEqual(evidence["manifest_sha256"], digest)
+        self.assertEqual(
+            document["build_provenance"]["evidence"],
+            fixture.contract["build_evidence"],
+        )
+
     def test_rejects_tampered_predecessor_even_when_v2_is_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             fixture = AssetFixture(Path(raw))
@@ -409,6 +500,64 @@ class AssetReleaseValidationTests(unittest.TestCase):
 
 
 class BuilderBundleProofTests(unittest.TestCase):
+    def test_git_runner_uses_fixed_binary_and_fully_isolated_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            completed = subprocess.CompletedProcess(
+                [ASSET.GIT_EXECUTABLE, "version"],
+                0,
+                stdout="git version fixture\n",
+                stderr="",
+            )
+            environment = ASSET._git_environment(home)
+            with mock.patch.object(
+                ASSET.subprocess,
+                "run",
+                return_value=completed,
+            ) as run:
+                ASSET._git_run(
+                    [ASSET.GIT_EXECUTABLE, "version"],
+                    cwd=None,
+                    environment=environment,
+                )
+
+            command = run.call_args.args[0]
+            invoked_environment = run.call_args.kwargs["env"]
+            self.assertEqual(command[0], "/usr/bin/git")
+            self.assertEqual(
+                command[1 : 1 + len(ASSET.ISOLATED_GIT_OPTIONS)],
+                list(ASSET.ISOLATED_GIT_OPTIONS),
+            )
+            self.assertEqual(command[-1], "version")
+            self.assertEqual(invoked_environment["PATH"], "/usr/bin:/bin")
+            self.assertEqual(invoked_environment["GIT_CONFIG_NOSYSTEM"], "1")
+            self.assertEqual(
+                invoked_environment["GIT_CONFIG_GLOBAL"],
+                os.devnull,
+            )
+            self.assertEqual(
+                invoked_environment["GIT_CEILING_DIRECTORIES"],
+                str(home),
+            )
+            self.assertEqual(invoked_environment["GIT_NO_LAZY_FETCH"], "1")
+            self.assertEqual(
+                invoked_environment["GIT_NO_REPLACE_OBJECTS"],
+                "1",
+            )
+            self.assertEqual(invoked_environment["GIT_ALLOW_PROTOCOL"], "file")
+            self.assertEqual(invoked_environment["GIT_ATTR_NOSYSTEM"], "1")
+            self.assertNotIn("GIT_CONFIG_COUNT", invoked_environment)
+
+            with self.assertRaisesRegex(
+                ASSET.AssetContractError,
+                "fixed Git executable",
+            ):
+                ASSET._git_run(
+                    ["git", "version"],
+                    cwd=None,
+                    environment=environment,
+                )
+
     def test_bundle_proves_exact_builder_target_authority_chain(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             parent = Path(raw)
@@ -462,15 +611,33 @@ class BuilderBundleProofTests(unittest.TestCase):
                 "script_path": ASSET.BUILD_SOURCE_SCRIPT,
                 "script_blob": builder_blob,
             }
-            proof = ASSET.verify_builder_from_bundle(
-                bundle,
-                expected_bundle_sha256=bundle_digest,
-                builder_source=builder,
-                target={"sha": target_sha, "tree": target_tree},
-                authority={"sha": authority_sha, "tree": authority_tree},
-            )
+            with mock.patch.object(
+                ASSET,
+                "_git_run",
+                wraps=ASSET._git_run,
+            ) as isolated_git:
+                proof = ASSET.verify_builder_from_bundle(
+                    bundle,
+                    expected_bundle_sha256=bundle_digest,
+                    builder_source=builder,
+                    target={"sha": target_sha, "tree": target_tree},
+                    authority={"sha": authority_sha, "tree": authority_tree},
+                )
             self.assertTrue(proof["ancestry"]["builder_to_target"])
             self.assertFalse(proof["network_used"])
+            self.assertTrue(isolated_git.call_args_list)
+            self.assertTrue(
+                all(
+                    call.args[0][0] == ASSET.GIT_EXECUTABLE
+                    for call in isolated_git.call_args_list
+                )
+            )
+            self.assertTrue(
+                all(
+                    call.kwargs["cwd"] is not None
+                    for call in isolated_git.call_args_list
+                )
+            )
 
             fixture_root = parent / "assets"
             fixture_root.mkdir(mode=0o700)
