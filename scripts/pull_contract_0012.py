@@ -651,26 +651,31 @@ class PullContractLifecycle(pull.SystemLifecycle):
         self.cleanup_contract_restore_container(controller, operation_id)
 
         failure: BaseException | None = None
+        container_id: str | None = None
 
         def run(*arguments: str, **kwargs: Any) -> Any:
             return controller.runner.run(list(arguments), env=clean, **kwargs)
 
         def psql_json(sql: str) -> Any:
+            if container_id is None:
+                raise PullContractError(
+                    "isolated PostgreSQL container identity is unavailable"
+                )
             result = run(
-                "docker",
-                "exec",
-                name,
-                "psql",
-                "--set",
-                "ON_ERROR_STOP=1",
-                "--tuples-only",
-                "--no-align",
-                "--username",
-                "postgres",
-                "--dbname",
-                "nexpoly_restore",
-                "--command",
-                sql,
+                *pull.SystemLifecycle._docker_exec(
+                    container_id,
+                    "psql",
+                    "--set",
+                    "ON_ERROR_STOP=1",
+                    "--tuples-only",
+                    "--no-align",
+                    "--username",
+                    "postgres",
+                    "--dbname",
+                    "nexpoly_restore",
+                    "--command",
+                    sql,
+                ),
             )
             raw = str(result.stdout).strip()
             if not raw or len(raw.encode("utf-8")) > 8 * 1024 * 1024:
@@ -719,7 +724,7 @@ class PullContractLifecycle(pull.SystemLifecycle):
                     "started contract restore inspection is malformed"
                 ) from exc
             try:
-                pull.SystemLifecycle._validate_isolated_container(
+                container_id = pull.SystemLifecycle._validate_isolated_container(
                     committed_record,
                     name=name,
                     image=pull.POSTGRES16_IMAGE,
@@ -734,12 +739,12 @@ class PullContractLifecycle(pull.SystemLifecycle):
             deadline = time.monotonic() + 120
             while True:
                 ready = run(
-                    "docker",
-                    "exec",
-                    name,
-                    "pg_isready",
-                    "--username",
-                    "postgres",
+                    *pull.SystemLifecycle._docker_exec(
+                        str(container_id),
+                        "pg_isready",
+                        "--username",
+                        "postgres",
+                    ),
                     check=False,
                 )
                 if ready.returncode == 0:
@@ -750,46 +755,46 @@ class PullContractLifecycle(pull.SystemLifecycle):
                     )
                 time.sleep(1)
             run(
-                "docker",
-                "exec",
-                name,
-                "createdb",
-                "--username",
-                "postgres",
-                "nexpoly_restore",
+                *pull.SystemLifecycle._docker_exec(
+                    str(container_id),
+                    "createdb",
+                    "--username",
+                    "postgres",
+                    "nexpoly_restore",
+                ),
             )
             with dump.open("rb") as source:
                 run(
-                    "docker",
-                    "exec",
-                    "--interactive",
-                    name,
-                    "pg_restore",
-                    "--exit-on-error",
-                    "--no-owner",
-                    "--no-acl",
-                    "--username",
-                    "postgres",
-                    "--dbname",
-                    "nexpoly_restore",
+                    *pull.SystemLifecycle._docker_exec(
+                        str(container_id),
+                        "pg_restore",
+                        "--exit-on-error",
+                        "--no-owner",
+                        "--no-acl",
+                        "--username",
+                        "postgres",
+                        "--dbname",
+                        "nexpoly_restore",
+                        interactive=True,
+                    ),
                     text=False,
                     stdin=source,
                     timeout=1800,
                 )
             version = str(
                 run(
-                    "docker",
-                    "exec",
-                    name,
-                    "psql",
-                    "--tuples-only",
-                    "--no-align",
-                    "--username",
-                    "postgres",
-                    "--dbname",
-                    "nexpoly_restore",
-                    "--command",
-                    "SHOW server_version_num",
+                    *pull.SystemLifecycle._docker_exec(
+                        str(container_id),
+                        "psql",
+                        "--tuples-only",
+                        "--no-align",
+                        "--username",
+                        "postgres",
+                        "--dbname",
+                        "nexpoly_restore",
+                        "--command",
+                        "SHOW server_version_num",
+                    ),
                 ).stdout
             ).strip()
             if not version.isdigit() or not version.startswith("16"):
@@ -1210,10 +1215,49 @@ class PullRuntimeController(legacy.ReleaseController):
         *,
         release: Path,
     ) -> None:
+        del release
         expected = self._assert_contract_postgres_runtime(
             phase="before 0012 rollback restore"
         )
-        super().restore_database(environment, release=release)
+        if self.backup_path is None or not self.backup_path.is_file():
+            raise PullContractError(
+                "database restore requires the verified pre-0012 dump"
+            )
+        expected_digest = legacy.sha256_file(self.backup_path)
+        try:
+            sidecar = pull.load_private_json(
+                self.backup_path.with_suffix(".dump.json")
+            )
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "0012 database backup sidecar is unsafe"
+            ) from exc
+        if sidecar.get("sha256") != expected_digest:
+            raise PullContractError(
+                "0012 database dump digest differs from its sidecar"
+            )
+        user = environment["NEXPOLY_POSTGRES_USER"]
+        database = environment["NEXPOLY_POSTGRES_DB"]
+        with self.backup_path.open("rb") as source:
+            self.run(
+                pull.SystemLifecycle._docker_exec(
+                    expected["container_id"],
+                    "pg_restore",
+                    "--exit-on-error",
+                    "--single-transaction",
+                    "--clean",
+                    "--if-exists",
+                    "--no-owner",
+                    "--no-privileges",
+                    "-U",
+                    user,
+                    "-d",
+                    database,
+                    interactive=True,
+                ),
+                env=self.pull_controller.control_environment(),
+                stdin=source,
+            )
         self._assert_contract_postgres_runtime(
             expected=expected,
             phase="during 0012 rollback restore",
@@ -1834,11 +1878,8 @@ class PullRuntimeController(legacy.ReleaseController):
         with self.backup_path.open("xb") as output:
             os.chmod(self.backup_path, 0o600)
             self.run(
-                self.compose(
-                    self.candidate_dir,
-                    "exec",
-                    "-T",
-                    "lab-postgres",
+                pull.SystemLifecycle._docker_exec(
+                    expected_postgres["container_id"],
                     "pg_dump",
                     "-U",
                     user,
@@ -1846,21 +1887,19 @@ class PullRuntimeController(legacy.ReleaseController):
                     database,
                     "-Fc",
                 ),
-                env=environment,
+                env=self.pull_controller.control_environment(),
                 stdout=output,
             )
         legacy.fsync_regular_file(self.backup_path)
         with self.backup_path.open("rb") as source:
             self.run(
-                self.compose(
-                    self.candidate_dir,
-                    "exec",
-                    "-T",
-                    "lab-postgres",
+                pull.SystemLifecycle._docker_exec(
+                    expected_postgres["container_id"],
                     "pg_restore",
                     "--list",
+                    interactive=True,
                 ),
-                env=environment,
+                env=self.pull_controller.control_environment(),
                 stdin=source,
                 stdout=subprocess.DEVNULL,
             )

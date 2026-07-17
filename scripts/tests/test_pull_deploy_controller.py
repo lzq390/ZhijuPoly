@@ -1861,6 +1861,31 @@ class EphemeralContainerOwnershipTests(unittest.TestCase):
 
 
 class PostgresRuntimeFencingTests(unittest.TestCase):
+    def test_docker_exec_requires_an_exact_container_id(self) -> None:
+        container_id = "a" * 64
+        self.assertEqual(
+            CONTROLLER.SystemLifecycle._docker_exec(
+                container_id,
+                "pg_restore",
+                interactive=True,
+            ),
+            [
+                "docker",
+                "exec",
+                "--interactive",
+                container_id,
+                "pg_restore",
+            ],
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "exact container ID",
+        ):
+            CONTROLLER.SystemLifecycle._docker_exec(
+                "lab-postgres",
+                "dropdb",
+            )
+
     class Runner:
         def __init__(self, *, replace_on_up: bool = False) -> None:
             self.container_id = "a" * 64

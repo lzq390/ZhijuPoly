@@ -4364,6 +4364,24 @@ class Lifecycle(Protocol):
 
 class SystemLifecycle:
     @staticmethod
+    def _docker_exec(
+        container_id: str,
+        *arguments: str,
+        interactive: bool = False,
+    ) -> list[str]:
+        """Address one already-fenced container without mutable Compose lookup."""
+
+        if re.fullmatch(r"[0-9a-f]{64}", container_id) is None:
+            raise PullDeployError("Docker exec target is not an exact container ID")
+        return [
+            "docker",
+            "exec",
+            *(["--interactive"] if interactive else []),
+            container_id,
+            *arguments,
+        ]
+
+    @staticmethod
     def _drain_authority_sha(descriptor: dict[str, Any]) -> str:
         """Return the owner token of the persistent Backend drain.
 
@@ -5666,7 +5684,12 @@ class SystemLifecycle:
             deadline = time.monotonic() + 120
             while True:
                 ready = controller.runner.run(
-                    ["docker", "exec", name, "pg_isready", "--username", "postgres"],
+                    self._docker_exec(
+                        str(started_id),
+                        "pg_isready",
+                        "--username",
+                        "postgres",
+                    ),
                     env=controller.control_environment(),
                     check=False,
                 )
@@ -5676,24 +5699,19 @@ class SystemLifecycle:
                     raise PullDeployError("isolated PostgreSQL 16 did not become ready")
                 time.sleep(1)
             controller.runner.run(
-                [
-                    "docker",
-                    "exec",
-                    name,
+                self._docker_exec(
+                    str(started_id),
                     "createdb",
                     "--username",
                     "postgres",
                     "nexpoly_restore",
-                ],
+                ),
                 env=controller.control_environment(),
             )
             with dump.open("rb") as source:
                 controller.runner.run(
-                    [
-                        "docker",
-                        "exec",
-                        "--interactive",
-                        name,
+                    self._docker_exec(
+                        str(started_id),
                         "pg_restore",
                         "--exit-on-error",
                         "--no-owner",
@@ -5702,17 +5720,16 @@ class SystemLifecycle:
                         "postgres",
                         "--dbname",
                         "nexpoly_restore",
-                    ],
+                        interactive=True,
+                    ),
                     env=controller.control_environment(),
                     text=False,
                     stdin=source,
                     timeout=1800,
                 )
             version = controller.runner.run(
-                [
-                    "docker",
-                    "exec",
-                    name,
+                self._docker_exec(
+                    str(started_id),
                     "psql",
                     "--tuples-only",
                     "--no-align",
@@ -5722,17 +5739,15 @@ class SystemLifecycle:
                     "nexpoly_restore",
                     "--command",
                     "SHOW server_version_num",
-                ],
+                ),
                 env=controller.control_environment(),
             )
             version_number = str(version.stdout).strip()
             if not version_number.startswith("16") or not version_number.isdigit():
                 raise PullDeployError("isolated restore did not use PostgreSQL 16")
             ledger_result = controller.runner.run(
-                [
-                    "docker",
-                    "exec",
-                    name,
+                self._docker_exec(
+                    str(started_id),
                     "psql",
                     "--set",
                     "ON_ERROR_STOP=1",
@@ -5742,7 +5757,7 @@ class SystemLifecycle:
                     "nexpoly_restore",
                     "--command",
                     "SELECT COALESCE(json_agg(json_build_object('version', version, 'checksum', checksum) ORDER BY version), '[]'::json)::text FROM governance.schema_migrations",
-                ],
+                ),
                 env=controller.control_environment(),
             )
             try:
@@ -6085,7 +6100,7 @@ class SystemLifecycle:
             descriptor,
             phase="before database backup",
         )
-        environment = self._environment(controller, descriptor)
+        postgres_container_id = expected_postgres["container_id"]
         values = parse_literal_env(controller.config_dir / "deploy.env")
         user = values.get("NEXPOLY_POSTGRES_USER")
         database = values.get("NEXPOLY_POSTGRES_DB")
@@ -6126,11 +6141,8 @@ class SystemLifecycle:
             with temporary.open("xb") as output:
                 os.chmod(temporary, 0o600)
                 controller.runner.run(
-                    self._compose(
-                        controller,
-                        "exec",
-                        "-T",
-                        "lab-postgres",
+                    self._docker_exec(
+                        postgres_container_id,
                         "pg_dump",
                         "--format=custom",
                         "--username",
@@ -6139,7 +6151,7 @@ class SystemLifecycle:
                         database,
                     ),
                     cwd=controller.production_root,
-                    env=environment,
+                    env=controller.control_environment(),
                     text=False,
                     stdout=output,
                 )
@@ -6225,7 +6237,6 @@ class SystemLifecycle:
             descriptor, backup, require_operation_backup=True
         )
         dump = Path(backup["path"])
-        environment = self._environment(controller, descriptor)
         values = controller.production_deploy_values(check_free_space=False)
         user = values["NEXPOLY_POSTGRES_USER"]
         database = values["NEXPOLY_POSTGRES_DB"]
@@ -6234,22 +6245,10 @@ class SystemLifecycle:
             descriptor,
             phase="before rollback restore",
         )
-        postgres = controller.runner.run(
-            self._compose(controller, "ps", "--quiet", "lab-postgres"),
-            cwd=controller.production_root,
-            env=environment,
-        )
-        identities = [value for value in str(postgres.stdout).splitlines() if value]
-        if len(identities) != 1:
-            raise PullDeployError(
-                "PostgreSQL container is unavailable for rollback restore"
-            )
+        postgres_container_id = expected_postgres["container_id"]
         controller.runner.run(
-            self._compose(
-                controller,
-                "exec",
-                "-T",
-                "lab-postgres",
+            self._docker_exec(
+                postgres_container_id,
                 "psql",
                 "--set",
                 "ON_ERROR_STOP=1",
@@ -6264,14 +6263,11 @@ class SystemLifecycle:
                 ),
             ),
             cwd=controller.production_root,
-            env=environment,
+            env=controller.control_environment(),
         )
         controller.runner.run(
-            self._compose(
-                controller,
-                "exec",
-                "-T",
-                "lab-postgres",
+            self._docker_exec(
+                postgres_container_id,
                 "dropdb",
                 "--if-exists",
                 "--force",
@@ -6280,14 +6276,11 @@ class SystemLifecycle:
                 database,
             ),
             cwd=controller.production_root,
-            env=environment,
+            env=controller.control_environment(),
         )
         controller.runner.run(
-            self._compose(
-                controller,
-                "exec",
-                "-T",
-                "lab-postgres",
+            self._docker_exec(
+                postgres_container_id,
                 "createdb",
                 "--username",
                 user,
@@ -6296,50 +6289,49 @@ class SystemLifecycle:
                 database,
             ),
             cwd=controller.production_root,
-            env=environment,
+            env=controller.control_environment(),
         )
         with dump.open("rb") as source:
             controller.runner.run(
-                self._compose(
-                    controller,
-                    "exec",
-                    "-T",
-                    "lab-postgres",
+                self._docker_exec(
+                    postgres_container_id,
                     "pg_restore",
                     "--exit-on-error",
                     "--username",
                     user,
                     "--dbname",
                     database,
+                    interactive=True,
                 ),
                 cwd=controller.production_root,
-                env=environment,
+                env=controller.control_environment(),
                 text=False,
                 stdin=source,
                 timeout=1800,
             )
         # The same target manifest used to verify the isolated restore is the
         # authoritative prefix after the production restore.
-        ledger_program = (
-            "import json,os,psycopg;"
-            "c=psycopg.connect(os.environ['APP_POSTGRES_DSN']);"
-            "r=c.execute('SELECT version, checksum FROM governance.schema_migrations ORDER BY version').fetchall();"
-            "print(json.dumps([{'version':x[0],'checksum':x[1]} for x in r],sort_keys=True));"
-            "c.close()"
-        )
         result = controller.runner.run(
-            self._compose(
-                controller,
-                "run",
-                "--rm",
-                "--no-deps",
-                "postgres-init",
-                "python",
-                "-c",
-                ledger_program,
+            self._docker_exec(
+                postgres_container_id,
+                "psql",
+                "--set",
+                "ON_ERROR_STOP=1",
+                "--tuples-only",
+                "--no-align",
+                "--username",
+                user,
+                "--dbname",
+                database,
+                "--command",
+                (
+                    "SELECT COALESCE(json_agg(json_build_object("
+                    "'version', version, 'checksum', checksum) ORDER BY version), "
+                    "'[]'::json)::text FROM governance.schema_migrations"
+                ),
             ),
             cwd=controller.production_root,
-            env=environment,
+            env=controller.control_environment(),
         )
         try:
             rows = json.loads(str(result.stdout))

@@ -2873,6 +2873,17 @@ class PullContract0012Tests(unittest.TestCase):
                         for command in commands
                     )
                 )
+                for command in commands:
+                    if command[:2] != ["docker", "exec"]:
+                        continue
+                    target_index = (
+                        3 if command[2] == "--interactive" else 2
+                    )
+                    self.assertEqual(
+                        command[target_index],
+                        "1" * 64,
+                        command,
+                    )
 
     def test_private_recovery_marker_rejects_wrong_mode_and_broken_symlink(
         self,
