@@ -20,6 +20,11 @@ assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
+FIXTURE_RESTORE_IMAGE = {
+    "digest_ref": MODULE.POSTGRES16_IMAGE,
+    "image_id": "sha256:" + "f" * 64,
+}
+
 
 def digest(value: object) -> str:
     return hashlib.sha256(
@@ -73,7 +78,7 @@ def inventory(*, phase: str = "pre", restored: bool = False) -> dict[str, object
         "database_owner": "postgres" if restored else MODULE.DATABASE_OWNER,
         "server_version_num": 160014,
         "in_recovery": False,
-        "system_identifier": "restore-id" if restored else MODULE.SYSTEM_IDENTIFIER,
+        "system_identifier": "123456789" if restored else MODULE.SYSTEM_IDENTIFIER,
         "transaction_read_only": "on",
         "ledger": ledger,
         "rows": rows,
@@ -88,19 +93,33 @@ def inventory(*, phase: str = "pre", restored: bool = False) -> dict[str, object
     }
 
 
+def operation_inventory(*, phase: str) -> dict[str, object]:
+    canonical = {
+        "version": MODULE.CANONICAL_VERSION,
+        "checksum": MODULE.ALIAS_CHECKSUM,
+        "applied_at": "2026-07-08T00:00:00.000000Z",
+    }
+    alias = {
+        "version": MODULE.ALIAS_VERSION,
+        "checksum": MODULE.ALIAS_CHECKSUM,
+        "applied_at": MODULE.ALIAS_APPLIED_AT,
+    }
+    return {
+        "ledger": [alias, canonical] if phase == "pre" else [canonical],
+        "archive": {"rows_sha256": "fixture"},
+    }
+
+
 @contextlib.contextmanager
 def fixture_expectations():
     document = inventory()
     structure = MODULE._structure(document)
     ledger_structure = MODULE._structure(document, prefix="ledger_")
     with (
-        mock.patch.object(MODULE, "EXPECTED_ROWS_SHA256", digest(document["rows"])),
         mock.patch.object(MODULE, "EXPECTED_SCHEMA_SHA256", digest(structure)),
         mock.patch.object(
             MODULE, "EXPECTED_LEDGER_SCHEMA_SHA256", digest(ledger_structure)
         ),
-        mock.patch.object(MODULE, "EXPECTED_STATUS_COUNTS", {"completed": 1}),
-        mock.patch.object(MODULE, "EXPECTED_ROW_COUNT", 1),
         mock.patch.object(
             MODULE,
             "EXPECTED_STRUCTURE_COUNTS",
@@ -176,8 +195,16 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(before["archive"]["row_count"], 1)
         self.assertNotIn(MODULE.ALIAS_VERSION, [row["version"] for row in after["ledger"]])
         self.assertEqual(restored["database"], "nexpoly_alias_restore")
+        MODULE._require_post_matches_before(before, after)
+        MODULE._require_restore_matches_before(before, restored)
 
-    def test_rejects_alias_timestamp_ledger_and_archive_drift(self) -> None:
+        changed_after = {**after, "archive": {**after["archive"], "row_count": 2}}
+        with self.assertRaisesRegex(MODULE.ReconcileError, "business snapshot"):
+            MODULE._require_post_matches_before(before, changed_after)
+
+    def test_rejects_alias_timestamp_and_ledger_but_accepts_dynamic_business_rows(
+        self,
+    ) -> None:
         with fixture_expectations():
             changed = inventory()
             next(
@@ -197,7 +224,16 @@ class ReconcileTests(unittest.TestCase):
 
             changed = inventory()
             changed["rows"].append({"job_id": "changed", "status": "failed"})
-            with self.assertRaisesRegex(MODULE.ReconcileError, "archive"):
+            changed["status_counts"] = {"completed": 1, "failed": 1}
+            dynamic = MODULE.validate_inventory(changed, expected_phase="pre")
+            self.assertEqual(dynamic["archive"]["row_count"], 2)
+            self.assertEqual(
+                dynamic["archive"]["status_counts"],
+                {"completed": 1, "failed": 1},
+            )
+
+            changed["status_counts"] = {"completed": 1}
+            with self.assertRaisesRegex(MODULE.ReconcileError, "business snapshot"):
                 MODULE.validate_inventory(changed, expected_phase="pre")
 
     def test_rejects_cluster_relation_and_restore_identity_drift(self) -> None:
@@ -256,6 +292,54 @@ class ReconcileTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(MODULE.ReconcileError, "local Docker"):
             MODULE._require_local_docker_endpoint(runner)
+
+    def test_restore_image_keeps_index_digest_separate_from_config_image_id(
+        self,
+    ) -> None:
+        runner = mock.Mock()
+        runner.run.side_effect = [
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='"unix:///var/run/docker.sock"\n',
+                stderr="",
+            ),
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps(FIXTURE_RESTORE_IMAGE["image_id"]) + "\n",
+                stderr="",
+            ),
+        ]
+        operation = MODULE.Reconciliation(
+            operation_id="alias-0005-image-test",
+            environment={
+                "NEXPOLY_PRODUCTION_POSTGRES_DSN": (
+                    "postgresql://polyprop:secret@127.0.0.1:55432/"
+                    "nexpoly?sslmode=disable"
+                )
+            },
+            runner=runner,
+        )
+        self.assertEqual(operation._image_identity(), FIXTURE_RESTORE_IMAGE)
+        self.assertNotEqual(
+            FIXTURE_RESTORE_IMAGE["image_id"],
+            "sha256:" + MODULE.POSTGRES16_IMAGE.rsplit("@sha256:", 1)[1],
+        )
+
+        runner.run.side_effect = [
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='"unix:///var/run/docker.sock"\n',
+                stderr="",
+            ),
+            subprocess.CompletedProcess(
+                args=[], returncode=0, stdout='"not-a-digest"\n', stderr=""
+            ),
+        ]
+        with self.assertRaisesRegex(MODULE.ReconcileError, "malformed"):
+            operation._image_identity()
 
     def test_operation_id_and_cli_do_not_accept_general_ledger_selectors(self) -> None:
         self.assertEqual(
@@ -319,20 +403,13 @@ class ReconcileTests(unittest.TestCase):
             mock.patch.object(
                 MODULE,
                 "validate_inventory",
-                side_effect=lambda document, **_kwargs: {
-                    "ledger": [
-                        {
-                            "version": (
-                                MODULE.ALIAS_VERSION
-                                if document.get("fixture_phase") == "pre"
-                                else MODULE.CANONICAL_VERSION
-                            ),
-                            "checksum": MODULE.ALIAS_CHECKSUM,
-                            "applied_at": MODULE.ALIAS_APPLIED_AT,
-                        }
-                    ],
-                    "archive": {"rows_sha256": "fixture"},
-                },
+                side_effect=lambda document, **_kwargs: operation_inventory(
+                    phase=(
+                        "pre"
+                        if document.get("fixture_phase") == "pre"
+                        else "post"
+                    )
+                ),
             ),
             mock.patch.object(
                 MODULE,
@@ -355,7 +432,7 @@ class ReconcileTests(unittest.TestCase):
                 {"binary": {"sha256": "b"}},
             )
         )
-        operation._image_identity = mock.Mock(return_value={"image_id": "i"})
+        operation._image_identity = mock.Mock(return_value=FIXTURE_RESTORE_IMAGE)
         operation._runtime_stop_fence = mock.Mock(return_value={"fixture": True})
         operation._validate_mandatory_evidence = mock.Mock(
             return_value=({"dump_sha256": "dump"}, {"dump_sha256": "dump"})
@@ -396,8 +473,8 @@ class ReconcileTests(unittest.TestCase):
     def _advance_marker(
         operation: object, marker: dict[str, object], *, committed: bool
     ) -> None:
-        before = {"ledger": [], "archive": {"rows_sha256": "fixture"}}
-        after = {"ledger": [], "archive": {"rows_sha256": "fixture"}}
+        before = operation_inventory(phase="pre")
+        after = operation_inventory(phase="post")
         operation._write_marker(  # type: ignore[attr-defined]
             marker, "runtime-fenced", runtime_stop_fence={"fixture": True}
         )
@@ -510,11 +587,12 @@ class ReconcileTests(unittest.TestCase):
             source=source,
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
         self._advance_marker(operation, marker, committed=False)
-        recovered = {"ledger": [], "archive": {"rows_sha256": "fixture"}}
+        recovered = operation_inventory(phase="post")
         operation._begin_recovery_locked = mock.Mock(
             return_value=("post", recovered)
         )
@@ -532,11 +610,12 @@ class ReconcileTests(unittest.TestCase):
             source=source,
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
         self._advance_marker(operation, marker, committed=True)
-        recovered = {"ledger": [], "archive": {"rows_sha256": "fixture"}}
+        recovered = operation_inventory(phase="post")
         operation._begin_recovery_locked = mock.Mock(
             return_value=("post", recovered)
         )
@@ -554,6 +633,7 @@ class ReconcileTests(unittest.TestCase):
             source=source,
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -563,7 +643,7 @@ class ReconcileTests(unittest.TestCase):
         operation._begin_recovery_locked = mock.Mock(
             return_value=(
                 "pre",
-                {"ledger": [], "archive": {"rows_sha256": "fixture"}},
+                operation_inventory(phase="pre"),
             )
         )
         original_reset = operation._reset_precommit_evidence
@@ -591,13 +671,14 @@ class ReconcileTests(unittest.TestCase):
             source=source,
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
         self._advance_marker(operation, marker, committed=False)
         restarted_fence = {"fixture": "restarted-and-stopped"}
         operation._runtime_stop_fence = mock.Mock(return_value=restarted_fence)
-        recovered = {"ledger": [], "archive": {"rows_sha256": "fixture"}}
+        recovered = operation_inventory(phase="post")
         operation._begin_recovery_locked = mock.Mock(
             return_value=("post", recovered)
         )
@@ -623,6 +704,7 @@ class ReconcileTests(unittest.TestCase):
             source=source,
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -667,6 +749,7 @@ class ReconcileTests(unittest.TestCase):
             source=source,
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -712,6 +795,7 @@ class ReconcileTests(unittest.TestCase):
             source=source,
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
         )
         operation._prepare_roots()
         marker = {
@@ -748,6 +832,7 @@ class ReconcileTests(unittest.TestCase):
             source=source,
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -791,6 +876,7 @@ class ReconcileTests(unittest.TestCase):
             source=source,
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -831,7 +917,10 @@ class ReconcileTests(unittest.TestCase):
                 "schema_version": 1,
                 "action": "reconcile-production-0005-polytao-alias",
                 "phase": "planned",
-                "identity": {"operation_id": "another-operation"},
+                "identity": {
+                    "operation_id": "another-operation",
+                    "restore_image": FIXTURE_RESTORE_IMAGE,
+                },
                 "operation_directories": {
                     "audit": str(operation.audit_dir),
                     "backup": str(operation.backup_dir),

@@ -233,19 +233,55 @@ class SelectorTests(unittest.TestCase):
                 for index, (version, checksum) in enumerate(pairs)
             ]
 
+        archive = {
+            "row_count": 12,
+            "status_counts": {"completed": 8, "failed": 4},
+            "rows_sha256": "c" * 64,
+            "schema_sha256": SELECTOR.ALIAS_EXPECTED_SCHEMA_SHA256,
+            "structure_counts": SELECTOR.ALIAS_EXPECTED_STRUCTURE_COUNTS,
+        }
+        relation = {
+            "kind": "r",
+            "persistence": "p",
+            "is_partition": False,
+            "row_security": False,
+            "force_row_security": False,
+            "owner": "polyprop",
+            "parents": 0,
+            "children": 0,
+        }
         before = {
+            "database": "nexpoly",
+            "current_user": "polyprop",
+            "database_owner": "polyprop",
+            "server_version_num": 160014,
+            "in_recovery": False,
+            "system_identifier": SELECTOR.ALIAS_SYSTEM_IDENTIFIER,
             "ledger": ledger_rows(SELECTOR.ALIAS_PRE_LEDGER),
-            "archive": SELECTOR.ALIAS_EXPECTED_ARCHIVE,
+            "archive": archive,
             "ledger_schema_sha256": SELECTOR.ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256,
             "ledger_structure_counts": (
                 SELECTOR.ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS
             ),
+            "polytao_relation": relation,
+            "ledger_relation": relation,
         }
         after = {
-            "ledger": ledger_rows(SELECTOR.ALIAS_POST_LEDGER),
-            "archive": before["archive"],
-            "ledger_schema_sha256": before["ledger_schema_sha256"],
-            "ledger_structure_counts": before["ledger_structure_counts"],
+            **before,
+            "ledger": [
+                row
+                for row in before["ledger"]
+                if row["version"] != SELECTOR.ALIAS_VERSION
+            ],
+        }
+        restored = {
+            **before,
+            "database": "nexpoly_alias_restore",
+            "current_user": "postgres",
+            "database_owner": "postgres",
+            "system_identifier": "123456789",
+            "polytao_relation": {**relation, "owner": "postgres"},
+            "ledger_relation": {**relation, "owner": "postgres"},
         }
         root = self.runtime / "control-releases" / str(manifest["release_id"])
         entrypoint = manifest["entrypoints"]["reconcile-production-0005-alias"]
@@ -268,6 +304,10 @@ class SelectorTests(unittest.TestCase):
             "binaries_sha256": binary_hashes,
             "database_endpoint": SELECTOR.ALIAS_DATABASE_ENDPOINT,
             "database_system_identifier": SELECTOR.ALIAS_SYSTEM_IDENTIFIER,
+            "restore_image": {
+                "digest_ref": SELECTOR.ALIAS_RESTORE_IMAGE,
+                "image_id": "sha256:" + "d" * 64,
+            },
             "alias": {
                 "version": SELECTOR.ALIAS_VERSION,
                 "checksum": SELECTOR.ALIAS_CHECKSUM,
@@ -285,14 +325,14 @@ class SelectorTests(unittest.TestCase):
         restore = {
             "image": {
                 "digest_ref": SELECTOR.ALIAS_RESTORE_IMAGE,
-                "image_id": "sha256:"
-                + SELECTOR.ALIAS_RESTORE_IMAGE.rsplit("@sha256:", 1)[1],
+                "image_id": "sha256:" + "d" * 64,
             },
             "container_name": "nexpoly-alias-restore-fixture",
             "network_mode": "none",
             "dump_sha256": dump_sha,
             "archive": before["archive"],
             "ledger_schema_sha256": before["ledger_schema_sha256"],
+            "database_inventory": restored,
             "verified_at": "2026-07-17T00:00:00Z",
         }
         self._write(
@@ -638,6 +678,44 @@ class SelectorTests(unittest.TestCase):
                         "deploy",
                         [command, "--operation-id", "deploy-before-alias"],
                     )
+
+    def test_completed_alias_gate_accepts_dynamic_rows_and_binds_restore_image(
+        self,
+    ) -> None:
+        manifest, _root = self.release(
+            source_sha="a" * 40,
+            source_tree="b" * 40,
+            variant="dynamic-alias-evidence",
+        )
+        self.activate(manifest, operation_id="bootstrap-controls-dynamic-alias")
+        gate = SELECTOR.load_production_0005_alias_gate(
+            self.runtime, require_completed=True
+        )
+        self.assertEqual(gate["before"]["archive"]["row_count"], 12)
+        self.assertEqual(
+            gate["isolated_restore"]["image"],
+            gate["identity"]["restore_image"],
+        )
+        self.assertNotEqual(
+            gate["identity"]["restore_image"]["image_id"],
+            "sha256:"
+            + SELECTOR.ALIAS_RESTORE_IMAGE.rsplit("@sha256:", 1)[1],
+        )
+
+        marker_path = self.runtime / SELECTOR.ALIAS_MARKER_RELATIVE
+        tampered = SELECTOR._load_private_json(marker_path)
+        tampered["identity"]["restore_image"]["image_id"] = "sha256:" + "e" * 64
+        self._write(
+            marker_path,
+            SELECTOR.canonical_json_bytes(tampered) + b"\n",
+            0o600,
+        )
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError, "completion evidence differs"
+        ):
+            SELECTOR.load_production_0005_alias_gate(
+                self.runtime, require_completed=True
+            )
 
     def test_completed_alias_replay_uses_its_recorded_control_release(self) -> None:
         original, original_root = self.release(

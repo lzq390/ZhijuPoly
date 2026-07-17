@@ -98,17 +98,14 @@ ALIAS_PRE_LEDGER = sorted(
     [*ALIAS_CANONICAL_LEDGER, (ALIAS_VERSION, ALIAS_CHECKSUM)]
 )
 ALIAS_POST_LEDGER = sorted(ALIAS_CANONICAL_LEDGER)
-ALIAS_EXPECTED_ARCHIVE = {
-    "row_count": 9,
-    "status_counts": {"completed": 7, "failed": 2},
-    "rows_sha256": "1d865e76745c594934864cc3a80653edeb7ca587abfb85fa81472e1e9262d674",
-    "schema_sha256": "8594868c661024af0766627a2d48280fc6967b8efe445878fc2a252a4520000c",
-    "structure_counts": {
-        "columns": 23,
-        "indexes": 3,
-        "constraints": 6,
-        "triggers": 0,
-    },
+ALIAS_EXPECTED_SCHEMA_SHA256 = (
+    "8594868c661024af0766627a2d48280fc6967b8efe445878fc2a252a4520000c"
+)
+ALIAS_EXPECTED_STRUCTURE_COUNTS = {
+    "columns": 23,
+    "indexes": 3,
+    "constraints": 6,
+    "triggers": 0,
 }
 ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256 = (
     "db77ff078329ed4ec8b00f70172be743b9f3e67924d27716fba26277466ecfdd"
@@ -259,6 +256,142 @@ def _alias_ledger_pairs(value: object) -> list[tuple[str, str]] | None:
     return pairs
 
 
+def _alias_archive_is_valid(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "row_count",
+        "status_counts",
+        "rows_sha256",
+        "schema_sha256",
+        "structure_counts",
+    }:
+        return False
+    row_count = value.get("row_count")
+    status_counts = value.get("status_counts")
+    return bool(
+        not isinstance(row_count, bool)
+        and isinstance(row_count, int)
+        and row_count >= 0
+        and isinstance(status_counts, dict)
+        and all(
+            isinstance(status, str)
+            and bool(status)
+            and not isinstance(count, bool)
+            and isinstance(count, int)
+            and count >= 0
+            for status, count in status_counts.items()
+        )
+        and sum(status_counts.values()) == row_count
+        and isinstance(value.get("rows_sha256"), str)
+        and HEX_DIGEST_RE.fullmatch(value["rows_sha256"]) is not None
+        and value.get("schema_sha256") == ALIAS_EXPECTED_SCHEMA_SHA256
+        and value.get("structure_counts") == ALIAS_EXPECTED_STRUCTURE_COUNTS
+    )
+
+
+def _alias_restore_image_is_valid(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and set(value) == {"digest_ref", "image_id"}
+        and value.get("digest_ref") == ALIAS_RESTORE_IMAGE
+        and isinstance(value.get("image_id"), str)
+        and DIGEST_RE.fullmatch(value["image_id"]) is not None
+    )
+
+
+def _alias_relation_is_valid(value: object, *, owner: str) -> bool:
+    return value == {
+        "kind": "r",
+        "persistence": "p",
+        "is_partition": False,
+        "row_security": False,
+        "force_row_security": False,
+        "owner": owner,
+        "parents": 0,
+        "children": 0,
+    }
+
+
+def _alias_live_inventory_is_valid(
+    value: object,
+    *,
+    ledger: list[tuple[str, str]],
+    archive: object | None = None,
+) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "database",
+        "current_user",
+        "database_owner",
+        "server_version_num",
+        "in_recovery",
+        "system_identifier",
+        "ledger",
+        "archive",
+        "ledger_schema_sha256",
+        "ledger_structure_counts",
+        "polytao_relation",
+        "ledger_relation",
+    }:
+        return False
+    rows = value.get("ledger")
+    alias_rows = (
+        [row for row in rows if row.get("version") == ALIAS_VERSION]
+        if isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
+        else []
+    )
+    return bool(
+        value.get("database") == ALIAS_DATABASE_ENDPOINT["database"]
+        and value.get("current_user") == ALIAS_DATABASE_ENDPOINT["user"]
+        and value.get("database_owner") == "polyprop"
+        and not isinstance(value.get("server_version_num"), bool)
+        and isinstance(value.get("server_version_num"), int)
+        and 160000 <= value["server_version_num"] < 170000
+        and value.get("in_recovery") is False
+        and str(value.get("system_identifier")) == ALIAS_SYSTEM_IDENTIFIER
+        and _alias_ledger_pairs(rows) == ledger
+        and (
+            not any(pair[0] == ALIAS_VERSION for pair in ledger)
+            or len(alias_rows) == 1
+            and alias_rows[0].get("applied_at") == ALIAS_APPLIED_AT
+        )
+        and (
+            _alias_archive_is_valid(value.get("archive"))
+            if archive is None
+            else value.get("archive") == archive
+        )
+        and value.get("ledger_schema_sha256")
+        == ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256
+        and value.get("ledger_structure_counts")
+        == ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS
+        and _alias_relation_is_valid(value.get("polytao_relation"), owner="polyprop")
+        and _alias_relation_is_valid(value.get("ledger_relation"), owner="polyprop")
+    )
+
+
+def _alias_restore_inventory_matches(before: object, restored: object) -> bool:
+    if not isinstance(before, dict) or not isinstance(restored, dict):
+        return False
+    return bool(
+        set(restored) == set(before)
+        and restored.get("database") == "nexpoly_alias_restore"
+        and restored.get("current_user") == "postgres"
+        and restored.get("database_owner") == "postgres"
+        and restored.get("in_recovery") is False
+        and not isinstance(restored.get("server_version_num"), bool)
+        and isinstance(restored.get("server_version_num"), int)
+        and 160000 <= restored["server_version_num"] < 170000
+        and isinstance(restored.get("system_identifier"), str)
+        and restored["system_identifier"].isdigit()
+        and restored.get("ledger") == before.get("ledger")
+        and restored.get("archive") == before.get("archive")
+        and restored.get("ledger_schema_sha256")
+        == before.get("ledger_schema_sha256")
+        and restored.get("ledger_structure_counts")
+        == before.get("ledger_structure_counts")
+        and _alias_relation_is_valid(restored.get("polytao_relation"), owner="postgres")
+        and _alias_relation_is_valid(restored.get("ledger_relation"), owner="postgres")
+    )
+
+
 def load_production_0005_alias_gate(
     runtime_root: Path, *, require_completed: bool
 ) -> dict[str, Any] | None:
@@ -342,25 +475,30 @@ def load_production_0005_alias_gate(
     files = _alias_evidence_files(audit_dir, backup_dir)
     binary_hashes = identity.get("binaries_sha256")
     audit_binaries = manifest.get("binaries")
-    expected_image_id = "sha256:" + ALIAS_RESTORE_IMAGE.rsplit("@sha256:", 1)[1]
+    restore_image = identity.get("restore_image")
     if (
         not isinstance(backup, dict)
         or not isinstance(before, dict)
         or not isinstance(mutation_intent, dict)
         or identity.get("database_endpoint") != ALIAS_DATABASE_ENDPOINT
         or identity.get("database_system_identifier") != ALIAS_SYSTEM_IDENTIFIER
-        or _alias_ledger_pairs(before.get("ledger")) != ALIAS_PRE_LEDGER
-        or _alias_ledger_pairs(after.get("ledger")) != ALIAS_POST_LEDGER
-        or before.get("archive") != ALIAS_EXPECTED_ARCHIVE
-        or after.get("archive") != ALIAS_EXPECTED_ARCHIVE
-        or before.get("ledger_schema_sha256")
-        != ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256
-        or after.get("ledger_schema_sha256")
-        != ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256
-        or before.get("ledger_structure_counts")
-        != ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS
-        or after.get("ledger_structure_counts")
-        != ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS
+        or not _alias_live_inventory_is_valid(before, ledger=ALIAS_PRE_LEDGER)
+        or not _alias_live_inventory_is_valid(
+            after,
+            ledger=ALIAS_POST_LEDGER,
+            archive=before.get("archive"),
+        )
+        or any(
+            before.get(key) != after.get(key)
+            for key in before
+            if key != "ledger"
+        )
+        or after.get("ledger")
+        != [
+            row
+            for row in before.get("ledger", [])
+            if isinstance(row, dict) and row.get("version") != ALIAS_VERSION
+        ]
         or backup.get("dump_path") != str(dump_path)
         or backup.get("dump_sha256") != actual_dump_sha
         or backup.get("dump_size") != dump_path.stat().st_size
@@ -369,11 +507,14 @@ def load_production_0005_alias_gate(
         or sidecar != actual_dump_sha
         or restore != marker.get("isolated_restore")
         or restore.get("dump_sha256") != actual_dump_sha
-        or restore.get("image")
-        != {"digest_ref": ALIAS_RESTORE_IMAGE, "image_id": expected_image_id}
+        or not _alias_restore_image_is_valid(restore_image)
+        or restore.get("image") != restore_image
         or restore.get("archive") != before.get("archive")
         or restore.get("ledger_schema_sha256")
         != before.get("ledger_schema_sha256")
+        or not _alias_restore_inventory_matches(
+            before, restore.get("database_inventory")
+        )
         or mutation_intent
         != {
             "database_system_identifier": identity.get(

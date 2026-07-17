@@ -91,17 +91,12 @@ CANONICAL_LEDGER = [
 PRE_LEDGER = sorted([*CANONICAL_LEDGER, (ALIAS_VERSION, ALIAS_CHECKSUM)])
 POST_LEDGER = sorted(CANONICAL_LEDGER)
 
-EXPECTED_ROWS_SHA256 = (
-    "1d865e76745c594934864cc3a80653edeb7ca587abfb85fa81472e1e9262d674"
-)
 EXPECTED_SCHEMA_SHA256 = (
     "8594868c661024af0766627a2d48280fc6967b8efe445878fc2a252a4520000c"
 )
 EXPECTED_LEDGER_SCHEMA_SHA256 = (
     "db77ff078329ed4ec8b00f70172be743b9f3e67924d27716fba26277466ecfdd"
 )
-EXPECTED_STATUS_COUNTS = {"completed": 7, "failed": 2}
-EXPECTED_ROW_COUNT = 9
 EXPECTED_STRUCTURE_COUNTS = {
     "columns": 23,
     "indexes": 3,
@@ -150,6 +145,8 @@ ADVISORY_LOCK_KEY = 5_977_005_007
 OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 RELEASE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+HEX_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_PSQL_BLOCK_BYTES = MAX_JSON_BYTES + 64 * 1024
 PSQL_BLOCK_TIMEOUT_SECONDS = 31 * 60
@@ -744,6 +741,43 @@ def _public_inventory(document: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_dynamic_archive(archive: object) -> dict[str, Any]:
+    if not isinstance(archive, dict) or set(archive) != {
+        "row_count",
+        "status_counts",
+        "rows_sha256",
+        "schema_sha256",
+        "structure_counts",
+    }:
+        raise ReconcileError("production PolyTAO archive shape is invalid")
+    row_count = archive.get("row_count")
+    status_counts = archive.get("status_counts")
+    if (
+        isinstance(row_count, bool)
+        or not isinstance(row_count, int)
+        or row_count < 0
+        or not isinstance(status_counts, dict)
+        or any(
+            not isinstance(status, str)
+            or not status
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+            for status, count in status_counts.items()
+        )
+        or sum(status_counts.values()) != row_count
+        or not isinstance(archive.get("rows_sha256"), str)
+        or HEX_DIGEST_RE.fullmatch(archive["rows_sha256"]) is None
+    ):
+        raise ReconcileError("production PolyTAO business snapshot is invalid")
+    if (
+        archive.get("schema_sha256") != EXPECTED_SCHEMA_SHA256
+        or archive.get("structure_counts") != EXPECTED_STRUCTURE_COUNTS
+    ):
+        raise ReconcileError("production PolyTAO schema identity differs")
+    return dict(archive)
+
+
 def validate_inventory(
     document: Mapping[str, Any],
     *,
@@ -766,16 +800,12 @@ def validate_inventory(
         aliases = [row for row in public["ledger"] if row["version"] == ALIAS_VERSION]
         if len(aliases) != 1 or aliases[0]["applied_at"] != ALIAS_APPLIED_AT:
             raise ReconcileError("production alias tuple differs from reviewed evidence")
+    public["archive"] = _validate_dynamic_archive(public["archive"])
     if (
-        public["archive"]["row_count"] != EXPECTED_ROW_COUNT
-        or public["archive"]["status_counts"] != EXPECTED_STATUS_COUNTS
-        or public["archive"]["rows_sha256"] != EXPECTED_ROWS_SHA256
-        or public["archive"]["schema_sha256"] != EXPECTED_SCHEMA_SHA256
-        or public["archive"]["structure_counts"] != EXPECTED_STRUCTURE_COUNTS
-        or public["ledger_schema_sha256"] != EXPECTED_LEDGER_SCHEMA_SHA256
+        public["ledger_schema_sha256"] != EXPECTED_LEDGER_SCHEMA_SHA256
         or public["ledger_structure_counts"] != EXPECTED_LEDGER_STRUCTURE_COUNTS
     ):
-        raise ReconcileError("production PolyTAO archive or ledger schema differs")
+        raise ReconcileError("production migration-ledger schema differs")
     expected_relation = {
         "kind": "r",
         "persistence": "p",
@@ -814,6 +844,73 @@ def validate_inventory(
         ):
             raise ReconcileError("isolated PostgreSQL restore identity differs")
     return public
+
+
+def _require_post_matches_before(
+    before: object, after: object
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise ReconcileError("database before/after evidence is malformed")
+    before_ledger = before.get("ledger")
+    expected_after_ledger = (
+        [
+            row
+            for row in before_ledger
+            if isinstance(row, dict) and row.get("version") != ALIAS_VERSION
+        ]
+        if isinstance(before_ledger, list)
+        else None
+    )
+    if (
+        expected_after_ledger is None
+        or len(expected_after_ledger) + 1 != len(before_ledger)
+        or after.get("ledger") != expected_after_ledger
+        or set(before) != set(after)
+        or any(
+            before.get(key) != after.get(key) for key in before if key != "ledger"
+        )
+    ):
+        raise ReconcileError(
+            "post-alias database differs from the locked business snapshot"
+        )
+    return before, after
+
+
+def _require_restore_matches_before(
+    before: object, restored: object
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(before, dict) or not isinstance(restored, dict):
+        raise ReconcileError("isolated restore database evidence is malformed")
+    if (
+        restored.get("database") != "nexpoly_alias_restore"
+        or restored.get("current_user") != "postgres"
+        or restored.get("database_owner") != "postgres"
+        or restored.get("in_recovery") is not False
+        or isinstance(restored.get("server_version_num"), bool)
+        or not isinstance(restored.get("server_version_num"), int)
+        or not 160000 <= restored["server_version_num"] < 170000
+        or not isinstance(restored.get("system_identifier"), str)
+        or not restored["system_identifier"].isdigit()
+        or restored.get("ledger") != before.get("ledger")
+        or restored.get("archive") != before.get("archive")
+        or restored.get("ledger_schema_sha256")
+        != before.get("ledger_schema_sha256")
+        or restored.get("ledger_structure_counts")
+        != before.get("ledger_structure_counts")
+    ):
+        raise ReconcileError("isolated restore differs from the locked database snapshot")
+    for relation_name in ("polytao_relation", "ledger_relation"):
+        source_relation = before.get(relation_name)
+        restored_relation = restored.get(relation_name)
+        if (
+            not isinstance(source_relation, dict)
+            or not isinstance(restored_relation, dict)
+            or restored_relation != {**source_relation, "owner": "postgres"}
+        ):
+            raise ReconcileError(
+                "isolated restore relation differs from the locked database snapshot"
+            )
+    return before, restored
 
 
 def _source_identity(runner: CommandRunner) -> dict[str, str]:
@@ -1088,6 +1185,7 @@ def _marker_identity(
     source: Mapping[str, str],
     binaries: Mapping[str, Any],
     database_endpoint: Mapping[str, Any],
+    restore_image: Mapping[str, str],
 ) -> dict[str, Any]:
     return {
         "operation_id": operation_id,
@@ -1098,11 +1196,27 @@ def _marker_identity(
         },
         "database_endpoint": dict(database_endpoint),
         "database_system_identifier": SYSTEM_IDENTIFIER,
+        "restore_image": _validate_restore_image_identity(restore_image),
         "alias": {
             "version": ALIAS_VERSION,
             "checksum": ALIAS_CHECKSUM,
             "applied_at": ALIAS_APPLIED_AT,
         },
+    }
+
+
+def _validate_restore_image_identity(value: object) -> dict[str, str]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"digest_ref", "image_id"}
+        or value.get("digest_ref") != POSTGRES16_IMAGE
+        or not isinstance(value.get("image_id"), str)
+        or DIGEST_RE.fullmatch(value["image_id"]) is None
+    ):
+        raise ReconcileError("pinned PostgreSQL 16 restore image identity is malformed")
+    return {
+        "digest_ref": POSTGRES16_IMAGE,
+        "image_id": value["image_id"],
     }
 
 
@@ -1128,6 +1242,7 @@ class Reconciliation:
         self.dump_path = self.backup_dir / "nexpoly-before.dump"
         self.dump_sha_path = self.backup_dir / "nexpoly-before.dump.sha256"
         self.restore_list_path = self.audit_dir / "pg-restore.list"
+        self._operation_restore_image: dict[str, str] | None = None
         self._pg_environment, self.database_endpoint = _parse_dsn(
             self.environment.get("NEXPOLY_PRODUCTION_POSTGRES_DSN", "")
         )
@@ -1178,16 +1293,43 @@ class Reconciliation:
         _require_local_docker_endpoint(self.runner)
         completed = _run_checked(
             self.runner,
-            [str(DOCKER), "image", "inspect", POSTGRES16_IMAGE, "--format", "{{.Id}}"],
+            [
+                str(DOCKER),
+                "image",
+                "inspect",
+                POSTGRES16_IMAGE,
+                "--format",
+                "{{json .Id}}",
+            ],
             label="pinned PostgreSQL 16 restore image identity",
             env=CONTROL_ENVIRONMENT,
             timeout=30,
         )
-        image_id = str(completed.stdout).strip()
-        expected = "sha256:" + POSTGRES16_IMAGE.rsplit("@sha256:", 1)[1]
-        if image_id != expected:
-            raise ReconcileError("pinned PostgreSQL 16 restore image ID differs")
-        return {"digest_ref": POSTGRES16_IMAGE, "image_id": image_id}
+        lines = [line for line in str(completed.stdout).splitlines() if line.strip()]
+        try:
+            image_id = json.loads(lines[0]) if len(lines) == 1 else None
+        except json.JSONDecodeError as exc:
+            raise ReconcileError(
+                "pinned PostgreSQL 16 restore image ID is malformed"
+            ) from exc
+        return _validate_restore_image_identity(
+            {"digest_ref": POSTGRES16_IMAGE, "image_id": image_id}
+        )
+
+    def _bind_restore_image(self, value: object) -> dict[str, str]:
+        image = _validate_restore_image_identity(value)
+        if (
+            self._operation_restore_image is not None
+            and self._operation_restore_image != image
+        ):
+            raise ReconcileError("operation restore image identity changed")
+        self._operation_restore_image = image
+        return dict(image)
+
+    def _bound_restore_image(self) -> dict[str, str]:
+        if self._operation_restore_image is None:
+            raise ReconcileError("operation restore image identity is unavailable")
+        return dict(self._operation_restore_image)
 
     @contextlib.contextmanager
     def _deployment_lock(self):
@@ -1231,6 +1373,7 @@ class Reconciliation:
             or not isinstance(marker.get("updated_at"), str)
         ):
             raise ReconcileError("ledger-alias operation marker is malformed")
+        _validate_restore_image_identity(identity.get("restore_image"))
         required_by_phase: tuple[tuple[str, str], ...] = (
             ("runtime-fenced", "runtime_stop_fence"),
             ("locked-preverified", "before"),
@@ -1268,6 +1411,7 @@ class Reconciliation:
         return phase
 
     def _new_marker(self, identity: Mapping[str, Any]) -> dict[str, Any]:
+        self._bind_restore_image(identity.get("restore_image"))
         if self.marker_path.exists() or self.marker_path.is_symlink():
             marker = load_private_json(self.marker_path)
             self._validate_marker_shape(marker)
@@ -1473,6 +1617,7 @@ class Reconciliation:
     def _owned_container(
         self, record: Mapping[str, Any], *, archive: Mapping[str, Any]
     ) -> bool:
+        restore_image = self._bound_restore_image()
         config = record.get("Config")
         host = record.get("HostConfig")
         labels = config.get("Labels") if isinstance(config, dict) else None
@@ -1494,10 +1639,10 @@ class Reconciliation:
             and isinstance(host, dict)
             and isinstance(state, dict)
             and isinstance(network, dict)
-            and record.get("Image") == "sha256:" + POSTGRES16_IMAGE.rsplit("@sha256:", 1)[1]
+            and record.get("Image") == restore_image["image_id"]
             and record.get("Name") == f"/{self._container_name()}"
             and record.get("RestartCount") == 0
-            and config.get("Image") == POSTGRES16_IMAGE
+            and config.get("Image") == restore_image["digest_ref"]
             and labels == expected_labels
             and config.get("Env") == expected_environment
             and config.get("Cmd") == ["postgres"]
@@ -1711,12 +1856,13 @@ class Reconciliation:
         finally:
             self._remove_owned_container(name, archive)
         proof = {
-            "image": self._image_identity(),
+            "image": self._bound_restore_image(),
             "container_name": name,
             "network_mode": "none",
             "dump_sha256": archive["dump_sha256"],
             "archive": restored["archive"],
             "ledger_schema_sha256": restored["ledger_schema_sha256"],
+            "database_inventory": restored,
             "verified_at": utc_now(),
         }
         atomic_json(self.audit_dir / "isolated-postgres16-restore.json", proof)
@@ -1757,19 +1903,24 @@ class Reconciliation:
         restore_path = self.audit_dir / "isolated-postgres16-restore.json"
         if load_private_json(restore_path) != restore:
             raise ReconcileError("isolated restore evidence file differs")
-        expected_image_id = "sha256:" + POSTGRES16_IMAGE.rsplit("@sha256:", 1)[1]
+        identity = marker.get("identity")
+        recorded_image = (
+            identity.get("restore_image") if isinstance(identity, dict) else None
+        )
         if (
             restore.get("image")
-            != {"digest_ref": POSTGRES16_IMAGE, "image_id": expected_image_id}
+            != _validate_restore_image_identity(recorded_image)
             or restore.get("container_name") != self._container_name()
             or restore.get("network_mode") != "none"
             or restore.get("dump_sha256") != archive["dump_sha256"]
             or restore.get("archive") != before.get("archive")
             or restore.get("ledger_schema_sha256")
             != before.get("ledger_schema_sha256")
+            or not isinstance(restore.get("database_inventory"), dict)
             or not isinstance(restore.get("verified_at"), str)
         ):
             raise ReconcileError("isolated restore evidence identity differs")
+        _require_restore_matches_before(before, restore["database_inventory"])
         if self._inspect_container(self._container_name()) is not None:
             raise ReconcileError("isolated restore container remains present")
         if require_intent:
@@ -1791,6 +1942,7 @@ class Reconciliation:
             after = marker.get("after")
             if not isinstance(after, dict) or load_private_json(after_path) != after:
                 raise ReconcileError("post-mutation database evidence differs")
+            _require_post_matches_before(before, after)
         return archive, restore
 
     def _production_container_fence(self) -> list[dict[str, Any]]:
@@ -2104,7 +2256,9 @@ class Reconciliation:
             source=source,
             binaries=current_binaries,
             database_endpoint=self.database_endpoint,
+            restore_image=self._image_identity(),
         )
+        self._bind_restore_image(expected["restore_image"])
         if marker.get("identity") != expected or current_binaries != binaries:
             raise ReconcileError("maintenance execution identity changed")
 
@@ -2266,6 +2420,7 @@ class Reconciliation:
                 source=source,
                 binaries=binaries,
                 database_endpoint=self.database_endpoint,
+                restore_image=image,
             )
             marker = self._new_marker(identity)
             current_runtime_fence, runtime_fence_changed = (
@@ -2304,6 +2459,7 @@ class Reconciliation:
                                     reason="post_commit_recovery",
                                 )
                             self._revalidate_runtime_stop_fence(marker)
+                            _require_post_matches_before(marker.get("before"), locked)
                             archive = marker.get("database_backup")
                             if not isinstance(archive, dict):
                                 raise ReconcileError(
@@ -2408,8 +2564,7 @@ class Reconciliation:
                     after = validate_inventory(
                         session.json(INVENTORY_SQL), expected_phase="post"
                     )
-                    if after["archive"] != before["archive"]:
-                        raise ReconcileError("PolyTAO archive changed inside alias transaction")
+                    _require_post_matches_before(before, after)
                     self._write_marker(marker, "mutation-commit-started", after=after)
                     session.command("COMMIT")
                     self._write_marker(marker, "mutation-committed", after=after)

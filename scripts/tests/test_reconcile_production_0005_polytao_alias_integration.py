@@ -337,8 +337,10 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
                 + ")"
             )
         jobs = []
-        for index in range(9):
-            status = "completed" if index < 7 else "failed"
+        # Deliberately differs from the historical production 9-row/7+2 snapshot.
+        # Business rows are sealed dynamically only after the maintenance locks.
+        for index in range(10):
+            status = "completed" if index < 8 else "failed"
             jobs.append(
                 "("
                 + ",".join(
@@ -483,8 +485,15 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
             patches.enter_context(
                 mock.patch.object(
                     SELECTOR,
-                    "ALIAS_EXPECTED_ARCHIVE",
-                    public_before["archive"],
+                    "ALIAS_EXPECTED_SCHEMA_SHA256",
+                    public_before["archive"]["schema_sha256"],
+                )
+            )
+            patches.enter_context(
+                mock.patch.object(
+                    SELECTOR,
+                    "ALIAS_EXPECTED_STRUCTURE_COUNTS",
+                    public_before["archive"]["structure_counts"],
                 )
             )
             patches.enter_context(
@@ -499,27 +508,6 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
                     SELECTOR,
                     "ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS",
                     public_before["ledger_structure_counts"],
-                )
-            )
-            patches.enter_context(
-                mock.patch.object(
-                    MODULE,
-                    "EXPECTED_ROW_COUNT",
-                    public_before["archive"]["row_count"],
-                )
-            )
-            patches.enter_context(
-                mock.patch.object(
-                    MODULE,
-                    "EXPECTED_STATUS_COUNTS",
-                    public_before["archive"]["status_counts"],
-                )
-            )
-            patches.enter_context(
-                mock.patch.object(
-                    MODULE,
-                    "EXPECTED_ROWS_SHA256",
-                    public_before["archive"]["rows_sha256"],
                 )
             )
             patches.enter_context(
@@ -583,6 +571,15 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
             operation.identities = mock.Mock(return_value=identities)
             operation._runtime_stop_fence = mock.Mock(return_value=runtime_fence)
 
+            restore_image = operation._image_identity()
+            self.assertEqual(restore_image["digest_ref"], PINNED_IMAGE)
+            self.assertRegex(restore_image["image_id"], r"^sha256:[0-9a-f]{64}$")
+            self.assertEqual(public_before["archive"]["row_count"], 10)
+            self.assertEqual(
+                public_before["archive"]["status_counts"],
+                {"completed": 8, "failed": 2},
+            )
+
             first = operation.apply()
             self.assertEqual(first["status"], "completed")
             self.assertNotIn(
@@ -595,6 +592,11 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
             marker = MODULE.load_private_json(operation.marker_path)
             self.assertEqual(marker["phase"], "completed")
             self.assertEqual(marker["runtime_stop_fence"], runtime_fence)
+            self.assertEqual(marker["identity"]["restore_image"], restore_image)
+            self.assertEqual(
+                marker["isolated_restore"]["image"],
+                marker["identity"]["restore_image"],
+            )
             self.assertEqual(
                 marker["mutation_intent"]["alias"],
                 {

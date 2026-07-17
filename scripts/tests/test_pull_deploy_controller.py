@@ -83,17 +83,53 @@ def seed_completed_alias_gate(
             for index, (version, checksum) in enumerate(pairs)
         ]
 
+    archive = {
+        "row_count": 12,
+        "status_counts": {"completed": 8, "failed": 4},
+        "rows_sha256": "c" * 64,
+        "schema_sha256": selector.ALIAS_EXPECTED_SCHEMA_SHA256,
+        "structure_counts": selector.ALIAS_EXPECTED_STRUCTURE_COUNTS,
+    }
+    relation = {
+        "kind": "r",
+        "persistence": "p",
+        "is_partition": False,
+        "row_security": False,
+        "force_row_security": False,
+        "owner": "polyprop",
+        "parents": 0,
+        "children": 0,
+    }
     before = {
+        "database": "nexpoly",
+        "current_user": "polyprop",
+        "database_owner": "polyprop",
+        "server_version_num": 160014,
+        "in_recovery": False,
+        "system_identifier": selector.ALIAS_SYSTEM_IDENTIFIER,
         "ledger": ledger_rows(selector.ALIAS_PRE_LEDGER),
-        "archive": selector.ALIAS_EXPECTED_ARCHIVE,
+        "archive": archive,
         "ledger_schema_sha256": selector.ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256,
         "ledger_structure_counts": selector.ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS,
+        "polytao_relation": relation,
+        "ledger_relation": relation,
     }
     after = {
-        "ledger": ledger_rows(selector.ALIAS_POST_LEDGER),
-        "archive": before["archive"],
-        "ledger_schema_sha256": before["ledger_schema_sha256"],
-        "ledger_structure_counts": before["ledger_structure_counts"],
+        **before,
+        "ledger": [
+            row
+            for row in before["ledger"]
+            if row["version"] != selector.ALIAS_VERSION
+        ],
+    }
+    restored = {
+        **before,
+        "database": "nexpoly_alias_restore",
+        "current_user": "postgres",
+        "database_owner": "postgres",
+        "system_identifier": "123456789",
+        "polytao_relation": {**relation, "owner": "postgres"},
+        "ledger_relation": {**relation, "owner": "postgres"},
     }
     entrypoint = manifest["entrypoints"]["reconcile-production-0005-alias"]
     control = {
@@ -114,6 +150,10 @@ def seed_completed_alias_gate(
         "binaries_sha256": {"/fixture/bin": "b" * 64},
         "database_endpoint": selector.ALIAS_DATABASE_ENDPOINT,
         "database_system_identifier": selector.ALIAS_SYSTEM_IDENTIFIER,
+        "restore_image": {
+            "digest_ref": selector.ALIAS_RESTORE_IMAGE,
+            "image_id": "sha256:" + "d" * 64,
+        },
         "alias": {
             "version": selector.ALIAS_VERSION,
             "checksum": selector.ALIAS_CHECKSUM,
@@ -131,14 +171,14 @@ def seed_completed_alias_gate(
     restore = {
         "image": {
             "digest_ref": selector.ALIAS_RESTORE_IMAGE,
-            "image_id": "sha256:"
-            + selector.ALIAS_RESTORE_IMAGE.rsplit("@sha256:", 1)[1],
+            "image_id": "sha256:" + "d" * 64,
         },
         "container_name": "nexpoly-alias-restore-fixture",
         "network_mode": "none",
         "dump_sha256": dump_sha,
         "archive": before["archive"],
         "ledger_schema_sha256": before["ledger_schema_sha256"],
+        "database_inventory": restored,
         "verified_at": "2026-07-17T00:00:00Z",
     }
     CONTROLLER.atomic_json(audit_dir / "isolated-postgres16-restore.json", restore)

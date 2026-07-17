@@ -39,8 +39,9 @@ release state lists 0012 as pending rather than applied.
 Before that cutover, the content-addressed
 `nexpoly-reconcile-production-0005-polytao-alias` control removes the one known
 legacy alias row only after proving the exact production cluster, canonical
-0001-0008 ledger plus alias, nine-row PolyTAO archive and schema digests, a full
-backup, and a real isolated PostgreSQL 16 restore. Its only database mutation is
+0001-0008 ledger plus alias, fixed PolyTAO schema identity, the business rows
+dynamically sealed while locked, a full backup, and a real isolated PostgreSQL
+16 restore. Its only database mutation is
 an advisory/table-locked compare-and-swap delete of the exact
 `0005_polytao_jobs` version/checksum/applied-at tuple. It never runs migration
 SQL or changes `generation.polytao_jobs`. A missing alias without the matching

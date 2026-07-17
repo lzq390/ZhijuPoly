@@ -214,9 +214,9 @@ export NEXPOLY_PRODUCTION_POSTGRES_DSN
   --operation-id alias-0005-<utc-timestamp>
 ```
 
-After reviewing the exact cluster, ledger, nine-row archive, PostgreSQL client,
-backup and isolated-restore plan, repeat the same operation ID with the explicit
-write confirmation during a maintenance window. Isolate ingress; stop the
+After reviewing the exact cluster, ledger, dynamically sealed business-row
+archive, PostgreSQL client, backup and isolated-restore plan, repeat the same
+operation ID with the explicit write confirmation during a maintenance window. Isolate ingress; stop the
 Backend, Web/Nginx, `postgres-init`, and all MD/DFT Worker processes while
 keeping PostgreSQL running. Apply refuses a production database with any other
 client session:
