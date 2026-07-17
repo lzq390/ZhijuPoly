@@ -179,6 +179,103 @@ class SiteHelperContractTests(unittest.TestCase):
                 expected_runtime_digest="sha256:" + "f" * 64,
             )
 
+    def test_legacy_v2_seals_web_container_and_worker_unit_identity(self) -> None:
+        status = {
+            "schema_version": 2,
+            "legacy_runtime_state": "open",
+            **runtime_identity_fields(),
+            "backend_container_id": "d" * 64,
+            "web_container_id": "e" * 64,
+            "backend_process_spec_sha256": DIGEST_A,
+            "web_process_spec_sha256": DIGEST_B,
+            "worker_unit_name": "nexpoly-monomer-md.service",
+            "worker_unit_path": (
+                f"/home/{os.geteuid()}/.config/systemd/user/"
+                "nexpoly-monomer-md.service"
+            ),
+            "worker_unit_mode": "0664",
+            "worker_unit_uid": os.geteuid(),
+            "worker_unit_gid": os.getegid(),
+            "worker_manager_uid": os.geteuid(),
+            "worker_manager_runtime_dir": f"/run/user/{os.geteuid()}",
+            "worker_manager_environment_sha256": DIGEST_C,
+            "postgres_container_id": "9" * 64,
+            "postgres_image_id": DIGEST_A,
+            "postgres_data_volume": "nexpoly_pg_data",
+            "postgres_system_identifier": "7659245354718314530",
+            "backend_pid": 123,
+            "web_pid": 234,
+            "backend_started_at": "2026-07-17T00:00:00Z",
+            "web_started_at": "2026-07-17T00:00:01Z",
+            "backend_restart_count": 0,
+            "web_restart_count": 0,
+            "worker_main_pid": 456,
+            "worker_invocation_id": "fixture-worker",
+            "worker_active_enter_monotonic": 789,
+            "backend_healthy": True,
+            "web_healthy": True,
+            "worker_healthy": True,
+            "ingress_open": True,
+        }
+        expected = CONTRACTS.legacy_runtime_identity(status)
+        self.assertEqual(
+            CONTRACTS.validate_legacy_status(
+                status,
+                expected_runtime_digest=expected,
+            ),
+            status,
+        )
+        isolated = dict(status)
+        isolated.update(
+            {
+                "legacy_runtime_state": "isolated",
+                "web_pid": None,
+                "web_started_at": None,
+                "web_restart_count": None,
+                "web_healthy": False,
+                "ingress_open": False,
+            }
+        )
+        self.assertEqual(
+            CONTRACTS.validate_legacy_status(
+                isolated,
+                expected_runtime_digest=expected,
+            ),
+            isolated,
+        )
+        changed = dict(status)
+        changed["web_container_id"] = "f" * 64
+        with self.assertRaisesRegex(
+            CONTRACTS.SiteHelperContractError,
+            "another runtime",
+        ):
+            CONTRACTS.validate_legacy_status(
+                changed,
+                expected_runtime_digest=expected,
+            )
+
+        restored = {
+            key: value
+            for key, value in status.items()
+            if key not in {"legacy_runtime_state", "ingress_open"}
+        }
+        restored.update(
+            {
+                "legacy_runtime_restored": True,
+                "backend_healthy": True,
+                "web_healthy": True,
+                "worker_healthy": True,
+                "ingress_restored": True,
+            }
+        )
+        self.assertEqual(
+            CONTRACTS.validate_legacy_restore(
+                restored,
+                expected_runtime_digest=expected,
+            ),
+            restored,
+        )
+
     def test_external_database_contract_is_complete_and_read_only(self) -> None:
         def record(stack: str, user: str) -> dict[str, object]:
             return {
@@ -231,6 +328,108 @@ class SiteHelperContractTests(unittest.TestCase):
                 document,
                 expected_users=expected_users,
             )
+
+    def test_mutable_data_audit_binds_exact_tables_and_one_snapshot(self) -> None:
+        tables = [
+            {
+                "schema": "online_knowledge",
+                "table": "history",
+                "row_count": 17,
+                "schema_sha256": DIGEST_A,
+                "content_sha256": DIGEST_B,
+            },
+            {
+                "schema": "online_knowledge",
+                "table": "jobs",
+                "row_count": 9,
+                "schema_sha256": DIGEST_B,
+                "content_sha256": DIGEST_C,
+            },
+        ]
+        identity = {
+            "database": "nexpoly",
+            "database_system_identifier": "7659245354718314530",
+            "connection": {
+                "service": "nexpoly-mutable-audit",
+                "host": "127.0.0.1",
+                "port": 55432,
+                "database": "nexpoly",
+                "user": "nexpoly_mutable_audit",
+            },
+            "postgres_runtime": {
+                "container_id": "a" * 64,
+                "image_id": DIGEST_A,
+                "configured_image": "postgres:16-alpine@sha256:" + "b" * 64,
+                "data_volume": {
+                    "type": "volume",
+                    "name": "nexpoly_postgres_data",
+                    "source": (
+                        "/var/lib/docker/volumes/"
+                        "nexpoly_postgres_data/_data"
+                    ),
+                    "destination": "/var/lib/postgresql/data",
+                    "driver": "local",
+                    "read_write": True,
+                },
+                "host_endpoint": {
+                    "host": "127.0.0.1",
+                    "port": 55432,
+                    "container_port": 5432,
+                    "protocol": "tcp",
+                },
+                "system_identifier": "7659245354718314530",
+            },
+            "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
+            "tables": tables,
+        }
+        document = {
+            "schema_version": 2,
+            **identity,
+            "transaction_isolation": "repeatable read",
+            "transaction_read_only": True,
+            "transaction_deferrable": True,
+            "snapshot_sha256": CONTRACTS.sha256_bytes(
+                CONTRACTS.canonical_json_bytes(identity)
+            ),
+            "captured_at": "2026-07-17T00:00:00Z",
+        }
+        self.assertEqual(
+            CONTRACTS.validate_mutable_data_audit(document),
+            document,
+        )
+        mutations = (
+            ("table", lambda value: value["tables"][0].update(table="jobs")),
+            (
+                "content",
+                lambda value: value["tables"][1].update(
+                    content_sha256="sha256:" + "f" * 64
+                ),
+            ),
+            (
+                "schema",
+                lambda value: value["tables"][0].update(
+                    schema_sha256="sha256:" + "e" * 64
+                ),
+            ),
+            (
+                "snapshot",
+                lambda value: value.update(snapshot_sha256=DIGEST_A),
+            ),
+            (
+                "read-write",
+                lambda value: value.update(transaction_read_only=False),
+            ),
+            (
+                "non-deferrable",
+                lambda value: value.update(transaction_deferrable=False),
+            ),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                changed = json.loads(json.dumps(document))
+                mutate(changed)
+                with self.assertRaises(CONTRACTS.SiteHelperContractError):
+                    CONTRACTS.validate_mutable_data_audit(changed)
 
     def test_cli_validate_never_changes_input(self) -> None:
         evidence = self.runtime / "active-jobs.json"

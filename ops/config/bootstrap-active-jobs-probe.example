@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# SITE_IMPLEMENTATION_REQUIRED
+# Replace this body with a reviewed, read-only site probe. It must emit exactly
+# one active-jobs schema-v2 JSON object, include every category (including
+# monomer_dft), and derive counts from live queues/processes in one observation.
+# Installing this fail-closed reference unchanged is forbidden by the installer.
+echo "site-specific active-job probe is not implemented" >&2
+exit 2

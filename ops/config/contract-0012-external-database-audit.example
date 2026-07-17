@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# Secrets stay in this deploy-user-owned libpq service file (mode 0600).
+service_file=/data/lzq/gith/nexpoly-runtime/config/pg_service.conf
+[[ -f "$service_file" && ! -L "$service_file" ]] || {
+  echo "install the private libpq service file" >&2
+  exit 2
+}
+[[ "$(stat -c '%u:%a' "$service_file")" == "$(id -u):600" ]] || {
+  echo "pg_service.conf must be deploy-user-owned mode 0600" >&2
+  exit 2
+}
+export PGSERVICEFILE="$service_file"
+
+# The service entries contain credentials; their non-secret fixed names are:
+# [nexpoly_dev_audit] and [nexpoly_md_health_opt_audit].
+/usr/bin/python3 -I -B <<'PY'
+import json
+import os
+import subprocess
+
+SQL = r"""
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE;
+SELECT json_build_object(
+  'database', current_database(),
+  'current_user', current_user,
+  'transaction_read_only',
+    current_setting('transaction_read_only')::boolean,
+  'role_superuser', role.rolsuper,
+  'role_create_db', role.rolcreatedb,
+  'role_create_role', role.rolcreaterole,
+  'ledger', COALESCE((
+    SELECT json_agg(
+      json_build_object('version', version, 'checksum', checksum)
+      ORDER BY version
+    )
+    FROM governance.schema_migrations
+  ), '[]'::json),
+  'legacy_relation_present',
+    to_regclass('generation.polytao_jobs') IS NOT NULL
+)
+FROM pg_roles AS role
+WHERE role.rolname = current_user;
+COMMIT;
+"""
+
+
+def inspect(stack: str, service: str) -> dict[str, object]:
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PGSERVICEFILE": os.environ["PGSERVICEFILE"],
+        "PGSERVICE": service,
+        "PGCONNECT_TIMEOUT": "10",
+    }
+    completed = subprocess.run(
+        ["/usr/bin/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1"],
+        input=SQL,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+        check=True,
+        timeout=60,
+    )
+    rows = [
+        line for line in completed.stdout.splitlines()
+        if line.startswith("{") and line.endswith("}")
+    ]
+    if len(rows) != 1:
+        raise SystemExit(f"{stack} audit did not return one JSON record")
+    value = json.loads(rows[0])
+    if value.get("database") != stack:
+        raise SystemExit(f"{stack} audit connected to another database")
+    return {"stack": stack, **value}
+
+
+document = {
+    "schema_version": 1,
+    "inventory_complete": True,
+    "writable_target": {"stack": "production", "database": "nexpoly"},
+    "databases": [
+        inspect("nexpoly_dev", "nexpoly_dev_audit"),
+        inspect(
+            "nexpoly_md_health_opt",
+            "nexpoly_md_health_opt_audit",
+        ),
+    ],
+}
+print(json.dumps(document, sort_keys=True, separators=(",", ":")))
+PY

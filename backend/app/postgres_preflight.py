@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.config import Settings
+from app.migration_compatibility import compatible_forward_versions
 from app.migration_policy import validate_migration_manifest_entries
 from app.postgres_database import PostgresUnavailableError, postgres_connection
 
@@ -310,6 +311,7 @@ def run_preflight(
             "checksum_mismatches": [],
             "dependency_errors": [],
             "unknown_migrations": [],
+            "forward_compatible_migrations": [],
             "duplicate_migrations": [],
         },
         "files": {},
@@ -372,8 +374,16 @@ def run_preflight(
                 for requirement in migration.requires_contracts
                 if applied_migrations.get(requirement.version) != requirement.checksum
             ]
+            forward_compatible_migrations = sorted(
+                compatible_forward_versions(
+                    applied_migrations,
+                    _MIGRATION_CHECKSUMS,
+                )
+            )
             unknown_migrations = sorted(
-                set(applied_migrations).difference(_MIGRATION_CHECKSUMS)
+                set(applied_migrations)
+                .difference(_MIGRATION_CHECKSUMS)
+                .difference(forward_compatible_migrations)
             )
             report["postgres"] = {
                 "reachable": True,
@@ -398,6 +408,7 @@ def run_preflight(
                 "checksum_mismatches": checksum_mismatches,
                 "dependency_errors": dependency_errors,
                 "unknown_migrations": unknown_migrations,
+                "forward_compatible_migrations": forward_compatible_migrations,
                 "duplicate_migrations": duplicate_migrations,
             }
             report["analytics_snapshot"] = _analytics_snapshot_report(connection)

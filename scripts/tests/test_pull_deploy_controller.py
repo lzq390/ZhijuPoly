@@ -28,6 +28,12 @@ TARGET_TREE = "4" * 40
 OPERATION_ID = "deploy-20260716-0001"
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
+B_MANIFEST_PAYLOAD = (
+    REPOSITORY_ROOT / "backend/migrations/postgres/manifest.json"
+).read_bytes()
+B_MANIFEST_RECORDS = json.loads(B_MANIFEST_PAYLOAD)["migrations"]
+B_MANIFEST_DIGEST = CONTROLLER.sha256_bytes(B_MANIFEST_PAYLOAD)
+F_MANIFEST_DIGEST = "sha256:" + "e" * 64
 
 
 def write_private(path: Path, payload: str) -> None:
@@ -46,6 +52,69 @@ def image_record(role: str, sha: str = TARGET_SHA) -> dict[str, str]:
         "revision": sha,
         "source": CONTROLLER.SOURCE_URL,
         "version": f"sha-{sha}",
+    }
+
+
+def mutable_data_evidence() -> dict[str, object]:
+    tables = [
+        {
+            "schema": "online_knowledge",
+            "table": "history",
+            "row_count": 17,
+            "schema_sha256": "sha256:" + "1" * 64,
+            "content_sha256": "sha256:" + "2" * 64,
+        },
+        {
+            "schema": "online_knowledge",
+            "table": "jobs",
+            "row_count": 9,
+            "schema_sha256": "sha256:" + "3" * 64,
+            "content_sha256": "sha256:" + "4" * 64,
+        },
+    ]
+    identity = {
+        "database": "nexpoly",
+        "database_system_identifier": "7659245354718314530",
+        "connection": {
+            "service": CONTROLLER.MUTABLE_DATA_SERVICE,
+            "host": CONTROLLER.MUTABLE_DATA_HOST,
+            "port": CONTROLLER.MUTABLE_DATA_PORT,
+            "database": CONTROLLER.MUTABLE_DATA_DATABASE,
+            "user": CONTROLLER.MUTABLE_DATA_USER,
+        },
+        "postgres_runtime": {
+            "container_id": "a" * 64,
+            "image_id": "sha256:" + "b" * 64,
+            "configured_image": "postgres:16-alpine",
+            "data_volume": {
+                "type": "volume",
+                "name": "nexpoly_postgres_data",
+                "source": (
+                    "/var/lib/docker/volumes/nexpoly_postgres_data/_data"
+                ),
+                "destination": "/var/lib/postgresql/data",
+                "driver": "local",
+                "read_write": True,
+            },
+            "host_endpoint": {
+                "host": CONTROLLER.MUTABLE_DATA_HOST,
+                "port": CONTROLLER.MUTABLE_DATA_PORT,
+                "container_port": 5432,
+                "protocol": "tcp",
+            },
+            "system_identifier": "7659245354718314530",
+        },
+        "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
+        "tables": tables,
+    }
+    return {
+        "schema_version": 2,
+        **identity,
+        "transaction_isolation": "repeatable read",
+        "transaction_read_only": True,
+        "transaction_deferrable": True,
+        "snapshot_sha256": CONTROLLER.canonical_json_digest(identity),
+        "captured_at": "2026-07-17T00:00:00Z",
     }
 
 
@@ -375,6 +444,16 @@ class FakeLifecycle:
         if self.fail_at == name:
             raise CONTROLLER.PullDeployError(f"injected {name} failure")
 
+    def postgres_runtime_identity(
+        self, _controller: object, _descriptor: object
+    ) -> dict[str, object]:
+        runtime = dict(mutable_data_evidence()["postgres_runtime"])
+        return {
+            "schema_version": 1,
+            **runtime,
+            "captured_at": CONTROLLER.utc_now(),
+        }
+
     def drain(self, _controller: object, _descriptor: object) -> dict[str, object]:
         self._event("drain")
         self.admission_open = False
@@ -650,13 +729,58 @@ class FixtureController(CONTROLLER.PullDeployController):
             "activated_at": CONTROLLER.utc_now(),
         }
         CONTROLLER.atomic_json(self.active_control_path, active)
+        source_readiness = {
+            "schema_version": 1,
+            "ready": True,
+            "source_root": str(
+                self.runtime_root / "fixture-bootstrap-source"
+            ),
+            "source_sha": candidate["source_sha"],
+            "source_tree": candidate["source_tree"],
+            "branch": "main",
+            "origin": CONTROLLER.REPOSITORY_SSH_URL,
+            "standalone_object_database": True,
+            "shallow": False,
+            "dirty_entries": 0,
+            "ignored_entries": 0,
+            "unreachable_objects": 0,
+            "owner_private": True,
+            "group_or_world_writable": False,
+        }
+        takeover = {
+            "schema_version": 1,
+            "operation_id": "takeover-pull-fixture",
+            "authority_sha": candidate["source_sha"],
+            "authority_tree": candidate["source_tree"],
+            "install_manifest_sha256": "sha256:" + "3" * 64,
+            "classification_sha256": "sha256:" + "4" * 64,
+            "runtime_identity_sha256": "sha256:" + "5" * 64,
+            "git_identity": {
+                "branch": "refs/heads/main",
+                "head_sha": PREVIOUS_SHA,
+                "head_tree": PREVIOUS_TREE,
+                "local_main_sha": PREVIOUS_SHA,
+            },
+            "pre_stopped_fence_sha256": "sha256:" + "6" * 64,
+            "control_layout_sha256": "sha256:" + "7" * 64,
+            "checkout_permissions_sha256": "sha256:" + "8" * 64,
+            "applied_record_sha256": "sha256:" + "9" * 64,
+        }
+        takeover["binding_sha256"] = CONTROLLER.canonical_json_digest(
+            takeover
+        )
         CONTROLLER.atomic_json(
             self.state_dir / "bootstrap-control.json",
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "status": "completed",
                 "source_sha": candidate["source_sha"],
                 "source_tree": candidate["source_tree"],
+                "source_readiness": source_readiness,
+                "source_readiness_sha256": (
+                    CONTROLLER.canonical_json_digest(source_readiness)
+                ),
+                "legacy_takeover": takeover,
                 "delivery_gate": {"fixture": True},
                 "production_repository": {"fixture": True},
                 "immutable_files": {
@@ -735,6 +859,11 @@ class FixtureController(CONTROLLER.PullDeployController):
 
     def production_deploy_values(self, *, check_free_space: bool) -> dict[str, str]:
         return {"fixture": str(check_free_space)}
+
+    def _capture_mutable_data(
+        self, _descriptor: dict[str, object]
+    ) -> dict[str, object]:
+        return mutable_data_evidence()
 
     def asset_evidence(self, expected_digest: str) -> dict[str, object]:
         target = self.runtime_root / "fixture-assets" / expected_digest.split(":", 1)[1]
@@ -980,10 +1109,27 @@ class PullDeployTestCase(unittest.TestCase):
             "bootstrap-legacy-runtime-status",
             "bootstrap-legacy-runtime-resume-unchanged",
             "bootstrap-legacy-runtime-restore",
+            CONTROLLER.MUTABLE_DATA_AUDIT_HELPER,
         ):
             hook = self.runtime / "config" / name
             hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             os.chmod(hook, 0o700)
+        write_private(
+            self.runtime / "config" / CONTROLLER.MUTABLE_DATA_SERVICE_CONFIG,
+            (
+                "[nexpoly-mutable-audit]\n"
+                "host=127.0.0.1\n"
+                "port=55432\n"
+                "dbname=nexpoly\n"
+                "user=nexpoly_mutable_audit\n"
+                "sslmode=disable\n"
+                f"passfile={self.runtime / 'config' / CONTROLLER.MUTABLE_DATA_PGPASS}\n"
+            ),
+        )
+        write_private(
+            self.runtime / "config" / CONTROLLER.MUTABLE_DATA_PGPASS,
+            "127.0.0.1:55432:nexpoly:nexpoly_mutable_audit:fixture\n",
+        )
         write_private(
             self.runtime / "config/docker/config.json",
             json.dumps(
@@ -1236,6 +1382,13 @@ class PostgresRuntimeFencingTests(unittest.TestCase):
                     },
                 },
                 "State": {"Running": True},
+                "NetworkSettings": {
+                    "Ports": {
+                        "5432/tcp": [
+                            {"HostIp": "127.0.0.1", "HostPort": "55432"}
+                        ]
+                    }
+                },
                 "Mounts": [
                     {
                         "Type": "volume",
@@ -1378,6 +1531,12 @@ class PostgresRuntimeFencingTests(unittest.TestCase):
                 "driver": "local",
                 "read_write": True,
             },
+            "host_endpoint": {
+                "host": "127.0.0.1",
+                "port": 55432,
+                "container_port": 5432,
+                "protocol": "tcp",
+            },
             "system_identifier": "7659245354718314530",
             "captured_at": CONTROLLER.utc_now(),
         }
@@ -1468,20 +1627,28 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             ],
             "datasets_on_asset_change": [],
             "final_migration": dict(CONTROLLER._bridge_core.FINAL_MIGRATION),
-            "accepted_migration_ledgers": [
-                {"name": "pre-0012", "manifest_sha256": DIGEST_A},
-                {
-                    "name": "post-0012",
-                    "manifest_sha256": "sha256:" + "e" * 64,
-                },
-                {"name": "post-0013", "manifest_sha256": DIGEST_B},
-            ],
+            "accepted_migration_ledgers": (
+                CONTROLLER._bridge_core.expected_migration_registry(
+                    target_manifest_sha256=B_MANIFEST_DIGEST,
+                    target_records=B_MANIFEST_RECORDS,
+                    authority_manifest_sha256=F_MANIFEST_DIGEST,
+                    authority_records=[
+                        *B_MANIFEST_RECORDS,
+                        CONTROLLER._bridge_core.FINAL_MIGRATION_RECORD,
+                    ],
+                )
+            ),
             "required_ci_jobs": required_jobs,
             "policy_id": None,
         }
         policy["policy_id"] = CONTROLLER._bridge_core.canonical_json_digest(
             {key: value for key, value in policy.items() if key != "policy_id"}
         )
+        descriptor["migrations"] = {
+            "sha256": B_MANIFEST_DIGEST,
+            "schema_version": 2,
+            "records": json.loads(json.dumps(B_MANIFEST_RECORDS)),
+        }
         descriptor["schema_version"] = CONTROLLER.BRIDGE_DESCRIPTOR_SCHEMA_VERSION
         descriptor["bridge"] = CONTROLLER._bridge_core.build_bridge_descriptor(
             operation_id=OPERATION_ID,
@@ -1496,6 +1663,64 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             token_id="sha256:" + "8" * 64,
             token_sha256="sha256:" + "9" * 64,
         )
+        takeover = {
+            "schema_version": 1,
+            "operation_id": "takeover-fixture-operation",
+            "authority_sha": authority_sha,
+            "authority_tree": authority_tree,
+            "install_manifest_sha256": "sha256:" + "a" * 64,
+            "classification_sha256": "sha256:" + "b" * 64,
+            "runtime_identity_sha256": "sha256:" + "c" * 64,
+            "git_identity": {
+                "branch": "refs/heads/main",
+                "head_sha": descriptor["repository"]["previous_sha"],
+                "head_tree": descriptor["repository"]["previous_tree"],
+                "local_main_sha": descriptor["repository"]["previous_sha"],
+            },
+            "pre_stopped_fence_sha256": "sha256:" + "d" * 64,
+            "control_layout_sha256": "sha256:" + "e" * 64,
+            "checkout_permissions_sha256": "sha256:" + "f" * 64,
+            "applied_record_sha256": "sha256:" + "1" * 64,
+        }
+        takeover["binding_sha256"] = CONTROLLER.canonical_json_digest(
+            takeover
+        )
+        descriptor["legacy_takeover"] = takeover
+        prefetch = {
+            "schema_version": 1,
+            "operation_id": "prefetch-fixture-operation",
+            "ready_path": str(
+                controller.runtime_root
+                / "prefetch/prefetch-fixture-operation/ready.json"
+            ),
+            "ready_sha256": "sha256:" + "2" * 64,
+            "identity_sha256": "sha256:" + "3" * 64,
+            "source": {
+                "authority": {
+                    "sha": authority_sha,
+                    "tree": authority_tree,
+                },
+                "target": {
+                    "sha": TARGET_SHA,
+                    "tree": TARGET_TREE,
+                },
+            },
+            "source_readiness_sha256": "sha256:" + "4" * 64,
+            "policy_sha256": descriptor["bridge"]["policy_sha256"],
+            "docker_config_sha256": "sha256:" + "5" * 64,
+            "git_bundle_sha256": "sha256:" + "6" * 64,
+            "images_sha256": "sha256:" + "7" * 64,
+            "wheel_caches_sha256": "sha256:" + "8" * 64,
+            "asset_manifest_sha256": descriptor["release_input"][
+                "asset_manifest_digest"
+            ],
+            "asset_inventory_sha256": "sha256:" + "9" * 64,
+            "recovery_tools_sha256": "sha256:" + "a" * 64,
+        }
+        prefetch["binding_sha256"] = CONTROLLER.canonical_json_digest(
+            prefetch
+        )
+        descriptor["prefetch"] = prefetch
         return descriptor
 
     def test_v3_descriptor_binds_f_authority_exact_b_and_empty_datasets(
@@ -1535,6 +1760,293 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 mutate(changed)
                 with self.assertRaises(CONTROLLER.PullDeployError):
                     CONTROLLER.validate_descriptor(changed)
+
+    def test_bridge_ledger_registry_is_consumed_by_runtime_validation(self) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        accepted = descriptor["bridge"]["policy"]["accepted_migration_ledgers"]
+        manifest = descriptor["migrations"]["records"]
+        for name, rows in (
+            ("pre-0012", manifest[:-1]),
+            ("post-0012", manifest),
+            (
+                "post-0013",
+                [
+                    *manifest,
+                    CONTROLLER._bridge_core.FINAL_MIGRATION_RECORD,
+                ],
+            ),
+        ):
+            history = CONTROLLER.canonical_ledger_history(
+                [
+                    {
+                        "version": record["version"],
+                        "checksum": record["checksum"],
+                    }
+                    for record in rows
+                ],
+                manifest,
+                accepted_ledgers=accepted,
+                require_registry_match=True,
+            )
+            self.assertEqual(history, rows)
+            compatibility = CONTROLLER.build_migration_compatibility_state(
+                descriptor["bridge"]["policy"],
+                code_manifest_sha256=(
+                    F_MANIFEST_DIGEST
+                    if name == "post-0013"
+                    else B_MANIFEST_DIGEST
+                ),
+                migrations=history,
+            )
+            self.assertEqual(compatibility["ledger_state"]["name"], name)
+
+        for rows in (
+            [
+                *manifest,
+                {
+                    **CONTROLLER._bridge_core.FINAL_MIGRATION,
+                    "checksum": "f" * 64,
+                },
+            ],
+            [
+                *manifest,
+                CONTROLLER._bridge_core.FINAL_MIGRATION,
+                {"version": "0014_future", "checksum": "e" * 64},
+            ],
+        ):
+            with self.assertRaises(CONTROLLER.PullDeployError):
+                CONTROLLER.canonical_ledger_history(
+                    rows,
+                    manifest,
+                    accepted_ledgers=accepted,
+                    require_registry_match=True,
+                )
+
+    def test_b_state_can_truthfully_record_f_0013_ledger(self) -> None:
+        descriptor = self.bridge_descriptor(self.controller())
+        migrations = [
+            *descriptor["migrations"]["records"],
+            CONTROLLER._bridge_core.FINAL_MIGRATION_RECORD,
+        ]
+        compatibility = CONTROLLER.build_migration_compatibility_state(
+            descriptor["bridge"]["policy"],
+            code_manifest_sha256=B_MANIFEST_DIGEST,
+            migrations=migrations,
+        )
+        self.assertEqual(
+            compatibility["code_manifest_sha256"],
+            B_MANIFEST_DIGEST,
+        )
+        self.assertEqual(
+            compatibility["ledger_manifest_sha256"],
+            F_MANIFEST_DIGEST,
+        )
+        self.assertEqual(
+            compatibility["ledger_state"]["name"],
+            "post-0013",
+        )
+
+    def test_mutable_online_tables_are_sealed_before_and_after_apply(self) -> None:
+        before = mutable_data_evidence()
+        pair = CONTROLLER.validate_mutable_data_pair(
+            {
+                "before": before,
+                "after": json.loads(json.dumps(before)),
+                "identity_sha256": CONTROLLER.canonical_json_digest(
+                    CONTROLLER.mutable_data_identity(before)
+                ),
+            }
+        )
+        self.assertEqual(pair["before"], pair["after"])
+
+        for label, field, replacement in (
+            ("row count", "row_count", 18),
+            ("content", "content_sha256", "sha256:" + "f" * 64),
+            ("schema", "schema_sha256", "sha256:" + "e" * 64),
+        ):
+            with self.subTest(label=label):
+                after = json.loads(json.dumps(before))
+                after["tables"][0][field] = replacement
+                identity = {
+                    "database": after["database"],
+                    "database_system_identifier": after[
+                        "database_system_identifier"
+                    ],
+                    "connection": after["connection"],
+                    "postgres_runtime": after["postgres_runtime"],
+                    "digest_algorithm": after["digest_algorithm"],
+                    "tables": after["tables"],
+                }
+                after["snapshot_sha256"] = CONTROLLER.canonical_json_digest(
+                    identity
+                )
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "changed during deployment",
+                ):
+                    CONTROLLER.validate_mutable_data_pair(
+                        {
+                            "before": before,
+                            "after": after,
+                            "identity_sha256": CONTROLLER.canonical_json_digest(
+                                CONTROLLER.mutable_data_identity(before)
+                            ),
+                        }
+                    )
+
+    def test_mutable_helper_is_descriptor_bound_and_asset_rebuild_is_empty(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        self.assertEqual(
+            descriptor["release_input"]["datasets_on_asset_change"],
+            [],
+        )
+        self.assertEqual(
+            descriptor["mutable_data"]["helper_sha256"],
+            descriptor["production_config"][
+                "deployment_mutable_data_audit_sha256"
+            ],
+        )
+        descriptor["mutable_data"]["helper_sha256"] = "sha256:" + "f" * 64
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "mutable-data helper differs",
+        ):
+            CONTROLLER.validate_descriptor(descriptor)
+
+        pgpass = controller.config_dir / CONTROLLER.MUTABLE_DATA_PGPASS
+        pgpass.write_text(
+            (
+                "127.0.0.1:55432:nexpoly:"
+                "nexpoly_mutable_audit:changed\n"
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(pgpass, 0o600)
+        self.assertNotEqual(
+            controller.mutable_data_contract(),
+            descriptor["mutable_data"],
+        )
+        pgpass.unlink()
+        pgpass.symlink_to(controller.config_dir / "app.env")
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "dependency is unsafe",
+        ):
+            controller.mutable_data_contract()
+
+    def test_mutable_connection_rejects_indirection_and_wrong_audit_identity(
+        self,
+    ) -> None:
+        passfile = Path("/private/mutable-data-audit.pgpass")
+        canonical = (
+            "[nexpoly-mutable-audit]\n"
+            "host=127.0.0.1\n"
+            "port=55432\n"
+            "dbname=nexpoly\n"
+            "user=nexpoly_mutable_audit\n"
+            "sslmode=disable\n"
+            f"passfile={passfile}\n"
+        ).encode()
+        pgpass = (
+            b"127.0.0.1:55432:nexpoly:nexpoly_mutable_audit:secret\\:value\n"
+        )
+        self.assertEqual(
+            CONTROLLER.validate_mutable_data_connection_inputs(
+                canonical,
+                pgpass,
+                expected_passfile=passfile,
+            )["user"],
+            "nexpoly_mutable_audit",
+        )
+        for service in (
+            canonical + b"include=/tmp/redirect.conf\n",
+            canonical.replace(b"host=127.0.0.1", b"host=localhost"),
+            canonical.replace(
+                b"passfile=/private/mutable-data-audit.pgpass",
+                b"servicefile=/tmp/other.conf",
+            ),
+        ):
+            with self.subTest(service=service):
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "one exact loopback audit endpoint",
+                ):
+                    CONTROLLER.validate_mutable_data_connection_inputs(
+                        service,
+                        pgpass,
+                        expected_passfile=passfile,
+                    )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "does not match",
+        ):
+            CONTROLLER.validate_mutable_data_connection_inputs(
+                canonical,
+                b"127.0.0.1:55432:nexpoly:postgres:secret\n",
+                expected_passfile=passfile,
+            )
+
+    def test_same_system_identifier_clone_cannot_satisfy_mutable_audit(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        expected = FakeLifecycle().postgres_runtime_identity(
+            controller, descriptor
+        )
+        CONTROLLER.atomic_json(
+            controller.marker_path,
+            {
+                "postgres_runtime_fence": expected,
+            },
+        )
+
+        class CloneLifecycle(FakeLifecycle):
+            def __init__(self) -> None:
+                super().__init__()
+                self.captures = 0
+
+            def postgres_runtime_identity(
+                self, target_controller: object, target_descriptor: object
+            ) -> dict[str, object]:
+                result = super().postgres_runtime_identity(
+                    target_controller, target_descriptor
+                )
+                self.captures += 1
+                if self.captures == 2:
+                    result["container_id"] = "c" * 64
+                return result
+
+        controller.lifecycle = CloneLifecycle()
+        with mock.patch.object(
+            controller.runner,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["deployment-mutable-data-audit"],
+                0,
+                json.dumps(mutable_data_evidence()),
+                "",
+            ),
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "exact PostgreSQL container",
+        ):
+            CONTROLLER.PullDeployController._capture_mutable_data(
+                controller,
+                descriptor,
+            )
 
     def test_bridge_source_switch_uses_exact_policy_ref_not_remote_main(
         self,
@@ -2465,7 +2977,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         class LostStartLifecycle(FakeLifecycle):
             lose_start = True
 
-            def start(self, _controller, _descriptor):  # type: ignore[no-untyped-def]
+            def start(self, controller, _descriptor):  # type: ignore[no-untyped-def]
+                persisted = CONTROLLER.load_private_json(controller.marker_path)
+                self.assert_postgres_fence(persisted)
                 self._event("start")
                 self.runtime_state = "live"
                 self.admission_open = False
@@ -2473,6 +2987,25 @@ class LifecycleStateMachineTests(PullDeployTestCase):
                 if self.lose_start:
                     self.lose_start = False
                     raise CONTROLLER.PullDeployError("injected start response loss")
+
+            @staticmethod
+            def assert_postgres_fence(marker):  # type: ignore[no-untyped-def]
+                expected = CONTROLLER.postgres_runtime_fence_identity(
+                    {
+                        "schema_version": 1,
+                        **mutable_data_evidence()["postgres_runtime"],
+                        "captured_at": marker["postgres_runtime_fence"][
+                            "captured_at"
+                        ],
+                    }
+                )
+                actual = CONTROLLER.postgres_runtime_fence_identity(
+                    marker["postgres_runtime_fence"]
+                )
+                if actual != expected:
+                    raise AssertionError(
+                        "PostgreSQL runtime fence was not durable before start"
+                    )
 
         lifecycle = LostStartLifecycle()
         lifecycle.runtime_state = "stopped"
@@ -2496,6 +3029,15 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         self.assertEqual(
             persisted["runtime_start_intent"]["target_sha"],
             TARGET_SHA,
+        )
+        self.assertEqual(
+            CONTROLLER.postgres_runtime_fence_identity(
+                persisted["postgres_runtime_fence"]
+            ),
+            {
+                "schema_version": 1,
+                **mutable_data_evidence()["postgres_runtime"],
+            },
         )
         self.assertNotIn("verification", persisted)
 

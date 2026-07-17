@@ -13,6 +13,14 @@
       "kind": "python",
       "file": "pull_deploy_controller.py"
     },
+    "legacy-takeover": {
+      "kind": "python",
+      "file": "legacy_takeover.py"
+    },
+    "maintenance-prefetch": {
+      "kind": "python",
+      "file": "maintenance_prefetch.py"
+    },
     "site-helper-readiness": {
       "kind": "python",
       "file": "site_helper_contracts.py"
@@ -34,8 +42,28 @@
   },
   "files": [
     {
+      "name": "bootstrap_pull_deploy.py",
+      "source": "scripts/bootstrap_pull_deploy.py",
+      "mode": 448
+    },
+    {
       "name": "bridge_deploy_core.py",
       "source": "scripts/bridge_deploy_core.py",
+      "mode": 448
+    },
+    {
+      "name": "legacy_takeover.py",
+      "source": "scripts/legacy_takeover.py",
+      "mode": 448
+    },
+    {
+      "name": "legacy_takeover_evidence.py",
+      "source": "scripts/legacy_takeover_evidence.py",
+      "mode": 448
+    },
+    {
+      "name": "maintenance_prefetch.py",
+      "source": "scripts/maintenance_prefetch.py",
       "mode": 448
     },
     {

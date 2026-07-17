@@ -424,6 +424,15 @@ def _pull_state_projection(
     projected["migrations"] = [
         dict(canonical_by_version[version]) for version in versions
     ]
+    compatibility = projected.get("migration_compatibility")
+    if isinstance(compatibility, dict):
+        projected["migration_compatibility"] = (
+            pull.build_migration_compatibility_state(
+                compatibility,
+                code_manifest_sha256=binding.descriptor["migrations"]["sha256"],
+                migrations=projected["migrations"],
+            )
+        )
     projected.pop("applied_migrations", None)
     return projected
 

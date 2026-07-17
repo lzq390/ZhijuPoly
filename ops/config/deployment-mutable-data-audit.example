@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# Install as runtime/config/deployment-mutable-data-audit, owned by the deploy
+# user and mode 0700.  Provision the referenced pg_service/pgpass files outside
+# Git as mode 0600; never place a password in this script or its argv.
+set -euo pipefail
+umask 077
+
+readonly runtime_root="/data/lzq/gith/nexpoly-runtime"
+readonly audit_root="${runtime_root}/audit/mutable-data"
+readonly pg_service_file="${runtime_root}/config/mutable-data-audit.pg_service.conf"
+readonly pg_pass_file="${runtime_root}/config/mutable-data-audit.pgpass"
+readonly runtime_identity_json="${NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON:?sealed PostgreSQL runtime identity is required}"
+
+test -d "${audit_root}"
+test ! -L "${audit_root}"
+test "$(stat -c '%a:%u' "${audit_root}")" = "700:$(id -u)"
+test ! -L "${pg_service_file}"
+test ! -L "${pg_pass_file}"
+test "$(stat -c '%a:%u' "${pg_service_file}")" = "600:$(id -u)"
+test "$(stat -c '%a:%u' "${pg_pass_file}")" = "600:$(id -u)"
+
+capture="$(mktemp -d "${audit_root}/.capture.XXXXXXXX")"
+cleanup() {
+  rm -rf -- "${capture}"
+}
+trap cleanup EXIT HUP INT TERM
+
+# Every COPY below runs in one repeatable-read, read-only transaction.  The
+# only files containing business rows are private temporaries removed by the
+# trap; stdout contains counts and digests only.
+/usr/bin/env -i \
+  HOME="/nonexistent" \
+  PATH="/usr/bin:/bin" \
+  PGSERVICE="nexpoly-mutable-audit" \
+  PGSERVICEFILE="${pg_service_file}" \
+  PGAPPNAME="nexpoly-mutable-data-audit" \
+  /usr/bin/psql \
+  --no-psqlrc \
+  --set=ON_ERROR_STOP=1 \
+  --quiet \
+  --dbname=service=nexpoly-mutable-audit <<SQL
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE;
+\copy (SELECT json_build_object('database', current_database(), 'audit_user', current_user, 'server_port', inet_server_port(), 'database_system_identifier', system_identifier::text, 'transaction_isolation', current_setting('transaction_isolation'), 'transaction_read_only', current_setting('transaction_read_only')::boolean, 'transaction_deferrable', current_setting('transaction_deferrable')::boolean)::text FROM pg_control_system()) TO '${capture}/metadata.json'
+\copy (SELECT to_jsonb(value)::text FROM online_knowledge.history AS value ORDER BY history_id) TO '${capture}/history.rows'
+\copy (SELECT to_jsonb(value)::text FROM online_knowledge.jobs AS value ORDER BY job_id) TO '${capture}/jobs.rows'
+\copy (SELECT jsonb_build_object('kind','column','position',a.attnum,'name',a.attname,'type',pg_catalog.format_type(a.atttypid,a.atttypmod),'not_null',a.attnotnull,'default',pg_get_expr(d.adbin,d.adrelid))::text FROM pg_attribute AS a LEFT JOIN pg_attrdef AS d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid='online_knowledge.history'::regclass AND a.attnum>0 AND NOT a.attisdropped UNION ALL SELECT jsonb_build_object('kind','constraint','name',c.conname,'definition',pg_get_constraintdef(c.oid,true))::text FROM pg_constraint AS c WHERE c.conrelid='online_knowledge.history'::regclass UNION ALL SELECT jsonb_build_object('kind','index','name',i.indexrelid::regclass::text,'definition',pg_get_indexdef(i.indexrelid))::text FROM pg_index AS i WHERE i.indrelid='online_knowledge.history'::regclass ORDER BY 1) TO '${capture}/history.schema'
+\copy (SELECT jsonb_build_object('kind','column','position',a.attnum,'name',a.attname,'type',pg_catalog.format_type(a.atttypid,a.atttypmod),'not_null',a.attnotnull,'default',pg_get_expr(d.adbin,d.adrelid))::text FROM pg_attribute AS a LEFT JOIN pg_attrdef AS d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid='online_knowledge.jobs'::regclass AND a.attnum>0 AND NOT a.attisdropped UNION ALL SELECT jsonb_build_object('kind','constraint','name',c.conname,'definition',pg_get_constraintdef(c.oid,true))::text FROM pg_constraint AS c WHERE c.conrelid='online_knowledge.jobs'::regclass UNION ALL SELECT jsonb_build_object('kind','index','name',i.indexrelid::regclass::text,'definition',pg_get_indexdef(i.indexrelid))::text FROM pg_index AS i WHERE i.indrelid='online_knowledge.jobs'::regclass ORDER BY 1) TO '${capture}/jobs.schema'
+COMMIT;
+SQL
+
+/usr/bin/env -i \
+  HOME="/nonexistent" \
+  PATH="/usr/bin:/bin" \
+  TZ="UTC" \
+  NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON="${runtime_identity_json}" \
+  /usr/bin/python3 -I -B - "${capture}" <<'PY'
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+
+root = Path(sys.argv[1])
+
+
+def canonical(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+
+
+def digest(value: object) -> str:
+    return "sha256:" + hashlib.sha256(canonical(value)).hexdigest()
+
+
+def load_json_lines(path: Path) -> list[object]:
+    values: list[object] = []
+    with path.open("r", encoding="utf-8") as stream:
+        for line in stream:
+            if line.strip():
+                values.append(json.loads(line))
+    return values
+
+
+metadata_rows = load_json_lines(root / "metadata.json")
+if len(metadata_rows) != 1:
+    raise SystemExit("mutable audit metadata is incomplete")
+metadata = metadata_rows[0]
+if not isinstance(metadata, dict):
+    raise SystemExit("mutable audit metadata is invalid")
+if (
+    metadata.get("database") != "nexpoly"
+    or metadata.get("audit_user") != "nexpoly_mutable_audit"
+    or metadata.get("server_port") != 5432
+):
+    raise SystemExit("mutable audit connected to an unexpected database identity")
+try:
+    postgres_runtime = json.loads(
+        os.environ["NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON"]
+    )
+except (KeyError, json.JSONDecodeError) as exc:
+    raise SystemExit("sealed PostgreSQL runtime identity is unavailable") from exc
+connection = {
+    "service": "nexpoly-mutable-audit",
+    "host": "127.0.0.1",
+    "port": 55432,
+    "database": "nexpoly",
+    "user": "nexpoly_mutable_audit",
+}
+
+tables = []
+for table in ("history", "jobs"):
+    rows_path = root / f"{table}.rows"
+    schema_path = root / f"{table}.schema"
+    # PostgreSQL jsonb text is canonical for object-key order and numeric
+    # spelling; COPY text escaping is deterministic.  Hash its bytes directly
+    # so no IEEE-754 conversion can collapse distinct numeric values.
+    rows_payload = rows_path.read_bytes()
+    schema_payload = schema_path.read_bytes()
+    row_count = sum(1 for line in rows_payload.splitlines() if line)
+    tables.append(
+        {
+            "schema": "online_knowledge",
+            "table": table,
+            "row_count": row_count,
+            "schema_sha256": "sha256:" + hashlib.sha256(schema_payload).hexdigest(),
+            "content_sha256": "sha256:" + hashlib.sha256(rows_payload).hexdigest(),
+        }
+    )
+
+identity = {
+    "database": metadata["database"],
+    "database_system_identifier": metadata["database_system_identifier"],
+    "connection": connection,
+    "postgres_runtime": postgres_runtime,
+    "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
+    "tables": tables,
+}
+document = {
+    "schema_version": 2,
+    **identity,
+    "transaction_isolation": metadata["transaction_isolation"],
+    "transaction_read_only": metadata["transaction_read_only"],
+    "transaction_deferrable": metadata["transaction_deferrable"],
+    "snapshot_sha256": digest(identity),
+    "captured_at": (
+        dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    ),
+}
+print(json.dumps(document, sort_keys=True, separators=(",", ":")))
+PY

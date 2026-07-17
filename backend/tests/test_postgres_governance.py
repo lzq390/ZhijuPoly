@@ -295,6 +295,59 @@ def test_unknown_migration_ledger_entry_blocks_preflight_and_runner(
             )
 
 
+def test_exact_0013_is_reported_as_forward_compatible_for_bridge_b(
+    tmp_path: Path,
+    postgres_dsn: str,
+) -> None:
+    from app.migration_compatibility import FORWARD_COMPATIBLE_MIGRATION
+
+    version = FORWARD_COMPATIBLE_MIGRATION["version"]
+    checksum = FORWARD_COMPATIBLE_MIGRATION["checksum"]
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    inserted = False
+    with postgres_connection(postgres_dsn) as connection:
+        existing = connection.execute(
+            "SELECT checksum FROM governance.schema_migrations WHERE version = %s",
+            (version,),
+        ).fetchone()
+        if existing is None:
+            connection.execute(
+                "INSERT INTO governance.schema_migrations (version, checksum) VALUES (%s, %s)",
+                (version, checksum),
+            )
+            inserted = True
+        else:
+            assert existing["checksum"] == checksum
+
+    try:
+        report = postgres_preflight.run_preflight(
+            settings,
+            dsn=postgres_dsn,
+            mode="schema",
+            strict=True,
+        )
+        assert report["migrations"]["unknown_migrations"] == []
+        assert report["migrations"]["forward_compatible_migrations"] == (
+            [] if version in postgres_preflight._MIGRATION_CHECKSUMS else [version]
+        )
+        assert report["strict_ok"] is True
+
+        results = apply_postgres_migrations(
+            postgres_dsn,
+            allowed_kinds={"baseline", "expand"},
+            defer_trailing_contracts=True,
+        )
+        assert results
+        assert all(result.applied is False for result in results)
+    finally:
+        if inserted:
+            with postgres_connection(postgres_dsn) as connection:
+                connection.execute(
+                    "DELETE FROM governance.schema_migrations WHERE version = %s",
+                    (version,),
+                )
+
+
 def test_duplicate_migration_ledger_entry_blocks_preflight_and_runner(
     tmp_path: Path,
     postgres_dsn: str,

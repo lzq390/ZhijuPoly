@@ -45,12 +45,25 @@ REQUIRED_CI_JOBS = {
     "Publish and smoke immutable main images",
     "bridge-validation",
 }
-REQUIRED_LEDGER_NAMES = {"pre-0012", "post-0012", "post-0013"}
+REQUIRED_LEDGER_ORDER = ("pre-0012", "post-0012", "post-0013")
+REQUIRED_LEDGER_NAMES = set(REQUIRED_LEDGER_ORDER)
+CONTRACT_MIGRATION = {
+    "version": "0012_drop_polytao_jobs",
+    "checksum": (
+        "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+    ),
+}
 FINAL_MIGRATION = {
     "version": "0013_monomer_dft_jobs",
     "checksum": (
         "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc"
     ),
+}
+FINAL_MIGRATION_RECORD = {
+    **FINAL_MIGRATION,
+    "kind": "expand",
+    "epoch": 2,
+    "requires_contracts": [dict(CONTRACT_MIGRATION)],
 }
 TOKEN_STATUSES = {"reserved", "prepared", "commit-intent", "consumed"}
 
@@ -123,6 +136,215 @@ def _validate_images(value: object) -> dict[str, str]:
     return result
 
 
+def _migration_rows(records: object) -> list[dict[str, str]]:
+    if not isinstance(records, list) or not records:
+        raise BridgeDeployError("bridge migration ledger is empty or invalid")
+    rows: list[dict[str, str]] = []
+    previous = ""
+    for record in records:
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("version"), str)
+            or re.fullmatch(r"^[0-9]{4}_[a-z0-9_]+$", record["version"]) is None
+            or not isinstance(record.get("checksum"), str)
+            or re.fullmatch(r"^[0-9a-f]{64}$", record["checksum"]) is None
+            or record["version"] <= previous
+        ):
+            raise BridgeDeployError("bridge migration ledger is not canonical")
+        previous = record["version"]
+        rows.append(
+            {
+                "version": record["version"],
+                "checksum": record["checksum"],
+            }
+        )
+    return rows
+
+
+def migration_ledger_digest(records: object) -> str:
+    """Digest the exact ordered version/checksum ledger, independent of metadata."""
+
+    return canonical_json_digest(_migration_rows(records))
+
+
+def _validate_manifest_records(records: object) -> list[dict[str, Any]]:
+    if not isinstance(records, list) or not records:
+        raise BridgeDeployError("bridge migration manifest is empty or invalid")
+    normalized: list[dict[str, Any]] = []
+    for record in records:
+        if (
+            not isinstance(record, dict)
+            or set(record)
+            != {
+                "version",
+                "kind",
+                "epoch",
+                "checksum",
+                "requires_contracts",
+            }
+            or record.get("kind") not in {"baseline", "expand", "contract"}
+            or isinstance(record.get("epoch"), bool)
+            or not isinstance(record.get("epoch"), int)
+            or record["epoch"] < 1
+            or not isinstance(record.get("requires_contracts"), list)
+        ):
+            raise BridgeDeployError("bridge migration manifest is invalid")
+        normalized.append(json.loads(json.dumps(record)))
+    _migration_rows(normalized)
+    return normalized
+
+
+def expected_migration_registry(
+    *,
+    target_manifest_sha256: object,
+    target_records: object,
+    authority_manifest_sha256: object,
+    authority_records: object,
+) -> list[dict[str, str]]:
+    """Derive the only three ledgers accepted by the frozen B/F pair."""
+
+    target_digest = _require_digest(
+        target_manifest_sha256, "bridge target migration manifest"
+    )
+    authority_digest = _require_digest(
+        authority_manifest_sha256, "bridge authority migration manifest"
+    )
+    target = _validate_manifest_records(target_records)
+    authority = _validate_manifest_records(authority_records)
+    if (
+        len(target) < 2
+        or target[-1].get("version") != CONTRACT_MIGRATION["version"]
+        or target[-1].get("checksum") != CONTRACT_MIGRATION["checksum"]
+        or target[-1].get("kind") != "contract"
+        or target[-1].get("epoch") != 1
+        or target[-1].get("requires_contracts") != []
+    ):
+        raise BridgeDeployError(
+            "bridge target manifest lacks the exact trailing 0012 contract"
+        )
+    if authority != [*target, FINAL_MIGRATION_RECORD]:
+        raise BridgeDeployError(
+            "bridge authority manifest is not the unique B plus 0013 extension"
+        )
+    before_contract = target[:-1]
+    return [
+        {
+            "name": "pre-0012",
+            "manifest_sha256": target_digest,
+            "terminal_version": before_contract[-1]["version"],
+            "ledger_sha256": migration_ledger_digest(before_contract),
+        },
+        {
+            "name": "post-0012",
+            "manifest_sha256": target_digest,
+            "terminal_version": CONTRACT_MIGRATION["version"],
+            "ledger_sha256": migration_ledger_digest(target),
+        },
+        {
+            "name": "post-0013",
+            "manifest_sha256": authority_digest,
+            "terminal_version": FINAL_MIGRATION["version"],
+            "ledger_sha256": migration_ledger_digest(authority),
+        },
+    ]
+
+
+def validate_migration_registry(
+    policy: object,
+    *,
+    target_manifest_sha256: object,
+    target_records: object,
+    authority_manifest_sha256: object,
+    authority_records: object,
+) -> list[dict[str, str]]:
+    """Bind policy registry rows to the exact B and F Git manifests."""
+
+    normalized = validate_policy(policy)
+    expected = expected_migration_registry(
+        target_manifest_sha256=target_manifest_sha256,
+        target_records=target_records,
+        authority_manifest_sha256=authority_manifest_sha256,
+        authority_records=authority_records,
+    )
+    if normalized["accepted_migration_ledgers"] != expected:
+        raise BridgeDeployError(
+            "bridge migration compatibility differs from exact B/F manifests"
+        )
+    return expected
+
+
+def match_migration_ledger(
+    accepted_ledgers: object,
+    records: object,
+) -> dict[str, str]:
+    """Return the exact accepted registry row for an observed migration ledger."""
+
+    ledgers = _validate_accepted_ledgers(accepted_ledgers)
+    rows = _migration_rows(records)
+    digest = canonical_json_digest(rows)
+    terminal = rows[-1]["version"]
+    matches = [
+        record
+        for record in ledgers
+        if record["ledger_sha256"] == digest
+        and record["terminal_version"] == terminal
+    ]
+    if len(matches) != 1:
+        raise BridgeDeployError(
+            "observed migration ledger is outside the frozen B/F registry"
+        )
+    if matches[0]["name"] == "post-0013" and rows[-1] != FINAL_MIGRATION:
+        raise BridgeDeployError("observed 0013 ledger checksum differs")
+    return dict(matches[0])
+
+
+def _validate_accepted_ledgers(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list) or len(value) != len(REQUIRED_LEDGER_ORDER):
+        raise BridgeDeployError("bridge migration compatibility is incomplete")
+    normalized: list[dict[str, str]] = []
+    names: set[str] = set()
+    for record in value:
+        if (
+            not isinstance(record, dict)
+            or set(record)
+            != {
+                "name",
+                "manifest_sha256",
+                "terminal_version",
+                "ledger_sha256",
+            }
+            or not isinstance(record.get("name"), str)
+            or LEDGER_NAME_RE.fullmatch(record["name"]) is None
+            or record["name"] in names
+            or not isinstance(record.get("terminal_version"), str)
+            or re.fullmatch(
+                r"^[0-9]{4}_[a-z0-9_]+$", record["terminal_version"]
+            )
+            is None
+        ):
+            raise BridgeDeployError("bridge migration compatibility record is invalid")
+        names.add(record["name"])
+        normalized.append(
+            {
+                "name": record["name"],
+                "manifest_sha256": _require_digest(
+                    record.get("manifest_sha256"),
+                    "bridge migration manifest",
+                ),
+                "terminal_version": record["terminal_version"],
+                "ledger_sha256": _require_digest(
+                    record.get("ledger_sha256"),
+                    "bridge migration ledger",
+                ),
+            }
+        )
+    if [record["name"] for record in normalized] != list(REQUIRED_LEDGER_ORDER):
+        raise BridgeDeployError(
+            "bridge migration compatibility order is not canonical"
+        )
+    return normalized
+
+
 def validate_policy(document: object) -> dict[str, Any]:
     fields = {
         "schema_version",
@@ -173,34 +395,9 @@ def validate_policy(document: object) -> dict[str, Any]:
         raise BridgeDeployError("bridge asset dataset policy is invalid")
     if document.get("final_migration") != FINAL_MIGRATION:
         raise BridgeDeployError("bridge final 0013 registration differs")
-    ledgers = document.get("accepted_migration_ledgers")
-    if not isinstance(ledgers, list) or not 3 <= len(ledgers) <= 16:
-        raise BridgeDeployError("bridge migration compatibility is incomplete")
-    normalized_ledgers: list[dict[str, str]] = []
-    names: set[str] = set()
-    for record in ledgers:
-        if (
-            not isinstance(record, dict)
-            or set(record) != {"name", "manifest_sha256"}
-            or not isinstance(record.get("name"), str)
-            or LEDGER_NAME_RE.fullmatch(record["name"]) is None
-            or record["name"] in names
-        ):
-            raise BridgeDeployError("bridge migration compatibility record is invalid")
-        names.add(record["name"])
-        normalized_ledgers.append(
-            {
-                "name": record["name"],
-                "manifest_sha256": _require_digest(
-                    record.get("manifest_sha256"),
-                    "bridge migration manifest",
-                ),
-            }
-        )
-    if not REQUIRED_LEDGER_NAMES.issubset(names):
-        raise BridgeDeployError(
-            "bridge migration compatibility lacks 0012/0013 states"
-        )
+    normalized_ledgers = _validate_accepted_ledgers(
+        document.get("accepted_migration_ledgers")
+    )
     jobs = document.get("required_ci_jobs")
     if (
         not isinstance(jobs, list)

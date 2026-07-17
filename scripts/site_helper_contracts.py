@@ -26,6 +26,9 @@ DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 CONTAINER_RE = re.compile(r"^[0-9a-f]{64}$")
 MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9_]+$")
 ROLE_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,62}$")
+SYSTEMD_UNIT_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,128}\.service$")
+VOLUME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+PG_SYSTEM_ID_RE = re.compile(r"^[0-9]{1,20}$")
 
 ACTIVE_JOB_FIELDS_V1 = frozenset(
     {
@@ -40,6 +43,10 @@ ACTIVE_JOB_FIELDS_V1 = frozenset(
     }
 )
 ACTIVE_JOB_FIELDS_V2 = ACTIVE_JOB_FIELDS_V1 | {"monomer_dft"}
+MUTABLE_DATA_TABLES = (
+    ("online_knowledge", "history"),
+    ("online_knowledge", "jobs"),
+)
 
 HELPERS: dict[str, dict[str, str]] = {
     "bootstrap-quiesce": {
@@ -78,6 +85,10 @@ HELPERS: dict[str, dict[str, str]] = {
         "authority": "site-specific",
         "effect": "read-only",
     },
+    "deployment-mutable-data-audit": {
+        "authority": "site-specific",
+        "effect": "read-only",
+    },
 }
 
 EVIDENCE_HELPERS = {
@@ -86,6 +97,7 @@ EVIDENCE_HELPERS = {
     "bootstrap-legacy-runtime-resume-unchanged",
     "bootstrap-legacy-runtime-restore",
     "contract-0012-external-database-audit",
+    "deployment-mutable-data-audit",
 }
 
 
@@ -129,11 +141,263 @@ def _require_digest(value: object, label: str) -> str:
 
 
 def legacy_runtime_identity(document: dict[str, Any]) -> str:
-    identity = {
-        name: _require_digest(document.get(name), name)
-        for name in ("backend_image_id", "web_image_id", "worker_unit_sha256")
+    version = document.get("schema_version", 1)
+    digest_fields = [
+        "backend_image_id",
+        "web_image_id",
+        "worker_unit_sha256",
+    ]
+    if version == 2:
+        digest_fields.extend(
+            [
+                "backend_process_spec_sha256",
+                "web_process_spec_sha256",
+                "worker_manager_environment_sha256",
+                "postgres_image_id",
+            ]
+        )
+    identity: dict[str, Any] = {
+        name: _require_digest(document.get(name), name) for name in digest_fields
     }
+    if version == 2:
+        for name in (
+            "backend_container_id",
+            "web_container_id",
+            "postgres_container_id",
+        ):
+            value = document.get(name)
+            if not isinstance(value, str) or CONTAINER_RE.fullmatch(value) is None:
+                raise SiteHelperContractError(
+                    f"helper evidence has invalid {name}"
+                )
+            identity[name] = value
+        unit = document.get("worker_unit_name")
+        if not isinstance(unit, str) or SYSTEMD_UNIT_RE.fullmatch(unit) is None:
+            raise SiteHelperContractError(
+                "helper evidence has invalid worker_unit_name"
+            )
+        identity["worker_unit_name"] = unit
+        manager_uid = document.get("worker_manager_uid")
+        if (
+            isinstance(manager_uid, bool)
+            or not isinstance(manager_uid, int)
+            or manager_uid < 0
+        ):
+            raise SiteHelperContractError(
+                "helper evidence has invalid worker_manager_uid"
+            )
+        runtime_dir = document.get("worker_manager_runtime_dir")
+        if runtime_dir != f"/run/user/{manager_uid}":
+            raise SiteHelperContractError(
+                "helper evidence has invalid worker_manager_runtime_dir"
+            )
+        identity["worker_manager_uid"] = manager_uid
+        identity["worker_manager_runtime_dir"] = runtime_dir
+        unit_path = document.get("worker_unit_path")
+        if (
+            not isinstance(unit_path, str)
+            or not Path(unit_path).is_absolute()
+            or ".." in Path(unit_path).parts
+            or Path(unit_path).name != unit
+        ):
+            raise SiteHelperContractError(
+                "helper evidence has invalid worker_unit_path"
+            )
+        unit_mode = document.get("worker_unit_mode")
+        if (
+            not isinstance(unit_mode, str)
+            or re.fullmatch(r"[0-7]{4}", unit_mode) is None
+        ):
+            raise SiteHelperContractError(
+                "helper evidence has invalid worker_unit_mode"
+            )
+        unit_uid = document.get("worker_unit_uid")
+        unit_gid = document.get("worker_unit_gid")
+        if (
+            isinstance(unit_uid, bool)
+            or not isinstance(unit_uid, int)
+            or unit_uid != manager_uid
+            or isinstance(unit_gid, bool)
+            or not isinstance(unit_gid, int)
+            or unit_gid < 0
+        ):
+            raise SiteHelperContractError(
+                "helper evidence has invalid Worker unit ownership"
+            )
+        identity["worker_unit_path"] = unit_path
+        identity["worker_unit_mode"] = unit_mode
+        identity["worker_unit_uid"] = unit_uid
+        identity["worker_unit_gid"] = unit_gid
+        volume = document.get("postgres_data_volume")
+        if not isinstance(volume, str) or VOLUME_RE.fullmatch(volume) is None:
+            raise SiteHelperContractError(
+                "helper evidence has invalid postgres_data_volume"
+            )
+        system_identifier = document.get("postgres_system_identifier")
+        if (
+            not isinstance(system_identifier, str)
+            or PG_SYSTEM_ID_RE.fullmatch(system_identifier) is None
+        ):
+            raise SiteHelperContractError(
+                "helper evidence has invalid postgres_system_identifier"
+            )
+        identity["postgres_data_volume"] = volume
+        identity["postgres_system_identifier"] = system_identifier
     return sha256_bytes(canonical_json_bytes(identity))
+
+
+def _validate_live_process_fields_v2(document: dict[str, Any]) -> None:
+    for name in (
+        "backend_pid",
+        "web_pid",
+        "worker_main_pid",
+        "worker_active_enter_monotonic",
+    ):
+        _require_positive_int(document[name], name)
+    for name in ("backend_restart_count", "web_restart_count"):
+        value = document[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise SiteHelperContractError(
+                f"legacy-status {name} is invalid"
+            )
+    for name in (
+        "backend_started_at",
+        "web_started_at",
+        "worker_invocation_id",
+    ):
+        if not isinstance(document[name], str) or not document[name]:
+            raise SiteHelperContractError(f"legacy-status {name} is invalid")
+
+
+def _validate_legacy_status_v2(
+    document: dict[str, Any],
+    *,
+    expected_runtime_digest: str | None,
+) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "legacy_runtime_state",
+        "backend_image_id",
+        "web_image_id",
+        "worker_unit_sha256",
+        "backend_container_id",
+        "web_container_id",
+        "backend_process_spec_sha256",
+        "web_process_spec_sha256",
+        "worker_unit_name",
+        "worker_unit_path",
+        "worker_unit_mode",
+        "worker_unit_uid",
+        "worker_unit_gid",
+        "worker_manager_uid",
+        "worker_manager_runtime_dir",
+        "worker_manager_environment_sha256",
+        "postgres_container_id",
+        "postgres_image_id",
+        "postgres_data_volume",
+        "postgres_system_identifier",
+        "backend_pid",
+        "web_pid",
+        "backend_started_at",
+        "web_started_at",
+        "backend_restart_count",
+        "web_restart_count",
+        "worker_main_pid",
+        "worker_invocation_id",
+        "worker_active_enter_monotonic",
+        "backend_healthy",
+        "web_healthy",
+        "worker_healthy",
+        "ingress_open",
+    }
+    if set(document) != fields:
+        raise SiteHelperContractError("legacy-status v2 evidence has an invalid shape")
+    identity = legacy_runtime_identity(document)
+    if expected_runtime_digest is not None and identity != _require_digest(
+        expected_runtime_digest, "expected runtime digest"
+    ):
+        raise SiteHelperContractError("legacy-status selected another runtime")
+    state = document.get("legacy_runtime_state")
+    backend_dynamic_fields = {
+        "backend_pid",
+        "backend_started_at",
+        "backend_restart_count",
+    }
+    web_dynamic_fields = {
+        "web_pid",
+        "web_started_at",
+        "web_restart_count",
+    }
+    worker_dynamic_fields = {
+        "worker_main_pid",
+        "worker_invocation_id",
+        "worker_active_enter_monotonic",
+    }
+    health_fields = {
+        "backend_healthy",
+        "web_healthy",
+        "worker_healthy",
+        "ingress_open",
+    }
+    if state == "stopped":
+        dynamic_fields = (
+            backend_dynamic_fields | web_dynamic_fields | worker_dynamic_fields
+        )
+        if any(document[name] is not None for name in dynamic_fields) or any(
+            document[name] is not False for name in health_fields
+        ):
+            raise SiteHelperContractError("legacy-status v2 stopped state is partial")
+    elif state == "open":
+        expected_health = {
+            "backend_healthy": True,
+            "web_healthy": True,
+            "worker_healthy": True,
+            "ingress_open": True,
+        }
+        if any(document[name] is not value for name, value in expected_health.items()):
+            raise SiteHelperContractError(
+                "legacy-status v2 health state is inconsistent"
+            )
+        _validate_live_process_fields_v2(document)
+    elif state == "isolated":
+        expected_health = {
+            "backend_healthy": True,
+            "web_healthy": False,
+            "worker_healthy": True,
+            "ingress_open": False,
+        }
+        if any(document[name] is not value for name, value in expected_health.items()):
+            raise SiteHelperContractError(
+                "legacy-status v2 health state is inconsistent"
+            )
+        for name in (
+            "backend_pid",
+            "worker_main_pid",
+            "worker_active_enter_monotonic",
+        ):
+            _require_positive_int(document[name], name)
+        backend_restarts = document["backend_restart_count"]
+        if (
+            isinstance(backend_restarts, bool)
+            or not isinstance(backend_restarts, int)
+            or backend_restarts < 0
+        ):
+            raise SiteHelperContractError(
+                "legacy-status backend_restart_count is invalid"
+            )
+        for name in (
+            "backend_started_at",
+            "worker_invocation_id",
+        ):
+            if not isinstance(document[name], str) or not document[name]:
+                raise SiteHelperContractError(f"legacy-status {name} is invalid")
+        if any(document[name] is not None for name in web_dynamic_fields):
+            raise SiteHelperContractError(
+                "legacy-status v2 isolated Web is not stopped"
+            )
+    else:
+        raise SiteHelperContractError("legacy-status runtime state is unsupported")
+    return dict(document)
 
 
 def validate_active_jobs(document: object) -> dict[str, Any]:
@@ -177,6 +441,11 @@ def validate_legacy_status(
     *,
     expected_runtime_digest: str | None,
 ) -> dict[str, Any]:
+    if isinstance(document, dict) and document.get("schema_version") == 2:
+        return _validate_legacy_status_v2(
+            document,
+            expected_runtime_digest=expected_runtime_digest,
+        )
     fields = {
         "schema_version",
         "legacy_runtime_state",
@@ -263,6 +532,111 @@ def validate_legacy_resume(
     *,
     expected_runtime_digest: str | None,
 ) -> dict[str, Any]:
+    if isinstance(document, dict) and document.get("schema_version") == 2:
+        stable = {
+            "backend_image_id",
+            "web_image_id",
+            "worker_unit_sha256",
+            "backend_container_id",
+            "web_container_id",
+            "backend_process_spec_sha256",
+            "web_process_spec_sha256",
+            "worker_unit_name",
+            "worker_unit_path",
+            "worker_unit_mode",
+            "worker_unit_uid",
+            "worker_unit_gid",
+            "worker_manager_uid",
+            "worker_manager_runtime_dir",
+            "worker_manager_environment_sha256",
+            "postgres_container_id",
+            "postgres_image_id",
+            "postgres_data_volume",
+            "postgres_system_identifier",
+        }
+        paired = {
+            f"{name}_{suffix}"
+            for name in (
+                "backend_pid",
+                "backend_started_at",
+                "backend_restart_count",
+                "worker_main_pid",
+                "worker_invocation_id",
+                "worker_active_enter_monotonic",
+            )
+            for suffix in ("before", "after")
+        }
+        fields_v2 = stable | paired | {
+            "schema_version",
+            "legacy_runtime_unchanged",
+            "web_pid_before",
+            "web_started_at_before",
+            "web_restart_count_before",
+            "web_pid_after",
+            "web_started_at_after",
+            "web_restart_count_after",
+            "backend_healthy",
+            "web_healthy",
+            "worker_healthy",
+            "ingress_restored",
+        }
+        if set(document) != fields_v2:
+            raise SiteHelperContractError(
+                "legacy-resume v2 evidence has an invalid shape"
+            )
+        for name in (
+            "legacy_runtime_unchanged",
+            "backend_healthy",
+            "web_healthy",
+            "worker_healthy",
+            "ingress_restored",
+        ):
+            _require_bool(document, name, True)
+        identity = legacy_runtime_identity(document)
+        if expected_runtime_digest is not None and identity != _require_digest(
+            expected_runtime_digest, "expected runtime digest"
+        ):
+            raise SiteHelperContractError("legacy-resume selected another runtime")
+        for prefix in (
+            "backend_pid",
+            "backend_started_at",
+            "backend_restart_count",
+            "worker_main_pid",
+            "worker_invocation_id",
+            "worker_active_enter_monotonic",
+        ):
+            if document[f"{prefix}_before"] != document[f"{prefix}_after"]:
+                raise SiteHelperContractError(f"legacy-resume changed {prefix}")
+        for name in (
+            "backend_pid_before",
+            "worker_main_pid_before",
+            "worker_active_enter_monotonic_before",
+            "web_pid_after",
+        ):
+            _require_positive_int(document[name], name)
+        for name in (
+            "backend_started_at_before",
+            "worker_invocation_id_before",
+            "web_started_at_after",
+        ):
+            if not isinstance(document[name], str) or not document[name]:
+                raise SiteHelperContractError(f"legacy-resume {name} is invalid")
+        for name in ("backend_restart_count_before", "web_restart_count_after"):
+            value = document[name]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise SiteHelperContractError(f"legacy-resume {name} is invalid")
+        if any(
+            document[name] is not None
+            for name in (
+                "web_pid_before",
+                "web_started_at_before",
+                "web_restart_count_before",
+            )
+        ):
+            raise SiteHelperContractError(
+                "legacy-resume did not start from stopped Web"
+            )
+        return dict(document)
     fields = {
         "schema_version",
         "legacy_runtime_unchanged",
@@ -345,6 +719,62 @@ def validate_legacy_restore(
     *,
     expected_runtime_digest: str | None,
 ) -> dict[str, Any]:
+    if isinstance(document, dict) and document.get("schema_version") == 2:
+        fields_v2 = {
+            "schema_version",
+            "legacy_runtime_restored",
+            "backend_image_id",
+            "web_image_id",
+            "worker_unit_sha256",
+            "backend_container_id",
+            "web_container_id",
+            "backend_process_spec_sha256",
+            "web_process_spec_sha256",
+            "worker_unit_name",
+            "worker_unit_path",
+            "worker_unit_mode",
+            "worker_unit_uid",
+            "worker_unit_gid",
+            "worker_manager_uid",
+            "worker_manager_runtime_dir",
+            "worker_manager_environment_sha256",
+            "postgres_container_id",
+            "postgres_image_id",
+            "postgres_data_volume",
+            "postgres_system_identifier",
+            "backend_pid",
+            "web_pid",
+            "backend_started_at",
+            "web_started_at",
+            "backend_restart_count",
+            "web_restart_count",
+            "worker_main_pid",
+            "worker_invocation_id",
+            "worker_active_enter_monotonic",
+            "backend_healthy",
+            "web_healthy",
+            "worker_healthy",
+            "ingress_restored",
+        }
+        if set(document) != fields_v2:
+            raise SiteHelperContractError(
+                "legacy-restore v2 evidence has an invalid shape"
+            )
+        for name in (
+            "legacy_runtime_restored",
+            "backend_healthy",
+            "web_healthy",
+            "worker_healthy",
+            "ingress_restored",
+        ):
+            _require_bool(document, name, True)
+        identity = legacy_runtime_identity(document)
+        if expected_runtime_digest is not None and identity != _require_digest(
+            expected_runtime_digest, "expected runtime digest"
+        ):
+            raise SiteHelperContractError("legacy-restore selected another runtime")
+        _validate_live_process_fields_v2(document)
+        return dict(document)
     fields = {
         "schema_version",
         "legacy_runtime_restored",
@@ -468,6 +898,172 @@ def validate_external_database_audit(
     }
 
 
+def validate_mutable_data_audit(document: object) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "database",
+        "database_system_identifier",
+        "connection",
+        "postgres_runtime",
+        "transaction_isolation",
+        "transaction_read_only",
+        "transaction_deferrable",
+        "digest_algorithm",
+        "tables",
+        "snapshot_sha256",
+        "captured_at",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != 2
+        or document.get("database") != "nexpoly"
+        or not isinstance(document.get("database_system_identifier"), str)
+        or re.fullmatch(
+            r"[0-9]{10,30}", document["database_system_identifier"]
+        )
+        is None
+        or document.get("transaction_isolation") != "repeatable read"
+        or document.get("transaction_read_only") is not True
+        or document.get("transaction_deferrable") is not True
+        or document.get("digest_algorithm")
+        != "sha256-postgres-jsonb-copy-v1"
+        or not isinstance(document.get("captured_at"), str)
+        or not document["captured_at"]
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit did not prove one read-only repeatable snapshot"
+        )
+    connection = document.get("connection")
+    if (
+        not isinstance(connection, dict)
+        or set(connection)
+        != {"service", "host", "port", "database", "user"}
+        or connection.get("service") != "nexpoly-mutable-audit"
+        or connection.get("host") != "127.0.0.1"
+        or connection.get("port") != 55432
+        or connection.get("database") != "nexpoly"
+        or connection.get("user") != "nexpoly_mutable_audit"
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit connection identity differs"
+        )
+    runtime = document.get("postgres_runtime")
+    if (
+        not isinstance(runtime, dict)
+        or set(runtime)
+        != {
+            "container_id",
+            "image_id",
+            "configured_image",
+            "data_volume",
+            "host_endpoint",
+            "system_identifier",
+        }
+        or not isinstance(runtime.get("container_id"), str)
+        or CONTAINER_RE.fullmatch(runtime["container_id"]) is None
+        or DIGEST_RE.fullmatch(str(runtime.get("image_id"))) is None
+        or not isinstance(runtime.get("configured_image"), str)
+        or not runtime["configured_image"]
+        or runtime.get("system_identifier")
+        != document["database_system_identifier"]
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit PostgreSQL runtime identity differs"
+        )
+    volume = runtime.get("data_volume")
+    if (
+        not isinstance(volume, dict)
+        or set(volume)
+        != {"type", "name", "source", "destination", "driver", "read_write"}
+        or volume.get("type") != "volume"
+        or not isinstance(volume.get("name"), str)
+        or VOLUME_RE.fullmatch(volume["name"]) is None
+        or not isinstance(volume.get("source"), str)
+        or not Path(volume["source"]).is_absolute()
+        or volume.get("destination") != "/var/lib/postgresql/data"
+        or not isinstance(volume.get("driver"), str)
+        or not volume["driver"]
+        or volume.get("read_write") is not True
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit PostgreSQL volume identity differs"
+        )
+    endpoint = runtime.get("host_endpoint")
+    if (
+        not isinstance(endpoint, dict)
+        or endpoint
+        != {
+            "host": connection["host"],
+            "port": connection["port"],
+            "container_port": 5432,
+            "protocol": "tcp",
+        }
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit endpoint is not the sealed PostgreSQL container"
+        )
+    records = document.get("tables")
+    if not isinstance(records, list) or len(records) != len(MUTABLE_DATA_TABLES):
+        raise SiteHelperContractError("mutable-data audit table inventory differs")
+    normalized: list[dict[str, Any]] = []
+    for record, expected in zip(records, MUTABLE_DATA_TABLES, strict=True):
+        if (
+            not isinstance(record, dict)
+            or set(record)
+            != {
+                "schema",
+                "table",
+                "row_count",
+                "schema_sha256",
+                "content_sha256",
+            }
+            or (record.get("schema"), record.get("table")) != expected
+            or isinstance(record.get("row_count"), bool)
+            or not isinstance(record.get("row_count"), int)
+            or record["row_count"] < 0
+        ):
+            raise SiteHelperContractError(
+                "mutable-data audit table record is invalid"
+            )
+        normalized.append(
+            {
+                "schema": expected[0],
+                "table": expected[1],
+                "row_count": record["row_count"],
+                "schema_sha256": _require_digest(
+                    record.get("schema_sha256"),
+                    "mutable-data schema digest",
+                ),
+                "content_sha256": _require_digest(
+                    record.get("content_sha256"),
+                    "mutable-data content digest",
+                ),
+            }
+        )
+    identity = {
+        "database": "nexpoly",
+        "database_system_identifier": document["database_system_identifier"],
+        "connection": connection,
+        "postgres_runtime": runtime,
+        "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
+        "tables": normalized,
+    }
+    if document.get("snapshot_sha256") != sha256_bytes(
+        canonical_json_bytes(identity)
+    ):
+        raise SiteHelperContractError("mutable-data snapshot digest differs")
+    return {
+        "schema_version": 2,
+        **identity,
+        "transaction_isolation": "repeatable read",
+        "transaction_read_only": True,
+        "transaction_deferrable": True,
+        "snapshot_sha256": document["snapshot_sha256"],
+        "captured_at": document["captured_at"],
+    }
+
+
 def validate_evidence(
     helper: str,
     document: object,
@@ -481,11 +1077,15 @@ def validate_evidence(
         "bootstrap-legacy-runtime-resume-unchanged": validate_legacy_resume,
         "bootstrap-legacy-runtime-restore": validate_legacy_restore,
         "contract-0012-external-database-audit": validate_external_database_audit,
+        "deployment-mutable-data-audit": validate_mutable_data_audit,
     }
     validator = validators.get(helper)
     if validator is None:
         raise SiteHelperContractError("helper has no site-evidence contract")
-    if helper == "bootstrap-active-jobs-probe":
+    if helper in {
+        "bootstrap-active-jobs-probe",
+        "deployment-mutable-data-audit",
+    }:
         return validator(document)
     if helper == "contract-0012-external-database-audit":
         return validator(document, expected_users=expected_users)

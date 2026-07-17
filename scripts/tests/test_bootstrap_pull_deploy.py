@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import importlib.util
 import io
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 import stat
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 import zlib
@@ -22,6 +24,40 @@ BOOTSTRAP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOTSTRAP)
 SOURCE_SHA = "1" * 40
 SOURCE_TREE = "2" * 40
+TAKEOVER_OPERATION_ID = "takeover-fixture-0001"
+
+
+def takeover_binding(
+    operation_id: str = TAKEOVER_OPERATION_ID,
+) -> dict[str, object]:
+    binding: dict[str, object] = {
+        "schema_version": 1,
+        "operation_id": operation_id,
+        "authority_sha": SOURCE_SHA,
+        "authority_tree": SOURCE_TREE,
+        "install_manifest_sha256": "sha256:" + "3" * 64,
+        "classification_sha256": "sha256:" + "4" * 64,
+        "runtime_identity_sha256": "sha256:" + "5" * 64,
+        "git_identity": {
+            "branch": "refs/heads/main",
+            "head_sha": "0" * 40,
+            "head_tree": "0" * 40,
+            "local_main_sha": "0" * 40,
+        },
+        "pre_stopped_fence_sha256": "sha256:" + "6" * 64,
+        "control_layout_sha256": "sha256:" + "7" * 64,
+        "checkout_permissions_sha256": "sha256:" + "9" * 64,
+        "applied_record_sha256": "sha256:" + "8" * 64,
+    }
+    binding["binding_sha256"] = BOOTSTRAP.digest(
+        json.dumps(
+            binding,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    )
+    return binding
 
 
 class BootstrapPullDeployTests(unittest.TestCase):
@@ -46,14 +82,46 @@ class BootstrapPullDeployTests(unittest.TestCase):
         subprocess.run(["git", "add", "tracked/fixture.txt"], cwd=self.production, check=True)
 
     def run_main(self, *arguments: str) -> tuple[int, str, str]:
+        effective_arguments = list(arguments)
+        if (
+            "--check-source-readiness" not in effective_arguments
+            and "--legacy-takeover-operation-id" not in effective_arguments
+        ):
+            effective_arguments.extend(
+                [
+                    "--legacy-takeover-operation-id",
+                    TAKEOVER_OPERATION_ID,
+                ]
+            )
+        # The pre-takeover installer owns creation of the shared lock.
+        # Bootstrap must acquire it before making any runtime write.
+        if (
+            "--apply" in effective_arguments
+            and "--check-source-readiness" not in effective_arguments
+            and not (
+            self.runtime.exists() or self.runtime.is_symlink()
+            )
+        ):
+            state = self.runtime / "state"
+            state.mkdir(parents=True, mode=0o700)
+            os.chmod(self.runtime, 0o700)
+            os.chmod(state, 0o700)
+            lock = state / "deploy.lock"
+            lock.write_bytes(b"")
+            os.chmod(lock, 0o600)
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
             mock.patch.dict(os.environ, {"NEXPOLY_ALLOW_TEST_ROOT": "1"}),
+            mock.patch.object(
+                BOOTSTRAP,
+                "_completed_legacy_takeover",
+                return_value=takeover_binding(),
+            ),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
-            result = BOOTSTRAP.main(list(arguments))
+            result = BOOTSTRAP.main(effective_arguments)
         return result, stdout.getvalue(), stderr.getvalue()
 
     def apply_arguments(self) -> list[str]:
@@ -69,6 +137,8 @@ class BootstrapPullDeployTests(unittest.TestCase):
             str(self.production.absolute()),
             "--confirm-runtime-root",
             str(self.runtime.absolute()),
+            "--legacy-takeover-operation-id",
+            TAKEOVER_OPERATION_ID,
             "--confirm-source-tree",
             SOURCE_TREE,
         ]
@@ -241,6 +311,112 @@ class BootstrapPullDeployTests(unittest.TestCase):
             json.loads(bootstrap_record.read_text(encoding="utf-8"))["source_sha"],
             SOURCE_SHA,
         )
+        readiness = json.loads(
+            bootstrap_record.read_text(encoding="utf-8")
+        )["source_readiness"]
+        self.assertTrue(readiness["ready"])
+        self.assertTrue(readiness["owner_private"])
+        self.assertEqual(readiness["source_tree"], SOURCE_TREE)
+        authority = json.loads(
+            bootstrap_record.read_text(encoding="utf-8")
+        )
+        self.assertEqual(authority["schema_version"], 2)
+        self.assertEqual(
+            authority["legacy_takeover"],
+            takeover_binding(),
+        )
+
+    def test_takeover_binding_requires_exact_f_and_legacy_git_identity(
+        self,
+    ) -> None:
+        observed: dict[str, object] = {}
+
+        def validate_completed(
+            runtime_root: Path,
+            operation_id: str,
+            authority_sha: str,
+            authority_tree: str,
+            *,
+            expected_git_identity: dict[str, str],
+        ) -> dict[str, object]:
+            observed.update(
+                {
+                    "runtime_root": runtime_root,
+                    "operation_id": operation_id,
+                    "authority_sha": authority_sha,
+                    "authority_tree": authority_tree,
+                    "git_identity": expected_git_identity,
+                }
+            )
+            return takeover_binding(operation_id)
+
+        repository = BOOTSTRAP._production_repository_identity(
+            self.production,
+            SOURCE_SHA,
+            allow_test=True,
+        )
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_legacy_takeover_evidence",
+            return_value=SimpleNamespace(
+                validate_completed=validate_completed
+            ),
+        ):
+            binding = BOOTSTRAP._completed_legacy_takeover(
+                self.runtime,
+                TAKEOVER_OPERATION_ID,
+                source_sha=SOURCE_SHA,
+                source_tree=SOURCE_TREE,
+                production_repository=repository,
+                allow_test=True,
+            )
+        self.assertEqual(binding, takeover_binding())
+        self.assertEqual(
+            observed,
+            {
+                "runtime_root": self.runtime.absolute(),
+                "operation_id": TAKEOVER_OPERATION_ID,
+                "authority_sha": SOURCE_SHA,
+                "authority_tree": SOURCE_TREE,
+                "git_identity": {
+                    "branch": "refs/heads/main",
+                    "head_sha": "0" * 40,
+                    "head_tree": "0" * 40,
+                    "local_main_sha": "0" * 40,
+                },
+            },
+        )
+
+    def test_shared_deploy_lock_blocks_before_every_runtime_write(self) -> None:
+        state = self.runtime / "state"
+        state.mkdir(parents=True, mode=0o700)
+        os.chmod(self.runtime, 0o700)
+        os.chmod(state, 0o700)
+        lock = state / "deploy.lock"
+        lock.write_bytes(b"pre-takeover-lock\n")
+        os.chmod(lock, 0o600)
+
+        def snapshot() -> list[tuple[str, int, bytes]]:
+            records: list[tuple[str, int, bytes]] = []
+            for path in sorted(self.runtime.rglob("*")):
+                relative = path.relative_to(self.runtime).as_posix()
+                mode = stat.S_IMODE(path.lstat().st_mode)
+                records.append(
+                    (
+                        relative,
+                        mode,
+                        path.read_bytes() if path.is_file() else b"",
+                    )
+                )
+            return records
+
+        before = snapshot()
+        with lock.open("r+", encoding="utf-8") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result, _output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 2)
+        self.assertIn("another deployment holds deploy.lock", error)
+        self.assertEqual(snapshot(), before)
 
     def test_apply_takes_over_exact_legacy_worker_unit_with_private_backup(self) -> None:
         unit = (
@@ -281,7 +457,8 @@ class BootstrapPullDeployTests(unittest.TestCase):
         )
         self.assertEqual(result, 2)
         self.assertIn("explicit confirmation", error)
-        self.assertFalse(self.runtime.exists())
+        self.assertFalse((self.runtime / "bin").exists())
+        self.assertFalse((self.runtime / "state/bootstrap-control.json").exists())
 
         os.chmod(unit, 0o644)
         result, _output, error = self.run_main(
@@ -291,7 +468,8 @@ class BootstrapPullDeployTests(unittest.TestCase):
         )
         self.assertEqual(result, 2)
         self.assertIn("mode is not an allowed", error)
-        self.assertFalse(self.runtime.exists())
+        self.assertFalse((self.runtime / "bin").exists())
+        self.assertFalse((self.runtime / "state/bootstrap-control.json").exists())
 
     def test_worker_unit_takeover_crash_after_atomic_replace_is_resumable(self) -> None:
         unit = self.root / "systemd/user/nexpoly-monomer-md-worker.service"
@@ -869,7 +1047,7 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertTrue(error)
         self.assertEqual(outside.read_text(encoding="utf-8"), "unchanged\n")
-        self.assertFalse(any((self.runtime / "bin").iterdir()))
+        self.assertFalse((self.runtime / "bin").exists())
 
     def test_content_release_is_never_overwritten_and_tampering_fails_closed(self) -> None:
         first, output, error = self.run_main(*self.apply_arguments())

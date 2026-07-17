@@ -166,14 +166,59 @@ class SelectorTests(unittest.TestCase):
         )
         authority = self.runtime / "state/bootstrap-control.json"
         if not authority.exists():
+            source_readiness = {
+                "schema_version": 1,
+                "ready": True,
+                "source_root": str(
+                    self.runtime.parent / "bootstrap-source"
+                ),
+                "source_sha": candidate["source_sha"],
+                "source_tree": candidate["source_tree"],
+                "branch": "main",
+                "origin": "git@github.com:lzq390/ZhijuPoly.git",
+                "standalone_object_database": True,
+                "shallow": False,
+                "dirty_entries": 0,
+                "ignored_entries": 0,
+                "unreachable_objects": 0,
+                "owner_private": True,
+                "group_or_world_writable": False,
+            }
+            takeover = {
+                "schema_version": 1,
+                "operation_id": "takeover-selector-fixture",
+                "authority_sha": candidate["source_sha"],
+                "authority_tree": candidate["source_tree"],
+                "install_manifest_sha256": "sha256:" + "3" * 64,
+                "classification_sha256": "sha256:" + "4" * 64,
+                "runtime_identity_sha256": "sha256:" + "5" * 64,
+                "git_identity": {
+                    "branch": "refs/heads/main",
+                    "head_sha": "0" * 40,
+                    "head_tree": "0" * 40,
+                    "local_main_sha": "0" * 40,
+                },
+                "pre_stopped_fence_sha256": "sha256:" + "6" * 64,
+                "control_layout_sha256": "sha256:" + "7" * 64,
+                "checkout_permissions_sha256": "sha256:" + "9" * 64,
+                "applied_record_sha256": "sha256:" + "8" * 64,
+            }
+            takeover["binding_sha256"] = SELECTOR.canonical_json_digest(
+                takeover
+            )
             self._write(
                 authority,
                 SELECTOR.canonical_json_bytes(
                     {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "status": "completed",
                         "source_sha": candidate["source_sha"],
                         "source_tree": candidate["source_tree"],
+                        "source_readiness": source_readiness,
+                        "source_readiness_sha256": (
+                            SELECTOR.canonical_json_digest(source_readiness)
+                        ),
+                        "legacy_takeover": takeover,
                         "delivery_gate": {"fixture": True},
                         "production_repository": {"fixture": True},
                         "immutable_files": self.immutable,

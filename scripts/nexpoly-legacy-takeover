@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+exec /usr/bin/python3 -I -B \
+  /data/lzq/gith/nexpoly-runtime/legacy-takeover/bin/legacy_takeover.py \
+  "$@"

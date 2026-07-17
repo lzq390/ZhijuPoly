@@ -15,6 +15,11 @@ from app.migration_policy import (
     validate_migration_manifest,
     validate_migration_manifest_entries,
 )
+from app.migration_compatibility import (
+    FORWARD_COMPATIBLE_MIGRATION,
+    compatible_forward_versions,
+    require_known_or_exact_forward_ledger,
+)
 from app.postgres_migrations import (
     POLYTAO_CONTRACT_CHECKSUM,
     database_is_fresh_for_bootstrap,
@@ -353,6 +358,70 @@ def test_unknown_ledger_version_is_rejected_before_any_migration_sql(
         for path in sorted(MIGRATIONS_DIR.glob("*.sql"))
     ]
     assert not any(body in query for body in migration_bodies for query in connection.queries)
+
+
+def test_bridge_b_accepts_only_complete_checksum_exact_0013_ledger(
+    monkeypatch,
+) -> None:
+    entries = validate_migration_manifest_entries(MIGRATIONS_DIR)
+    local_canonical = {
+        entry.version: str(entry.checksum)
+        for entry in entries
+    }
+    canonical = {
+        version: checksum
+        for version, checksum in local_canonical.items()
+        if version != FORWARD_COMPATIBLE_MIGRATION["version"]
+    }
+    applied = {
+        **canonical,
+        FORWARD_COMPATIBLE_MIGRATION["version"]: (
+            FORWARD_COMPATIBLE_MIGRATION["checksum"]
+        ),
+    }
+    assert compatible_forward_versions(applied, canonical) == {
+        FORWARD_COMPATIBLE_MIGRATION["version"]
+    }
+    assert require_known_or_exact_forward_ledger(applied, canonical) == {
+        FORWARD_COMPATIBLE_MIGRATION["version"]
+    }
+
+    connection = _LedgerConnection(
+        [
+            {"version": version, "checksum": checksum}
+            for version, checksum in sorted(applied.items())
+        ]
+    )
+
+    @contextmanager
+    def fake_connection(_dsn):
+        yield connection
+
+    monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+    results = postgres_migrations.apply_postgres_migrations(
+        "postgresql://fixture",
+        MIGRATIONS_DIR,
+        allowed_kinds={"expand"},
+        defer_trailing_contracts=True,
+    )
+    assert len(results) == len(entries)
+    assert all(result.applied is False for result in results)
+
+    for changed in (
+        {
+            **applied,
+            FORWARD_COMPATIBLE_MIGRATION["version"]: "f" * 64,
+        },
+        {
+            key: value
+            for key, value in applied.items()
+            if key != "0012_drop_polytao_jobs"
+        },
+        {**applied, "0014_future": "e" * 64},
+    ):
+        assert compatible_forward_versions(changed, canonical) == set()
+        with pytest.raises(RuntimeError, match="absent from the canonical manifest"):
+            require_known_or_exact_forward_ledger(changed, canonical)
 
 
 @pytest.mark.parametrize(

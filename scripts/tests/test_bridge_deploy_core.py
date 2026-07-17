@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -23,6 +24,14 @@ TARGET_TREE = "d" * 40
 OPERATION_ID = "bridge-20260717-0001"
 DIGEST_A = "sha256:" + "1" * 64
 DIGEST_B = "sha256:" + "2" * 64
+TARGET_MANIFEST_SHA256 = "sha256:" + "4" * 64
+AUTHORITY_MANIFEST_SHA256 = "sha256:" + "6" * 64
+TARGET_RECORDS = json.loads(
+    (ROOT / "backend/migrations/postgres/manifest.json").read_text(
+        encoding="utf-8"
+    )
+)["migrations"]
+AUTHORITY_RECORDS = [*TARGET_RECORDS, BRIDGE.FINAL_MIGRATION_RECORD]
 
 
 def policy() -> dict[str, object]:
@@ -40,20 +49,12 @@ def policy() -> dict[str, object]:
         "asset_manifest_digest": "sha256:" + "3" * 64,
         "datasets_on_asset_change": [],
         "final_migration": dict(BRIDGE.FINAL_MIGRATION),
-        "accepted_migration_ledgers": [
-            {
-                "name": "pre-0012",
-                "manifest_sha256": "sha256:" + "4" * 64,
-            },
-            {
-                "name": "post-0012",
-                "manifest_sha256": "sha256:" + "5" * 64,
-            },
-            {
-                "name": "post-0013",
-                "manifest_sha256": "sha256:" + "6" * 64,
-            },
-        ],
+        "accepted_migration_ledgers": BRIDGE.expected_migration_registry(
+            target_manifest_sha256=TARGET_MANIFEST_SHA256,
+            target_records=TARGET_RECORDS,
+            authority_manifest_sha256=AUTHORITY_MANIFEST_SHA256,
+            authority_records=AUTHORITY_RECORDS,
+        ),
         "required_ci_jobs": sorted(BRIDGE.REQUIRED_CI_JOBS),
         "policy_id": None,
     }
@@ -92,6 +93,75 @@ class BridgePolicyTests(unittest.TestCase):
             BRIDGE.validate_bridge_descriptor(descriptor),
             descriptor,
         )
+
+    def test_registry_is_derived_from_exact_b_and_unique_0013(self) -> None:
+        document = policy()
+        self.assertEqual(
+            BRIDGE.validate_migration_registry(
+                document,
+                target_manifest_sha256=TARGET_MANIFEST_SHA256,
+                target_records=TARGET_RECORDS,
+                authority_manifest_sha256=AUTHORITY_MANIFEST_SHA256,
+                authority_records=AUTHORITY_RECORDS,
+            ),
+            document["accepted_migration_ledgers"],
+        )
+        for label, authority_records in (
+            (
+                "wrong checksum",
+                [
+                    *TARGET_RECORDS,
+                    {
+                        **BRIDGE.FINAL_MIGRATION_RECORD,
+                        "checksum": "f" * 64,
+                    },
+                ],
+            ),
+            (
+                "future row",
+                [
+                    *AUTHORITY_RECORDS,
+                    {
+                        **BRIDGE.FINAL_MIGRATION_RECORD,
+                        "version": "0014_future",
+                    },
+                ],
+            ),
+        ):
+            with self.subTest(label=label), self.assertRaises(
+                BRIDGE.BridgeDeployError
+            ):
+                BRIDGE.validate_migration_registry(
+                    document,
+                    target_manifest_sha256=TARGET_MANIFEST_SHA256,
+                    target_records=TARGET_RECORDS,
+                    authority_manifest_sha256=AUTHORITY_MANIFEST_SHA256,
+                    authority_records=authority_records,
+                )
+
+    def test_registry_matches_only_exact_pre_post_0012_and_post_0013(self) -> None:
+        registry = policy()["accepted_migration_ledgers"]
+        assert isinstance(registry, list)
+        for name, records in (
+            ("pre-0012", TARGET_RECORDS[:-1]),
+            ("post-0012", TARGET_RECORDS),
+            ("post-0013", AUTHORITY_RECORDS),
+        ):
+            self.assertEqual(
+                BRIDGE.match_migration_ledger(registry, records)["name"],
+                name,
+            )
+        with self.assertRaises(BRIDGE.BridgeDeployError):
+            BRIDGE.match_migration_ledger(
+                registry,
+                [
+                    *TARGET_RECORDS,
+                    {
+                        **BRIDGE.FINAL_MIGRATION_RECORD,
+                        "checksum": "e" * 64,
+                    },
+                ],
+            )
 
     def test_policy_rejects_mutable_ref_tampering_and_missing_current_ci(self) -> None:
         document = policy()

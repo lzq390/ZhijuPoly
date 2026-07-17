@@ -870,6 +870,9 @@ def _validate_bootstrap_authority(runtime_root: Path) -> dict[str, Any]:
         "status",
         "source_sha",
         "source_tree",
+        "source_readiness",
+        "source_readiness_sha256",
+        "legacy_takeover",
         "delivery_gate",
         "production_repository",
         "immutable_files",
@@ -878,14 +881,50 @@ def _validate_bootstrap_authority(runtime_root: Path) -> dict[str, Any]:
         "active_control",
     }
     immutable = record.get("immutable_files")
+    readiness = record.get("source_readiness")
     candidate = validate_candidate_record(record.get("candidate_control"))
     initial_active = validate_active_control_record(record.get("active_control"))
     if (
         set(record) != expected_fields
-        or record.get("schema_version") != 1
+        or record.get("schema_version") != 2
         or record.get("status") != "completed"
         or SHA_RE.fullmatch(str(record.get("source_sha", ""))) is None
         or SHA_RE.fullmatch(str(record.get("source_tree", ""))) is None
+        or not isinstance(readiness, dict)
+        or set(readiness)
+        != {
+            "schema_version",
+            "ready",
+            "source_root",
+            "source_sha",
+            "source_tree",
+            "branch",
+            "origin",
+            "standalone_object_database",
+            "shallow",
+            "dirty_entries",
+            "ignored_entries",
+            "unreachable_objects",
+            "owner_private",
+            "group_or_world_writable",
+        }
+        or readiness.get("schema_version") != 1
+        or readiness.get("ready") is not True
+        or not isinstance(readiness.get("source_root"), str)
+        or not Path(readiness["source_root"]).is_absolute()
+        or readiness.get("source_sha") != record.get("source_sha")
+        or readiness.get("source_tree") != record.get("source_tree")
+        or readiness.get("branch") != "main"
+        or readiness.get("origin") != "git@github.com:lzq390/ZhijuPoly.git"
+        or readiness.get("standalone_object_database") is not True
+        or readiness.get("shallow") is not False
+        or readiness.get("dirty_entries") != 0
+        or readiness.get("ignored_entries") != 0
+        or readiness.get("unreachable_objects") != 0
+        or readiness.get("owner_private") is not True
+        or readiness.get("group_or_world_writable") is not False
+        or record.get("source_readiness_sha256")
+        != canonical_json_digest(readiness)
         or not isinstance(record.get("delivery_gate"), dict)
         or not isinstance(record.get("production_repository"), dict)
         or not isinstance(record.get("worker_unit_takeover"), dict)
@@ -910,6 +949,67 @@ def _validate_bootstrap_authority(runtime_root: Path) -> dict[str, Any]:
         or record["source_tree"] != candidate["source_tree"]
     ):
         raise ControlRuntimeError("completed bootstrap authority is invalid")
+    takeover = record.get("legacy_takeover")
+    takeover_fields = {
+        "schema_version",
+        "operation_id",
+        "authority_sha",
+        "authority_tree",
+        "install_manifest_sha256",
+        "classification_sha256",
+        "runtime_identity_sha256",
+        "git_identity",
+        "pre_stopped_fence_sha256",
+        "control_layout_sha256",
+        "checkout_permissions_sha256",
+        "applied_record_sha256",
+        "binding_sha256",
+    }
+    if (
+        not isinstance(takeover, dict)
+        or set(takeover) != takeover_fields
+        or takeover.get("schema_version") != 1
+        or not isinstance(takeover.get("operation_id"), str)
+        or OPERATION_ID_RE.fullmatch(takeover["operation_id"]) is None
+        or takeover.get("authority_sha") != record["source_sha"]
+        or takeover.get("authority_tree") != record["source_tree"]
+        or any(
+            not isinstance(takeover.get(name), str)
+            or DIGEST_RE.fullmatch(takeover[name]) is None
+            for name in (
+                "install_manifest_sha256",
+                "classification_sha256",
+                "runtime_identity_sha256",
+                "pre_stopped_fence_sha256",
+                "control_layout_sha256",
+                "checkout_permissions_sha256",
+                "applied_record_sha256",
+                "binding_sha256",
+            )
+        )
+        or not isinstance(takeover.get("git_identity"), dict)
+        or set(takeover["git_identity"])
+        != {"branch", "head_sha", "head_tree", "local_main_sha"}
+        or takeover["git_identity"].get("branch") != "refs/heads/main"
+        or takeover["git_identity"].get("head_sha")
+        != takeover["git_identity"].get("local_main_sha")
+        or any(
+            not isinstance(takeover["git_identity"].get(name), str)
+            or SHA_RE.fullmatch(takeover["git_identity"][name]) is None
+            for name in ("head_sha", "head_tree", "local_main_sha")
+        )
+        or takeover["binding_sha256"]
+        != canonical_json_digest(
+            {
+                key: value
+                for key, value in takeover.items()
+                if key != "binding_sha256"
+            }
+        )
+    ):
+        raise ControlRuntimeError(
+            "completed bootstrap legacy takeover authority is invalid"
+        )
     bin_root = runtime_root / "bin"
     _require_private_directory(bin_root)
     if {entry.name for entry in bin_root.iterdir()} != BOOTSTRAP_IMMUTABLE_FILES:

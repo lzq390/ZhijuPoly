@@ -49,6 +49,10 @@ class BootstrapReleaseRootTests(unittest.TestCase):
 
     def test_bootstrap_hook_templates_are_secret_free_valid_shell(self) -> None:
         names = {
+            "bootstrap-active-jobs-probe.example",
+            "bootstrap-legacy-runtime-restore.example",
+            "bootstrap-legacy-runtime-resume-unchanged.example",
+            "bootstrap-legacy-runtime-status.example",
             "bootstrap-quiesce.example",
             "bootstrap-status.example",
             "bootstrap-resume-unchanged.example",

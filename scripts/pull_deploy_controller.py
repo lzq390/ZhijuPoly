@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import configparser
 import contextlib
 import datetime as dt
 import fcntl
@@ -146,6 +147,27 @@ def _load_bridge_core() -> Any:
     return module
 
 
+def _load_site_helper_contracts() -> Any:
+    """Load immutable validators for site-specific helper JSON."""
+
+    module_name = "nexpoly_pull_deploy_site_helper_contracts"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = _validated_executable_sibling("site_helper_contracts.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise PullDeployError("cannot load installed site-helper contracts")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
 def _load_control_runtime() -> Any:
     """Load the immutable stdlib-only control release validator."""
 
@@ -187,9 +209,91 @@ def _load_control_runtime() -> Any:
     return module
 
 
+def _load_exact_sibling_module(module_name: str, filename: str) -> Any:
+    """Load one manifest-sealed sibling without ambient import paths."""
+
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = _validated_executable_sibling(filename)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load installed controller sibling: {filename}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+def _load_legacy_takeover_evidence() -> Any:
+    return _load_exact_sibling_module(
+        "nexpoly_pull_deploy_legacy_takeover_evidence",
+        "legacy_takeover_evidence.py",
+    )
+
+
+def _load_prefetch_evidence(
+    *,
+    bridge_core: Any,
+    worker_slot_runtime: Any,
+) -> Any:
+    """Load the prefetch validator with exact sibling dependencies.
+
+    ``maintenance_prefetch.py`` is also a standalone pre-bootstrap command,
+    so it imports its three local dependencies by their ordinary names.
+    During governed execution, temporarily bind those names to the exact
+    manifest-sealed sibling modules and restore the caller's module table
+    after loading.
+    """
+
+    module_name = "nexpoly_pull_deploy_maintenance_prefetch"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    bootstrap = _load_exact_sibling_module(
+        "nexpoly_pull_deploy_bootstrap_source",
+        "bootstrap_pull_deploy.py",
+    )
+    aliases = {
+        "bootstrap_pull_deploy": bootstrap,
+        "bridge_deploy_core": bridge_core,
+        "worker_slot_runtime": worker_slot_runtime,
+    }
+    prior = {name: sys.modules.get(name) for name in aliases}
+    path = _validated_executable_sibling("maintenance_prefetch.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load installed maintenance prefetch validator")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        sys.modules.update(aliases)
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    finally:
+        for name, value in prior.items():
+            if value is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
+    return module
+
+
 _worker_slot_runtime = _load_worker_slot_runtime()
 _control_runtime = _load_control_runtime()
 _bridge_core = _load_bridge_core()
+_site_helper_contracts = _load_site_helper_contracts()
+_legacy_takeover_evidence = _load_legacy_takeover_evidence()
+_prefetch_evidence = _load_prefetch_evidence(
+    bridge_core=_bridge_core,
+    worker_slot_runtime=_worker_slot_runtime,
+)
 WORKER_SLOTS = _worker_slot_runtime.SLOTS
 WorkerSlotError = _worker_slot_runtime.WorkerSlotError
 worker_record_digest = _worker_slot_runtime.canonical_json_digest
@@ -211,6 +315,18 @@ WEB_TAG_ROOT = "ghcr.io/lzq390/nexpoly-web"
 POSTGRES16_IMAGE = "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
 MONOMER_MD_UNIT_NAME = "nexpoly-monomer-md-worker.service"
 MONOMER_MD_UNIT_SOURCE = "ops/systemd/nexpoly-monomer-md-worker.service"
+MUTABLE_DATA_AUDIT_HELPER = "deployment-mutable-data-audit"
+MUTABLE_DATA_SERVICE_CONFIG = "mutable-data-audit.pg_service.conf"
+MUTABLE_DATA_PGPASS = "mutable-data-audit.pgpass"
+MUTABLE_DATA_SERVICE = "nexpoly-mutable-audit"
+MUTABLE_DATA_HOST = "127.0.0.1"
+MUTABLE_DATA_PORT = 55432
+MUTABLE_DATA_DATABASE = "nexpoly"
+MUTABLE_DATA_USER = "nexpoly_mutable_audit"
+MUTABLE_DATA_TABLES = (
+    "online_knowledge.history",
+    "online_knowledge.jobs",
+)
 DEPLOY_USER_HOME = Path("/home/devuser")
 SOURCE_URL = "https://github.com/lzq390/ZhijuPoly"
 ASSET_RELEASES_ROOT = Path("/data/lzq/nexpoly-assets/releases")
@@ -297,12 +413,17 @@ DESCRIPTOR_FIELDS = {
     "compose",
     "production_config",
     "postgres_restore_image",
+    "mutable_data",
     "monomer_md",
     "previous_deployment",
     "previous_deployment_sha256",
     "prepared_at",
 }
-BRIDGE_DESCRIPTOR_FIELDS = DESCRIPTOR_FIELDS | {"bridge"}
+BRIDGE_DESCRIPTOR_FIELDS = DESCRIPTOR_FIELDS | {
+    "bridge",
+    "legacy_takeover",
+    "prefetch",
+}
 READY_FIELDS = {
     "schema_version",
     "status",
@@ -374,6 +495,7 @@ CURRENT_STATE_FIELDS = {
     "migration_epoch_barrier",
     "schema_compatibility_floor",
     "last_contract_operation",
+    "migration_compatibility",
     "active_monomer_md_slot",
     "monomer_md_worker_env",
     "monomer_md_systemd_unit",
@@ -381,7 +503,18 @@ CURRENT_STATE_FIELDS = {
     "active_control",
     "production_config",
     "database_backup",
+    "mutable_data_audit",
     "deployed_at",
+}
+MIGRATION_COMPATIBILITY_FIELDS = {
+    "schema_version",
+    "policy_id",
+    "target_manifest_sha256",
+    "authority_manifest_sha256",
+    "code_manifest_sha256",
+    "ledger_manifest_sha256",
+    "ledger_state",
+    "accepted_migration_ledgers",
 }
 PRODUCTION_CONFIG_FIELDS = {
     "deploy_env_sha256",
@@ -398,6 +531,9 @@ PRODUCTION_CONFIG_FIELDS = {
     "bootstrap_legacy_runtime_status_sha256",
     "bootstrap_legacy_runtime_resume_unchanged_sha256",
     "bootstrap_legacy_runtime_restore_sha256",
+    "deployment_mutable_data_audit_sha256",
+    "mutable_data_audit_pg_service_sha256",
+    "mutable_data_audit_pgpass_sha256",
 }
 OPERATION_STATE_FIELDS = {
     "schema_version",
@@ -499,9 +635,17 @@ MARKER_OPTIONAL_FIELDS = {
     "rollback_current_state_sha256",
     "rollback_backup",
     "rollback_backup_operation_id",
+    "rollback_candidate_state",
+    "rollback_candidate_state_sha256",
     "pre_stop_abort",
     "runtime_start_intent",
     "postgres_runtime_fence",
+    "mutable_data_before",
+    "mutable_data_after",
+    "mutable_data_restored",
+    "takeover_pre_stopped_fence_sha256",
+    "takeover_restore_started",
+    "takeover_restored_terminal_sha256",
 }
 
 POSTGRES_RUNTIME_FENCE_FIELDS = {
@@ -510,6 +654,7 @@ POSTGRES_RUNTIME_FENCE_FIELDS = {
     "image_id",
     "configured_image",
     "data_volume",
+    "host_endpoint",
     "system_identifier",
     "captured_at",
 }
@@ -531,6 +676,7 @@ class CommandRunner(Protocol):
         stdin: BinaryIO | None = None,
         stdout: BinaryIO | int | None = subprocess.PIPE,
         timeout: float | None = None,
+        pass_fds: tuple[int, ...] = (),
     ) -> subprocess.CompletedProcess[Any]: ...
 
     def request_json(self, url: str, token: str) -> dict[str, Any]: ...
@@ -550,6 +696,7 @@ class SystemRunner:
         stdin: BinaryIO | None = None,
         stdout: BinaryIO | int | None = subprocess.PIPE,
         timeout: float | None = None,
+        pass_fds: tuple[int, ...] = (),
     ) -> subprocess.CompletedProcess[Any]:
         return subprocess.run(
             command,
@@ -561,6 +708,7 @@ class SystemRunner:
             stdout=stdout,
             stderr=subprocess.PIPE,
             timeout=timeout,
+            pass_fds=pass_fds,
         )
 
     def request_json(self, url: str, token: str) -> dict[str, Any]:
@@ -658,6 +806,321 @@ def validate_production_config_evidence(document: object) -> dict[str, str]:
     return dict(document)
 
 
+LEGACY_TAKEOVER_BINDING_FIELDS = {
+    "schema_version",
+    "operation_id",
+    "authority_sha",
+    "authority_tree",
+    "install_manifest_sha256",
+    "classification_sha256",
+    "runtime_identity_sha256",
+    "git_identity",
+    "pre_stopped_fence_sha256",
+    "control_layout_sha256",
+    "checkout_permissions_sha256",
+    "applied_record_sha256",
+    "binding_sha256",
+}
+PREFETCH_BINDING_FIELDS = {
+    "schema_version",
+    "operation_id",
+    "ready_path",
+    "ready_sha256",
+    "identity_sha256",
+    "source",
+    "source_readiness_sha256",
+    "policy_sha256",
+    "docker_config_sha256",
+    "git_bundle_sha256",
+    "images_sha256",
+    "wheel_caches_sha256",
+    "asset_manifest_sha256",
+    "asset_inventory_sha256",
+    "recovery_tools_sha256",
+    "binding_sha256",
+}
+
+
+def validate_legacy_takeover_binding(document: object) -> dict[str, Any]:
+    if (
+        not isinstance(document, dict)
+        or set(document) != LEGACY_TAKEOVER_BINDING_FIELDS
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("operation_id"), str)
+        or not document["operation_id"].startswith("takeover-")
+    ):
+        raise PullDeployError("legacy takeover binding has an invalid shape")
+    require_sha(document.get("authority_sha"), "takeover authority SHA")
+    require_sha(document.get("authority_tree"), "takeover authority tree")
+    for name in (
+        "install_manifest_sha256",
+        "classification_sha256",
+        "runtime_identity_sha256",
+        "pre_stopped_fence_sha256",
+        "control_layout_sha256",
+        "checkout_permissions_sha256",
+        "applied_record_sha256",
+        "binding_sha256",
+    ):
+        require_digest(document.get(name), f"takeover {name}")
+    git_identity = document.get("git_identity")
+    if (
+        not isinstance(git_identity, dict)
+        or set(git_identity)
+        != {"branch", "head_sha", "head_tree", "local_main_sha"}
+        or git_identity.get("branch") != "refs/heads/main"
+        or git_identity.get("head_sha") != git_identity.get("local_main_sha")
+    ):
+        raise PullDeployError("legacy takeover Git binding is invalid")
+    for name in ("head_sha", "head_tree", "local_main_sha"):
+        require_sha(git_identity.get(name), f"takeover Git {name}")
+    identity = {
+        key: value
+        for key, value in document.items()
+        if key != "binding_sha256"
+    }
+    if document["binding_sha256"] != canonical_json_digest(identity):
+        raise PullDeployError("legacy takeover binding digest differs")
+    return dict(document)
+
+
+def validate_prefetch_binding(document: object) -> dict[str, Any]:
+    if (
+        not isinstance(document, dict)
+        or set(document) != PREFETCH_BINDING_FIELDS
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("operation_id"), str)
+        or not document["operation_id"].startswith("prefetch-")
+        or not isinstance(document.get("ready_path"), str)
+        or not Path(document["ready_path"]).is_absolute()
+    ):
+        raise PullDeployError("maintenance prefetch binding has an invalid shape")
+    source = document.get("source")
+    if not isinstance(source, dict) or set(source) != {"authority", "target"}:
+        raise PullDeployError("maintenance prefetch source binding is invalid")
+    for role in ("authority", "target"):
+        identity = source.get(role)
+        if not isinstance(identity, dict) or set(identity) != {"sha", "tree"}:
+            raise PullDeployError("maintenance prefetch Git binding is invalid")
+        require_sha(identity.get("sha"), f"prefetch {role} SHA")
+        require_sha(identity.get("tree"), f"prefetch {role} tree")
+    for name in PREFETCH_BINDING_FIELDS - {
+        "schema_version",
+        "operation_id",
+        "ready_path",
+        "source",
+    }:
+        require_digest(document.get(name), f"prefetch {name}")
+    identity = {
+        key: value
+        for key, value in document.items()
+        if key != "binding_sha256"
+    }
+    if document["binding_sha256"] != canonical_json_digest(identity):
+        raise PullDeployError("maintenance prefetch binding digest differs")
+    return dict(document)
+
+
+def validate_mutable_data_contract(document: object) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "helper_path",
+        "helper_sha256",
+        "dependencies",
+        "connection",
+        "tables",
+        "evidence_schema_version",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != 2
+        or document.get("evidence_schema_version") != 2
+        or document.get("tables") != list(MUTABLE_DATA_TABLES)
+        or not isinstance(document.get("helper_path"), str)
+        or not Path(document["helper_path"]).is_absolute()
+        or Path(document["helper_path"]).name != MUTABLE_DATA_AUDIT_HELPER
+    ):
+        raise PullDeployError("mutable-data audit contract has an invalid shape")
+    require_digest(document.get("helper_sha256"), "mutable-data helper digest")
+    dependencies = document.get("dependencies")
+    if not isinstance(dependencies, dict) or set(dependencies) != {
+        "pg_service",
+        "pgpass",
+    }:
+        raise PullDeployError("mutable-data helper dependencies are invalid")
+    for name, expected_filename in (
+        ("pg_service", MUTABLE_DATA_SERVICE_CONFIG),
+        ("pgpass", MUTABLE_DATA_PGPASS),
+    ):
+        record = dependencies.get(name)
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "sha256", "mode"}
+            or not isinstance(record.get("path"), str)
+            or not Path(record["path"]).is_absolute()
+            or Path(record["path"]).name != expected_filename
+            or record.get("mode") != "0600"
+        ):
+            raise PullDeployError("mutable-data helper dependency is invalid")
+        require_digest(record.get("sha256"), f"mutable-data {name} digest")
+    if document.get("connection") != {
+        "service": MUTABLE_DATA_SERVICE,
+        "host": MUTABLE_DATA_HOST,
+        "port": MUTABLE_DATA_PORT,
+        "database": MUTABLE_DATA_DATABASE,
+        "user": MUTABLE_DATA_USER,
+    }:
+        raise PullDeployError("mutable-data connection contract differs")
+    return dict(document)
+
+
+def validate_mutable_data_evidence(document: object) -> dict[str, Any]:
+    try:
+        validated = _site_helper_contracts.validate_mutable_data_audit(document)
+    except Exception as exc:
+        raise PullDeployError("mutable-data audit evidence is invalid") from exc
+    if [
+        f"{record['schema']}.{record['table']}"
+        for record in validated["tables"]
+    ] != list(MUTABLE_DATA_TABLES):
+        raise PullDeployError("mutable-data audit selected unexpected tables")
+    return validated
+
+
+def mutable_data_identity(document: object) -> dict[str, Any]:
+    validated = validate_mutable_data_evidence(document)
+    return {
+        "database": validated["database"],
+        "database_system_identifier": validated["database_system_identifier"],
+        "connection": validated["connection"],
+        "postgres_runtime": validated["postgres_runtime"],
+        "digest_algorithm": validated["digest_algorithm"],
+        "tables": validated["tables"],
+        "snapshot_sha256": validated["snapshot_sha256"],
+    }
+
+
+def validate_mutable_data_pair(document: object) -> dict[str, Any]:
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"before", "after", "identity_sha256"}
+    ):
+        raise PullDeployError("mutable-data deployment evidence has an invalid shape")
+    before = validate_mutable_data_evidence(document["before"])
+    after = validate_mutable_data_evidence(document["after"])
+    before_identity = mutable_data_identity(before)
+    after_identity = mutable_data_identity(after)
+    if before_identity != after_identity:
+        raise PullDeployError("mutable online business tables changed during deployment")
+    digest = canonical_json_digest(before_identity)
+    if document.get("identity_sha256") != digest:
+        raise PullDeployError("mutable-data deployment identity differs")
+    return {
+        "before": before,
+        "after": after,
+        "identity_sha256": digest,
+    }
+
+
+def _split_pgpass_line(payload: bytes) -> tuple[str, str, str, str, str]:
+    """Parse one libpq password line without ever returning it in evidence."""
+
+    if (
+        not payload
+        or len(payload) > 64 * 1024
+        or b"\0" in payload
+        or b"\r" in payload
+        or payload.count(b"\n") != 1
+        or not payload.endswith(b"\n")
+    ):
+        raise PullDeployError("mutable-data pgpass must contain one exact line")
+    try:
+        line = payload[:-1].decode("utf-8")
+    except UnicodeError as exc:
+        raise PullDeployError("mutable-data pgpass is not UTF-8") from exc
+    fields: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for character in line:
+        if escaped:
+            current.append(character)
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == ":" and len(fields) < 4:
+            fields.append("".join(current))
+            current = []
+        else:
+            current.append(character)
+    if escaped:
+        raise PullDeployError("mutable-data pgpass has a trailing escape")
+    fields.append("".join(current))
+    if len(fields) != 5 or not fields[4]:
+        raise PullDeployError("mutable-data pgpass has an invalid shape")
+    return tuple(fields)  # type: ignore[return-value]
+
+
+def validate_mutable_data_connection_inputs(
+    service_payload: bytes,
+    pgpass_payload: bytes,
+    *,
+    expected_passfile: Path,
+) -> dict[str, object]:
+    """Reject libpq indirection and bind one exact loopback audit identity."""
+
+    if (
+        not service_payload
+        or len(service_payload) > 64 * 1024
+        or b"\0" in service_payload
+        or b"\r" in service_payload
+    ):
+        raise PullDeployError("mutable-data pg_service input is malformed")
+    parser = configparser.RawConfigParser(
+        interpolation=None,
+        strict=True,
+        empty_lines_in_values=False,
+    )
+    parser.optionxform = str.lower
+    try:
+        parser.read_string(service_payload.decode("utf-8"))
+    except (UnicodeError, configparser.Error) as exc:
+        raise PullDeployError("mutable-data pg_service input is malformed") from exc
+    expected_options = {
+        "host": MUTABLE_DATA_HOST,
+        "port": str(MUTABLE_DATA_PORT),
+        "dbname": MUTABLE_DATA_DATABASE,
+        "user": MUTABLE_DATA_USER,
+        "sslmode": "disable",
+        "passfile": str(expected_passfile),
+    }
+    if (
+        parser.sections() != [MUTABLE_DATA_SERVICE]
+        or dict(parser.items(MUTABLE_DATA_SERVICE, raw=True)) != expected_options
+        or parser.defaults()
+    ):
+        raise PullDeployError(
+            "mutable-data pg_service must name one exact loopback audit endpoint"
+        )
+    host, port, database, user, _secret = _split_pgpass_line(pgpass_payload)
+    if (host, port, database, user) != (
+        MUTABLE_DATA_HOST,
+        str(MUTABLE_DATA_PORT),
+        MUTABLE_DATA_DATABASE,
+        MUTABLE_DATA_USER,
+    ):
+        raise PullDeployError(
+            "mutable-data pgpass does not match the exact audit endpoint"
+        )
+    return {
+        "service": MUTABLE_DATA_SERVICE,
+        "host": MUTABLE_DATA_HOST,
+        "port": MUTABLE_DATA_PORT,
+        "database": MUTABLE_DATA_DATABASE,
+        "user": MUTABLE_DATA_USER,
+    }
+
+
 def validate_postgres_runtime_fence(document: object) -> dict[str, Any]:
     """Validate the immutable identity of the live production PostgreSQL."""
 
@@ -693,9 +1156,20 @@ def validate_postgres_runtime_fence(document: object) -> dict[str, Any]:
         or volume.get("read_write") is not True
     ):
         raise PullDeployError("PostgreSQL data-volume fence is invalid")
+    endpoint = document.get("host_endpoint")
+    if (
+        not isinstance(endpoint, dict)
+        or set(endpoint) != {"host", "port", "container_port", "protocol"}
+        or endpoint.get("host") != MUTABLE_DATA_HOST
+        or endpoint.get("port") != MUTABLE_DATA_PORT
+        or endpoint.get("container_port") != 5432
+        or endpoint.get("protocol") != "tcp"
+    ):
+        raise PullDeployError("PostgreSQL host-endpoint fence is invalid")
     return {
         **document,
         "data_volume": dict(volume),
+        "host_endpoint": dict(endpoint),
     }
 
 
@@ -1215,17 +1689,43 @@ def parse_command_json(payload: object, label: str) -> dict[str, Any]:
     return document
 
 
-def canonical_ledger_history(rows: object, manifest: object) -> list[dict[str, Any]]:
-    """Validate an exact, ordered canonical migration-ledger prefix."""
+def canonical_ledger_history(
+    rows: object,
+    manifest: object,
+    *,
+    accepted_ledgers: object | None = None,
+    require_registry_match: bool = False,
+) -> list[dict[str, Any]]:
+    """Validate a canonical ledger or the unique registered trailing 0013.
+
+    B never treats an arbitrary future row as compatible.  Its sole
+    forward-compatible state is the checksum-exact 0013 extension registered
+    by the F authority policy.
+    """
 
     if not isinstance(rows, list) or not isinstance(manifest, list):
         raise PullDeployError("migration manifest or ledger evidence is invalid")
-    if not rows or len(rows) > len(manifest):
+    if not rows or len(rows) > len(manifest) + 1:
         raise PullDeployError(
             "database migration ledger is empty or beyond the manifest"
         )
     history: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
+        if index == len(manifest):
+            if (
+                accepted_ledgers is None
+                or row != _bridge_core.FINAL_MIGRATION
+                or not history
+                or history[-1].get("version")
+                != _bridge_core.CONTRACT_MIGRATION["version"]
+                or history[-1].get("checksum")
+                != _bridge_core.CONTRACT_MIGRATION["checksum"]
+            ):
+                raise PullDeployError(
+                    "database migration ledger exceeds B without exact 0013 compatibility"
+                )
+            history.append(dict(_bridge_core.FINAL_MIGRATION_RECORD))
+            continue
         expected = manifest[index]
         if (
             not isinstance(row, dict)
@@ -1240,7 +1740,36 @@ def canonical_ledger_history(rows: object, manifest: object) -> list[dict[str, A
                 "database migration ledger is not an exact canonical prefix"
             )
         history.append(dict(expected))
+    if require_registry_match:
+        if accepted_ledgers is None:
+            raise PullDeployError(
+                "migration ledger registry authority is unavailable"
+            )
+        try:
+            _bridge_core.match_migration_ledger(accepted_ledgers, history)
+        except Exception as exc:
+            raise PullDeployError(
+                "migration ledger is outside the exact bridge compatibility registry"
+            ) from exc
     return history
+
+
+def descriptor_accepted_ledgers(
+    descriptor: dict[str, Any],
+) -> list[dict[str, str]] | None:
+    bridge = descriptor.get("bridge")
+    if isinstance(bridge, dict):
+        policy = bridge.get("policy")
+        if isinstance(policy, dict):
+            value = policy.get("accepted_migration_ledgers")
+            if isinstance(value, list):
+                return [dict(record) for record in value if isinstance(record, dict)]
+    compatibility = descriptor.get("_migration_compatibility")
+    if isinstance(compatibility, dict):
+        value = compatibility.get("accepted_migration_ledgers")
+        if isinstance(value, list):
+            return [dict(record) for record in value if isinstance(record, dict)]
+    return None
 
 
 def _validate_drain_state(
@@ -1984,6 +2513,89 @@ def inspect_asset_release(asset_root: Path, expected_digest: str) -> dict[str, A
     }
 
 
+def build_migration_compatibility_state(
+    authority: object,
+    *,
+    code_manifest_sha256: object,
+    migrations: object,
+) -> dict[str, Any]:
+    """Bind code and live ledger identities to the frozen B/F registry."""
+
+    if not isinstance(authority, dict):
+        raise PullDeployError("migration compatibility authority is invalid")
+    accepted = authority.get("accepted_migration_ledgers")
+    policy_id = require_digest(
+        authority.get("policy_id"), "migration compatibility policy"
+    )
+    code_manifest = require_digest(
+        code_manifest_sha256, "migration compatibility code manifest"
+    )
+    try:
+        ledger_state = _bridge_core.match_migration_ledger(accepted, migrations)
+    except Exception as exc:
+        raise PullDeployError(
+            "migration history is outside the frozen B/F registry"
+        ) from exc
+    if not isinstance(accepted, list):
+        raise PullDeployError("migration compatibility registry is invalid")
+    normalized = [dict(record) for record in accepted if isinstance(record, dict)]
+    if len(normalized) != 3:
+        raise PullDeployError("migration compatibility registry is incomplete")
+    by_name = {record.get("name"): record for record in normalized}
+    if set(by_name) != set(_bridge_core.REQUIRED_LEDGER_ORDER):
+        raise PullDeployError("migration compatibility registry names are invalid")
+    target_manifest = require_digest(
+        by_name["post-0012"].get("manifest_sha256"),
+        "B migration manifest",
+    )
+    authority_manifest = require_digest(
+        by_name["post-0013"].get("manifest_sha256"),
+        "F migration manifest",
+    )
+    if (
+        by_name["pre-0012"].get("manifest_sha256") != target_manifest
+        or code_manifest not in {target_manifest, authority_manifest}
+        or (
+            ledger_state["name"] != "post-0013"
+            and code_manifest != target_manifest
+        )
+    ):
+        raise PullDeployError(
+            "code/ledger migration compatibility pair is not registered"
+        )
+    return {
+        "schema_version": 1,
+        "policy_id": policy_id,
+        "target_manifest_sha256": target_manifest,
+        "authority_manifest_sha256": authority_manifest,
+        "code_manifest_sha256": code_manifest,
+        "ledger_manifest_sha256": ledger_state["manifest_sha256"],
+        "ledger_state": ledger_state,
+        "accepted_migration_ledgers": normalized,
+    }
+
+
+def validate_migration_compatibility_state(
+    value: object,
+    *,
+    migrations: object,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != MIGRATION_COMPATIBILITY_FIELDS:
+        raise PullDeployError("current migration compatibility has an invalid shape")
+    if value.get("schema_version") != 1:
+        raise PullDeployError("current migration compatibility schema is unsupported")
+    rebuilt = build_migration_compatibility_state(
+        value,
+        code_manifest_sha256=value.get("code_manifest_sha256"),
+        migrations=migrations,
+    )
+    if rebuilt != value:
+        raise PullDeployError("current migration compatibility identity differs")
+    return rebuilt
+
+
 def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any]:
     """Validate the durable state that a new prepare seals by digest."""
 
@@ -2020,6 +2632,10 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
             or not isinstance(record.get("requires_contracts"), list)
         ):
             raise PullDeployError("current deployment migration history is invalid")
+    validate_migration_compatibility_state(
+        document.get("migration_compatibility"),
+        migrations=history,
+    )
     active = validate_active_slot_record(document.get("active_monomer_md_slot"))
     if (
         active["source_sha"] != document["source_sha"]
@@ -2091,16 +2707,30 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
             "current deployment controls differ from source or Worker"
         )
     validate_production_config_evidence(document.get("production_config"))
+    validate_mutable_data_pair(document.get("mutable_data_audit"))
     backup = document.get("database_backup")
     if (
         not isinstance(backup, dict)
-        or set(backup) != {"path", "sha256", "restore_verification"}
+        or set(backup)
+        != {
+            "path",
+            "sha256",
+            "restore_verification",
+            "mutable_data_before_sha256",
+        }
         or not isinstance(backup.get("path"), str)
         or not Path(backup["path"]).is_absolute()
         or not isinstance(backup.get("restore_verification"), dict)
     ):
         raise PullDeployError("current deployment database backup identity is invalid")
     require_digest(backup.get("sha256"), "current database backup digest")
+    if (
+        backup.get("mutable_data_before_sha256")
+        != document["mutable_data_audit"]["identity_sha256"]
+    ):
+        raise PullDeployError(
+            "current database backup differs from mutable-data evidence"
+        )
     if not isinstance(document.get("deployed_at"), str) or not document["deployed_at"]:
         raise PullDeployError("current deployment timestamp is invalid")
     try:
@@ -2306,7 +2936,21 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             )
         }
     )
-    validate_production_config_evidence(document.get("production_config"))
+    production_config = validate_production_config_evidence(
+        document.get("production_config")
+    )
+    mutable_data = validate_mutable_data_contract(document.get("mutable_data"))
+    if (
+        mutable_data["helper_sha256"]
+        != production_config["deployment_mutable_data_audit_sha256"]
+        or mutable_data["dependencies"]["pg_service"]["sha256"]
+        != production_config["mutable_data_audit_pg_service_sha256"]
+        or mutable_data["dependencies"]["pgpass"]["sha256"]
+        != production_config["mutable_data_audit_pgpass_sha256"]
+    ):
+        raise PullDeployError(
+            "mutable-data helper differs from sealed production configuration"
+        )
     postgres_image = document.get("postgres_restore_image")
     if (
         not isinstance(postgres_image, dict)
@@ -2345,9 +2989,27 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             raise PullDeployError(
                 "historical bridge deployment is restricted to first takeover"
             )
+        takeover = validate_legacy_takeover_binding(
+            document.get("legacy_takeover")
+        )
+        prefetch = validate_prefetch_binding(document.get("prefetch"))
         try:
             bridge = _bridge_core.validate_bridge_descriptor(
                 document.get("bridge")
+            )
+            registry = bridge["policy"]["accepted_migration_ledgers"]
+            post_0013 = next(
+                record for record in registry if record["name"] == "post-0013"
+            )
+            _bridge_core.validate_migration_registry(
+                bridge["policy"],
+                target_manifest_sha256=document["migrations"]["sha256"],
+                target_records=document["migrations"]["records"],
+                authority_manifest_sha256=post_0013["manifest_sha256"],
+                authority_records=[
+                    *document["migrations"]["records"],
+                    _bridge_core.FINAL_MIGRATION_RECORD,
+                ],
             )
         except Exception as exc:
             raise PullDeployError("bridge descriptor evidence is invalid") from exc
@@ -2369,6 +3031,23 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             or bridge["target"]["control_release_id"] != executor["release_id"]
             or bridge["target"]["sha"] != repository["target_sha"]
             or bridge["target"]["tree"] != repository["target_tree"]
+            or takeover["authority_sha"] != bridge["authority"]["sha"]
+            or takeover["authority_tree"] != bridge["authority"]["tree"]
+            or takeover["git_identity"]["head_sha"]
+            != repository["previous_sha"]
+            or takeover["git_identity"]["head_tree"]
+            != repository["previous_tree"]
+            or prefetch["source"]["authority"]
+            != {
+                "sha": bridge["authority"]["sha"],
+                "tree": bridge["authority"]["tree"],
+            }
+            or prefetch["source"]["target"]
+            != {
+                "sha": bridge["target"]["sha"],
+                "tree": bridge["target"]["tree"],
+            }
+            or prefetch["policy_sha256"] != bridge["policy_sha256"]
             or bridge["target"]["images"] != target_images
             or bridge["target"]["asset_manifest_digest"]
             != document["release_input"]["asset_manifest_digest"]
@@ -2480,6 +3159,29 @@ def validate_recovery_marker(
             raise PullDeployError("deployment marker candidate state is invalid")
         validate_current_deployment_state(candidate)
         require_digest(candidate_digest, "deployment marker candidate-state digest")
+    rollback_candidate = marker.get("rollback_candidate_state")
+    rollback_candidate_digest = marker.get("rollback_candidate_state_sha256")
+    if (rollback_candidate is None) != (rollback_candidate_digest is None):
+        raise PullDeployError(
+            "explicit rollback marker has incomplete candidate-state intent"
+        )
+    if rollback_candidate is not None:
+        if marker["action"] != "explicit-rollback" or not isinstance(
+            rollback_candidate, dict
+        ):
+            raise PullDeployError("explicit rollback candidate state is invalid")
+        validate_current_deployment_state(rollback_candidate)
+        expected_rollback_digest = require_digest(
+            rollback_candidate_digest,
+            "explicit rollback candidate-state digest",
+        )
+        if (
+            sha256_bytes(canonical_json_bytes(rollback_candidate) + b"\n")
+            != expected_rollback_digest
+        ):
+            raise PullDeployError(
+                "explicit rollback candidate-state digest differs"
+            )
     if "postgres_runtime_fence" in marker:
         validate_postgres_runtime_fence(marker["postgres_runtime_fence"])
     return marker
@@ -2821,6 +3523,11 @@ class SystemLifecycle:
         state = container.get("State") if isinstance(container, dict) else None
         labels = config.get("Labels") if isinstance(config, dict) else None
         mounts = container.get("Mounts") if isinstance(container, dict) else None
+        network = (
+            container.get("NetworkSettings") if isinstance(container, dict) else None
+        )
+        ports = network.get("Ports") if isinstance(network, dict) else None
+        published = ports.get("5432/tcp") if isinstance(ports, dict) else None
         data_mounts = (
             [
                 value
@@ -2843,6 +3550,8 @@ class SystemLifecycle:
             or labels.get("com.docker.compose.project") != "nexpoly"
             or labels.get("com.docker.compose.service") != "lab-postgres"
             or len(data_mounts) != 1
+            or published
+            != [{"HostIp": MUTABLE_DATA_HOST, "HostPort": str(MUTABLE_DATA_PORT)}]
         ):
             raise PullDeployError("PostgreSQL container runtime identity differs")
         mount = data_mounts[0]
@@ -2894,6 +3603,12 @@ class SystemLifecycle:
                     "destination": mount["Destination"],
                     "driver": mount["Driver"],
                     "read_write": True,
+                },
+                "host_endpoint": {
+                    "host": MUTABLE_DATA_HOST,
+                    "port": MUTABLE_DATA_PORT,
+                    "container_port": 5432,
+                    "protocol": "tcp",
                 },
                 "system_identifier": system_identifier,
                 "captured_at": utc_now(),
@@ -3906,7 +4621,9 @@ class SystemLifecycle:
                     "isolated restore migration ledger is invalid JSON"
                 ) from exc
             ledger = canonical_ledger_history(
-                ledger_rows, descriptor["migrations"].get("records")
+                ledger_rows,
+                descriptor["migrations"].get("records"),
+                accepted_ledgers=descriptor_accepted_ledgers(descriptor),
             )
             return {
                 "schema_version": 1,
@@ -4465,7 +5182,11 @@ class SystemLifecycle:
             raise PullDeployError(
                 "restored production ledger evidence is invalid"
             ) from exc
-        ledger = canonical_ledger_history(rows, descriptor["migrations"].get("records"))
+        ledger = canonical_ledger_history(
+            rows,
+            descriptor["migrations"].get("records"),
+            accepted_ledgers=descriptor_accepted_ledgers(descriptor),
+        )
         expected_ledger = backup["restore_verification"].get("ledger")
         if ledger != expected_ledger:
             raise PullDeployError(
@@ -4635,40 +5356,13 @@ class SystemLifecycle:
             ledger_rows = json.loads(str(ledger_result.stdout))
         except json.JSONDecodeError as exc:
             raise PullDeployError("migration ledger evidence is invalid JSON") from exc
-        if not isinstance(manifest, list) or not isinstance(ledger_rows, list):
-            raise PullDeployError("migration manifest or ledger evidence is invalid")
-        if len(ledger_rows) > len(manifest):
-            raise PullDeployError(
-                "database migration ledger is beyond the target manifest"
-            )
-        canonical_history: list[dict[str, Any]] = []
-        for index, row in enumerate(ledger_rows):
-            expected = manifest[index]
-            if (
-                not isinstance(row, dict)
-                or set(row) != {"version", "checksum"}
-                or not isinstance(expected, dict)
-                or row.get("version") != expected.get("version")
-                or row.get("checksum") != expected.get("checksum")
-            ):
-                raise PullDeployError(
-                    "database migration ledger is not a canonical target prefix"
-                )
-            if set(expected) != {
-                "version",
-                "kind",
-                "epoch",
-                "checksum",
-                "requires_contracts",
-            }:
-                raise PullDeployError(
-                    "target migration manifest entry has an invalid shape"
-                )
-            canonical_history.append(dict(expected))
-        if not canonical_history:
-            raise PullDeployError(
-                "expand deployment produced an empty canonical ledger"
-            )
+        canonical_history = canonical_ledger_history(
+            ledger_rows,
+            manifest,
+            accepted_ledgers=descriptor_accepted_ledgers(descriptor),
+            require_registry_match=descriptor_accepted_ledgers(descriptor)
+            is not None,
+        )
         return {"newly_applied": applied, "ledger": canonical_history}
 
     def start(
@@ -5539,6 +6233,7 @@ class PullDeployController:
         self.current_state_path = self.state_dir / "current-deployment.json"
         self.active_slot_path = self.state_dir / "monomer-md-active-slot.json"
         self.active_control_path = self.state_dir / "active-control.json"
+        self._held_deploy_lock_fd: int | None = None
 
     def _require_no_contract_maintenance(
         self, *, require_alias_completed: bool = True
@@ -5635,7 +6330,7 @@ class PullDeployController:
             )
 
     @contextlib.contextmanager
-    def deployment_lock(self) -> Iterable[None]:
+    def deployment_lock(self) -> Iterable[int]:
         try:
             descriptor = os.open(
                 self.lock_path,
@@ -5661,7 +6356,13 @@ class PullDeployController:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise PullDeployError("another deployment holds deploy.lock") from exc
-            yield
+            if self._held_deploy_lock_fd is not None:
+                raise PullDeployError("nested deployment lock ownership is invalid")
+            self._held_deploy_lock_fd = stream.fileno()
+            try:
+                yield stream.fileno()
+            finally:
+                self._held_deploy_lock_fd = None
 
     def _clean_environment(self) -> dict[str, str]:
         environment = {
@@ -5818,6 +6519,7 @@ class PullDeployController:
             "bootstrap-legacy-runtime-status",
             "bootstrap-legacy-runtime-resume-unchanged",
             "bootstrap-legacy-runtime-restore",
+            MUTABLE_DATA_AUDIT_HELPER,
         ):
             path = self.config_dir / name
             metadata = path.lstat()
@@ -5829,6 +6531,33 @@ class PullDeployController:
             ):
                 raise PullDeployError(f"bootstrap hook is unsafe: {path}")
             hook_digests[name.replace("-", "_") + "_sha256"] = sha256_file(path)
+        mutable_config_digests: dict[str, str] = {}
+        for name, evidence_key in (
+            (
+                MUTABLE_DATA_SERVICE_CONFIG,
+                "mutable_data_audit_pg_service_sha256",
+            ),
+            (MUTABLE_DATA_PGPASS, "mutable_data_audit_pgpass_sha256"),
+        ):
+            path = self.config_dir / name
+            try:
+                metadata = path.lstat()
+            except OSError as exc:
+                raise PullDeployError(
+                    f"mutable-data private input is unavailable: {name}"
+                ) from exc
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or path.is_symlink()
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_size < 1
+                or metadata.st_size > 64 * 1024
+            ):
+                raise PullDeployError(
+                    f"mutable-data private input is unsafe: {name}"
+                )
+            mutable_config_digests[evidence_key] = sha256_file(path)
         evidence = {
             "deploy_env_sha256": sha256_file(self.config_dir / "deploy.env"),
             "app_env_sha256": sha256_file(self.config_dir / "app.env"),
@@ -5839,8 +6568,200 @@ class PullDeployController:
             ),
             "docker_config_sha256": sha256_file(self.config_dir / "docker/config.json"),
             **hook_digests,
+            **mutable_config_digests,
         }
         return validate_production_config_evidence(evidence)
+
+    def mutable_data_contract(self) -> dict[str, Any]:
+        path = self.config_dir / MUTABLE_DATA_AUDIT_HELPER
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise PullDeployError(
+                "mutable-data audit helper is unavailable"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise PullDeployError("mutable-data audit helper is unsafe")
+        dependencies: dict[str, dict[str, str]] = {}
+        dependency_payloads: dict[str, bytes] = {}
+        for key, filename in (
+            ("pg_service", MUTABLE_DATA_SERVICE_CONFIG),
+            ("pgpass", MUTABLE_DATA_PGPASS),
+        ):
+            dependency = self.config_dir / filename
+            try:
+                dependency_metadata = dependency.lstat()
+            except OSError as exc:
+                raise PullDeployError(
+                    f"mutable-data helper dependency is unavailable: {filename}"
+                ) from exc
+            if (
+                not stat.S_ISREG(dependency_metadata.st_mode)
+                or dependency.is_symlink()
+                or dependency_metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(dependency_metadata.st_mode) != 0o600
+            ):
+                raise PullDeployError(
+                    f"mutable-data helper dependency is unsafe: {filename}"
+                )
+            payload = dependency.read_bytes()
+            if not payload or len(payload) > 64 * 1024:
+                raise PullDeployError(
+                    f"mutable-data helper dependency is malformed: {filename}"
+                )
+            dependency_payloads[key] = payload
+            dependencies[key] = {
+                "path": str(dependency),
+                "sha256": sha256_file(dependency),
+                "mode": "0600",
+            }
+        connection = validate_mutable_data_connection_inputs(
+            dependency_payloads["pg_service"],
+            dependency_payloads["pgpass"],
+            expected_passfile=self.config_dir / MUTABLE_DATA_PGPASS,
+        )
+        return validate_mutable_data_contract(
+            {
+                "schema_version": 2,
+                "helper_path": str(path),
+                "helper_sha256": sha256_file(path),
+                "dependencies": dependencies,
+                "connection": connection,
+                "tables": list(MUTABLE_DATA_TABLES),
+                "evidence_schema_version": 2,
+            }
+        )
+
+    def _capture_mutable_data(
+        self,
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        if (
+            self.production_config_evidence(check_free_space=False)
+            != descriptor["production_config"]
+        ):
+            raise PullDeployError(
+                "mutable-data helper configuration changed after prepare"
+            )
+        contract = self.mutable_data_contract()
+        if contract != descriptor["mutable_data"]:
+            raise PullDeployError("mutable-data helper contract changed after prepare")
+        marker = load_private_json(self.marker_path)
+        sealed = validate_postgres_runtime_fence(
+            marker.get("postgres_runtime_fence")
+        )
+        capture = getattr(self.lifecycle, "postgres_runtime_identity", None)
+        if not callable(capture):
+            raise PullDeployError(
+                "mutable-data audit cannot revalidate PostgreSQL runtime"
+            )
+        before = validate_postgres_runtime_fence(capture(self, descriptor))
+        if postgres_runtime_fence_identity(before) != postgres_runtime_fence_identity(
+            sealed
+        ):
+            raise PullDeployError(
+                "mutable-data audit PostgreSQL runtime differs from stop fence"
+            )
+        runtime_identity = postgres_runtime_fence_identity(before)
+        if runtime_identity["host_endpoint"] != {
+            "host": contract["connection"]["host"],
+            "port": contract["connection"]["port"],
+            "container_port": 5432,
+            "protocol": "tcp",
+        }:
+            raise PullDeployError(
+                "mutable-data audit endpoint differs from PostgreSQL container"
+            )
+        environment = self.control_environment()
+        environment["NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON"] = json.dumps(
+            runtime_identity,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        result = self.runner.run(
+            [contract["helper_path"]],
+            cwd=self.production_root,
+            env=environment,
+            text=True,
+        )
+        evidence = validate_mutable_data_evidence(
+            parse_command_json(result.stdout, "mutable-data audit")
+        )
+        after = validate_postgres_runtime_fence(capture(self, descriptor))
+        if (
+            postgres_runtime_fence_identity(after) != runtime_identity
+            or evidence["postgres_runtime"] != runtime_identity
+            or evidence["connection"] != contract["connection"]
+        ):
+            raise PullDeployError(
+                "mutable-data audit did not bind the exact PostgreSQL container"
+            )
+        return evidence
+
+    def _bind_mutable_data_before(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        existing = marker.get("mutable_data_before")
+        before = (
+            validate_mutable_data_evidence(existing)
+            if existing is not None
+            else self._capture_mutable_data(descriptor)
+        )
+        postgres = marker.get("postgres_runtime_fence")
+        if (
+            isinstance(postgres, dict)
+            and before["database_system_identifier"]
+            != postgres.get("system_identifier")
+        ):
+            raise PullDeployError(
+                "mutable-data audit selected another PostgreSQL cluster"
+            )
+        if existing is None:
+            self._advance(
+                marker,
+                str(marker["phase"]),
+                mutable_data_before=before,
+            )
+        return before
+
+    def _bind_mutable_data_after(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        before = self._bind_mutable_data_before(marker, descriptor)
+        after = self._capture_mutable_data(descriptor)
+        pair = validate_mutable_data_pair(
+            {
+                "before": before,
+                "after": after,
+                "identity_sha256": canonical_json_digest(
+                    mutable_data_identity(before)
+                ),
+            }
+        )
+        postgres = marker.get("postgres_runtime_fence")
+        if (
+            isinstance(postgres, dict)
+            and after["database_system_identifier"]
+            != postgres.get("system_identifier")
+        ):
+            raise PullDeployError(
+                "post-deploy mutable-data audit selected another PostgreSQL cluster"
+            )
+        self._advance(
+            marker,
+            str(marker["phase"]),
+            mutable_data_after=after,
+        )
+        return pair
 
     def _git(
         self, *arguments: str, check: bool = True
@@ -6140,6 +7061,32 @@ class PullDeployController:
         if self.remote_main() != authority_sha:
             raise PullDeployError("bridge authority changed during verification")
         try:
+            target_manifest_payload = self._git_show(
+                target_sha, "backend/migrations/postgres/manifest.json"
+            )
+            authority_manifest_payload = self._git_show(
+                authority_sha, "backend/migrations/postgres/manifest.json"
+            )
+            target_manifest = json.loads(target_manifest_payload)
+            authority_manifest = json.loads(authority_manifest_payload)
+            if (
+                not isinstance(target_manifest, dict)
+                or set(target_manifest) != {"schema_version", "migrations"}
+                or target_manifest.get("schema_version") != 2
+                or not isinstance(authority_manifest, dict)
+                or set(authority_manifest) != {"schema_version", "migrations"}
+                or authority_manifest.get("schema_version") != 2
+            ):
+                raise PullDeployError(
+                    "bridge migration manifests are not canonical schema V2"
+                )
+            migration_registry = _bridge_core.validate_migration_registry(
+                policy,
+                target_manifest_sha256=sha256_bytes(target_manifest_payload),
+                target_records=target_manifest["migrations"],
+                authority_manifest_sha256=sha256_bytes(authority_manifest_payload),
+                authority_records=authority_manifest["migrations"],
+            )
             relation = _bridge_core.validate_relation(
                 policy,
                 authority_sha=authority_sha,
@@ -6158,6 +7105,185 @@ class PullDeployController:
             "policy": policy,
             "policy_sha256": _bridge_core.canonical_json_digest(policy),
             "relation": relation,
+            "migration_registry": migration_registry,
+        }
+
+    def materialize_prefetched_bridge_relation(
+        self,
+        ready: dict[str, Any],
+        *,
+        create_target_ref: bool,
+    ) -> dict[str, Any]:
+        """Import and validate exact F/B objects from the sealed local bundle."""
+
+        try:
+            ready = _prefetch_evidence.validate_ready_evidence(
+                ready,
+                runtime_root=self.runtime_root,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "maintenance prefetch evidence cannot materialize F/B"
+            ) from exc
+        operation_id = ready["operation_id"]
+        authority = ready["source"]["authority"]
+        target = ready["source"]["target"]
+        bundle = Path(ready["git_bundle"]["path"])
+        authority_ref = f"refs/nexpoly/prefetch/{operation_id}/authority"
+        self._git(
+            "fetch",
+            "--no-tags",
+            str(bundle),
+            f"+refs/heads/main:{authority_ref}",
+        )
+        imported = require_sha(
+            str(self._git("rev-parse", authority_ref).stdout).strip(),
+            "prefetched authority ref",
+        )
+        if imported != authority["sha"]:
+            raise PullDeployError(
+                "prefetched bundle materialized another F authority"
+            )
+        authority_tree = require_sha(
+            str(
+                self._git(
+                    "rev-parse", f"{authority['sha']}^{{tree}}"
+                ).stdout
+            ).strip(),
+            "prefetched authority tree",
+        )
+        target_tree = require_sha(
+            str(
+                self._git("rev-parse", f"{target['sha']}^{{tree}}").stdout
+            ).strip(),
+            "prefetched bridge target tree",
+        )
+        if (
+            authority_tree != authority["tree"]
+            or target_tree != target["tree"]
+            or str(
+                self._git("cat-file", "-t", target["sha"]).stdout
+            ).strip()
+            != "commit"
+            or self._git(
+                "merge-base",
+                "--is-ancestor",
+                target["sha"],
+                authority["sha"],
+                check=False,
+            ).returncode
+            != 0
+            or self._git(
+                "merge-base",
+                "--is-ancestor",
+                "HEAD",
+                target["sha"],
+                check=False,
+            ).returncode
+            != 0
+        ):
+            raise PullDeployError(
+                "prefetched F/B Git ancestry or tree differs"
+            )
+        try:
+            policy = _bridge_core.parse_policy(
+                self._git_show(
+                    authority["sha"],
+                    _bridge_core.POLICY_RELATIVE_PATH,
+                )
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "prefetched F policy is invalid"
+            ) from exc
+        if (
+            policy != ready["policy"]
+            or canonical_json_digest(policy) != ready["policy_sha256"]
+        ):
+            raise PullDeployError(
+                "prefetched F policy differs from Git authority"
+            )
+        target_ref = policy["target_ref"]
+        existing = self._git(
+            "show-ref",
+            "--verify",
+            "--hash",
+            target_ref,
+            check=False,
+        )
+        if existing.returncode not in {0, 1}:
+            raise PullDeployError(
+                "cannot inspect exact prefetched bridge target ref"
+            )
+        if existing.returncode == 0:
+            if require_sha(
+                str(existing.stdout).strip(),
+                "prefetched bridge target ref",
+            ) != target["sha"]:
+                raise PullDeployError(
+                    "exact prefetched bridge target ref was repointed"
+                )
+        elif create_target_ref:
+            self._git(
+                "update-ref",
+                target_ref,
+                target["sha"],
+                "0" * 40,
+            )
+        try:
+            target_manifest_payload = self._git_show(
+                target["sha"],
+                "backend/migrations/postgres/manifest.json",
+            )
+            authority_manifest_payload = self._git_show(
+                authority["sha"],
+                "backend/migrations/postgres/manifest.json",
+            )
+            target_manifest = json.loads(target_manifest_payload)
+            authority_manifest = json.loads(authority_manifest_payload)
+            if (
+                not isinstance(target_manifest, dict)
+                or set(target_manifest)
+                != {"schema_version", "migrations"}
+                or target_manifest.get("schema_version") != 2
+                or not isinstance(authority_manifest, dict)
+                or set(authority_manifest)
+                != {"schema_version", "migrations"}
+                or authority_manifest.get("schema_version") != 2
+            ):
+                raise PullDeployError(
+                    "prefetched migration manifests are not schema V2"
+                )
+            migration_registry = _bridge_core.validate_migration_registry(
+                policy,
+                target_manifest_sha256=sha256_bytes(
+                    target_manifest_payload
+                ),
+                target_records=target_manifest["migrations"],
+                authority_manifest_sha256=sha256_bytes(
+                    authority_manifest_payload
+                ),
+                authority_records=authority_manifest["migrations"],
+            )
+            relation = _bridge_core.validate_relation(
+                policy,
+                authority_sha=authority["sha"],
+                authority_tree=authority["tree"],
+                remote_main=authority["sha"],
+                target_sha=target["sha"],
+                target_tree=target["tree"],
+                target_ref=target_ref,
+                is_ancestor=True,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "prefetched F/B policy relation differs"
+            ) from exc
+        return {
+            "policy": policy,
+            "policy_sha256": canonical_json_digest(policy),
+            "relation": relation,
+            "migration_registry": migration_registry,
         }
 
     def _git_show(self, target_sha: str, relative: str) -> bytes:
@@ -7544,15 +8670,270 @@ class PullDeployController:
             "ignored_runtime_entries": self.ignored_runtime_entries(),
         }
 
+    def completed_legacy_takeover_evidence(
+        self,
+        *,
+        authority_sha: str,
+        authority_tree: str,
+        expected_repository: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Re-prove the installed exact takeover and Bootstrap binding."""
+
+        try:
+            bootstrap = _control_runtime._validate_bootstrap_authority(
+                self.runtime_root
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "completed Bootstrap authority is unavailable"
+            ) from exc
+        sealed = validate_legacy_takeover_binding(
+            bootstrap.get("legacy_takeover")
+        )
+        if (
+            bootstrap.get("source_sha") != authority_sha
+            or bootstrap.get("source_tree") != authority_tree
+            or sealed["authority_sha"] != authority_sha
+            or sealed["authority_tree"] != authority_tree
+        ):
+            raise PullDeployError(
+                "Bootstrap and legacy takeover are not the exact F authority"
+            )
+        if expected_repository is not None and (
+            sealed["git_identity"]["head_sha"]
+            != expected_repository.get("sha")
+            or sealed["git_identity"]["head_tree"]
+            != expected_repository.get("tree")
+        ):
+            raise PullDeployError(
+                "legacy takeover belongs to another production Git identity"
+            )
+        try:
+            current = _legacy_takeover_evidence.validate_completed(
+                self.runtime_root,
+                sealed["operation_id"],
+                authority_sha,
+                authority_tree,
+                expected_git_identity=sealed["git_identity"],
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "legacy takeover installation or completed evidence changed"
+            ) from exc
+        validated = validate_legacy_takeover_binding(current)
+        if validated != sealed:
+            raise PullDeployError(
+                "legacy takeover differs from Bootstrap authority"
+            )
+        return validated
+
+    def maintenance_prefetch_evidence(
+        self,
+        operation_id: str,
+        *,
+        authority_sha: str,
+        authority_tree: str | None,
+        target_sha: str | None = None,
+        target_tree: str | None = None,
+        policy_sha256: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Validate and compact one complete local-only prefetch authority."""
+
+        operation_id = str(operation_id)
+        ready_path = (
+            self.runtime_root / "prefetch" / operation_id / "ready.json"
+        )
+        try:
+            ready = _prefetch_evidence.validate_ready_evidence(
+                load_private_json(ready_path),
+                runtime_root=self.runtime_root,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "complete maintenance prefetch evidence is required"
+            ) from exc
+        source = ready["source"]
+        if (
+            source["authority"]["sha"] != authority_sha
+            or authority_tree is not None
+            and source["authority"]["tree"] != authority_tree
+            or target_sha is not None
+            and source["target"]["sha"] != target_sha
+            or target_tree is not None
+            and source["target"]["tree"] != target_tree
+            or policy_sha256 is not None
+            and ready["policy_sha256"] != policy_sha256
+        ):
+            raise PullDeployError(
+                "maintenance prefetch belongs to another F/B policy"
+            )
+        binding: dict[str, Any] = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "ready_path": str(ready_path),
+            "ready_sha256": sha256_file(ready_path),
+            "identity_sha256": ready["identity_sha256"],
+            "source": source,
+            "source_readiness_sha256": ready[
+                "source_readiness_sha256"
+            ],
+            "policy_sha256": ready["policy_sha256"],
+            "docker_config_sha256": ready["docker_config"][
+                "config_sha256"
+            ],
+            "git_bundle_sha256": ready["git_bundle"]["sha256"],
+            "images_sha256": canonical_json_digest(ready["images"]),
+            "wheel_caches_sha256": canonical_json_digest(
+                ready["wheel_caches"]
+            ),
+            "asset_manifest_sha256": ready["asset"]["manifest_sha256"],
+            "asset_inventory_sha256": ready["asset"]["inventory_sha256"],
+            "recovery_tools_sha256": canonical_json_digest(
+                ready["recovery_tools"]
+            ),
+        }
+        binding["binding_sha256"] = canonical_json_digest(binding)
+        return ready, validate_prefetch_binding(binding)
+
+    def _revalidate_bridge_external_authorities(
+        self,
+        descriptor: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        bridge = descriptor["bridge"]
+        takeover = self.completed_legacy_takeover_evidence(
+            authority_sha=bridge["authority"]["sha"],
+            authority_tree=bridge["authority"]["tree"],
+            expected_repository={
+                "sha": descriptor["repository"]["previous_sha"],
+                "tree": descriptor["repository"]["previous_tree"],
+            },
+        )
+        ready, prefetch = self.maintenance_prefetch_evidence(
+            descriptor["prefetch"]["operation_id"],
+            authority_sha=bridge["authority"]["sha"],
+            authority_tree=bridge["authority"]["tree"],
+            target_sha=bridge["target"]["sha"],
+            target_tree=bridge["target"]["tree"],
+            policy_sha256=bridge["policy_sha256"],
+        )
+        if (
+            takeover != descriptor["legacy_takeover"]
+            or prefetch != descriptor["prefetch"]
+        ):
+            raise PullDeployError(
+                "takeover or maintenance prefetch authority changed"
+            )
+        return ready, takeover
+
+    def bootstrap_ci_evidence(
+        self,
+        *,
+        authority_sha: str,
+        required_jobs: Iterable[str],
+    ) -> dict[str, Any]:
+        """Consume CI evidence sealed by Bootstrap before legacy takeover."""
+
+        try:
+            bootstrap = _control_runtime._validate_bootstrap_authority(
+                self.runtime_root
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "Bootstrap CI authority is unavailable"
+            ) from exc
+        delivery = bootstrap.get("delivery_gate")
+        ci = delivery.get("ci") if isinstance(delivery, dict) else None
+        required = set(required_jobs)
+        if (
+            not isinstance(ci, dict)
+            or ci.get("head_sha") != authority_sha
+            or ci.get("head_branch") != "main"
+            or ci.get("event") != "push"
+            or ci.get("path") != ".github/workflows/ci.yml"
+            or ci.get("conclusion") != "success"
+            or set(ci.get("required_jobs", [])) != required
+        ):
+            raise PullDeployError(
+                "Bootstrap did not seal the exact required F CI jobs"
+            )
+        return dict(ci)
+
+    def prefetched_application_images(
+        self,
+        ready: dict[str, Any],
+        *,
+        target_sha: str,
+    ) -> dict[str, dict[str, str]]:
+        """Project local prefetch records into Pull image evidence."""
+
+        records: dict[str, dict[str, str]] = {}
+        for role, root in (
+            ("backend", BACKEND_TAG_ROOT),
+            ("web", WEB_TAG_ROOT),
+        ):
+            prefetched = ready["images"]["target"][role]
+            records[role] = {
+                "tag": f"{root}:sha-{target_sha}",
+                "digest_ref": prefetched["digest_ref"],
+                "image_id": prefetched["local_image_id"],
+                "revision": target_sha,
+                "source": SOURCE_URL,
+                "version": f"sha-{target_sha}",
+            }
+        validate_image_records(records, source_sha=target_sha)
+        self._revalidate_materialized_images(
+            records,
+            source_sha=target_sha,
+            pull=False,
+        )
+        return records
+
+    def prefetched_postgres_restore_image(
+        self,
+        ready: dict[str, Any],
+    ) -> dict[str, str]:
+        record = ready["images"]["postgres_restore"]
+        if record["digest_ref"] != POSTGRES16_IMAGE:
+            raise PullDeployError(
+                "prefetched PostgreSQL restore image differs"
+            )
+        result = self.runner.run(
+            ["docker", "image", "inspect", POSTGRES16_IMAGE],
+            env=self.control_environment(),
+        )
+        try:
+            values = json.loads(str(result.stdout))
+            image = values[0]
+        except (json.JSONDecodeError, IndexError, TypeError) as exc:
+            raise PullDeployError(
+                "prefetched PostgreSQL image is unavailable"
+            ) from exc
+        if (
+            len(values) != 1
+            or image.get("Id") != record["local_image_id"]
+            or POSTGRES16_IMAGE not in image.get("RepoDigests", [])
+        ):
+            raise PullDeployError(
+                "prefetched PostgreSQL image material changed"
+            )
+        return {
+            "digest_ref": POSTGRES16_IMAGE,
+            "image_id": record["local_image_id"],
+        }
+
     def bridge_plan(
-        self, *, authority_sha: str, operation_id: str
+        self,
+        *,
+        authority_sha: str,
+        operation_id: str,
+        prefetch_operation_id: str,
     ) -> dict[str, Any]:
         """Read-only plan for F-authorized deployment of the exact ancestor B."""
 
         self.ensure_roots(mutating=False)
         authority_sha = require_sha(authority_sha, "bridge authority SHA")
         operation_id = require_operation_id(operation_id)
-        self._require_no_contract_maintenance()
+        self._require_no_contract_maintenance(require_alias_completed=False)
         if self.marker_path.exists() or self.marker_path.is_symlink():
             raise PullDeployError(
                 "an interrupted deployment must be recovered before planning"
@@ -7567,23 +8948,37 @@ class PullDeployController:
                 "active Worker slot exists before first governed takeover"
             )
         production_config = self.production_config_evidence(check_free_space=True)
-        self._github_token()
         helpers = self.stable_helper_evidence()
         active_control = self.active_control_evidence()
-        relation = self.bridge_policy_relation(
-            authority_sha,
-            create_target_ref=False,
-            fetch_authority=False,
+        ready, prefetch = self.maintenance_prefetch_evidence(
+            prefetch_operation_id,
+            authority_sha=authority_sha,
+            authority_tree=None,
+        )
+        authority_tree = ready["source"]["authority"]["tree"]
+        target_sha = ready["source"]["target"]["sha"]
+        target_tree = ready["source"]["target"]["tree"]
+        policy = ready["policy"]
+        if (
+            policy["target_sha"] != target_sha
+            or policy["target_tree"] != target_tree
+        ):
+            raise PullDeployError(
+                "maintenance prefetch target differs from F policy"
+            )
+        current = self.repository_identity(require_ssh_origin=True)
+        takeover = self.completed_legacy_takeover_evidence(
+            authority_sha=authority_sha,
+            authority_tree=authority_tree,
+            expected_repository=current,
         )
         if (
             active_control["source_sha"] != authority_sha
-            or active_control["source_tree"]
-            != relation["relation"]["authority_tree"]
+            or active_control["source_tree"] != authority_tree
         ):
             raise PullDeployError(
                 "active bootstrap controls are not the bridge authority"
             )
-        current = self.repository_identity()
         return {
             "action": "bridge-plan",
             "apply": False,
@@ -7591,11 +8986,13 @@ class PullDeployController:
             "production_root": str(self.production_root),
             "runtime_root": str(self.runtime_root),
             "authority_sha": authority_sha,
-            "authority_tree": relation["relation"]["authority_tree"],
-            "target_sha": relation["policy"]["target_sha"],
-            "target_tree": relation["policy"]["target_tree"],
-            "target_ref": relation["policy"]["target_ref"],
-            "policy_id": relation["policy"]["policy_id"],
+            "authority_tree": authority_tree,
+            "target_sha": target_sha,
+            "target_tree": target_tree,
+            "target_ref": policy["target_ref"],
+            "policy_id": policy["policy_id"],
+            "prefetch": prefetch,
+            "legacy_takeover": takeover,
             "previous_sha": current["sha"],
             "previous_tree": current["tree"],
             "deploy_origin_ready": current["origin"] == REPOSITORY_SSH_URL,
@@ -7619,12 +9016,22 @@ class PullDeployController:
     ) -> dict[str, Any]:
         if (
             not isinstance(backup, dict)
-            or set(backup) != {"path", "sha256", "restore_verification"}
+            or set(backup)
+            != {
+                "path",
+                "sha256",
+                "restore_verification",
+                "mutable_data_before_sha256",
+            }
             or not isinstance(backup.get("path"), str)
             or not isinstance(backup.get("restore_verification"), dict)
         ):
             raise PullDeployError("database backup evidence has an invalid shape")
         digest = require_digest(backup.get("sha256"), "database backup digest")
+        require_digest(
+            backup.get("mutable_data_before_sha256"),
+            "database backup mutable-data identity",
+        )
         path = Path(backup["path"])
         if not path.is_absolute():
             raise PullDeployError("database backup path must be absolute")
@@ -7669,6 +9076,7 @@ class PullDeployController:
                 if isinstance(item, dict)
             ],
             descriptor["migrations"].get("records"),
+            accepted_ledgers=descriptor_accepted_ledgers(descriptor),
         )
         return dict(backup)
 
@@ -7928,12 +9336,16 @@ class PullDeployController:
         )
 
     def _handoff_prepare_to_bridge_controller(
-        self, *, authority_sha: str, operation_id: str
+        self,
+        *,
+        authority_sha: str,
+        operation_id: str,
+        prefetch_operation_id: str,
     ) -> None:
         """Let active F derive B, install B controls, then exec B to prepare."""
 
         with self.deployment_lock():
-            self._require_no_contract_maintenance()
+            self._require_no_contract_maintenance(require_alias_completed=False)
             if self.marker_path.exists() or self.marker_path.is_symlink():
                 raise PullDeployError(
                     "an interrupted deployment must be recovered before prepare"
@@ -7949,13 +9361,24 @@ class PullDeployController:
                     "historical bridge is restricted to first governed takeover"
                 )
             current = self.repository_identity(require_ssh_origin=True)
-            relation = self.bridge_policy_relation(
-                authority_sha,
+            prefetch_ready, prefetch_binding = (
+                self.maintenance_prefetch_evidence(
+                    prefetch_operation_id,
+                    authority_sha=authority_sha,
+                    authority_tree=None,
+                )
+            )
+            relation = self.materialize_prefetched_bridge_relation(
+                prefetch_ready,
                 create_target_ref=True,
-                fetch_authority=True,
             )
             target_sha = relation["policy"]["target_sha"]
             target_tree = relation["policy"]["target_tree"]
+            takeover = self.completed_legacy_takeover_evidence(
+                authority_sha=authority_sha,
+                authority_tree=relation["relation"]["authority_tree"],
+                expected_repository=current,
+            )
             previous_active = self.active_control_evidence()
             if (
                 previous_active["source_sha"] != authority_sha
@@ -7993,6 +9416,10 @@ class PullDeployController:
                     or record.get("policy_id") != relation["policy"]["policy_id"]
                     or record.get("policy_sha256")
                     != relation["policy_sha256"]
+                    or record.get("prefetch_operation_id")
+                    != prefetch_operation_id
+                    or record.get("prefetch") != prefetch_binding
+                    or record.get("legacy_takeover") != takeover
                     or record.get("previous_active_control") != previous_active
                     or canonical_json_digest(record.get("previous_active_control"))
                     != record.get("previous_active_control_sha256")
@@ -8020,6 +9447,9 @@ class PullDeployController:
                     "target_ref": relation["policy"]["target_ref"],
                     "policy_id": relation["policy"]["policy_id"],
                     "policy_sha256": relation["policy_sha256"],
+                    "prefetch_operation_id": prefetch_operation_id,
+                    "prefetch": prefetch_binding,
+                    "legacy_takeover": takeover,
                     "previous_active_control": previous_active,
                     "previous_active_control_sha256": canonical_json_digest(
                         previous_active
@@ -8057,6 +9487,7 @@ class PullDeployController:
                 "NEXPOLY_PREPARE_HANDOFF_OPERATION": operation_id,
                 "NEXPOLY_PREPARE_HANDOFF_SHA256": handoff_digest,
                 "NEXPOLY_BRIDGE_AUTHORITY_SHA": authority_sha,
+                "NEXPOLY_PREFETCH_OPERATION_ID": prefetch_operation_id,
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
         )
@@ -8072,21 +9503,31 @@ class PullDeployController:
                 authority_sha,
                 "--operation-id",
                 operation_id,
+                "--prefetch-operation-id",
+                prefetch_operation_id,
             ],
             environment,
         )
 
     def _validate_bridge_prepare_handoff(
-        self, *, authority_sha: str, operation_id: str
+        self,
+        *,
+        authority_sha: str,
+        operation_id: str,
+        prefetch_operation_id: str,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Have B independently re-fetch and re-prove F's exact policy."""
+        """Have B independently re-prove F/B from the sealed local bundle."""
 
         handoff_operation = os.environ.get("NEXPOLY_PREPARE_HANDOFF_OPERATION")
         handoff_digest = os.environ.get("NEXPOLY_PREPARE_HANDOFF_SHA256")
         environment_authority = os.environ.get("NEXPOLY_BRIDGE_AUTHORITY_SHA")
+        environment_prefetch = os.environ.get(
+            "NEXPOLY_PREFETCH_OPERATION_ID"
+        )
         if (
             handoff_operation != operation_id
             or environment_authority != authority_sha
+            or environment_prefetch != prefetch_operation_id
             or not isinstance(handoff_digest, str)
         ):
             raise PullDeployError("bridge prepare lacks a selector-sealed handoff")
@@ -8107,6 +9548,9 @@ class PullDeployController:
             "target_ref",
             "policy_id",
             "policy_sha256",
+            "prefetch_operation_id",
+            "prefetch",
+            "legacy_takeover",
             "previous_active_control",
             "previous_active_control_sha256",
             "executor_control",
@@ -8119,16 +9563,31 @@ class PullDeployController:
             or record.get("protocol_version") != _control_runtime.PROTOCOL_VERSION
             or record.get("operation_id") != operation_id
             or record.get("authority_sha") != authority_sha
+            or record.get("prefetch_operation_id")
+            != prefetch_operation_id
             or canonical_json_digest(record.get("executor_control"))
             != record.get("executor_control_sha256")
             or canonical_json_digest(record.get("previous_active_control"))
             != record.get("previous_active_control_sha256")
         ):
             raise PullDeployError("bridge prepare handoff identity is invalid")
-        relation = self.bridge_policy_relation(
-            authority_sha,
+        ready, prefetch = self.maintenance_prefetch_evidence(
+            prefetch_operation_id,
+            authority_sha=authority_sha,
+            authority_tree=record["authority_tree"],
+            target_sha=record["target_sha"],
+            target_tree=record["target_tree"],
+            policy_sha256=record["policy_sha256"],
+        )
+        relation = self.materialize_prefetched_bridge_relation(
+            ready,
             create_target_ref=True,
-            fetch_authority=True,
+        )
+        current = self.repository_identity(require_ssh_origin=True)
+        takeover = self.completed_legacy_takeover_evidence(
+            authority_sha=authority_sha,
+            authority_tree=record["authority_tree"],
+            expected_repository=current,
         )
         if (
             record["authority_tree"] != relation["relation"]["authority_tree"]
@@ -8137,6 +9596,8 @@ class PullDeployController:
             or record["target_ref"] != relation["policy"]["target_ref"]
             or record["policy_id"] != relation["policy"]["policy_id"]
             or record["policy_sha256"] != relation["policy_sha256"]
+            or record["prefetch"] != prefetch
+            or record["legacy_takeover"] != takeover
         ):
             raise PullDeployError(
                 "bridge policy changed across the target-controller handoff"
@@ -8233,11 +9694,15 @@ class PullDeployController:
         target_sha: str | None,
         operation_id: str,
         bridge_authority_sha: str | None = None,
+        prefetch_operation_id: str | None = None,
     ) -> dict[str, Any]:
         self.ensure_roots(mutating=True)
         operation_id = require_operation_id(operation_id)
         bridge_relation: dict[str, Any] | None = None
         bridge_handoff: dict[str, Any] | None = None
+        bridge_prefetch_ready: dict[str, Any] | None = None
+        bridge_prefetch_binding: dict[str, Any] | None = None
+        bridge_takeover_binding: dict[str, Any] | None = None
         if bridge_authority_sha is not None:
             authority_sha = require_sha(
                 bridge_authority_sha, "bridge authority SHA"
@@ -8246,10 +9711,15 @@ class PullDeployController:
                 raise PullDeployError(
                     "bridge target is derived from policy, not caller input"
                 )
+            if prefetch_operation_id is None:
+                raise PullDeployError(
+                    "bridge prepare requires exact maintenance prefetch evidence"
+                )
             if not self.apply_enabled:
                 return self.bridge_plan(
                     authority_sha=authority_sha,
                     operation_id=operation_id,
+                    prefetch_operation_id=prefetch_operation_id,
                 )
             if (
                 not self.test_root_mode
@@ -8258,6 +9728,7 @@ class PullDeployController:
                 self._handoff_prepare_to_bridge_controller(
                     authority_sha=authority_sha,
                     operation_id=operation_id,
+                    prefetch_operation_id=prefetch_operation_id,
                 )
                 raise PullDeployError(
                     "bridge target controller prepare handoff returned unexpectedly"
@@ -8267,13 +9738,28 @@ class PullDeployController:
                     self._validate_bridge_prepare_handoff(
                         authority_sha=authority_sha,
                         operation_id=operation_id,
+                        prefetch_operation_id=prefetch_operation_id,
+                    )
+                )
+                bridge_prefetch_binding = validate_prefetch_binding(
+                    bridge_handoff["prefetch"]
+                )
+                bridge_takeover_binding = (
+                    validate_legacy_takeover_binding(
+                        bridge_handoff["legacy_takeover"]
                     )
                 )
             else:
-                bridge_relation = self.bridge_policy_relation(
-                    authority_sha,
+                bridge_prefetch_ready, bridge_prefetch_binding = (
+                    self.maintenance_prefetch_evidence(
+                        prefetch_operation_id,
+                        authority_sha=authority_sha,
+                        authority_tree=None,
+                    )
+                )
+                bridge_relation = self.materialize_prefetched_bridge_relation(
+                    bridge_prefetch_ready,
                     create_target_ref=True,
-                    fetch_authority=True,
                 )
             target_sha = require_sha(
                 bridge_relation["policy"]["target_sha"], "bridge target SHA"
@@ -8304,6 +9790,15 @@ class PullDeployController:
                     self._validate_bridge_prepare_handoff(
                         authority_sha=authority_sha,
                         operation_id=operation_id,
+                        prefetch_operation_id=prefetch_operation_id,
+                    )
+                )
+                bridge_prefetch_binding = validate_prefetch_binding(
+                    bridge_handoff["prefetch"]
+                )
+                bridge_takeover_binding = (
+                    validate_legacy_takeover_binding(
+                        bridge_handoff["legacy_takeover"]
                     )
                 )
             elif handoff_record is not None:
@@ -8335,6 +9830,17 @@ class PullDeployController:
                 ):
                     raise PullDeployError(
                         "operation ID is already prepared for another bridge authority"
+                    )
+                if bridge_relation is not None:
+                    if (
+                        descriptor["prefetch"]["operation_id"]
+                        != prefetch_operation_id
+                    ):
+                        raise PullDeployError(
+                            "operation is prepared for another prefetch authority"
+                        )
+                    self._revalidate_bridge_external_authorities(
+                        descriptor
                     )
                 return {"action": "prepare", "status": "already-ready", **ready}
             attempt = self._open_prepare_operation(
@@ -8404,11 +9910,50 @@ class PullDeployController:
                         "active controls differ from the production source identity"
                     )
                 if bridge_relation is not None:
-                    bridge_relation = self.bridge_policy_relation(
-                        authority_sha,
-                        create_target_ref=True,
-                        fetch_authority=True,
+                    (
+                        bridge_prefetch_ready,
+                        current_prefetch_binding,
+                    ) = self.maintenance_prefetch_evidence(
+                        prefetch_operation_id,
+                        authority_sha=authority_sha,
+                        authority_tree=bridge_relation["relation"][
+                            "authority_tree"
+                        ],
+                        target_sha=target_sha,
+                        target_tree=bridge_relation["policy"][
+                            "target_tree"
+                        ],
+                        policy_sha256=bridge_relation["policy_sha256"],
                     )
+                    bridge_relation = (
+                        self.materialize_prefetched_bridge_relation(
+                            bridge_prefetch_ready,
+                            create_target_ref=True,
+                        )
+                    )
+                    current_takeover_binding = (
+                        self.completed_legacy_takeover_evidence(
+                            authority_sha=authority_sha,
+                            authority_tree=bridge_relation["relation"][
+                                "authority_tree"
+                            ],
+                            expected_repository=current,
+                        )
+                    )
+                    if (
+                        bridge_prefetch_binding is not None
+                        and bridge_prefetch_binding
+                        != current_prefetch_binding
+                    ) or (
+                        bridge_takeover_binding is not None
+                        and bridge_takeover_binding
+                        != current_takeover_binding
+                    ):
+                        raise PullDeployError(
+                            "takeover or prefetch changed during bridge prepare"
+                        )
+                    bridge_prefetch_binding = current_prefetch_binding
+                    bridge_takeover_binding = current_takeover_binding
                     if target_sha != bridge_relation["policy"]["target_sha"]:
                         raise PullDeployError(
                             "bridge target changed during preparation"
@@ -8473,21 +10018,57 @@ class PullDeployController:
                 release_input["asset"] = self.asset_evidence(
                     release_input["asset_manifest_digest"]
                 )
-                ci = (
-                    self.ci_evidence(
-                        authority_sha,
+                if bridge_relation is not None:
+                    if (
+                        bridge_prefetch_ready is None
+                        or bridge_prefetch_binding is None
+                        or bridge_takeover_binding is None
+                    ):
+                        raise PullDeployError(
+                            "bridge prepare lost takeover or prefetch authority"
+                        )
+                    ci = self.bootstrap_ci_evidence(
+                        authority_sha=authority_sha,
                         required_jobs=bridge_relation["policy"][
                             "required_ci_jobs"
                         ],
                     )
-                    if bridge_relation is not None
-                    else self.ci_evidence(target_sha)
-                )
-                images = {
-                    "backend": self.image_evidence("backend", target_sha),
-                    "web": self.image_evidence("web", target_sha),
-                }
-                postgres_restore_image = self.postgres_restore_image_evidence()
+                    images = self.prefetched_application_images(
+                        bridge_prefetch_ready,
+                        target_sha=target_sha,
+                    )
+                    postgres_restore_image = (
+                        self.prefetched_postgres_restore_image(
+                            bridge_prefetch_ready
+                        )
+                    )
+                    target_wheels = [
+                        record
+                        for record in bridge_prefetch_ready[
+                            "wheel_caches"
+                        ]
+                        if record["source_sha"] == target_sha
+                    ]
+                    if (
+                        len(target_wheels) != 1
+                        or target_wheels[0]["source_tree"] != target_tree
+                        or target_wheels[0]["worker_lock_sha256"]
+                        != sha256_bytes(lock_payload)
+                    ):
+                        raise PullDeployError(
+                            "prefetched B wheel cache differs from source lock"
+                        )
+                else:
+                    ci = self.ci_evidence(target_sha)
+                    images = {
+                        "backend": self.image_evidence(
+                            "backend", target_sha
+                        ),
+                        "web": self.image_evidence("web", target_sha),
+                    }
+                    postgres_restore_image = (
+                        self.postgres_restore_image_evidence()
+                    )
                 worker_controls = self.prepare_worker_controls(
                     operation_id=operation_id,
                     target_sha=target_sha,
@@ -8583,6 +10164,7 @@ class PullDeployController:
                     "migrations": migrations,
                     "compose": compose,
                     "production_config": production_config,
+                    "mutable_data": self.mutable_data_contract(),
                     "monomer_md": {
                         "slot": slot_record["slot"],
                         "slot_record": slot_record,
@@ -8599,6 +10181,10 @@ class PullDeployController:
                 }
                 if bridge_descriptor is not None:
                     descriptor["bridge"] = bridge_descriptor
+                    descriptor["legacy_takeover"] = (
+                        bridge_takeover_binding
+                    )
+                    descriptor["prefetch"] = bridge_prefetch_binding
                 validate_descriptor(descriptor)
                 if descriptor_path.exists() or descriptor_path.is_symlink():
                     existing_descriptor = validate_descriptor(
@@ -8905,13 +10491,49 @@ class PullDeployController:
             allow_unfenced=allow_unfenced,
         )
         if recovery["runtime_state"] == "stopped":
+            self._persist_stopped_postgres_runtime_fence(marker, descriptor)
             self._record_runtime_start_intent(marker, descriptor)
             self.lifecycle.start(self, descriptor)
         verification = self._persist_runtime_verification(
             marker, self.lifecycle.verify(self, descriptor)
         )
+        if marker.get("mutable_data_before") is not None:
+            self._bind_mutable_data_after(marker, descriptor)
         self.lifecycle.resume(self, descriptor, verification)
         return verification
+
+    def _persist_stopped_postgres_runtime_fence(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Seal PostgreSQL identity before any stopped-runtime restart.
+
+        PostgreSQL remains live while application readers are stopped.  A
+        recovery that starts the application without first sealing that exact
+        container, image, volume, endpoint and system identifier could attach
+        the candidate to a replacement database after a crash.  Persist the
+        observation before recording start intent so a lost start response is
+        still fenced by durable evidence.
+        """
+
+        capture = getattr(self.lifecycle, "postgres_runtime_identity", None)
+        if not callable(capture):
+            raise PullDeployError(
+                "stopped runtime recovery cannot fence PostgreSQL identity"
+            )
+        observed = validate_postgres_runtime_fence(capture(self, descriptor))
+        existing = marker.get("postgres_runtime_fence")
+        if existing is not None and postgres_runtime_fence_identity(
+            existing
+        ) != postgres_runtime_fence_identity(observed):
+            raise PullDeployError(
+                "PostgreSQL identity changed before stopped runtime restart"
+            )
+        marker["postgres_runtime_fence"] = observed
+        marker["updated_at"] = utc_now()
+        self._write_marker(marker)
+        return observed
 
     def _recover_unchanged_and_resume(
         self,
@@ -8985,6 +10607,80 @@ class PullDeployController:
             marker["postgres_runtime_fence"] = fence
         self._write_marker(marker)
 
+    def _adopt_legacy_takeover_stop(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> None:
+        """Consume takeover's stop fence without draining or stopping again."""
+
+        self._revalidate_bridge_external_authorities(descriptor)
+        takeover = descriptor["legacy_takeover"]
+        try:
+            status = _legacy_takeover_evidence.load_status(
+                self.runtime_root,
+                takeover["operation_id"],
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "legacy takeover pre-stopped status is unavailable"
+            ) from exc
+        fence = status.get("pre_stopped_fence")
+        runtime = (
+            fence.get("runtime_fence")
+            if isinstance(fence, dict)
+            else None
+        )
+        if (
+            not isinstance(runtime, dict)
+            or status.get("apply_phase") != "complete"
+            or status.get("restore_phase") is not None
+            or status.get("active") is not False
+            or status.get("pre_stopped_fence_sha256")
+            != takeover["pre_stopped_fence_sha256"]
+            or runtime.get("readers_stopped") is not True
+            or runtime.get("postgres_running_untouched") is not True
+        ):
+            raise PullDeployError(
+                "legacy takeover did not leave an exact stopped reader fence"
+            )
+        capture = getattr(self.lifecycle, "postgres_runtime_identity", None)
+        if not callable(capture):
+            raise PullDeployError(
+                "takeover stop cannot capture PostgreSQL identity"
+            )
+        postgres = validate_postgres_runtime_fence(
+            capture(self, descriptor)
+        )
+        if (
+            runtime.get("postgres_container_id")
+            != postgres["container_id"]
+            or runtime.get("postgres_image_id") != postgres["image_id"]
+            or runtime.get("postgres_data_volume")
+            != postgres["data_volume"]["name"]
+            or runtime.get("postgres_system_identifier")
+            != postgres["system_identifier"]
+        ):
+            raise PullDeployError(
+                "PostgreSQL identity differs from legacy takeover stop fence"
+            )
+        marker["drain"] = {
+            "runtime_state": "stopped",
+            "ingress_isolated": True,
+            "source": "legacy-takeover",
+            "pre_stopped_fence_sha256": takeover[
+                "pre_stopped_fence_sha256"
+            ],
+        }
+        marker["postgres_runtime_fence"] = postgres
+        marker["takeover_pre_stopped_fence_sha256"] = takeover[
+            "pre_stopped_fence_sha256"
+        ]
+        marker["runtime_stopped"] = True
+        marker["phase"] = "runtime-stopped"
+        marker["updated_at"] = utc_now()
+        self._write_marker(marker)
+
     def _revalidate_previous_deployment_state(self, descriptor: dict[str, Any]) -> None:
         expected = descriptor.get("previous_deployment")
         expected_digest = descriptor.get("previous_deployment_sha256")
@@ -9031,6 +10727,8 @@ class PullDeployController:
             "production_config"
         ):
             raise PullDeployError("production configuration changed after prepare")
+        if self.mutable_data_contract() != descriptor.get("mutable_data"):
+            raise PullDeployError("mutable-data audit contract changed after prepare")
         self._revalidate_previous_deployment_state(descriptor)
         bridge = (
             descriptor["bridge"]
@@ -9079,10 +10777,12 @@ class PullDeployController:
         ):
             raise PullDeployError("production source changed after prepare")
         if bridge is not None:
-            relation = self.bridge_policy_relation(
-                bridge["authority"]["sha"],
+            prefetched, _takeover = (
+                self._revalidate_bridge_external_authorities(descriptor)
+            )
+            relation = self.materialize_prefetched_bridge_relation(
+                prefetched,
                 create_target_ref=True,
-                fetch_authority=True,
             )
             if (
                 relation["policy"] != bridge["policy"]
@@ -9099,8 +10799,8 @@ class PullDeployController:
                 raise PullDeployError(
                     "bridge F policy or exact B relation changed after prepare"
                 )
-            authority_ci = self.ci_evidence(
-                bridge["authority"]["sha"],
+            authority_ci = self.bootstrap_ci_evidence(
+                authority_sha=bridge["authority"]["sha"],
                 required_jobs=bridge["policy"]["required_ci_jobs"],
             )
             if (
@@ -9137,21 +10837,35 @@ class PullDeployController:
                 raise PullDeployError("prepared target tree changed")
             if self.ci_evidence(expected["target_sha"]) != descriptor["ci"]:
                 raise PullDeployError("target CI evidence changed after prepare")
-        for role in ("backend", "web"):
+        if bridge is not None:
             if (
-                self.image_evidence(role, expected["target_sha"])
-                != descriptor["images"][role]
+                self.prefetched_application_images(
+                    prefetched,
+                    target_sha=expected["target_sha"],
+                )
+                != descriptor["images"]
+                or self.prefetched_postgres_restore_image(prefetched)
+                != descriptor["postgres_restore_image"]
             ):
                 raise PullDeployError(
-                    f"sealed {role} image identity changed after prepare"
+                    "sealed local bridge image material changed after prepare"
                 )
-        if (
-            self.postgres_restore_image_evidence()
-            != descriptor["postgres_restore_image"]
-        ):
-            raise PullDeployError(
-                "sealed PostgreSQL restore image changed after prepare"
-            )
+        else:
+            for role in ("backend", "web"):
+                if (
+                    self.image_evidence(role, expected["target_sha"])
+                    != descriptor["images"][role]
+                ):
+                    raise PullDeployError(
+                        f"sealed {role} image identity changed after prepare"
+                    )
+            if (
+                self.postgres_restore_image_evidence()
+                != descriptor["postgres_restore_image"]
+            ):
+                raise PullDeployError(
+                    "sealed PostgreSQL restore image changed after prepare"
+                )
 
     def _switch_source(self, descriptor: dict[str, Any]) -> None:
         repository = descriptor["repository"]
@@ -9403,6 +11117,9 @@ class PullDeployController:
             "asset_manifest_digest"
         )
         projected["release_input"]["asset"] = asset
+        compatibility = previous.get("migration_compatibility")
+        if isinstance(compatibility, dict):
+            projected["_migration_compatibility"] = compatibility
         projected["monomer_md"] = {
             "slot": active["slot"],
             "slot_record": slot_record,
@@ -9441,6 +11158,20 @@ class PullDeployController:
         migrations = [dict(record) for record in history if isinstance(record, dict)]
         if len(migrations) != len(history):
             raise PullDeployError("deployment marker migration history is invalid")
+        migration_compatibility: dict[str, Any] | None = None
+        compatibility_authority: dict[str, Any] | None = None
+        if descriptor["schema_version"] == BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
+            compatibility_authority = descriptor["bridge"]["policy"]
+        elif isinstance(previous, dict) and isinstance(
+            previous.get("migration_compatibility"), dict
+        ):
+            compatibility_authority = previous["migration_compatibility"]
+        if compatibility_authority is not None:
+            migration_compatibility = build_migration_compatibility_state(
+                compatibility_authority,
+                code_manifest_sha256=descriptor["migrations"]["sha256"],
+                migrations=migrations,
+            )
         active = validate_active_slot_record(load_private_json(self.active_slot_path))
         active_control = self.active_control_evidence()
         if not self._active_matches_candidate(
@@ -9449,6 +11180,17 @@ class PullDeployController:
             raise PullDeployError(
                 "candidate control authority is not active at state commit"
             )
+        mutable_before = marker.get("mutable_data_before")
+        mutable_after = marker.get("mutable_data_after")
+        mutable_pair = validate_mutable_data_pair(
+            {
+                "before": mutable_before,
+                "after": mutable_after,
+                "identity_sha256": canonical_json_digest(
+                    mutable_data_identity(mutable_before)
+                ),
+            }
+        )
         return {
             "schema_version": 2,
             "status": "success",
@@ -9468,6 +11210,7 @@ class PullDeployController:
             "migration_epoch_barrier": barrier,
             "schema_compatibility_floor": floor,
             "last_contract_operation": last_contract_operation,
+            "migration_compatibility": migration_compatibility,
             "active_monomer_md_slot": active,
             "monomer_md_worker_env": descriptor["monomer_md"]["worker_env"],
             "monomer_md_systemd_unit": {
@@ -9484,6 +11227,7 @@ class PullDeployController:
             "active_control": active_control,
             "production_config": descriptor["production_config"],
             "database_backup": marker.get("database_backup"),
+            "mutable_data_audit": mutable_pair,
             "deployed_at": utc_now(),
         }
 
@@ -9732,6 +11476,12 @@ class PullDeployController:
             database_restored=True,
             database_restore=restored,
         )
+        restored_mutable = self._bind_mutable_data_after(marker, descriptor)
+        self._advance(
+            marker,
+            "database-restored",
+            mutable_data_restored=restored_mutable,
+        )
 
     def _reconcile_effect_commit_windows(
         self, descriptor: dict[str, Any], marker: dict[str, Any]
@@ -9863,6 +11613,16 @@ class PullDeployController:
         descriptor: dict[str, Any],
         marker: dict[str, Any],
     ) -> bool:
+        if (
+            descriptor.get("schema_version")
+            == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            and descriptor.get("previous_deployment") is None
+        ):
+            # The exact legacy runtime was already stopped by takeover before
+            # Pull began.  Even a failure in Pull's "prepared" phase must use
+            # the takeover restore state machine, never an in-place bootstrap
+            # resume path.
+            return False
         failed_phase = marker.get("failed_phase", marker.get("phase"))
         if not (
             marker.get("action") == "deploy"
@@ -10042,6 +11802,49 @@ class PullDeployController:
             allow_unfenced=marker.get("verification") is None,
         )
 
+    @staticmethod
+    def _explicit_rollback_state(
+        current: dict[str, Any],
+        previous: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Project B truthfully when the database retains exact F/0013."""
+
+        rollback_state = json.loads(json.dumps(previous))
+        if current.get("migrations") == previous.get("migrations"):
+            return rollback_state
+        previous_compatibility = previous.get("migration_compatibility")
+        current_compatibility = current.get("migration_compatibility")
+        if (
+            not isinstance(previous_compatibility, dict)
+            or not isinstance(current_compatibility, dict)
+            or previous_compatibility.get("policy_id")
+            != current_compatibility.get("policy_id")
+            or previous_compatibility.get("accepted_migration_ledgers")
+            != current_compatibility.get("accepted_migration_ledgers")
+            or current.get("migrations")
+            != [
+                *previous.get("migrations", []),
+                _bridge_core.FINAL_MIGRATION_RECORD,
+            ]
+            or current_compatibility.get("ledger_state", {}).get("name")
+            != "post-0013"
+        ):
+            raise PullDeployError(
+                "explicit rollback crosses migration histories without the exact 0013 compatibility registry"
+            )
+        rollback_state["migrations"] = json.loads(json.dumps(current["migrations"]))
+        rollback_state["migration_compatibility"] = (
+            build_migration_compatibility_state(
+                previous_compatibility,
+                code_manifest_sha256=previous_compatibility[
+                    "code_manifest_sha256"
+                ],
+                migrations=rollback_state["migrations"],
+            )
+        )
+        validate_current_deployment_state(rollback_state)
+        return rollback_state
+
     def _recover_explicit_rollback(
         self,
         descriptor: dict[str, Any],
@@ -10066,7 +11869,26 @@ class PullDeployController:
             and current.get("source_sha") == descriptor["repository"]["target_sha"]
             and current.get("descriptor_sha256") == descriptor_digest
         )
-        current_is_previous = file_digest == previous_digest and current == previous
+        base_rollback_state = self._explicit_rollback_state(current, previous)
+        sealed_rollback_state = marker.get("rollback_candidate_state")
+        sealed_rollback_digest = marker.get("rollback_candidate_state_sha256")
+        rollback_state = (
+            sealed_rollback_state
+            if isinstance(sealed_rollback_state, dict)
+            else base_rollback_state
+        )
+        rollback_state_digest = (
+            require_digest(
+                sealed_rollback_digest,
+                "explicit rollback candidate-state digest",
+            )
+            if sealed_rollback_state is not None
+            else sha256_bytes(canonical_json_bytes(rollback_state) + b"\n")
+        )
+        current_is_previous = (
+            file_digest in {previous_digest, rollback_state_digest}
+            and (current == previous or current == rollback_state)
+        )
         if not current_is_candidate and not current_is_previous:
             raise PullDeployError(
                 "explicit rollback current state is neither sealed candidate nor previous"
@@ -10086,7 +11908,7 @@ class PullDeployController:
             )
             self.marker_path.unlink()
             fsync_directory(self.marker_path.parent)
-            return previous
+            return current
         self._reconcile_effect_commit_windows(descriptor, marker)
         candidate_effects = all(
             marker.get(name) is True
@@ -10167,6 +11989,7 @@ class PullDeployController:
         marker["runtime_stopped"] = True
         marker["updated_at"] = utc_now()
         self._write_marker(marker)
+        mutable_before = self._bind_mutable_data_before(marker, descriptor)
         rollback_backup = marker.get("rollback_backup")
         if rollback_backup is None:
             if current_is_previous:
@@ -10177,6 +12000,9 @@ class PullDeployController:
                 self,
                 descriptor,
                 marker["rollback_backup_operation_id"],
+            )
+            rollback_backup["mutable_data_before_sha256"] = (
+                canonical_json_digest(mutable_data_identity(mutable_before))
             )
             marker["rollback_backup"] = rollback_backup
             self._write_marker(marker)
@@ -10212,12 +12038,43 @@ class PullDeployController:
                 "explicit rollback recovery did not restore every governed effect"
             )
         previous_descriptor = self._previous_runtime_descriptor(descriptor)
-        atomic_json(self.current_state_path, previous)
-        self._recover_runtime_and_resume(
+        recovery = self._prepare_runtime_recovery(
             marker,
             previous_descriptor,
             allow_unfenced=marker.get("verification") is None,
         )
+        if recovery["runtime_state"] == "stopped":
+            self._persist_stopped_postgres_runtime_fence(
+                marker, previous_descriptor
+            )
+            self._record_runtime_start_intent(marker, previous_descriptor)
+            self.lifecycle.start(self, previous_descriptor)
+        verification = self._persist_runtime_verification(
+            marker,
+            self.lifecycle.verify(self, previous_descriptor),
+        )
+        rollback_mutable = self._bind_mutable_data_after(
+            marker, previous_descriptor
+        )
+        rollback_state["database_backup"] = rollback_backup
+        rollback_state["mutable_data_audit"] = rollback_mutable
+        rollback_state["deployed_at"] = utc_now()
+        validate_current_deployment_state(rollback_state)
+        rollback_state_digest = sha256_bytes(
+            canonical_json_bytes(rollback_state) + b"\n"
+        )
+        self._advance(
+            marker,
+            str(marker["phase"]),
+            rollback_candidate_state=rollback_state,
+            rollback_candidate_state_sha256=rollback_state_digest,
+        )
+        atomic_json(self.current_state_path, rollback_state)
+        if sha256_file(self.current_state_path) != rollback_state_digest:
+            raise PullDeployError(
+                "recovered explicit rollback state did not commit exactly"
+            )
+        self.lifecycle.resume(self, previous_descriptor, verification)
         self._advance(marker, "explicit-rollback-recovered")
         self._audit_attempt(marker, "recovered-explicit-rollback")
         self._record_operation_outcome(
@@ -10227,7 +12084,7 @@ class PullDeployController:
         )
         self.marker_path.unlink()
         fsync_directory(self.marker_path.parent)
-        return previous
+        return rollback_state
 
     def recover_interrupted(self) -> dict[str, Any] | None:
         if not self.marker_path.exists():
@@ -10391,24 +12248,47 @@ class PullDeployController:
             }
             self._write_marker(marker)
             try:
-                self._advance(marker, "drain-started")
-                drain = self.lifecycle.drain(self, descriptor)
-                self._advance(marker, "drained", drain=drain)
-                stop_recovery = self._prepare_runtime_recovery(
-                    marker,
-                    descriptor,
-                    allow_unfenced=True,
+                first_bridge = bool(
+                    descriptor["schema_version"]
+                    == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+                    and descriptor.get("previous_deployment") is None
                 )
-                self._advance(
-                    marker,
-                    "runtime-stop-started",
-                    drain=stop_recovery,
+                if first_bridge:
+                    self._adopt_legacy_takeover_stop(marker, descriptor)
+                else:
+                    self._advance(marker, "drain-started")
+                    drain = self.lifecycle.drain(self, descriptor)
+                    self._advance(marker, "drained", drain=drain)
+                    stop_recovery = self._prepare_runtime_recovery(
+                        marker,
+                        descriptor,
+                        allow_unfenced=True,
+                    )
+                    self._advance(
+                        marker,
+                        "runtime-stop-started",
+                        drain=stop_recovery,
+                    )
+                    if stop_recovery["runtime_state"] == "drained":
+                        self._stop_runtime(marker, descriptor)
+                    self._advance(
+                        marker,
+                        "runtime-stopped",
+                        runtime_stopped=True,
+                    )
+                mutable_before = self._bind_mutable_data_before(
+                    marker, descriptor
                 )
-                if stop_recovery["runtime_state"] == "drained":
-                    self._stop_runtime(marker, descriptor)
-                self._advance(marker, "runtime-stopped", runtime_stopped=True)
                 self._advance(marker, "backup-started")
                 backup = self.lifecycle.backup(self, descriptor)
+                backup["mutable_data_before_sha256"] = canonical_json_digest(
+                    mutable_data_identity(mutable_before)
+                )
+                backup = self._validate_database_backup(
+                    descriptor,
+                    backup,
+                    require_operation_backup=True,
+                )
                 self._advance(marker, "backup-verified", database_backup=backup)
                 self._revalidate_pre_switch(descriptor)
                 self._advance(marker, "asset-switch-started")
@@ -10462,6 +12342,7 @@ class PullDeployController:
                     self.lifecycle.verify(self, descriptor),
                     phase="verified",
                 )
+                self._bind_mutable_data_after(marker, descriptor)
                 state = self._current_state(descriptor, descriptor_digest, marker)
                 state_digest = sha256_bytes(canonical_json_bytes(state) + b"\n")
                 self._advance(
@@ -10639,10 +12520,7 @@ class PullDeployController:
                 raise PullDeployError(
                     "bootstrap rollback requires its dedicated maintenance hook"
                 )
-            if current.get("migrations") != previous.get("migrations"):
-                raise PullDeployError(
-                    "explicit rollback crosses migration histories without a reviewed down/forward-compatibility adapter"
-                )
+            rollback_state = self._explicit_rollback_state(current, previous)
             # Validate the complete old runtime projection before drain.  In
             # particular, a stable-control CAS upgrade deliberately closes
             # rollback to a state bound to older executable helpers.
@@ -10698,6 +12576,7 @@ class PullDeployController:
             self._advance(
                 marker, "explicit-rollback-runtime-stopped", runtime_stopped=True
             )
+            mutable_before = self._bind_mutable_data_before(marker, descriptor)
             # A fresh backup protects writes made after the original deploy.
             # It is evidence only: explicit rollback never restores the old
             # pre-deploy dump and therefore never discards post-deploy writes.
@@ -10706,6 +12585,9 @@ class PullDeployController:
                 descriptor,
                 marker["rollback_backup_operation_id"],
             )
+            marker["rollback_backup"][
+                "mutable_data_before_sha256"
+            ] = canonical_json_digest(mutable_data_identity(mutable_before))
             self._write_marker(marker)
             self._restore_source(descriptor)
             self._advance(
@@ -10732,7 +12614,27 @@ class PullDeployController:
             verification = self._persist_runtime_verification(
                 marker, self.lifecycle.verify(self, previous_descriptor)
             )
-            atomic_json(self.current_state_path, previous)
+            rollback_mutable = self._bind_mutable_data_after(
+                marker, previous_descriptor
+            )
+            rollback_state["database_backup"] = marker["rollback_backup"]
+            rollback_state["mutable_data_audit"] = rollback_mutable
+            rollback_state["deployed_at"] = utc_now()
+            validate_current_deployment_state(rollback_state)
+            rollback_state_digest = sha256_bytes(
+                canonical_json_bytes(rollback_state) + b"\n"
+            )
+            self._advance(
+                marker,
+                str(marker["phase"]),
+                rollback_candidate_state=rollback_state,
+                rollback_candidate_state_sha256=rollback_state_digest,
+            )
+            atomic_json(self.current_state_path, rollback_state)
+            if sha256_file(self.current_state_path) != rollback_state_digest:
+                raise PullDeployError(
+                    "explicit rollback current state did not commit exactly"
+                )
             self.lifecycle.resume(self, previous_descriptor, verification)
             self._advance(marker, "explicit-rollback-complete")
             self._audit_attempt(marker, "explicit-rollback")
@@ -10743,7 +12645,7 @@ class PullDeployController:
             )
             self.marker_path.unlink()
             fsync_directory(self.marker_path.parent)
-            return previous
+            return rollback_state
 
 
 def parser() -> argparse.ArgumentParser:
@@ -10753,10 +12655,14 @@ def parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name)
         command.add_argument("--sha", required=True)
         command.add_argument("--operation-id", required=True)
-    for name in ("bridge-plan", "bridge-prepare", "bridge-apply"):
+    for name in ("bridge-plan", "bridge-prepare"):
         command = commands.add_parser(name)
         command.add_argument("--authority-sha", required=True)
         command.add_argument("--operation-id", required=True)
+        command.add_argument("--prefetch-operation-id", required=True)
+    bridge_apply = commands.add_parser("bridge-apply")
+    bridge_apply.add_argument("--authority-sha", required=True)
+    bridge_apply.add_argument("--operation-id", required=True)
     rollback = commands.add_parser("rollback")
     rollback.add_argument("--operation-id", required=True)
     return result
@@ -10779,12 +12685,14 @@ def main(argv: list[str] | None = None) -> int:
             document = controller.bridge_plan(
                 authority_sha=args.authority_sha,
                 operation_id=args.operation_id,
+                prefetch_operation_id=args.prefetch_operation_id,
             )
         elif args.command == "bridge-prepare":
             document = controller.prepare(
                 target_sha=None,
                 operation_id=args.operation_id,
                 bridge_authority_sha=args.authority_sha,
+                prefetch_operation_id=args.prefetch_operation_id,
             )
         elif args.command == "bridge-apply":
             document = controller.apply_bridge(

@@ -3,24 +3,28 @@ set -euo pipefail
 umask 077
 
 production_root=/data/lzq/gith/nexpoly
-status_probe=/data/lzq/gith/nexpoly-runtime/config/bootstrap-legacy-runtime-status
+runtime_root=/data/lzq/gith/nexpoly-runtime
+status_probe="$runtime_root/config/bootstrap-legacy-runtime-status"
+validator="$runtime_root/legacy-takeover/bin/site_helper_contracts.py"
 : "${NEXPOLY_BOOTSTRAP_LEGACY_RUNTIME_SHA256:?set the audited legacy runtime digest}"
 
 [[ "$PWD" == "$production_root" ]] || {
   echo "bootstrap status must run from $production_root" >&2
   exit 2
 }
-[[ -f "$status_probe" && ! -L "$status_probe" && -x "$status_probe" ]] || {
-  echo "install an audited executable bootstrap-legacy-runtime-status" >&2
-  exit 2
-}
-[[ "$(stat -c '%u:%a' "$status_probe")" == "$(id -u):700" ]] || {
-  echo "bootstrap-legacy-runtime-status must be deploy-user-owned and mode 0700" >&2
-  exit 2
-}
+for executable in "$status_probe" "$validator"; do
+  [[ -f "$executable" && ! -L "$executable" && -x "$executable" ]] || {
+    echo "install the source-pinned legacy status contract first" >&2
+    exit 2
+  }
+  [[ "$(stat -c '%u:%a' "$executable")" == "$(id -u):700" ]] || {
+    echo "legacy status executable must be deploy-user-owned mode 0700" >&2
+    exit 2
+  }
+done
 
-# The site probe is strictly read-only. It must report either a fully open,
-# exact legacy runtime or a fully stopped one; mixed/unknown state is an error.
+# The site probe is read-only. Schema-v2 evidence binds both containers,
+# entrypoint/command digests, the user Worker manager/unit, and PostgreSQL.
 evidence="$(mktemp)"
 trap 'rm -f "$evidence"' EXIT
 "$status_probe" >"$evidence"
@@ -29,89 +33,7 @@ trap 'rm -f "$evidence"' EXIT
   exit 2
 }
 
-python3 - "$evidence" <<'PY'
-import hashlib
-import json
-import os
-import re
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as source:
-    document = json.load(source)
-expected = {
-    "schema_version",
-    "legacy_runtime_state",
-    "backend_image_id",
-    "web_image_id",
-    "worker_unit_sha256",
-    "backend_container_id",
-    "backend_pid",
-    "backend_started_at",
-    "backend_restart_count",
-    "worker_main_pid",
-    "worker_invocation_id",
-    "worker_active_enter_monotonic",
-    "backend_healthy",
-    "web_healthy",
-    "worker_healthy",
-    "ingress_open",
-}
-if not isinstance(document, dict) or set(document) != expected:
-    raise SystemExit("legacy status returned an invalid evidence object")
-if document["schema_version"] != 1:
-    raise SystemExit("legacy status evidence has an unsupported schema")
-digest = re.compile(r"^sha256:[0-9a-f]{64}$")
-identity = {}
-for field in ("backend_image_id", "web_image_id", "worker_unit_sha256"):
-    value = document[field]
-    if not isinstance(value, str) or not digest.fullmatch(value):
-        raise SystemExit(f"legacy status returned an invalid {field}")
-    identity[field] = value
-payload = json.dumps(
-    identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-).encode("utf-8")
-actual_identity = "sha256:" + hashlib.sha256(payload).hexdigest()
-if actual_identity != os.environ["NEXPOLY_BOOTSTRAP_LEGACY_RUNTIME_SHA256"]:
-    raise SystemExit("legacy status selected the wrong saved identity")
-health = ("backend_healthy", "web_healthy", "worker_healthy", "ingress_open")
-process = (
-    "backend_container_id",
-    "backend_pid",
-    "backend_started_at",
-    "backend_restart_count",
-    "worker_main_pid",
-    "worker_invocation_id",
-    "worker_active_enter_monotonic",
-)
-if document["legacy_runtime_state"] == "stopped":
-    if any(document[name] is not None for name in process) or any(
-        document[name] is not False for name in health
-    ):
-        raise SystemExit("legacy status is a partial stopped state")
-elif document["legacy_runtime_state"] in {"open", "isolated"}:
-    state = document["legacy_runtime_state"]
-    expected_health = {
-        "backend_healthy": True,
-        "web_healthy": state == "open",
-        "worker_healthy": True,
-        "ingress_open": state == "open",
-    }
-    if any(document[name] is not value for name, value in expected_health.items()):
-        raise SystemExit("legacy status running/ingress evidence is inconsistent")
-    container = document["backend_container_id"]
-    if not isinstance(container, str) or re.fullmatch(r"[0-9a-f]{64}", container) is None:
-        raise SystemExit("legacy status Backend container identity is invalid")
-    for name in ("backend_pid", "worker_main_pid", "worker_active_enter_monotonic"):
-        value = document[name]
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise SystemExit(f"legacy status {name} is invalid")
-    restarts = document["backend_restart_count"]
-    if isinstance(restarts, bool) or not isinstance(restarts, int) or restarts < 0:
-        raise SystemExit("legacy status Backend restart count is invalid")
-    for name in ("backend_started_at", "worker_invocation_id"):
-        if not isinstance(document[name], str) or not document[name]:
-            raise SystemExit(f"legacy status {name} is invalid")
-else:
-    raise SystemExit("legacy status is neither fully stopped, isolated, nor open")
-print(json.dumps(document, sort_keys=True, separators=(",", ":")))
-PY
+/usr/bin/python3 -I -B "$validator" validate \
+  --helper bootstrap-legacy-runtime-status \
+  --input "$evidence" \
+  --expected-runtime-digest "$NEXPOLY_BOOTSTRAP_LEGACY_RUNTIME_SHA256"
