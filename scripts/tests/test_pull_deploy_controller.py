@@ -2828,6 +2828,121 @@ class StrictLifecycleEvidenceTests(unittest.TestCase):
                 require_resumed=True,
             )
 
+    def test_transport_runtime_identity_is_exact_and_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="pull-worker-identity-"
+        ) as raw:
+            root = Path(raw)
+            production = root / "source"
+            python = root / "venv/bin/python"
+            production.mkdir()
+            python.parent.mkdir(parents=True)
+            python.symlink_to(Path(sys.executable).resolve())
+            controller = SimpleNamespace(production_root=production)
+            slot_record = {
+                "slot": "a",
+                "venv_prefix": str(root / "venv"),
+                "worker_lock_sha256": DIGEST_A,
+                "base_python_identity_sha256": DIGEST_B,
+            }
+            descriptor = {
+                "repository": {
+                    "target_sha": TARGET_SHA,
+                    "target_tree": TARGET_TREE,
+                },
+                "monomer_md": {
+                    "slot_record": slot_record,
+                    "slot_record_sha256": DIGEST_A,
+                },
+            }
+            worker: dict[str, object] = {
+                "status": "ok",
+                "mode": "real",
+                "source_sha": TARGET_SHA,
+                "source_tree": TARGET_TREE,
+                "source_root": str(production),
+                "venv_slot": "a",
+                "venv_prefix": str(root / "venv"),
+                "worker_lock_sha256": DIGEST_A,
+                "slot_record_sha256": DIGEST_A,
+                "base_python_identity_sha256": DIGEST_B,
+                "python_executable": str(python.resolve(strict=True)),
+                "db_configured": True,
+                "runtime_ready": True,
+                "max_active_jobs": 1,
+                "default_steps": 300,
+                "max_steps": 300,
+                "cuda_visible_devices": "2",
+                "gpu_broker_enabled": False,
+                "active_jobs": 0,
+                "accepting_jobs": True,
+                "draining": False,
+                "worker_instance_id": "worker-fixture",
+                "protocols": {
+                    "Transport": {
+                        "supported": True,
+                        "runtime_ready": True,
+                        "runtime_error": None,
+                    }
+                },
+            }
+            lifecycle = CONTROLLER.SystemLifecycle()
+            self.assertIs(
+                lifecycle._validate_worker_runtime_identity(
+                    controller,
+                    descriptor,
+                    worker,
+                    expected_accepting=True,
+                ),
+                worker,
+            )
+
+            invalid_protocols = (
+                None,
+                [],
+                {},
+                {"Transport": None},
+                {"Transport": []},
+                {
+                    "Transport": {
+                        "supported": False,
+                        "runtime_ready": True,
+                        "runtime_error": None,
+                    }
+                },
+                {
+                    "Transport": {
+                        "supported": True,
+                        "runtime_ready": False,
+                        "runtime_error": None,
+                    }
+                },
+                {
+                    "Transport": {
+                        "supported": True,
+                        "runtime_ready": True,
+                    }
+                },
+                {
+                    "Transport": {
+                        "supported": True,
+                        "runtime_ready": True,
+                        "runtime_error": "private runtime detail",
+                    }
+                },
+            )
+            for protocols in invalid_protocols:
+                with (
+                    self.subTest(protocols=protocols),
+                    self.assertRaises(CONTROLLER.PullDeployError),
+                ):
+                    lifecycle._validate_worker_runtime_identity(
+                        controller,
+                        descriptor,
+                        {**worker, "protocols": protocols},
+                        expected_accepting=True,
+                    )
+
 
 class SystemDrainFencingTests(unittest.TestCase):
     class Harness(CONTROLLER.SystemLifecycle):

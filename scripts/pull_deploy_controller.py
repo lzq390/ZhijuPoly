@@ -4547,11 +4547,17 @@ class SystemLifecycle:
         instance = worker.get("worker_instance_id")
         if not isinstance(instance, str) or not instance:
             raise PullDeployError("monomer MD Worker instance identity is invalid")
-        transport = worker.get("protocols", {}).get("Transport")
+        protocols = worker.get("protocols")
+        if not isinstance(protocols, dict):
+            raise PullDeployError(
+                "monomer MD Worker protocol inventory is invalid"
+            )
+        transport = protocols.get("Transport")
         if (
             not isinstance(transport, dict)
             or transport.get("supported") is not True
             or transport.get("runtime_ready") is not True
+            or "runtime_error" not in transport
             or transport.get("runtime_error") is not None
         ):
             raise PullDeployError("monomer MD Transport runtime is not strictly ready")

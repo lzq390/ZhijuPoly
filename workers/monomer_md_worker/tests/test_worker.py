@@ -263,6 +263,52 @@ def test_runtime_snapshot_initializes_once_and_hot_readiness_never_reprobes(
     assert calls == 1
 
 
+def test_health_response_uses_one_immutable_runtime_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _settings(
+        tmp_path,
+        mode="real",
+        app_postgres_dsn="postgresql://db/app",
+    )
+    object.__setattr__(settings, "gpu_broker_enabled", True)
+    initial = _runtime_snapshot()
+    changed = _runtime_snapshot(
+        ready=False,
+        error="later global snapshot",
+        transport_ready=False,
+    )
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "runtime_snapshot", initial)
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    monkeypatch.setattr(worker_main, "recovery_ready", True)
+    monkeypatch.setattr(worker_main, "draining", False)
+    monkeypatch.setattr(
+        worker_main,
+        "runner",
+        SimpleNamespace(gpu_admission_uncertain=False),
+    )
+
+    async def mutate_during_broker_read(_callback):
+        worker_main.runtime_snapshot = changed
+        return {"draining": False}
+
+    monkeypatch.setattr(
+        worker_main.asyncio,
+        "to_thread",
+        mutate_during_broker_read,
+    )
+
+    response = asyncio.run(worker_main._build_health_response())
+
+    assert worker_main.runtime_snapshot is changed
+    assert response.status == "ok"
+    assert response.byteff2_root_exists is True
+    assert response.runtime_ready is True
+    assert response.runtime_error is None
+    assert response.protocols == initial.protocols_dict()
+
+
 def test_production_runtime_identity_uses_live_checkout_and_active_slot(
     tmp_path: Path, monkeypatch
 ):
