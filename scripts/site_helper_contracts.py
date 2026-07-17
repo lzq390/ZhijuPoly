@@ -1326,6 +1326,73 @@ def _validate_governed_controls(document: object) -> dict[str, Any]:
     }
 
 
+def _validate_mutable_audit_role_security(
+    document: object,
+) -> dict[str, Any]:
+    fields = {
+        "role",
+        "can_login",
+        "superuser",
+        "create_db",
+        "create_role",
+        "inherit",
+        "replication",
+        "bypass_rls",
+        "role_settings",
+        "direct_memberships",
+        "effective_memberships",
+        "has_pg_read_all_data",
+        "has_pg_write_all_data",
+        "owned_objects",
+        "direct_write_grants",
+        "effective_write_privileges",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("role") != "nexpoly_mutable_audit"
+        or document.get("can_login") is not True
+        or document.get("superuser") is not False
+        or document.get("create_db") is not False
+        or document.get("create_role") is not False
+        or document.get("inherit") is not True
+        or document.get("replication") is not False
+        or document.get("bypass_rls") is not False
+        or document.get("role_settings")
+        != [
+            {
+                "database": "*",
+                "settings": ["default_transaction_read_only=on"],
+            }
+        ]
+        or document.get("direct_memberships")
+        != [
+            {
+                "role": "pg_read_all_data",
+                "admin_option": False,
+                "inherit_option": True,
+                "set_option": True,
+            }
+        ]
+        or document.get("effective_memberships") != ["pg_read_all_data"]
+        or document.get("has_pg_read_all_data") is not True
+        or document.get("has_pg_write_all_data") is not False
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit role authority is unsafe"
+        )
+    for field in (
+        "owned_objects",
+        "direct_write_grants",
+        "effective_write_privileges",
+    ):
+        if document.get(field) != []:
+            raise SiteHelperContractError(
+                f"mutable-data audit role has unsafe {field}"
+            )
+    return dict(document)
+
+
 def validate_mutable_data_audit(document: object) -> dict[str, Any]:
     fields = {
         "schema_version",
@@ -1334,6 +1401,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         "database_system_identifier",
         "connection",
         "postgres_runtime",
+        "role_security",
         "transaction_isolation",
         "transaction_read_only",
         "transaction_deferrable",
@@ -1350,7 +1418,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 3
+        or document.get("schema_version") != 4
         or not isinstance(document.get("operation_id"), str)
         or OPERATION_ID_RE.fullmatch(document["operation_id"]) is None
         or document.get("database") != "nexpoly"
@@ -1363,7 +1431,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         or document.get("transaction_read_only") is not True
         or document.get("transaction_deferrable") is not True
         or document.get("digest_algorithm")
-        != "sha256-postgres-jsonb-copy-v2"
+        != "sha256-postgres-jsonb-copy-v3"
         or not isinstance(document.get("captured_at"), str)
         or not document["captured_at"]
     ):
@@ -1439,6 +1507,9 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         raise SiteHelperContractError(
             "mutable-data audit endpoint is not the sealed PostgreSQL container"
         )
+    role_security = _validate_mutable_audit_role_security(
+        document.get("role_security")
+    )
 
     ledger = _validate_mutable_ledger(document.get("migration_ledger"))
     versions = {record["version"] for record in ledger}
@@ -1482,7 +1553,8 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         "database_system_identifier": document["database_system_identifier"],
         "connection": connection,
         "postgres_runtime": runtime,
-        "digest_algorithm": "sha256-postgres-jsonb-copy-v2",
+        "role_security": role_security,
+        "digest_algorithm": "sha256-postgres-jsonb-copy-v3",
         "migration_ledger": ledger,
         "business_tables": business_tables,
         "governed_controls": governed_controls,
@@ -1495,7 +1567,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
     ):
         raise SiteHelperContractError("mutable-data snapshot digest differs")
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,

@@ -162,6 +162,328 @@ schema_query = (
     "'definition',pg_get_indexdef(i.indexrelid))::text "
     "FROM pg_index AS i WHERE i.indrelid='{relation}'::regclass ORDER BY 1"
 )
+role_security_query = """
+WITH target AS (
+    SELECT *
+    FROM pg_catalog.pg_roles
+    WHERE rolname = current_user
+),
+direct_memberships AS (
+    SELECT coalesce(
+        jsonb_agg(
+            jsonb_build_object(
+                'role', parent.rolname,
+                'admin_option', member.admin_option,
+                'inherit_option', member.inherit_option,
+                'set_option', member.set_option
+            )
+            ORDER BY parent.rolname
+        ),
+        '[]'::jsonb
+    ) AS value
+    FROM target
+    JOIN pg_catalog.pg_auth_members AS member
+      ON member.member = target.oid
+    JOIN pg_catalog.pg_roles AS parent
+      ON parent.oid = member.roleid
+),
+effective_memberships AS (
+    SELECT coalesce(
+        jsonb_agg(candidate.rolname ORDER BY candidate.rolname),
+        '[]'::jsonb
+    ) AS value
+    FROM target
+    JOIN pg_catalog.pg_roles AS candidate
+      ON candidate.oid <> target.oid
+     AND pg_catalog.pg_has_role(target.oid, candidate.oid, 'MEMBER')
+),
+role_settings AS (
+    SELECT coalesce(
+        jsonb_agg(
+            jsonb_build_object(
+                'database',
+                CASE
+                    WHEN setting.setdatabase = 0 THEN '*'
+                    ELSE database.datname
+                END,
+                'settings',
+                to_jsonb(setting.setconfig)
+            )
+            ORDER BY setting.setdatabase
+        ),
+        '[]'::jsonb
+    ) AS value
+    FROM target
+    JOIN pg_catalog.pg_db_role_setting AS setting
+      ON setting.setrole = target.oid
+    LEFT JOIN pg_catalog.pg_database AS database
+      ON database.oid = setting.setdatabase
+),
+owned_objects AS (
+    SELECT coalesce(jsonb_agg(identity ORDER BY identity), '[]'::jsonb) AS value
+    FROM target
+    CROSS JOIN LATERAL (
+        SELECT 'dependency:' || dependency.dbid::text || ':'
+               || dependency.classid::regclass::text || ':'
+               || dependency.objid::text || ':'
+               || dependency.objsubid::text AS identity
+        FROM pg_catalog.pg_shdepend AS dependency
+        WHERE dependency.refclassid = 'pg_authid'::pg_catalog.regclass
+          AND dependency.refobjid = target.oid
+          AND dependency.deptype = 'o'
+          AND (
+              dependency.dbid = 0
+              OR dependency.dbid = (
+                  SELECT oid
+                  FROM pg_catalog.pg_database
+                  WHERE datname = current_database()
+              )
+          )
+        UNION ALL
+        SELECT 'database:' || database.datname AS identity
+        FROM pg_catalog.pg_database AS database
+        WHERE database.datdba = target.oid
+        UNION ALL
+        SELECT 'schema:' || namespace.nspname
+        FROM pg_catalog.pg_namespace AS namespace
+        WHERE namespace.nspowner = target.oid
+        UNION ALL
+        SELECT 'relation:' || namespace.nspname || '.' || relation.relname
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE relation.relowner = target.oid
+        UNION ALL
+        SELECT 'routine:' || routine.oid::regprocedure::text
+        FROM pg_catalog.pg_proc AS routine
+        WHERE routine.proowner = target.oid
+        UNION ALL
+        SELECT 'type:' || type.oid::regtype::text
+        FROM pg_catalog.pg_type AS type
+        WHERE type.typowner = target.oid
+        UNION ALL
+        SELECT 'large-object:' || object.oid::text
+        FROM pg_catalog.pg_largeobject_metadata AS object
+        WHERE object.lomowner = target.oid
+        UNION ALL
+        SELECT 'foreign-data-wrapper:' || wrapper.fdwname
+        FROM pg_catalog.pg_foreign_data_wrapper AS wrapper
+        WHERE wrapper.fdwowner = target.oid
+        UNION ALL
+        SELECT 'foreign-server:' || server.srvname
+        FROM pg_catalog.pg_foreign_server AS server
+        WHERE server.srvowner = target.oid
+        UNION ALL
+        SELECT 'tablespace:' || tablespace.spcname
+        FROM pg_catalog.pg_tablespace AS tablespace
+        WHERE tablespace.spcowner = target.oid
+    ) AS owned
+),
+direct_write_grants AS (
+    SELECT coalesce(jsonb_agg(identity ORDER BY identity), '[]'::jsonb) AS value
+    FROM target
+    CROSS JOIN LATERAL (
+        SELECT 'database:' || database.datname || ':' || acl.privilege_type
+            AS identity
+        FROM pg_catalog.pg_database AS database
+        CROSS JOIN LATERAL pg_catalog.aclexplode(database.datacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND acl.privilege_type = 'CREATE'
+        UNION ALL
+        SELECT 'schema:' || namespace.nspname || ':' || acl.privilege_type
+        FROM pg_catalog.pg_namespace AS namespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(namespace.nspacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND acl.privilege_type = 'CREATE'
+        UNION ALL
+        SELECT 'relation:' || namespace.nspname || '.' || relation.relname
+               || ':' || acl.privilege_type
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(relation.relacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND (
+              relation.relkind = 'S'
+              AND acl.privilege_type IN ('USAGE', 'UPDATE')
+              OR relation.relkind <> 'S'
+              AND acl.privilege_type IN (
+                  'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE',
+                  'REFERENCES', 'TRIGGER'
+              )
+          )
+        UNION ALL
+        SELECT 'column:' || namespace.nspname || '.' || relation.relname
+               || '.' || attribute.attname || ':' || acl.privilege_type
+        FROM pg_catalog.pg_attribute AS attribute
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = attribute.attrelid
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND acl.privilege_type IN ('INSERT', 'UPDATE', 'REFERENCES')
+        UNION ALL
+        SELECT 'large-object:' || object.oid::text || ':'
+               || acl.privilege_type
+        FROM pg_catalog.pg_largeobject_metadata AS object
+        CROSS JOIN LATERAL pg_catalog.aclexplode(object.lomacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND acl.privilege_type = 'UPDATE'
+    ) AS grant_record
+),
+effective_write_privileges AS (
+    SELECT coalesce(jsonb_agg(identity ORDER BY identity), '[]'::jsonb) AS value
+    FROM target
+    CROSS JOIN LATERAL (
+        SELECT 'database:' || current_database() || ':CREATE' AS identity
+        WHERE pg_catalog.has_database_privilege(
+            target.oid, current_database(), 'CREATE'
+        )
+        UNION ALL
+        SELECT 'schema:' || namespace.nspname || ':CREATE'
+        FROM pg_catalog.pg_namespace AS namespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND pg_catalog.has_schema_privilege(
+              target.oid, namespace.oid, 'CREATE'
+          )
+        UNION ALL
+        SELECT 'relation:' || namespace.nspname || '.' || relation.relname
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND (
+              pg_catalog.has_table_privilege(target.oid, relation.oid, 'INSERT')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'UPDATE')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'DELETE')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'TRUNCATE')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'REFERENCES')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'TRIGGER')
+          )
+        UNION ALL
+        SELECT 'column:' || namespace.nspname || '.' || relation.relname
+               || '.' || attribute.attname
+        FROM pg_catalog.pg_attribute AS attribute
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = attribute.attrelid
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+          AND (
+              pg_catalog.has_column_privilege(
+                  target.oid, relation.oid, attribute.attnum, 'INSERT'
+              )
+              OR pg_catalog.has_column_privilege(
+                  target.oid, relation.oid, attribute.attnum, 'UPDATE'
+              )
+              OR pg_catalog.has_column_privilege(
+                  target.oid, relation.oid, attribute.attnum, 'REFERENCES'
+              )
+          )
+        UNION ALL
+        SELECT 'sequence:' || namespace.nspname || '.' || sequence.relname
+        FROM pg_catalog.pg_class AS sequence
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = sequence.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND CASE
+              WHEN sequence.relkind = 'S' THEN (
+                  pg_catalog.has_sequence_privilege(
+                      target.oid, sequence.oid, 'USAGE'
+                  )
+                  OR pg_catalog.has_sequence_privilege(
+                      target.oid, sequence.oid, 'UPDATE'
+                  )
+              )
+              ELSE false
+          END
+        UNION ALL
+        SELECT 'security-definer:' || routine.oid::regprocedure::text
+        FROM pg_catalog.pg_proc AS routine
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = routine.pronamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND routine.prosecdef
+          AND pg_catalog.has_function_privilege(
+              target.oid, routine.oid, 'EXECUTE'
+          )
+        UNION ALL
+        SELECT 'catalog-write-routine:' || routine.oid::regprocedure::text
+        FROM unnest(
+            ARRAY[
+                'pg_catalog.lo_creat(integer)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_create(oid)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_from_bytea(oid,bytea)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_put(oid,bigint,bytea)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_unlink(oid)'::pg_catalog.regprocedure,
+                'pg_catalog.lowrite(integer,bytea)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_truncate(integer,integer)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_truncate64(integer,bigint)'::pg_catalog.regprocedure
+            ]
+        ) AS routine(oid)
+        WHERE pg_catalog.has_function_privilege(
+            target.oid, routine.oid, 'EXECUTE'
+        )
+        UNION ALL
+        SELECT 'large-object:' || object.oid::text || ':UPDATE'
+        FROM pg_catalog.pg_largeobject_metadata AS object
+        CROSS JOIN LATERAL pg_catalog.aclexplode(object.lomacl) AS acl
+        WHERE acl.privilege_type = 'UPDATE'
+          AND CASE
+              WHEN acl.grantee = 0 THEN true
+              ELSE pg_catalog.pg_has_role(
+                  target.oid, acl.grantee, 'USAGE'
+              )
+          END
+        UNION ALL
+        SELECT 'tablespace:' || tablespace.spcname || ':CREATE'
+        FROM pg_catalog.pg_tablespace AS tablespace
+        WHERE pg_catalog.has_tablespace_privilege(
+            target.oid, tablespace.oid, 'CREATE'
+        )
+    ) AS privilege
+)
+SELECT jsonb_build_object(
+    'role', target.rolname,
+    'can_login', target.rolcanlogin,
+    'superuser', target.rolsuper,
+    'create_db', target.rolcreatedb,
+    'create_role', target.rolcreaterole,
+    'inherit', target.rolinherit,
+    'replication', target.rolreplication,
+    'bypass_rls', target.rolbypassrls,
+    'role_settings', role_settings.value,
+    'direct_memberships', direct_memberships.value,
+    'effective_memberships', effective_memberships.value,
+    'has_pg_read_all_data',
+        pg_catalog.pg_has_role(
+            target.oid, 'pg_read_all_data'::pg_catalog.regrole, 'MEMBER'
+        ),
+    'has_pg_write_all_data',
+        pg_catalog.pg_has_role(
+            target.oid, 'pg_write_all_data'::pg_catalog.regrole, 'MEMBER'
+        ),
+    'owned_objects', owned_objects.value,
+    'direct_write_grants', direct_write_grants.value,
+    'effective_write_privileges', effective_write_privileges.value
+)::text
+FROM target
+CROSS JOIN direct_memberships
+CROSS JOIN effective_memberships
+CROSS JOIN role_settings
+CROSS JOIN owned_objects
+CROSS JOIN direct_write_grants
+CROSS JOIN effective_write_privileges
+"""
 commands = [
     "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE;",
     (
@@ -174,6 +496,10 @@ commands = [
         "'transaction_deferrable',current_setting('transaction_deferrable')::boolean"
         ")::text FROM pg_control_system()) TO "
         f"'{literal(root / 'metadata.json')}'"
+    ),
+    (
+        f"\\copy ({role_security_query}) TO "
+        f"'{literal(root / 'role_security.json')}'"
     ),
     (
         "SELECT (to_regclass('generation.polytao_jobs') IS NOT NULL) "
@@ -484,13 +810,17 @@ for schema, sequence, owned_by in sequence_specs:
     sequences.append({"state": "present", **values[0]})
 
 ledger = json_lines(root / "migration_ledger.rows")
+role_security_rows = json_lines(root / "role_security.json")
+if len(role_security_rows) != 1 or not isinstance(role_security_rows[0], dict):
+    raise SystemExit("mutable audit role-security evidence is invalid")
 identity = {
     "operation_id": operation_id,
     "database": metadata["database"],
     "database_system_identifier": metadata["database_system_identifier"],
     "connection": connection,
     "postgres_runtime": postgres_runtime,
-    "digest_algorithm": "sha256-postgres-jsonb-copy-v2",
+    "digest_algorithm": "sha256-postgres-jsonb-copy-v3",
+    "role_security": role_security_rows[0],
     "migration_ledger": ledger,
     "business_tables": [
         table_record(schema, table) for schema, table in business
@@ -512,7 +842,7 @@ identity = {
     "sequences": sequences,
 }
 document = {
-    "schema_version": 3,
+    "schema_version": 4,
     **identity,
     "transaction_isolation": metadata["transaction_isolation"],
     "transaction_read_only": metadata["transaction_read_only"],

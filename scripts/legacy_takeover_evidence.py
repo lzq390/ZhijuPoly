@@ -89,6 +89,7 @@ REQUIRED_SOURCE_HASH_NAMES = (
         "legacy-takeover-classification.json.example",
         "mutable-data-audit.pg_service.conf.example",
         "mutable-data-audit.pgpass.example",
+        "mutable-data-audit-role.sql.example",
     }
 )
 STATUS_FIELDS = {

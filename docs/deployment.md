@@ -118,6 +118,13 @@ bootstrap executables are mode `0700`:
   `config/bootstrap-legacy-runtime-restore`.
 - the read-only `config/contract-0012-external-database-audit` helper used to
   enumerate the independent dev/health database stacks.
+- a reviewed, non-secret
+  `ops/config/mutable-data-audit-role.sql.example` provisioning/check
+  contract. Run it as the cluster role administrator, connected to `nexpoly`
+  in the maintenance window; provision the `nexpoly_mutable_audit` password
+  out of band and install only the mode-`0600` pgpass value. The helper's
+  schema-v4 evidence rejects any role attribute, membership, ownership or
+  persistent write authority outside the exact `pg_read_all_data` contract.
 - `bootstrap-input/legacy-takeover-classification.json`, mode `0600`, covering
   the production checkout's ignored paths exactly with `runtime`, `secret` or
   `asset` classifications. The reviewed file must contain no secret value.

@@ -482,7 +482,37 @@ class SiteHelperContractTests(unittest.TestCase):
                 },
                 "system_identifier": "7659245354718314530",
             },
-            "digest_algorithm": "sha256-postgres-jsonb-copy-v2",
+            "role_security": {
+                "role": "nexpoly_mutable_audit",
+                "can_login": True,
+                "superuser": False,
+                "create_db": False,
+                "create_role": False,
+                "inherit": True,
+                "replication": False,
+                "bypass_rls": False,
+                "role_settings": [
+                    {
+                        "database": "*",
+                        "settings": ["default_transaction_read_only=on"],
+                    }
+                ],
+                "direct_memberships": [
+                    {
+                        "role": "pg_read_all_data",
+                        "admin_option": False,
+                        "inherit_option": True,
+                        "set_option": True,
+                    }
+                ],
+                "effective_memberships": ["pg_read_all_data"],
+                "has_pg_read_all_data": True,
+                "has_pg_write_all_data": False,
+                "owned_objects": [],
+                "direct_write_grants": [],
+                "effective_write_privileges": [],
+            },
+            "digest_algorithm": "sha256-postgres-jsonb-copy-v3",
             "migration_ledger": [
                 {"version": version, "checksum": checksum}
                 for version, checksum in CONTRACTS.CANONICAL_MIGRATION_LEDGER[
@@ -517,7 +547,7 @@ class SiteHelperContractTests(unittest.TestCase):
             "sequences": sequences,
         }
         document = {
-            "schema_version": 3,
+            "schema_version": 4,
             **identity,
             "transaction_isolation": "repeatable read",
             "transaction_read_only": True,
@@ -567,6 +597,42 @@ class SiteHelperContractTests(unittest.TestCase):
             (
                 "read-write",
                 lambda value: value.update(transaction_read_only=False),
+            ),
+            (
+                "write-membership",
+                lambda value: value["role_security"].update(
+                    has_pg_write_all_data=True
+                ),
+            ),
+            (
+                "dangerous-membership",
+                lambda value: value["role_security"][
+                    "effective_memberships"
+                ].append("site_writer"),
+            ),
+            (
+                "direct-write",
+                lambda value: value["role_security"][
+                    "direct_write_grants"
+                ].append("relation:online_knowledge.jobs:UPDATE"),
+            ),
+            (
+                "effective-write",
+                lambda value: value["role_security"][
+                    "effective_write_privileges"
+                ].append("relation:online_knowledge.jobs"),
+            ),
+            (
+                "object-owner",
+                lambda value: value["role_security"][
+                    "owned_objects"
+                ].append("relation:online_knowledge.jobs"),
+            ),
+            (
+                "writable-default",
+                lambda value: value["role_security"]["role_settings"][0][
+                    "settings"
+                ].__setitem__(0, "default_transaction_read_only=off"),
             ),
             (
                 "non-deferrable",

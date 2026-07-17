@@ -1102,8 +1102,8 @@ def validate_mutable_data_contract(document: object) -> dict[str, Any]:
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 3
-        or document.get("evidence_schema_version") != 3
+        or document.get("schema_version") != 4
+        or document.get("evidence_schema_version") != 4
         or document.get("business_tables")
         != list(MUTABLE_DATA_BUSINESS_TABLES)
         or document.get("governed_controls")
@@ -7196,7 +7196,7 @@ class PullDeployController:
         )
         return validate_mutable_data_contract(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "helper_path": str(path),
                 "helper_sha256": sha256_file(path),
                 "dependencies": dependencies,
@@ -7208,7 +7208,7 @@ class PullDeployController:
                 "static_tables": list(MUTABLE_DATA_STATIC_TABLES),
                 "migration_exception": MUTABLE_DATA_EXCEPTION,
                 "sequences": list(MUTABLE_DATA_SEQUENCES),
-                "evidence_schema_version": 3,
+                "evidence_schema_version": 4,
             }
         )
 

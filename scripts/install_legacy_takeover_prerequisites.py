@@ -71,6 +71,9 @@ ATTESTATION_FILES = {
     "mutable-data-audit.pgpass.example": (
         "ops/config/mutable-data-audit.pgpass.example"
     ),
+    "mutable-data-audit-role.sql.example": (
+        "ops/config/mutable-data-audit-role.sql.example"
+    ),
 }
 CLASSIFICATION_NAME = "legacy-takeover-classification.json"
 MUTABLE_SERVICE_NAME = "mutable-data-audit.pg_service.conf"
