@@ -649,6 +649,13 @@ class FakeLifecycle:
                 "postgres_major": 16,
                 "image": CONTROLLER.POSTGRES16_IMAGE,
                 "dump_sha256": digest,
+                "source_mutable_data_identity_sha256": (
+                    CONTROLLER.canonical_json_digest(
+                        CONTROLLER.mutable_data_identity(
+                            mutable_data_evidence()
+                        )
+                    )
+                ),
                 "ledger": [
                     {
                         "version": "0010_deployment_control",
@@ -3376,6 +3383,13 @@ class SystemDrainFencingTests(unittest.TestCase):
             def _environment(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
                 return {}
 
+            def postgres_runtime_identity(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+                return {
+                    "schema_version": 1,
+                    **mutable_data_evidence()["postgres_runtime"],
+                    "captured_at": CONTROLLER.utc_now(),
+                }
+
             def _isolate_ingress(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
                 return None
 
@@ -3491,7 +3505,13 @@ class SystemDrainFencingTests(unittest.TestCase):
                 "control_environment": lambda _self: {},
             },
         )()
-        descriptor = {"repository": {"target_sha": TARGET_SHA}}
+        descriptor = {
+            "repository": {"target_sha": TARGET_SHA},
+            "_expected_postgres_runtime_identity": {
+                "schema_version": 1,
+                **mutable_data_evidence()["postgres_runtime"],
+            },
+        }
         harness = ResumeHarness()
         persisted: list[dict[str, object]] = []
         harness.resume_unchanged(controller, descriptor, persisted.append)
@@ -3597,13 +3617,36 @@ class SystemDrainFencingTests(unittest.TestCase):
         }
 
         class OrderingHarness(CONTROLLER.SystemLifecycle):
-            def __init__(self, *, fail_final: bool = False) -> None:
+            def __init__(
+                self,
+                *,
+                fail_final: bool = False,
+                drift_postgres_after_ingress: bool = False,
+            ) -> None:
                 self.events: list[str] = []
                 self.fail_final = fail_final
+                self.drift_postgres_after_ingress = (
+                    drift_postgres_after_ingress
+                )
                 self.backend_open = False
+                self.postgres_reads = 0
 
             def _environment(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
                 return {}
+
+            def postgres_runtime_identity(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+                self.postgres_reads += 1
+                runtime = dict(mutable_data_evidence()["postgres_runtime"])
+                if (
+                    self.drift_postgres_after_ingress
+                    and self.postgres_reads >= 3
+                ):
+                    runtime["container_id"] = "f" * 64
+                return {
+                    "schema_version": 1,
+                    **runtime,
+                    "captured_at": CONTROLLER.utc_now(),
+                }
 
             def _isolate_ingress(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
                 self.events.append("isolate-ingress")
@@ -3672,7 +3715,13 @@ class SystemDrainFencingTests(unittest.TestCase):
                     self.lifecycle.events.append("nginx-start")
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-        descriptor = {"repository": {"target_sha": TARGET_SHA}}
+        descriptor = {
+            "repository": {"target_sha": TARGET_SHA},
+            "_expected_postgres_runtime_identity": {
+                "schema_version": 1,
+                **mutable_data_evidence()["postgres_runtime"],
+            },
+        }
         verification = {"health": "ok", "recovery_fence": fence}
         lifecycle = OrderingHarness()
         controller = type(
@@ -3716,6 +3765,27 @@ class SystemDrainFencingTests(unittest.TestCase):
         ):
             failing.resume(failing_controller, descriptor, verification)
         self.assertEqual(failing.events[-1], "isolate-ingress")
+
+        drifting = OrderingHarness(drift_postgres_after_ingress=True)
+        drifting_controller = type(
+            "Controller",
+            (),
+            {
+                "runner": Runner(drifting),
+                "production_root": Path("/fixture/source"),
+                "control_environment": lambda _self: {},
+            },
+        )()
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "PostgreSQL identity changed while resuming ingress",
+        ):
+            drifting.resume(
+                drifting_controller,
+                descriptor,
+                verification,
+            )
+        self.assertEqual(drifting.events[-1], "isolate-ingress")
 
 
 class LifecycleStateMachineTests(PullDeployTestCase):

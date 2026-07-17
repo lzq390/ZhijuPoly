@@ -940,6 +940,13 @@ class PullRuntimeController(legacy.ReleaseController):
         self.env_file = self.config_dir / "deploy.env"
         self.document = _pull_document(binding)
         self.runtime_descriptor = json.loads(json.dumps(binding.descriptor))
+        current_mutable = pull.validate_mutable_data_pair(
+            binding.current_state.get("mutable_data_audit")
+        )
+        self.runtime_descriptor["_expected_postgres_runtime_identity"] = {
+            "schema_version": 1,
+            **current_mutable["after"]["postgres_runtime"],
+        }
         if self.runtime_descriptor.get("previous_deployment") is None:
             # The sealed first-takeover descriptor correctly records that no
             # *previous governed deployment* existed.  Once that takeover is
@@ -1081,6 +1088,84 @@ class PullRuntimeController(legacy.ReleaseController):
             }
         )
         return environment
+
+    def _sealed_contract_postgres_runtime(self) -> dict[str, Any]:
+        marker = self._contract_marker()
+        evidence = pull.validate_mutable_data_evidence(
+            marker.get("mutable_data_before")
+        )
+        if evidence["operation_id"] != self.operation_id:
+            raise PullContractError(
+                "0012 PostgreSQL fence belongs to another operation"
+            )
+        return {
+            "schema_version": 1,
+            **evidence["postgres_runtime"],
+        }
+
+    def _assert_contract_postgres_runtime(
+        self,
+        *,
+        expected: dict[str, Any] | None = None,
+        phase: str,
+    ) -> dict[str, Any]:
+        sealed = (
+            self._sealed_contract_postgres_runtime()
+            if expected is None
+            else dict(expected)
+        )
+        observed = pull.postgres_runtime_fence_identity(
+            pull.validate_postgres_runtime_fence(
+                self.lifecycle.postgres_runtime_identity(
+                    self.pull_controller,
+                    self.runtime_descriptor,
+                )
+            )
+        )
+        if observed != sealed:
+            raise PullContractError(f"PostgreSQL identity changed {phase}")
+        return sealed
+
+    def restore_database(
+        self,
+        environment: dict[str, str],
+        *,
+        release: Path,
+    ) -> None:
+        expected = self._assert_contract_postgres_runtime(
+            phase="before 0012 rollback restore"
+        )
+        super().restore_database(environment, release=release)
+        self._assert_contract_postgres_runtime(
+            expected=expected,
+            phase="during 0012 rollback restore",
+        )
+
+    def run_migrations(
+        self,
+        environment: dict[str, str],
+        *,
+        mode: str = "expand",
+    ) -> list[str]:
+        expected = self._assert_contract_postgres_runtime(
+            phase="before 0012 migration"
+        )
+        try:
+            applied = super().run_migrations(environment, mode=mode)
+        except BaseException as migration_error:
+            try:
+                self._assert_contract_postgres_runtime(
+                    expected=expected,
+                    phase="during failed 0012 migration",
+                )
+            except BaseException as fence_error:
+                raise fence_error from migration_error
+            raise
+        self._assert_contract_postgres_runtime(
+            expected=expected,
+            phase="during 0012 migration",
+        )
+        return applied
 
     def validate_external_database_audit_helper(self) -> dict[str, str]:
         """Re-hash the fixed audit helper against the sealed pull binding."""
@@ -1648,6 +1733,9 @@ class PullRuntimeController(legacy.ReleaseController):
         return evidence
 
     def backup_database(self, environment: dict[str, str], from_sha: str) -> None:
+        expected_postgres = self._assert_contract_postgres_runtime(
+            phase="before 0012 backup"
+        )
         if self.backup_root.exists() or self.backup_root.is_symlink():
             raise PullContractError("0012 backup directory already exists")
         legacy.ensure_durable_directory(self.backup_root)
@@ -1700,6 +1788,10 @@ class PullRuntimeController(legacy.ReleaseController):
         legacy.atomic_text(
             self.backup_path.with_suffix(".dump.sha256"),
             f"{digest.removeprefix('sha256:')}  {self.backup_path.name}\n",
+        )
+        self._assert_contract_postgres_runtime(
+            expected=expected_postgres,
+            phase="during 0012 backup",
         )
 
     def marker_backup(self, marker: dict[str, Any]) -> Path:
@@ -2207,20 +2299,6 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             initial_inventory=initial_inventory,
         )
 
-    def _restore_previous_database(
-        self,
-        environment: dict[str, str],
-        previous_state: dict[str, Any],
-        *,
-        recorded_database_inventory: object | None = None,
-    ) -> None:
-        self._ensure_database_recovery_drain()
-        super()._restore_previous_database(
-            environment,
-            previous_state,
-            recorded_database_inventory=recorded_database_inventory,
-        )
-
     def _reestablish_recovery_drain(self, marker: dict[str, Any]) -> None:
         """Close every admission plane before recovery can inspect or restore DB."""
 
@@ -2424,10 +2502,18 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
     ) -> None:
         """Prove a failed 0012 rollback restored every non-exception row."""
 
+        self._ensure_database_recovery_drain()
+        expected_postgres = self.controller._assert_contract_postgres_runtime(
+            phase="before 0012 recovery"
+        )
         super()._restore_previous_database(
             environment,
             previous_state,
             recorded_database_inventory=recorded_database_inventory,
+        )
+        self.controller._assert_contract_postgres_runtime(
+            expected=expected_postgres,
+            phase="during 0012 recovery",
         )
         marker = self._load_runtime_recovery_marker()
         before = self._sealed_mutable_data_before(marker)

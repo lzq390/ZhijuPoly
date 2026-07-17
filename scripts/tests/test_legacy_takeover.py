@@ -455,6 +455,135 @@ class Fixture:
 
 
 class LegacyTakeoverTests(unittest.TestCase):
+    def test_live_postgres_fence_includes_volume_and_system_identifier(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="legacy-live-pg-") as temporary:
+            root = Path(temporary)
+            system = TAKEOVER.LiveSystem(root, root / "runtime")
+            runtime = runtime_status(root / "worker.service", DIGEST_A)
+            container = {
+                "Id": runtime["postgres_container_id"],
+                "Image": runtime["postgres_image_id"],
+                "State": {"Running": True},
+                "Mounts": [
+                    {
+                        "Type": "volume",
+                        "Name": runtime["postgres_data_volume"],
+                        "Destination": "/var/lib/postgresql/data",
+                        "RW": True,
+                    }
+                ],
+            }
+            control = (
+                "pg_control version number:            1300\n"
+                "Database system identifier:           "
+                f"{runtime['postgres_system_identifier']}\n"
+            )
+            with (
+                mock.patch.object(system, "_container", return_value=container),
+                mock.patch.object(system, "_run", return_value=control),
+            ):
+                self.assertEqual(
+                    system._validate_postgres(runtime)[
+                        "postgres_system_identifier"
+                    ],
+                    runtime["postgres_system_identifier"],
+                )
+
+            wrong_volume = {
+                **container,
+                "Mounts": [{**container["Mounts"][0], "RW": False}],
+            }
+            with (
+                mock.patch.object(
+                    system,
+                    "_container",
+                    return_value=wrong_volume,
+                ),
+                self.assertRaisesRegex(
+                    TAKEOVER.LegacyTakeoverError,
+                    "runtime identity changed",
+                ),
+            ):
+                system._validate_postgres(runtime)
+
+            with (
+                mock.patch.object(system, "_container", return_value=container),
+                mock.patch.object(
+                    system,
+                    "_run",
+                    return_value=(
+                        "Database system identifier: 9999999999999999999\n"
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    TAKEOVER.LegacyTakeoverError,
+                    "system identifier changed",
+                ),
+            ):
+                system._validate_postgres(runtime)
+
+    def test_legacy_restore_fences_postgres_around_every_reader_start(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="legacy-restore-pg-") as temporary:
+            root = Path(temporary)
+            system = TAKEOVER.LiveSystem(root, root / "runtime")
+            runtime = runtime_status(root / "worker.service", DIGEST_A)
+            events: list[str] = []
+
+            def postgres(_runtime):  # type: ignore[no-untyped-def]
+                events.append("postgres")
+                return {}
+
+            def container(role, _runtime):  # type: ignore[no-untyped-def]
+                events.append(f"start:{role}")
+
+            def run(command, **_kwargs):  # type: ignore[no-untyped-def]
+                if command[-2:] == ["start", runtime["worker_unit_name"]]:
+                    events.append("start:worker")
+                return ""
+
+            with (
+                mock.patch.object(
+                    system,
+                    "_validate_postgres",
+                    side_effect=postgres,
+                ),
+                mock.patch.object(
+                    system,
+                    "_start_container",
+                    side_effect=container,
+                ),
+                mock.patch.object(system, "_validate_worker_unit"),
+                mock.patch.object(system, "_worker_environment", return_value={}),
+                mock.patch.object(system, "_systemd_property", return_value="0"),
+                mock.patch.object(system, "_run", side_effect=run),
+                mock.patch.object(
+                    system,
+                    "_helper_json",
+                    side_effect=lambda _name: events.append("helper") or {},
+                ),
+            ):
+                system.restore_runtime(runtime)
+
+            self.assertEqual(
+                events,
+                [
+                    "postgres",
+                    "start:backend",
+                    "postgres",
+                    "postgres",
+                    "start:worker",
+                    "postgres",
+                    "postgres",
+                    "start:web",
+                    "postgres",
+                    "helper",
+                ],
+            )
+
     def labels_for_apply(self) -> list[str]:
         fixture = Fixture()
         self.addCleanup(fixture.close)

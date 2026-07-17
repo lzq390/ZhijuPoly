@@ -1365,6 +1365,8 @@ class LiveSystem:
             if isinstance(mount, dict)
             and mount.get("Type") == "volume"
             and mount.get("Name") == runtime["postgres_data_volume"]
+            and mount.get("Destination") == "/var/lib/postgresql/data"
+            and mount.get("RW") is True
         ] if isinstance(mounts, list) else []
         if (
             record.get("Id") != runtime["postgres_container_id"]
@@ -1374,6 +1376,27 @@ class LiveSystem:
             or len(matching_volumes) != 1
         ):
             raise LegacyTakeoverError("sealed PostgreSQL runtime identity changed")
+        control = self._run(
+            [
+                "/usr/bin/docker",
+                "exec",
+                "--user",
+                "postgres",
+                runtime["postgres_container_id"],
+                "pg_controldata",
+                "-D",
+                "/var/lib/postgresql/data",
+            ]
+        )
+        identifiers = re.findall(
+            r"^Database system identifier:\s*([0-9]{10,30})\s*$",
+            control,
+            flags=re.MULTILINE,
+        )
+        if identifiers != [runtime["postgres_system_identifier"]]:
+            raise LegacyTakeoverError(
+                "sealed PostgreSQL system identifier changed"
+            )
         return {
             "postgres_container_id": runtime["postgres_container_id"],
             "postgres_image_id": runtime["postgres_image_id"],
@@ -1453,15 +1476,23 @@ class LiveSystem:
             raise LegacyTakeoverError(f"sealed {role} container did not start")
 
     def restore_runtime(self, runtime: dict[str, Any]) -> dict[str, Any]:
+        self._validate_postgres(runtime)
         self._start_container("backend", runtime)
+        self._validate_postgres(runtime)
         self._validate_worker_unit(runtime)
         unit = runtime["worker_unit_name"]
         if self._systemd_property(runtime, "MainPID") in {"", "0"}:
+            self._validate_postgres(runtime)
             self._run(
                 ["/usr/bin/systemctl", "--user", "start", unit],
                 environment=self._worker_environment(runtime),
             )
+            self._validate_postgres(runtime)
+        else:
+            self._validate_postgres(runtime)
+        self._validate_postgres(runtime)
         self._start_container("web", runtime)
+        self._validate_postgres(runtime)
         evidence = self._helper_json("bootstrap-legacy-runtime-restore")
         if not isinstance(evidence, dict):
             raise LegacyTakeoverError("legacy restore helper returned invalid evidence")

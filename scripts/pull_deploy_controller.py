@@ -4156,6 +4156,47 @@ class SystemLifecycle:
             marker.get("postgres_runtime_fence")
         )
 
+    def _assert_sealed_postgres_runtime(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+        *,
+        expected: dict[str, Any] | None = None,
+        phase: str,
+    ) -> dict[str, Any]:
+        """CAS the live PostgreSQL runtime against the durable deployment fence."""
+
+        if expected is None:
+            contract_identity = descriptor.get(
+                "_expected_postgres_runtime_identity"
+            )
+            if contract_identity is None:
+                sealed_identity = postgres_runtime_fence_identity(
+                    self._sealed_postgres_runtime_fence(controller)
+                )
+            elif isinstance(contract_identity, dict):
+                sealed_identity = dict(contract_identity)
+            else:
+                raise PullDeployError(
+                    "sealed PostgreSQL contract identity is invalid"
+                )
+        elif "captured_at" in expected:
+            sealed_identity = postgres_runtime_fence_identity(
+                validate_postgres_runtime_fence(expected)
+            )
+        else:
+            sealed_identity = dict(expected)
+        observed = validate_postgres_runtime_fence(
+            self.postgres_runtime_identity(controller, descriptor)
+        )
+        observed_identity = postgres_runtime_fence_identity(observed)
+        if (
+            set(sealed_identity) != set(observed_identity)
+            or observed_identity != sealed_identity
+        ):
+            raise PullDeployError(f"PostgreSQL identity changed {phase}")
+        return sealed_identity
+
     def _environment(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> dict[str, str]:
@@ -5487,6 +5528,11 @@ class SystemLifecycle:
     def backup(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> dict[str, Any]:
+        expected_postgres = self._assert_sealed_postgres_runtime(
+            controller,
+            descriptor,
+            phase="before database backup",
+        )
         environment = self._environment(controller, descriptor)
         values = parse_literal_env(controller.config_dir / "deploy.env")
         user = values.get("NEXPOLY_POSTGRES_USER")
@@ -5571,6 +5617,30 @@ class SystemLifecycle:
             or restored.get("dump_sha256") != digest
         ):
             raise PullDeployError("isolated PostgreSQL 16 restore evidence is invalid")
+        marker = load_private_json(controller.marker_path)
+        source_before = validate_mutable_data_evidence(
+            marker.get("mutable_data_before")
+        )
+        source_after = controller._capture_mutable_data(descriptor)
+        source_identity_sha256 = canonical_json_digest(
+            mutable_data_identity(source_before)
+        )
+        if (
+            canonical_json_digest(mutable_data_identity(source_after))
+            != source_identity_sha256
+        ):
+            raise PullDeployError(
+                "database changed while producing the rollback backup"
+            )
+        restored["source_mutable_data_identity_sha256"] = (
+            source_identity_sha256
+        )
+        self._assert_sealed_postgres_runtime(
+            controller,
+            descriptor,
+            expected=expected_postgres,
+            phase="during database backup",
+        )
         return {"path": str(dump), "sha256": digest, "restore_verification": restored}
 
     def backup_rollback(
@@ -5607,6 +5677,11 @@ class SystemLifecycle:
         values = controller.production_deploy_values(check_free_space=False)
         user = values["NEXPOLY_POSTGRES_USER"]
         database = values["NEXPOLY_POSTGRES_DB"]
+        expected_postgres = self._assert_sealed_postgres_runtime(
+            controller,
+            descriptor,
+            phase="before rollback restore",
+        )
         postgres = controller.runner.run(
             self._compose(controller, "ps", "--quiet", "lab-postgres"),
             cwd=controller.production_root,
@@ -5730,6 +5805,12 @@ class SystemLifecycle:
             raise PullDeployError(
                 "restored production ledger differs from verified backup"
             )
+        self._assert_sealed_postgres_runtime(
+            controller,
+            descriptor,
+            expected=expected_postgres,
+            phase="during rollback restore",
+        )
         return {
             "restored": True,
             "dump_sha256": backup["sha256"],
@@ -5814,28 +5895,45 @@ class SystemLifecycle:
     def migrate(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> dict[str, Any]:
+        expected_postgres = self._assert_sealed_postgres_runtime(
+            controller,
+            descriptor,
+            phase="before migration",
+        )
         environment = self._environment(controller, descriptor)
         mode = (
             "bootstrap-expand"
             if descriptor["previous_deployment"] is None
             else "expand"
         )
-        result = controller.runner.run(
-            self._compose(
-                controller,
-                "run",
-                "--rm",
-                "--no-deps",
-                "postgres-init",
-                "python",
-                "-m",
-                "app.postgres_migrations",
-                "--mode",
-                mode,
-            ),
-            cwd=controller.production_root,
-            env=environment,
-        )
+        try:
+            result = controller.runner.run(
+                self._compose(
+                    controller,
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "postgres-init",
+                    "python",
+                    "-m",
+                    "app.postgres_migrations",
+                    "--mode",
+                    mode,
+                ),
+                cwd=controller.production_root,
+                env=environment,
+            )
+        except BaseException as migration_error:
+            try:
+                self._assert_sealed_postgres_runtime(
+                    controller,
+                    descriptor,
+                    expected=expected_postgres,
+                    phase="during failed migration",
+                )
+            except BaseException as fence_error:
+                raise fence_error from migration_error
+            raise
         applied: list[str] = []
         observed_results: list[tuple[str, str, str]] = []
         for line in str(result.stdout).splitlines():
@@ -5900,6 +5998,12 @@ class SystemLifecycle:
             accepted_ledgers=descriptor_accepted_ledgers(descriptor),
             require_registry_match=descriptor_accepted_ledgers(descriptor)
             is not None,
+        )
+        self._assert_sealed_postgres_runtime(
+            controller,
+            descriptor,
+            expected=expected_postgres,
+            phase="during migration",
         )
         return {"newly_applied": applied, "ledger": canonical_history}
 
@@ -6509,6 +6613,11 @@ class SystemLifecycle:
     ) -> None:
         expected = self._expected_runtime_recovery_fence(expected_verification)
         environment = self._environment(controller, descriptor)
+        expected_postgres = self._assert_sealed_postgres_runtime(
+            controller,
+            descriptor,
+            phase="before admission resume",
+        )
         self._isolate_ingress(controller, descriptor)
         try:
             # The persisted fence describes the fully drained runtime.  It is
@@ -6570,6 +6679,12 @@ class SystemLifecycle:
                 raise PullDeployError(
                     "internally resumed runtime differs from committed verification"
                 )
+            self._assert_sealed_postgres_runtime(
+                controller,
+                descriptor,
+                expected=expected_postgres,
+                phase="before ingress resume",
+            )
             controller.runner.run(
                 self._compose(
                     controller,
@@ -6579,10 +6694,17 @@ class SystemLifecycle:
                     "--wait",
                     "--wait-timeout",
                     "300",
+                    "--no-deps",
                     "nginx",
                 ),
                 cwd=controller.production_root,
                 env=environment,
+            )
+            self._assert_sealed_postgres_runtime(
+                controller,
+                descriptor,
+                expected=expected_postgres,
+                phase="while resuming ingress",
             )
             # Public ingress is the final admission mutation.  Verify the
             # exact open runtime immediately after it.
@@ -6627,11 +6749,12 @@ class SystemLifecycle:
         persist_verification: Callable[[dict[str, Any]], None],
         expected_verification: dict[str, Any] | None = None,
     ) -> None:
-        """Re-open a sealed pre-stop runtime without restarting it.
+        """Re-open a sealed pre-stop runtime without restarting its readers.
 
         Unlike the normal post-switch path this never runs ``systemctl start``
-        or compose ``up``.  Both process identities and the Worker socket set
-        must survive unchanged while an accepted job may still be finishing.
+        or Compose for Backend/PostgreSQL.  It may start only nginx with
+        ``--no-deps`` after both process identities, the PostgreSQL fence and
+        the Worker socket set survive unchanged.
         """
 
         recovery = self.prepare_recovery_runtime(
@@ -6651,6 +6774,11 @@ class SystemLifecycle:
         # process-local or database-backed admission is changed.
         persist_verification(verification)
         environment = self._environment(controller, descriptor)
+        expected_postgres = self._assert_sealed_postgres_runtime(
+            controller,
+            descriptor,
+            phase="before unchanged admission resume",
+        )
         try:
             if (
                 self._capture_runtime_recovery_fence(
@@ -6717,6 +6845,12 @@ class SystemLifecycle:
                 raise PullDeployError(
                     "internally resumed unchanged runtime changed instance"
                 )
+            self._assert_sealed_postgres_runtime(
+                controller,
+                descriptor,
+                expected=expected_postgres,
+                phase="before unchanged ingress resume",
+            )
             controller.runner.run(
                 self._compose(
                     controller,
@@ -6726,10 +6860,17 @@ class SystemLifecycle:
                     "--wait",
                     "--wait-timeout",
                     "300",
+                    "--no-deps",
                     "nginx",
                 ),
                 cwd=controller.production_root,
                 env=environment,
+            )
+            self._assert_sealed_postgres_runtime(
+                controller,
+                descriptor,
+                expected=expected_postgres,
+                phase="while resuming unchanged ingress",
             )
             self.verify_open_runtime(controller, descriptor, verification)
         except BaseException:
@@ -9655,6 +9796,8 @@ class PullDeployController:
             or restore.get("image") != POSTGRES16_IMAGE
             or restore.get("dump_sha256") != digest
             or not isinstance(restore.get("ledger"), list)
+            or restore.get("source_mutable_data_identity_sha256")
+            != backup["mutable_data_before_sha256"]
         ):
             raise PullDeployError("database backup restore evidence is invalid")
         canonical_ledger_history(

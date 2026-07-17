@@ -639,6 +639,13 @@ class ContractRuntimeLifecycle(contract.pull.SystemLifecycle):
     def _environment(self, _controller, _descriptor):  # type: ignore[no-untyped-def]
         return {}
 
+    def postgres_runtime_identity(self, _controller, _descriptor):  # type: ignore[no-untyped-def]
+        return {
+            "schema_version": 1,
+            **_mutable_data_evidence()["postgres_runtime"],
+            "captured_at": contract.legacy.utc_now(),
+        }
+
     def _compose(self, _controller, *arguments):  # type: ignore[no-untyped-def]
         return ["fixture-compose", *arguments]
 
@@ -1996,6 +2003,11 @@ class PullContract0012Tests(unittest.TestCase):
                 runtime,
                 "capture_mutable_data",
                 return_value=marker["mutable_data_before"],
+            ),
+            mock.patch.object(
+                runtime,
+                "_assert_contract_postgres_runtime",
+                return_value=marker["mutable_data_before"]["postgres_runtime"],
             ),
         ):
             maintenance._reconcile_owned_verification_database({})

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from contextlib import ExitStack, contextmanager
 import fcntl
 import inspect
@@ -116,6 +117,41 @@ def write_worker_base_identity(release: Path) -> dict[str, object]:
 
 
 class ReleaseControllerTests(unittest.TestCase):
+    def test_production_compose_up_never_controls_postgres_dependencies(
+        self,
+    ) -> None:
+        calls: list[tuple[Path, int, list[str]]] = []
+        for source_path in (
+            REPOSITORY_ROOT / "scripts/release_controller.py",
+            REPOSITORY_ROOT / "scripts/pull_deploy_controller.py",
+        ):
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                function = node.func
+                if (
+                    not isinstance(function, ast.Attribute)
+                    or function.attr not in {"compose", "_compose"}
+                ):
+                    continue
+                literals = [
+                    argument.value
+                    for argument in node.args
+                    if isinstance(argument, ast.Constant)
+                    and isinstance(argument.value, str)
+                ]
+                if "up" in literals:
+                    calls.append((source_path, node.lineno, literals))
+
+        self.assertEqual(len(calls), 12)
+        for source_path, line, literals in calls:
+            with self.subTest(source=source_path.name, line=line):
+                self.assertIn("--no-deps", literals)
+                self.assertNotIn("lab-postgres", literals)
+                self.assertNotIn("postgres-init", literals)
+                self.assertIn(literals[-1], {"backend", "nginx"})
+
     def setUp(self) -> None:
         for patcher in (
             mock.patch.object(
@@ -4640,7 +4676,8 @@ class ReleaseControllerTests(unittest.TestCase):
             if "up" in command and command[-1] == "backend"
         )
         self.assertIn("lab-postgres", pull_command)
-        self.assertIn("lab-postgres", backend_up)
+        self.assertNotIn("lab-postgres", backend_up)
+        self.assertIn("--no-deps", backend_up)
         self.assertEqual(
             events[-7:],
             ["contract", "monomer", "web", "freshness", "nginx", "health", "freshness"],
@@ -5064,7 +5101,8 @@ class ReleaseControllerTests(unittest.TestCase):
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[0][-2:], ["nginx", "backend"])
         self.assertIn("--wait-timeout", commands[1])
-        self.assertIn("lab-postgres", commands[1])
+        self.assertNotIn("lab-postgres", commands[1])
+        self.assertIn("--no-deps", commands[1])
         self.assertEqual(commands[1][-1], "backend")
         self.assertIn("app.generate_database_analytics_snapshot", commands[2])
         self.assertIn(previous_sha, commands[2])
