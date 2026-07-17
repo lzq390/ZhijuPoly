@@ -570,6 +570,124 @@ class ReleaseControllerTests(unittest.TestCase):
 
         self.assertEqual(actual_digest, digest)
 
+    def test_provenance_schema_v2_asset_verifies_all_tree_and_build_evidence(
+        self,
+    ) -> None:
+        release = self.make_asset_release()
+        manifest_path = release / "ASSET-MANIFEST.json"
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        tree_digests = {
+            tree: release_controller.sha256_bytes(
+                (
+                    json.dumps(
+                        {"files": document["assets"][tree]},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            for tree in ("model", "database", "backend-data", "byteff2")
+        }
+        unchanged_digests = {
+            tree: tree_digests[tree]
+            for tree in ("model", "database", "backend-data")
+        }
+        predecessor_digest = (
+            release_controller.SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+        )
+        document.update(
+            {
+                "predecessor_asset_digest": predecessor_digest,
+                "changed_asset_trees": ["byteff2"],
+                "unchanged_asset_tree_digests": unchanged_digests,
+                "asset_tree_digests": tree_digests,
+                "byteff2_tree": release_controller.BYTEFF2_GIT_TREE,
+                "byteff2_submodule_trees": {},
+                "build_provenance": {
+                    "schema_version": 1,
+                    "builder_source": {
+                        "repository": (
+                            release_controller.ASSET_BUILD_SOURCE_REPOSITORY
+                        ),
+                        "commit": "1" * 40,
+                        "tree": "2" * 40,
+                        "script_path": release_controller.ASSET_BUILD_SOURCE_SCRIPT,
+                        "script_blob": "3" * 40,
+                    },
+                    "evidence": {
+                        "predecessor_manifest_digest": predecessor_digest,
+                        "predecessor_all_trees_rehashed": [
+                            "model",
+                            "database",
+                            "backend-data",
+                            "byteff2",
+                        ],
+                        "unchanged_trees_byte_identical": [
+                            "model",
+                            "database",
+                            "backend-data",
+                        ],
+                        "byteff2_source_verification": (
+                            "clean-recursive-commit-and-tree"
+                        ),
+                        "staging_directory_mode": "0700",
+                        "file_and_directory_fsync": True,
+                        "publication": "atomic-rename",
+                        "existing_target": "full-content-revalidation",
+                    },
+                },
+            }
+        )
+        os.chmod(release, 0o755)
+        os.chmod(manifest_path, 0o644)
+        manifest_path.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(manifest_path, 0o444)
+        os.chmod(release, 0o555)
+        digest = release_controller.sha256_file(manifest_path)
+
+        with (
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS",
+                unchanged_digests,
+            ),
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_ASSET_MANIFEST_DIGEST",
+                digest,
+            ),
+        ):
+            _resolved, actual_digest, _commit = (
+                release_controller.inspect_asset_release(release)
+            )
+        self.assertEqual(actual_digest, digest)
+
+        os.chmod(release, 0o755)
+        os.chmod(manifest_path, 0o644)
+        document["build_provenance"]["builder_source"]["script_blob"] = "short"
+        manifest_path.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(manifest_path, 0o444)
+        os.chmod(release, 0o555)
+        with (
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS",
+                unchanged_digests,
+            ),
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "invalid builder identity",
+            ),
+        ):
+            release_controller.inspect_asset_release(release)
+
     def test_asset_release_rejects_unmanifested_or_writable_content(self) -> None:
         release = self.make_asset_release()
         model = release / "model"

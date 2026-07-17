@@ -135,6 +135,16 @@ class AssetBootstrapTests(unittest.TestCase):
             for tree_name in assets.UNCHANGED_ASSET_TREES
         }
 
+    @staticmethod
+    def builder_source() -> dict[str, str]:
+        return {
+            "repository": assets.BUILD_SOURCE_REPOSITORY,
+            "commit": "1" * 40,
+            "tree": "2" * 40,
+            "script_path": assets.BUILD_SOURCE_SCRIPT,
+            "script_blob": "3" * 40,
+        }
+
     def initialize_repository(
         self,
         root: Path,
@@ -258,11 +268,17 @@ class AssetBootstrapTests(unittest.TestCase):
         parent = "a" * 40
         child = "b" * 40
         manifest = assets.build_manifest(
-            {"byteff2": self.required_runtime_inventory()},
+            {
+                **{tree: [] for tree in assets.UNCHANGED_ASSET_TREES},
+                "byteff2": self.required_runtime_inventory(),
+            },
             byteff2_commit=parent,
+            byteff2_tree="d" * 40,
             byteff2_submodules={"vendor/nested": child},
+            byteff2_submodule_trees={"vendor/nested": "e" * 40},
             predecessor_digest=assets.PREDECESSOR_ASSET_DIGEST,
             predecessor_tree_digests=self.predecessor_tree_digests(),
+            builder_source=self.builder_source(),
         )
         self.assertEqual(manifest["schema_version"], 2)
         self.assertEqual(
@@ -271,6 +287,11 @@ class AssetBootstrapTests(unittest.TestCase):
         )
         self.assertEqual(manifest["changed_asset_trees"], ["byteff2"])
         self.assertEqual(manifest["byteff2_commit"], parent)
+        self.assertEqual(manifest["byteff2_tree"], "d" * 40)
+        self.assertEqual(
+            manifest["byteff2_submodule_trees"],
+            {"vendor/nested": "e" * 40},
+        )
         self.assertEqual(
             manifest["byteff2_source"],
             {
@@ -282,6 +303,24 @@ class AssetBootstrapTests(unittest.TestCase):
         self.assertEqual(
             manifest["byteff2_audited_overlays"],
             assets.byteff2_audited_overlays_manifest(),
+        )
+        self.assertEqual(set(manifest["asset_tree_digests"]), set(assets.ASSET_KEYS))
+        self.assertEqual(
+            manifest["build_provenance"]["builder_source"],
+            self.builder_source(),
+        )
+        self.assertEqual(
+            manifest["build_provenance"]["evidence"],
+            {
+                "predecessor_manifest_digest": assets.PREDECESSOR_ASSET_DIGEST,
+                "predecessor_all_trees_rehashed": list(assets.ASSET_KEYS),
+                "unchanged_trees_byte_identical": list(assets.UNCHANGED_ASSET_TREES),
+                "byteff2_source_verification": "clean-recursive-commit-and-tree",
+                "staging_directory_mode": "0700",
+                "file_and_directory_fsync": True,
+                "publication": "atomic-rename",
+                "existing_target": "full-content-revalidation",
+            },
         )
 
     def test_manifest_rejects_missing_or_changed_required_runtime_asset(self) -> None:
@@ -297,11 +336,17 @@ class AssetBootstrapTests(unittest.TestCase):
             with self.subTest(error=error):
                 with self.assertRaisesRegex(assets.AssetError, error):
                     assets.build_manifest(
-                        {"byteff2": inventory},
+                        {
+                            **{tree: [] for tree in assets.UNCHANGED_ASSET_TREES},
+                            "byteff2": inventory,
+                        },
                         byteff2_commit="a" * 40,
+                        byteff2_tree="d" * 40,
                         byteff2_submodules={},
+                        byteff2_submodule_trees={},
                         predecessor_digest=assets.PREDECESSOR_ASSET_DIGEST,
                         predecessor_tree_digests=self.predecessor_tree_digests(),
+                        builder_source=self.builder_source(),
                     )
 
     def test_required_runtime_asset_contract_pins_audited_digest(self) -> None:
@@ -332,9 +377,52 @@ class AssetBootstrapTests(unittest.TestCase):
             assets.BYTEFF2_GIT_REVISION,
             "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2",
         )
+        self.assertEqual(
+            assets.BYTEFF2_GIT_TREE,
+            "2d9ab46fc185e0e830be53c0ad077100e693ce68",
+        )
         assets.require_approved_byteff2_revision(assets.BYTEFF2_GIT_REVISION)
         with self.assertRaisesRegex(assets.AssetError, "official v1.0.0"):
             assets.require_approved_byteff2_revision("0" * 40)
+
+    def test_builder_source_identity_binds_clean_commit_tree_and_script_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "builder"
+            root.mkdir()
+            self.git(root, "init", "--quiet")
+            self.git(root, "config", "user.email", "ci@example.invalid")
+            self.git(root, "config", "user.name", "CI")
+            (root / "builder.py").write_text("print('builder')\n", encoding="utf-8")
+            self.git(root, "add", "builder.py")
+            self.git(root, "commit", "--quiet", "-m", "add builder")
+            commit = self.git(root, "rev-parse", "HEAD")
+            self.git(root, "remote", "add", "origin", assets.BUILD_SOURCE_REPOSITORY)
+
+            identity = assets.inspect_builder_source(
+                root,
+                script_path="builder.py",
+                expected_source=assets.BUILD_SOURCE_REPOSITORY,
+            )
+
+            self.assertEqual(identity["repository"], assets.BUILD_SOURCE_REPOSITORY)
+            self.assertEqual(identity["commit"], commit)
+            self.assertEqual(identity["tree"], self.git(root, "rev-parse", "HEAD^{tree}"))
+            self.assertEqual(
+                identity["script_blob"],
+                self.git(root, "rev-parse", "HEAD:builder.py"),
+            )
+
+            (root / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+            self.git(root, "add", ".gitignore")
+            self.git(root, "commit", "--quiet", "-m", "ignore cache")
+            (root / "__pycache__").mkdir()
+            (root / "__pycache__" / "builder.pyc").write_bytes(b"unreviewed")
+            with self.assertRaisesRegex(assets.AssetError, "no modified, untracked, or ignored"):
+                assets.inspect_builder_source(
+                    root,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
 
     def test_audited_overlay_contract_pins_hugging_face_revision_size_and_digest(self) -> None:
         self.assertEqual(
@@ -430,6 +518,11 @@ class AssetBootstrapTests(unittest.TestCase):
             expected_commit = self.initialize_repository(source)
 
             commit, submodules = assets.inspect_byteff2_checkout(source)
+            byteff2_tree, submodule_trees = assets.inspect_byteff2_tree_identity(
+                source,
+                expected_commit=commit,
+                expected_submodules=submodules,
+            )
             assets.copy_verified_byteff2(
                 source,
                 destination,
@@ -438,11 +531,17 @@ class AssetBootstrapTests(unittest.TestCase):
             )
             inventory = assets.inspect_tree(destination, hash_files=True)
             manifest = assets.build_manifest(
-                {"byteff2": inventory},
+                {
+                    **{tree: [] for tree in assets.UNCHANGED_ASSET_TREES},
+                    "byteff2": inventory,
+                },
                 byteff2_commit=expected_commit,
+                byteff2_tree=byteff2_tree,
                 byteff2_submodules={},
+                byteff2_submodule_trees=submodule_trees,
                 predecessor_digest=assets.PREDECESSOR_ASSET_DIGEST,
                 predecessor_tree_digests=self.predecessor_tree_digests(),
+                builder_source=self.builder_source(),
             )
 
             runtime_path, runtime_digest = assets.BYTEFF2_RUNTIME_REQUIRED_FILES[0]

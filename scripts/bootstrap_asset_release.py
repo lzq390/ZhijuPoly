@@ -29,6 +29,9 @@ FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256_DIGEST = re.compile(r"^sha256:([0-9a-f]{64})$")
 BYTEFF2_GIT_SOURCE = "https://github.com/ByteDance-Seed/byteff2.git"
 BYTEFF2_GIT_REVISION = "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2"
+BYTEFF2_GIT_TREE = "2d9ab46fc185e0e830be53c0ad077100e693ce68"
+BUILD_SOURCE_REPOSITORY = "https://github.com/lzq390/ZhijuPoly.git"
+BUILD_SOURCE_SCRIPT = "scripts/bootstrap_asset_release.py"
 BYTEFF2_RUNTIME_REQUIRED_FILES = (
     (
         "submodules/bytemol/bytemol/toolkit/infer_molecule/bond_length_ref.csv",
@@ -159,6 +162,104 @@ def git_output(root: Path, *arguments: str) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     ).stdout
+
+
+def git_tree(root: Path) -> str:
+    tree = git_output(root, "rev-parse", "--verify", "HEAD^{tree}").strip()
+    if not FULL_SHA.fullmatch(tree):
+        raise AssetError(f"repository does not resolve to a full tree SHA: {root}")
+    return tree
+
+
+def inspect_builder_source(
+    root: Path,
+    *,
+    script_path: str,
+    expected_source: str,
+) -> dict[str, str]:
+    """Bind a build to one clean committed implementation of this tool.
+
+    The output release digest cannot be committed before it exists.  The
+    builder identity therefore intentionally names the clean source commit
+    used to create the release; a later commit may publish the resulting
+    content-addressed digest without changing that historical identity.
+    """
+    root = root.resolve()
+    if not root.is_dir() or root.is_symlink():
+        raise AssetError(f"builder source must be a real directory: {root}")
+    top_level = Path(git_output(root, "rev-parse", "--show-toplevel").strip()).resolve()
+    if top_level != root:
+        raise AssetError("builder source must be the Git top-level directory")
+    source = git_output(root, "remote", "get-url", "origin").strip()
+    if source != expected_source:
+        raise AssetError("builder source origin differs from the approved repository")
+    commit = git_output(root, "rev-parse", "--verify", "HEAD^{commit}").strip()
+    tree = git_tree(root)
+    if not FULL_SHA.fullmatch(commit):
+        raise AssetError("builder source does not resolve to a full commit SHA")
+    relative = Path(script_path)
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or ".." in relative.parts
+        or relative.as_posix() != script_path
+    ):
+        raise AssetError("builder script path is invalid")
+    entries = _git_index_entries(root, script_path)
+    if len(entries) != 1:
+        raise AssetError("builder script must be tracked exactly once")
+    try:
+        metadata, raw_path = entries[0].split(b"\t", 1)
+        mode, blob_bytes, stage = metadata.split(b" ", 2)
+        indexed_path = raw_path.decode("utf-8")
+        blob = blob_bytes.decode("ascii")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise AssetError("cannot parse builder script index identity") from exc
+    if (
+        indexed_path != script_path
+        or mode not in {b"100644", b"100755"}
+        or stage != b"0"
+        or not FULL_SHA.fullmatch(blob)
+    ):
+        raise AssetError("builder script must be a stage-zero regular Git file")
+    committed_blob = git_output(root, "rev-parse", f"HEAD:{script_path}").strip()
+    worktree_blob = git_output(root, "hash-object", "--", script_path).strip()
+    if committed_blob != blob or worktree_blob != blob:
+        raise AssetError("builder script differs from its committed source")
+    status = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=matching",
+            "--ignore-submodules=none",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+    if status:
+        raise AssetError("builder source must contain no modified, untracked, or ignored content")
+    index_flags = git_output(root, "ls-files", "-v", "-z")
+    if any(entry and (entry[0] == "S" or entry[0].islower()) for entry in index_flags.split("\0")):
+        raise AssetError("builder source contains hidden index state")
+    if (
+        git_output(root, "rev-parse", "--verify", "HEAD^{commit}").strip() != commit
+        or git_tree(root) != tree
+        or git_output(root, "rev-parse", f"HEAD:{script_path}").strip() != blob
+    ):
+        raise AssetError("builder source identity changed while it was inspected")
+    return {
+        "repository": source,
+        "commit": commit,
+        "tree": tree,
+        "script_path": script_path,
+        "script_blob": blob,
+    }
 
 
 def _git_index_entries(root: Path, relative: str) -> list[bytes]:
@@ -416,6 +517,47 @@ def require_approved_byteff2_revision(revision: str) -> None:
         )
 
 
+def inspect_byteff2_tree_identity(
+    root: Path,
+    *,
+    expected_commit: str,
+    expected_submodules: dict[str, str],
+) -> tuple[str, dict[str, str]]:
+    """Resolve the root and every recursively discovered submodule tree."""
+    root_tree = git_tree(root)
+    submodule_trees: dict[str, str] = {}
+    for relative, expected_submodule_commit in sorted(expected_submodules.items()):
+        repository = root / relative
+        commit = git_output(
+            repository,
+            "rev-parse",
+            "--verify",
+            "HEAD^{commit}",
+        ).strip()
+        if commit != expected_submodule_commit:
+            raise AssetError(
+                f"ByteFF2 submodule identity changed before tree inspection: {relative}"
+            )
+        submodule_trees[relative] = git_tree(repository)
+    if (
+        git_output(root, "rev-parse", "--verify", "HEAD^{commit}").strip()
+        != expected_commit
+        or git_tree(root) != root_tree
+    ):
+        raise AssetError("ByteFF2 root identity changed while inspecting Git trees")
+    for relative, expected_tree in submodule_trees.items():
+        repository = root / relative
+        if (
+            git_output(repository, "rev-parse", "--verify", "HEAD^{commit}").strip()
+            != expected_submodules[relative]
+            or git_tree(repository) != expected_tree
+        ):
+            raise AssetError(
+                f"ByteFF2 submodule identity changed while inspecting Git trees: {relative}"
+            )
+    return root_tree, dict(sorted(submodule_trees.items()))
+
+
 def indexed_submodules(root: Path) -> list[tuple[str, str]]:
     """Return the path and pinned commit for each direct gitlink in *root*."""
     output = subprocess.run(
@@ -635,14 +777,29 @@ def build_manifest(
     assets: dict[str, list[dict[str, Any]]],
     *,
     byteff2_commit: str,
+    byteff2_tree: str,
     byteff2_submodules: dict[str, str],
+    byteff2_submodule_trees: dict[str, str],
     predecessor_digest: str,
     predecessor_tree_digests: dict[str, str],
+    builder_source: dict[str, str],
 ) -> dict[str, Any]:
     if not FULL_SHA.fullmatch(byteff2_commit):
         raise AssetError("ByteFF2 root does not resolve to a full commit SHA")
     if any(not FULL_SHA.fullmatch(commit) for commit in byteff2_submodules.values()):
         raise AssetError("ByteFF2 submodule does not resolve to a full commit SHA")
+    if not FULL_SHA.fullmatch(byteff2_tree):
+        raise AssetError("ByteFF2 root does not resolve to a full tree SHA")
+    if (
+        set(byteff2_submodule_trees) != set(byteff2_submodules)
+        or any(
+            not FULL_SHA.fullmatch(tree)
+            for tree in byteff2_submodule_trees.values()
+        )
+    ):
+        raise AssetError("ByteFF2 recursive submodule tree evidence is incomplete")
+    if byteff2_commit == BYTEFF2_GIT_REVISION and byteff2_tree != BYTEFF2_GIT_TREE:
+        raise AssetError("approved ByteFF2 commit resolves to the wrong Git tree")
     byteff2_assets = assets.get("byteff2")
     if not isinstance(byteff2_assets, list):
         raise AssetError("asset manifest must contain a ByteFF2 inventory")
@@ -651,15 +808,57 @@ def build_manifest(
         raise AssetError("asset manifest predecessor is not the approved schema-v1 release")
     if set(predecessor_tree_digests) != set(UNCHANGED_ASSET_TREES):
         raise AssetError("asset manifest predecessor tree evidence is incomplete")
+    if set(assets) != set(ASSET_KEYS):
+        raise AssetError("asset manifest content tree set is incomplete")
+    asset_tree_digests = {
+        tree_name: tree_inventory_digest(
+            normalized_inventory(assets[tree_name], label=tree_name)
+        )
+        for tree_name in ASSET_KEYS
+    }
+    expected_builder_fields = {
+        "repository",
+        "commit",
+        "tree",
+        "script_path",
+        "script_blob",
+    }
+    if (
+        set(builder_source) != expected_builder_fields
+        or builder_source.get("repository") != BUILD_SOURCE_REPOSITORY
+        or builder_source.get("script_path") != BUILD_SOURCE_SCRIPT
+        or any(
+            not FULL_SHA.fullmatch(str(builder_source.get(field, "")))
+            for field in ("commit", "tree", "script_blob")
+        )
+    ):
+        raise AssetError("asset builder source identity is invalid")
     return {
         "schema_version": 2,
         "predecessor_asset_digest": predecessor_digest,
         "changed_asset_trees": ["byteff2"],
         "unchanged_asset_tree_digests": dict(sorted(predecessor_tree_digests.items())),
+        "asset_tree_digests": dict(sorted(asset_tree_digests.items())),
         "byteff2_commit": byteff2_commit,
+        "byteff2_tree": byteff2_tree,
         "byteff2_submodules": dict(sorted(byteff2_submodules.items())),
+        "byteff2_submodule_trees": dict(sorted(byteff2_submodule_trees.items())),
         "byteff2_source": byteff2_source_manifest(byteff2_commit),
         "byteff2_audited_overlays": byteff2_audited_overlays_manifest(),
+        "build_provenance": {
+            "schema_version": 1,
+            "builder_source": dict(builder_source),
+            "evidence": {
+                "predecessor_manifest_digest": predecessor_digest,
+                "predecessor_all_trees_rehashed": list(ASSET_KEYS),
+                "unchanged_trees_byte_identical": list(UNCHANGED_ASSET_TREES),
+                "byteff2_source_verification": "clean-recursive-commit-and-tree",
+                "staging_directory_mode": "0700",
+                "file_and_directory_fsync": True,
+                "publication": "atomic-rename",
+                "existing_target": "full-content-revalidation",
+            },
+        },
         "assets": assets,
     }
 
@@ -903,11 +1102,24 @@ def main(argv: list[str] | None = None) -> int:
     store = Path(args.asset_store).resolve()
     byteff2 = Path(args.byteff2_root).resolve()
     try:
+        source_root = Path(__file__).resolve().parents[1]
+        builder_source = inspect_builder_source(
+            source_root,
+            script_path=BUILD_SOURCE_SCRIPT,
+            expected_source=BUILD_SOURCE_REPOSITORY,
+        )
         predecessor, predecessor_manifest, predecessor_assets, tree_digests = (
             load_verified_predecessor(store, args.predecessor_digest)
         )
         byteff2_commit, byteff2_submodules = inspect_byteff2_checkout(byteff2)
         require_approved_byteff2_revision(byteff2_commit)
+        byteff2_tree, byteff2_submodule_trees = inspect_byteff2_tree_identity(
+            byteff2,
+            expected_commit=byteff2_commit,
+            expected_submodules=byteff2_submodules,
+        )
+        if byteff2_tree != BYTEFF2_GIT_TREE:
+            raise AssetError("approved ByteFF2 revision has the wrong Git tree")
         byteff2_tracked_entries = [
             entry
             for entry in subprocess.run(
@@ -947,9 +1159,12 @@ def main(argv: list[str] | None = None) -> int:
             "byteff2_root": str(byteff2),
             "asset_store": str(store),
             "byteff2_commit": byteff2_commit,
+            "byteff2_tree": byteff2_tree,
             "byteff2_source": byteff2_source_manifest(byteff2_commit),
             "byteff2_submodules": byteff2_submodules,
+            "byteff2_submodule_trees": byteff2_submodule_trees,
             "byteff2_audited_overlays": byteff2_audited_overlays_manifest(),
+            "builder_source": builder_source,
             "summary": summary,
         }
         if not args.apply:
@@ -1037,9 +1252,12 @@ def main(argv: list[str] | None = None) -> int:
                 manifest = build_manifest(
                     assets,
                     byteff2_commit=byteff2_commit,
+                    byteff2_tree=byteff2_tree,
                     byteff2_submodules=byteff2_submodules,
+                    byteff2_submodule_trees=byteff2_submodule_trees,
                     predecessor_digest=args.predecessor_digest,
                     predecessor_tree_digests=tree_digests,
+                    builder_source=builder_source,
                 )
                 manifest_bytes = canonical(manifest)
                 digest = hashlib.sha256(manifest_bytes).hexdigest()

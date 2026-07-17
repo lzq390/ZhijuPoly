@@ -116,6 +116,9 @@ BYTEFF2_FORMAL_RUNTIME_ASSETS = (
 )
 BYTEFF2_GIT_SOURCE = "https://github.com/ByteDance-Seed/byteff2.git"
 BYTEFF2_GIT_REVISION = "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2"
+BYTEFF2_GIT_TREE = "2d9ab46fc185e0e830be53c0ad077100e693ce68"
+ASSET_BUILD_SOURCE_REPOSITORY = "https://github.com/lzq390/ZhijuPoly.git"
+ASSET_BUILD_SOURCE_SCRIPT = "scripts/bootstrap_asset_release.py"
 BYTEFF2_AUDITED_OVERLAY_SOURCE = "https://huggingface.co/ByteDance-Seed/byteff2"
 BYTEFF2_AUDITED_OVERLAY_REVISION = "b92ac49058c113625012c1f50d98a7bf9cf4e46e"
 BYTEFF2_AUDITED_OVERLAY_ASSETS = BYTEFF2_FORMAL_RUNTIME_ASSETS[1:]
@@ -2573,6 +2576,84 @@ def validate_byteff2_source(
     return {"source": source, "revision": revision}
 
 
+def validate_schema_v2_asset_provenance(
+    document: dict[str, Any],
+    *,
+    expected_trees: set[str],
+) -> None:
+    """Validate build/source evidence that is itself covered by the manifest digest."""
+    byteff2_tree = document.get("byteff2_tree")
+    submodules = document.get("byteff2_submodules")
+    submodule_trees = document.get("byteff2_submodule_trees")
+    asset_tree_digests = document.get("asset_tree_digests")
+    build_provenance = document.get("build_provenance")
+    if (
+        not isinstance(byteff2_tree, str)
+        or SHA_RE.fullmatch(byteff2_tree) is None
+        or (
+            document.get("byteff2_commit") == BYTEFF2_GIT_REVISION
+            and byteff2_tree != BYTEFF2_GIT_TREE
+        )
+        or not isinstance(submodules, dict)
+        or not isinstance(submodule_trees, dict)
+        or set(submodule_trees) != set(submodules)
+        or any(
+            not isinstance(tree, str) or SHA_RE.fullmatch(tree) is None
+            for tree in submodule_trees.values()
+        )
+        or not isinstance(asset_tree_digests, dict)
+        or set(asset_tree_digests) != expected_trees
+        or any(
+            not isinstance(digest, str) or DIGEST_RE.fullmatch(digest) is None
+            for digest in asset_tree_digests.values()
+        )
+    ):
+        raise ReleaseError("pinned schema-v2 asset manifest has invalid source provenance")
+
+    if (
+        not isinstance(build_provenance, dict)
+        or set(build_provenance) != {"schema_version", "builder_source", "evidence"}
+        or build_provenance.get("schema_version") != 1
+    ):
+        raise ReleaseError("pinned schema-v2 asset manifest has invalid build provenance")
+    builder_source = build_provenance.get("builder_source")
+    if (
+        not isinstance(builder_source, dict)
+        or set(builder_source)
+        != {"repository", "commit", "tree", "script_path", "script_blob"}
+        or builder_source.get("repository") != ASSET_BUILD_SOURCE_REPOSITORY
+        or builder_source.get("script_path") != ASSET_BUILD_SOURCE_SCRIPT
+        or any(
+            not isinstance(builder_source.get(field), str)
+            or SHA_RE.fullmatch(builder_source[field]) is None
+            for field in ("commit", "tree", "script_blob")
+        )
+    ):
+        raise ReleaseError("pinned schema-v2 asset manifest has invalid builder identity")
+    evidence = build_provenance.get("evidence")
+    expected_evidence = {
+        "predecessor_manifest_digest": document.get("predecessor_asset_digest"),
+        "predecessor_all_trees_rehashed": [
+            "model",
+            "database",
+            "backend-data",
+            "byteff2",
+        ],
+        "unchanged_trees_byte_identical": [
+            "model",
+            "database",
+            "backend-data",
+        ],
+        "byteff2_source_verification": "clean-recursive-commit-and-tree",
+        "staging_directory_mode": "0700",
+        "file_and_directory_fsync": True,
+        "publication": "atomic-rename",
+        "existing_target": "full-content-revalidation",
+    }
+    if evidence != expected_evidence:
+        raise ReleaseError("pinned schema-v2 asset manifest has invalid build evidence")
+
+
 def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
     asset_root = path.resolve()
     if not asset_root.is_dir():
@@ -2604,6 +2685,12 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
         "changed_asset_trees",
         "unchanged_asset_tree_digests",
     }
+    provenance_schema_v2_fields = predecessor_schema_v2_fields | {
+        "asset_tree_digests",
+        "byteff2_tree",
+        "byteff2_submodule_trees",
+        "build_provenance",
+    }
     schema_version = (
         document.get("schema_version") if isinstance(document, dict) else None
     )
@@ -2614,7 +2701,11 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
             or (
                 schema_version == 2
                 and frozenset(document)
-                in {frozenset(legacy_schema_v2_fields), frozenset(predecessor_schema_v2_fields)}
+                in {
+                    frozenset(legacy_schema_v2_fields),
+                    frozenset(predecessor_schema_v2_fields),
+                    frozenset(provenance_schema_v2_fields),
+                }
             )
         )
     )
@@ -2651,7 +2742,10 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
             document["byteff2_audited_overlays"],
             require_exact_identity=False,
         )
-        if set(document) == predecessor_schema_v2_fields:
+        if frozenset(document) in {
+            frozenset(predecessor_schema_v2_fields),
+            frozenset(provenance_schema_v2_fields),
+        }:
             if (
                 document["predecessor_asset_digest"]
                 != SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
@@ -2662,6 +2756,11 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
                 raise ReleaseError(
                     "pinned schema-v2 asset manifest has invalid predecessor evidence"
                 )
+        if set(document) == provenance_schema_v2_fields:
+            validate_schema_v2_asset_provenance(
+                document,
+                expected_trees=expected_trees,
+            )
     root_entries = {entry.name for entry in asset_root.iterdir()}
     if root_entries != expected_trees | {"ASSET-MANIFEST.json"}:
         raise ReleaseError("pinned asset release contains unmanifested root entries")
@@ -2759,7 +2858,11 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
                 )
         if (
             schema_version == 2
-            and set(document) == predecessor_schema_v2_fields
+            and frozenset(document)
+            in {
+                frozenset(predecessor_schema_v2_fields),
+                frozenset(provenance_schema_v2_fields),
+            }
             and tree_name in SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS
         ):
             inventory_payload = (
@@ -2779,10 +2882,31 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
                     "pinned schema-v2 unchanged asset tree evidence differs "
                     f"from its inventory: {tree_name}"
                 )
+        if (
+            schema_version == 2
+            and set(document) == provenance_schema_v2_fields
+        ):
+            inventory_payload = (
+                json.dumps(
+                    {"files": records},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            if sha256_bytes(inventory_payload) != document["asset_tree_digests"][tree_name]:
+                raise ReleaseError(
+                    "pinned schema-v2 asset tree digest differs "
+                    f"from its inventory: {tree_name}"
+                )
     digest = sha256_file(asset_manifest)
     if (
         schema_version == 2
-        and set(document) == predecessor_schema_v2_fields
+        and frozenset(document)
+        in {
+            frozenset(predecessor_schema_v2_fields),
+            frozenset(provenance_schema_v2_fields),
+        }
         and digest != SCHEMA_V2_ASSET_MANIFEST_DIGEST
     ):
         raise ReleaseError(
