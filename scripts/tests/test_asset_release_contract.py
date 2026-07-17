@@ -302,6 +302,68 @@ class AssetReleaseValidationTests(unittest.TestCase):
                     contract=fixture.contract,
                 )
 
+    def test_rejects_symlinked_release_root_and_writable_store_parent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw) / "asset-store"
+            store.mkdir(mode=0o700)
+            fixture = AssetFixture(store)
+            alias = Path(raw) / "asset-store-alias"
+            alias.symlink_to(store, target_is_directory=True)
+            with self.assertRaisesRegex(
+                ASSET.AssetContractError,
+                "asset-store container is unsafe",
+            ):
+                ASSET.validate_schema_v2_release(
+                    alias
+                    / "releases"
+                    / fixture.v2_digest.removeprefix("sha256:"),
+                    expected_digest=fixture.v2_digest,
+                    releases_root=alias / "releases",
+                    contract=fixture.contract,
+                )
+
+            releases_alias = store / "releases-alias"
+            releases_alias.symlink_to(
+                fixture.releases,
+                target_is_directory=True,
+            )
+            with self.assertRaisesRegex(
+                ASSET.AssetContractError,
+                "asset releases root is unsafe",
+            ):
+                ASSET.validate_schema_v2_release(
+                    releases_alias
+                    / fixture.v2_digest.removeprefix("sha256:"),
+                    expected_digest=fixture.v2_digest,
+                    releases_root=releases_alias,
+                    contract=fixture.contract,
+                )
+
+            store.chmod(0o722)
+            with self.assertRaisesRegex(
+                ASSET.AssetContractError,
+                "asset-store container is unsafe",
+            ):
+                ASSET.validate_schema_v2_release(
+                    fixture.v2_root,
+                    expected_digest=fixture.v2_digest,
+                    releases_root=fixture.releases,
+                    contract=fixture.contract,
+                )
+            store.chmod(0o755)
+            fixture.releases.chmod(0o755)
+            self.assertEqual(
+                ASSET.validate_schema_v2_release(
+                    fixture.v2_root,
+                    expected_digest=fixture.v2_digest,
+                    releases_root=fixture.releases,
+                    contract=fixture.contract,
+                )["manifest_sha256"],
+                fixture.v2_digest,
+            )
+
     def test_rejects_writable_extra_and_symlink_entries(self) -> None:
         for mutation, message in (
             ("writable", "unsafe"),
@@ -450,6 +512,22 @@ class BuilderBundleProofTests(unittest.TestCase):
                     target={"sha": target_sha, "tree": target_tree},
                     authority={"sha": authority_sha, "tree": authority_tree},
                 )
+            corrupted = parent / "corrupt.bundle"
+            payload = bytearray(bundle.read_bytes())
+            payload[-1] ^= 0xFF
+            corrupted.write_bytes(payload)
+            corrupted.chmod(0o600)
+            with self.assertRaisesRegex(
+                ASSET.AssetContractError,
+                "offline Git proof command failed",
+            ):
+                ASSET.verify_builder_from_bundle(
+                    corrupted,
+                    expected_bundle_sha256=ASSET.sha256_bytes(bytes(payload)),
+                    builder_source=builder,
+                    target={"sha": target_sha, "tree": target_tree},
+                    authority={"sha": authority_sha, "tree": authority_tree},
+                )
 
 
 class LivePointerSnapshotTests(unittest.TestCase):
@@ -488,6 +566,18 @@ class LivePointerSnapshotTests(unittest.TestCase):
                 first["manifest_sha256"],
                 second["manifest_sha256"],
             )
+            alias = root / "asset-alias"
+            alias.symlink_to(targets[0], target_is_directory=True)
+            pointer.unlink()
+            pointer.symlink_to(alias)
+            with self.assertRaisesRegex(
+                ASSET.AssetContractError,
+                "target is unsafe",
+            ):
+                ASSET.snapshot_live_asset_pointer(
+                    pointer,
+                    releases_root=releases,
+                )
 
     def test_absent_pointer_is_explicit_and_relative_target_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

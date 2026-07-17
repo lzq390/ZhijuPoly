@@ -347,6 +347,29 @@ def _validate_directory(
     return metadata
 
 
+def _validate_release_store(path: Path, *, expected_uid: int) -> None:
+    """Trust both the asset-store container and its releases directory."""
+
+    for candidate, label in (
+        (path.parent, "asset-store container"),
+        (path, "asset releases root"),
+    ):
+        try:
+            metadata = candidate.lstat()
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise AssetContractError(f"{label} is unavailable") from exc
+        if (
+            not candidate.is_absolute()
+            or resolved != candidate
+            or not stat.S_ISDIR(metadata.st_mode)
+            or candidate.is_symlink()
+            or metadata.st_uid != expected_uid
+            or metadata.st_mode & 0o022
+        ):
+            raise AssetContractError(f"{label} is unsafe")
+
+
 def _normalized_records(
     value: object,
     *,
@@ -547,6 +570,7 @@ def validate_schema_v1_release(
 
     expected_digest = require_digest(expected_digest, "predecessor asset digest")
     expected_uid = os.geteuid() if expected_uid is None else expected_uid
+    _validate_release_store(releases_root, expected_uid=expected_uid)
     expected_root = releases_root / expected_digest.removeprefix("sha256:")
     if root != expected_root:
         raise AssetContractError("predecessor release path differs from its digest")
@@ -593,6 +617,7 @@ def validate_schema_v2_release(
 
     expected_digest = require_digest(expected_digest, "schema-v2 asset digest")
     expected_uid = os.geteuid() if expected_uid is None else expected_uid
+    _validate_release_store(releases_root, expected_uid=expected_uid)
     expected_root = releases_root / expected_digest.removeprefix("sha256:")
     if root != expected_root:
         raise AssetContractError("schema-v2 release path differs from its digest")
@@ -758,7 +783,10 @@ def validate_schema_v2_release(
 
 
 def _private_file_digest(path: Path, *, expected_uid: int) -> str:
-    metadata = path.lstat()
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise AssetContractError("offline Git bundle is unavailable") from exc
     if (
         not stat.S_ISREG(metadata.st_mode)
         or path.is_symlink()
@@ -801,16 +829,19 @@ def _git_run(
     environment: Mapping[str, str],
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        arguments,
-        cwd=cwd,
-        env=dict(environment),
-        check=check,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=120,
-    )
+    try:
+        return subprocess.run(
+            arguments,
+            cwd=cwd,
+            env=dict(environment),
+            check=check,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise AssetContractError("offline Git proof command failed") from exc
 
 
 def verify_builder_from_bundle(
@@ -829,6 +860,10 @@ def verify_builder_from_bundle(
         expected_bundle_sha256,
         "offline Git bundle",
     )
+    try:
+        bundle_before = bundle_path.lstat()
+    except OSError as exc:
+        raise AssetContractError("offline Git bundle is unavailable") from exc
     if _private_file_digest(bundle_path, expected_uid=expected_uid) != (
         expected_bundle_sha256
     ):
@@ -933,6 +968,27 @@ def verify_builder_from_bundle(
             (target_sha, target_tree, "B1 target"),
             (authority_sha, authority_tree, "F authority"),
         ):
+            commit_type_result = _git_run(
+                ["git", "-C", str(clone), "cat-file", "-t", sha],
+                cwd=None,
+                environment=environment,
+                check=False,
+            )
+            tree_type_result = _git_run(
+                ["git", "-C", str(clone), "cat-file", "-t", tree],
+                cwd=None,
+                environment=environment,
+                check=False,
+            )
+            if (
+                commit_type_result.returncode != 0
+                or commit_type_result.stdout.strip() != "commit"
+                or tree_type_result.returncode != 0
+                or tree_type_result.stdout.strip() != "tree"
+            ):
+                raise AssetContractError(
+                    f"{label} does not name an exact commit and tree"
+                )
             observed = _git_run(
                 ["git", "-C", str(clone), "rev-parse", f"{sha}^{{tree}}"],
                 cwd=None,
@@ -951,7 +1007,17 @@ def verify_builder_from_bundle(
             cwd=None,
             environment=environment,
         ).stdout.strip()
-        if observed_blob != builder_blob:
+        blob_type_result = _git_run(
+            ["git", "-C", str(clone), "cat-file", "-t", builder_blob],
+            cwd=None,
+            environment=environment,
+            check=False,
+        )
+        if (
+            observed_blob != builder_blob
+            or blob_type_result.returncode != 0
+            or blob_type_result.stdout.strip() != "blob"
+        ):
             raise AssetContractError("B0 builder script blob differs in offline bundle")
         for ancestor, descendant, label in (
             (builder_sha, target_sha, "B0 -> B1"),
@@ -976,6 +1042,18 @@ def verify_builder_from_bundle(
                 raise AssetContractError(
                     f"offline bundle does not prove strict ancestry: {label}"
                 )
+    try:
+        bundle_after = bundle_path.lstat()
+    except OSError as exc:
+        raise AssetContractError(
+            "offline Git bundle disappeared during proof"
+        ) from exc
+    if (
+        _metadata_identity(bundle_after) != _metadata_identity(bundle_before)
+        or _private_file_digest(bundle_path, expected_uid=expected_uid)
+        != expected_bundle_sha256
+    ):
+        raise AssetContractError("offline Git bundle changed during proof")
     identity = {
         "schema_version": 1,
         "bundle_sha256": expected_bundle_sha256,
@@ -1018,7 +1096,8 @@ def snapshot_live_asset_pointer(
     ):
         raise AssetContractError("live asset pointer is not a deploy-user symlink")
     raw_target = os.readlink(pointer)
-    if not Path(raw_target).is_absolute():
+    raw_target_path = Path(raw_target)
+    if not raw_target_path.is_absolute():
         raise AssetContractError("live asset pointer target must be absolute")
     try:
         resolved = pointer.resolve(strict=True)
@@ -1026,7 +1105,8 @@ def snapshot_live_asset_pointer(
     except OSError as exc:
         raise AssetContractError("live asset pointer target is unavailable") from exc
     if (
-        resolved.parent != releases_root
+        raw_target_path != resolved
+        or resolved.parent != releases_root
         or HEX_DIGEST_RE.fullmatch(resolved.name) is None
         or not stat.S_ISDIR(target_metadata.st_mode)
         or resolved.is_symlink()
@@ -1034,6 +1114,7 @@ def snapshot_live_asset_pointer(
         or target_metadata.st_mode & 0o222
     ):
         raise AssetContractError("live asset pointer target is unsafe")
+    _validate_release_store(releases_root, expected_uid=expected_uid)
     manifest = resolved / "ASSET-MANIFEST.json"
     _bytes, manifest_sha256, _manifest_metadata = _read_regular(
         manifest,
