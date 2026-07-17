@@ -850,7 +850,11 @@ def validate_existing_release(
     if not isinstance(assets, dict) or set(assets) != set(ASSET_KEYS):
         raise AssetError("existing asset release inventory is invalid")
     for tree_name in ASSET_KEYS:
-        if inspect_tree(destination / tree_name, hash_files=True) != assets[tree_name]:
+        expected = assets[tree_name]
+        if not isinstance(expected, list) or normalized_inventory(
+            inspect_tree(destination / tree_name, hash_files=True),
+            label=tree_name,
+        ) != normalized_inventory(expected, label=tree_name):
             raise AssetError(f"existing asset release tree is invalid: {tree_name}")
 
 
