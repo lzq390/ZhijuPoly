@@ -62,6 +62,11 @@
       "mode": 448
     },
     {
+      "name": "git_source_trust.py",
+      "source": "scripts/git_source_trust.py",
+      "mode": 448
+    },
+    {
       "name": "legacy_takeover.py",
       "source": "scripts/legacy_takeover.py",
       "mode": 448

@@ -58,6 +58,7 @@ RECOVERY_FILES = {
     "bridge_recovery_launcher.py",
     "bootstrap_pull_deploy.py",
     "bridge_deploy_core.py",
+    "git_source_trust.py",
     "legacy_takeover.py",
     "legacy_takeover_evidence.py",
     "maintenance_prefetch.py",
@@ -311,6 +312,7 @@ def validate_install_manifest(
         "installed",
         "helper_report_sha256",
         "classification_sha256",
+        "production_source_trust_sha256",
     }
     if (
         not isinstance(document, dict)
@@ -368,6 +370,11 @@ def validate_install_manifest(
         raise LegacyTakeoverEvidenceError(
             "legacy takeover classification differs from install manifest"
         )
+    _digest(
+        document.get("production_source_trust_sha256"),
+        "production source trust digest",
+        optional=True,
+    )
     pgpass = _private_file(
         runtime_root / "config/mutable-data-audit.pgpass",
         0o600,

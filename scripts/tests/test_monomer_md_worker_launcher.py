@@ -229,6 +229,7 @@ def test_stable_launcher_imports_sibling_runtime_when_executed_standalone(
     source_root = Path(__file__).resolve().parents[1]
     shutil.copy2(source_root / "monomer_md_worker_launcher.py", binary_root)
     shutil.copy2(source_root / "worker_slot_runtime.py", binary_root)
+    shutil.copy2(source_root / "git_source_trust.py", binary_root)
 
     completed = subprocess.run(
         [

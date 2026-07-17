@@ -50,6 +50,28 @@ def _load_site_helper_contracts() -> Any:
 
 SITE_HELPERS = _load_site_helper_contracts()
 
+
+def _load_git_source_trust() -> Any:
+    module_name = "nexpoly_legacy_git_source_trust"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = Path(__file__).with_name("git_source_trust.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Git source trust policy cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+GIT_SOURCE_TRUST = _load_git_source_trust()
+
 PRODUCTION_REPOSITORY = Path("/data/lzq/gith/nexpoly")
 PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 REPOSITORY_HTTPS_URL = "https://github.com/lzq390/ZhijuPoly.git"
@@ -1077,6 +1099,8 @@ class LiveSystem:
     def __init__(self, repository: Path, runtime_root: Path):
         self.repository = repository
         self.runtime_root = runtime_root
+        self._last_git_identity: dict[str, str] | None = None
+        self._last_git_trust_evidence: dict[str, Any] | None = None
         self.environment = {
             "PATH": "/usr/bin:/bin",
             "LANG": "C",
@@ -1114,10 +1138,24 @@ class LiveSystem:
         return completed.stdout
 
     def _git(self, arguments: list[str]) -> str:
-        return self._run(
-            ["/usr/bin/git", *arguments],
-            cwd=self.repository,
-        )
+        try:
+            GIT_SOURCE_TRUST.repository_preflight_evidence(
+                self.repository,
+                ambient=os.environ,
+            )
+            command = GIT_SOURCE_TRUST.safe_git_command(
+                self.repository,
+                *arguments,
+            )
+            environment = GIT_SOURCE_TRUST.safe_git_environment(
+                self.repository,
+                ambient=os.environ,
+            )
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "production Git trust preflight failed"
+            ) from exc
+        return self._run(command, cwd=self.repository, environment=environment)
 
     def origin_urls(self) -> tuple[list[str], list[str]]:
         fetch = self._git(["remote", "get-url", "--all", "origin"]).splitlines()
@@ -1144,9 +1182,8 @@ class LiveSystem:
             raise LegacyTakeoverError("Git origin switch is incomplete")
 
     def ignored_paths(self) -> list[str]:
-        payload = self._run(
+        payload = self._git(
             [
-                "/usr/bin/git",
                 "ls-files",
                 "--others",
                 "--ignored",
@@ -1154,8 +1191,7 @@ class LiveSystem:
                 "--directory",
                 "--no-empty-directory",
                 "-z",
-            ],
-            cwd=self.repository,
+            ]
         )
         return sorted(
             (_normal_relative_path(value) for value in payload.split("\0") if value),
@@ -1163,19 +1199,26 @@ class LiveSystem:
         )
 
     def worktree_clean(self) -> bool:
-        payload = self._run(
+        payload = self._git(
             [
-                "/usr/bin/git",
                 "status",
                 "--porcelain=v1",
                 "-z",
                 "--untracked-files=all",
-            ],
-            cwd=self.repository,
+            ]
         )
         return payload == ""
 
     def git_identity(self) -> dict[str, str]:
+        try:
+            preflight = GIT_SOURCE_TRUST.repository_preflight_evidence(
+                self.repository,
+                ambient=os.environ,
+            )
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "production Git trust preflight failed"
+            ) from exc
         branch = self._git(["symbolic-ref", "--quiet", "HEAD"]).strip()
         identity = {
             "branch": branch,
@@ -1200,7 +1243,44 @@ class LiveSystem:
             raise LegacyTakeoverError(
                 "production checkout is not exact local main"
             )
+        try:
+            fetch, push = self.origin_urls()
+            origin = fetch[0] if fetch == push and len(fetch) == 1 else None
+            evidence = GIT_SOURCE_TRUST.repository_trust_evidence(
+                self.repository,
+                source_sha=identity["head_sha"],
+                source_tree=identity["head_tree"],
+                branch=identity["branch"],
+                origin=origin,
+                ambient=os.environ,
+            )
+            GIT_SOURCE_TRUST.require_stable_trust_surface(
+                preflight,
+                evidence,
+            )
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "production Git trust evidence changed"
+            ) from exc
+        self._last_git_identity = dict(identity)
+        self._last_git_trust_evidence = evidence
         return identity
+
+    def git_trust_evidence(
+        self,
+        identity: dict[str, str],
+    ) -> dict[str, Any]:
+        if (
+            self._last_git_identity != identity
+            or self._last_git_trust_evidence is None
+        ):
+            current = self.git_identity()
+            if current != identity:
+                raise LegacyTakeoverError(
+                    "production Git identity changed before evidence binding"
+                )
+        assert self._last_git_trust_evidence is not None
+        return json.loads(canonical_json_bytes(self._last_git_trust_evidence))
 
     def helper_report(self) -> dict[str, Any]:
         try:
@@ -1890,6 +1970,8 @@ class LegacyTakeover:
             "sealed_at",
             "drained_at",
             "runtime_stopped_at",
+            "git_trust_evidence",
+            "git_trust_applied",
         }
         if (
             not isinstance(value, dict)
@@ -1965,6 +2047,33 @@ class LegacyTakeover:
             or git_identity["head_sha"] != git_identity["local_main_sha"]
         ):
             raise LegacyTakeoverError("takeover Git seal is invalid")
+        for field in ("git_trust_evidence", "git_trust_applied"):
+            if field not in value:
+                continue
+            trust = value[field]
+            source = trust.get("source") if isinstance(trust, dict) else None
+            if (
+                not isinstance(trust, dict)
+                or trust.get("schema_version") != 1
+                or trust.get("policy") != GIT_SOURCE_TRUST.POLICY_NAME
+                or not isinstance(source, dict)
+                or source.get("sha") != git_identity["head_sha"]
+                or source.get("tree") != git_identity["head_tree"]
+                or source.get("branch") != git_identity["branch"]
+                or trust.get("evidence_sha256")
+                != sha256_bytes(
+                    canonical_json_bytes(
+                        {
+                            key: item
+                            for key, item in trust.items()
+                            if key != "evidence_sha256"
+                        }
+                    )
+                )
+            ):
+                raise LegacyTakeoverError(
+                    "takeover Git trust evidence is invalid"
+                )
         classification_paths = value.get("classification_paths")
         if (
             not isinstance(classification_paths, list)
@@ -2337,6 +2446,46 @@ class LegacyTakeover:
             )
         return dict(value)
 
+    def _git_trust_evidence(
+        self,
+        identity: dict[str, str],
+    ) -> dict[str, Any] | None:
+        provider = getattr(self.system, "git_trust_evidence", None)
+        if provider is None:
+            # Test doubles do not execute production Git.  The installed
+            # LiveSystem always supplies this method.
+            return None
+        try:
+            evidence = provider(identity)
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "production Git trust evidence is unavailable"
+            ) from exc
+        if not isinstance(evidence, dict):
+            raise LegacyTakeoverError("production Git trust evidence is invalid")
+        evidence_digest = evidence.get("evidence_sha256")
+        unsigned = {
+            key: value
+            for key, value in evidence.items()
+            if key != "evidence_sha256"
+        }
+        source = evidence.get("source")
+        if (
+            evidence.get("schema_version") != 1
+            or evidence.get("policy") != GIT_SOURCE_TRUST.POLICY_NAME
+            or not isinstance(source, dict)
+            or source.get("sha") != identity["head_sha"]
+            or source.get("tree") != identity["head_tree"]
+            or source.get("branch") != identity["branch"]
+            or not isinstance(evidence_digest, str)
+            or evidence_digest
+            != sha256_bytes(canonical_json_bytes(unsigned))
+        ):
+            raise LegacyTakeoverError(
+                "production Git trust evidence is not content-bound"
+            )
+        return json.loads(canonical_json_bytes(evidence))
+
     def _assert_checkout(
         self,
         state: dict[str, Any],
@@ -2351,8 +2500,10 @@ class LegacyTakeover:
             or fetch[0] not in allowed_origins
         ):
             raise LegacyTakeoverError("Git origin failed takeover CAS")
-        if self._git_identity() != state["git_identity"]:
+        current_identity = self._git_identity()
+        if current_identity != state["git_identity"]:
             raise LegacyTakeoverError("production checkout HEAD/tree/main drifted")
+        self._git_trust_evidence(current_identity)
         if not self.system.worktree_clean():
             raise LegacyTakeoverError(
                 "production checkout has tracked or non-ignored untracked changes"
@@ -2421,6 +2572,7 @@ class LegacyTakeover:
             return state
         self._require_origin(REPOSITORY_HTTPS_URL)
         git_identity = self._git_identity()
+        git_trust_evidence = self._git_trust_evidence(git_identity)
         if not self.system.worktree_clean():
             raise LegacyTakeoverError(
                 "production checkout has tracked or non-ignored untracked changes"
@@ -2600,6 +2752,8 @@ class LegacyTakeover:
             ),
             "moves": moves,
         }
+        if git_trust_evidence is not None:
+            state["git_trust_evidence"] = git_trust_evidence
         self._save(state)
         self._checkpoint("sealed")
         return state
@@ -2677,6 +2831,12 @@ class LegacyTakeover:
             "classification_sha256": state["classification_sha256"],
             "classification_review_id": state["classification_review_id"],
             "git_identity": state["git_identity"],
+            "git_trust_evidence_sha256": (
+                state.get("git_trust_evidence", {}).get("evidence_sha256")
+            ),
+            "git_trust_applied_sha256": (
+                state.get("git_trust_applied", {}).get("evidence_sha256")
+            ),
             "helper_report_sha256": state["helper_report_sha256"],
             "runtime_identity_sha256": state["runtime_identity_sha256"],
             "runtime_evidence_sha256": state["runtime_evidence_sha256"],
@@ -3085,6 +3245,10 @@ class LegacyTakeover:
                     state,
                     allowed_origins={REPOSITORY_SSH_URL},
                 )
+                applied_identity = self._git_identity()
+                applied_trust = self._git_trust_evidence(applied_identity)
+                if applied_trust is not None:
+                    state["git_trust_applied"] = applied_trust
                 state["applied_record_sha256"] = self._applied_record_digest(
                     state
                 )

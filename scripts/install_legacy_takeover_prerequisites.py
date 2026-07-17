@@ -8,6 +8,7 @@ import configparser
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,27 @@ import sys
 import types
 from typing import Any, Callable, Iterator
 
+
+def _load_git_source_trust() -> Any:
+    module_name = "nexpoly_installer_git_source_trust"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = Path(__file__).with_name("git_source_trust.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Git source trust policy cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+GIT_SOURCE_TRUST = _load_git_source_trust()
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
@@ -42,6 +64,7 @@ RECOVERY_FILES = {
     "legacy_takeover_evidence.py": "scripts/legacy_takeover_evidence.py",
     "maintenance_prefetch.py": "scripts/maintenance_prefetch.py",
     "postgres_media_evidence.py": "scripts/postgres_media_evidence.py",
+    "git_source_trust.py": "scripts/git_source_trust.py",
     "worker_slot_runtime.py": "scripts/worker_slot_runtime.py",
     "site_helper_contracts.py": "scripts/site_helper_contracts.py",
     "nexpoly-legacy-takeover": "scripts/nexpoly-legacy-takeover",
@@ -242,27 +265,16 @@ def _assert_minimal_private_source(root: Path) -> tuple[Path, Path]:
 
 
 def _authority_git_environment(root: Path) -> dict[str, str]:
-    git_dir, work_tree = _assert_minimal_private_source(root)
-    return {
-        "PATH": "/usr/bin:/bin",
-        "HOME": "/nonexistent",
-        "LC_ALL": "C",
-        "GIT_DIR": str(git_dir),
-        "GIT_WORK_TREE": str(work_tree),
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_OPTIONAL_LOCKS": "0",
-        "GIT_NO_LAZY_FETCH": "1",
-        "GIT_NO_REPLACE_OBJECTS": "1",
-        "GIT_PROTOCOL_FROM_USER": "0",
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_ATTR_NOSYSTEM": "1",
-        "GIT_ASKPASS": "/bin/false",
-        "GIT_SSH_COMMAND": "/bin/false",
-        "SSH_ASKPASS": "/bin/false",
-        "GIT_PAGER": "cat",
-        "GIT_EDITOR": "/bin/false",
-    }
+    _assert_minimal_private_source(root)
+    try:
+        return GIT_SOURCE_TRUST.safe_git_environment(
+            root,
+            ambient=os.environ,
+        )
+    except Exception as exc:
+        raise PrerequisiteInstallError(
+            "fresh F source Git environment is unsafe"
+        ) from exc
 
 
 def _private_directory(path: Path, *, create: bool = False) -> None:
@@ -366,39 +378,67 @@ def _authority_payload(root: Path, authority_sha: str, relative: str) -> bytes:
     ):
         raise PrerequisiteInstallError("F authority path is invalid")
     try:
+        preflight = GIT_SOURCE_TRUST.repository_preflight_evidence(
+            root,
+            ambient=os.environ,
+        )
         result = subprocess.run(
-            [
-                "/usr/bin/git",
-                "--no-replace-objects",
-                "-c",
-                "credential.helper=",
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "core.fsmonitor=false",
-                "-c",
-                "core.untrackedCache=false",
-                "-c",
-                "core.attributesFile=/dev/null",
-                "-c",
-                f"core.worktree={root.absolute()}",
-                "-c",
-                "protocol.allow=never",
-                "-c",
-                "remote.origin.promisor=false",
+            GIT_SOURCE_TRUST.safe_git_command(
+                root,
                 "cat-file",
                 "blob",
                 f"{authority_sha}:{relative}",
-            ],
+            ),
             cwd=root,
             env=_authority_git_environment(root),
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except Exception as exc:
         raise PrerequisiteInstallError(
             f"cannot read F authority blob: {relative}"
+        ) from exc
+    try:
+        tree = subprocess.run(
+            GIT_SOURCE_TRUST.safe_git_command(
+                root,
+                "rev-parse",
+                f"{authority_sha}^{{tree}}",
+            ),
+            cwd=root,
+            env=_authority_git_environment(root),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+        origin = subprocess.run(
+            GIT_SOURCE_TRUST.safe_git_command(
+                root,
+                "remote",
+                "get-url",
+                "origin",
+            ),
+            cwd=root,
+            env=_authority_git_environment(root),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+        evidence = GIT_SOURCE_TRUST.repository_trust_evidence(
+            root,
+            source_sha=authority_sha,
+            source_tree=tree,
+            branch="refs/heads/main",
+            origin=origin,
+            ambient=os.environ,
+        )
+        GIT_SOURCE_TRUST.require_stable_trust_surface(preflight, evidence)
+    except Exception as exc:
+        raise PrerequisiteInstallError(
+            "F authority Git trust evidence changed"
         ) from exc
     return result.stdout
 
@@ -593,7 +633,105 @@ def verify_fresh_source(
         or report.get("sparse_index") is not False
     ):
         raise PrerequisiteInstallError("fresh F source identity differs")
+    if authority_reader is _authority_payload:
+        try:
+            preflight = GIT_SOURCE_TRUST.repository_preflight_evidence(
+                source_root,
+                ambient=os.environ,
+            )
+            trust = GIT_SOURCE_TRUST.repository_trust_evidence(
+                source_root,
+                source_sha=authority_sha,
+                source_tree=authority_tree,
+                branch="refs/heads/main",
+                origin=REPOSITORY_SSH_URL,
+                ambient=os.environ,
+            )
+            GIT_SOURCE_TRUST.require_stable_trust_surface(
+                preflight,
+                trust,
+            )
+        except Exception as exc:
+            raise PrerequisiteInstallError(
+                "fresh F Git trust evidence changed"
+            ) from exc
+        report = {**report, "git_source_trust": trust}
     return report
+
+
+def _production_ignored_inventory(
+    production_root: Path,
+) -> tuple[list[str], dict[str, Any]]:
+    """Enumerate ignored paths under the same sealed Git interpretation."""
+
+    try:
+        preflight = GIT_SOURCE_TRUST.repository_preflight_evidence(
+            production_root,
+            ambient=os.environ,
+        )
+        environment = GIT_SOURCE_TRUST.safe_git_environment(
+            production_root,
+            ambient=os.environ,
+        )
+
+        def git(*arguments: str, text: bool = True) -> str | bytes:
+            return subprocess.run(
+                GIT_SOURCE_TRUST.safe_git_command(
+                    production_root,
+                    *arguments,
+                ),
+                cwd=production_root,
+                env=environment,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=text,
+            ).stdout
+
+        branch = str(git("symbolic-ref", "--quiet", "HEAD")).strip()
+        source_sha = str(
+            git("rev-parse", "--verify", "HEAD^{commit}")
+        ).strip()
+        source_tree = str(
+            git("rev-parse", "--verify", "HEAD^{tree}")
+        ).strip()
+        origin = str(git("remote", "get-url", "origin")).strip()
+        payload = bytes(
+            git(
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+                "--no-empty-directory",
+                "-z",
+                text=False,
+            )
+        )
+        evidence = GIT_SOURCE_TRUST.repository_trust_evidence(
+            production_root,
+            source_sha=source_sha,
+            source_tree=source_tree,
+            branch=branch,
+            origin=origin,
+            ambient=os.environ,
+        )
+        GIT_SOURCE_TRUST.require_stable_trust_surface(preflight, evidence)
+    except Exception as exc:
+        raise PrerequisiteInstallError(
+            "cannot enumerate trusted production ignored paths"
+        ) from exc
+    try:
+        ignored = [
+            value.decode("utf-8").removesuffix("/")
+            for value in payload.split(b"\0")
+            if value
+        ]
+    except UnicodeError as exc:
+        raise PrerequisiteInstallError(
+            "production ignored path inventory is not UTF-8"
+        ) from exc
+    return ignored, evidence
 
 
 def _install_prerequisites_locked(
@@ -694,36 +832,18 @@ def _install_prerequisites_locked(
         "legacy_takeover_install_validator",
         source_payloads["legacy_takeover.py"],
         filename=f"git:{authority_sha}:scripts/legacy_takeover.py",
-        injected_modules={"site_helper_contracts": contracts},
+        injected_modules={
+            "site_helper_contracts": contracts,
+            "nexpoly_legacy_git_source_trust": GIT_SOURCE_TRUST,
+        },
     )
+    production_source_trust: dict[str, Any] | None = None
     if ignored_paths is None:
-        try:
-            payload = subprocess.run(
-                [
-                    "/usr/bin/git",
-                    "-C",
-                    str(production_root),
-                    "ls-files",
-                    "--others",
-                    "--ignored",
-                    "--exclude-standard",
-                    "--directory",
-                    "--no-empty-directory",
-                    "-z",
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            ).stdout
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise PrerequisiteInstallError(
-                "cannot enumerate production ignored paths"
-            ) from exc
-        ignored_paths = [
-            value.decode("utf-8").removesuffix("/")
-            for value in payload.split(b"\0")
-            if value
-        ]
+        ignored_paths, production_source_trust = (
+            _production_ignored_inventory(production_root)
+        )
+    if production_source_trust is not None:
+        plan["production_source_trust"] = production_source_trust
     try:
         classification_document = json.loads(classification)
         legacy.validate_classification(
@@ -817,6 +937,11 @@ def _install_prerequisites_locked(
             canonical_json_bytes(helper_report)
         ),
         "classification_sha256": sha256_bytes(classification),
+        "production_source_trust_sha256": (
+            production_source_trust["evidence_sha256"]
+            if production_source_trust is not None
+            else None
+        ),
     }
     installed_manifest = _install_exact(
         runtime_root / "legacy-takeover/INSTALL-MANIFEST.json",

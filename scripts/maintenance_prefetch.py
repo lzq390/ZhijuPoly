@@ -59,6 +59,7 @@ REQUIRED_RECOVERY_PATHS = {
     "scripts/bootstrap_pull_deploy.py",
     "scripts/control-release.json",
     "scripts/control_runtime_selector.py",
+    "scripts/git_source_trust.py",
     "scripts/install_legacy_takeover_prerequisites.py",
     "scripts/legacy_takeover.py",
     "scripts/legacy_takeover_evidence.py",
@@ -73,6 +74,7 @@ PREFETCH_CONTROLLER_PATHS = {
     "scripts/bridge_recovery_capsule.py",
     "scripts/bootstrap_pull_deploy.py",
     "scripts/bridge_deploy_core.py",
+    "scripts/git_source_trust.py",
     "scripts/maintenance_prefetch.py",
     "scripts/worker_slot_runtime.py",
 }

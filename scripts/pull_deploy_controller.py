@@ -168,6 +168,15 @@ def _load_site_helper_contracts() -> Any:
     return module
 
 
+def _load_git_source_trust() -> Any:
+    """Load the immutable production Git interpretation policy."""
+
+    return _load_exact_sibling_module(
+        "nexpoly_pull_deploy_git_source_trust",
+        "git_source_trust.py",
+    )
+
+
 def _load_control_runtime() -> Any:
     """Load the immutable stdlib-only control release validator."""
 
@@ -291,6 +300,7 @@ _worker_slot_runtime = _load_worker_slot_runtime()
 _control_runtime = _load_control_runtime()
 _bridge_core = _load_bridge_core()
 _site_helper_contracts = _load_site_helper_contracts()
+_git_source_trust = _load_git_source_trust()
 _legacy_takeover_evidence = _load_legacy_takeover_evidence()
 _asset_release_contract = _load_exact_sibling_module(
     "nexpoly_pull_deploy_asset_release_contract",
@@ -7854,17 +7864,6 @@ class PullDeployController:
             self.runner = original
 
     def _clean_environment(self) -> dict[str, str]:
-        environment = {
-            **self.control_environment(),
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_OPTIONAL_LOCKS": "0",
-            "GIT_NO_REPLACE_OBJECTS": "1",
-            "GIT_ATTR_NOSYSTEM": "1",
-            "GIT_DIR": str(self.production_root / ".git"),
-            "GIT_WORK_TREE": str(self.production_root),
-        }
         key = self.config_dir / "git-deploy-key"
         known_hosts = self.config_dir / "known_hosts"
         for path in (key, known_hosts):
@@ -7876,12 +7875,66 @@ class PullDeployController:
                 or stat.S_IMODE(metadata.st_mode) != 0o600
             ):
                 raise PullDeployError(f"Git credential material is unsafe: {path}")
-        environment["GIT_SSH_COMMAND"] = (
+        ssh_command = (
             f"/usr/bin/ssh -i {key} -o IdentitiesOnly=yes "
             f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts} "
             "-o BatchMode=yes"
         )
-        return environment
+        if self.test_root_mode and not self._has_complete_test_git_layout():
+            # Existing unit-test runners model Git without a filesystem
+            # repository.  This branch is unreachable for the fixed
+            # production root.
+            return {
+                **self.control_environment(),
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_NO_REPLACE_OBJECTS": "1",
+                "GIT_ATTR_NOSYSTEM": "1",
+                "GIT_DIR": str(self.production_root / ".git"),
+                "GIT_WORK_TREE": str(self.production_root),
+                "GIT_SSH_COMMAND": ssh_command,
+            }
+        try:
+            return _git_source_trust.safe_git_environment(
+                self.production_root,
+                ambient=os.environ,
+                home=str(DEPLOY_USER_HOME),
+                ssh_command=ssh_command,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "production Git execution environment is unsafe"
+            ) from exc
+
+    def _has_complete_test_git_layout(self) -> bool:
+        git_dir = self.production_root / ".git"
+        return (
+            git_dir.is_dir()
+            and not git_dir.is_symlink()
+            and (git_dir / "objects").is_dir()
+            and (git_dir / "refs").is_dir()
+            and (git_dir / "config").is_file()
+            and (git_dir / "HEAD").is_file()
+            and (git_dir / "index").is_file()
+        )
+
+    def _git_trust_preflight(self) -> dict[str, Any] | None:
+        if self.test_root_mode and not self._has_complete_test_git_layout():
+            return None
+        environment = self._clean_environment()
+        try:
+            return _git_source_trust.repository_preflight_evidence(
+                self.production_root,
+                ambient=os.environ,
+                home=str(DEPLOY_USER_HOME),
+                ssh_command=environment["GIT_SSH_COMMAND"],
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "production Git trust preflight failed"
+            ) from exc
 
     def control_environment(self) -> dict[str, str]:
         return clean_control_environment(self.runtime_root)
@@ -8419,8 +8472,15 @@ class PullDeployController:
     def _git(
         self, *arguments: str, check: bool = True
     ) -> subprocess.CompletedProcess[Any]:
-        return self.runner.run(
-            [
+        preflight = self._git_trust_preflight()
+        command = (
+            _git_source_trust.safe_git_command(
+                self.production_root,
+                *arguments,
+                executable="git",
+            )
+            if preflight is not None
+            else [
                 "git",
                 "-c",
                 "credential.helper=",
@@ -8433,7 +8493,10 @@ class PullDeployController:
                 "-c",
                 f"core.worktree={self.production_root}",
                 *arguments,
-            ],
+            ]
+        )
+        return self.runner.run(
+            command,
             cwd=self.production_root,
             env=self._clean_environment(),
             check=check,
@@ -8441,7 +8504,8 @@ class PullDeployController:
 
     def repository_identity(
         self, *, require_ssh_origin: bool = False
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
+        preflight = self._git_trust_preflight()
         branch = str(self._git("symbolic-ref", "--short", "HEAD").stdout).strip()
         if branch != "main":
             raise PullDeployError("production checkout must be on local main")
@@ -8532,7 +8596,34 @@ class PullDeployController:
             str(self._git("rev-parse", "HEAD^{tree}").stdout).strip(),
             "current source tree",
         )
-        return {"sha": sha, "tree": tree, "origin": origin}
+        identity: dict[str, Any] = {
+            "sha": sha,
+            "tree": tree,
+            "origin": origin,
+        }
+        if preflight is not None:
+            environment = self._clean_environment()
+            try:
+                trust = _git_source_trust.repository_trust_evidence(
+                    self.production_root,
+                    source_sha=sha,
+                    source_tree=tree,
+                    branch="refs/heads/main",
+                    origin=origin,
+                    ambient=os.environ,
+                    home=str(DEPLOY_USER_HOME),
+                    ssh_command=environment["GIT_SSH_COMMAND"],
+                )
+                _git_source_trust.require_stable_trust_surface(
+                    preflight,
+                    trust,
+                )
+            except Exception as exc:
+                raise PullDeployError(
+                    "production Git trust evidence changed"
+                ) from exc
+            identity["trust"] = trust
+        return identity
 
     def ignored_runtime_entries(self) -> list[str]:
         result = self._git(
@@ -10313,6 +10404,7 @@ class PullDeployController:
             "runtime_root": str(self.runtime_root),
             "previous_sha": current["sha"],
             "previous_tree": current["tree"],
+            "source_trust": current.get("trust"),
             "target_sha": target_sha,
             "remote_main": remote,
             "deploy_origin_ready": current["origin"] == REPOSITORY_SSH_URL,
@@ -10676,6 +10768,7 @@ class PullDeployController:
             "legacy_takeover": takeover,
             "previous_sha": current["sha"],
             "previous_tree": current["tree"],
+            "source_trust": current.get("trust"),
             "deploy_origin_ready": current["origin"] == REPOSITORY_SSH_URL,
             "production_config": production_config,
             "stable_helpers": helpers,

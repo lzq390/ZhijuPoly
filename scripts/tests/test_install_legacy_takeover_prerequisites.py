@@ -277,7 +277,7 @@ def bootstrap_source_readiness(root, *, expected_sha):
             self.assertTrue(report["ready"])
             self.assertFalse(marker.exists())
 
-    def test_authority_reader_ignores_replace_refs_and_host_git_env(self) -> None:
+    def test_authority_reader_rejects_replace_refs_and_host_git_env(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="legacy-installer-authority-git-"
         ) as temporary:
@@ -337,21 +337,26 @@ def bootstrap_source_readiness(root, *, expected_sha):
             finally:
                 os.umask(previous_umask)
 
-            with mock.patch.dict(
-                os.environ,
-                {
-                    "GIT_DIR": "/definitely/untrusted",
-                    "GIT_WORK_TREE": "/definitely/untrusted",
-                    "GIT_NO_REPLACE_OBJECTS": "0",
-                    "GIT_CONFIG_GLOBAL": "/definitely/untrusted",
-                },
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "GIT_DIR": "/definitely/untrusted",
+                        "GIT_WORK_TREE": "/definitely/untrusted",
+                        "GIT_NO_REPLACE_OBJECTS": "0",
+                        "GIT_CONFIG_GLOBAL": "/definitely/untrusted",
+                    },
+                ),
+                self.assertRaisesRegex(
+                    INSTALLER.PrerequisiteInstallError,
+                    "cannot read F authority blob",
+                ),
             ):
-                observed = INSTALLER._authority_payload(
+                INSTALLER._authority_payload(
                     source,
                     trusted,
                     "payload.txt",
                 )
-            self.assertEqual(observed, b"trusted\n")
 
     def test_source_pinned_install_is_complete_and_idempotent(self) -> None:
         fixture = InstallerFixture()

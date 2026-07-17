@@ -31,6 +31,28 @@ import urllib.parse
 
 sys.dont_write_bytecode = True
 
+
+def _load_git_source_trust() -> Any:
+    module_name = "nexpoly_alias_git_source_trust"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = Path(__file__).with_name("git_source_trust.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Git source trust policy cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+GIT_SOURCE_TRUST = _load_git_source_trust()
+
 PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
 RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 STATE_ROOT_RELATIVE = Path("state/maintenance/0005-polytao-alias")
@@ -962,7 +984,7 @@ def _require_restore_matches_before(
     return before, restored
 
 
-def _source_identity(runner: CommandRunner) -> dict[str, str]:
+def _source_identity(runner: CommandRunner) -> dict[str, Any]:
     try:
         metadata = PRODUCTION_ROOT.lstat()
     except OSError as exc:
@@ -974,11 +996,28 @@ def _source_identity(runner: CommandRunner) -> dict[str, str]:
         or metadata.st_mode & 0o022
     ):
         raise ReconcileError("legacy production checkout permissions are unsafe")
+    try:
+        preflight = GIT_SOURCE_TRUST.repository_preflight_evidence(
+            PRODUCTION_ROOT,
+            ambient=os.environ,
+        )
+        git_environment = GIT_SOURCE_TRUST.safe_git_environment(
+            PRODUCTION_ROOT,
+            ambient=os.environ,
+        )
+    except Exception as exc:
+        raise ReconcileError("legacy production Git trust preflight failed") from exc
     completed = _run_checked(
         runner,
-        [str(GIT), "-C", str(PRODUCTION_ROOT), "rev-parse", "HEAD", "HEAD^{tree}"],
+        GIT_SOURCE_TRUST.safe_git_command(
+            PRODUCTION_ROOT,
+            "rev-parse",
+            "HEAD",
+            "HEAD^{tree}",
+            executable=str(GIT),
+        ),
         label="legacy source identity",
-        env=CONTROL_ENVIRONMENT,
+        env=git_environment,
         timeout=30,
     )
     lines = str(completed.stdout).splitlines()
@@ -986,16 +1025,15 @@ def _source_identity(runner: CommandRunner) -> dict[str, str]:
         raise ReconcileError("legacy production checkout identity differs")
     status = _run_checked(
         runner,
-        [
-            str(GIT),
-            "-C",
-            str(PRODUCTION_ROOT),
+        GIT_SOURCE_TRUST.safe_git_command(
+            PRODUCTION_ROOT,
             "status",
             "--porcelain=v1",
             "--untracked-files=all",
-        ],
+            executable=str(GIT),
+        ),
         label="legacy source cleanliness",
-        env=CONTROL_ENVIRONMENT,
+        env=git_environment,
         timeout=30,
     )
     if str(status.stdout):
@@ -1016,7 +1054,25 @@ def _source_identity(runner: CommandRunner) -> dict[str, str]:
             or stat.S_IMODE(child.st_mode) != expected_mode
         ):
             raise ReconcileError("legacy production Git permissions are unsafe")
-    return {"sha": LEGACY_SOURCE_SHA, "tree": LEGACY_SOURCE_TREE}
+    try:
+        evidence = GIT_SOURCE_TRUST.repository_trust_evidence(
+            PRODUCTION_ROOT,
+            source_sha=LEGACY_SOURCE_SHA,
+            source_tree=LEGACY_SOURCE_TREE,
+            branch="refs/heads/main",
+            origin=None,
+            ambient=os.environ,
+        )
+        GIT_SOURCE_TRUST.require_stable_trust_surface(preflight, evidence)
+    except Exception as exc:
+        raise ReconcileError(
+            "legacy production Git trust evidence changed"
+        ) from exc
+    return {
+        "sha": LEGACY_SOURCE_SHA,
+        "tree": LEGACY_SOURCE_TREE,
+        "trust": evidence,
+    }
 
 
 def _control_identity(environment: Mapping[str, str]) -> dict[str, Any]:
