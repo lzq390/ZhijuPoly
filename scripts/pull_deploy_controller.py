@@ -459,6 +459,17 @@ MARKER_OPTIONAL_FIELDS = {
     "rollback_backup_operation_id",
     "pre_stop_abort",
     "runtime_start_intent",
+    "postgres_runtime_fence",
+}
+
+POSTGRES_RUNTIME_FENCE_FIELDS = {
+    "schema_version",
+    "container_id",
+    "image_id",
+    "configured_image",
+    "data_volume",
+    "system_identifier",
+    "captured_at",
 }
 
 
@@ -603,6 +614,52 @@ def validate_production_config_evidence(document: object) -> dict[str, str]:
     for key in sorted(PRODUCTION_CONFIG_FIELDS):
         require_digest(document.get(key), f"production configuration {key}")
     return dict(document)
+
+
+def validate_postgres_runtime_fence(document: object) -> dict[str, Any]:
+    """Validate the immutable identity of the live production PostgreSQL."""
+
+    if (
+        not isinstance(document, dict)
+        or set(document) != POSTGRES_RUNTIME_FENCE_FIELDS
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("container_id"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", document["container_id"]) is None
+        or not isinstance(document.get("image_id"), str)
+        or DIGEST_RE.fullmatch(document["image_id"]) is None
+        or not isinstance(document.get("configured_image"), str)
+        or not document["configured_image"]
+        or not isinstance(document.get("system_identifier"), str)
+        or re.fullmatch(r"[0-9]{10,30}", document["system_identifier"]) is None
+        or not isinstance(document.get("captured_at"), str)
+        or not document["captured_at"]
+    ):
+        raise PullDeployError("PostgreSQL runtime fence has an invalid shape")
+    volume = document.get("data_volume")
+    if (
+        not isinstance(volume, dict)
+        or set(volume)
+        != {"type", "name", "source", "destination", "driver", "read_write"}
+        or volume.get("type") != "volume"
+        or not isinstance(volume.get("name"), str)
+        or not volume["name"]
+        or not isinstance(volume.get("source"), str)
+        or not Path(volume["source"]).is_absolute()
+        or volume.get("destination") != "/var/lib/postgresql/data"
+        or not isinstance(volume.get("driver"), str)
+        or not volume["driver"]
+        or volume.get("read_write") is not True
+    ):
+        raise PullDeployError("PostgreSQL data-volume fence is invalid")
+    return {
+        **document,
+        "data_volume": dict(volume),
+    }
+
+
+def postgres_runtime_fence_identity(document: object) -> dict[str, Any]:
+    fence = validate_postgres_runtime_fence(document)
+    return {key: value for key, value in fence.items() if key != "captured_at"}
 
 
 def validate_image_records(
@@ -2178,10 +2235,16 @@ def validate_recovery_marker(
             raise PullDeployError("deployment marker candidate state is invalid")
         validate_current_deployment_state(candidate)
         require_digest(candidate_digest, "deployment marker candidate-state digest")
+    if "postgres_runtime_fence" in marker:
+        validate_postgres_runtime_fence(marker["postgres_runtime_fence"])
     return marker
 
 
 class Lifecycle(Protocol):
+    def postgres_runtime_identity(
+        self, controller: "PullDeployController", descriptor: dict[str, Any]
+    ) -> dict[str, Any] | None: ...
+
     def drain(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> dict[str, Any]: ...
@@ -2203,7 +2266,7 @@ class Lifecycle(Protocol):
 
     def stop(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
-    ) -> None: ...
+    ) -> dict[str, Any] | None: ...
 
     def restore_database(
         self,
@@ -2483,6 +2546,123 @@ class SystemLifecycle:
             str(controller.config_dir / "deploy.env"),
             *arguments,
         ]
+
+    def postgres_runtime_identity(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Capture the exact running PostgreSQL container and data authority."""
+
+        environment = self._environment(controller, descriptor)
+        listed = controller.runner.run(
+            self._compose(controller, "ps", "--quiet", "lab-postgres"),
+            cwd=controller.production_root,
+            env=environment,
+        )
+        identities = [value for value in str(listed.stdout).splitlines() if value]
+        if len(identities) != 1 or re.fullmatch(r"[0-9a-f]{64}", identities[0]) is None:
+            raise PullDeployError("PostgreSQL container identity is unavailable")
+        inspected = controller.runner.run(
+            ["docker", "container", "inspect", identities[0]],
+            env=controller.control_environment(),
+        )
+        try:
+            records = json.loads(str(inspected.stdout))
+            container = records[0]
+        except (json.JSONDecodeError, IndexError, TypeError) as exc:
+            raise PullDeployError("PostgreSQL container inspection is malformed") from exc
+        config = container.get("Config") if isinstance(container, dict) else None
+        state = container.get("State") if isinstance(container, dict) else None
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        mounts = container.get("Mounts") if isinstance(container, dict) else None
+        data_mounts = (
+            [
+                value
+                for value in mounts
+                if isinstance(value, dict)
+                and value.get("Destination") == "/var/lib/postgresql/data"
+            ]
+            if isinstance(mounts, list)
+            else []
+        )
+        if (
+            not isinstance(container, dict)
+            or container.get("Id") != identities[0]
+            or not isinstance(state, dict)
+            or state.get("Running") is not True
+            or not isinstance(config, dict)
+            or not isinstance(config.get("Image"), str)
+            or not config["Image"]
+            or not isinstance(labels, dict)
+            or labels.get("com.docker.compose.project") != "nexpoly"
+            or labels.get("com.docker.compose.service") != "lab-postgres"
+            or len(data_mounts) != 1
+        ):
+            raise PullDeployError("PostgreSQL container runtime identity differs")
+        mount = data_mounts[0]
+        if (
+            mount.get("Type") != "volume"
+            or not isinstance(mount.get("Name"), str)
+            or not mount["Name"]
+            or not isinstance(mount.get("Source"), str)
+            or not Path(mount["Source"]).is_absolute()
+            or not isinstance(mount.get("Driver"), str)
+            or not mount["Driver"]
+            or mount.get("RW") is not True
+        ):
+            raise PullDeployError("PostgreSQL data volume identity is unsafe")
+        image_id = container.get("Image")
+        require_digest(image_id, "PostgreSQL running image ID")
+        values = controller.production_deploy_values(check_free_space=False)
+        system = controller.runner.run(
+            self._compose(
+                controller,
+                "exec",
+                "-T",
+                "lab-postgres",
+                "psql",
+                "--no-psqlrc",
+                "--tuples-only",
+                "--no-align",
+                "--username",
+                values["NEXPOLY_POSTGRES_USER"],
+                "--dbname",
+                values["NEXPOLY_POSTGRES_DB"],
+                "--command",
+                "SELECT system_identifier::text FROM pg_control_system()",
+            ),
+            cwd=controller.production_root,
+            env=environment,
+        )
+        system_identifier = str(system.stdout).strip()
+        return validate_postgres_runtime_fence(
+            {
+                "schema_version": 1,
+                "container_id": identities[0],
+                "image_id": image_id,
+                "configured_image": config["Image"],
+                "data_volume": {
+                    "type": "volume",
+                    "name": mount["Name"],
+                    "source": mount["Source"],
+                    "destination": mount["Destination"],
+                    "driver": mount["Driver"],
+                    "read_write": True,
+                },
+                "system_identifier": system_identifier,
+                "captured_at": utc_now(),
+            }
+        )
+
+    @staticmethod
+    def _sealed_postgres_runtime_fence(
+        controller: "PullDeployController",
+    ) -> dict[str, Any]:
+        marker = load_private_json(controller.marker_path)
+        return validate_postgres_runtime_fence(
+            marker.get("postgres_runtime_fence")
+        )
 
     def _environment(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
@@ -4055,8 +4235,9 @@ class SystemLifecycle:
 
     def stop(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
-    ) -> None:
+    ) -> dict[str, Any]:
         environment = self._environment(controller, descriptor)
+        before = self.postgres_runtime_identity(controller, descriptor)
         controller.runner.run(
             ["systemctl", "--user", "stop", "nexpoly-monomer-md-worker.service"],
             env=environment,
@@ -4099,6 +4280,11 @@ class SystemLifecycle:
         )
         if str(state.stdout).strip() != "true":
             raise PullDeployError("PostgreSQL was not preserved during source switch")
+        after = self.postgres_runtime_identity(controller, descriptor)
+        if postgres_runtime_fence_identity(after) != postgres_runtime_fence_identity(
+            before
+        ):
+            raise PullDeployError("PostgreSQL identity changed while stopping readers")
         for unit_name in (
             "nexpoly-gpu-broker.service",
             "nexpoly-gpu-mps@1.service",
@@ -4119,6 +4305,7 @@ class SystemLifecycle:
                 raise PullDeployError(
                     f"live-source GPU unit must be inactive before Git switch: {unit_name}"
                 )
+        return before
 
     def migrate(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
@@ -4243,6 +4430,12 @@ class SystemLifecycle:
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> None:
         environment = self._environment(controller, descriptor)
+        expected_postgres = self._sealed_postgres_runtime_fence(controller)
+        before = self.postgres_runtime_identity(controller, descriptor)
+        if postgres_runtime_fence_identity(before) != postgres_runtime_fence_identity(
+            expected_postgres
+        ):
+            raise PullDeployError("PostgreSQL identity changed before application start")
         controller.runner.run(
             self._compose(controller, "stop", "nginx"),
             cwd=controller.production_root,
@@ -4268,12 +4461,17 @@ class SystemLifecycle:
                 "--wait",
                 "--wait-timeout",
                 "300",
-                "lab-postgres",
+                "--no-deps",
                 "backend",
             ),
             cwd=controller.production_root,
             env=environment,
         )
+        after = self.postgres_runtime_identity(controller, descriptor)
+        if postgres_runtime_fence_identity(after) != postgres_runtime_fence_identity(
+            expected_postgres
+        ):
+            raise PullDeployError("PostgreSQL identity changed during application start")
         self._drain_started_runtime(controller, descriptor)
 
     def _drain_started_runtime(
@@ -7839,6 +8037,47 @@ class PullDeployController:
         marker["updated_at"] = utc_now()
         self._write_marker(marker)
 
+    def _stop_runtime(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> None:
+        """Stop source readers and durably preserve the PostgreSQL identity."""
+
+        existing = marker.get("postgres_runtime_fence")
+        capture = getattr(self.lifecycle, "postgres_runtime_identity", None)
+        if existing is None and callable(capture):
+            before = capture(self, descriptor)
+            if before is not None:
+                marker["postgres_runtime_fence"] = validate_postgres_runtime_fence(
+                    before
+                )
+                marker["updated_at"] = utc_now()
+                self._write_marker(marker)
+                existing = marker["postgres_runtime_fence"]
+        if existing is None and not self.test_root_mode:
+            raise PullDeployError(
+                "runtime stop lacks a pre-stop PostgreSQL identity fence"
+            )
+        observed = self.lifecycle.stop(self, descriptor)
+        if observed is None:
+            if not self.test_root_mode:
+                raise PullDeployError(
+                    "runtime stop did not return a PostgreSQL identity fence"
+                )
+            return
+        fence = validate_postgres_runtime_fence(observed)
+        if existing is not None:
+            if postgres_runtime_fence_identity(
+                existing
+            ) != postgres_runtime_fence_identity(fence):
+                raise PullDeployError(
+                    "PostgreSQL identity changed across runtime stop recovery"
+                )
+        else:
+            marker["postgres_runtime_fence"] = fence
+        self._write_marker(marker)
+
     def _revalidate_previous_deployment_state(self, descriptor: dict[str, Any]) -> None:
         expected = descriptor.get("previous_deployment")
         expected_digest = descriptor.get("previous_deployment_sha256")
@@ -8634,7 +8873,7 @@ class PullDeployController:
                     drain=recovery,
                 )
             if recovery["runtime_state"] == "drained":
-                self.lifecycle.stop(self, runtime_descriptor)
+                self._stop_runtime(marker, runtime_descriptor)
             self._advance(marker, "runtime-stopped", runtime_stopped=True)
         self._restore_database_after_failed_apply(descriptor, marker)
         if marker.get("source_switched") is True:
@@ -8782,7 +9021,7 @@ class PullDeployController:
                 allow_unfenced=marker.get("verification") is None,
             )
             if recovery["runtime_state"] == "drained":
-                self.lifecycle.stop(self, descriptor)
+                self._stop_runtime(marker, descriptor)
             self._advance(
                 marker,
                 "explicit-rollback-runtime-stopped",
@@ -8807,7 +9046,7 @@ class PullDeployController:
             allow_unfenced=marker.get("verification") is None,
         )
         if recovery["runtime_state"] == "drained":
-            self.lifecycle.stop(self, descriptor)
+            self._stop_runtime(marker, descriptor)
         marker["runtime_stopped"] = True
         marker["updated_at"] = utc_now()
         self._write_marker(marker)
@@ -9019,7 +9258,7 @@ class PullDeployController:
                     drain=stop_recovery,
                 )
                 if stop_recovery["runtime_state"] == "drained":
-                    self.lifecycle.stop(self, descriptor)
+                    self._stop_runtime(marker, descriptor)
                 self._advance(marker, "runtime-stopped", runtime_stopped=True)
                 self._advance(marker, "backup-started")
                 backup = self.lifecycle.backup(self, descriptor)
@@ -9265,7 +9504,7 @@ class PullDeployController:
                 drain=stop_recovery,
             )
             if stop_recovery["runtime_state"] == "drained":
-                self.lifecycle.stop(self, descriptor)
+                self._stop_runtime(marker, descriptor)
             self._advance(
                 marker, "explicit-rollback-runtime-stopped", runtime_stopped=True
             )

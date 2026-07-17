@@ -291,6 +291,8 @@ at its final A/B slot path.
 
 1. Enables Backend and Worker drain and waits for all active work to finish.
 2. Isolates public ingress and stops Backend, Web, MD Worker and DFT Worker.
+   Before the first stop call it durably seals the PostgreSQL container ID,
+   image ID, named data volume and `pg_control_system().system_identifier`.
    PostgreSQL remains running.
 3. Creates a private PostgreSQL backup and proves it can be restored in an
    isolated PostgreSQL 16 instance.
@@ -302,8 +304,11 @@ at its final A/B slot path.
    target code.
 7. Pulls the recorded image digests, applies only allowed expand migrations and
    runs strict schema preflight.
-8. Switches the prepared A/B slots, starts Workers, Backend and Web, and runs
-   required model, database, API, UI and calculation smokes.
+8. Switches the prepared A/B slots and starts Workers and Backend with
+   `compose up --no-deps backend`; the sealed PostgreSQL container is never an
+   `up` target and its full identity is rechecked before and after startup.
+   It then starts Web and runs required model, database, API, UI and
+   calculation smokes.
 9. Writes the successful deployment state atomically before restoring ingress.
 
 All processes that import or execute checkout files are stopped before the Git

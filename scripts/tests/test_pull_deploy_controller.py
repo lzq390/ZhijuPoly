@@ -1210,6 +1210,177 @@ class EphemeralContainerOwnershipTests(unittest.TestCase):
             )
 
 
+class PostgresRuntimeFencingTests(unittest.TestCase):
+    class Runner:
+        def __init__(self, *, replace_on_up: bool = False) -> None:
+            self.container_id = "a" * 64
+            self.replace_on_up = replace_on_up
+            self.commands: list[list[str]] = []
+
+        def _container(self) -> dict[str, object]:
+            return {
+                "Id": self.container_id,
+                "Image": "sha256:" + "b" * 64,
+                "Config": {
+                    "Image": "postgres:16-alpine",
+                    "Labels": {
+                        "com.docker.compose.project": "nexpoly",
+                        "com.docker.compose.service": "lab-postgres",
+                    },
+                },
+                "State": {"Running": True},
+                "Mounts": [
+                    {
+                        "Type": "volume",
+                        "Name": "nexpoly_postgres_data",
+                        "Source": "/var/lib/docker/volumes/nexpoly_postgres_data/_data",
+                        "Destination": "/var/lib/postgresql/data",
+                        "Driver": "local",
+                        "RW": True,
+                    }
+                ],
+            }
+
+        def run(
+            self, command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            self.commands.append(command)
+            output = ""
+            returncode = 0
+            if (
+                command[0:3] == ["docker", "container", "inspect"]
+                and len(command) == 4
+            ):
+                output = json.dumps([self._container()])
+            elif command[:3] == ["docker", "inspect", "--format"]:
+                output = "true\n"
+            elif command[:2] == ["docker", "compose"]:
+                if "ps" in command and command[-1] == "lab-postgres":
+                    output = self.container_id + "\n"
+                elif "ps" in command:
+                    output = ""
+                elif any("pg_control_system()" in value for value in command):
+                    output = "7659245354718314530\n"
+                elif "up" in command and self.replace_on_up:
+                    self.container_id = "c" * 64
+            elif command[:3] == ["systemctl", "--user", "is-active"]:
+                output = "inactive\n"
+                returncode = 3
+            elif command[:2] == ["systemctl", "is-active"]:
+                output = "inactive\n"
+                returncode = 3
+            return subprocess.CompletedProcess(command, returncode, output, "")
+
+        def request_json(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            raise AssertionError("unexpected network request")
+
+    class Lifecycle(CONTROLLER.SystemLifecycle):
+        def _drain_started_runtime(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return {"fixture": True}
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="postgres-fence-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.production = self.root / "production"
+        self.runtime = self.root / "runtime"
+        self.config = self.runtime / "config"
+        self.state = self.runtime / "state"
+        for path in (self.production, self.runtime, self.config, self.state):
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(path, 0o700)
+        self.descriptor = {
+            "images": {
+                "backend": {"digest_ref": "example.invalid/backend@" + DIGEST_A},
+                "web": {"digest_ref": "example.invalid/web@" + DIGEST_B},
+            }
+        }
+
+    def controller(self, runner: object) -> object:
+        marker_path = self.state / "deploy-in-progress.json"
+        return SimpleNamespace(
+            runner=runner,
+            production_root=self.production,
+            runtime_root=self.runtime,
+            config_dir=self.config,
+            state_dir=self.state,
+            marker_path=marker_path,
+            control_environment=lambda: {},
+            production_deploy_values=lambda **_kwargs: {
+                "NEXPOLY_POSTGRES_USER": "nexpoly",
+                "NEXPOLY_POSTGRES_DB": "nexpoly",
+            },
+        )
+
+    def test_stop_and_start_preserve_exact_container_volume_and_system_id(self) -> None:
+        runner = self.Runner()
+        controller = self.controller(runner)
+        lifecycle = self.Lifecycle()
+        fence = lifecycle.stop(controller, self.descriptor)
+        self.assertEqual(fence["container_id"], "a" * 64)
+        self.assertEqual(fence["data_volume"]["name"], "nexpoly_postgres_data")
+        self.assertEqual(fence["system_identifier"], "7659245354718314530")
+        CONTROLLER.atomic_json(
+            controller.marker_path,
+            {
+                "runtime_stopped": True,
+                "postgres_runtime_fence": fence,
+            },
+        )
+        lifecycle.start(controller, self.descriptor)
+        up = next(command for command in runner.commands if "up" in command)
+        self.assertIn("--no-deps", up)
+        self.assertIn("backend", up)
+        self.assertNotIn("lab-postgres", up)
+        self.assertFalse(
+            any(
+                "stop" in command and "lab-postgres" in command
+                for command in runner.commands
+            )
+        )
+
+    def test_start_fails_closed_if_compose_replaces_postgres(self) -> None:
+        runner = self.Runner(replace_on_up=True)
+        controller = self.controller(runner)
+        lifecycle = self.Lifecycle()
+        fence = lifecycle.postgres_runtime_identity(controller, self.descriptor)
+        CONTROLLER.atomic_json(
+            controller.marker_path,
+            {
+                "runtime_stopped": True,
+                "postgres_runtime_fence": fence,
+            },
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "changed during application start",
+        ):
+            lifecycle.start(controller, self.descriptor)
+
+    def test_fence_rejects_bind_or_writable_identity_drift(self) -> None:
+        fence = {
+            "schema_version": 1,
+            "container_id": "a" * 64,
+            "image_id": "sha256:" + "b" * 64,
+            "configured_image": "postgres:16-alpine",
+            "data_volume": {
+                "type": "bind",
+                "name": "foreign",
+                "source": "/tmp/foreign",
+                "destination": "/var/lib/postgresql/data",
+                "driver": "local",
+                "read_write": True,
+            },
+            "system_identifier": "7659245354718314530",
+            "captured_at": CONTROLLER.utc_now(),
+        }
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "data-volume fence",
+        ):
+            CONTROLLER.validate_postgres_runtime_fence(fence)
+
+
 class SlotAndDescriptorTests(PullDeployTestCase):
     def test_alias_gate_allows_preparation_only_before_reconciliation_starts(
         self,

@@ -115,6 +115,8 @@ The transition sequence is fixed:
 1. Drain the Backend and each enabled Worker, recording instance IDs and exact
    active-job schema evidence.
 2. Isolate ingress and stop every service that reads checkout files.
+   Persist the exact PostgreSQL container/image/data-volume/system identifier
+   before the stop unknown-commit boundary.
 3. Back up PostgreSQL, fsync the dump and sidecar, restore it into isolated
    PostgreSQL 16, and verify its schema and row digests.
 4. Record `refs/nexpoly/previous` and the previous deployment identity.
@@ -126,8 +128,9 @@ The transition sequence is fixed:
    digests and external runtime paths.
 9. Apply the permitted migration mode, refresh the analytics snapshot and run
    strict schema preflight.
-10. Atomically select prepared Worker slots, then start Worker, Backend and Web
-    in dependency order.
+10. Atomically select prepared Worker slots, then start Worker and Backend with
+    PostgreSQL excluded by `--no-deps`; revalidate the same PostgreSQL identity
+    before and after startup, then start Web in dependency order.
 11. Verify required model preload, Worker identity, database health, isolated
     API/UI/calculation smokes and final public health.
 12. Atomically commit current/previous state, remove the marker and resume
