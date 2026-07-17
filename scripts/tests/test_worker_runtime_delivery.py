@@ -26,6 +26,9 @@ WORKER_ENV = REPOSITORY_ROOT / "ops/config/worker.env.example"
 DEPLOY_ENV = REPOSITORY_ROOT / "ops/config/deploy.env.example"
 WORKER_SCRIPT = REPOSITORY_ROOT / "workers/monomer_md_worker/run_host_worker.sh"
 LEGACY_INSTALLER = REPOSITORY_ROOT / "scripts/install_monomer_md_worker_user_service.sh"
+LEGACY_SYSTEMD_WORKER_ENV = (
+    REPOSITORY_ROOT / "ops/systemd/nexpoly-monomer-md-worker.env.example"
+)
 BACKEND_DIGEST = "ghcr.io/lzq390/nexpoly-backend@sha256:" + "a" * 64
 WEB_DIGEST = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
 PRODUCTION_SOCKET_TARGET = "/app/monomer-md-worker"
@@ -245,6 +248,16 @@ class WorkerHostRuntimeTests(unittest.TestCase):
         self.assertNotIn("worker-venv/bin/python", unit)
         self.assertIn("UMask=0077", unit)
         self.assertNotIn("pip install", unit)
+
+    def test_host_launcher_cannot_revive_legacy_config_or_worker_selection(
+        self,
+    ) -> None:
+        launcher = WORKER_SCRIPT.read_text(encoding="utf-8")
+        self.assertFalse(LEGACY_SYSTEMD_WORKER_ENV.exists())
+        self.assertNotIn(".env.monomer-md-worker", launcher)
+        self.assertNotIn("monomer_worker_env.py", launcher)
+        self.assertNotIn("--nexpoly-worker-env-applied", launcher)
+        self.assertNotIn("--workers", launcher)
 
     def test_production_templates_pin_release_and_asset_pointers(self) -> None:
         worker = _env_values(WORKER_ENV)
