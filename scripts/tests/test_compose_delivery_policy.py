@@ -19,7 +19,7 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
         workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
         )
-        controller = (REPOSITORY_ROOT / "scripts" / "release_controller.py").read_text(
+        controller = (REPOSITORY_ROOT / "scripts" / "pull_deploy_controller.py").read_text(
             encoding="utf-8"
         )
 
@@ -28,10 +28,9 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
             "python -m app.postgres_migrations --mode bootstrap-expand",
             workflow,
         )
-        self.assertIn(
-            'self.run_migrations(environment, mode="bootstrap-expand")',
-            controller,
-        )
+        self.assertIn('"bootstrap-expand"', controller)
+        self.assertIn('descriptor["previous_deployment"] is None', controller)
+        self.assertIn('else "expand"', controller)
 
     def test_tracked_compose_contract_has_no_production_default_password(self) -> None:
         base = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
@@ -68,6 +67,7 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
                     "LAB_DATA_POSTGRES_DSN": "postgresql://nexpoly:test@lab-postgres:5432/nexpoly",
                     "NEXPOLY_APP_ENV_FILE": str(app_env),
                     "NEXPOLY_ASSET_ROOT": str(temporary / "assets"),
+                    "NEXPOLY_RUNTIME_ROOT": "/data/lzq/gith/nexpoly-runtime",
                     "POLYTAO_ENABLED": "true",
                     "WEB_CONCURRENCY": "9",
                     "GEN_JOB_WORKERS": "9",

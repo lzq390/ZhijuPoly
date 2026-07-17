@@ -28,7 +28,7 @@ case "$index" in
   3) expected_uuid="GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5" ;;
 esac
 
-state_root="${NEXPOLY_GPU_STATE_ROOT:-/data/lzq/gith/nexpoly/ops/state/gpu-resource}"
+state_root="${NEXPOLY_GPU_STATE_ROOT:-/data/lzq/gith/nexpoly-runtime/state/gpu-resource}"
 external_reservations="${NEXPOLY_GPU_EXTERNAL_RESERVATIONS:-$state_root/external-reservations.json}"
 CUDA_VISIBLE_DEVICES="$expected_uuid"
 CUDA_MPS_PIPE_DIRECTORY="$state_root/mps-$index/pipe"

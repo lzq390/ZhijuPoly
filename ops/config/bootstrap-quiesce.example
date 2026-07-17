@@ -3,7 +3,7 @@ set -euo pipefail
 umask 077
 
 production_root=/data/lzq/gith/nexpoly
-probe="$production_root/ops/config/bootstrap-active-jobs-probe"
+probe=/data/lzq/gith/nexpoly-runtime/config/bootstrap-active-jobs-probe
 
 [[ "$PWD" == "$production_root" ]] || {
   echo "bootstrap quiesce must run from $production_root" >&2
@@ -19,18 +19,36 @@ probe="$production_root/ops/config/bootstrap-active-jobs-probe"
 }
 
 # Isolate public ingress before asking the audited legacy-runtime probe for
-# evidence. All command logs go to stderr; stdout is reserved for one JSON object.
+# evidence. All command logs go to stderr; stdout is reserved for one JSON
+# object. Ordinary validation failures restore only nginx; they never restart
+# or signal the Backend or Worker that may still own an active job.
+quiesced=false
+evidence=""
+restore_ingress() {
+  if [[ "$quiesced" != true ]]; then
+    docker compose -p nexpoly -f "$production_root/docker-compose.yml" start nginx >&2 || true
+  fi
+}
+cleanup() {
+  if [[ -n "$evidence" ]]; then
+    rm -f "$evidence"
+  fi
+  restore_ingress
+}
+trap cleanup EXIT
 docker compose -p nexpoly -f "$production_root/docker-compose.yml" stop nginx >&2
 
 evidence="$(mktemp)"
-trap 'rm -f "$evidence"' EXIT
-"$probe" >"$evidence"
-[[ -s "$evidence" && "$(stat -c '%s' "$evidence")" -le 65536 ]] || {
-  echo "bootstrap active-job evidence is empty or too large" >&2
-  exit 2
-}
+deadline=$((SECONDS + 1800))
+while true; do
+  : >"$evidence"
+  "$probe" >"$evidence"
+  [[ -s "$evidence" && "$(stat -c '%s' "$evidence")" -le 65536 ]] || {
+    echo "bootstrap active-job evidence is empty or too large" >&2
+    exit 2
+  }
 
-python3 - "$evidence" <<'PY'
+  if python3 - "$evidence" <<'PY'
 import json
 import sys
 
@@ -66,10 +84,30 @@ if document["ingress_isolated"] is not True:
 categories = categories_v2 if schema_version == 2 else categories_v1
 if not isinstance(jobs, dict) or set(jobs) != set(categories):
     raise SystemExit("bootstrap probe did not cover every active-job category")
-if any(isinstance(jobs[name], bool) or not isinstance(jobs[name], int) or jobs[name] != 0 for name in categories):
-    raise SystemExit("bootstrap probe found active work or an invalid count")
-if isinstance(document["active_total"], bool) or document["active_total"] != 0:
-    raise SystemExit("bootstrap probe active_total must be zero")
+if any(isinstance(jobs[name], bool) or not isinstance(jobs[name], int) or jobs[name] < 0 for name in categories):
+    raise SystemExit("bootstrap probe returned an invalid active-job count")
+if isinstance(document["active_total"], bool) or not isinstance(document["active_total"], int):
+    raise SystemExit("bootstrap probe active_total must be an integer")
+if document["active_total"] != sum(jobs.values()):
+    raise SystemExit("bootstrap probe active_total is inconsistent")
+if document["active_total"] != 0:
+    raise SystemExit(3)
 document["active_jobs_schema_version"] = schema_version
 print(json.dumps(document, sort_keys=True, separators=(",", ":")))
 PY
+  then
+    quiesced=true
+    break
+  else
+    status=$?
+    if [[ "$status" -ne 3 ]]; then
+      echo "bootstrap active-job probe validation failed" >&2
+      exit 2
+    fi
+    if (( SECONDS >= deadline )); then
+      echo "timed out waiting for legacy active jobs" >&2
+      exit 2
+    fi
+    sleep 2
+  fi
+done

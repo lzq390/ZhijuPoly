@@ -144,6 +144,11 @@ class GpuResourceDeliveryTests(unittest.TestCase):
             "docker-compose.monomer-md-worker.gpu-governed.dev.yml config --quiet",
             workflow,
         )
+        self.assertIn(
+            "/data/lzq/gith/nexpoly-runtime/state/gpu-resource",
+            backend,
+        )
+        self.assertNotIn("/data/lzq/gith/nexpoly/ops/state", backend)
 
     def test_mps_templates_never_change_compute_mode_and_are_not_enabled(self) -> None:
         unit = (ROOT / "ops/systemd/nexpoly-gpu-mps@.service").read_text(encoding="utf-8")
@@ -163,9 +168,49 @@ class GpuResourceDeliveryTests(unittest.TestCase):
         self.assertNotIn("nvidia-smi -c", helper)
         self.assertIn("GPU0 is excluded", helper)
         self.assertIn("--mps-state-root", broker_unit)
+        self.assertIn("WorkingDirectory=/data/lzq/gith/nexpoly", unit)
+        self.assertIn("WorkingDirectory=/data/lzq/gith/nexpoly", broker_unit)
+        self.assertIn(
+            "/data/lzq/gith/nexpoly-runtime/state/gpu-resource",
+            unit,
+        )
+        self.assertIn(
+            "/data/lzq/gith/nexpoly-runtime/state/gpu-resource",
+            broker_unit,
+        )
+        self.assertIn(
+            "ExecStart=/usr/bin/python3 -E -s -B -m ops.gpu_broker.server",
+            broker_unit,
+        )
+        self.assertIn(
+            "UnsetEnvironment=PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONUSERBASE",
+            broker_unit,
+        )
+        self.assertNotIn("/data/lzq/gith/nexpoly/ops/current", unit + broker_unit)
+        self.assertNotIn("/data/lzq/gith/nexpoly/ops/state", unit + broker_unit)
         self.assertNotIn("--break-glass-without-broker", unit)
         self.assertNotIn("NEXPOLY_GPU_MPS_BREAK_GLASS_REASON", unit)
         self.assertTrue(os.access(ROOT / "scripts/gpu_mps_control.sh", os.X_OK))
+
+    def test_production_runtime_paths_are_external_to_the_source_checkout(self) -> None:
+        production = (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
+        base = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        deploy = (ROOT / "ops/config/deploy.env.example").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "NEXPOLY_RUNTIME_ROOT=/data/lzq/gith/nexpoly-runtime",
+            deploy,
+        )
+        self.assertIn(
+            "NEXPOLY_APP_ENV_FILE=/data/lzq/gith/nexpoly-runtime/config/app.env",
+            deploy,
+        )
+        self.assertIn(
+            "${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket",
+            production,
+        )
+        self.assertNotIn("/data/lzq/gith/nexpoly/ops/state", production)
+        self.assertNotIn("./ops/state", base)
 
     @unittest.skipUnless(
         os.getuid() == 1001 and os.getgid() == 1001,

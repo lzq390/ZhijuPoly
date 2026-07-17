@@ -337,7 +337,9 @@ class ConfigurationValidationTests(unittest.TestCase):
     def test_workflow_runs_the_probe_tests(self):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("bash -n scripts/deploy_server.sh", workflow)
-        self.assertIn("python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v", workflow)
+        self.assertIn('python3 -m unittest -v "${unittest_files[@]}"', workflow)
+        self.assertIn("scripts/tests/test_monomer_md_worker_launcher.py", workflow)
+        self.assertIn("scripts/tests/test_worker_slot_runtime.py", workflow)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -18,20 +19,33 @@ from workers.monomer_md_worker.app.runtime_health import (
 
 
 RELEASE_SHA = "a" * 40
+RELEASE_TREE = "b" * 40
+DIGEST = "sha256:" + "c" * 64
 
 
 def _production_runtime_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
-    release = tmp_path / "ops" / "releases" / RELEASE_SHA
-    module = release / "workers" / "monomer_md_worker" / "app" / "main.py"
+    source = tmp_path / "source"
+    module = source / "workers" / "monomer_md_worker" / "app" / "main.py"
     module.parent.mkdir(parents=True)
     module.write_text("# worker fixture\n", encoding="utf-8")
-    (release / "release-manifest.json").write_text(
-        '{"source_sha":"' + RELEASE_SHA + '"}\n',
-        encoding="utf-8",
+    venv = tmp_path / "runtime" / "worker-venvs" / "md-a" / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin/python").symlink_to(Path(sys.executable).resolve())
+    return source, module, venv
+
+
+def _fake_runtime_binding(venv: Path):
+    checkout = SimpleNamespace(source_sha=RELEASE_SHA, source_tree=RELEASE_TREE)
+    active = SimpleNamespace(
+        slot="a",
+        worker_lock_sha256=DIGEST,
+        slot_record_sha256=DIGEST,
     )
-    venv = release / "worker-venv"
-    venv.mkdir()
-    return release, module, venv
+    slot = SimpleNamespace(
+        venv_prefix=str(venv),
+        base_python_identity_sha256=DIGEST,
+    )
+    return checkout, SimpleNamespace(active=active, slot=slot), venv / "bin/python"
 
 
 def _settings(
@@ -103,9 +117,14 @@ def _runtime_snapshot(
 def test_health_exposes_source_and_venv_identity(tmp_path: Path, monkeypatch):
     settings = _settings(tmp_path)
     identity = worker_main.RuntimeIdentity(
-        source_sha=None,
+        source_sha=RELEASE_SHA,
+        source_tree=RELEASE_TREE,
         source_root=str(tmp_path / "source"),
         venv_prefix=str(tmp_path / "venv"),
+        venv_slot="a",
+        worker_lock_sha256=DIGEST,
+        slot_record_sha256=DIGEST,
+        base_python_identity_sha256=DIGEST,
         python_executable=str(Path(sys.executable).resolve()),
     )
     monkeypatch.setattr(worker_main, "settings", settings)
@@ -115,9 +134,14 @@ def test_health_exposes_source_and_venv_identity(tmp_path: Path, monkeypatch):
 
     response = asyncio.run(worker_main._build_health_response())
 
-    assert response.source_sha is None
+    assert response.source_sha == RELEASE_SHA
+    assert response.source_tree == RELEASE_TREE
     assert response.source_root == identity.source_root
     assert response.venv_prefix == identity.venv_prefix
+    assert response.venv_slot == "a"
+    assert response.worker_lock_sha256 == DIGEST
+    assert response.slot_record_sha256 == DIGEST
+    assert response.base_python_identity_sha256 == DIGEST
     assert response.python_executable == identity.python_executable
 
 
@@ -222,55 +246,86 @@ def test_runtime_snapshot_initializes_once_and_hot_readiness_never_reprobes(
     assert calls == 1
 
 
-def test_production_runtime_identity_uses_manifest_and_sys_prefix(tmp_path: Path):
-    release, module, venv = _production_runtime_paths(tmp_path)
+def test_production_runtime_identity_uses_live_checkout_and_active_slot(
+    tmp_path: Path, monkeypatch
+):
+    source, module, venv = _production_runtime_paths(tmp_path)
+    monkeypatch.setattr(
+        worker_main,
+        "verify_runtime_binding",
+        lambda **_kwargs: _fake_runtime_binding(venv),
+    )
 
     identity = worker_main._load_runtime_identity(
         module_path=module,
         python_prefix=venv,
-        python_executable=Path(sys.executable),
+        python_executable=venv / "bin/python",
+        production_source_root=source,
+        runtime_root=tmp_path / "runtime",
     )
 
     assert identity.source_sha == RELEASE_SHA
-    assert identity.source_root == str(release.resolve())
+    assert identity.source_tree == RELEASE_TREE
+    assert identity.source_root == str(source.resolve())
     assert identity.venv_prefix == str(venv.resolve())
+    assert identity.venv_slot == "a"
+    assert identity.worker_lock_sha256 == DIGEST
+    assert identity.slot_record_sha256 == DIGEST
+    assert identity.base_python_identity_sha256 == DIGEST
     assert identity.python_executable == str(Path(sys.executable).resolve())
 
 
-def test_production_runtime_identity_rejects_manifest_sha_mismatch(tmp_path: Path):
-    release, module, venv = _production_runtime_paths(tmp_path)
-    (release / "release-manifest.json").write_text(
-        '{"source_sha":"' + ("b" * 40) + '"}\n',
-        encoding="utf-8",
-    )
+def test_production_runtime_identity_rejects_invalid_slot_binding(
+    tmp_path: Path, monkeypatch
+):
+    source, module, venv = _production_runtime_paths(tmp_path)
+
+    def fail_binding(**_kwargs):
+        from scripts.worker_slot_runtime import WorkerSlotError
+
+        raise WorkerSlotError("private slot detail")
+
+    monkeypatch.setattr(worker_main, "verify_runtime_binding", fail_binding)
 
     try:
         worker_main._load_runtime_identity(
             module_path=module,
             python_prefix=venv,
-            python_executable=Path(sys.executable),
+            python_executable=venv / "bin/python",
+            production_source_root=source,
+            runtime_root=tmp_path / "runtime",
         )
     except RuntimeError as exc:
-        assert "manifest" in str(exc)
+        assert "A/B runtime identity" in str(exc)
+        assert "private slot detail" not in str(exc)
     else:
-        raise AssertionError("mismatched production source SHA was accepted")
+        raise AssertionError("invalid production slot binding was accepted")
 
 
-def test_production_runtime_identity_rejects_old_release_venv(tmp_path: Path):
-    _release, module, _venv = _production_runtime_paths(tmp_path)
-    old_venv = tmp_path / "ops" / "releases" / ("b" * 40) / "worker-venv"
+def test_production_runtime_identity_rejects_inactive_venv(
+    tmp_path: Path, monkeypatch
+):
+    source, module, venv = _production_runtime_paths(tmp_path)
+    old_venv = tmp_path / "runtime" / "worker-venvs" / "md-b" / "venv"
     old_venv.mkdir(parents=True)
+    monkeypatch.setattr(
+        worker_main,
+        "verify_runtime_binding",
+        lambda **_kwargs: _fake_runtime_binding(venv),
+    )
 
     try:
         worker_main._load_runtime_identity(
             module_path=module,
             python_prefix=old_venv,
-            python_executable=Path(sys.executable),
+            python_executable=venv / "bin/python",
+            production_source_root=source,
+            runtime_root=tmp_path / "runtime",
         )
     except RuntimeError as exc:
-        assert "release venv" in str(exc)
+        assert "active A/B venv" in str(exc)
     else:
-        raise AssertionError("old production Worker venv was accepted")
+        raise AssertionError("inactive production Worker venv was accepted")
 
 
 def test_real_health_reports_runtime_probe_failure(tmp_path: Path, monkeypatch):

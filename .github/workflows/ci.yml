@@ -5,14 +5,6 @@ on:
     branches: [main]
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      operation:
-        description: Run the one-time bootstrap for the current main commit
-        required: true
-        type: choice
-        options:
-          - bootstrap
 
 permissions:
   contents: read
@@ -38,7 +30,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_SHA: ${{ github.sha }}
           EVENT_REF: ${{ github.ref }}
-          DISPATCH_OPERATION: ${{ inputs.operation }}
         shell: bash
         run: |
           set -euo pipefail
@@ -51,17 +42,6 @@ jobs:
               candidate_sha="$EVENT_SHA"
               ;;
             push)
-              candidate_sha="$EVENT_SHA"
-              ;;
-            workflow_dispatch)
-              [[ "$EVENT_REF" == refs/heads/main ]] || {
-                echo "bootstrap must be dispatched from main" >&2
-                exit 1
-              }
-              [[ "$DISPATCH_OPERATION" == bootstrap ]] || {
-                echo "workflow_dispatch supports only the bootstrap operation" >&2
-                exit 1
-              }
               candidate_sha="$EVENT_SHA"
               ;;
             *)
@@ -116,6 +96,7 @@ jobs:
           NEXPOLY_WEB_IMAGE: ghcr.io/lzq390/nexpoly-web@sha256:0000000000000000000000000000000000000000000000000000000000000000
           NEXPOLY_POSTGRES_PASSWORD: ci-not-a-production-secret
           NEXPOLY_ASSET_ROOT: /tmp/nexpoly-assets
+          NEXPOLY_RUNTIME_ROOT: /data/lzq/gith/nexpoly-runtime
           NEXPOLY_APP_ENV_FILE: /tmp/nexpoly-app.env
           APP_POSTGRES_DSN: postgresql://nexpoly:ci-only@lab-postgres:5432/nexpoly
           PI_POSTGRES_DSN: postgresql://nexpoly:ci-only@lab-postgres:5432/nexpoly
@@ -149,8 +130,12 @@ jobs:
       - name: Run all script tests
         run: |
           bash -n scripts/deploy_server.sh
-          bash -n scripts/ci/remote_release.sh
-          python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+          mapfile -t unittest_files < <(
+            find scripts/tests -maxdepth 1 -type f -name 'test_*.py' \
+              ! -name 'test_monomer_md_worker_launcher.py' \
+              ! -name 'test_worker_slot_runtime.py' -print | sort
+          )
+          python3 -m unittest -v "${unittest_files[@]}"
 
   backend-tests:
     name: Backend tests (shard ${{ matrix.shard }})
@@ -252,13 +237,28 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: workers/monomer_md_worker/requirements-ci.lock
+          cache-dependency-path: |
+            workers/monomer_md_worker/requirements-ci.lock
+            workers/monomer_md_worker/requirements.lock
       - name: Install locked Worker dependencies
         run: python -m pip install --require-hashes -r workers/monomer_md_worker/requirements-ci.lock
+      - name: Rebuild the production Worker runtime lock from empty
+        run: |
+          set -euo pipefail
+          runtime_venv="${RUNNER_TEMP}/monomer-md-runtime-lock"
+          python -m venv --clear "$runtime_venv"
+          PIP_CONFIG_FILE=/dev/null PIP_DISABLE_PIP_VERSION_CHECK=1 \
+            "$runtime_venv/bin/python" -m pip install \
+              --require-hashes --only-binary=:all: \
+              -r workers/monomer_md_worker/requirements.lock
+          "$runtime_venv/bin/python" -m pip check
       - name: Run Worker tests
         run: |
           python -m pytest workers/monomer_md_worker/tests
           python -m pytest ops/gpu_broker/tests
+          python -m pytest \
+            scripts/tests/test_monomer_md_worker_launcher.py \
+            scripts/tests/test_worker_slot_runtime.py
 
   image-build:
     name: Build ${{ matrix.name }} image without publishing
@@ -341,18 +341,14 @@ jobs:
           PY
 
   release:
-    name: Build, smoke, package, and deploy current main
+    name: Publish and smoke immutable main images
     if: >-
       !cancelled() &&
       needs.ci-gate.result == 'success' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      github.event_name == 'push'
     needs: [resolve-sha, ci-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    environment: nexpoly-production
-    concurrency:
-      group: nexpoly-production
-      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -364,21 +360,8 @@ jobs:
           persist-credentials: false
       - name: Assert immutable checkout
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
-      - name: Resolve reviewed release input
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          RELEASE_SHA: ${{ needs.resolve-sha.outputs.candidate_sha }}
-        run: |
-          set -euo pipefail
-          python3 scripts/ci/validate_workflows.py
-          {
-            echo "RELEASE_SHA=$RELEASE_SHA"
-            if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
-              echo "DEPLOY_MODE=bootstrap"
-            else
-              echo "DEPLOY_MODE=auto"
-            fi
-          } >>"$GITHUB_ENV"
+      - name: Validate reviewed image publication policy
+        run: python3 scripts/ci/validate_workflows.py
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Log in to private GHCR
@@ -489,85 +472,3 @@ jobs:
           asset_path="$(grep -Eo '(src|href)="/assets/[^"?]+' "$web_html" | head -n1 | cut -d'"' -f2)"
           [[ "$asset_path" == /assets/* ]]
           curl --fail --silent --show-error "http://127.0.0.1:18080${asset_path}" >/dev/null
-      - name: Set up Python for the offline Worker wheelhouse
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: workers/monomer_md_worker/requirements.lock
-      - name: Build and verify the release bundle and manifest
-        run: |
-          set -euo pipefail
-          umask 077
-          install -d -m 700 dist
-          bundle="dist/nexpoly-release-${RELEASE_SHA}.tar.gz"
-          staging="$(mktemp -d)"
-          trap 'rm -rf "$staging"' EXIT
-          git archive --format=tar "$RELEASE_SHA" -- . \
-            ':(exclude)model/**' ':(exclude)database/**' ':(exclude)backend/data/**' \
-            | tar -C "$staging" -xf -
-          install -d -m 700 "$staging/wheelhouse"
-          python -m pip download --require-hashes --only-binary=:all: \
-            --dest "$staging/wheelhouse" -r workers/monomer_md_worker/requirements.lock
-          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-            -C "$staging" -czf "$bundle" .
-          tar -tzf "$bundle" >/dev/null
-          python3 scripts/release_controller.py build-manifest \
-            --sha "$RELEASE_SHA" \
-            --ci-run-id "$GITHUB_RUN_ID" \
-            --backend-image "$BACKEND_IMAGE" \
-            --web-image "$WEB_IMAGE" \
-            --release-bundle "$bundle" \
-            --release-input release-input.json \
-            --migration-manifest backend/migrations/postgres/manifest.json \
-            --output dist/release-manifest.json
-          python3 scripts/release_controller.py verify-manifest \
-            --manifest dist/release-manifest.json --sha "$RELEASE_SHA"
-      - id: freshness
-        name: Reconfirm that this SHA is still current main
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          current_main="$(curl --fail --silent --show-error \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])')"
-          [[ "$current_main" =~ ^[0-9a-f]{40}$ ]]
-          if [[ "$current_main" != "$RELEASE_SHA" ]]; then
-            echo "Release $RELEASE_SHA is superseded by main $current_main; deployment skipped." >>"$GITHUB_STEP_SUMMARY"
-            echo "superseded=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "superseded=false" >>"$GITHUB_OUTPUT"
-          fi
-      - id: deployment-gate
-        name: Resolve automatic deployment gate
-        if: steps.freshness.outputs.superseded == 'false'
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
-            echo "enabled=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >>"$GITHUB_OUTPUT"
-            echo "Automatic production deployment is disabled during the migration-epoch bridge; production was not changed." >>"$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Deploy bundle over pinned-host-key SSH
-        if: >-
-          steps.freshness.outputs.superseded == 'false' &&
-          steps.deployment-gate.outputs.enabled == 'true'
-        env:
-          NEXPOLY_RELEASE_SHA: ${{ needs.resolve-sha.outputs.candidate_sha }}
-          NEXPOLY_SSH_HOST: ${{ secrets.NEXPOLY_SSH_HOST }}
-          NEXPOLY_SSH_USER: ${{ secrets.NEXPOLY_SSH_USER }}
-          NEXPOLY_SSH_PRIVATE_KEY: ${{ secrets.NEXPOLY_SSH_PRIVATE_KEY }}
-          NEXPOLY_SSH_KNOWN_HOSTS: ${{ secrets.NEXPOLY_SSH_KNOWN_HOSTS }}
-          NEXPOLY_SSH_PORT: ${{ vars.NEXPOLY_SSH_PORT }}
-          NEXPOLY_PRODUCTION_ROOT: /data/lzq/gith/nexpoly
-        run: |
-          set -euo pipefail
-          scripts/ci/remote_release.sh "$DEPLOY_MODE" \
-            dist/release-manifest.json \
-            "dist/nexpoly-release-${NEXPOLY_RELEASE_SHA}.tar.gz"

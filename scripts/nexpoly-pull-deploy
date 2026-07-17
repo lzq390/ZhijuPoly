@@ -1,0 +1,28 @@
+#!/usr/bin/python3 -I
+"""Immutable, startup-file-free production deploy entrypoint."""
+
+import os
+import sys
+
+if not sys.flags.isolated:
+    raise SystemExit("nexpoly-pull-deploy requires isolated Python startup")
+
+
+PYTHON = "/usr/bin/python3"
+SELECTOR = "/data/lzq/gith/nexpoly-runtime/bin/control_runtime_selector.py"
+ENVIRONMENT = {
+    "HOME": "/home/devuser",
+    "USER": "devuser",
+    "LOGNAME": "devuser",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "XDG_RUNTIME_DIR": "/run/user/1001",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
+
+os.execve(
+    PYTHON,
+    [PYTHON, "-I", "-B", SELECTOR, "run", "deploy", *sys.argv[1:]],
+    ENVIRONMENT,
+)

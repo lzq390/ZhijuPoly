@@ -79,7 +79,9 @@ class WorkerSettings:
     transport_cuda_smoke_enabled: bool = True
     gpu_broker_enabled: bool = False
     gpu_broker_socket_path: str = "/run/user/1001/nexpoly-gpu/broker.sock"
-    gpu_mps_pipe_root: Path = Path("/data/lzq/gith/nexpoly/ops/state/gpu-resource")
+    gpu_mps_pipe_root: Path = Path(
+        "/data/lzq/gith/nexpoly-runtime/state/gpu-resource"
+    )
     gpu_broker_environment: str = "dev"
     gpu_broker_wait_timeout_seconds: float = 600.0
     gpu_broker_heartbeat_interval_seconds: float = 5.0
@@ -121,7 +123,7 @@ def load_settings() -> WorkerSettings:
     gpu_mps_pipe_root = Path(
         os.getenv(
             "MONOMER_MD_GPU_MPS_PIPE_ROOT",
-            "/data/lzq/gith/nexpoly/ops/state/gpu-resource",
+            "/data/lzq/gith/nexpoly-runtime/state/gpu-resource",
         )
     )
     if not gpu_mps_pipe_root.is_absolute():

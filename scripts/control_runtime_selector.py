@@ -1,0 +1,949 @@
+#!/usr/bin/env python3
+"""Immutable router for content-addressed production control releases.
+
+Only this module and the two tiny stable wrappers live in ``runtime/bin``.  Every
+controller, maintenance helper, and Worker launcher is loaded from an
+immutable, manifest-sealed release below ``runtime/control-releases``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import fcntl
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import sys
+from typing import Any, Mapping
+
+
+PROTOCOL_VERSION = 1
+SOURCE_MANIFEST_SCHEMA_VERSION = 1
+CONTROL_MANIFEST_SCHEMA_VERSION = 1
+CONTROL_CANDIDATE_SCHEMA_VERSION = 1
+ACTIVE_CONTROL_SCHEMA_VERSION = 1
+PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
+SOURCE_MANIFEST_RELATIVE_PATH = "scripts/control-release.json"
+CONTROL_MANIFEST_NAME = "CONTROL-MANIFEST.json"
+BOOTSTRAP_AUTHORITY_NAME = "bootstrap-control.json"
+BOOTSTRAP_IMMUTABLE_FILES = {
+    "control_runtime_selector.py",
+    "nexpoly-pull-deploy",
+    "nexpoly-pull-contract-0012",
+}
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+RELEASE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}\.py$")
+SAFE_ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
+SAFE_CONFIG_RE = re.compile(r"^config/[a-z][a-z0-9_.-]{0,127}$")
+REQUIRED_COMPATIBILITY = {
+    "handoff_protocol_versions": 1,
+    "descriptor_schema_versions": 2,
+    "current_state_schema_versions": 2,
+    "marker_schema_versions": 2,
+    "worker_slot_schema_versions": 2,
+}
+
+
+class ControlRuntimeError(RuntimeError):
+    """Fail-closed control release validation error."""
+
+
+def sha256_bytes(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+
+
+def canonical_json_digest(value: object) -> str:
+    return sha256_bytes(canonical_json_bytes(value))
+
+
+def release_identity(document_without_release_id: Mapping[str, Any]) -> str:
+    return canonical_json_digest(document_without_release_id).removeprefix("sha256:")
+
+
+def _require_private_directory(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ControlRuntimeError(f"control directory is unavailable: {path}") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise ControlRuntimeError(f"control directory is unsafe: {path}")
+
+
+def _load_private_json(path: Path) -> dict[str, Any]:
+    try:
+        metadata = path.lstat()
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise ControlRuntimeError(f"control record is unavailable: {path}") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or len(payload) > 1024 * 1024
+    ):
+        raise ControlRuntimeError(f"control record is unsafe: {path}")
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ControlRuntimeError(f"control record is invalid: {path}") from exc
+    if not isinstance(value, dict):
+        raise ControlRuntimeError(f"control record is invalid: {path}")
+    return value
+
+
+def _validate_compatibility(value: object) -> dict[str, Any]:
+    fields = {
+        "handoff_protocol_versions",
+        "descriptor_schema_versions",
+        "current_state_schema_versions",
+        "marker_schema_versions",
+        "worker_slot_schema_versions",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ControlRuntimeError("control compatibility declaration is invalid")
+    result: dict[str, list[int]] = {}
+    for name in sorted(fields):
+        versions = value[name]
+        if (
+            not isinstance(versions, list)
+            or not versions
+            or len(versions) > 16
+            or any(
+                not isinstance(item, int)
+                or isinstance(item, bool)
+                or not 1 <= item <= 1024
+                for item in versions
+            )
+            or versions != sorted(set(versions))
+        ):
+            raise ControlRuntimeError("control compatibility versions are invalid")
+        result[name] = list(versions)
+    if PROTOCOL_VERSION not in result["handoff_protocol_versions"]:
+        raise ControlRuntimeError("control release does not support this handoff protocol")
+    for field, required in REQUIRED_COMPATIBILITY.items():
+        if required not in result[field]:
+            raise ControlRuntimeError(
+                f"control release lacks required {field} version {required}"
+            )
+    return result
+
+
+def _validate_entrypoints(value: object, file_names: set[str]) -> dict[str, Any]:
+    if not isinstance(value, dict) or not 1 <= len(value) <= 32:
+        raise ControlRuntimeError("control entrypoint map is invalid")
+    result: dict[str, dict[str, Any]] = {}
+    for role, record in value.items():
+        if not isinstance(role, str) or SAFE_ROLE_RE.fullmatch(role) is None:
+            raise ControlRuntimeError("control role is unsafe")
+        if not isinstance(record, dict) or record.get("kind") not in {
+            "python",
+            "worker",
+        }:
+            raise ControlRuntimeError("control entrypoint is invalid")
+        if record["kind"] == "python":
+            if set(record) != {"kind", "file"} or record.get("file") not in file_names:
+                raise ControlRuntimeError("Python control entrypoint is invalid")
+        else:
+            if (
+                set(record)
+                != {"kind", "environment_loader", "launcher", "config_relative"}
+                or record.get("environment_loader") not in file_names
+                or record.get("launcher") not in file_names
+                or not isinstance(record.get("config_relative"), str)
+                or SAFE_CONFIG_RE.fullmatch(record["config_relative"]) is None
+            ):
+                raise ControlRuntimeError("Worker control entrypoint is invalid")
+        result[role] = dict(record)
+    if "deploy" not in result or result["deploy"].get("kind") != "python":
+        raise ControlRuntimeError("control release lacks the deploy entrypoint")
+    return result
+
+
+def parse_source_manifest(payload: bytes) -> dict[str, Any]:
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ControlRuntimeError("control source manifest is invalid JSON") from exc
+    fields = {
+        "schema_version",
+        "protocol_version",
+        "compatibility",
+        "entrypoints",
+        "files",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != SOURCE_MANIFEST_SCHEMA_VERSION
+        or document.get("protocol_version") != PROTOCOL_VERSION
+        or not isinstance(document.get("files"), list)
+        or not 1 <= len(document["files"]) <= 64
+    ):
+        raise ControlRuntimeError("control source manifest has an invalid shape")
+    files: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for record in document["files"]:
+        if not isinstance(record, dict) or set(record) != {"name", "source", "mode"}:
+            raise ControlRuntimeError("control source file record is invalid")
+        name = record.get("name")
+        source = record.get("source")
+        mode = record.get("mode")
+        pure = PurePosixPath(source) if isinstance(source, str) else PurePosixPath(".")
+        if (
+            not isinstance(name, str)
+            or SAFE_NAME_RE.fullmatch(name) is None
+            or name in names
+            or not isinstance(source, str)
+            or not source.startswith("scripts/")
+            or pure.is_absolute()
+            or ".." in pure.parts
+            or pure.name != name
+            or mode != 0o700
+        ):
+            raise ControlRuntimeError("control source file record is unsafe")
+        names.add(name)
+        files.append({"name": name, "source": source, "mode": mode})
+    compatibility = _validate_compatibility(document["compatibility"])
+    entrypoints = _validate_entrypoints(document["entrypoints"], names)
+    return {
+        "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
+        "compatibility": compatibility,
+        "entrypoints": entrypoints,
+        "files": files,
+    }
+
+
+def validate_control_manifest(document: object) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "protocol_version",
+        "release_id",
+        "source_sha",
+        "source_tree",
+        "compatibility",
+        "entrypoints",
+        "files",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != CONTROL_MANIFEST_SCHEMA_VERSION
+        or document.get("protocol_version") != PROTOCOL_VERSION
+        or not isinstance(document.get("release_id"), str)
+        or RELEASE_ID_RE.fullmatch(document["release_id"]) is None
+        or not isinstance(document.get("source_sha"), str)
+        or SHA_RE.fullmatch(document["source_sha"]) is None
+        or not isinstance(document.get("source_tree"), str)
+        or SHA_RE.fullmatch(document["source_tree"]) is None
+        or not isinstance(document.get("files"), dict)
+        or not 1 <= len(document["files"]) <= 64
+    ):
+        raise ControlRuntimeError("control release manifest has an invalid shape")
+    files: dict[str, dict[str, Any]] = {}
+    for name, record in document["files"].items():
+        if (
+            not isinstance(name, str)
+            or SAFE_NAME_RE.fullmatch(name) is None
+            or not isinstance(record, dict)
+            or set(record) != {"sha256", "size", "mode"}
+            or not isinstance(record.get("sha256"), str)
+            or DIGEST_RE.fullmatch(record["sha256"]) is None
+            or not isinstance(record.get("size"), int)
+            or isinstance(record.get("size"), bool)
+            or not 1 <= record["size"] <= 16 * 1024 * 1024
+            or record.get("mode") != 0o700
+        ):
+            raise ControlRuntimeError("control release file identity is invalid")
+        files[name] = dict(record)
+    compatibility = _validate_compatibility(document["compatibility"])
+    entrypoints = _validate_entrypoints(document["entrypoints"], set(files))
+    normalized = {
+        **document,
+        "compatibility": compatibility,
+        "entrypoints": entrypoints,
+        "files": files,
+    }
+    identity_payload = {key: value for key, value in normalized.items() if key != "release_id"}
+    if release_identity(identity_payload) != normalized["release_id"]:
+        raise ControlRuntimeError("control release identity differs from its manifest")
+    return normalized
+
+
+def validate_candidate_record(document: object) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "protocol_version",
+        "component",
+        "release_id",
+        "source_sha",
+        "source_tree",
+        "manifest_sha256",
+        "operation_id",
+        "prepared_at",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != CONTROL_CANDIDATE_SCHEMA_VERSION
+        or document.get("protocol_version") != PROTOCOL_VERSION
+        or document.get("component") != "deployment-controls"
+        or not isinstance(document.get("release_id"), str)
+        or RELEASE_ID_RE.fullmatch(document["release_id"]) is None
+        or not isinstance(document.get("source_sha"), str)
+        or SHA_RE.fullmatch(document["source_sha"]) is None
+        or not isinstance(document.get("source_tree"), str)
+        or SHA_RE.fullmatch(document["source_tree"]) is None
+        or not isinstance(document.get("manifest_sha256"), str)
+        or DIGEST_RE.fullmatch(document["manifest_sha256"]) is None
+        or not isinstance(document.get("operation_id"), str)
+        or OPERATION_ID_RE.fullmatch(document["operation_id"]) is None
+        or not isinstance(document.get("prepared_at"), str)
+        or not document["prepared_at"]
+    ):
+        raise ControlRuntimeError("candidate control record has an invalid shape")
+    return dict(document)
+
+
+def validate_active_control_record(document: object) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "protocol_version",
+        "component",
+        "generation",
+        "release_id",
+        "source_sha",
+        "source_tree",
+        "manifest_sha256",
+        "operation_id",
+        "previous_release_id",
+        "activated_at",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != ACTIVE_CONTROL_SCHEMA_VERSION
+        or document.get("protocol_version") != PROTOCOL_VERSION
+        or document.get("component") != "deployment-controls"
+        or not isinstance(document.get("generation"), int)
+        or isinstance(document.get("generation"), bool)
+        or document["generation"] < 1
+        or not isinstance(document.get("release_id"), str)
+        or RELEASE_ID_RE.fullmatch(document["release_id"]) is None
+        or not isinstance(document.get("source_sha"), str)
+        or SHA_RE.fullmatch(document["source_sha"]) is None
+        or not isinstance(document.get("source_tree"), str)
+        or SHA_RE.fullmatch(document["source_tree"]) is None
+        or not isinstance(document.get("manifest_sha256"), str)
+        or DIGEST_RE.fullmatch(document["manifest_sha256"]) is None
+        or not isinstance(document.get("operation_id"), str)
+        or OPERATION_ID_RE.fullmatch(document["operation_id"]) is None
+        or (
+            document.get("previous_release_id") is not None
+            and (
+                not isinstance(document["previous_release_id"], str)
+                or RELEASE_ID_RE.fullmatch(document["previous_release_id"]) is None
+            )
+        )
+        or not isinstance(document.get("activated_at"), str)
+        or not document["activated_at"]
+    ):
+        raise ControlRuntimeError("active control record has an invalid shape")
+    return dict(document)
+
+
+def control_release_root(runtime_root: Path, release_id: str) -> Path:
+    if RELEASE_ID_RE.fullmatch(release_id) is None:
+        raise ControlRuntimeError("control release identity is invalid")
+    return runtime_root / "control-releases" / release_id
+
+
+def active_control_record_path(runtime_root: Path) -> Path:
+    return runtime_root / "state/active-control.json"
+
+
+def _validate_bootstrap_authority(runtime_root: Path) -> dict[str, Any]:
+    record = _load_private_json(
+        runtime_root / "state" / BOOTSTRAP_AUTHORITY_NAME
+    )
+    expected_fields = {
+        "schema_version",
+        "status",
+        "source_sha",
+        "source_tree",
+        "delivery_gate",
+        "production_repository",
+        "immutable_files",
+        "worker_unit_takeover",
+        "candidate_control",
+        "active_control",
+    }
+    immutable = record.get("immutable_files")
+    candidate = validate_candidate_record(record.get("candidate_control"))
+    initial_active = validate_active_control_record(record.get("active_control"))
+    if (
+        set(record) != expected_fields
+        or record.get("schema_version") != 1
+        or record.get("status") != "completed"
+        or SHA_RE.fullmatch(str(record.get("source_sha", ""))) is None
+        or SHA_RE.fullmatch(str(record.get("source_tree", ""))) is None
+        or not isinstance(record.get("delivery_gate"), dict)
+        or not isinstance(record.get("production_repository"), dict)
+        or not isinstance(record.get("worker_unit_takeover"), dict)
+        or not isinstance(immutable, dict)
+        or set(immutable) != BOOTSTRAP_IMMUTABLE_FILES
+        or any(
+            not isinstance(value, str) or DIGEST_RE.fullmatch(value) is None
+            for value in immutable.values()
+        )
+        or any(
+            candidate.get(field) != initial_active.get(field)
+            for field in (
+                "protocol_version",
+                "release_id",
+                "source_sha",
+                "source_tree",
+                "manifest_sha256",
+                "operation_id",
+            )
+        )
+        or record["source_sha"] != candidate["source_sha"]
+        or record["source_tree"] != candidate["source_tree"]
+    ):
+        raise ControlRuntimeError("completed bootstrap authority is invalid")
+    bin_root = runtime_root / "bin"
+    _require_private_directory(bin_root)
+    if {entry.name for entry in bin_root.iterdir()} != BOOTSTRAP_IMMUTABLE_FILES:
+        raise ControlRuntimeError("immutable bootstrap router inventory differs")
+    for name, expected_digest in immutable.items():
+        path = bin_root / name
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise ControlRuntimeError(
+                f"immutable bootstrap router is unavailable: {name}"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or sha256_file(path) != expected_digest
+        ):
+            raise ControlRuntimeError(
+                f"immutable bootstrap router differs: {name}"
+            )
+    return record
+
+
+def load_control_release(
+    runtime_root: Path, release_id: str
+) -> tuple[dict[str, Any], Path]:
+    _require_private_directory(runtime_root)
+    parent = runtime_root / "control-releases"
+    _require_private_directory(parent)
+    root = control_release_root(runtime_root, release_id)
+    _require_private_directory(root)
+    manifest_path = root / CONTROL_MANIFEST_NAME
+    manifest = validate_control_manifest(_load_private_json(manifest_path))
+    if manifest["release_id"] != release_id:
+        raise ControlRuntimeError("control release directory differs from its identity")
+    expected_names = set(manifest["files"]) | {CONTROL_MANIFEST_NAME}
+    actual_names = {entry.name for entry in root.iterdir()}
+    if actual_names != expected_names:
+        raise ControlRuntimeError("control release inventory contains extra or missing files")
+    for name, identity in manifest["files"].items():
+        path = root / name
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise ControlRuntimeError(f"control release file is unavailable: {name}") from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != identity["mode"]
+            or metadata.st_size != identity["size"]
+            or sha256_file(path) != identity["sha256"]
+        ):
+            raise ControlRuntimeError(f"control release file differs: {name}")
+    return manifest, root
+
+
+def load_candidate_control(
+    runtime_root: Path, candidate: object
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    record = validate_candidate_record(candidate)
+    manifest, root = load_control_release(runtime_root, record["release_id"])
+    if (
+        sha256_file(root / CONTROL_MANIFEST_NAME) != record["manifest_sha256"]
+        or any(
+            manifest[key] != record[key]
+            for key in ("source_sha", "source_tree", "release_id")
+        )
+    ):
+        raise ControlRuntimeError("candidate control record differs from its release")
+    return record, manifest, root
+
+
+def load_active_control(
+    runtime_root: Path,
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    _validate_bootstrap_authority(runtime_root)
+    active = validate_active_control_record(
+        _load_private_json(active_control_record_path(runtime_root))
+    )
+    manifest, root = load_control_release(runtime_root, active["release_id"])
+    if (
+        sha256_file(root / CONTROL_MANIFEST_NAME) != active["manifest_sha256"]
+        or any(
+            active[key] != manifest[key]
+            for key in ("source_sha", "source_tree", "release_id")
+        )
+    ):
+        raise ControlRuntimeError("active control record differs from its release")
+    return active, manifest, root
+
+
+def _active_matches_candidate(
+    active: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> bool:
+    return all(
+        active.get(field) == candidate.get(field)
+        for field in (
+            "protocol_version",
+            "release_id",
+            "source_sha",
+            "source_tree",
+            "manifest_sha256",
+            "operation_id",
+        )
+    )
+
+
+def _require_deploy_lock_held(runtime_root: Path) -> None:
+    path = runtime_root / "state/deploy.lock"
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise ControlRuntimeError("deployment transition lock is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise ControlRuntimeError("deployment transition lock is unsafe")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        raise ControlRuntimeError("deployment transition marker is not lock-owned")
+    finally:
+        os.close(descriptor)
+
+
+def _worker_projection_matches(
+    active: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    *,
+    source_sha: object,
+    source_tree: object,
+    unit: object,
+    slot: object,
+    operation_id: object,
+) -> bool:
+    entrypoint = manifest.get("entrypoints", {}).get("monomer-md")
+    files = manifest.get("files")
+    if (
+        not isinstance(entrypoint, dict)
+        or entrypoint.get("kind") != "worker"
+        or not isinstance(files, dict)
+        or source_sha != active.get("source_sha")
+        or source_tree != active.get("source_tree")
+        or not isinstance(unit, dict)
+        or not isinstance(slot, dict)
+    ):
+        return False
+    launcher = files.get(entrypoint.get("launcher"))
+    return bool(
+        isinstance(launcher, dict)
+        and unit.get("control_release_id") == active.get("release_id")
+        and unit.get("launcher_sha256") == launcher.get("sha256")
+        and slot.get("source_sha") == source_sha
+        and slot.get("source_tree") == source_tree
+        and slot.get("operation_id") == operation_id
+        and active.get("operation_id") == operation_id
+    )
+
+
+def _asset_pointer_matches(runtime_root: Path, asset: object) -> bool:
+    if not isinstance(asset, dict) or not isinstance(asset.get("root"), str):
+        return False
+    root = Path(asset["root"])
+    pointer = runtime_root / "state/current-assets"
+    try:
+        metadata = pointer.lstat()
+        target = Path(os.readlink(pointer))
+    except OSError:
+        return False
+    if not target.is_absolute():
+        target = pointer.parent / target
+    return bool(
+        stat.S_ISLNK(metadata.st_mode)
+        and metadata.st_uid == os.geteuid()
+        and target.absolute() == root.absolute()
+    )
+
+
+def _validate_worker_route_authority(
+    runtime_root: Path,
+    active: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> None:
+    current_path = runtime_root / "state/current-deployment.json"
+    marker_path = runtime_root / "state/deploy-in-progress.json"
+    marker_present = marker_path.exists() or marker_path.is_symlink()
+    if not marker_present and (current_path.exists() or current_path.is_symlink()):
+        current = _load_private_json(current_path)
+        compatibility = manifest["compatibility"]["current_state_schema_versions"]
+        if (
+            current.get("schema_version") in compatibility
+            and current.get("active_control") == active
+            and _worker_projection_matches(
+                active,
+                manifest,
+                source_sha=current.get("source_sha"),
+                source_tree=current.get("source_tree"),
+                unit=current.get("monomer_md_systemd_unit"),
+                slot=current.get("active_monomer_md_slot"),
+                operation_id=current.get("operation_id"),
+            )
+            and _asset_pointer_matches(runtime_root, current.get("asset_identity"))
+        ):
+            return
+
+    if not marker_present:
+        raise ControlRuntimeError(
+            "active Worker controls differ from governed deployment authority"
+        )
+    marker = _load_private_json(marker_path)
+    operation_id = marker.get("operation_id")
+    descriptor_digest = marker.get("descriptor_sha256")
+    if (
+        marker.get("schema_version")
+        not in manifest["compatibility"]["marker_schema_versions"]
+        or marker.get("action") not in {"deploy", "explicit-rollback"}
+        or not isinstance(operation_id, str)
+        or OPERATION_ID_RE.fullmatch(operation_id) is None
+        or not isinstance(descriptor_digest, str)
+        or DIGEST_RE.fullmatch(descriptor_digest) is None
+    ):
+        raise ControlRuntimeError("Worker transition marker is invalid")
+    _require_deploy_lock_held(runtime_root)
+    descriptor_path = runtime_root / "state/prepared" / operation_id / "descriptor.json"
+    descriptor = _load_private_json(descriptor_path)
+    if sha256_file(descriptor_path) != descriptor_digest:
+        raise ControlRuntimeError("Worker transition descriptor differs from marker")
+    controller = descriptor.get("controller")
+    repository = descriptor.get("repository")
+    monomer = descriptor.get("monomer_md")
+    previous = descriptor.get("previous_deployment")
+    if not isinstance(controller, dict) or not isinstance(repository, dict):
+        raise ControlRuntimeError("Worker transition descriptor is incomplete")
+    candidate = controller.get("executor_control")
+    candidate_digest = controller.get("executor_control_sha256")
+    if (
+        not isinstance(candidate, dict)
+        or canonical_json_digest(candidate) != candidate_digest
+        or marker.get("executor_control") != candidate
+        or marker.get("executor_control_sha256") != candidate_digest
+    ):
+        raise ControlRuntimeError("Worker transition control authority differs")
+    switched = all(
+        marker.get(field) is True
+        for field in (
+            "source_switched",
+            "slot_switched",
+            "unit_switched",
+            "control_switched",
+            "asset_switched",
+        )
+    )
+    restored = (
+        marker.get("runtime_stopped") is True
+        and all(
+            marker.get(field) is False
+            for field in (
+                "source_switched",
+                "slot_switched",
+                "unit_switched",
+                "control_switched",
+                "asset_switched",
+            )
+        )
+    )
+    pre_stop_previous = (
+        marker.get("action") == "deploy"
+        and marker.get("runtime_stopped") is False
+        and marker.get("database_change_started") is False
+        and marker.get("phase") in {"prepared", "drain-started", "drained", "failed"}
+        and (
+            marker.get("phase") != "failed"
+            or marker.get("failed_phase") in {"prepared", "drain-started", "drained"}
+        )
+        and all(
+            marker.get(field) is False
+            for field in (
+                "source_switched",
+                "slot_switched",
+                "unit_switched",
+                "control_switched",
+                "asset_switched",
+            )
+        )
+    )
+    if switched and _active_matches_candidate(active, candidate):
+        if not isinstance(monomer, dict) or not _worker_projection_matches(
+            active,
+            manifest,
+            source_sha=repository.get("target_sha"),
+            source_tree=repository.get("target_tree"),
+            unit=monomer.get("systemd_unit"),
+            slot=monomer.get("slot_record"),
+            operation_id=operation_id,
+        ):
+            raise ControlRuntimeError("candidate Worker transition identity differs")
+        release_input = descriptor.get("release_input")
+        if not isinstance(release_input, dict) or not _asset_pointer_matches(
+            runtime_root, release_input.get("asset")
+        ):
+            raise ControlRuntimeError("candidate Worker asset identity differs")
+        return
+    previous_control = controller.get("previous_active_control")
+    if (
+        (restored or pre_stop_previous)
+        and isinstance(previous, dict)
+        and active == previous_control
+        and previous_control == previous.get("active_control")
+    ):
+        if pre_stop_previous:
+            if not (current_path.exists() or current_path.is_symlink()):
+                raise ControlRuntimeError(
+                    "unchanged pre-stop Worker authority has no current state"
+                )
+            current = _load_private_json(current_path)
+            if current != previous:
+                raise ControlRuntimeError(
+                    "unchanged pre-stop Worker state differs from previous deployment"
+                )
+        if not _worker_projection_matches(
+            active,
+            manifest,
+            source_sha=previous.get("source_sha"),
+            source_tree=previous.get("source_tree"),
+            unit=previous.get("monomer_md_systemd_unit"),
+            slot=previous.get("active_monomer_md_slot"),
+            operation_id=previous.get("operation_id"),
+        ):
+            raise ControlRuntimeError("restored Worker transition identity differs")
+        if not _asset_pointer_matches(runtime_root, previous.get("asset_identity")):
+            raise ControlRuntimeError("restored Worker asset identity differs")
+        return
+    raise ControlRuntimeError(
+        "active Worker controls differ from governed deployment authority"
+    )
+
+
+def _selected_release(
+    runtime_root: Path, role: str, arguments: list[str]
+) -> tuple[dict[str, Any], Path]:
+    """Route recovery/apply to a sealed candidate; all other calls use active."""
+
+    active, manifest, root = load_active_control(runtime_root)
+    if role == "contract-0012":
+        deploy_marker = runtime_root / "state/deploy-in-progress.json"
+        if deploy_marker.exists() or deploy_marker.is_symlink():
+            raise ControlRuntimeError(
+                "0012 maintenance is blocked by an interrupted code deployment"
+            )
+    if role == "monomer-md":
+        _validate_worker_route_authority(runtime_root, active, manifest)
+    if role != "deploy" or not arguments:
+        return manifest, root
+    command = arguments[0]
+    operation_id: str | None = None
+    if command in {"apply", "rollback"}:
+        if arguments.count("--operation-id") != 1:
+            raise ControlRuntimeError("deploy operation ID must occur exactly once")
+        try:
+            index = arguments.index("--operation-id")
+            operation_id = arguments[index + 1]
+        except IndexError:
+            raise ControlRuntimeError("deploy operation ID is missing") from None
+        if OPERATION_ID_RE.fullmatch(operation_id) is None:
+            raise ControlRuntimeError("deploy operation ID is invalid")
+    marker_path = runtime_root / "state/deploy-in-progress.json"
+    if marker_path.exists() or marker_path.is_symlink():
+        marker = _load_private_json(marker_path)
+        if (
+            not isinstance(marker.get("schema_version"), int)
+            or isinstance(marker.get("schema_version"), bool)
+            or marker.get("action") not in {"deploy", "explicit-rollback"}
+            or not isinstance(marker.get("operation_id"), str)
+            or OPERATION_ID_RE.fullmatch(marker["operation_id"]) is None
+            or not isinstance(marker.get("executor_control"), dict)
+            or not isinstance(marker.get("executor_control_sha256"), str)
+        ):
+            raise ControlRuntimeError("deployment marker lacks sealed control authority")
+        candidate = marker["executor_control"]
+        if (
+            canonical_json_digest(candidate) != marker["executor_control_sha256"]
+            or candidate.get("operation_id") != marker["operation_id"]
+            or operation_id is not None
+            and operation_id != marker["operation_id"]
+        ):
+            raise ControlRuntimeError("deployment marker control identity differs")
+        _record, candidate_manifest, candidate_root = load_candidate_control(
+            runtime_root, candidate
+        )
+        if (
+            marker["schema_version"]
+            not in candidate_manifest["compatibility"]["marker_schema_versions"]
+        ):
+            raise ControlRuntimeError(
+                "deployment marker schema is unsupported by its executor"
+            )
+        return candidate_manifest, candidate_root
+    if operation_id is not None:
+        ready_path = runtime_root / "state/prepared" / operation_id / "ready.json"
+        ready = _load_private_json(ready_path)
+        if (
+            ready.get("schema_version") != 1
+            or ready.get("status") != "ready"
+            or ready.get("operation_id") != operation_id
+        ):
+            raise ControlRuntimeError("prepared control operation identity differs")
+        candidate = ready.get("executor_control")
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("operation_id") != operation_id
+            or canonical_json_digest(candidate)
+            != ready.get("executor_control_sha256")
+        ):
+            raise ControlRuntimeError("prepared control identity differs")
+        _record, candidate_manifest, candidate_root = load_candidate_control(
+            runtime_root, candidate
+        )
+        return candidate_manifest, candidate_root
+    return manifest, root
+
+
+def _exec_role(
+    role: str,
+    arguments: list[str],
+    environment: Mapping[str, str],
+    *,
+    runtime_root: Path = PRODUCTION_RUNTIME_ROOT,
+) -> None:
+    if SAFE_ROLE_RE.fullmatch(role) is None:
+        raise ControlRuntimeError("control selector role is invalid")
+    runtime_root = runtime_root.absolute()
+    manifest, release = _selected_release(runtime_root, role, arguments)
+    entrypoint = manifest["entrypoints"].get(role)
+    if entrypoint is None:
+        raise ControlRuntimeError("active control release does not provide this role")
+    allowed = {
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+    }
+    clean_environment = {
+        key: value for key, value in environment.items() if key in allowed
+    }
+    clean_environment.update(
+        {
+            "HOME": "/home/devuser",
+            "USER": "devuser",
+            "LOGNAME": "devuser",
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "XDG_RUNTIME_DIR": "/run/user/1001",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+    clean_environment["NEXPOLY_ACTIVE_CONTROL_ROOT"] = str(release)
+    clean_environment["NEXPOLY_ACTIVE_CONTROL_RELEASE_ID"] = manifest["release_id"]
+    python = "/usr/bin/python3"
+    if entrypoint["kind"] == "python":
+        target = release / entrypoint["file"]
+        argv = [python, "-I", "-B", str(target), *arguments]
+    else:
+        environment_loader = release / entrypoint["environment_loader"]
+        launcher = release / entrypoint["launcher"]
+        config = runtime_root / entrypoint["config_relative"]
+        argv = [
+            python,
+            "-I",
+            "-B",
+            str(environment_loader),
+            "exec",
+            str(config),
+            "--",
+            python,
+            "-I",
+            "-B",
+            str(launcher),
+            *arguments,
+        ]
+    os.execve(python, argv, clean_environment)
+
+
+def main(argv: list[str] | None = None) -> int:
+    values = list(sys.argv[1:] if argv is None else argv)
+    if len(values) < 2 or values[0] != "run":
+        print("control-runtime-selector: usage: run <role> [arguments...]", file=sys.stderr)
+        return 2
+    try:
+        _exec_role(values[1], values[2:], os.environ)
+    except (ControlRuntimeError, OSError, ValueError) as exc:
+        print(f"control-runtime-selector: error: {exc}", file=sys.stderr)
+        return 2
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

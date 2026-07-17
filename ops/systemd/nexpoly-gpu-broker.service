@@ -7,13 +7,14 @@ Wants=network-online.target
 Type=simple
 User=1001
 Group=1001
-WorkingDirectory=/data/lzq/gith/nexpoly/ops/current
-Environment="PYTHONPATH=/data/lzq/gith/nexpoly/ops/current"
+WorkingDirectory=/data/lzq/gith/nexpoly
 Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="PYTHONNOUSERSITE=1"
 Environment="XDG_RUNTIME_DIR=/run/user/1001"
-ExecStartPre=/usr/bin/install -d -m 0700 /data/lzq/gith/nexpoly/ops/state/gpu-resource
-ExecStartPre=/usr/bin/install -m 0600 /data/lzq/gith/nexpoly/ops/current/ops/config/gpu-external-reservations.json /data/lzq/gith/nexpoly/ops/state/gpu-resource/external-reservations.json
-ExecStart=/data/lzq/gith/nexpoly/ops/current/worker-venv/bin/python -m ops.gpu_broker.server --socket /data/lzq/gith/nexpoly/ops/state/gpu-resource/broker.sock --state /data/lzq/gith/nexpoly/ops/state/gpu-resource/broker-state.json --policy /data/lzq/gith/nexpoly/ops/current/ops/config/gpu-broker-policy.json --external-reservations /data/lzq/gith/nexpoly/ops/state/gpu-resource/external-reservations.json --mps-state-root /data/lzq/gith/nexpoly/ops/state/gpu-resource --job-cgroup-root /sys/fs/cgroup/nexpoly-gpu-jobs
+UnsetEnvironment=PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONUSERBASE
+ExecStartPre=/usr/bin/install -d -m 0700 /data/lzq/gith/nexpoly-runtime/state/gpu-resource
+ExecStartPre=/usr/bin/install -m 0600 /data/lzq/gith/nexpoly/ops/config/gpu-external-reservations.json /data/lzq/gith/nexpoly-runtime/state/gpu-resource/external-reservations.json
+ExecStart=/usr/bin/python3 -E -s -B -m ops.gpu_broker.server --socket /data/lzq/gith/nexpoly-runtime/state/gpu-resource/broker.sock --state /data/lzq/gith/nexpoly-runtime/state/gpu-resource/broker-state.json --policy /data/lzq/gith/nexpoly/ops/config/gpu-broker-policy.json --external-reservations /data/lzq/gith/nexpoly-runtime/state/gpu-resource/external-reservations.json --mps-state-root /data/lzq/gith/nexpoly-runtime/state/gpu-resource --job-cgroup-root /sys/fs/cgroup/nexpoly-gpu-jobs
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -25,7 +26,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nexpoly-gpu-broker
 
-# Capability only.  Release automation must not enable or start this unit;
+# Capability only.  Pull deployment must not enable or start this unit;
 # production activation is a separately authorized maintenance operation.
 [Install]
 WantedBy=default.target

@@ -12,7 +12,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_ROOT = REPOSITORY_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOW_ROOT / "ci.yml"
 RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
-RELEASE_CONTROLLER_PATH = REPOSITORY_ROOT / "scripts" / "release_controller.py"
+LEGACY_REMOTE_RELEASE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "remote_release.sh"
 
 PINNED_ACTION = re.compile(
     r"^\s*-?\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s*#.*)?$"
@@ -89,6 +89,8 @@ def main() -> int:
         ci_text = ""
     else:
         ci_text = CI_PATH.read_text(encoding="utf-8")
+    if LEGACY_REMOTE_RELEASE_PATH.exists() or LEGACY_REMOTE_RELEASE_PATH.is_symlink():
+        failures.append("the legacy CI-to-production remote release transport must stay removed")
 
     for path in workflow_files:
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -103,25 +105,29 @@ def main() -> int:
         (
             "pull_request:",
             "push:",
-            "workflow_dispatch:",
             "branches: [main]",
-            "DISPATCH_OPERATION",
             "[[ \"$EVENT_REF\" == refs/pull/*/merge ]]",
-            "[[ \"$EVENT_REF\" == refs/heads/main ]]",
-            "[[ \"$DISPATCH_OPERATION\" == bootstrap ]]",
             "name: ci-gate",
             "  release:\n"
-            "    name: Build, smoke, package, and deploy current main\n"
+            "    name: Publish and smoke immutable main images\n"
             "    if: >-\n"
             "      !cancelled() &&\n"
             "      needs.ci-gate.result == 'success' &&\n"
-            "      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')\n"
+            "      github.event_name == 'push'\n"
             "    needs: [resolve-sha, ci-gate]",
             "python3 scripts/ci/backend_test_shards.py --shards 3 --shard",
             "python -m pytest workers/monomer_md_worker/tests",
+            "scripts/tests/test_monomer_md_worker_launcher.py",
+            "scripts/tests/test_worker_slot_runtime.py",
+            "Rebuild the production Worker runtime lock from empty",
+            'python -m venv --clear "$runtime_venv"',
+            '"$runtime_venv/bin/python" -m pip install',
+            "--require-hashes --only-binary=:all:",
+            "workers/monomer_md_worker/requirements.lock",
+            '"$runtime_venv/bin/python" -m pip check',
             "working-directory: frontend",
             "run: npm test",
-            "python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v",
+            "python3 -m unittest -v \"${unittest_files[@]}\"",
             "python3 scripts/ci/validate_dependency_locks.py",
             "python3 -m app.migration_policy",
             "docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet",
@@ -135,26 +141,13 @@ def main() -> int:
             "python -m app.postgres_migrations --mode bootstrap",
             "python -m app.postgres_preflight --mode schema --strict",
             "asset_path=\"$(grep -Eo",
-            "python -m pip download --require-hashes --only-binary=:all:",
-            "nexpoly-release-${RELEASE_SHA}.tar.gz",
-            "--release-bundle \"$bundle\"",
-            "--release-input release-input.json",
-            "environment: nexpoly-production",
-            "group: nexpoly-production",
-            "cancel-in-progress: false",
-            "NEXPOLY_SSH_KNOWN_HOSTS: ${{ secrets.NEXPOLY_SSH_KNOWN_HOSTS }}",
-            "scripts/ci/remote_release.sh \"$DEPLOY_MODE\"",
-            "dist/release-manifest.json",
-            "NEXPOLY_PRODUCTION_ROOT: /data/lzq/gith/nexpoly",
-            "Reconfirm that this SHA is still current main",
-            "Automatic production deployment is disabled during the migration-epoch bridge",
-            "steps.deployment-gate.outputs.enabled == 'true'",
         ),
         failures,
     )
 
     for forbidden in (
         "workflow_run:",
+        "workflow_dispatch:",
         "merge_group:",
         "actions/upload-artifact",
         "actions/download-artifact",
@@ -167,16 +160,38 @@ def main() -> int:
         "PR_MERGE_SHA",
         "dataset all",
         "AUTODEPLOY_ENABLED",
+        "environment: nexpoly-production",
+        "NEXPOLY_SSH_",
+        "scripts/ci/remote_release.sh",
+        "release-bundle",
+        "nexpoly-release-${RELEASE_SHA}.tar.gz",
+        "dist/release-manifest.json",
+        "git archive",
+        "python -m pip download",
+        "provision-release",
+        "deploy --apply",
     ):
         if forbidden in ci_text:
             failures.append(f"ci.yml contains forbidden legacy/implicit control: {forbidden}")
 
-    if ci_text.count("scripts/ci/remote_release.sh \"$DEPLOY_MODE\"") != 1:
-        failures.append("ci.yml must expose exactly one production deployment path")
-    if ci_text.count("NEXPOLY_SSH_PRIVATE_KEY: ${{ secrets.NEXPOLY_SSH_PRIVATE_KEY }}") != 1:
-        failures.append("the SSH private key must be scoped to the single deployment step")
-    if ci_text.count("NEXPOLY_SSH_KNOWN_HOSTS: ${{ secrets.NEXPOLY_SSH_KNOWN_HOSTS }}") != 1:
-        failures.append("pinned known_hosts must be scoped to the single deployment step")
+    if ci_text.count("push: true") != 2:
+        failures.append("ci.yml must push exactly the Backend and Web SHA images")
+    if ci_text.count("ghcr.io/lzq390/nexpoly-backend:sha-") != 1:
+        failures.append("ci.yml must publish exactly one immutable Backend SHA tag")
+    if ci_text.count("ghcr.io/lzq390/nexpoly-web:sha-") != 1:
+        failures.append("ci.yml must publish exactly one immutable Web SHA tag")
+    if ci_text.count(
+        "org.opencontainers.image.revision=${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ) != 2:
+        failures.append("both published images must bind the immutable source revision label")
+    if ci_text.count(
+        "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}"
+    ) != 2:
+        failures.append("both published images must bind the repository source label")
+    if ci_text.count(
+        "org.opencontainers.image.version=sha-${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ) != 2:
+        failures.append("both published images must bind the immutable SHA version label")
     if ci_text.count("uses: actions/checkout@") != ci_text.count("Assert immutable checkout"):
         failures.append("every checkout must be followed by an immutable SHA assertion")
     if ci_text.count("uses: actions/checkout@") != ci_text.count("persist-credentials: false"):
@@ -187,16 +202,6 @@ def main() -> int:
         failures.append("ci.yml must syntax-check and ShellCheck every tracked shell script")
     if "workers/polytao_worker" in ci_text or "POLYTAO_WORKER_BASE_URL" in ci_text:
         failures.append("ci.yml must not build or test the removed standalone PolyTAO Worker")
-    try:
-        controller_text = RELEASE_CONTROLLER_PATH.read_text(encoding="utf-8")
-    except OSError as exc:
-        failures.append(f"release controller is unavailable: {exc}")
-    else:
-        if 'self.run_migrations(environment, mode="bootstrap-expand")' not in controller_text:
-            failures.append(
-                "production first-release takeover must retain bootstrap-expand"
-            )
-
     validate_release_input(failures)
 
     if failures:

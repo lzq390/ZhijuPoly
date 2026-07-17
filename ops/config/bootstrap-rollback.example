@@ -3,7 +3,7 @@ set -euo pipefail
 umask 077
 
 production_root=/data/lzq/gith/nexpoly
-restore="$production_root/ops/config/bootstrap-legacy-runtime-restore"
+restore=/data/lzq/gith/nexpoly-runtime/config/bootstrap-legacy-runtime-restore
 : "${NEXPOLY_BOOTSTRAP_LEGACY_RUNTIME_SHA256:?set the audited legacy runtime digest}"
 
 [[ "$PWD" == "$production_root" ]] || {

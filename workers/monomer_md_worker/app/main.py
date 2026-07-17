@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
-import json
-import re
 import shutil
 import sys
 from contextlib import asynccontextmanager
@@ -25,20 +23,30 @@ from .runtime_health import (
     probe_runtime_snapshot,
 )
 from gpu_resource import GpuBrokerClient, GpuBrokerClientError, ManagedGpuLease
+from scripts.worker_slot_runtime import (
+    PRODUCTION_RUNTIME_ROOT,
+    PRODUCTION_SOURCE_ROOT,
+    WorkerSlotError,
+    verify_runtime_binding,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("monomer_md_worker")
 
 
-_SOURCE_SHA_RE = re.compile(r"[0-9a-f]{40}")
 _WORKER_MODULE_PATH = Path("workers/monomer_md_worker/app/main.py")
 
 
 @dataclass(frozen=True)
 class RuntimeIdentity:
     source_sha: str | None
+    source_tree: str | None
     source_root: str
     venv_prefix: str
+    venv_slot: str | None
+    worker_lock_sha256: str | None
+    slot_record_sha256: str | None
+    base_python_identity_sha256: str | None
     python_executable: str
 
 
@@ -47,8 +55,10 @@ def _load_runtime_identity(
     module_path: Path | None = None,
     python_prefix: Path | None = None,
     python_executable: Path | None = None,
+    production_source_root: Path = PRODUCTION_SOURCE_ROOT,
+    runtime_root: Path = PRODUCTION_RUNTIME_ROOT,
 ) -> RuntimeIdentity:
-    """Derive release identity from loaded code, never from mutable environment."""
+    """Derive source and A/B runtime identity without trusting environment values."""
 
     try:
         loaded_module = (module_path or Path(__file__)).resolve(strict=True)
@@ -68,41 +78,45 @@ def _load_runtime_identity(
         raise RuntimeError("cannot resolve the Monomer MD Worker Python runtime") from exc
 
     source_sha: str | None = None
-    # Path(__file__).resolve() traverses ops/current and lands in this layout.
-    # Treat every source below an ops/releases tree as production and fail
-    # closed when either the directory, manifest, or release venv is stale.
-    is_release_source = (
-        source_root.parent.name == "releases"
-        and source_root.parent.parent.name == "ops"
-    )
-    if is_release_source:
-        if _SOURCE_SHA_RE.fullmatch(source_root.name) is None:
-            raise RuntimeError("production Worker release directory is not a full source SHA")
-        source_sha = source_root.name
-        manifest_path = source_root / "release-manifest.json"
-        if not manifest_path.is_file() or manifest_path.is_symlink():
-            raise RuntimeError("production Worker release manifest is missing or unsafe")
+    source_tree: str | None = None
+    venv_slot: str | None = None
+    worker_lock_sha256: str | None = None
+    slot_record_sha256: str | None = None
+    base_python_identity_sha256: str | None = None
+    try:
+        resolved_production_root = production_source_root.resolve(strict=True)
+    except OSError:
+        resolved_production_root = production_source_root
+    if source_root == resolved_production_root:
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise RuntimeError("production Worker release manifest is unreadable") from exc
-        if not isinstance(manifest, dict) or manifest.get("source_sha") != source_sha:
-            raise RuntimeError("production Worker source SHA differs from its release manifest")
-
-        expected_prefix_path = source_root / "worker-venv"
-        if expected_prefix_path.is_symlink():
-            raise RuntimeError("production Worker release venv must not be a symlink")
-        try:
-            expected_prefix = expected_prefix_path.resolve(strict=True)
-        except OSError as exc:
-            raise RuntimeError("production Worker release venv is missing") from exc
+            checkout, selection, selected_python = verify_runtime_binding(
+                source_root=production_source_root,
+                runtime_root=runtime_root,
+            )
+            expected_prefix = Path(selection.slot.venv_prefix).resolve(strict=True)
+            expected_executable = selected_python.resolve(strict=True)
+        except (OSError, WorkerSlotError) as exc:
+            raise RuntimeError("production Worker A/B runtime identity is invalid") from exc
         if resolved_prefix != expected_prefix:
-            raise RuntimeError("production Worker is not running from its release venv")
+            raise RuntimeError("production Worker is not running from the active A/B venv")
+        if resolved_executable != expected_executable:
+            raise RuntimeError("production Worker executable differs from the active A/B venv")
+        source_sha = checkout.source_sha
+        source_tree = checkout.source_tree
+        venv_slot = selection.active.slot
+        worker_lock_sha256 = selection.active.worker_lock_sha256
+        slot_record_sha256 = selection.active.slot_record_sha256
+        base_python_identity_sha256 = selection.slot.base_python_identity_sha256
 
     return RuntimeIdentity(
         source_sha=source_sha,
+        source_tree=source_tree,
         source_root=str(source_root),
         venv_prefix=str(resolved_prefix),
+        venv_slot=venv_slot,
+        worker_lock_sha256=worker_lock_sha256,
+        slot_record_sha256=slot_record_sha256,
+        base_python_identity_sha256=base_python_identity_sha256,
         python_executable=str(resolved_executable),
     )
 
@@ -358,8 +372,13 @@ async def _build_health_response() -> HealthResponse:
         status=worker_status,
         mode=settings.mode,
         source_sha=runtime_identity.source_sha,
+        source_tree=runtime_identity.source_tree,
         source_root=runtime_identity.source_root,
         venv_prefix=runtime_identity.venv_prefix,
+        venv_slot=runtime_identity.venv_slot,
+        worker_lock_sha256=runtime_identity.worker_lock_sha256,
+        slot_record_sha256=runtime_identity.slot_record_sha256,
+        base_python_identity_sha256=runtime_identity.base_python_identity_sha256,
         python_executable=runtime_identity.python_executable,
         db_configured=settings.db_configured,
         byteff2_root=str(settings.byteff2_root),
@@ -379,6 +398,7 @@ async def _build_health_response() -> HealthResponse:
         worker_id=settings.worker_id,
         worker_version=settings.worker_version,
         protocols=protocols,
+        cuda_visible_devices=settings.cuda_visible_devices,
         gpu_broker_enabled=settings.gpu_broker_enabled,
         gpu_broker_ready=gpu_broker_ready,
         gpu_broker_error=gpu_broker_error,

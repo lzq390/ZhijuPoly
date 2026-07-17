@@ -63,8 +63,13 @@ class HealthResponse(BaseModel):
     status: str
     mode: str
     source_sha: str | None = None
+    source_tree: str | None = None
     source_root: str
     venv_prefix: str
+    venv_slot: Literal["a", "b"] | None = None
+    worker_lock_sha256: str | None = None
+    slot_record_sha256: str | None = None
+    base_python_identity_sha256: str | None = None
     python_executable: str
     db_configured: bool
     byteff2_root: str
@@ -84,6 +89,7 @@ class HealthResponse(BaseModel):
     worker_id: str
     worker_version: str
     protocols: dict[str, Any] = Field(default_factory=dict)
+    cuda_visible_devices: str
     gpu_broker_enabled: bool = False
     gpu_broker_ready: bool = True
     gpu_broker_error: str | None = None
