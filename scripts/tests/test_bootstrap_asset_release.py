@@ -131,7 +131,7 @@ class AssetBootstrapTests(unittest.TestCase):
     @staticmethod
     def predecessor_tree_digests() -> dict[str, str]:
         return {
-            tree_name: "sha256:" + hashlib.sha256(tree_name.encode("ascii")).hexdigest()
+            tree_name: assets.tree_inventory_digest([])
             for tree_name in assets.UNCHANGED_ASSET_TREES
         }
 
@@ -315,6 +315,7 @@ class AssetBootstrapTests(unittest.TestCase):
                 "predecessor_manifest_digest": assets.PREDECESSOR_ASSET_DIGEST,
                 "predecessor_all_trees_rehashed": list(assets.ASSET_KEYS),
                 "unchanged_trees_byte_identical": list(assets.UNCHANGED_ASSET_TREES),
+                "asset_tree_digest_algorithm": "canonical-manifest-inventory-v1",
                 "byteff2_source_verification": "clean-recursive-commit-and-tree",
                 "staging_directory_mode": "0700",
                 "file_and_directory_fsync": True,

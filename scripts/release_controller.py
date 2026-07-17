@@ -2644,6 +2644,7 @@ def validate_schema_v2_asset_provenance(
             "database",
             "backend-data",
         ],
+        "asset_tree_digest_algorithm": "canonical-manifest-inventory-v1",
         "byteff2_source_verification": "clean-recursive-commit-and-tree",
         "staging_directory_mode": "0700",
         "file_and_directory_fsync": True,
@@ -2886,13 +2887,9 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
             schema_version == 2
             and set(document) == provenance_schema_v2_fields
         ):
-            canonical_records = sorted(
-                records,
-                key=lambda record: str(record["path"]),
-            )
             inventory_payload = (
                 json.dumps(
-                    {"files": canonical_records},
+                    {"files": records},
                     sort_keys=True,
                     separators=(",", ":"),
                 )

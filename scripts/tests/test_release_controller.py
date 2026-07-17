@@ -576,19 +576,11 @@ class ReleaseControllerTests(unittest.TestCase):
         release = self.make_asset_release()
         manifest_path = release / "ASSET-MANIFEST.json"
         document = json.loads(manifest_path.read_text(encoding="utf-8"))
-        document["assets"]["byteff2"] = list(
-            reversed(document["assets"]["byteff2"])
-        )
         tree_digests = {
             tree: release_controller.sha256_bytes(
                 (
                     json.dumps(
-                        {
-                            "files": sorted(
-                                document["assets"][tree],
-                                key=lambda record: str(record["path"]),
-                            )
-                        },
+                        {"files": document["assets"][tree]},
                         sort_keys=True,
                         separators=(",", ":"),
                     )
@@ -636,6 +628,9 @@ class ReleaseControllerTests(unittest.TestCase):
                             "database",
                             "backend-data",
                         ],
+                        "asset_tree_digest_algorithm": (
+                            "canonical-manifest-inventory-v1"
+                        ),
                         "byteff2_source_verification": (
                             "clean-recursive-commit-and-tree"
                         ),

@@ -810,12 +810,15 @@ def build_manifest(
         raise AssetError("asset manifest predecessor tree evidence is incomplete")
     if set(assets) != set(ASSET_KEYS):
         raise AssetError("asset manifest content tree set is incomplete")
-    asset_tree_digests = {
-        tree_name: tree_inventory_digest(
-            normalized_inventory(assets[tree_name], label=tree_name)
-        )
-        for tree_name in ASSET_KEYS
-    }
+    asset_tree_digests: dict[str, str] = {}
+    for tree_name in ASSET_KEYS:
+        normalized_inventory(assets[tree_name], label=tree_name)
+        asset_tree_digests[tree_name] = tree_inventory_digest(assets[tree_name])
+    if any(
+        asset_tree_digests[tree_name] != predecessor_tree_digests[tree_name]
+        for tree_name in UNCHANGED_ASSET_TREES
+    ):
+        raise AssetError("unchanged content tree digest differs from predecessor evidence")
     expected_builder_fields = {
         "repository",
         "commit",
@@ -852,6 +855,7 @@ def build_manifest(
                 "predecessor_manifest_digest": predecessor_digest,
                 "predecessor_all_trees_rehashed": list(ASSET_KEYS),
                 "unchanged_trees_byte_identical": list(UNCHANGED_ASSET_TREES),
+                "asset_tree_digest_algorithm": "canonical-manifest-inventory-v1",
                 "byteff2_source_verification": "clean-recursive-commit-and-tree",
                 "staging_directory_mode": "0700",
                 "file_and_directory_fsync": True,
