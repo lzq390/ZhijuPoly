@@ -36,6 +36,16 @@ production ledger through 0008 it applies 0009-0011, then defers the trailing
 unexpected baseline, ordering, or checksum must stop the cutover. The resulting
 release state lists 0012 as pending rather than applied.
 
+Before that cutover, the content-addressed
+`nexpoly-reconcile-production-0005-polytao-alias` control removes the one known
+legacy alias row only after proving the exact production cluster, canonical
+0001-0008 ledger plus alias, nine-row PolyTAO archive and schema digests, a full
+backup, and a real isolated PostgreSQL 16 restore. Its only database mutation is
+an advisory/table-locked compare-and-swap delete of the exact
+`0005_polytao_jobs` version/checksum/applied-at tuple. It never runs migration
+SQL or changes `generation.polytao_jobs`. A missing alias without the matching
+durable operation intent is not treated as success.
+
 Governed production Pull deployments use `--mode expand`; it applies compatible
 expansions and may defer only contracts that do not gate a later epoch.
 `bootstrap-expand` and `restore-expand` use the same rule for first cutover and

@@ -17,6 +17,10 @@
       "kind": "python",
       "file": "pull_contract_0012.py"
     },
+    "reconcile-production-0005-alias": {
+      "kind": "python",
+      "file": "reconcile_production_0005_polytao_alias.py"
+    },
     "monomer-md": {
       "kind": "worker",
       "environment_loader": "monomer_worker_env.py",
@@ -43,6 +47,11 @@
     {
       "name": "pull_deploy_controller.py",
       "source": "scripts/pull_deploy_controller.py",
+      "mode": 448
+    },
+    {
+      "name": "reconcile_production_0005_polytao_alias.py",
+      "source": "scripts/reconcile_production_0005_polytao_alias.py",
       "mode": 448
     },
     {

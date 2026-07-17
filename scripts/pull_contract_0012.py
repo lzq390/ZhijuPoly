@@ -2319,6 +2319,14 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
 
     def run(self) -> dict[str, Any]:
         self.controller.ensure_root()
+        try:
+            pull._control_runtime.load_production_0005_alias_gate(
+                self.runtime_root, require_completed=True
+            )
+        except Exception as exc:
+            raise PullContractError(
+                "completed production 0005 alias reconciliation is required before 0012"
+            ) from exc
         if (
             self.binding.controller.marker_path.exists()
             or self.binding.controller.marker_path.is_symlink()

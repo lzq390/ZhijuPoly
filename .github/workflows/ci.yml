@@ -137,6 +137,37 @@ jobs:
           )
           python3 -m unittest -v "${unittest_files[@]}"
 
+  production-alias-integration:
+    name: Production 0005 alias PostgreSQL 16 isolation integration
+    needs: resolve-sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NEXPOLY_ALIAS_DOCKER_INTEGRATION: "1"
+      NEXPOLY_ALIAS_DOCKER_TEST_ACK: ephemeral-localhost-only
+      NEXPOLY_ALIAS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Install PostgreSQL 16 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client-16
+          "$NEXPOLY_ALIAS_TEST_PG_BIN/psql" --version | grep -F "PostgreSQL) 16."
+          "$NEXPOLY_ALIAS_TEST_PG_BIN/pg_dump" --version | grep -F "PostgreSQL) 16."
+          "$NEXPOLY_ALIAS_TEST_PG_BIN/pg_restore" --version | grep -F "PostgreSQL) 16."
+      - name: Pull the pinned isolated-restore image
+        run: docker pull "$POSTGRES_IMAGE"
+      - name: Run real alias reconciliation integration
+        run: >-
+          python3 -m unittest -v
+          scripts/tests/test_reconcile_production_0005_polytao_alias_integration.py
+
   backend-tests:
     name: Backend tests (shard ${{ matrix.shard }})
     needs: resolve-sha
@@ -309,6 +340,7 @@ jobs:
       - resolve-sha
       - policy
       - script-tests
+      - production-alias-integration
       - backend-tests
       - frontend
       - worker-tests

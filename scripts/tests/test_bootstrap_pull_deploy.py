@@ -144,7 +144,11 @@ class BootstrapPullDeployTests(unittest.TestCase):
         fake_bash = hostile / "bash"
         fake_bash.write_text(f"#!/bin/sh\ntouch {marker}\nexit 99\n", encoding="utf-8")
         os.chmod(fake_bash, 0o700)
-        for name in ("nexpoly-pull-deploy", "nexpoly-pull-contract-0012"):
+        for name in (
+            "nexpoly-pull-deploy",
+            "nexpoly-pull-contract-0012",
+            "nexpoly-reconcile-production-0005-polytao-alias",
+        ):
             wrapper = REPOSITORY_ROOT / "scripts" / name
             self.assertEqual(
                 wrapper.read_text(encoding="utf-8").splitlines()[0],
@@ -205,6 +209,9 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertTrue(release.is_dir())
         self.assertTrue((release / "CONTROL-MANIFEST.json").is_file())
         self.assertTrue((release / "pull_deploy_controller.py").is_file())
+        self.assertTrue(
+            (release / "reconcile_production_0005_polytao_alias.py").is_file()
+        )
         self.assertEqual(stat.S_IMODE(self.production.stat().st_mode) & 0o022, 0)
         self.assertEqual(stat.S_IMODE((self.production / ".git").stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((self.production / ".git/config").stat().st_mode), 0o600)

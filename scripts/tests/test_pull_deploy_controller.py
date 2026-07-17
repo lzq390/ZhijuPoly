@@ -49,6 +49,153 @@ def image_record(role: str, sha: str = TARGET_SHA) -> dict[str, str]:
     }
 
 
+def seed_completed_alias_gate(
+    runtime: Path, manifest: dict[str, object], control_root: Path
+) -> None:
+    selector = CONTROLLER._control_runtime
+    operation_id = "alias-0005-fixture"
+    audit_dir = runtime / selector.ALIAS_AUDIT_ROOT_RELATIVE / operation_id
+    backup_dir = runtime / selector.ALIAS_BACKUP_ROOT_RELATIVE / operation_id
+    for directory in (audit_dir, backup_dir):
+        directory.mkdir(parents=True, mode=0o700)
+        os.chmod(directory, 0o700)
+    dump = backup_dir / "nexpoly-before.dump"
+    write_private(dump, "fixture database dump\n")
+    dump_sha = selector.sha256_file(dump).removeprefix("sha256:")
+    write_private(backup_dir / "nexpoly-before.dump.sha256", dump_sha + "\n")
+    restore_list = audit_dir / "pg-restore.list"
+    write_private(
+        restore_list,
+        "TABLE DATA generation polytao_jobs\n"
+        "TABLE DATA governance schema_migrations\n",
+    )
+    def ledger_rows(pairs: list[tuple[str, str]]) -> list[dict[str, str]]:
+        return [
+            {
+                "version": version,
+                "checksum": checksum,
+                "applied_at": (
+                    selector.ALIAS_APPLIED_AT
+                    if version == selector.ALIAS_VERSION
+                    else f"2026-07-08T02:{index:02d}:00.000000Z"
+                ),
+            }
+            for index, (version, checksum) in enumerate(pairs)
+        ]
+
+    before = {
+        "ledger": ledger_rows(selector.ALIAS_PRE_LEDGER),
+        "archive": selector.ALIAS_EXPECTED_ARCHIVE,
+        "ledger_schema_sha256": selector.ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256,
+        "ledger_structure_counts": selector.ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS,
+    }
+    after = {
+        "ledger": ledger_rows(selector.ALIAS_POST_LEDGER),
+        "archive": before["archive"],
+        "ledger_schema_sha256": before["ledger_schema_sha256"],
+        "ledger_structure_counts": before["ledger_structure_counts"],
+    }
+    entrypoint = manifest["entrypoints"]["reconcile-production-0005-alias"]
+    control = {
+        "release_id": manifest["release_id"],
+        "source_sha": manifest["source_sha"],
+        "source_tree": manifest["source_tree"],
+        "manifest_sha256": selector.sha256_file(
+            control_root / selector.CONTROL_MANIFEST_NAME
+        ).removeprefix("sha256:"),
+        "script_sha256": selector.sha256_file(
+            control_root / entrypoint["file"]
+        ).removeprefix("sha256:"),
+    }
+    identity = {
+        "operation_id": operation_id,
+        "control": control,
+        "legacy_source": {"sha": PREVIOUS_SHA, "tree": PREVIOUS_TREE},
+        "binaries_sha256": {"/fixture/bin": "b" * 64},
+        "database_endpoint": selector.ALIAS_DATABASE_ENDPOINT,
+        "database_system_identifier": selector.ALIAS_SYSTEM_IDENTIFIER,
+        "alias": {
+            "version": selector.ALIAS_VERSION,
+            "checksum": selector.ALIAS_CHECKSUM,
+            "applied_at": selector.ALIAS_APPLIED_AT,
+        },
+    }
+    backup = {
+        "dump_path": str(dump),
+        "dump_sha256": dump_sha,
+        "dump_size": dump.stat().st_size,
+        "restore_list_sha256": selector.sha256_file(restore_list).removeprefix(
+            "sha256:"
+        ),
+    }
+    restore = {
+        "image": {
+            "digest_ref": selector.ALIAS_RESTORE_IMAGE,
+            "image_id": "sha256:"
+            + selector.ALIAS_RESTORE_IMAGE.rsplit("@sha256:", 1)[1],
+        },
+        "container_name": "nexpoly-alias-restore-fixture",
+        "network_mode": "none",
+        "dump_sha256": dump_sha,
+        "archive": before["archive"],
+        "ledger_schema_sha256": before["ledger_schema_sha256"],
+        "verified_at": "2026-07-17T00:00:00Z",
+    }
+    CONTROLLER.atomic_json(audit_dir / "isolated-postgres16-restore.json", restore)
+    CONTROLLER.atomic_json(audit_dir / "database-after.json", after)
+    files = selector._alias_evidence_files(audit_dir, backup_dir)
+    completed_at = "2026-07-17T00:00:01Z"
+    audit = {
+        "schema_version": 1,
+        "operation_id": operation_id,
+        "outcome": "completed",
+        "identity": identity,
+        "database_before": before,
+        "database_after": after,
+        "database_backup": backup,
+        "isolated_restore": restore,
+        "binaries": {"/fixture/bin": {"sha256": "b" * 64}},
+        "files": files,
+        "completed_at": completed_at,
+    }
+    audit_path = audit_dir / "AUDIT-MANIFEST.json"
+    CONTROLLER.atomic_json(audit_path, audit)
+    marker = {
+        "schema_version": 1,
+        "action": selector.ALIAS_ACTION,
+        "phase": "completed",
+        "identity": identity,
+        "operation_directories": {
+            "audit": str(audit_dir),
+            "backup": str(backup_dir),
+        },
+        "started_at": "2026-07-17T00:00:00Z",
+        "updated_at": completed_at,
+        "runtime_stop_fence": {"fixture": True},
+        "before": before,
+        "database_backup": backup,
+        "restore_container": {"name": "fixture"},
+        "isolated_restore": restore,
+        "mutation_intent": {
+            "database_system_identifier": selector.ALIAS_SYSTEM_IDENTIFIER,
+            "alias": identity["alias"],
+            "pre_ledger": before["ledger"],
+            "archive": before["archive"],
+            "dump_sha256": dump_sha,
+            "restore_dump_sha256": dump_sha,
+        },
+        "after": after,
+        "audit_manifest_sha256": selector.sha256_file(audit_path).removeprefix(
+            "sha256:"
+        ),
+        "completed_at": completed_at,
+    }
+    marker_path = runtime / selector.ALIAS_MARKER_RELATIVE
+    marker_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(marker_path.parent, 0o700)
+    CONTROLLER.atomic_json(marker_path, marker)
+
+
 class GitRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
@@ -481,6 +628,7 @@ class FixtureController(CONTROLLER.PullDeployController):
                 "active_control": active,
             },
         )
+        seed_completed_alias_gate(self.runtime_root, manifest, _root)
 
     def _git_show(self, _target_sha: str, relative: str) -> bytes:
         return (REPOSITORY_ROOT / relative).read_bytes()
@@ -1023,6 +1171,34 @@ class EphemeralContainerOwnershipTests(unittest.TestCase):
 
 
 class SlotAndDescriptorTests(PullDeployTestCase):
+    def test_alias_gate_allows_preparation_only_before_reconciliation_starts(
+        self,
+    ) -> None:
+        controller = self.controller()
+        marker_path = (
+            controller.runtime_root
+            / CONTROLLER._control_runtime.ALIAS_MARKER_RELATIVE
+        )
+        completed = CONTROLLER.load_private_json(marker_path)
+        marker_path.unlink()
+        CONTROLLER.fsync_directory(marker_path.parent)
+
+        controller._require_no_contract_maintenance(
+            require_alias_completed=False
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "reconciliation is required"
+        ):
+            controller._require_no_contract_maintenance()
+
+        CONTROLLER.atomic_json(marker_path, {**completed, "phase": "planned"})
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "must recover first"
+        ):
+            controller._require_no_contract_maintenance(
+                require_alias_completed=False
+            )
+
     def test_pending_contract_marker_blocks_every_code_deployment_command(self) -> None:
         controller = self.controller()
         CONTROLLER.atomic_json(
