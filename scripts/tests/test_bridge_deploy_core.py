@@ -55,6 +55,10 @@ def policy() -> dict[str, object]:
             authority_manifest_sha256=AUTHORITY_MANIFEST_SHA256,
             authority_records=AUTHORITY_RECORDS,
         ),
+        "external_database_audit": {
+            **BRIDGE.EXTERNAL_DATABASE_AUDIT_POLICY,
+            "media_registry_sha256": "sha256:" + "5" * 64,
+        },
         "required_ci_jobs": sorted(BRIDGE.REQUIRED_CI_JOBS),
         "policy_id": None,
     }
@@ -64,6 +68,38 @@ def policy() -> dict[str, object]:
 
 
 class BridgePolicyTests(unittest.TestCase):
+    def test_policy_requires_one_exact_schema_bound_media_registry(self) -> None:
+        document = policy()
+        for label, mutate in (
+            (
+                "floating digest",
+                lambda value: value["external_database_audit"].__setitem__(
+                    "media_registry_sha256", "latest"
+                ),
+            ),
+            (
+                "optional audit",
+                lambda value: value["external_database_audit"].__setitem__(
+                    "require_fresh_snapshot", False
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                changed = json.loads(json.dumps(document))
+                mutate(changed)
+                changed["policy_id"] = BRIDGE.canonical_json_digest(
+                    {
+                        key: value
+                        for key, value in changed.items()
+                        if key != "policy_id"
+                    }
+                )
+                with self.assertRaisesRegex(
+                    BRIDGE.BridgeDeployError,
+                    "external database",
+                ):
+                    BRIDGE.validate_policy(changed)
+
     def test_policy_rejects_any_asset_driven_dataset_rebuild(self) -> None:
         document = policy()
         document["datasets_on_asset_change"] = ["database"]

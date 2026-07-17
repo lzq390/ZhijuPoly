@@ -47,6 +47,13 @@ REQUIRED_CI_JOBS = {
 }
 REQUIRED_LEDGER_ORDER = ("pre-0012", "post-0012", "post-0013")
 REQUIRED_LEDGER_NAMES = set(REQUIRED_LEDGER_ORDER)
+EXTERNAL_DATABASE_AUDIT_POLICY = {
+    "schema_version": 1,
+    "evidence_schema_version": 2,
+    "registry_schema_version": 1,
+    "require_exact_registry_digest": True,
+    "require_fresh_snapshot": True,
+}
 CONTRACT_MIGRATION = {
     "version": "0012_drop_polytao_jobs",
     "checksum": (
@@ -364,6 +371,7 @@ def validate_policy(document: object) -> dict[str, Any]:
         "datasets_on_asset_change",
         "final_migration",
         "accepted_migration_ledgers",
+        "external_database_audit",
         "required_ci_jobs",
         "policy_id",
     }
@@ -399,6 +407,23 @@ def validate_policy(document: object) -> dict[str, Any]:
     normalized_ledgers = _validate_accepted_ledgers(
         document.get("accepted_migration_ledgers")
     )
+    external_database_audit = document.get("external_database_audit")
+    if (
+        not isinstance(external_database_audit, dict)
+        or set(external_database_audit)
+        != {*EXTERNAL_DATABASE_AUDIT_POLICY, "media_registry_sha256"}
+        or any(
+            external_database_audit.get(key) != value
+            for key, value in EXTERNAL_DATABASE_AUDIT_POLICY.items()
+        )
+    ):
+        raise BridgeDeployError(
+            "bridge external database audit policy is invalid"
+        )
+    media_registry_sha256 = _require_digest(
+        external_database_audit.get("media_registry_sha256"),
+        "bridge external database media registry",
+    )
     jobs = document.get("required_ci_jobs")
     if (
         not isinstance(jobs, list)
@@ -419,6 +444,10 @@ def validate_policy(document: object) -> dict[str, Any]:
         "datasets_on_asset_change": list(datasets),
         "final_migration": dict(FINAL_MIGRATION),
         "accepted_migration_ledgers": normalized_ledgers,
+        "external_database_audit": {
+            **EXTERNAL_DATABASE_AUDIT_POLICY,
+            "media_registry_sha256": media_registry_sha256,
+        },
         "required_ci_jobs": list(jobs),
         "policy_id": document.get("policy_id"),
     }

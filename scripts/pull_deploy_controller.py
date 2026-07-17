@@ -328,6 +328,18 @@ MUTABLE_DATA_PGPASS = "mutable-data-audit.pgpass"
 MUTABLE_DATA_SERVICE = "nexpoly-mutable-audit"
 MUTABLE_DATA_HOST = "127.0.0.1"
 MUTABLE_DATA_PORT = 55432
+EXTERNAL_DATABASE_AUDIT_HELPER = "contract-0012-external-database-audit"
+EXTERNAL_DATABASE_MEDIA_REGISTRY = "postgres-media-registry.json"
+CONTRACT_0012_EXTERNAL_AUDIT_COMMAND = (
+    "NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND"
+)
+CONTRACT_0012_MEDIA_REGISTRY_DIGEST = (
+    "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256"
+)
+CONTRACT_0012_EXTERNAL_AUDIT_USERS = {
+    "nexpoly_dev": "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER",
+    "nexpoly_md_health_opt": "NEXPOLY_CONTRACT_0012_MD_HEALTH_AUDIT_USER",
+}
 MUTABLE_DATA_DATABASE = "nexpoly"
 MUTABLE_DATA_USER = "nexpoly_mutable_audit"
 MUTABLE_DATA_BUSINESS_TABLES = tuple(
@@ -456,6 +468,7 @@ BRIDGE_DESCRIPTOR_FIELDS = DESCRIPTOR_FIELDS | {
     "bridge",
     "legacy_takeover",
     "prefetch",
+    "external_database_audit",
 }
 READY_FIELDS = {
     "schema_version",
@@ -541,6 +554,8 @@ CURRENT_STATE_FIELDS = {
 }
 CURRENT_STATE_OPTIONAL_FIELDS = {
     "contract_mutable_data_audit",
+    "external_database_audit",
+    "contract_external_database_audit",
 }
 MIGRATION_COMPATIBILITY_FIELDS = {
     "schema_version",
@@ -957,6 +972,68 @@ def sha256_file(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def private_regular_file(
+    path: Path,
+    *,
+    mode: int,
+    maximum_bytes: int,
+) -> tuple[bytes, str]:
+    """Read one owner-private regular file without following or racing links."""
+
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise PullDeployError(f"private input is unavailable: {path}") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != mode
+            or before.st_size < 1
+            or before.st_size > maximum_bytes
+        ):
+            raise PullDeployError(f"private input is unsafe: {path}")
+        chunks: list[bytes] = []
+        remaining = maximum_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            len(payload) > maximum_bytes
+            or (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_mode,
+                before.st_uid,
+            )
+            != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_mode,
+                after.st_uid,
+            )
+        ):
+            raise PullDeployError(f"private input changed while reading: {path}")
+        return payload, sha256_bytes(payload)
+    finally:
+        os.close(descriptor)
+
+
 def canonical_json_bytes(value: object) -> bytes:
     return json.dumps(
         value,
@@ -1016,6 +1093,27 @@ PREFETCH_BINDING_FIELDS = {
     "recovery_tools_sha256",
     "created_at",
     "binding_sha256",
+}
+EXTERNAL_DATABASE_AUDIT_BINDING_FIELDS = {
+    "schema_version",
+    "helper",
+    "registry",
+    "expected_users",
+    "snapshot",
+    "snapshot_sha256",
+    "state_sha256",
+    "identity_sha256",
+}
+EXTERNAL_DATABASE_CONTRACT_PAIR_FIELDS = {
+    "schema_version",
+    "operation_id",
+    "before_identity_sha256",
+    "before_state_sha256",
+    "after_snapshot",
+    "after_snapshot_sha256",
+    "after_state_sha256",
+    "transition",
+    "identity_sha256",
 }
 
 
@@ -1103,6 +1201,359 @@ def validate_prefetch_binding(document: object) -> dict[str, Any]:
     if document["binding_sha256"] != canonical_json_digest(identity):
         raise PullDeployError("maintenance prefetch binding digest differs")
     return dict(document)
+
+
+def external_database_audit_state(document: object) -> dict[str, Any]:
+    """Return the timestamp-free state identity of one fresh media audit."""
+
+    if not isinstance(document, dict):
+        raise PullDeployError("external database audit snapshot is invalid")
+    stable = json.loads(json.dumps(document))
+    registry = stable.get("media_registry")
+    if not isinstance(registry, dict):
+        raise PullDeployError("external database audit registry is invalid")
+    registry.pop("captured_at", None)
+    media = stable.get("media")
+    if not isinstance(media, list):
+        raise PullDeployError("external database media inventory is invalid")
+    for record in media:
+        audit = record.get("audit") if isinstance(record, dict) else None
+        if not isinstance(audit, dict):
+            raise PullDeployError("external database media audit is invalid")
+        audit.pop("audited_at", None)
+    return stable
+
+
+def _external_database_audit_timestamp(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise PullDeployError(f"{label} timestamp is invalid")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise PullDeployError(f"{label} timestamp is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != dt.timedelta(0):
+        raise PullDeployError(f"{label} timestamp is not UTC")
+    return parsed
+
+
+def validate_fresh_external_database_audit(
+    document: dict[str, Any],
+    *,
+    started_at: dt.datetime,
+    completed_at: dt.datetime,
+) -> None:
+    """Require every audit timestamp to originate in this capture invocation."""
+
+    lower = started_at - dt.timedelta(seconds=5)
+    upper = completed_at + dt.timedelta(seconds=5)
+    timestamps = [
+        (
+            document.get("media_registry", {}).get("captured_at"),
+            "external media registry",
+        ),
+        *[
+            (
+                record.get("audit", {}).get("audited_at"),
+                f"external medium {record.get('media_id', '<unknown>')}",
+            )
+            for record in document.get("media", [])
+            if isinstance(record, dict)
+        ],
+    ]
+    for raw, label in timestamps:
+        observed = _external_database_audit_timestamp(raw, label)
+        if observed < lower or observed > upper:
+            raise PullDeployError(
+                f"{label} evidence was not captured by this invocation"
+            )
+
+
+def validate_external_database_audit_binding(
+    document: object,
+    *,
+    expected_policy: object | None = None,
+) -> dict[str, Any]:
+    """Validate the exact fresh snapshot sealed by a bridge descriptor."""
+
+    if (
+        not isinstance(document, dict)
+        or set(document) != EXTERNAL_DATABASE_AUDIT_BINDING_FIELDS
+        or document.get("schema_version") != 1
+    ):
+        raise PullDeployError(
+            "external database audit binding has an invalid shape"
+        )
+    helper = document.get("helper")
+    registry = document.get("registry")
+    for record, filename, mode, label in (
+        (
+            helper,
+            EXTERNAL_DATABASE_AUDIT_HELPER,
+            "0700",
+            "external database audit helper",
+        ),
+        (
+            registry,
+            EXTERNAL_DATABASE_MEDIA_REGISTRY,
+            "0600",
+            "external database media registry",
+        ),
+    ):
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "sha256", "mode"}
+            or not isinstance(record.get("path"), str)
+            or not Path(record["path"]).is_absolute()
+            or Path(record["path"]).name != filename
+            or record.get("mode") != mode
+        ):
+            raise PullDeployError(f"{label} binding is invalid")
+        require_digest(record.get("sha256"), f"{label} digest")
+    expected_users = document.get("expected_users")
+    if (
+        not isinstance(expected_users, dict)
+        or set(expected_users) != set(CONTRACT_0012_EXTERNAL_AUDIT_USERS)
+        or any(
+            not isinstance(value, str)
+            or re.fullmatch(r"[a-z_][a-z0-9_-]{0,62}", value) is None
+            for value in expected_users.values()
+        )
+    ):
+        raise PullDeployError("external database audit users are invalid")
+    try:
+        snapshot = _site_helper_contracts.validate_external_database_audit(
+            document.get("snapshot"),
+            expected_users=expected_users,
+            expected_media_registry_digest=registry["sha256"],
+        )
+    except Exception as exc:
+        raise PullDeployError(
+            "external database audit snapshot is invalid"
+        ) from exc
+    snapshot_sha256 = require_digest(
+        document.get("snapshot_sha256"),
+        "external database audit snapshot",
+    )
+    state_sha256 = require_digest(
+        document.get("state_sha256"),
+        "external database audit state",
+    )
+    if (
+        snapshot_sha256 != canonical_json_digest(snapshot)
+        or state_sha256
+        != canonical_json_digest(external_database_audit_state(snapshot))
+    ):
+        raise PullDeployError("external database audit snapshot digest differs")
+    if expected_policy is not None:
+        required = {
+            **_bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
+            "media_registry_sha256": registry["sha256"],
+        }
+        if expected_policy != required:
+            raise PullDeployError(
+                "external database audit differs from F policy"
+            )
+        if (
+            snapshot.get("schema_version")
+            != expected_policy["evidence_schema_version"]
+            or snapshot["media_registry"].get("schema_version")
+            != expected_policy["registry_schema_version"]
+        ):
+            raise PullDeployError(
+                "external database audit schema differs from F policy"
+            )
+    identity = {
+        key: value
+        for key, value in document.items()
+        if key != "identity_sha256"
+    }
+    if document.get("identity_sha256") != canonical_json_digest(identity):
+        raise PullDeployError("external database audit binding digest differs")
+    return {
+        **dict(document),
+        "snapshot": snapshot,
+    }
+
+
+def build_external_database_contract_pair(
+    before_binding: object,
+    after_snapshot: object,
+    *,
+    operation_id: str,
+) -> dict[str, Any]:
+    """Prove that 0012 changed only the exact writable production medium."""
+
+    before = validate_external_database_audit_binding(before_binding)
+    operation_id = require_operation_id(operation_id)
+    expected_users = before["expected_users"]
+    registry_sha256 = before["registry"]["sha256"]
+    try:
+        after = _site_helper_contracts.validate_external_database_audit(
+            after_snapshot,
+            expected_users=expected_users,
+            expected_media_registry_digest=registry_sha256,
+        )
+    except Exception as exc:
+        raise PullDeployError(
+            "post-0012 external database audit is invalid"
+        ) from exc
+    prior = before["snapshot"]
+    for key in (
+        "schema_version",
+        "inventory_complete",
+        "writable_target",
+        "databases",
+        "requires_0014",
+    ):
+        if after.get(key) != prior.get(key):
+            raise PullDeployError(
+                "0012 changed an external database outside production"
+            )
+    prior_registry = dict(prior["media_registry"])
+    after_registry = dict(after["media_registry"])
+    prior_registry.pop("captured_at", None)
+    after_registry.pop("captured_at", None)
+    if prior_registry != after_registry:
+        raise PullDeployError("0012 external media registry changed")
+    before_media = {
+        record["media_id"]: record for record in prior["media"]
+    }
+    after_media = {
+        record["media_id"]: record for record in after["media"]
+    }
+    if set(before_media) != set(after_media):
+        raise PullDeployError("0012 external media set changed")
+    writable = [
+        media_id
+        for media_id, record in before_media.items()
+        if record["disposition"] == "writable-target"
+    ]
+    if len(writable) != 1:
+        raise PullDeployError("0012 lacks one writable production medium")
+    writable_id = writable[0]
+    expected_before_ledger = [
+        {"version": version, "checksum": checksum}
+        for version, checksum in (
+            _site_helper_contracts.CANONICAL_MIGRATION_LEDGER
+        )
+        if version <= "0011_asset_release_v2"
+    ]
+    expected_after_ledger = [
+        {"version": version, "checksum": checksum}
+        for version, checksum in (
+            _site_helper_contracts.CANONICAL_MIGRATION_LEDGER
+        )
+        if version <= "0012_drop_polytao_jobs"
+    ]
+    for media_id in sorted(before_media):
+        prior_record = before_media[media_id]
+        after_record = after_media[media_id]
+        if media_id != writable_id:
+            stable_before = json.loads(json.dumps(prior_record))
+            stable_after = json.loads(json.dumps(after_record))
+            stable_before["audit"].pop("audited_at", None)
+            stable_after["audit"].pop("audited_at", None)
+            if stable_before != stable_after:
+                raise PullDeployError(
+                    "0012 changed dormant or read-only external media"
+                )
+            continue
+        for key in (
+            "media_id",
+            "kind",
+            "database",
+            "source_identity_before",
+            "source_identity_after",
+            "disposition",
+        ):
+            if after_record.get(key) != prior_record.get(key):
+                raise PullDeployError(
+                    "0012 writable medium identity changed"
+                )
+        if (
+            prior_record["kind"] != "docker_volume"
+            or prior_record["database"] != "nexpoly"
+            or prior_record["ledger"] != expected_before_ledger
+            or after_record["ledger"] != expected_after_ledger
+            or prior_record["legacy_relation_present"] is not True
+            or after_record["legacy_relation_present"] is not False
+            or prior_record["migration_0013"]
+            != {"state": "absent", "checksum": None}
+            or after_record["migration_0013"]
+            != {"state": "absent", "checksum": None}
+            or prior_record["ledger_analysis"]
+            != {"status": "canonical", "checksum_mismatches": []}
+            or after_record["ledger_analysis"]
+            != {"status": "canonical", "checksum_mismatches": []}
+            or prior_record["source_content_sha256"]
+            == after_record["source_content_sha256"]
+            or prior_record["audit"]["method"] != "live-read-only"
+            or after_record["audit"]["method"] != "live-read-only"
+            or prior_record["audit"]["auditor_sha256"]
+            != after_record["audit"]["auditor_sha256"]
+            or prior_record["audit"]["postgres_major"]
+            != after_record["audit"]["postgres_major"]
+        ):
+            raise PullDeployError(
+                "0012 writable external database transition is invalid"
+            )
+    transition = {
+        "kind": "contract-0012",
+        "operation_id": operation_id,
+        "writable_media_id": writable_id,
+        "before_content_sha256": before_media[writable_id][
+            "source_content_sha256"
+        ],
+        "after_content_sha256": after_media[writable_id][
+            "source_content_sha256"
+        ],
+    }
+    pair: dict[str, Any] = {
+        "schema_version": 1,
+        "operation_id": operation_id,
+        "before_identity_sha256": before["identity_sha256"],
+        "before_state_sha256": before["state_sha256"],
+        "after_snapshot": after,
+        "after_snapshot_sha256": canonical_json_digest(after),
+        "after_state_sha256": canonical_json_digest(
+            external_database_audit_state(after)
+        ),
+        "transition": transition,
+        "identity_sha256": None,
+    }
+    pair["identity_sha256"] = canonical_json_digest(
+        {
+            key: value
+            for key, value in pair.items()
+            if key != "identity_sha256"
+        }
+    )
+    return pair
+
+
+def validate_external_database_contract_pair(
+    document: object,
+    *,
+    before_binding: object,
+) -> dict[str, Any]:
+    if (
+        not isinstance(document, dict)
+        or set(document) != EXTERNAL_DATABASE_CONTRACT_PAIR_FIELDS
+        or document.get("schema_version") != 1
+    ):
+        raise PullDeployError(
+            "0012 external database transition has an invalid shape"
+        )
+    rebuilt = build_external_database_contract_pair(
+        before_binding,
+        document.get("after_snapshot"),
+        operation_id=str(document.get("operation_id", "")),
+    )
+    if rebuilt != document:
+        raise PullDeployError(
+            "0012 external database transition identity differs"
+        )
+    return rebuilt
 
 
 def validate_mutable_data_contract(document: object) -> dict[str, Any]:
@@ -3216,6 +3667,25 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
         )
     validate_production_config_evidence(document.get("production_config"))
     validate_mutable_data_pair(document.get("mutable_data_audit"))
+    external_database_audit = document.get("external_database_audit")
+    if external_database_audit is not None:
+        external_database_audit = validate_external_database_audit_binding(
+            external_database_audit
+        )
+    contract_external = document.get("contract_external_database_audit")
+    if contract_external is not None:
+        if external_database_audit is None:
+            raise PullDeployError(
+                "0012 external database transition lacks its bridge baseline"
+            )
+        pair = validate_external_database_contract_pair(
+            contract_external,
+            before_binding=external_database_audit,
+        )
+        if pair["operation_id"] != document.get("last_contract_operation"):
+            raise PullDeployError(
+                "0012 external database transition belongs to another operation"
+            )
     contract_mutable = document.get("contract_mutable_data_audit")
     if contract_mutable is not None:
         contract_pair = validate_mutable_data_pair(contract_mutable)
@@ -3516,6 +3986,21 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             document.get("legacy_takeover")
         )
         prefetch = validate_prefetch_binding(document.get("prefetch"))
+        raw_bridge = document.get("bridge")
+        raw_policy = (
+            raw_bridge.get("policy")
+            if isinstance(raw_bridge, dict)
+            else None
+        )
+        expected_external_policy = (
+            raw_policy.get("external_database_audit")
+            if isinstance(raw_policy, dict)
+            else None
+        )
+        external_database_audit = validate_external_database_audit_binding(
+            document.get("external_database_audit"),
+            expected_policy=expected_external_policy,
+        )
         try:
             bridge = _bridge_core.validate_bridge_descriptor(
                 document.get("bridge")
@@ -3576,6 +4061,10 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             != document["release_input"]["asset_manifest_digest"]
             or bridge["target"]["datasets_on_asset_change"]
             != document["release_input"]["datasets_on_asset_change"]
+            or external_database_audit["registry"]["sha256"]
+            != bridge["policy"]["external_database_audit"][
+                "media_registry_sha256"
+            ]
         ):
             raise PullDeployError(
                 "bridge descriptor differs from deployment evidence"
@@ -7351,6 +7840,169 @@ class PullDeployController:
         }
         return validate_production_config_evidence(evidence)
 
+    def external_database_audit_evidence(
+        self,
+        policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Capture and seal a fresh, complete external PostgreSQL audit."""
+
+        values = self.production_deploy_values(check_free_space=False)
+        expected_helper = self.config_dir / EXTERNAL_DATABASE_AUDIT_HELPER
+        expected_registry = (
+            self.config_dir / EXTERNAL_DATABASE_MEDIA_REGISTRY
+        )
+        if (
+            values.get(CONTRACT_0012_EXTERNAL_AUDIT_COMMAND)
+            != str(expected_helper)
+        ):
+            raise PullDeployError(
+                "external database audit command is not the fixed helper"
+            )
+        helper_payload, helper_sha256 = private_regular_file(
+            expected_helper,
+            mode=0o700,
+            maximum_bytes=4 * 1024 * 1024,
+        )
+        if not helper_payload.startswith(b"#!"):
+            raise PullDeployError(
+                "external database audit helper is not executable source"
+            )
+        _registry_payload, registry_sha256 = private_regular_file(
+            expected_registry,
+            mode=0o600,
+            maximum_bytes=4 * 1024 * 1024,
+        )
+        configured_registry = require_digest(
+            values.get(CONTRACT_0012_MEDIA_REGISTRY_DIGEST),
+            "configured external media registry",
+        )
+        if registry_sha256 != configured_registry:
+            raise PullDeployError(
+                "external database media registry differs from deploy.env"
+            )
+        expected_users: dict[str, str] = {}
+        for stack, key in CONTRACT_0012_EXTERNAL_AUDIT_USERS.items():
+            value = values.get(key)
+            if (
+                not isinstance(value, str)
+                or re.fullmatch(r"[a-z_][a-z0-9_-]{0,62}", value) is None
+            ):
+                raise PullDeployError(
+                    f"external database audit user is missing or invalid: {key}"
+                )
+            expected_users[stack] = value
+        environment = self.control_environment()
+        environment.update(
+            {
+                CONTRACT_0012_MEDIA_REGISTRY_DIGEST: registry_sha256,
+                **{
+                    key: expected_users[stack]
+                    for stack, key in CONTRACT_0012_EXTERNAL_AUDIT_USERS.items()
+                },
+            }
+        )
+        started_at = dt.datetime.now(dt.timezone.utc)
+        completed = self.runner.run(
+            [str(expected_helper)],
+            cwd=self.production_root,
+            env=environment,
+            timeout=60 * 60,
+        )
+        completed_at = dt.datetime.now(dt.timezone.utc)
+        _helper_after, helper_after_sha256 = private_regular_file(
+            expected_helper,
+            mode=0o700,
+            maximum_bytes=4 * 1024 * 1024,
+        )
+        _registry_after, registry_after_sha256 = private_regular_file(
+            expected_registry,
+            mode=0o600,
+            maximum_bytes=4 * 1024 * 1024,
+        )
+        if (
+            helper_after_sha256 != helper_sha256
+            or registry_after_sha256 != registry_sha256
+        ):
+            raise PullDeployError(
+                "external database audit authority changed while executing"
+            )
+        snapshot = parse_command_json(
+            completed.stdout,
+            "external database audit",
+        )
+        try:
+            snapshot = _site_helper_contracts.validate_external_database_audit(
+                snapshot,
+                expected_users=expected_users,
+                expected_media_registry_digest=registry_sha256,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "external database audit helper returned unsafe evidence"
+            ) from exc
+        validate_fresh_external_database_audit(
+            snapshot,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+        binding: dict[str, Any] = {
+            "schema_version": 1,
+            "helper": {
+                "path": str(expected_helper),
+                "sha256": helper_sha256,
+                "mode": "0700",
+            },
+            "registry": {
+                "path": str(expected_registry),
+                "sha256": registry_sha256,
+                "mode": "0600",
+            },
+            "expected_users": expected_users,
+            "snapshot": snapshot,
+            "snapshot_sha256": canonical_json_digest(snapshot),
+            "state_sha256": canonical_json_digest(
+                external_database_audit_state(snapshot)
+            ),
+            "identity_sha256": None,
+        }
+        binding["identity_sha256"] = canonical_json_digest(
+            {
+                key: value
+                for key, value in binding.items()
+                if key != "identity_sha256"
+            }
+        )
+        return validate_external_database_audit_binding(
+            binding,
+            expected_policy=policy,
+        )
+
+    def _revalidate_external_database_audit(
+        self,
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        if (
+            descriptor.get("schema_version")
+            != BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+        ):
+            raise PullDeployError(
+                "external database audit CAS is restricted to the bridge"
+            )
+        policy = descriptor["bridge"]["policy"][
+            "external_database_audit"
+        ]
+        expected = validate_external_database_audit_binding(
+            descriptor.get("external_database_audit"),
+            expected_policy=policy,
+        )
+        observed = self.external_database_audit_evidence(policy)
+        for field in ("helper", "registry", "expected_users", "state_sha256"):
+            if observed[field] != expected[field]:
+                raise PullDeployError(
+                    "external database media changed after bridge prepare"
+                )
+        return observed
+
     def mutable_data_contract(self) -> dict[str, Any]:
         path = self.config_dir / MUTABLE_DATA_AUDIT_HELPER
         try:
@@ -10715,6 +11367,7 @@ class PullDeployController:
                     self._revalidate_bridge_external_authorities(
                         descriptor
                     )
+                    self._revalidate_external_database_audit(descriptor)
                 return {"action": "prepare", "status": "already-ready", **ready}
             attempt = self._open_prepare_operation(
                 operation,
@@ -10959,6 +11612,7 @@ class PullDeployController:
                 self._revalidate_previous_deployment_state(anchor)
                 token_record: dict[str, Any] | None = None
                 bridge_descriptor: dict[str, Any] | None = None
+                external_database_audit: dict[str, Any] | None = None
                 if bridge_relation is not None:
                     target_digest_refs = {
                         role: images[role]["digest_ref"]
@@ -10975,6 +11629,13 @@ class PullDeployController:
                         raise PullDeployError(
                             "materialized B images or asset differ from F policy"
                         )
+                    external_database_audit = (
+                        self.external_database_audit_evidence(
+                            bridge_relation["policy"][
+                                "external_database_audit"
+                            ]
+                        )
+                    )
                     try:
                         predecessor_retirement = (
                             self._bridge_token_successor_authority()
@@ -11062,6 +11723,9 @@ class PullDeployController:
                         bridge_takeover_binding
                     )
                     descriptor["prefetch"] = bridge_prefetch_binding
+                    descriptor["external_database_audit"] = (
+                        external_database_audit
+                    )
                 validate_descriptor(descriptor)
                 if descriptor_path.exists() or descriptor_path.is_symlink():
                     existing_descriptor = validate_descriptor(
@@ -11667,6 +12331,7 @@ class PullDeployController:
         ):
             raise PullDeployError("production source changed after prepare")
         if bridge is not None:
+            self._revalidate_external_database_audit(descriptor)
             prefetched, _takeover = (
                 self._revalidate_bridge_external_authorities(descriptor)
             )
@@ -12080,7 +12745,7 @@ class PullDeployController:
             mutable_before,
             mutable_after,
         )
-        return {
+        state = {
             "schema_version": 2,
             "status": "success",
             "operation_id": descriptor["operation_id"],
@@ -12120,6 +12785,27 @@ class PullDeployController:
             "mutable_data_audit": mutable_pair,
             "deployed_at": utc_now(),
         }
+        external_database_audit = (
+            descriptor.get("external_database_audit")
+            if descriptor["schema_version"]
+            == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            else previous.get("external_database_audit")
+            if isinstance(previous, dict)
+            else None
+        )
+        if external_database_audit is not None:
+            state["external_database_audit"] = (
+                validate_external_database_audit_binding(
+                    external_database_audit
+                )
+            )
+        if isinstance(previous, dict) and previous.get(
+            "contract_external_database_audit"
+        ) is not None:
+            state["contract_external_database_audit"] = previous[
+                "contract_external_database_audit"
+            ]
+        return state
 
     def _audit_attempt(self, marker: dict[str, Any], status: str) -> Path:
         operation_id = require_operation_id(marker["operation_id"])

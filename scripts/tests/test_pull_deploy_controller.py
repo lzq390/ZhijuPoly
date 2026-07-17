@@ -280,6 +280,174 @@ def reseal_mutable_data_evidence(
     return document
 
 
+def external_database_audit_binding(
+    runtime: Path,
+    *,
+    captured_at: str = "2026-07-17T00:00:00Z",
+) -> dict[str, object]:
+    helper_path = (
+        runtime / "config" / CONTROLLER.EXTERNAL_DATABASE_AUDIT_HELPER
+    )
+    registry_path = (
+        runtime
+        / "config"
+        / CONTROLLER.EXTERNAL_DATABASE_MEDIA_REGISTRY
+    )
+    helper_sha256 = (
+        CONTROLLER.sha256_file(helper_path)
+        if helper_path.exists()
+        else "sha256:" + "8" * 64
+    )
+    registry_sha256 = (
+        CONTROLLER.sha256_file(registry_path)
+        if registry_path.exists()
+        else "sha256:" + "5" * 64
+    )
+    ledger = [
+        {"version": version, "checksum": checksum}
+        for version, checksum in (
+            CONTROLLER._site_helper_contracts.CANONICAL_MIGRATION_LEDGER
+        )
+    ]
+    through_0011 = [
+        row for row in ledger if row["version"] <= "0011_asset_release_v2"
+    ]
+    through_0012 = [
+        row for row in ledger if row["version"] <= "0012_drop_polytao_jobs"
+    ]
+    through_0008 = [
+        row
+        for row in ledger
+        if row["version"] <= "0008_polytao_backend_runtime"
+    ]
+    media_id = "docker-volume:nexpoly_postgres_data"
+    source = {
+        "name": "nexpoly_postgres_data",
+        "driver": "local",
+        "mountpoint": (
+            "/var/lib/docker/volumes/nexpoly_postgres_data/_data"
+        ),
+        "labels_sha256": "sha256:" + "1" * 64,
+        "inspect_sha256": "sha256:" + "2" * 64,
+        "attached_container_ids": ["3" * 64],
+    }
+    snapshot = {
+        "schema_version": 2,
+        "inventory_complete": True,
+        "writable_target": {
+            "stack": "production",
+            "database": "nexpoly",
+        },
+        "media_registry": {
+            "schema_version": 1,
+            "sha256": registry_sha256,
+            "captured_at": captured_at,
+            "expected_media_ids": [media_id],
+            "discovered_media_ids": [media_id],
+        },
+        "databases": [
+            {
+                "stack": "nexpoly_dev",
+                "database": "nexpoly_dev",
+                "current_user": "nexpoly_dev_auditor",
+                "transaction_read_only": True,
+                "role_superuser": False,
+                "role_create_db": False,
+                "role_create_role": False,
+                "ledger": through_0012,
+                "legacy_relation_present": False,
+            },
+            {
+                "stack": "nexpoly_md_health_opt",
+                "database": "nexpoly_md_health_opt",
+                "current_user": "nexpoly_health_auditor",
+                "transaction_read_only": True,
+                "role_superuser": False,
+                "role_create_db": False,
+                "role_create_role": False,
+                "ledger": through_0008,
+                "legacy_relation_present": True,
+            },
+        ],
+        "media": [
+            {
+                "media_id": media_id,
+                "kind": "docker_volume",
+                "database": "nexpoly",
+                "source_identity_before": source,
+                "source_identity_after": source,
+                "source_content_sha256": "sha256:" + "4" * 64,
+                "audit": {
+                    "method": "live-read-only",
+                    "complete": True,
+                    "evidence_sha256": "sha256:" + "6" * 64,
+                    "auditor_sha256": "sha256:" + "7" * 64,
+                    "postgres_major": 16,
+                    "audited_at": captured_at,
+                },
+                "ledger": through_0011,
+                "ledger_analysis": {
+                    "status": "canonical",
+                    "checksum_mismatches": [],
+                },
+                "legacy_relation_present": True,
+                "migration_0013": {"state": "absent", "checksum": None},
+                "disposition": "writable-target",
+            }
+        ],
+        "requires_0014": False,
+    }
+    binding: dict[str, object] = {
+        "schema_version": 1,
+        "helper": {
+            "path": str(helper_path),
+            "sha256": helper_sha256,
+            "mode": "0700",
+        },
+        "registry": {
+            "path": str(registry_path),
+            "sha256": registry_sha256,
+            "mode": "0600",
+        },
+        "expected_users": {
+            "nexpoly_dev": "nexpoly_dev_auditor",
+            "nexpoly_md_health_opt": "nexpoly_health_auditor",
+        },
+        "snapshot": snapshot,
+        "snapshot_sha256": CONTROLLER.canonical_json_digest(snapshot),
+        "state_sha256": CONTROLLER.canonical_json_digest(
+            CONTROLLER.external_database_audit_state(snapshot)
+        ),
+        "identity_sha256": None,
+    }
+    binding["identity_sha256"] = CONTROLLER.canonical_json_digest(
+        {
+            key: value
+            for key, value in binding.items()
+            if key != "identity_sha256"
+        }
+    )
+    return binding
+
+
+def reseal_external_database_audit_binding(
+    binding: dict[str, object],
+) -> dict[str, object]:
+    snapshot = binding["snapshot"]
+    binding["snapshot_sha256"] = CONTROLLER.canonical_json_digest(snapshot)
+    binding["state_sha256"] = CONTROLLER.canonical_json_digest(
+        CONTROLLER.external_database_audit_state(snapshot)
+    )
+    binding["identity_sha256"] = CONTROLLER.canonical_json_digest(
+        {
+            key: value
+            for key, value in binding.items()
+            if key != "identity_sha256"
+        }
+    )
+    return binding
+
+
 def seed_completed_alias_gate(
     runtime: Path, manifest: dict[str, object], control_root: Path
 ) -> None:
@@ -1051,6 +1219,14 @@ class FixtureController(CONTROLLER.PullDeployController):
     def production_deploy_values(self, *, check_free_space: bool) -> dict[str, str]:
         return {"fixture": str(check_free_space)}
 
+    def external_database_audit_evidence(
+        self, policy: dict[str, object]
+    ) -> dict[str, object]:
+        return CONTROLLER.validate_external_database_audit_binding(
+            external_database_audit_binding(self.runtime_root),
+            expected_policy=policy,
+        )
+
     def _capture_mutable_data(
         self, _descriptor: dict[str, object]
     ) -> dict[str, object]:
@@ -1256,6 +1432,10 @@ class PullDeployTestCase(unittest.TestCase):
         lock = self.runtime / "state/deploy.lock"
         lock.write_text("", encoding="utf-8")
         os.chmod(lock, 0o600)
+        registry_fixture_payload = '{"schema_version":1,"media":[]}\n'
+        registry_fixture_sha256 = CONTROLLER.sha256_bytes(
+            registry_fixture_payload.encode("utf-8")
+        )
         for name, content in (
             ("git-deploy-key", "fixture-key\n"),
             ("known_hosts", "github.com ssh-ed25519 fixture\n"),
@@ -1279,6 +1459,20 @@ class PullDeployTestCase(unittest.TestCase):
                         "NEXPOLY_HEALTH_URLS=http://127.0.0.1:9000/health",
                         "NEXPOLY_MIN_FREE_BYTES=1073741824",
                         "NEXPOLY_POSTGRES_RESTORE_TMPFS_BYTES=8589934592",
+                        (
+                            "NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND="
+                            + str(
+                                self.runtime
+                                / "config"
+                                / CONTROLLER.EXTERNAL_DATABASE_AUDIT_HELPER
+                            )
+                        ),
+                        "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER=nexpoly_dev_auditor",
+                        "NEXPOLY_CONTRACT_0012_MD_HEALTH_AUDIT_USER=nexpoly_health_auditor",
+                        (
+                            "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256="
+                            + registry_fixture_sha256
+                        ),
                         f"NEXPOLY_WORKER_BASE_PYTHON={sys.executable}",
                         "",
                     )
@@ -1300,11 +1494,18 @@ class PullDeployTestCase(unittest.TestCase):
             "bootstrap-legacy-runtime-status",
             "bootstrap-legacy-runtime-resume-unchanged",
             "bootstrap-legacy-runtime-restore",
+            CONTROLLER.EXTERNAL_DATABASE_AUDIT_HELPER,
             CONTROLLER.MUTABLE_DATA_AUDIT_HELPER,
         ):
             hook = self.runtime / "config" / name
             hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             os.chmod(hook, 0o700)
+        write_private(
+            self.runtime
+            / "config"
+            / CONTROLLER.EXTERNAL_DATABASE_MEDIA_REGISTRY,
+            registry_fixture_payload,
+        )
         write_private(
             self.runtime / "config" / CONTROLLER.MUTABLE_DATA_SERVICE_CONFIG,
             (
@@ -1957,6 +2158,9 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             "conclusion": "success",
             "required_jobs": required_jobs,
         }
+        external_database_audit = external_database_audit_binding(
+            controller.runtime_root
+        )
         policy = {
             "schema_version": 1,
             "mode": CONTROLLER._bridge_core.BRIDGE_MODE,
@@ -1984,6 +2188,12 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                     ],
                 )
             ),
+            "external_database_audit": {
+                **CONTROLLER._bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
+                "media_registry_sha256": external_database_audit[
+                    "registry"
+                ]["sha256"],
+            },
             "required_ci_jobs": required_jobs,
             "policy_id": None,
         }
@@ -2075,6 +2285,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             prefetch
         )
         descriptor["prefetch"] = prefetch
+        descriptor["external_database_audit"] = external_database_audit
         return descriptor
 
     def bind_bridge_token(
@@ -2202,6 +2413,18 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                     "datasets_on_asset_change"
                 ].append("online"),
             ),
+            (
+                "external registry",
+                lambda value: value["external_database_audit"][
+                    "registry"
+                ].__setitem__("sha256", "sha256:" + "f" * 64),
+            ),
+            (
+                "external snapshot",
+                lambda value: value["external_database_audit"].__setitem__(
+                    "snapshot_sha256", "sha256:" + "f" * 64
+                ),
+            ),
         )
         for label, mutate in mutations:
             with self.subTest(label=label):
@@ -2209,6 +2432,169 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 mutate(changed)
                 with self.assertRaises(CONTROLLER.PullDeployError):
                     CONTROLLER.validate_descriptor(changed)
+
+    def test_external_database_cas_allows_only_fresh_timestamp_changes(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        observed = json.loads(
+            json.dumps(descriptor["external_database_audit"])
+        )
+        observed["snapshot"]["media_registry"]["captured_at"] = (
+            "2026-07-17T00:01:00Z"
+        )
+        observed["snapshot"]["media"][0]["audit"]["audited_at"] = (
+            "2026-07-17T00:01:00Z"
+        )
+        reseal_external_database_audit_binding(observed)
+        with mock.patch.object(
+            controller,
+            "external_database_audit_evidence",
+            return_value=observed,
+        ):
+            self.assertEqual(
+                controller._revalidate_external_database_audit(descriptor),
+                observed,
+            )
+
+        changed = json.loads(json.dumps(observed))
+        changed["snapshot"]["media"][0]["source_content_sha256"] = (
+            "sha256:" + "e" * 64
+        )
+        reseal_external_database_audit_binding(changed)
+        with (
+            mock.patch.object(
+                controller,
+                "external_database_audit_evidence",
+                return_value=changed,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "media changed",
+            ),
+        ):
+            controller._revalidate_external_database_audit(descriptor)
+
+    def test_bridge_prepare_captures_exact_private_registry_and_fresh_audit(
+        self,
+    ) -> None:
+        controller = self.controller()
+        expected = external_database_audit_binding(
+            controller.runtime_root,
+            captured_at=CONTROLLER.utc_now(),
+        )
+        runner = mock.Mock()
+        runner.run.return_value = subprocess.CompletedProcess(
+            [expected["helper"]["path"]],
+            0,
+            json.dumps(expected["snapshot"]),
+            "",
+        )
+        controller.runner = runner
+        values = {
+            CONTROLLER.CONTRACT_0012_EXTERNAL_AUDIT_COMMAND: expected[
+                "helper"
+            ]["path"],
+            CONTROLLER.CONTRACT_0012_MEDIA_REGISTRY_DIGEST: expected[
+                "registry"
+            ]["sha256"],
+            CONTROLLER.CONTRACT_0012_EXTERNAL_AUDIT_USERS[
+                "nexpoly_dev"
+            ]: expected["expected_users"]["nexpoly_dev"],
+            CONTROLLER.CONTRACT_0012_EXTERNAL_AUDIT_USERS[
+                "nexpoly_md_health_opt"
+            ]: expected["expected_users"]["nexpoly_md_health_opt"],
+        }
+        policy = {
+            **CONTROLLER._bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
+            "media_registry_sha256": expected["registry"]["sha256"],
+        }
+        with mock.patch.object(
+            controller,
+            "production_deploy_values",
+            return_value=values,
+        ):
+            observed = (
+                CONTROLLER.PullDeployController.external_database_audit_evidence(
+                    controller,
+                    policy,
+                )
+            )
+        self.assertEqual(observed, expected)
+        runner.run.assert_called_once()
+
+        stale = external_database_audit_binding(
+            controller.runtime_root,
+            captured_at="2026-07-16T00:00:00Z",
+        )
+        runner.run.return_value = subprocess.CompletedProcess(
+            [stale["helper"]["path"]],
+            0,
+            json.dumps(stale["snapshot"]),
+            "",
+        )
+        with (
+            mock.patch.object(
+                controller,
+                "production_deploy_values",
+                return_value=values,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "not captured by this invocation",
+            ),
+        ):
+            CONTROLLER.PullDeployController.external_database_audit_evidence(
+                controller,
+                policy,
+            )
+
+        missing_user_values = dict(values)
+        missing_user_values.pop(
+            CONTROLLER.CONTRACT_0012_EXTERNAL_AUDIT_USERS[
+                "nexpoly_dev"
+            ]
+        )
+        with (
+            mock.patch.object(
+                controller,
+                "production_deploy_values",
+                return_value=missing_user_values,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "user is missing or invalid",
+            ),
+        ):
+            CONTROLLER.PullDeployController.external_database_audit_evidence(
+                controller,
+                policy,
+            )
+
+        with (
+            mock.patch.object(
+                controller,
+                "production_deploy_values",
+                return_value={
+                    **values,
+                    CONTROLLER.CONTRACT_0012_MEDIA_REGISTRY_DIGEST: (
+                        "sha256:" + "f" * 64
+                    ),
+                },
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "differs from deploy.env",
+            ),
+        ):
+            CONTROLLER.PullDeployController.external_database_audit_evidence(
+                controller,
+                {
+                    **policy,
+                    "media_registry_sha256": "sha256:" + "f" * 64,
+                },
+            )
 
     def test_bridge_ledger_registry_is_consumed_by_runtime_validation(self) -> None:
         controller = self.controller()
@@ -3291,6 +3677,10 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             descriptor_sha256=descriptor_digest,
         )
         state["descriptor_sha256"] = descriptor_digest
+        state["external_database_audit"] = descriptor[
+            "external_database_audit"
+        ]
+        CONTROLLER.validate_current_deployment_state(state)
         candidate_digest = CONTROLLER.sha256_bytes(
             CONTROLLER.canonical_json_bytes(state) + b"\n"
         )
@@ -3311,6 +3701,10 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             marker,
         )
         self.assertEqual(recovered, state)
+        self.assertEqual(
+            recovered["external_database_audit"]["identity_sha256"],
+            descriptor["external_database_audit"]["identity_sha256"],
+        )
         self.assertEqual(
             CONTROLLER.sha256_file(controller.current_state_path),
             candidate_digest,

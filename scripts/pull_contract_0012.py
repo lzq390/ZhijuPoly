@@ -121,6 +121,7 @@ class PullBinding:
     control_manifest_sha256: str
     live_production_config: dict[str, str]
     external_database_audit_helper: dict[str, str]
+    external_database_audit: dict[str, Any] | None
 
 
 def _require_private_file(path: Path, *, executable: bool = False) -> None:
@@ -234,6 +235,69 @@ def load_binding(
         or state["production_config"] != descriptor["production_config"]
     ):
         raise PullContractError("current state differs from its sealed pull descriptor")
+    external_database_audit: dict[str, Any] | None = None
+    raw_external = state.get("external_database_audit")
+    descriptor_external = descriptor.get("external_database_audit")
+    if descriptor_external is None:
+        previous = descriptor.get("previous_deployment")
+        if isinstance(previous, dict):
+            descriptor_external = previous.get("external_database_audit")
+    if raw_external is not None:
+        try:
+            external_database_audit = (
+                pull.validate_external_database_audit_binding(raw_external)
+            )
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "current external database audit binding is invalid"
+            ) from exc
+        if descriptor_external != external_database_audit:
+            raise PullContractError(
+                "current external database audit differs from its descriptor"
+            )
+        helper = external_database_audit["helper"]
+        registry = external_database_audit["registry"]
+        expected_helper = controller.config_dir / pull.EXTERNAL_DATABASE_AUDIT_HELPER
+        expected_registry = (
+            controller.config_dir
+            / pull.EXTERNAL_DATABASE_MEDIA_REGISTRY
+        )
+        if (
+            helper["path"] != str(expected_helper)
+            or registry["path"] != str(expected_registry)
+        ):
+            raise PullContractError(
+                "external database audit uses another private authority"
+            )
+        try:
+            _helper_payload, helper_sha256 = pull.private_regular_file(
+                expected_helper,
+                mode=0o700,
+                maximum_bytes=4 * 1024 * 1024,
+            )
+            _registry_payload, registry_sha256 = pull.private_regular_file(
+                expected_registry,
+                mode=0o600,
+                maximum_bytes=4 * 1024 * 1024,
+            )
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "external database audit private authority is unsafe"
+            ) from exc
+        if (
+            helper_sha256 != helper["sha256"]
+            or registry_sha256 != registry["sha256"]
+        ):
+            raise PullContractError(
+                "external database audit private authority changed"
+            )
+    elif (
+        descriptor.get("schema_version")
+        == pull.BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+    ):
+        raise PullContractError(
+            "bridge deployment lacks external database audit authority"
+        )
     active_control = controller.active_control_evidence()
     if active_control != state[
         "active_control"
@@ -352,6 +416,7 @@ def load_binding(
         external_database_audit_helper=(
             _external_database_audit_helper_evidence(controller)
         ),
+        external_database_audit=external_database_audit,
     )
 
 
@@ -987,7 +1052,20 @@ class PullRuntimeController(legacy.ReleaseController):
         )
         self._contract_marker_loader: Callable[[], dict[str, Any]] | None = None
         self._contract_marker_writer: Callable[[dict[str, Any]], None] | None = None
+        self._post_contract_external_audit: (
+            Callable[[dict[str, str]], None] | None
+        ) = None
         self.backup_root = self.runtime_root / "backups/contracts/0012" / operation_id
+
+    def bind_post_contract_external_audit(
+        self,
+        callback: Callable[[dict[str, str]], None],
+    ) -> None:
+        if self._post_contract_external_audit is not None:
+            raise PullContractError(
+                "post-contract external audit callback is already bound"
+            )
+        self._post_contract_external_audit = callback
 
     def ensure_root(self) -> None:
         self.pull_controller.ensure_roots(mutating=self.apply)
@@ -1165,6 +1243,15 @@ class PullRuntimeController(legacy.ReleaseController):
             expected=expected,
             phase="during 0012 migration",
         )
+        if (
+            mode == "contract-0012"
+            and self.binding.external_database_audit is not None
+        ):
+            if self._post_contract_external_audit is None:
+                raise PullContractError(
+                    "0012 lacks its post-contract external database audit"
+                )
+            self._post_contract_external_audit(environment)
         return applied
 
     def validate_external_database_audit_helper(self) -> dict[str, str]:
@@ -1230,6 +1317,8 @@ class PullRuntimeController(legacy.ReleaseController):
             fresh.descriptor_sha256 != self.binding.descriptor_sha256
             or fresh.current_state != self.binding.current_state
             or fresh.repository != self.binding.repository
+            or fresh.external_database_audit
+            != self.binding.external_database_audit
         ):
             raise PullContractError("pull deployment identity changed before 0012")
         active = self.pull_controller._active_slot()
@@ -1927,9 +2016,14 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         self._database_recovery_drain_gate: dict[str, Any] | None = None
         self._contract_mutable_data_before: dict[str, Any] | None = None
         self._contract_mutable_data_pair: dict[str, Any] | None = None
+        self._contract_external_database_pair: dict[str, Any] | None = None
+        self._capturing_post_contract_external_audit = False
         self.controller.bind_contract_marker_persistence(
             loader=self._load_runtime_recovery_marker,
             writer=self._write_marker,
+        )
+        self.controller.bind_post_contract_external_audit(
+            self._capture_post_contract_external_database_audit
         )
 
     def plan(self) -> dict[str, Any]:
@@ -1950,6 +2044,9 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             "external_database_audit_helper": (
                 self.binding.external_database_audit_helper
             ),
+            "external_database_bridge_baseline": (
+                self._external_database_authority()
+            ),
             "legacy_release_bundle": False,
         }
         if self.controller._runtime_identity_evidence is not None:
@@ -1962,9 +2059,14 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         allow_completed_contract: bool = False,
     ) -> dict[str, Any]:
         fresh = load_binding(self.root, self.runtime_root, apply=self.apply)
-        if fresh.live_production_config != self.binding.live_production_config:
+        if (
+            fresh.live_production_config != self.binding.live_production_config
+            or fresh.external_database_audit
+            != self.binding.external_database_audit
+        ):
             raise PullContractError(
-                "live production configuration changed during 0012 maintenance"
+                "live production or external database authority changed during "
+                "0012 maintenance"
             )
         state = _legacy_state_projection(fresh.current_state)
         history = state["migrations"]
@@ -1994,10 +2096,33 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
 
     def _load_runtime_recovery_marker(self) -> dict[str, Any]:
         self._validate_installed_authority()
-        return self._load_operation_document(
+        marker = self._load_operation_document(
             self.marker_path,
             "runtime recovery marker",
         )
+        raw_pair = marker.get("contract_external_database_audit")
+        if raw_pair is not None:
+            baseline = self.binding.external_database_audit
+            if baseline is None:
+                raise PullContractError(
+                    "0012 marker has an external database transition without "
+                    "its bridge baseline"
+                )
+            try:
+                pair = pull.validate_external_database_contract_pair(
+                    raw_pair,
+                    before_binding=baseline,
+                )
+            except pull.PullDeployError as exc:
+                raise PullContractError(
+                    "0012 marker external database transition is invalid"
+                ) from exc
+            if pair["operation_id"] != self.operation_id:
+                raise PullContractError(
+                    "0012 marker external database transition belongs to "
+                    "another operation"
+                )
+        return marker
 
     def _write_current_state(self, state: dict[str, Any]) -> None:
         projected = _pull_state_projection(self.binding, state)
@@ -2019,15 +2144,56 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
                 "0012 mutable-data transition belongs to another operation"
             )
         projected["contract_mutable_data_audit"] = pair
+        baseline = self.binding.external_database_audit
+        if baseline is not None:
+            external_pair = self._contract_external_database_pair
+            if external_pair is None:
+                marker = self._load_runtime_recovery_marker()
+                raw_external_pair = marker.get(
+                    "contract_external_database_audit"
+                )
+                if raw_external_pair is not None:
+                    try:
+                        external_pair = (
+                            pull.validate_external_database_contract_pair(
+                                raw_external_pair,
+                                before_binding=baseline,
+                            )
+                        )
+                    except pull.PullDeployError as exc:
+                        raise PullContractError(
+                            "0012 state commit has invalid external database "
+                            "transition evidence"
+                        ) from exc
+            if external_pair is None:
+                raise PullContractError(
+                    "0012 state commit lacks external database transition evidence"
+                )
+            if external_pair["operation_id"] != self.operation_id:
+                raise PullContractError(
+                    "0012 external database transition belongs to another operation"
+                )
+            projected["contract_external_database_audit"] = external_pair
         pull.validate_current_deployment_state(projected)
         legacy.atomic_json(
             self.state_path,
             projected,
         )
 
+    def _external_database_authority(self) -> dict[str, str] | None:
+        baseline = self.binding.external_database_audit
+        if baseline is None:
+            return None
+        return {
+            "identity_sha256": baseline["identity_sha256"],
+            "state_sha256": baseline["state_sha256"],
+            "helper_sha256": baseline["helper"]["sha256"],
+            "registry_sha256": baseline["registry"]["sha256"],
+        }
+
     def _maintenance_authority(self) -> dict[str, Any]:
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "source_sha": self.binding.repository["sha"],
             "source_tree": self.binding.repository["tree"],
             "pull_descriptor_sha256": self.binding.descriptor_sha256,
@@ -2040,6 +2206,9 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             "production_config": self.binding.live_production_config,
             "external_database_audit_helper": (
                 self.binding.external_database_audit_helper
+            ),
+            "external_database_bridge_baseline": (
+                self._external_database_authority()
             ),
         }
 
@@ -2057,6 +2226,8 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             or fresh.live_production_config != self.binding.live_production_config
             or fresh.external_database_audit_helper
             != self.binding.external_database_audit_helper
+            or fresh.external_database_audit
+            != self.binding.external_database_audit
         ):
             raise PullContractError(
                 "installed 0012 maintenance authority changed during the operation"
@@ -2081,6 +2252,10 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             ]
             marker["contract_mutable_data_audit"] = (
                 self._contract_mutable_data_pair
+            )
+        if self._contract_external_database_pair is not None:
+            marker["contract_external_database_audit"] = (
+                self._contract_external_database_pair
             )
         authority = self._maintenance_authority()
         marker["pull_maintenance_authority"] = authority
@@ -2142,6 +2317,21 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             self.audit_dir / "external-database-audit-helper.json",
             self.binding.external_database_audit_helper,
         )
+        baseline = self.binding.external_database_audit
+        if baseline is not None:
+            self._write_mutable_audit_document(
+                "external-database-bridge-baseline.json",
+                baseline,
+            )
+        if self._contract_external_database_pair is not None:
+            self._write_mutable_audit_document(
+                "external-database.after.json",
+                self._contract_external_database_pair["after_snapshot"],
+            )
+            self._write_mutable_audit_document(
+                "external-database.transition.json",
+                self._contract_external_database_pair,
+            )
         return super()._audit_manifest()
 
     def _validate_audit_manifest(self, manifest: object) -> dict[str, Any]:
@@ -2174,6 +2364,75 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             raise PullContractError(
                 "0012 audit is not bound to its external database audit helper"
             )
+        baseline = self.binding.external_database_audit
+        baseline_path = self.audit_dir / "external-database-bridge-baseline.json"
+        if baseline is not None:
+            if (
+                not baseline_path.is_file()
+                or baseline_path.is_symlink()
+                or stat.S_IMODE(baseline_path.stat().st_mode) != 0o600
+                or self._load_operation_document(
+                    baseline_path,
+                    "external database bridge baseline",
+                )
+                != baseline
+            ):
+                raise PullContractError(
+                    "0012 audit is not bound to its bridge-time external "
+                    "database baseline"
+                )
+            pair_path = self.audit_dir / "external-database.transition.json"
+            after_path = self.audit_dir / "external-database.after.json"
+            pair_expected = (
+                self._contract_external_database_pair is not None
+                or self.binding.current_state.get(
+                    "contract_external_database_audit"
+                )
+                is not None
+            )
+            if pair_expected:
+                if (
+                    not pair_path.is_file()
+                    or pair_path.is_symlink()
+                    or stat.S_IMODE(pair_path.stat().st_mode) != 0o600
+                    or not after_path.is_file()
+                    or after_path.is_symlink()
+                    or stat.S_IMODE(after_path.stat().st_mode) != 0o600
+                ):
+                    raise PullContractError(
+                        "0012 audit lacks its external database transition"
+                    )
+                try:
+                    pair = pull.validate_external_database_contract_pair(
+                        self._load_operation_document(
+                            pair_path,
+                            "external database transition",
+                        ),
+                        before_binding=baseline,
+                    )
+                except pull.PullDeployError as exc:
+                    raise PullContractError(
+                        "0012 external database transition audit is invalid"
+                    ) from exc
+                if (
+                    pair["operation_id"] != self.operation_id
+                    or self._load_operation_document(
+                        after_path,
+                        "post-0012 external database snapshot",
+                    )
+                    != pair["after_snapshot"]
+                ):
+                    raise PullContractError(
+                        "0012 external database transition audit differs"
+                    )
+                if (
+                    self._contract_external_database_pair is not None
+                    and pair != self._contract_external_database_pair
+                ):
+                    raise PullContractError(
+                        "0012 external database transition changed during audit"
+                    )
+                self._contract_external_database_pair = pair
         return validated
 
     def _bind_current_release(self, state: dict[str, Any]) -> Path:
@@ -2209,6 +2468,8 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             or fresh.live_production_config != self.binding.live_production_config
             or fresh.external_database_audit_helper
             != self.binding.external_database_audit_helper
+            or fresh.external_database_audit
+            != self.binding.external_database_audit
         ):
             raise PullContractError(
                 "live pull identity changed before 0012 maintenance"
@@ -2230,7 +2491,55 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             raise PullContractError(
                 "0012 external database audit helper changed while executing"
             )
+        baseline = self.binding.external_database_audit
+        if (
+            baseline is not None
+            and not self._capturing_post_contract_external_audit
+            and pull.canonical_json_digest(
+                pull.external_database_audit_state(inventory)
+            )
+            != baseline["state_sha256"]
+        ):
+            raise PullContractError(
+                "external database media changed since bridge preparation"
+            )
         return inventory
+
+    def _capture_post_contract_external_database_audit(
+        self,
+        environment: dict[str, str],
+    ) -> None:
+        baseline = self.binding.external_database_audit
+        if baseline is None:
+            return
+        if self._contract_external_database_pair is not None:
+            return
+        self._capturing_post_contract_external_audit = True
+        try:
+            after = self._capture_external_database_inventory(environment)
+        finally:
+            self._capturing_post_contract_external_audit = False
+        try:
+            pair = pull.build_external_database_contract_pair(
+                baseline,
+                after,
+                operation_id=self.operation_id,
+            )
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "post-0012 external database transition is unsafe"
+            ) from exc
+        self._contract_external_database_pair = pair
+        self._write_mutable_audit_document(
+            "external-database.after.json",
+            pair["after_snapshot"],
+        )
+        self._write_mutable_audit_document(
+            "external-database.transition.json",
+            pair,
+        )
+        marker = self._load_runtime_recovery_marker()
+        self._write_marker(marker)
 
     @staticmethod
     def _database_recovery_gate_identity(
@@ -2552,6 +2861,16 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
                 pull.mutable_data_identity(restored)
             )
         )
+        if self.binding.external_database_audit is not None:
+            external_restored = self._capture_external_database_inventory(
+                environment
+            )
+            marker["external_database_restored"] = external_restored
+            marker["external_database_restored_state_sha256"] = (
+                pull.canonical_json_digest(
+                    pull.external_database_audit_state(external_restored)
+                )
+            )
         self._write_marker(marker)
 
     def _success_journal(
@@ -2595,6 +2914,42 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         }
         for name, document in evidence_files.items():
             self._write_mutable_audit_document(name, document)
+        external_pair = self._contract_external_database_pair
+        if self.binding.external_database_audit is not None:
+            if external_pair is None:
+                raw_external_pair = marker.get(
+                    "contract_external_database_audit"
+                )
+                if raw_external_pair is not None:
+                    try:
+                        external_pair = (
+                            pull.validate_external_database_contract_pair(
+                                raw_external_pair,
+                                before_binding=self.binding.external_database_audit,
+                            )
+                        )
+                    except pull.PullDeployError as exc:
+                        raise PullContractError(
+                            "0012 success has invalid external database "
+                            "transition evidence"
+                        ) from exc
+            if (
+                external_pair is None
+                or external_pair["operation_id"] != self.operation_id
+            ):
+                raise PullContractError(
+                    "0012 success lacks its exact external database transition"
+                )
+            self._contract_external_database_pair = external_pair
+            marker["contract_external_database_audit"] = external_pair
+            self._write_mutable_audit_document(
+                "external-database.after.json",
+                external_pair["after_snapshot"],
+            )
+            self._write_mutable_audit_document(
+                "external-database.transition.json",
+                external_pair,
+            )
         audit_manifest = self._audit_manifest()
         marker["mutable_data_after"] = pair["after"]
         marker["contract_mutable_data_audit"] = pair
@@ -2620,6 +2975,8 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         journal["ingress_isolated_canary"] = canary
         journal["ingress_isolated_canary_sha256"] = canary_digest
         journal["contract_mutable_data_audit"] = pair
+        if external_pair is not None:
+            journal["contract_external_database_audit"] = external_pair
         return journal
 
     def _validate_success_journal(
@@ -2643,6 +3000,8 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             "ingress_isolated_canary_sha256",
             "contract_mutable_data_audit",
         }
+        if self.binding.external_database_audit is not None:
+            expected_fields.add("contract_external_database_audit")
         if not isinstance(journal, dict) or set(journal) != expected_fields:
             raise PullContractError(
                 "existing 0012 success journal has an invalid shape"
@@ -2674,6 +3033,22 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             raise PullContractError(
                 "existing 0012 mutable-data journal belongs to another operation"
             )
+        if self.binding.external_database_audit is not None:
+            try:
+                external_pair = pull.validate_external_database_contract_pair(
+                    journal.get("contract_external_database_audit"),
+                    before_binding=self.binding.external_database_audit,
+                )
+            except pull.PullDeployError as exc:
+                raise PullContractError(
+                    "existing 0012 external database journal is invalid"
+                ) from exc
+            if external_pair["operation_id"] != self.operation_id:
+                raise PullContractError(
+                    "existing 0012 external database journal belongs to "
+                    "another operation"
+                )
+            self._contract_external_database_pair = external_pair
         backup = journal.get("database_backup")
         backup_digest = journal.get("database_backup_sha256")
         if (

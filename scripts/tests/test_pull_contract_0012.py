@@ -289,6 +289,166 @@ def _contract_mutable_data_pair() -> dict[str, object]:
     return contract.pull.build_mutable_data_pair(before, after)
 
 
+def _external_database_audit_binding(
+    runtime: Path,
+    *,
+    captured_at: str = "2026-07-17T00:00:00Z",
+) -> dict[str, object]:
+    helper_path = (
+        runtime / "config" / contract.pull.EXTERNAL_DATABASE_AUDIT_HELPER
+    )
+    registry_path = (
+        runtime
+        / "config"
+        / contract.pull.EXTERNAL_DATABASE_MEDIA_REGISTRY
+    )
+    ledger = [
+        {"version": version, "checksum": checksum}
+        for version, checksum in (
+            contract.pull._site_helper_contracts.CANONICAL_MIGRATION_LEDGER
+        )
+    ]
+    through_0011 = [
+        row for row in ledger if row["version"] <= "0011_asset_release_v2"
+    ]
+    through_0012 = [
+        row for row in ledger if row["version"] <= "0012_drop_polytao_jobs"
+    ]
+    through_0008 = [
+        row
+        for row in ledger
+        if row["version"] <= "0008_polytao_backend_runtime"
+    ]
+    media_id = "docker-volume:nexpoly_postgres_data"
+    source = {
+        "name": "nexpoly_postgres_data",
+        "driver": "local",
+        "mountpoint": "/var/lib/docker/volumes/nexpoly_postgres_data/_data",
+        "labels_sha256": "sha256:" + "1" * 64,
+        "inspect_sha256": "sha256:" + "2" * 64,
+        "attached_container_ids": ["3" * 64],
+    }
+    registry_sha256 = contract.pull.sha256_file(registry_path)
+    snapshot = {
+        "schema_version": 2,
+        "inventory_complete": True,
+        "writable_target": {
+            "stack": "production",
+            "database": "nexpoly",
+        },
+        "media_registry": {
+            "schema_version": 1,
+            "sha256": registry_sha256,
+            "captured_at": captured_at,
+            "expected_media_ids": [media_id],
+            "discovered_media_ids": [media_id],
+        },
+        "databases": [
+            {
+                "stack": "nexpoly_dev",
+                "database": "nexpoly_dev",
+                "current_user": "nexpoly_dev_auditor",
+                "transaction_read_only": True,
+                "role_superuser": False,
+                "role_create_db": False,
+                "role_create_role": False,
+                "ledger": through_0012,
+                "legacy_relation_present": False,
+            },
+            {
+                "stack": "nexpoly_md_health_opt",
+                "database": "nexpoly_md_health_opt",
+                "current_user": "nexpoly_health_auditor",
+                "transaction_read_only": True,
+                "role_superuser": False,
+                "role_create_db": False,
+                "role_create_role": False,
+                "ledger": through_0008,
+                "legacy_relation_present": True,
+            },
+        ],
+        "media": [
+            {
+                "media_id": media_id,
+                "kind": "docker_volume",
+                "database": "nexpoly",
+                "source_identity_before": source,
+                "source_identity_after": source,
+                "source_content_sha256": "sha256:" + "4" * 64,
+                "audit": {
+                    "method": "live-read-only",
+                    "complete": True,
+                    "evidence_sha256": "sha256:" + "6" * 64,
+                    "auditor_sha256": "sha256:" + "7" * 64,
+                    "postgres_major": 16,
+                    "audited_at": captured_at,
+                },
+                "ledger": through_0011,
+                "ledger_analysis": {
+                    "status": "canonical",
+                    "checksum_mismatches": [],
+                },
+                "legacy_relation_present": True,
+                "migration_0013": {"state": "absent", "checksum": None},
+                "disposition": "writable-target",
+            }
+        ],
+        "requires_0014": False,
+    }
+    binding: dict[str, object] = {
+        "schema_version": 1,
+        "helper": {
+            "path": str(helper_path),
+            "sha256": contract.pull.sha256_file(helper_path),
+            "mode": "0700",
+        },
+        "registry": {
+            "path": str(registry_path),
+            "sha256": registry_sha256,
+            "mode": "0600",
+        },
+        "expected_users": {
+            "nexpoly_dev": "nexpoly_dev_auditor",
+            "nexpoly_md_health_opt": "nexpoly_health_auditor",
+        },
+        "snapshot": snapshot,
+        "snapshot_sha256": contract.pull.canonical_json_digest(snapshot),
+        "state_sha256": contract.pull.canonical_json_digest(
+            contract.pull.external_database_audit_state(snapshot)
+        ),
+        "identity_sha256": None,
+    }
+    binding["identity_sha256"] = contract.pull.canonical_json_digest(
+        {
+            key: value
+            for key, value in binding.items()
+            if key != "identity_sha256"
+        }
+    )
+    return binding
+
+
+def _post_0012_external_database_snapshot(
+    binding: dict[str, object],
+) -> dict[str, object]:
+    snapshot = json.loads(json.dumps(binding["snapshot"]))
+    ledger = [
+        {"version": version, "checksum": checksum}
+        for version, checksum in (
+            contract.pull._site_helper_contracts.CANONICAL_MIGRATION_LEDGER
+        )
+        if version <= "0012_drop_polytao_jobs"
+    ]
+    writable = snapshot["media"][0]
+    writable["ledger"] = ledger
+    writable["legacy_relation_present"] = False
+    writable["source_content_sha256"] = "sha256:" + "9" * 64
+    writable["audit"]["evidence_sha256"] = "sha256:" + "a" * 64
+    writable["audit"]["audited_at"] = "2026-07-17T00:10:00Z"
+    snapshot["media_registry"]["captured_at"] = "2026-07-17T00:10:00Z"
+    return snapshot
+
+
 def _seed_completed_alias_gate(
     runtime: Path, manifest: dict[str, object], control_root: Path
 ) -> None:
@@ -1099,6 +1259,24 @@ class PullContract0012Tests(unittest.TestCase):
             state=self.state,
         )
 
+    def _enable_external_database_binding(self) -> dict[str, object]:
+        registry = (
+            self.runtime
+            / "config"
+            / contract.pull.EXTERNAL_DATABASE_MEDIA_REGISTRY
+        )
+        _write_private_json(
+            registry,
+            {
+                "schema_version": 1,
+                "media": ["docker-volume:nexpoly_postgres_data"],
+            },
+        )
+        binding = _external_database_audit_binding(self.runtime)
+        self.descriptor["external_database_audit"] = binding
+        self.state["external_database_audit"] = binding
+        return binding
+
     def _stateful_runtime(
         self,
         *,
@@ -1490,6 +1668,234 @@ class PullContract0012Tests(unittest.TestCase):
             audit_files["external-database-audit-helper.json"]["sha256"],
             contract.pull.sha256_file(helper_audit),
         )
+
+    def test_bridge_external_database_baseline_is_bound_to_authority_and_audit(
+        self,
+    ) -> None:
+        baseline = self._enable_external_database_binding()
+        fake = self._fake_controller()
+        with mock.patch.object(
+            contract.pull,
+            "PullDeployController",
+            return_value=fake,
+        ):
+            maintenance = contract.PullContractMaintenance(
+                self.production,
+                self.runtime,
+                CONTRACT_OPERATION,
+                apply=False,
+            )
+            marker = {
+                "operation_id": CONTRACT_OPERATION,
+                "source_sha": SHA,
+            }
+            maintenance._write_marker(marker)
+            persisted = contract.pull.load_private_json(maintenance.marker_path)
+            expected_authority = {
+                "identity_sha256": baseline["identity_sha256"],
+                "state_sha256": baseline["state_sha256"],
+                "helper_sha256": baseline["helper"]["sha256"],
+                "registry_sha256": baseline["registry"]["sha256"],
+            }
+            self.assertEqual(
+                persisted["pull_maintenance_authority"][
+                    "external_database_bridge_baseline"
+                ],
+                expected_authority,
+            )
+            maintenance.audit_dir.mkdir(parents=True, mode=0o700)
+            os.chmod(maintenance.audit_dir, 0o700)
+            manifest = maintenance._audit_manifest()
+
+        baseline_path = (
+            maintenance.audit_dir
+            / "external-database-bridge-baseline.json"
+        )
+        self.assertEqual(
+            contract.pull.load_private_json(baseline_path),
+            baseline,
+        )
+        self.assertIn(
+            "external-database-bridge-baseline.json",
+            {record["name"] for record in manifest["files"]},
+        )
+
+    def test_external_database_pre_contract_cas_ignores_only_timestamps(
+        self,
+    ) -> None:
+        baseline = self._enable_external_database_binding()
+        fake = self._fake_controller()
+        with mock.patch.object(
+            contract.pull,
+            "PullDeployController",
+            return_value=fake,
+        ):
+            maintenance = contract.PullContractMaintenance(
+                self.production,
+                self.runtime,
+                CONTRACT_OPERATION,
+                apply=False,
+            )
+            timestamp_only = json.loads(json.dumps(baseline["snapshot"]))
+            timestamp_only["media_registry"]["captured_at"] = (
+                "2026-07-17T00:05:00Z"
+            )
+            timestamp_only["media"][0]["audit"]["audited_at"] = (
+                "2026-07-17T00:05:00Z"
+            )
+            with mock.patch.object(
+                contract.legacy.PolytaoContractMaintenance,
+                "_capture_external_database_inventory",
+                return_value=timestamp_only,
+            ):
+                self.assertEqual(
+                    maintenance._capture_external_database_inventory({}),
+                    timestamp_only,
+                )
+
+            changed = json.loads(json.dumps(timestamp_only))
+            changed["media"][0]["source_content_sha256"] = (
+                "sha256:" + "f" * 64
+            )
+            with (
+                mock.patch.object(
+                    contract.legacy.PolytaoContractMaintenance,
+                    "_capture_external_database_inventory",
+                    return_value=changed,
+                ),
+                self.assertRaisesRegex(
+                    contract.PullContractError,
+                    "changed since bridge preparation",
+                ),
+            ):
+                maintenance._capture_external_database_inventory({})
+
+    def test_post_0012_external_database_pair_is_in_marker_state_and_audit(
+        self,
+    ) -> None:
+        baseline = self._enable_external_database_binding()
+        fake = self._fake_controller()
+        with mock.patch.object(
+            contract.pull,
+            "PullDeployController",
+            return_value=fake,
+        ):
+            maintenance = contract.PullContractMaintenance(
+                self.production,
+                self.runtime,
+                CONTRACT_OPERATION,
+                apply=False,
+            )
+            maintenance.audit_dir.mkdir(parents=True, mode=0o700)
+            os.chmod(maintenance.audit_dir, 0o700)
+            maintenance._write_marker(
+                {
+                    "operation_id": CONTRACT_OPERATION,
+                    "source_sha": SHA,
+                }
+            )
+            after = _post_0012_external_database_snapshot(baseline)
+            with mock.patch.object(
+                contract.legacy.PolytaoContractMaintenance,
+                "_capture_external_database_inventory",
+                return_value=after,
+            ):
+                maintenance._capture_post_contract_external_database_audit({})
+            marker = contract.pull.load_private_json(maintenance.marker_path)
+            pair = contract.pull.validate_external_database_contract_pair(
+                marker["contract_external_database_audit"],
+                before_binding=baseline,
+            )
+            self.assertEqual(pair["operation_id"], CONTRACT_OPERATION)
+
+            maintenance._contract_mutable_data_pair = (
+                _contract_mutable_data_pair()
+            )
+            committed = contract._legacy_state_projection(self.state)
+            committed["migrations"].append(contract.CONTRACT_VERSION)
+            committed["approved_contracts"] = [
+                {
+                    "version": contract.CONTRACT_VERSION,
+                    "checksum": contract.CONTRACT_CHECKSUM,
+                    "operation_id": CONTRACT_OPERATION,
+                    "approved_at": "2026-07-17T00:10:00+00:00",
+                }
+            ]
+            committed["schema_compatibility_floor"] = {
+                "version": contract.CONTRACT_VERSION,
+                "checksum": contract.CONTRACT_CHECKSUM,
+            }
+            committed["migration_epoch_barrier"] = {
+                "epoch": 1,
+                "contract": {
+                    "version": contract.CONTRACT_VERSION,
+                    "checksum": contract.CONTRACT_CHECKSUM,
+                },
+                "operation_id": CONTRACT_OPERATION,
+                "approved_at": "2026-07-17T00:10:00+00:00",
+            }
+            committed["last_contract_operation"] = CONTRACT_OPERATION
+            maintenance._write_current_state(committed)
+            written_state = contract.pull.load_private_json(
+                maintenance.state_path
+            )
+            self.assertEqual(
+                written_state["contract_external_database_audit"],
+                pair,
+            )
+            audit_manifest = maintenance._audit_manifest()
+            maintenance._validate_audit_manifest(audit_manifest)
+
+        transition_path = (
+            maintenance.audit_dir / "external-database.transition.json"
+        )
+        self.assertEqual(
+            contract.pull.load_private_json(transition_path),
+            pair,
+        )
+
+    def test_external_database_pair_rejects_nonproduction_media_drift(
+        self,
+    ) -> None:
+        baseline = self._enable_external_database_binding()
+        after = _post_0012_external_database_snapshot(baseline)
+        after["databases"][0]["legacy_relation_present"] = True
+        with self.assertRaisesRegex(
+            contract.pull.PullDeployError,
+            "outside production",
+        ):
+            contract.pull.build_external_database_contract_pair(
+                baseline,
+                after,
+                operation_id=CONTRACT_OPERATION,
+            )
+
+    def test_load_binding_rejects_external_media_registry_replacement(
+        self,
+    ) -> None:
+        self._enable_external_database_binding()
+        fake = self._fake_controller()
+        registry = (
+            self.runtime
+            / "config"
+            / contract.pull.EXTERNAL_DATABASE_MEDIA_REGISTRY
+        )
+        _write_private_json(
+            registry,
+            {"schema_version": 1, "media": ["replacement"]},
+        )
+        with (
+            mock.patch.object(
+                contract.pull,
+                "PullDeployController",
+                return_value=fake,
+            ),
+            self.assertRaisesRegex(
+                contract.PullContractError,
+                "private authority changed",
+            ),
+        ):
+            contract.load_binding(self.production, self.runtime, apply=False)
 
     def test_runtime_gate_records_actual_live_identity_before_marker(self) -> None:
         fake = self._fake_controller()
