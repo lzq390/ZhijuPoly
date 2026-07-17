@@ -40,6 +40,12 @@ at its start value, and not called.
 never rebuilt by deployment. The release descriptor must keep `datasets=[]`;
 asset publication cannot invoke an importer.
 
+The standalone import CLI expands `--dataset all` to static datasets only.
+Its retired `online` and `lab` names fail closed, and static `--rebuild`
+constructs an exact table list without `CASCADE`. This is an implementation
+boundary, not only a deployment-policy convention: no static rebuild can
+truncate or overwrite any business-mutable relation.
+
 ## Migration ledger and the sole destructive exception
 
 `governance.schema_migrations` must be the exact ordered, checksum-pinned

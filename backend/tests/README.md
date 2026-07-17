@@ -46,11 +46,12 @@ Automatic code deployment runs only compatible migrations:
 python -m app.postgres_migrations --mode expand
 ```
 
-The single `ci.yml` pipeline reads the immutable asset digest and explicit
-dataset list from `release-input.json`. An unchanged digest performs no import;
-when the digest changes, the production controller takes a verified dump and
-runs one `--rebuild` with those exact dataset names. The implicit dataset value
-`all` is forbidden. Runtime healthchecks use:
+The single `ci.yml` pipeline reads the immutable asset digest from schema-v2
+`release-input.json`, whose dataset list must be empty. Asset pointer changes
+never invoke the importer. Standalone static maintenance may use an explicit
+dataset or `all` (which expands only to static datasets); its rebuild table list
+excludes business-mutable relations and never uses `CASCADE`. Runtime
+healthchecks use:
 
 ```bash
 python -m app.postgres_preflight --mode runtime --strict \

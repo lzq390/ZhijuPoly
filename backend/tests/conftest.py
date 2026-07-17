@@ -173,6 +173,8 @@ def reset_postgres_fixture(dsn: str) -> None:
               knowledge.documents,
               online_knowledge.history,
               online_knowledge.jobs,
+              lab.sample_measurements,
+              lab.test_projects,
               pi.tg_predictions,
               pi.polymers,
               pi.monomer_iupac,

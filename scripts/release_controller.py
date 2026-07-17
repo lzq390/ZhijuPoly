@@ -3344,21 +3344,17 @@ def load_release_input(path: Path) -> dict[str, Any]:
 
     document = load_manifest(path)
     schema_version = document.get("schema_version")
-    v1_fields = {
+    v2_fields = {
         "schema_version",
         "asset_manifest_digest",
         "datasets_on_asset_change",
-    }
-    v2_fields = v1_fields | {
         "predecessor_asset_manifest_digest",
         "changed_asset_trees",
     }
-    if (
-        (schema_version == 1 and set(document) != v1_fields)
-        or (schema_version == 2 and set(document) != v2_fields)
-        or schema_version not in {1, 2}
-    ):
-        raise ReleaseError("release input uses an unsupported schema")
+    if schema_version != 2 or set(document) != v2_fields:
+        raise ReleaseError(
+            "release input must use the non-rebuilding schema-v2 contract"
+        )
     asset_digest = require_digest(
         str(document.get("asset_manifest_digest", "")),
         "release input asset manifest digest",
@@ -3377,25 +3373,20 @@ def load_release_input(path: Path) -> dict[str, Any]:
         raise ReleaseError(
             "datasets_on_asset_change must be a duplicate-free list of explicit datasets"
         )
-    if schema_version == 1 and not datasets:
-        raise ReleaseError("schema-v1 release input requires at least one dataset")
-    predecessor_digest: str | None = None
-    changed_asset_trees: list[str] = []
-    if schema_version == 2:
-        predecessor_digest = require_digest(
-            str(document.get("predecessor_asset_manifest_digest", "")),
-            "release input predecessor asset manifest digest",
+    predecessor_digest = require_digest(
+        str(document.get("predecessor_asset_manifest_digest", "")),
+        "release input predecessor asset manifest digest",
+    )
+    changed_asset_trees = document.get("changed_asset_trees")
+    if (
+        changed_asset_trees != ["byteff2"]
+        or datasets
+        or predecessor_digest == asset_digest
+    ):
+        raise ReleaseError(
+            "schema-v2 ByteFF2-only release input must change only byteff2 "
+            "and must not rebuild PostgreSQL datasets"
         )
-        changed_asset_trees = document.get("changed_asset_trees")
-        if (
-            changed_asset_trees != ["byteff2"]
-            or datasets
-            or predecessor_digest == asset_digest
-        ):
-            raise ReleaseError(
-                "schema-v2 ByteFF2-only release input must change only byteff2 "
-                "and must not rebuild PostgreSQL datasets"
-            )
     return {
         "schema_version": schema_version,
         "asset_manifest_digest": asset_digest,
@@ -3530,16 +3521,10 @@ def validate_manifest(
     datasets = document.get("datasets_on_asset_change", [])
     if (
         not isinstance(datasets, list)
-        or any(
-            not isinstance(dataset, str)
-            or not SAFE_DATASET_RE.fullmatch(dataset)
-            or dataset in {"all", "none"}
-            for dataset in datasets
-        )
-        or len(set(datasets)) != len(datasets)
+        or datasets
     ):
         raise ReleaseError(
-            "datasets_on_asset_change must contain explicit safe dataset names"
+            "release manifests must not request asset-triggered database rebuilds"
         )
     migrations = release_migration_records(document)
     for migration in migrations:
@@ -6880,24 +6865,16 @@ class ReleaseController:
         return candidate
 
     def rebuild_datasets(self, environment: dict[str, str]) -> None:
+        """Reject the retired asset-triggered database rebuild path."""
+
+        del environment
         datasets = self.document.get("datasets_on_asset_change", [])
         if not datasets:
             return
-        command = self.compose(
-            self.candidate_dir,
-            "run",
-            "--rm",
-            "--no-deps",
-            "postgres-init",
-            "python",
-            "-m",
-            "app.import_postgres",
-            "--rebuild",
-            "--skip-migrations",
+        raise ReleaseError(
+            "asset-triggered database rebuilds are retired; publish the "
+            "content-addressed asset pointer without importing datasets"
         )
-        for dataset in datasets:
-            command.extend(["--dataset", dataset])
-        self.run(command, env=environment)
 
     def restore_database(
         self,
@@ -7628,8 +7605,8 @@ class ReleaseController:
         if not previous_release.is_dir() or previous_release.is_symlink():
             raise ReleaseError("interrupted deployment previous release is unavailable")
         data_change_started = marker.get("data_change_started") is True
-        if data_change_started:
-            self.backup_path = self.marker_backup(marker)
+        asset_change_started = marker.get("asset_switch_started") is True
+        if asset_change_started or data_change_started:
             previous_asset_root = Path(str(marker.get("previous_asset_root", "")))
             resolved_previous, previous_digest, previous_byteff2_commit = (
                 inspect_asset_release(previous_asset_root)
@@ -7647,6 +7624,10 @@ class ReleaseController:
             self.document["current_asset_manifest_digest"] = previous_digest
             self.document["current_byteff2_commit"] = previous_byteff2_commit
             environment["NEXPOLY_ASSET_MANIFEST_DIGEST"] = previous_digest
+        if data_change_started:
+            # Compatibility recovery for markers emitted by the retired
+            # asset-triggered database rebuild implementation.
+            self.backup_path = self.marker_backup(marker)
             self.run(
                 self.compose(self.release_dir, "stop", "nginx", "backend"),
                 env=environment,
@@ -8188,12 +8169,8 @@ class ReleaseController:
                     )
                 candidate_environment = self.candidate_asset_environment(environment)
                 if asset_changed:
-                    # From this point a crash requires restoring the verified
-                    # dump before the old runtime can accept writes again.
-                    state["data_change_started"] = True
-                    self.write_attempt(state)
-                    self.rebuild_datasets(candidate_environment)
-                    state["datasets_rebuilt"] = True
+                    # Asset publication is a pointer-only operation.  Database
+                    # imports are never coupled to an asset digest change.
                     state["asset_switch_started"] = True
                     self.write_attempt(state)
                     self.switch_asset_pointer(
@@ -8318,11 +8295,7 @@ class ReleaseController:
                         "migrations": migration_history,
                         "applied_migrations": actual_migrations,
                         "migration_manifest": self.document["migrations"],
-                        "datasets_rebuilt": (
-                            self.document["datasets_on_asset_change"]
-                            if asset_changed
-                            else []
-                        ),
+                        "datasets_rebuilt": [],
                         "worker_restart": "deferred"
                         if self.worker_restart_deferred
                         else "completed",

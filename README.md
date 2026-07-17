@@ -144,7 +144,7 @@ docker compose config --quiet
 
 - 运行时代码只面向 PostgreSQL；不要重新引入 SQLite 在线分支。
 - `backend/migrations/postgres/` 是 append-only 合约。已应用迁移不得直接改写，也不得通过手工更新账本绕过 checksum。
-- 未经明确授权，不得在 prod 执行 `--rebuild`、截断业务表、修改迁移账本或清理运行资产。
+- 资产切换不得执行数据库导入；静态 `--rebuild` 永远不包含或级联截断在线业务表。prod 仍禁止未经维护流程授权的静态重建、迁移账本修改或运行资产清理。
 - 模型、数据导入和 Worker 状态必须通过现有 preflight/status 机制判断。
 - 修改功能时应明确区分真实后端能力与纯前端 Demo，避免把预制结果描述为在线计算结果。
 

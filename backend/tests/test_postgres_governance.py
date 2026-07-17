@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -16,12 +17,20 @@ import pytest
 from app import postgres_preflight
 from app.config import Settings
 from app.import_postgres import (
+    BUSINESS_MUTABLE_IMPORT_DATASETS,
+    BUSINESS_MUTABLE_TABLES,
     IMPORT_BATCH_SOURCE_LOGICAL_NAMES,
+    STATIC_IMPORT_DATASETS,
+    STATIC_REBUILD_TABLES_BY_DATASET,
     _start_batch,
     backfill_import_batch_sources,
     import_all_to_postgres,
+    import_lab_from_legacy_schema,
     import_model_registry,
+    import_online_knowledge_from_sqlite,
     resolve_requested_datasets,
+    truncate_governed_tables,
+    truncate_static_import_tables,
     upsert_source_registry,
 )
 from app.model_asset_manifest import iter_model_asset_specs
@@ -32,7 +41,6 @@ from app.postgres_migrations import (
     apply_postgres_migrations,
     migration_checksum,
 )
-from app.services.online_knowledge.postgres_history_repository import save_online_history_postgres
 from app.services.postgres_database_browser import get_database_analytics_postgres
 
 
@@ -142,6 +150,90 @@ def _governance_settings(
         legacy_pi_sqlite_source_path=str(_write_file(tmp_path / "pi_reverse_design.db")),
         legacy_dft_sqlite_source_path=str(_write_file(tmp_path / "fumol.db")),
         app_postgres_dsn=postgres_dsn,
+    )
+
+
+_BUSINESS_MUTABLE_TABLE_KEYS = {
+    ("online_knowledge", "history"): "history_id",
+    ("online_knowledge", "jobs"): "job_id",
+    ("lab", "test_projects"): "id",
+    ("lab", "sample_measurements"): "id",
+    ("md", "monomer_md_jobs"): "job_id",
+}
+
+
+def _business_mutable_snapshot(connection) -> dict[str, dict[str, object]]:
+    snapshot: dict[str, dict[str, object]] = {}
+    for (schema, table), key in _BUSINESS_MUTABLE_TABLE_KEYS.items():
+        rows = connection.execute(
+            sql.SQL("SELECT to_jsonb(item) AS payload FROM {}.{} AS item ORDER BY {}").format(
+                sql.Identifier(schema),
+                sql.Identifier(table),
+                sql.Identifier(key),
+            )
+        ).fetchall()
+        material = json.dumps(
+            [row["payload"] for row in rows],
+            default=str,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        snapshot[f"{schema}.{table}"] = {
+            "row_count": len(rows),
+            "sha256": hashlib.sha256(material).hexdigest(),
+        }
+    return snapshot
+
+
+def _seed_business_mutable_rows(connection) -> None:
+    connection.execute(
+        """
+        INSERT INTO online_knowledge.history (
+          history_id, material, mode, papers_found, reactions_extracted,
+          max_papers, result_data
+        ) VALUES (9001, 'mutable-polymer', 'synthesis', 7, 3, 10, '{"kept": true}')
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO online_knowledge.jobs (
+          job_id, status, material, mode, max_papers, progress_stage,
+          progress_message, processed_papers, total_papers, result_data
+        ) VALUES (
+          'mutable-online-job', 'running', 'mutable-polymer', 'synthesis', 10,
+          'searching', 'must survive', 4, 10, '{"kept": true}'
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO lab.test_projects (id, project_name, result_unit)
+        VALUES (9001, 'mutable-project', 'MPa')
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO lab.sample_measurements (
+          id, sample_id, experiment_project, instrument_id, "operator",
+          collection_time, temperature, concentration, result_value,
+          result_unit, remarks
+        ) VALUES (
+          9001, 'mutable-sample', 'mutable-project', 'instrument-1', 'operator-1',
+          '2026-07-17 00:00:00', 23.50, 1.2500, 9.7500, 'MPa',
+          'must survive'
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO md.monomer_md_jobs (
+          job_id, status, input_smiles, canonical_smiles, requested_steps,
+          completed_steps, progress_percent, progress_stage, progress_message
+        ) VALUES (
+          'mutable-md-job', 'running', 'CC', 'CC', 100, 40, 40,
+          'integrating', 'must survive'
+        )
+        """
     )
 
 
@@ -567,26 +659,60 @@ def test_epoch_two_migration_requires_exact_prior_contract_before_any_ddl(
             )
 
 
-def test_rebuild_is_rejected_for_governance_only_import(tmp_path: Path, postgres_dsn: str) -> None:
-    settings = _governance_settings(tmp_path, postgres_dsn)
+def test_retired_broad_rebuild_entrypoint_fails_closed() -> None:
+    with pytest.raises(ValueError, match="broad governed-table rebuild is retired"):
+        truncate_governed_tables(None)
 
-    with pytest.raises(ValueError, match="--rebuild is only supported with a full import"):
-        import_all_to_postgres(
-            settings,
-            dsn=postgres_dsn,
-            datasets={"governance"},
-            rebuild=True,
-            apply_migrations=False,
-        )
 
-    with postgres_connection(postgres_dsn) as connection:
-        polymer_count = connection.execute("SELECT COUNT(*) AS count FROM core.polymers").fetchone()["count"]
-
-    assert polymer_count == 3
+def test_retired_mutable_import_functions_fail_closed(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="online_knowledge.jobs/history"):
+        import_online_knowledge_from_sqlite(None, tmp_path / "legacy.db", 100)
+    with pytest.raises(ValueError, match="lab.test_projects/sample_measurements"):
+        import_lab_from_legacy_schema(None)
 
 
 def test_all_import_selection_includes_property_filter() -> None:
-    assert "property_filter" in resolve_requested_datasets({"all"})
+    requested = resolve_requested_datasets({"all"})
+
+    assert requested == set(STATIC_IMPORT_DATASETS)
+    assert requested.isdisjoint(BUSINESS_MUTABLE_IMPORT_DATASETS)
+
+
+def test_static_rebuild_contract_excludes_mutable_tables_and_cascade() -> None:
+    rebuild_tables = {
+        table
+        for tables in STATIC_REBUILD_TABLES_BY_DATASET.values()
+        for table in tables
+    }
+
+    class CaptureConnection:
+        query = None
+
+        def execute(self, query) -> None:
+            self.query = query
+
+    connection = CaptureConnection()
+    truncate_static_import_tables(connection, set(STATIC_IMPORT_DATASETS))
+
+    assert rebuild_tables.isdisjoint(BUSINESS_MUTABLE_TABLES)
+    assert connection.query is not None
+    assert "CASCADE" not in repr(connection.query).upper()
+
+
+def test_static_rebuild_runtime_guard_rejects_mutable_table_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        STATIC_REBUILD_TABLES_BY_DATASET,
+        "unsafe-probe",
+        (("online_knowledge", "history"),),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="crossed the business-mutable boundary: online_knowledge.history",
+    ):
+        truncate_static_import_tables(None, {"unsafe-probe"})
 
 
 def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postgres_dsn: str) -> None:
@@ -664,42 +790,77 @@ def test_property_filter_import_records_missing_source_without_truncating(tmp_pa
     assert existing_rows == 6
 
 
-def test_online_history_sequence_resets_after_legacy_import_and_keeps_runtime_rows(tmp_path: Path, postgres_dsn: str) -> None:
+def test_retired_online_import_fails_closed_without_touching_runtime_rows(
+    tmp_path: Path,
+    postgres_dsn: str,
+) -> None:
     legacy_db = _write_legacy_online_sqlite(tmp_path / "polyprop.db", history_id=500)
     settings = _governance_settings(tmp_path, postgres_dsn, legacy_main_sqlite_path=legacy_db)
 
-    import_all_to_postgres(settings, dsn=postgres_dsn, datasets={"online"}, apply_migrations=False)
-
     with postgres_connection(postgres_dsn) as connection:
-        save_online_history_postgres(
-            connection,
-            material="runtime-polymer",
-            mode="synthesis",
-            max_papers=1,
-            result_data={"totalPapers": 1, "syntheses": [{"title": "runtime"}]},
+        _seed_business_mutable_rows(connection)
+        before = _business_mutable_snapshot(connection)
+
+    with pytest.raises(
+        ValueError,
+        match="business-mutable datasets cannot be imported or rebuilt: online",
+    ):
+        import_all_to_postgres(
+            settings,
+            dsn=postgres_dsn,
+            datasets={"online"},
+            apply_migrations=False,
         )
-        runtime_id = connection.execute(
-            "SELECT history_id FROM online_knowledge.history WHERE material = %s",
-            ("runtime-polymer",),
-        ).fetchone()["history_id"]
-
-    assert runtime_id > 500
-
-    import_all_to_postgres(settings, dsn=postgres_dsn, datasets={"online"}, apply_migrations=False)
 
     with postgres_connection(postgres_dsn) as connection:
-        rows = connection.execute(
-            """
-            SELECT material, history_id
-            FROM online_knowledge.history
-            WHERE material IN (%s, %s)
-            """,
-            ("legacy-polymer", "runtime-polymer"),
-        ).fetchall()
+        assert _business_mutable_snapshot(connection) == before
 
-    history_by_material = {row["material"]: row["history_id"] for row in rows}
-    assert history_by_material["legacy-polymer"] == 500
-    assert history_by_material["runtime-polymer"] == runtime_id
+
+def test_static_rebuild_updates_static_rows_and_preserves_mutable_digests(
+    tmp_path: Path,
+    postgres_dsn: str,
+) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+
+    with postgres_connection(postgres_dsn) as connection:
+        _seed_business_mutable_rows(connection)
+        mutable_before = _business_mutable_snapshot(connection)
+        static_before = connection.execute(
+            """
+            SELECT COUNT(*) AS row_count,
+                   md5(string_agg(to_jsonb(item)::text, '' ORDER BY filter_record_id))
+                     AS content_digest
+            FROM core.polymer_property_filter_records AS item
+            """,
+        ).fetchone()
+
+    stats = import_all_to_postgres(
+        settings,
+        dsn=postgres_dsn,
+        datasets={"property_filter"},
+        rebuild=True,
+        apply_migrations=False,
+    )
+
+    with postgres_connection(postgres_dsn) as connection:
+        mutable_after = _business_mutable_snapshot(connection)
+        static_after = connection.execute(
+            """
+            SELECT COUNT(*) AS row_count,
+                   md5(string_agg(to_jsonb(item)::text, '' ORDER BY filter_record_id))
+                     AS content_digest
+            FROM core.polymer_property_filter_records AS item
+            """
+        ).fetchone()
+
+    dataset_stats = next(
+        item for item in stats.datasets if item.dataset_key == "property_filter"
+    )
+    assert dataset_stats.row_count == 2
+    assert static_before["row_count"] == 6
+    assert static_after["row_count"] == 2
+    assert static_after["content_digest"] != static_before["content_digest"]
+    assert mutable_after == mutable_before
 
 
 def test_strict_runtime_preflight_passes_after_migrations(tmp_path: Path, postgres_dsn: str, monkeypatch) -> None:

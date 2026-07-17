@@ -320,16 +320,20 @@ python -m app.import_postgres --dataset property_filter
 python -m app.postgres_preflight --mode runtime --strict
 ```
 
-The local import CLI still understands `--dataset all`, but CI/CD deliberately
-does not use it. `release-input.json` enumerates every intended dataset. The
-controller compares the requested immutable asset digest with active release
-state: an unchanged digest runs migrations only and performs no import; a
-changed digest first creates a verified dump and then runs the complete
-explicit dataset set with `--rebuild`.
+The local import CLI understands `--dataset all`, but `all` now expands only to
+the explicitly classified static datasets. `online` and `lab` remain accepted
+as retired names solely so old invocations fail with a clear error; neither can
+import, upsert, or rebuild live rows. A static `--rebuild` truncates only the
+selected static tables and never uses `CASCADE`, so an unexpected foreign-key
+dependency aborts the transaction instead of deleting an unclassified table.
 
-The import replaces only `core.polymer_property_filter_records`. It must not
-truncate or rebuild `core.polymer_properties`, knowledge, DFT, PI, or monomer MD
-runtime tables.
+`release-input.json` is schema v2 and fixes
+`datasets_on_asset_change=[]`. The deployment controller publishes a changed
+content-addressed asset pointer without invoking `app.import_postgres`.
+Static-data maintenance is a separate, explicit operation. The property-filter
+import replaces only `core.polymer_property_filter_records`; it cannot truncate
+or overwrite online knowledge, laboratory, monomer MD, or monomer DFT runtime
+tables.
 
 ## Acceptance Checks
 

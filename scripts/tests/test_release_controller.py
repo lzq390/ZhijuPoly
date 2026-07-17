@@ -211,19 +211,13 @@ class ReleaseControllerTests(unittest.TestCase):
         self.release_input.write_text(
             json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "asset_manifest_digest": DIGEST,
-                    "datasets_on_asset_change": [
-                        "governance",
-                        "core",
-                        "knowledge",
-                        "online",
-                        "pi",
-                        "dft",
-                        "experimental",
-                        "lab",
-                        "property_filter",
-                    ],
+                    "predecessor_asset_manifest_digest": (
+                        "sha256:" + "d" * 64
+                    ),
+                    "changed_asset_trees": ["byteff2"],
+                    "datasets_on_asset_change": [],
                 }
             ),
             encoding="utf-8",
@@ -496,6 +490,24 @@ class ReleaseControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(
             release_controller.ReleaseError,
             "must not rebuild PostgreSQL datasets",
+        ):
+            release_controller.load_release_input(self.release_input)
+
+    def test_schema_v1_release_input_is_retired(self) -> None:
+        self.release_input.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "asset_manifest_digest": DIGEST,
+                    "datasets_on_asset_change": ["online"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "must use the non-rebuilding schema-v2 contract",
         ):
             release_controller.load_release_input(self.release_input)
 
@@ -2930,7 +2942,7 @@ class ReleaseControllerTests(unittest.TestCase):
             with self.assertRaisesRegex(release_controller.ReleaseError, "post-switch failure"):
                 controller.deploy()
 
-        patched["rebuild_datasets"].assert_called_once()
+        patched["rebuild_datasets"].assert_not_called()
         self.assertEqual(
             [call.args[0] for call in patched["switch_asset_pointer"].call_args_list],
             [target_assets, old_assets],
@@ -3424,6 +3436,60 @@ class ReleaseControllerTests(unittest.TestCase):
         drain.assert_called_once_with(environment, False)
         self.assertFalse(controller.staging.exists())
         self.assertFalse(controller.in_progress_path.exists())
+
+    def test_interrupted_asset_pointer_switch_restores_pointer_not_database(self) -> None:
+        manifest = self.build()
+        controller = release_controller.ReleaseController(
+            self.root / "production",
+            manifest,
+            "auto",
+            True,
+        )
+        previous_sha = "1" * 40
+        previous_release = controller.ops / "releases" / previous_sha
+        previous_release.mkdir(parents=True)
+        current = controller.ops / "current"
+        current.symlink_to(Path("releases") / previous_sha)
+        old_assets = self.root / "old-assets"
+        old_digest = "sha256:" + "f" * 64
+        old_commit = "2" * 40
+        marker = {
+            "source_sha": SHA,
+            "phase": "db-changed",
+            "previous_state": {"status": "success", "source_sha": previous_sha},
+            "bootstrap": False,
+            "database_change_started": False,
+            "data_change_started": False,
+            "asset_switch_started": True,
+            "runtime_switch_started": False,
+            "previous_asset_root": str(old_assets),
+            "previous_asset_digest": old_digest,
+        }
+        self.seal_mock_interrupted_release(controller, marker)
+        controller.in_progress_path.parent.mkdir(parents=True, exist_ok=True)
+        controller.in_progress_path.write_text(json.dumps(marker), encoding="utf-8")
+        environment = {"NEXPOLY_ASSET_MANIFEST_DIGEST": DIGEST}
+
+        with (
+            mock.patch.object(controller, "environment", return_value=environment),
+            mock.patch.object(controller, "_validate_provisioned_ready"),
+            mock.patch.object(
+                release_controller,
+                "inspect_asset_release",
+                return_value=(old_assets, old_digest, old_commit),
+            ),
+            mock.patch.object(controller, "switch_asset_pointer") as switch_assets,
+            mock.patch.object(controller, "restore_database") as restore_database,
+            mock.patch.object(controller, "rollback_runtime") as rollback_runtime,
+            mock.patch.object(controller, "drain") as drain,
+        ):
+            controller.recover_interrupted_deployment(marker)
+
+        switch_assets.assert_called_once_with(old_assets)
+        restore_database.assert_not_called()
+        rollback_runtime.assert_not_called()
+        drain.assert_called_once_with(environment, False)
+        self.assertEqual(environment["NEXPOLY_ASSET_MANIFEST_DIGEST"], old_digest)
 
     def test_prepared_interrupted_deploy_retains_ready_release_for_same_sha_retry(self) -> None:
         manifest = self.build()
@@ -5521,7 +5587,7 @@ class ReleaseControllerTests(unittest.TestCase):
         )
 
 
-    def test_asset_change_rebuild_uses_one_explicit_full_dataset_command(self) -> None:
+    def test_asset_change_database_rebuild_entrypoint_fails_closed(self) -> None:
         manifest = self.build_single_bundle()
         controller = release_controller.ReleaseController(
             self.root / "production",
@@ -5529,16 +5595,15 @@ class ReleaseControllerTests(unittest.TestCase):
             "auto",
             False,
         )
+        controller.document["datasets_on_asset_change"] = ["online"]
         with mock.patch.object(controller, "run") as run:
-            controller.rebuild_datasets({})
+            with self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "asset-triggered database rebuilds are retired",
+            ):
+                controller.rebuild_datasets({})
 
-        command = run.call_args.args[0]
-        self.assertIn("--rebuild", command)
-        self.assertIn("--skip-migrations", command)
-        self.assertNotIn("all", command)
-        declared = controller.document["datasets_on_asset_change"]
-        selected = [command[index + 1] for index, value in enumerate(command) if value == "--dataset"]
-        self.assertEqual(selected, declared)
+        run.assert_not_called()
 
     def test_byteff2_only_asset_change_does_not_run_database_rebuild(self) -> None:
         manifest = self.build_single_bundle()
@@ -5554,6 +5619,17 @@ class ReleaseControllerTests(unittest.TestCase):
             controller.rebuild_datasets({})
 
         run.assert_not_called()
+
+    def test_release_manifest_rejects_legacy_asset_database_rebuilds(self) -> None:
+        manifest_path = self.build_single_bundle()
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        document["datasets_on_asset_change"] = ["core"]
+
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "must not request asset-triggered database rebuilds",
+        ):
+            release_controller.validate_manifest(document)
 
     def test_previous_release_gpu_preflight_uses_previous_compose_tree(self) -> None:
         manifest = self.build()

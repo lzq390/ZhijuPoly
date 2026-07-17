@@ -450,7 +450,8 @@ The controller re-hashes both releases and requires the `model`, `database`
 and `backend-data` inventories to match the predecessor byte-for-byte. Only
 `byteff2` may differ. Its release input declares an empty
 `datasets_on_asset_change`; switching this asset must not invoke a database
-rebuild or truncate any online table.
+import or rebuild. The retired controller rebuild entrypoint fails closed, and
+the standalone static importer excludes every business-mutable table.
 
 > **First-deployment stop condition:** control bootstrap and bridge preparation
 > alone are permitted. Until the dedicated reconciliation control has backed
