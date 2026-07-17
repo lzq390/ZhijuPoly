@@ -125,6 +125,27 @@ def _load_governance_core() -> Any:
     return module
 
 
+def _load_bridge_core() -> Any:
+    """Load the immutable authority/target bridge validator."""
+
+    module_name = "nexpoly_pull_deploy_bridge_core"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = _validated_executable_sibling("bridge_deploy_core.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise PullDeployError("cannot load the installed bridge deployment core")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
 def _load_control_runtime() -> Any:
     """Load the immutable stdlib-only control release validator."""
 
@@ -168,6 +189,7 @@ def _load_control_runtime() -> Any:
 
 _worker_slot_runtime = _load_worker_slot_runtime()
 _control_runtime = _load_control_runtime()
+_bridge_core = _load_bridge_core()
 WORKER_SLOTS = _worker_slot_runtime.SLOTS
 WorkerSlotError = _worker_slot_runtime.WorkerSlotError
 worker_record_digest = _worker_slot_runtime.canonical_json_digest
@@ -192,6 +214,23 @@ MONOMER_MD_UNIT_SOURCE = "ops/systemd/nexpoly-monomer-md-worker.service"
 DEPLOY_USER_HOME = Path("/home/devuser")
 SOURCE_URL = "https://github.com/lzq390/ZhijuPoly"
 ASSET_RELEASES_ROOT = Path("/data/lzq/nexpoly-assets/releases")
+SCHEMA_V2_ASSET_MANIFEST_DIGEST = (
+    "sha256:15600f50c9aa720e8ae72352191f60b9e9f013613f152fc8df317ff9ee599d1e"
+)
+SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST = (
+    "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
+)
+SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS = {
+    "backend-data": (
+        "sha256:1e8dc53143d0676753805ba7a4bf167431e59d92d227ea3aff39e679e43402e1"
+    ),
+    "database": (
+        "sha256:e6bf224836664723124bc7201d14afbdb6dc13cebd289df8b6f86e7a0be0bdcd"
+    ),
+    "model": (
+        "sha256:40e88b7d9d5103ab5db4cd911219dfe37c2ac62319a10824c69c0b36d9556f25"
+    ),
+}
 STABLE_HELPER_FILES = (
     "control_runtime_selector.py",
     "nexpoly-pull-contract-0012",
@@ -209,9 +248,11 @@ CONTROL_SOURCE_PATHS = {
 CONTROL_SOURCE_MANIFEST = "scripts/control-release.json"
 CONTROLLER_SCHEMA_VERSION = 1
 DESCRIPTOR_SCHEMA_VERSION = 2
+BRIDGE_DESCRIPTOR_SCHEMA_VERSION = 3
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
+DATASET_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 SLOT_NAMES = tuple(sorted(WORKER_SLOTS))
 MAX_GITHUB_RESPONSE_BYTES = 2 * 1024 * 1024
 SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -261,6 +302,7 @@ DESCRIPTOR_FIELDS = {
     "previous_deployment_sha256",
     "prepared_at",
 }
+BRIDGE_DESCRIPTOR_FIELDS = DESCRIPTOR_FIELDS | {"bridge"}
 READY_FIELDS = {
     "schema_version",
     "status",
@@ -740,6 +782,46 @@ def validate_asset_identity(document: object) -> dict[str, Any]:
             previous.get("schema_version"), bool
         ):
             raise PullDeployError("previous asset schema version is invalid")
+    return dict(document)
+
+
+def validate_release_input(document: object) -> dict[str, Any]:
+    """Validate the frozen non-activating schema-v2 asset selection."""
+
+    fields = {
+        "schema_version",
+        "asset_manifest_digest",
+        "predecessor_asset_manifest_digest",
+        "changed_asset_trees",
+        "datasets_on_asset_change",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != 2
+        or document.get("asset_manifest_digest")
+        != SCHEMA_V2_ASSET_MANIFEST_DIGEST
+        or document.get("predecessor_asset_manifest_digest")
+        != SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+        or document.get("changed_asset_trees") != ["byteff2"]
+    ):
+        raise PullDeployError("release input is not the frozen schema-v2 asset contract")
+    datasets = document.get("datasets_on_asset_change")
+    if (
+        not isinstance(datasets, list)
+        or len(datasets) > 64
+        or len(set(datasets)) != len(datasets)
+        or any(
+            not isinstance(dataset, str)
+            or DATASET_RE.fullmatch(dataset) is None
+            or dataset in {"all", "none"}
+            for dataset in datasets
+        )
+        or datasets
+    ):
+        raise PullDeployError(
+            "schema-v2 asset contract must not rebuild database datasets"
+        )
     return dict(document)
 
 
@@ -1692,13 +1774,19 @@ def inspect_asset_release(asset_root: Path, expected_digest: str) -> dict[str, A
         )
     expected_trees = {"model", "database", "backend-data", "byteff2"}
     base_fields = {"schema_version", "byteff2_commit", "byteff2_submodules", "assets"}
+    schema_v2_fields = base_fields | {
+        "byteff2_source",
+        "byteff2_audited_overlays",
+        "predecessor_asset_digest",
+        "changed_asset_trees",
+        "unchanged_asset_tree_digests",
+    }
     if (
         not isinstance(document, dict)
         or (document.get("schema_version") == 1 and set(document) != base_fields)
         or (
             document.get("schema_version") == 2
-            and set(document)
-            != base_fields | {"byteff2_source", "byteff2_audited_overlays"}
+            and set(document) != schema_v2_fields
         )
         or document.get("schema_version") not in {1, 2}
     ):
@@ -1711,6 +1799,45 @@ def inspect_asset_release(asset_root: Path, expected_digest: str) -> dict[str, A
             "external production asset trees differ from the manifest"
         )
     byteff2_commit = require_sha(document.get("byteff2_commit"), "asset ByteFF2 commit")
+    submodules = document.get("byteff2_submodules")
+    if not isinstance(submodules, dict) or any(
+        not isinstance(name, str)
+        or not name
+        or PurePosixPath(name).is_absolute()
+        or ".." in PurePosixPath(name).parts
+        or str(PurePosixPath(name)) != name
+        or not isinstance(commit, str)
+        or SHA_RE.fullmatch(commit) is None
+        for name, commit in submodules.items()
+    ):
+        raise PullDeployError("external ByteFF2 submodule identity is invalid")
+    if document["schema_version"] == 2:
+        try:
+            governance = _load_governance_core()
+            governance.validate_byteff2_source(
+                document["byteff2_source"],
+                manifest_commit=byteff2_commit,
+                require_exact_identity=True,
+            )
+            governance.validate_byteff2_audited_overlay(
+                document["byteff2_audited_overlays"],
+                require_exact_identity=True,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "external schema-v2 ByteFF2 source identity is invalid"
+            ) from exc
+        if (
+            expected_digest != SCHEMA_V2_ASSET_MANIFEST_DIGEST
+            or document["predecessor_asset_digest"]
+            != SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+            or document["changed_asset_trees"] != ["byteff2"]
+            or document["unchanged_asset_tree_digests"]
+            != SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS
+        ):
+            raise PullDeployError(
+                "external schema-v2 asset predecessor evidence differs"
+            )
     root_entries = {entry.name for entry in asset_root.iterdir()}
     if root_entries != expected_trees | {"ASSET-MANIFEST.json"}:
         raise PullDeployError("external production asset root has unmanifested entries")
@@ -1798,9 +1925,56 @@ def inspect_asset_release(asset_root: Path, expected_digest: str) -> dict[str, A
             inventory.update(
                 f"{tree_name}/{relative}\0{size}\0{checksum}\n".encode("utf-8")
             )
+        if (
+            document["schema_version"] == 2
+            and tree_name in SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS
+        ):
+            tree_inventory = (
+                json.dumps(
+                    {"files": records},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            if sha256_bytes(tree_inventory) != document[
+                "unchanged_asset_tree_digests"
+            ][tree_name]:
+                raise PullDeployError(
+                    f"external unchanged asset tree evidence differs: {tree_name}"
+                )
     commit_file = asset_root / "byteff2" / "BYTEFF2-COMMIT"
     if commit_file.read_text(encoding="ascii").strip() != byteff2_commit:
         raise PullDeployError("external ByteFF2 commit marker differs from manifest")
+    if document["schema_version"] == 2:
+        predecessor_root = ASSET_RELEASES_ROOT / (
+            SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST.split(":", 1)[1]
+        )
+        predecessor = inspect_asset_release(
+            predecessor_root,
+            SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST,
+        )
+        try:
+            predecessor_document = json.loads(
+                (predecessor_root / "ASSET-MANIFEST.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise PullDeployError(
+                "external predecessor asset evidence is unavailable"
+            ) from exc
+        if (
+            predecessor["schema_version"] != 1
+            or any(
+                predecessor_document["assets"][tree_name]
+                != document["assets"][tree_name]
+                for tree_name in SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS
+            )
+        ):
+            raise PullDeployError(
+                "external schema-v2 unchanged trees differ from predecessor"
+            )
     return {
         "root": str(asset_root),
         "manifest_sha256": expected_digest,
@@ -1941,10 +2115,17 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
 
 
 def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
-    if (
-        set(document) != DESCRIPTOR_FIELDS
-        or document.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION
-    ):
+    schema_version = document.get("schema_version")
+    expected_fields = (
+        DESCRIPTOR_FIELDS
+        if schema_version == DESCRIPTOR_SCHEMA_VERSION
+        else (
+            BRIDGE_DESCRIPTOR_FIELDS
+            if schema_version == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            else None
+        )
+    )
+    if expected_fields is None or set(document) != expected_fields:
         raise PullDeployError("prepared deployment descriptor has an invalid shape")
     operation_id = require_operation_id(str(document.get("operation_id", "")))
     repository = document.get("repository")
@@ -2003,7 +2184,10 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
     ci = document.get("ci")
     if (
         not isinstance(ci, dict)
-        or ci.get("head_sha") != repository["target_sha"]
+        or (
+            schema_version == DESCRIPTOR_SCHEMA_VERSION
+            and ci.get("head_sha") != repository["target_sha"]
+        )
         or ci.get("conclusion") != "success"
     ):
         raise PullDeployError("descriptor CI evidence is invalid")
@@ -2099,6 +2283,29 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(record, dict) or "sha256" not in record:
             raise PullDeployError(f"descriptor {key} evidence is invalid")
         require_digest(record["sha256"], f"{key} digest")
+    release_input = document["release_input"]
+    if set(release_input) != {
+        "sha256",
+        "schema_version",
+        "asset_manifest_digest",
+        "predecessor_asset_manifest_digest",
+        "changed_asset_trees",
+        "datasets_on_asset_change",
+        "asset",
+    }:
+        raise PullDeployError("descriptor release input evidence has an invalid shape")
+    validate_release_input(
+        {
+            key: release_input[key]
+            for key in (
+                "schema_version",
+                "asset_manifest_digest",
+                "predecessor_asset_manifest_digest",
+                "changed_asset_trees",
+                "datasets_on_asset_change",
+            )
+        }
+    )
     validate_production_config_evidence(document.get("production_config"))
     postgres_image = document.get("postgres_restore_image")
     if (
@@ -2108,8 +2315,8 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
     ):
         raise PullDeployError("descriptor PostgreSQL restore image is invalid")
     require_digest(postgres_image.get("image_id"), "PostgreSQL restore image ID")
-    asset = validate_asset_identity(document["release_input"].get("asset"))
-    if asset["manifest_sha256"] != document["release_input"].get(
+    asset = validate_asset_identity(release_input.get("asset"))
+    if asset["manifest_sha256"] != release_input.get(
         "asset_manifest_digest"
     ):
         raise PullDeployError(
@@ -2133,7 +2340,45 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             raise PullDeployError(
                 "descriptor previous control authority differs from governed state"
             )
-    if previous is None and previous_control["release_id"] != executor["release_id"]:
+    if schema_version == BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
+        if previous is not None:
+            raise PullDeployError(
+                "historical bridge deployment is restricted to first takeover"
+            )
+        try:
+            bridge = _bridge_core.validate_bridge_descriptor(
+                document.get("bridge")
+            )
+        except Exception as exc:
+            raise PullDeployError("bridge descriptor evidence is invalid") from exc
+        target_images = {
+            role: document["images"][role]["digest_ref"]
+            for role in ("backend", "web")
+        }
+        if (
+            bridge["operation_id"] != operation_id
+            or bridge["authority"]["sha"] != previous_control["source_sha"]
+            or bridge["authority"]["tree"] != previous_control["source_tree"]
+            or bridge["authority"]["control_release_id"]
+            != previous_control["release_id"]
+            or bridge["authority"]["ci_evidence_sha256"]
+            != canonical_json_digest(ci)
+            or ci.get("head_sha") != bridge["authority"]["sha"]
+            or set(ci.get("required_jobs", []))
+            != set(bridge["policy"]["required_ci_jobs"])
+            or bridge["target"]["control_release_id"] != executor["release_id"]
+            or bridge["target"]["sha"] != repository["target_sha"]
+            or bridge["target"]["tree"] != repository["target_tree"]
+            or bridge["target"]["images"] != target_images
+            or bridge["target"]["asset_manifest_digest"]
+            != document["release_input"]["asset_manifest_digest"]
+            or bridge["target"]["datasets_on_asset_change"]
+            != document["release_input"]["datasets_on_asset_change"]
+        ):
+            raise PullDeployError(
+                "bridge descriptor differs from deployment evidence"
+            )
+    elif previous is None and previous_control["release_id"] != executor["release_id"]:
         raise PullDeployError(
             "bootstrap takeover controls must already be the target release"
         )
@@ -5290,6 +5535,7 @@ class PullDeployController:
         self.lock_path = self.state_dir / "deploy.lock"
         self.marker_path = self.state_dir / "deploy-in-progress.json"
         self.contract_marker_path = self.state_dir / "contract-0012-in-progress.json"
+        self.bridge_token_path = self.state_dir / "bridge-takeover.json"
         self.current_state_path = self.state_dir / "current-deployment.json"
         self.active_slot_path = self.state_dir / "monomer-md-active-slot.json"
         self.active_control_path = self.state_dir / "active-control.json"
@@ -5788,6 +6034,132 @@ class PullDeployController:
         )
         return target_tree
 
+    def bridge_policy_relation(
+        self,
+        authority_sha: str,
+        *,
+        create_target_ref: bool,
+        fetch_authority: bool,
+    ) -> dict[str, Any]:
+        """Re-fetch F and derive the only deployable historical B from policy.
+
+        No caller supplies the target.  The exact SHA, tree, private ref,
+        images, asset and migration compatibility all come from the policy
+        stored in the current protected remote main object.
+        """
+
+        authority_sha = require_sha(authority_sha, "bridge authority SHA")
+        if self.remote_main() != authority_sha:
+            raise PullDeployError("bridge authority is no longer current remote main")
+        if fetch_authority:
+            self._git(
+                "fetch",
+                "--no-tags",
+                "--prune",
+                REPOSITORY_SSH_URL,
+                "+refs/heads/main:refs/remotes/nexpoly-deploy/main",
+            )
+        fetched = require_sha(
+            str(
+                self._git("rev-parse", "refs/remotes/nexpoly-deploy/main").stdout
+            ).strip(),
+            "fetched bridge authority SHA",
+        )
+        if fetched != authority_sha:
+            raise PullDeployError("fetched bridge authority differs from remote main")
+        authority_tree = require_sha(
+            str(self._git("rev-parse", f"{authority_sha}^{{tree}}").stdout).strip(),
+            "bridge authority tree",
+        )
+        try:
+            policy = _bridge_core.parse_policy(
+                self._git_show(authority_sha, _bridge_core.POLICY_RELATIVE_PATH)
+            )
+        except Exception as exc:
+            raise PullDeployError("bridge authority policy is invalid") from exc
+        target_sha = policy["target_sha"]
+        if str(self._git("cat-file", "-t", target_sha).stdout).strip() != "commit":
+            raise PullDeployError("bridge target object is not a commit")
+        target_tree = require_sha(
+            str(self._git("rev-parse", f"{target_sha}^{{tree}}").stdout).strip(),
+            "bridge target tree",
+        )
+        target_is_ancestor = (
+            self._git(
+                "merge-base",
+                "--is-ancestor",
+                target_sha,
+                authority_sha,
+                check=False,
+            ).returncode
+            == 0
+        )
+        production_can_advance = (
+            self._git(
+                "merge-base",
+                "--is-ancestor",
+                "HEAD",
+                target_sha,
+                check=False,
+            ).returncode
+            == 0
+        )
+        if not production_can_advance:
+            raise PullDeployError(
+                "bridge target is not a fast-forward of the production source"
+            )
+        target_ref = policy["target_ref"]
+        existing = self._git(
+            "show-ref",
+            "--verify",
+            "--hash",
+            target_ref,
+            check=False,
+        )
+        if existing.returncode not in {0, 1}:
+            raise PullDeployError("cannot inspect the exact bridge target ref")
+        if existing.returncode == 0:
+            if require_sha(
+                str(existing.stdout).strip(), "existing bridge target ref"
+            ) != target_sha:
+                raise PullDeployError("exact bridge target ref was repointed")
+        elif create_target_ref:
+            self._git(
+                "update-ref",
+                target_ref,
+                target_sha,
+                "0" * 40,
+            )
+            if require_sha(
+                str(
+                    self._git("show-ref", "--verify", "--hash", target_ref).stdout
+                ).strip(),
+                "created bridge target ref",
+            ) != target_sha:
+                raise PullDeployError("exact bridge target ref did not publish")
+        if self.remote_main() != authority_sha:
+            raise PullDeployError("bridge authority changed during verification")
+        try:
+            relation = _bridge_core.validate_relation(
+                policy,
+                authority_sha=authority_sha,
+                authority_tree=authority_tree,
+                remote_main=authority_sha,
+                target_sha=target_sha,
+                target_tree=target_tree,
+                target_ref=target_ref,
+                is_ancestor=target_is_ancestor,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "bridge authority/target relation differs from policy"
+            ) from exc
+        return {
+            "policy": policy,
+            "policy_sha256": _bridge_core.canonical_json_digest(policy),
+            "relation": relation,
+        }
+
     def _git_show(self, target_sha: str, relative: str) -> bytes:
         result = self._git("show", f"{target_sha}:{relative}")
         return str(result.stdout).encode("utf-8")
@@ -5807,7 +6179,12 @@ class PullDeployController:
             raise PullDeployError("GitHub API token is empty or malformed")
         return token
 
-    def ci_evidence(self, target_sha: str) -> dict[str, Any]:
+    def ci_evidence(
+        self,
+        target_sha: str,
+        *,
+        required_jobs: Iterable[str] | None = None,
+    ) -> dict[str, Any]:
         token = self._github_token()
         runs = self.runner.request_json(
             f"{REPOSITORY_API_ROOT}/actions/runs?branch=main&head_sha={target_sha}&event=push&per_page=20",
@@ -5847,7 +6224,17 @@ class PullDeployController:
             for job in jobs
             if isinstance(job, dict) and job.get("conclusion") == "success"
         }
-        required = {"ci-gate", "Publish and smoke immutable main images"}
+        required = (
+            {"ci-gate", "Publish and smoke immutable main images"}
+            if required_jobs is None
+            else set(required_jobs)
+        )
+        if (
+            not required
+            or len(required) > 32
+            or any(not isinstance(name, str) or not name for name in required)
+        ):
+            raise PullDeployError("required CI job policy is invalid")
         if not required.issubset(successful):
             raise PullDeployError(
                 "target CI lacks a successful gate or immutable image publication job"
@@ -7070,10 +7457,11 @@ class PullDeployController:
             raise PullDeployError(
                 "target release input or migration manifest is invalid JSON"
             ) from exc
-        if not isinstance(release_input, dict) or not isinstance(migrations, dict):
+        if not isinstance(migrations, dict):
             raise PullDeployError(
                 "target release input or migration manifest is invalid"
             )
+        release_input = validate_release_input(release_input)
         compose_paths = ("docker-compose.yml", "docker-compose.prod.yml")
         compose_files = {
             path: sha256_bytes(self._git_show(target_sha, path))
@@ -7082,12 +7470,7 @@ class PullDeployController:
         return (
             {
                 "sha256": sha256_bytes(release_input_payload),
-                "asset_manifest_digest": require_digest(
-                    release_input.get("asset_manifest_digest"), "target asset manifest"
-                ),
-                "datasets_on_asset_change": release_input.get(
-                    "datasets_on_asset_change"
-                ),
+                **release_input,
             },
             {
                 "sha256": sha256_bytes(migration_payload),
@@ -7153,6 +7536,68 @@ class PullDeployController:
             "previous_tree": current["tree"],
             "target_sha": target_sha,
             "remote_main": remote,
+            "deploy_origin_ready": current["origin"] == REPOSITORY_SSH_URL,
+            "production_config": production_config,
+            "stable_helpers": helpers,
+            "active_control": active_control,
+            "service_mutation": False,
+            "ignored_runtime_entries": self.ignored_runtime_entries(),
+        }
+
+    def bridge_plan(
+        self, *, authority_sha: str, operation_id: str
+    ) -> dict[str, Any]:
+        """Read-only plan for F-authorized deployment of the exact ancestor B."""
+
+        self.ensure_roots(mutating=False)
+        authority_sha = require_sha(authority_sha, "bridge authority SHA")
+        operation_id = require_operation_id(operation_id)
+        self._require_no_contract_maintenance()
+        if self.marker_path.exists() or self.marker_path.is_symlink():
+            raise PullDeployError(
+                "an interrupted deployment must be recovered before planning"
+            )
+        self._assert_operation_not_terminal(operation_id, action="bridge-plan")
+        if self.current_state_path.exists() or self.current_state_path.is_symlink():
+            raise PullDeployError(
+                "historical bridge is restricted to the first governed takeover"
+            )
+        if self._active_slot() is not None:
+            raise PullDeployError(
+                "active Worker slot exists before first governed takeover"
+            )
+        production_config = self.production_config_evidence(check_free_space=True)
+        self._github_token()
+        helpers = self.stable_helper_evidence()
+        active_control = self.active_control_evidence()
+        relation = self.bridge_policy_relation(
+            authority_sha,
+            create_target_ref=False,
+            fetch_authority=False,
+        )
+        if (
+            active_control["source_sha"] != authority_sha
+            or active_control["source_tree"]
+            != relation["relation"]["authority_tree"]
+        ):
+            raise PullDeployError(
+                "active bootstrap controls are not the bridge authority"
+            )
+        current = self.repository_identity()
+        return {
+            "action": "bridge-plan",
+            "apply": False,
+            "operation_id": operation_id,
+            "production_root": str(self.production_root),
+            "runtime_root": str(self.runtime_root),
+            "authority_sha": authority_sha,
+            "authority_tree": relation["relation"]["authority_tree"],
+            "target_sha": relation["policy"]["target_sha"],
+            "target_tree": relation["policy"]["target_tree"],
+            "target_ref": relation["policy"]["target_ref"],
+            "policy_id": relation["policy"]["policy_id"],
+            "previous_sha": current["sha"],
+            "previous_tree": current["tree"],
             "deploy_origin_ready": current["origin"] == REPOSITORY_SSH_URL,
             "production_config": production_config,
             "stable_helpers": helpers,
@@ -7482,6 +7927,247 @@ class PullDeployController:
             environment,
         )
 
+    def _handoff_prepare_to_bridge_controller(
+        self, *, authority_sha: str, operation_id: str
+    ) -> None:
+        """Let active F derive B, install B controls, then exec B to prepare."""
+
+        with self.deployment_lock():
+            self._require_no_contract_maintenance()
+            if self.marker_path.exists() or self.marker_path.is_symlink():
+                raise PullDeployError(
+                    "an interrupted deployment must be recovered before prepare"
+                )
+            self._assert_operation_not_terminal(
+                operation_id, action="bridge-prepare"
+            )
+            if (
+                self.current_state_path.exists()
+                or self.current_state_path.is_symlink()
+            ):
+                raise PullDeployError(
+                    "historical bridge is restricted to first governed takeover"
+                )
+            current = self.repository_identity(require_ssh_origin=True)
+            relation = self.bridge_policy_relation(
+                authority_sha,
+                create_target_ref=True,
+                fetch_authority=True,
+            )
+            target_sha = relation["policy"]["target_sha"]
+            target_tree = relation["policy"]["target_tree"]
+            previous_active = self.active_control_evidence()
+            if (
+                previous_active["source_sha"] != authority_sha
+                or previous_active["source_tree"]
+                != relation["relation"]["authority_tree"]
+            ):
+                raise PullDeployError(
+                    "active controls are not the exact bridge authority"
+                )
+            self.validate_installed_controls_against_target(authority_sha)
+            if (
+                self._git(
+                    "merge-base",
+                    "--is-ancestor",
+                    current["sha"],
+                    target_sha,
+                    check=False,
+                ).returncode
+                != 0
+            ):
+                raise PullDeployError(
+                    "bridge target is not a fast-forward of production HEAD"
+                )
+            handoff_path = self.control_handoffs_dir / f"{operation_id}.json"
+            if handoff_path.exists() or handoff_path.is_symlink():
+                record = load_private_json(handoff_path)
+                if (
+                    record.get("schema_version") != 2
+                    or record.get("operation_id") != operation_id
+                    or record.get("authority_sha") != authority_sha
+                    or record.get("authority_tree")
+                    != relation["relation"]["authority_tree"]
+                    or record.get("target_sha") != target_sha
+                    or record.get("target_tree") != target_tree
+                    or record.get("policy_id") != relation["policy"]["policy_id"]
+                    or record.get("policy_sha256")
+                    != relation["policy_sha256"]
+                    or record.get("previous_active_control") != previous_active
+                    or canonical_json_digest(record.get("previous_active_control"))
+                    != record.get("previous_active_control_sha256")
+                    or canonical_json_digest(record.get("executor_control"))
+                    != record.get("executor_control_sha256")
+                ):
+                    raise PullDeployError(
+                        "bridge prepare handoff has different ownership"
+                    )
+                candidate = record["executor_control"]
+            else:
+                candidate = self.prepare_control_release(
+                    operation_id=operation_id,
+                    target_sha=target_sha,
+                    target_tree=target_tree,
+                )
+                record = {
+                    "schema_version": 2,
+                    "protocol_version": _control_runtime.PROTOCOL_VERSION,
+                    "operation_id": operation_id,
+                    "authority_sha": authority_sha,
+                    "authority_tree": relation["relation"]["authority_tree"],
+                    "target_sha": target_sha,
+                    "target_tree": target_tree,
+                    "target_ref": relation["policy"]["target_ref"],
+                    "policy_id": relation["policy"]["policy_id"],
+                    "policy_sha256": relation["policy_sha256"],
+                    "previous_active_control": previous_active,
+                    "previous_active_control_sha256": canonical_json_digest(
+                        previous_active
+                    ),
+                    "executor_control": candidate,
+                    "executor_control_sha256": canonical_json_digest(candidate),
+                    "created_at": utc_now(),
+                }
+                atomic_json(handoff_path, record)
+            try:
+                _record, manifest, release_root = (
+                    _control_runtime.load_candidate_control(
+                        self.runtime_root, candidate
+                    )
+                )
+            except Exception as exc:
+                raise PullDeployError(
+                    "bridge target controller cannot be loaded"
+                ) from exc
+            if BRIDGE_DESCRIPTOR_SCHEMA_VERSION not in manifest["compatibility"][
+                "descriptor_schema_versions"
+            ]:
+                raise PullDeployError(
+                    "bridge target controls do not support descriptor schema v3"
+                )
+            controller_path = release_root / manifest["entrypoints"]["deploy"]["file"]
+            if manifest["entrypoints"]["deploy"]["kind"] != "python":
+                raise PullDeployError("bridge deploy entrypoint is not Python")
+            handoff_digest = sha256_file(handoff_path)
+        environment = self.control_environment()
+        environment.update(
+            {
+                "NEXPOLY_ACTIVE_CONTROL_ROOT": str(release_root),
+                "NEXPOLY_ACTIVE_CONTROL_RELEASE_ID": candidate["release_id"],
+                "NEXPOLY_PREPARE_HANDOFF_OPERATION": operation_id,
+                "NEXPOLY_PREPARE_HANDOFF_SHA256": handoff_digest,
+                "NEXPOLY_BRIDGE_AUTHORITY_SHA": authority_sha,
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+        )
+        os.execve(
+            "/usr/bin/python3",
+            [
+                "/usr/bin/python3",
+                "-I",
+                "-B",
+                str(controller_path),
+                "bridge-prepare",
+                "--authority-sha",
+                authority_sha,
+                "--operation-id",
+                operation_id,
+            ],
+            environment,
+        )
+
+    def _validate_bridge_prepare_handoff(
+        self, *, authority_sha: str, operation_id: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Have B independently re-fetch and re-prove F's exact policy."""
+
+        handoff_operation = os.environ.get("NEXPOLY_PREPARE_HANDOFF_OPERATION")
+        handoff_digest = os.environ.get("NEXPOLY_PREPARE_HANDOFF_SHA256")
+        environment_authority = os.environ.get("NEXPOLY_BRIDGE_AUTHORITY_SHA")
+        if (
+            handoff_operation != operation_id
+            or environment_authority != authority_sha
+            or not isinstance(handoff_digest, str)
+        ):
+            raise PullDeployError("bridge prepare lacks a selector-sealed handoff")
+        handoff_path = self.control_handoffs_dir / f"{operation_id}.json"
+        if sha256_file(handoff_path) != require_digest(
+            handoff_digest, "bridge prepare handoff digest"
+        ):
+            raise PullDeployError("bridge prepare handoff record changed")
+        record = load_private_json(handoff_path)
+        required = {
+            "schema_version",
+            "protocol_version",
+            "operation_id",
+            "authority_sha",
+            "authority_tree",
+            "target_sha",
+            "target_tree",
+            "target_ref",
+            "policy_id",
+            "policy_sha256",
+            "previous_active_control",
+            "previous_active_control_sha256",
+            "executor_control",
+            "executor_control_sha256",
+            "created_at",
+        }
+        if (
+            set(record) != required
+            or record.get("schema_version") != 2
+            or record.get("protocol_version") != _control_runtime.PROTOCOL_VERSION
+            or record.get("operation_id") != operation_id
+            or record.get("authority_sha") != authority_sha
+            or canonical_json_digest(record.get("executor_control"))
+            != record.get("executor_control_sha256")
+            or canonical_json_digest(record.get("previous_active_control"))
+            != record.get("previous_active_control_sha256")
+        ):
+            raise PullDeployError("bridge prepare handoff identity is invalid")
+        relation = self.bridge_policy_relation(
+            authority_sha,
+            create_target_ref=True,
+            fetch_authority=True,
+        )
+        if (
+            record["authority_tree"] != relation["relation"]["authority_tree"]
+            or record["target_sha"] != relation["policy"]["target_sha"]
+            or record["target_tree"] != relation["policy"]["target_tree"]
+            or record["target_ref"] != relation["policy"]["target_ref"]
+            or record["policy_id"] != relation["policy"]["policy_id"]
+            or record["policy_sha256"] != relation["policy_sha256"]
+        ):
+            raise PullDeployError(
+                "bridge policy changed across the target-controller handoff"
+            )
+        try:
+            candidate, manifest, release_root = (
+                _control_runtime.load_candidate_control(
+                    self.runtime_root, record["executor_control"]
+                )
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "bridge candidate control release is invalid"
+            ) from exc
+        if (
+            candidate["operation_id"] != operation_id
+            or candidate["source_sha"] != record["target_sha"]
+            or candidate["source_tree"] != record["target_tree"]
+            or Path(__file__).resolve().parent != release_root.resolve()
+            or self.active_control_evidence() != record["previous_active_control"]
+            or record["previous_active_control"]["source_sha"] != authority_sha
+            or record["previous_active_control"]["source_tree"]
+            != record["authority_tree"]
+            or BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            not in manifest["compatibility"]["descriptor_schema_versions"]
+        ):
+            raise PullDeployError(
+                "bridge candidate prepare is not executing sealed B controls"
+            )
+        return record, relation
+
     def _validate_prepare_handoff(
         self, *, target_sha: str, operation_id: str
     ) -> dict[str, Any]:
@@ -7541,17 +8227,66 @@ class PullDeployController:
             )
         return record
 
-    def prepare(self, *, target_sha: str, operation_id: str) -> dict[str, Any]:
+    def prepare(
+        self,
+        *,
+        target_sha: str | None,
+        operation_id: str,
+        bridge_authority_sha: str | None = None,
+    ) -> dict[str, Any]:
         self.ensure_roots(mutating=True)
-        target_sha = require_sha(target_sha, "target SHA")
         operation_id = require_operation_id(operation_id)
+        bridge_relation: dict[str, Any] | None = None
+        bridge_handoff: dict[str, Any] | None = None
+        if bridge_authority_sha is not None:
+            authority_sha = require_sha(
+                bridge_authority_sha, "bridge authority SHA"
+            )
+            if target_sha is not None:
+                raise PullDeployError(
+                    "bridge target is derived from policy, not caller input"
+                )
+            if not self.apply_enabled:
+                return self.bridge_plan(
+                    authority_sha=authority_sha,
+                    operation_id=operation_id,
+                )
+            if (
+                not self.test_root_mode
+                and os.environ.get("NEXPOLY_PREPARE_HANDOFF_OPERATION") is None
+            ):
+                self._handoff_prepare_to_bridge_controller(
+                    authority_sha=authority_sha,
+                    operation_id=operation_id,
+                )
+                raise PullDeployError(
+                    "bridge target controller prepare handoff returned unexpectedly"
+                )
+            if not self.test_root_mode:
+                bridge_handoff, bridge_relation = (
+                    self._validate_bridge_prepare_handoff(
+                        authority_sha=authority_sha,
+                        operation_id=operation_id,
+                    )
+                )
+            else:
+                bridge_relation = self.bridge_policy_relation(
+                    authority_sha,
+                    create_target_ref=True,
+                    fetch_authority=True,
+                )
+            target_sha = require_sha(
+                bridge_relation["policy"]["target_sha"], "bridge target SHA"
+            )
+        else:
+            target_sha = require_sha(target_sha, "target SHA")
         if not self.apply_enabled:
             return {
                 **self.plan(target_sha=target_sha, operation_id=operation_id),
                 "action": "prepare",
             }
         handoff_record: dict[str, Any] | None = None
-        if not self.test_root_mode:
+        if not self.test_root_mode and bridge_relation is None:
             if os.environ.get("NEXPOLY_PREPARE_HANDOFF_OPERATION") is None:
                 self._handoff_prepare_to_target_controller(
                     target_sha=target_sha, operation_id=operation_id
@@ -7564,7 +8299,14 @@ class PullDeployController:
             )
         with self.deployment_lock():
             self._require_no_contract_maintenance(require_alias_completed=False)
-            if handoff_record is not None:
+            if bridge_handoff is not None:
+                bridge_handoff, bridge_relation = (
+                    self._validate_bridge_prepare_handoff(
+                        authority_sha=authority_sha,
+                        operation_id=operation_id,
+                    )
+                )
+            elif handoff_record is not None:
                 # Revalidate after acquiring the lock; pre-lock validation is
                 # intentionally not authority for descriptor preparation.
                 handoff_record = self._validate_prepare_handoff(
@@ -7583,6 +8325,16 @@ class PullDeployController:
                 if descriptor["repository"]["target_sha"] != target_sha:
                     raise PullDeployError(
                         "operation ID is already prepared for another target"
+                    )
+                if bridge_relation is not None and (
+                    descriptor.get("schema_version")
+                    != BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+                    or descriptor["bridge"]["authority"]["sha"] != authority_sha
+                    or descriptor["bridge"]["policy"]
+                    != bridge_relation["policy"]
+                ):
+                    raise PullDeployError(
+                        "operation ID is already prepared for another bridge authority"
                     )
                 return {"action": "prepare", "status": "already-ready", **ready}
             attempt = self._open_prepare_operation(
@@ -7603,6 +8355,10 @@ class PullDeployController:
                     previous_digest = sha256_file(self.current_state_path)
                     previous = validate_current_deployment_state(
                         load_private_json(self.current_state_path)
+                    )
+                if bridge_relation is not None and previous is not None:
+                    raise PullDeployError(
+                        "historical bridge is restricted to first governed takeover"
                     )
                 anchor = {
                     "previous_deployment": previous,
@@ -7632,6 +8388,14 @@ class PullDeployController:
                     raise PullDeployError(
                         "active controls changed after target prepare handoff"
                     )
+                if (
+                    bridge_handoff is not None
+                    and previous_active_control
+                    != bridge_handoff["previous_active_control"]
+                ):
+                    raise PullDeployError(
+                        "active controls changed after bridge prepare handoff"
+                    )
                 if previous is not None and (
                     previous_active_control["source_sha"] != current["sha"]
                     or previous_active_control["source_tree"] != current["tree"]
@@ -7639,21 +8403,43 @@ class PullDeployController:
                     raise PullDeployError(
                         "active controls differ from the production source identity"
                     )
-                if self.remote_main() != target_sha:
-                    raise PullDeployError(
-                        "requested target is no longer current remote main"
+                if bridge_relation is not None:
+                    bridge_relation = self.bridge_policy_relation(
+                        authority_sha,
+                        create_target_ref=True,
+                        fetch_authority=True,
                     )
-                target_tree = self.fetch_target(target_sha, operation_id)
-                if (
-                    handoff_record is not None
-                    and target_tree != handoff_record["target_tree"]
-                ):
-                    raise PullDeployError(
-                        "target tree changed after target prepare handoff"
-                    )
+                    if target_sha != bridge_relation["policy"]["target_sha"]:
+                        raise PullDeployError(
+                            "bridge target changed during preparation"
+                        )
+                    target_tree = bridge_relation["policy"]["target_tree"]
+                    if (
+                        previous_active_control["source_sha"] != authority_sha
+                        or previous_active_control["source_tree"]
+                        != bridge_relation["relation"]["authority_tree"]
+                    ):
+                        raise PullDeployError(
+                            "active bootstrap controls changed from authority F"
+                        )
+                else:
+                    if self.remote_main() != target_sha:
+                        raise PullDeployError(
+                            "requested target is no longer current remote main"
+                        )
+                    target_tree = self.fetch_target(target_sha, operation_id)
+                    if (
+                        handoff_record is not None
+                        and target_tree != handoff_record["target_tree"]
+                    ):
+                        raise PullDeployError(
+                            "target tree changed after target prepare handoff"
+                        )
                 self.validate_installed_controls_against_target(target_sha)
                 executor_control = (
-                    handoff_record["executor_control"]
+                    bridge_handoff["executor_control"]
+                    if bridge_handoff is not None
+                    else handoff_record["executor_control"]
                     if handoff_record is not None
                     else self.prepare_control_release(
                         operation_id=operation_id,
@@ -7671,13 +8457,32 @@ class PullDeployController:
                     raise PullDeployError(
                         "prepared candidate controls are unavailable"
                     ) from exc
+                if (
+                    bridge_relation is not None
+                    and BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+                    not in candidate_manifest["compatibility"][
+                        "descriptor_schema_versions"
+                    ]
+                ):
+                    raise PullDeployError(
+                        "prepared B controls do not support bridge descriptor v3"
+                    )
                 release_input, migrations, compose, lock_payload = (
                     self._source_evidence(target_sha)
                 )
                 release_input["asset"] = self.asset_evidence(
                     release_input["asset_manifest_digest"]
                 )
-                ci = self.ci_evidence(target_sha)
+                ci = (
+                    self.ci_evidence(
+                        authority_sha,
+                        required_jobs=bridge_relation["policy"][
+                            "required_ci_jobs"
+                        ],
+                    )
+                    if bridge_relation is not None
+                    else self.ci_evidence(target_sha)
+                )
                 images = {
                     "backend": self.image_evidence("backend", target_sha),
                     "web": self.image_evidence("web", target_sha),
@@ -7698,8 +8503,55 @@ class PullDeployController:
                     lock_payload=lock_payload,
                 )
                 self._revalidate_previous_deployment_state(anchor)
+                token_record: dict[str, Any] | None = None
+                bridge_descriptor: dict[str, Any] | None = None
+                if bridge_relation is not None:
+                    target_digest_refs = {
+                        role: images[role]["digest_ref"]
+                        for role in ("backend", "web")
+                    }
+                    if (
+                        target_digest_refs
+                        != bridge_relation["policy"]["target_images"]
+                        or release_input["asset_manifest_digest"]
+                        != bridge_relation["policy"]["asset_manifest_digest"]
+                        or release_input["datasets_on_asset_change"]
+                        != bridge_relation["policy"]["datasets_on_asset_change"]
+                    ):
+                        raise PullDeployError(
+                            "materialized B images or asset differ from F policy"
+                        )
+                    try:
+                        token_record = _bridge_core.reserve_token(
+                            self.state_dir,
+                            operation_id=operation_id,
+                            policy_id=bridge_relation["policy"]["policy_id"],
+                        )
+                        bridge_descriptor = _bridge_core.build_bridge_descriptor(
+                            operation_id=operation_id,
+                            authority_sha=authority_sha,
+                            authority_tree=bridge_relation["relation"][
+                                "authority_tree"
+                            ],
+                            authority_control_release_id=previous_active_control[
+                                "release_id"
+                            ],
+                            ci_evidence=ci,
+                            target_control_release_id=executor_control["release_id"],
+                            policy=bridge_relation["policy"],
+                            token_id=token_record["token_id"],
+                            token_sha256=token_record["token_sha256"],
+                        )
+                    except Exception as exc:
+                        raise PullDeployError(
+                            "cannot reserve exact bridge takeover authority"
+                        ) from exc
                 descriptor = {
-                    "schema_version": DESCRIPTOR_SCHEMA_VERSION,
+                    "schema_version": (
+                        BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+                        if bridge_descriptor is not None
+                        else DESCRIPTOR_SCHEMA_VERSION
+                    ),
                     "operation_id": operation_id,
                     "controller": {
                         "schema_version": CONTROLLER_SCHEMA_VERSION,
@@ -7739,10 +8591,46 @@ class PullDeployController:
                     },
                     "previous_deployment": previous,
                     "previous_deployment_sha256": previous_digest,
-                    "prepared_at": utc_now(),
+                    "prepared_at": (
+                        token_record["prepared_at"]
+                        if token_record is not None
+                        else utc_now()
+                    ),
                 }
+                if bridge_descriptor is not None:
+                    descriptor["bridge"] = bridge_descriptor
                 validate_descriptor(descriptor)
-                atomic_json(descriptor_path, descriptor)
+                if descriptor_path.exists() or descriptor_path.is_symlink():
+                    existing_descriptor = validate_descriptor(
+                        load_private_json(descriptor_path)
+                    )
+                    if existing_descriptor != descriptor:
+                        raise PullDeployError(
+                            "interrupted bridge descriptor differs on retry"
+                        )
+                else:
+                    atomic_json(descriptor_path, descriptor)
+                if bridge_descriptor is not None:
+                    try:
+                        bound_token = _bridge_core.bind_token_descriptor(
+                            self.state_dir,
+                            operation_id=operation_id,
+                            policy_id=bridge_relation["policy"]["policy_id"],
+                            descriptor_sha256=sha256_file(descriptor_path),
+                        )
+                    except Exception as exc:
+                        raise PullDeployError(
+                            "bridge token could not bind the descriptor"
+                        ) from exc
+                    if (
+                        bound_token["token_id"]
+                        != bridge_descriptor["token"]["token_id"]
+                        or bound_token["token_sha256"]
+                        != bridge_descriptor["token"]["token_sha256"]
+                    ):
+                        raise PullDeployError(
+                            "bridge descriptor token identity changed"
+                        )
                 ready = {
                     "schema_version": 1,
                     "status": "ready",
@@ -7826,6 +8714,25 @@ class PullDeployController:
         descriptor = validate_descriptor(load_private_json(descriptor_path))
         ready = load_private_json(ready_path)
         self._validate_ready(ready, descriptor, descriptor_path)
+        if descriptor["schema_version"] == BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
+            try:
+                token = _bridge_core.load_token_authority(self.state_dir)
+            except Exception as exc:
+                raise PullDeployError(
+                    "prepared bridge token authority is unavailable"
+                ) from exc
+            bridge = descriptor["bridge"]
+            if (
+                token["status"] == "reserved"
+                or token["operation_id"] != descriptor["operation_id"]
+                or token["policy_id"] != bridge["policy"]["policy_id"]
+                or token["descriptor_sha256"] != ready["descriptor_sha256"]
+                or token["token_id"] != bridge["token"]["token_id"]
+                or token["token_sha256"] != bridge["token"]["token_sha256"]
+            ):
+                raise PullDeployError(
+                    "prepared bridge token differs from descriptor authority"
+                )
         if (
             target_sha is not None
             and descriptor["repository"]["target_sha"] != target_sha
@@ -8125,6 +9032,19 @@ class PullDeployController:
         ):
             raise PullDeployError("production configuration changed after prepare")
         self._revalidate_previous_deployment_state(descriptor)
+        bridge = (
+            descriptor["bridge"]
+            if descriptor["schema_version"] == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            else None
+        )
+        if (
+            bridge is not None
+            and self.active_control_evidence()
+            != descriptor["controller"]["previous_active_control"]
+        ):
+            raise PullDeployError(
+                "active F control authority changed after bridge prepare"
+            )
         previous = descriptor.get("previous_deployment")
         if isinstance(previous, dict):
             self._previous_runtime_descriptor(descriptor)
@@ -8158,15 +9078,65 @@ class PullDeployController:
             or repository["tree"] != expected["previous_tree"]
         ):
             raise PullDeployError("production source changed after prepare")
-        if self.remote_main() != expected["target_sha"]:
-            raise PullDeployError("prepared target has been superseded on main")
-        fetched_tree = self.fetch_target(
-            expected["target_sha"], descriptor["operation_id"]
-        )
-        if fetched_tree != expected["target_tree"]:
-            raise PullDeployError("prepared target tree changed")
-        if self.ci_evidence(expected["target_sha"]) != descriptor["ci"]:
-            raise PullDeployError("target CI evidence changed after prepare")
+        if bridge is not None:
+            relation = self.bridge_policy_relation(
+                bridge["authority"]["sha"],
+                create_target_ref=True,
+                fetch_authority=True,
+            )
+            if (
+                relation["policy"] != bridge["policy"]
+                or relation["policy_sha256"] != bridge["policy_sha256"]
+                or relation["relation"]["authority_sha"]
+                != bridge["authority"]["sha"]
+                or relation["relation"]["authority_tree"]
+                != bridge["authority"]["tree"]
+                or relation["relation"]["target_sha"] != expected["target_sha"]
+                or relation["relation"]["target_tree"] != expected["target_tree"]
+                or relation["relation"]["target_ref"]
+                != bridge["target"]["exact_ref"]
+            ):
+                raise PullDeployError(
+                    "bridge F policy or exact B relation changed after prepare"
+                )
+            authority_ci = self.ci_evidence(
+                bridge["authority"]["sha"],
+                required_jobs=bridge["policy"]["required_ci_jobs"],
+            )
+            if (
+                authority_ci != descriptor["ci"]
+                or _bridge_core.canonical_json_digest(authority_ci)
+                != bridge["authority"]["ci_evidence_sha256"]
+            ):
+                raise PullDeployError(
+                    "bridge authority CI evidence changed after prepare"
+                )
+            try:
+                token = _bridge_core.load_token_authority(self.state_dir)
+            except Exception as exc:
+                raise PullDeployError(
+                    "bridge token authority changed after prepare"
+                ) from exc
+            if (
+                token["status"] not in {"prepared", "commit-intent"}
+                or token["operation_id"] != descriptor["operation_id"]
+                or token["policy_id"] != bridge["policy"]["policy_id"]
+                or token["token_id"] != bridge["token"]["token_id"]
+                or token["token_sha256"] != bridge["token"]["token_sha256"]
+            ):
+                raise PullDeployError(
+                    "bridge token is not available before source switch"
+                )
+        else:
+            if self.remote_main() != expected["target_sha"]:
+                raise PullDeployError("prepared target has been superseded on main")
+            fetched_tree = self.fetch_target(
+                expected["target_sha"], descriptor["operation_id"]
+            )
+            if fetched_tree != expected["target_tree"]:
+                raise PullDeployError("prepared target tree changed")
+            if self.ci_evidence(expected["target_sha"]) != descriptor["ci"]:
+                raise PullDeployError("target CI evidence changed after prepare")
         for role in ("backend", "web"):
             if (
                 self.image_evidence(role, expected["target_sha"])
@@ -8205,7 +9175,12 @@ class PullDeployController:
             repository["previous_sha"],
             expected_previous_ref,
         )
-        self._git("merge", "--ff-only", "refs/remotes/nexpoly-deploy/main")
+        source_ref = (
+            descriptor["bridge"]["target"]["exact_ref"]
+            if descriptor["schema_version"] == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            else "refs/remotes/nexpoly-deploy/main"
+        )
+        self._git("merge", "--ff-only", source_ref)
         current = self.repository_identity(require_ssh_origin=True)
         if (
             current["sha"] != repository["target_sha"]
@@ -8526,16 +9501,9 @@ class PullDeployController:
         descriptor_digest: str,
         marker: dict[str, Any],
     ) -> dict[str, Any] | None:
-        if (
-            not self.current_state_path.exists()
-            and not self.current_state_path.is_symlink()
-        ):
-            return None
-        current = validate_current_deployment_state(
-            load_private_json(self.current_state_path)
-        )
         candidate = marker.get("candidate_state")
         candidate_digest = marker.get("candidate_state_sha256")
+        expected_digest: str | None = None
         if candidate is not None or candidate_digest is not None:
             if not isinstance(candidate, dict):
                 raise PullDeployError("deployment marker candidate state is invalid")
@@ -8554,10 +9522,59 @@ class PullDeployController:
                 raise PullDeployError(
                     "deployment marker candidate state differs from descriptor"
                 )
+        exists = (
+            self.current_state_path.exists()
+            or self.current_state_path.is_symlink()
+        )
+        if not exists:
+            if descriptor["schema_version"] == BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
+                token = self._reconcile_bridge_token(
+                    descriptor,
+                    descriptor_digest,
+                    observed_current_state_sha256=None,
+                )
+                if token["status"] == "commit-intent":
+                    if candidate is None or expected_digest is None:
+                        raise PullDeployError(
+                            "bridge commit intent lost its candidate state"
+                        )
+                    # The marker and global token both durably authorized this
+                    # exact commit.  Finish the replace after a crash instead
+                    # of rolling back and orphaning a globally single-use
+                    # token in commit-intent.
+                    atomic_json(self.current_state_path, candidate)
+                    if sha256_file(self.current_state_path) != expected_digest:
+                        raise PullDeployError(
+                            "bridge recovery did not commit candidate state exactly"
+                        )
+                    self._consume_bridge_token(
+                        descriptor,
+                        descriptor_digest,
+                        expected_digest,
+                    )
+                    return candidate
+            return None
+        current = validate_current_deployment_state(
+            load_private_json(self.current_state_path)
+        )
+        if candidate is not None:
             if (
                 current == candidate
                 and sha256_file(self.current_state_path) == expected_digest
             ):
+                if (
+                    descriptor["schema_version"]
+                    == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+                ):
+                    token = self._reconcile_bridge_token(
+                        descriptor,
+                        descriptor_digest,
+                        observed_current_state_sha256=expected_digest,
+                    )
+                    if token["status"] != "consumed":
+                        raise PullDeployError(
+                            "bridge current state lacks consumed token authority"
+                        )
                 return current
             if (
                 current.get("source_sha") == descriptor["repository"]["target_sha"]
@@ -8581,9 +9598,109 @@ class PullDeployController:
             and sha256_file(self.current_state_path) == previous_digest
             and current == previous
         ):
+            if descriptor["schema_version"] == BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
+                self._reconcile_bridge_token(
+                    descriptor,
+                    descriptor_digest,
+                    observed_current_state_sha256=None,
+                )
             return None
         raise PullDeployError(
             "current deployment state is neither sealed previous nor candidate"
+        )
+
+    def _reconcile_bridge_token(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+        *,
+        observed_current_state_sha256: str | None,
+    ) -> dict[str, Any]:
+        bridge = descriptor["bridge"]
+        try:
+            token = _bridge_core.reconcile_token(
+                self.state_dir,
+                operation_id=descriptor["operation_id"],
+                descriptor_sha256=descriptor_digest,
+                observed_current_state_sha256=observed_current_state_sha256,
+            )
+        except Exception as exc:
+            raise PullDeployError("bridge token recovery authority differs") from exc
+        if (
+            token["policy_id"] != bridge["policy"]["policy_id"]
+            or token["token_id"] != bridge["token"]["token_id"]
+            or token["token_sha256"] != bridge["token"]["token_sha256"]
+        ):
+            raise PullDeployError("bridge token identity differs during recovery")
+        return token
+
+    def _begin_bridge_state_commit(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+        candidate_state_digest: str,
+    ) -> None:
+        try:
+            token = _bridge_core.begin_state_commit(
+                self.state_dir,
+                operation_id=descriptor["operation_id"],
+                descriptor_sha256=descriptor_digest,
+                candidate_state_sha256=candidate_state_digest,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "bridge token could not authorize current-state commit"
+            ) from exc
+        bridge = descriptor["bridge"]
+        if (
+            token["status"] not in {"commit-intent", "consumed"}
+            or token["policy_id"] != bridge["policy"]["policy_id"]
+            or token["token_id"] != bridge["token"]["token_id"]
+            or token["token_sha256"] != bridge["token"]["token_sha256"]
+        ):
+            raise PullDeployError("bridge state commit token identity differs")
+
+    def _consume_bridge_token(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+        candidate_state_digest: str,
+    ) -> None:
+        try:
+            token = _bridge_core.consume_token(
+                self.state_dir,
+                operation_id=descriptor["operation_id"],
+                descriptor_sha256=descriptor_digest,
+                candidate_state_sha256=candidate_state_digest,
+            )
+        except Exception as exc:
+            raise PullDeployError("bridge token consumption failed") from exc
+        if token["status"] != "consumed":
+            raise PullDeployError("bridge token did not become permanently consumed")
+
+    def _bridge_precommit_is_retryable(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+    ) -> bool:
+        """Keep the same prepared operation reusable after a full rollback."""
+
+        if descriptor["schema_version"] != BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
+            return False
+        try:
+            token = _bridge_core.load_token_authority(self.state_dir)
+        except Exception as exc:
+            raise PullDeployError(
+                "bridge rollback cannot classify token authority"
+            ) from exc
+        bridge = descriptor["bridge"]
+        return bool(
+            token["status"] == "prepared"
+            and token["operation_id"] == descriptor["operation_id"]
+            and token["descriptor_sha256"] == descriptor_digest
+            and token["policy_id"] == bridge["policy"]["policy_id"]
+            and token["token_id"] == bridge["token"]["token_id"]
+            and token["token_sha256"] == bridge["token"]["token_sha256"]
         )
 
     def _restore_database_after_failed_apply(
@@ -9133,11 +10250,14 @@ class PullDeployController:
             # those equal bytes cannot prove that a switch happened.
             self._rollback_failed_attempt(descriptor, marker)
             self._audit_attempt(marker, "recovered-pre-stop-abort")
-            self._record_operation_outcome(
-                operation_id=operation_id,
-                descriptor_sha256=descriptor_digest,
-                outcome="failed",
-            )
+            if not self._bridge_precommit_is_retryable(
+                descriptor, descriptor_digest
+            ):
+                self._record_operation_outcome(
+                    operation_id=operation_id,
+                    descriptor_sha256=descriptor_digest,
+                    outcome="failed",
+                )
             self.marker_path.unlink()
             fsync_directory(self.marker_path.parent)
             return None
@@ -9191,16 +10311,25 @@ class PullDeployController:
             return None
         self._rollback_failed_attempt(descriptor, marker)
         self._audit_attempt(marker, "recovered-rollback")
-        self._record_operation_outcome(
-            operation_id=operation_id,
-            descriptor_sha256=descriptor_digest,
-            outcome="failed",
-        )
+        if not self._bridge_precommit_is_retryable(
+            descriptor, descriptor_digest
+        ):
+            self._record_operation_outcome(
+                operation_id=operation_id,
+                descriptor_sha256=descriptor_digest,
+                outcome="failed",
+            )
         self.marker_path.unlink()
         fsync_directory(self.marker_path.parent)
         return None
 
-    def apply(self, *, target_sha: str, operation_id: str) -> dict[str, Any]:
+    def apply(
+        self,
+        *,
+        target_sha: str,
+        operation_id: str,
+        bridge_authority_sha: str | None = None,
+    ) -> dict[str, Any]:
         self.ensure_roots(mutating=True)
         target_sha = require_sha(target_sha, "target SHA")
         operation_id = require_operation_id(operation_id)
@@ -9213,6 +10342,24 @@ class PullDeployController:
             }
         with self.deployment_lock():
             self._require_no_contract_maintenance()
+            descriptor, descriptor_digest = self._load_prepared(
+                operation_id, target_sha
+            )
+            if descriptor["schema_version"] == BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
+                if (
+                    bridge_authority_sha is None
+                    or require_sha(
+                        bridge_authority_sha, "bridge authority SHA"
+                    )
+                    != descriptor["bridge"]["authority"]["sha"]
+                ):
+                    raise PullDeployError(
+                        "bridge descriptor requires its exact authority command"
+                    )
+            elif bridge_authority_sha is not None:
+                raise PullDeployError(
+                    "ordinary deployment cannot use bridge authority"
+                )
             recovered = self.recover_interrupted()
             if recovered is not None and recovered.get("source_sha") == target_sha:
                 return recovered
@@ -9323,10 +10470,28 @@ class PullDeployController:
                     candidate_state=state,
                     candidate_state_sha256=state_digest,
                 )
+                if (
+                    descriptor["schema_version"]
+                    == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+                ):
+                    self._begin_bridge_state_commit(
+                        descriptor,
+                        descriptor_digest,
+                        state_digest,
+                    )
                 atomic_json(self.current_state_path, state)
                 if sha256_file(self.current_state_path) != state_digest:
                     raise PullDeployError(
                         "candidate deployment state did not commit exactly"
+                    )
+                if (
+                    descriptor["schema_version"]
+                    == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+                ):
+                    self._consume_bridge_token(
+                        descriptor,
+                        descriptor_digest,
+                        state_digest,
                     )
                 self._advance(marker, "state-committed")
                 self.lifecycle.resume(self, descriptor, verification)
@@ -9392,14 +10557,39 @@ class PullDeployController:
                     ) from rollback_exc
                 marker["rollback"] = "success"
                 self._audit_attempt(marker, "failed")
-                self._record_operation_outcome(
-                    operation_id=operation_id,
-                    descriptor_sha256=descriptor_digest,
-                    outcome="failed",
-                )
+                if not self._bridge_precommit_is_retryable(
+                    descriptor, descriptor_digest
+                ):
+                    self._record_operation_outcome(
+                        operation_id=operation_id,
+                        descriptor_sha256=descriptor_digest,
+                        outcome="failed",
+                    )
                 self.marker_path.unlink()
                 fsync_directory(self.marker_path.parent)
                 raise
+
+    def apply_bridge(
+        self, *, authority_sha: str, operation_id: str
+    ) -> dict[str, Any]:
+        """Apply only the B target already sealed by F in a v3 descriptor."""
+
+        self.ensure_roots(mutating=True)
+        authority_sha = require_sha(authority_sha, "bridge authority SHA")
+        operation_id = require_operation_id(operation_id)
+        descriptor, _digest = self._load_prepared(operation_id)
+        if (
+            descriptor["schema_version"] != BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            or descriptor["bridge"]["authority"]["sha"] != authority_sha
+        ):
+            raise PullDeployError(
+                "prepared operation is not owned by this bridge authority"
+            )
+        return self.apply(
+            target_sha=descriptor["repository"]["target_sha"],
+            operation_id=operation_id,
+            bridge_authority_sha=authority_sha,
+        )
 
     def rollback(self, *, operation_id: str) -> dict[str, Any]:
         self.ensure_roots(mutating=True)
@@ -9563,6 +10753,10 @@ def parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name)
         command.add_argument("--sha", required=True)
         command.add_argument("--operation-id", required=True)
+    for name in ("bridge-plan", "bridge-prepare", "bridge-apply"):
+        command = commands.add_parser(name)
+        command.add_argument("--authority-sha", required=True)
+        command.add_argument("--operation-id", required=True)
     rollback = commands.add_parser("rollback")
     rollback.add_argument("--operation-id", required=True)
     return result
@@ -9574,12 +10768,28 @@ def main(argv: list[str] | None = None) -> int:
     controller = PullDeployController(
         PRODUCTION_ROOT,
         RUNTIME_ROOT,
-        apply=args.command != "plan",
+        apply=args.command not in {"plan", "bridge-plan"},
     )
     try:
         if args.command == "plan":
             document = controller.plan(
                 target_sha=args.sha, operation_id=args.operation_id
+            )
+        elif args.command == "bridge-plan":
+            document = controller.bridge_plan(
+                authority_sha=args.authority_sha,
+                operation_id=args.operation_id,
+            )
+        elif args.command == "bridge-prepare":
+            document = controller.prepare(
+                target_sha=None,
+                operation_id=args.operation_id,
+                bridge_authority_sha=args.authority_sha,
+            )
+        elif args.command == "bridge-apply":
+            document = controller.apply_bridge(
+                authority_sha=args.authority_sha,
+                operation_id=args.operation_id,
             )
         elif args.command == "prepare":
             document = controller.prepare(

@@ -3,7 +3,7 @@
   "protocol_version": 1,
   "compatibility": {
     "handoff_protocol_versions": [1],
-    "descriptor_schema_versions": [2],
+    "descriptor_schema_versions": [2, 3],
     "current_state_schema_versions": [2],
     "marker_schema_versions": [2],
     "worker_slot_schema_versions": [2]
@@ -33,6 +33,11 @@
     }
   },
   "files": [
+    {
+      "name": "bridge_deploy_core.py",
+      "source": "scripts/bridge_deploy_core.py",
+      "mode": 448
+    },
     {
       "name": "monomer_md_worker_launcher.py",
       "source": "scripts/monomer_md_worker_launcher.py",

@@ -805,8 +805,15 @@ class FixtureController(CONTROLLER.PullDeployController):
         return (
             {
                 "sha256": DIGEST_A,
-                "asset_manifest_digest": "sha256:" + "f" * 64,
-                "datasets_on_asset_change": ["governance"],
+                "schema_version": 2,
+                "asset_manifest_digest": (
+                    CONTROLLER.SCHEMA_V2_ASSET_MANIFEST_DIGEST
+                ),
+                "predecessor_asset_manifest_digest": (
+                    CONTROLLER.SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+                ),
+                "changed_asset_trees": ["byteff2"],
+                "datasets_on_asset_change": [],
             },
             {
                 "sha256": DIGEST_B,
@@ -1409,6 +1416,215 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             controller._require_no_contract_maintenance(
                 require_alias_completed=False
             )
+
+    def bridge_descriptor(
+        self, controller: FixtureController
+    ) -> dict[str, object]:
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready_path = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        authority_sha = "5" * 40
+        authority_tree = "6" * 40
+        previous_control = dict(
+            descriptor["controller"]["previous_active_control"]
+        )
+        previous_control.update(
+            {
+                "release_id": "7" * 64,
+                "source_sha": authority_sha,
+                "source_tree": authority_tree,
+            }
+        )
+        descriptor["controller"]["previous_active_control"] = previous_control
+        descriptor["controller"][
+            "previous_active_control_sha256"
+        ] = CONTROLLER.canonical_json_digest(previous_control)
+        required_jobs = sorted(CONTROLLER._bridge_core.REQUIRED_CI_JOBS)
+        descriptor["ci"] = {
+            "workflow_run_id": 99,
+            "run_attempt": 1,
+            "head_sha": authority_sha,
+            "head_branch": "main",
+            "event": "push",
+            "path": ".github/workflows/ci.yml",
+            "conclusion": "success",
+            "required_jobs": required_jobs,
+        }
+        policy = {
+            "schema_version": 1,
+            "mode": CONTROLLER._bridge_core.BRIDGE_MODE,
+            "authority_ref": CONTROLLER._bridge_core.AUTHORITY_REF,
+            "target_sha": TARGET_SHA,
+            "target_tree": TARGET_TREE,
+            "target_ref": f"refs/nexpoly/bridge-target/{TARGET_SHA}",
+            "target_images": {
+                role: descriptor["images"][role]["digest_ref"]
+                for role in ("backend", "web")
+            },
+            "asset_manifest_digest": descriptor["release_input"][
+                "asset_manifest_digest"
+            ],
+            "datasets_on_asset_change": [],
+            "final_migration": dict(CONTROLLER._bridge_core.FINAL_MIGRATION),
+            "accepted_migration_ledgers": [
+                {"name": "pre-0012", "manifest_sha256": DIGEST_A},
+                {
+                    "name": "post-0012",
+                    "manifest_sha256": "sha256:" + "e" * 64,
+                },
+                {"name": "post-0013", "manifest_sha256": DIGEST_B},
+            ],
+            "required_ci_jobs": required_jobs,
+            "policy_id": None,
+        }
+        policy["policy_id"] = CONTROLLER._bridge_core.canonical_json_digest(
+            {key: value for key, value in policy.items() if key != "policy_id"}
+        )
+        descriptor["schema_version"] = CONTROLLER.BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+        descriptor["bridge"] = CONTROLLER._bridge_core.build_bridge_descriptor(
+            operation_id=OPERATION_ID,
+            authority_sha=authority_sha,
+            authority_tree=authority_tree,
+            authority_control_release_id=previous_control["release_id"],
+            ci_evidence=descriptor["ci"],
+            target_control_release_id=descriptor["controller"][
+                "executor_control"
+            ]["release_id"],
+            policy=policy,
+            token_id="sha256:" + "8" * 64,
+            token_sha256="sha256:" + "9" * 64,
+        )
+        return descriptor
+
+    def test_v3_descriptor_binds_f_authority_exact_b_and_empty_datasets(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        self.assertEqual(CONTROLLER.validate_descriptor(descriptor), descriptor)
+
+        mutations = (
+            (
+                "authority control",
+                lambda value: value["bridge"]["authority"].__setitem__(
+                    "control_release_id", "a" * 64
+                ),
+            ),
+            (
+                "authority CI",
+                lambda value: value["ci"].__setitem__("workflow_run_id", 100),
+            ),
+            (
+                "target ref",
+                lambda value: value["bridge"]["target"].__setitem__(
+                    "exact_ref", f"refs/nexpoly/bridge-target/{'a' * 40}"
+                ),
+            ),
+            (
+                "dataset rebuild",
+                lambda value: value["release_input"][
+                    "datasets_on_asset_change"
+                ].append("online"),
+            ),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                changed = json.loads(json.dumps(descriptor))
+                mutate(changed)
+                with self.assertRaises(CONTROLLER.PullDeployError):
+                    CONTROLLER.validate_descriptor(changed)
+
+    def test_bridge_source_switch_uses_exact_policy_ref_not_remote_main(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        commands: list[tuple[object, ...]] = []
+
+        def fake_git(*arguments, **_kwargs):  # type: ignore[no-untyped-def]
+            commands.append(arguments)
+            if arguments[:3] == ("show-ref", "--verify", "--hash"):
+                return subprocess.CompletedProcess([], 1, "", "")
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        controller._git = fake_git  # type: ignore[method-assign]
+        controller.repository_identity = lambda **_kwargs: {  # type: ignore[method-assign]
+            "sha": TARGET_SHA,
+            "tree": TARGET_TREE,
+            "origin": CONTROLLER.REPOSITORY_SSH_URL,
+        }
+        CONTROLLER.PullDeployController._switch_source(controller, descriptor)
+        merge = next(command for command in commands if command[0] == "merge")
+        self.assertEqual(
+            merge,
+            ("merge", "--ff-only", f"refs/nexpoly/bridge-target/{TARGET_SHA}"),
+        )
+
+    def test_bridge_commit_intent_crash_finishes_exact_current_state(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        # First build a structurally valid governed state using the existing
+        # v2 fixture lifecycle; bridge recovery only changes its descriptor
+        # authority before committing it through the v3 token.
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        token = CONTROLLER._bridge_core.reserve_token(
+            controller.state_dir,
+            operation_id=OPERATION_ID,
+            policy_id=descriptor["bridge"]["policy"]["policy_id"],
+            token=b"bridge-token-fixture-entropy-0001",
+        )
+        descriptor["bridge"]["token"] = {
+            "token_id": token["token_id"],
+            "token_sha256": token["token_sha256"],
+        }
+        CONTROLLER.validate_descriptor(descriptor)
+        descriptor_digest = CONTROLLER.sha256_bytes(
+            CONTROLLER.canonical_json_bytes(descriptor) + b"\n"
+        )
+        CONTROLLER._bridge_core.bind_token_descriptor(
+            controller.state_dir,
+            operation_id=OPERATION_ID,
+            policy_id=descriptor["bridge"]["policy"]["policy_id"],
+            descriptor_sha256=descriptor_digest,
+        )
+        state["descriptor_sha256"] = descriptor_digest
+        candidate_digest = CONTROLLER.sha256_bytes(
+            CONTROLLER.canonical_json_bytes(state) + b"\n"
+        )
+        CONTROLLER._bridge_core.begin_state_commit(
+            controller.state_dir,
+            operation_id=OPERATION_ID,
+            descriptor_sha256=descriptor_digest,
+            candidate_state_sha256=candidate_digest,
+        )
+        controller.current_state_path.unlink()
+        marker = {
+            "candidate_state": state,
+            "candidate_state_sha256": candidate_digest,
+        }
+        recovered = controller._candidate_current_state(
+            descriptor,
+            descriptor_digest,
+            marker,
+        )
+        self.assertEqual(recovered, state)
+        self.assertEqual(
+            CONTROLLER.sha256_file(controller.current_state_path),
+            candidate_digest,
+        )
+        self.assertEqual(
+            CONTROLLER._bridge_core.load_token_authority(
+                controller.state_dir
+            )["status"],
+            "consumed",
+        )
 
     def test_pending_contract_marker_blocks_every_code_deployment_command(self) -> None:
         controller = self.controller()

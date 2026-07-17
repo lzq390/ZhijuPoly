@@ -287,6 +287,43 @@ checks, resolves image digests and labels, validates assets and migrations,
 downloads locked wheels, and builds the inactive Worker environment directly
 at its final A/B slot path.
 
+The first governed takeover is the sole exception to “deploy current main”.
+After bootstrap has installed the current F control plane and the crash-safe
+legacy takeover has produced a clean SSH checkout, the operator supplies only
+F—not a historical target—to the bridge commands:
+
+```bash
+nexpoly-pull-deploy bridge-plan \
+  --authority-sha <full-F-sha> \
+  --operation-id bridge-<utc-timestamp>
+
+nexpoly-pull-deploy bridge-prepare \
+  --authority-sha <full-F-sha> \
+  --operation-id bridge-<utc-timestamp>
+
+nexpoly-pull-deploy bridge-apply \
+  --authority-sha <full-F-sha> \
+  --operation-id bridge-<utc-timestamp>
+```
+
+F's `ops/config/production-bridge-policy.json` is the only source of B. It pins
+the full B commit/tree, the private `refs/nexpoly/bridge-target/<B>` ref, image
+digests, the schema-v2 asset digest, the empty dataset-rebuild list, accepted
+migration ledgers and all required F CI jobs. F derives and installs B controls;
+B then independently fetches current main, rereads the same F policy, proves
+B→F ancestry and the production-HEAD→B fast-forward, and CAS-creates the exact
+private ref. Tags, branch names, short SHAs and caller-supplied historical SHAs
+are never accepted. The v3 descriptor keeps F authority and B target evidence
+separate. Source switch merges the exact private B ref, never remote main.
+
+A private global bridge token is reserved before READY, bound to the exact
+descriptor digest, moved to commit-intent only after the candidate state is
+sealed in the crash marker, and permanently consumed only with that exact
+current-state digest. Recovery forwards a durable commit-intent if a crash
+occurred immediately before current-state rename; a consumed token without its
+current state fails closed. Ordinary v2 deployments neither consume nor reset
+this one-time authority.
+
 `apply` obtains the exclusive deployment lock and then:
 
 1. Enables Backend and Worker drain and waits for all active work to finish.
@@ -332,10 +369,21 @@ read-only external-database audit helper listed above. If the production
 ledger, registered database inventory, asset identity or rollback evidence
 differs from the reviewed plan, the operation stops before mutation.
 
-> **First-deployment stop condition:** control bootstrap alone is permitted.
-> Until the dedicated reconciliation control has backed up, restore-tested and
-> removed exactly `0005_polytao_jobs`, operators must not run the first
-> production `apply` or `bootstrap-expand`.
+The frozen schema-v2 asset manifest is
+`sha256:15600f50c9aa720e8ae72352191f60b9e9f013613f152fc8df317ff9ee599d1e`
+and its only accepted predecessor is
+`sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2`.
+The controller re-hashes both releases and requires the `model`, `database`
+and `backend-data` inventories to match the predecessor byte-for-byte. Only
+`byteff2` may differ. Its release input declares an empty
+`datasets_on_asset_change`; switching this asset must not invoke a database
+rebuild or truncate any online table.
+
+> **First-deployment stop condition:** control bootstrap and bridge preparation
+> alone are permitted. Until the dedicated reconciliation control has backed
+> up, restore-tested and removed exactly `0005_polytao_jobs`, operators must not
+> run the first production `bridge-apply`, ordinary `apply`, or
+> `bootstrap-expand`.
 
 ## Rollback and interrupted attempts
 
