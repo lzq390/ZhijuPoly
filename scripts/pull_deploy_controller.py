@@ -2,7 +2,7 @@
 """Governed, commit-pinned production deployment from the live Git checkout.
 
 The controller executes from a content-addressed control release outside the
-checkout.  ``runtime/bin`` contains only an immutable selector and two stable
+checkout.  ``runtime/bin`` contains only an immutable selector and three stable
 Python wrappers;
 source fetch, candidate preparation and image pulls happen before the
 maintenance window, while ``apply`` consumes sealed evidence using the target
@@ -196,11 +196,15 @@ STABLE_HELPER_FILES = (
     "control_runtime_selector.py",
     "nexpoly-pull-contract-0012",
     "nexpoly-pull-deploy",
+    "nexpoly-reconcile-production-0005-polytao-alias",
 )
 CONTROL_SOURCE_PATHS = {
     "control_runtime_selector.py": "scripts/control_runtime_selector.py",
     "nexpoly-pull-contract-0012": "scripts/nexpoly-pull-contract-0012",
     "nexpoly-pull-deploy": "scripts/nexpoly-pull-deploy",
+    "nexpoly-reconcile-production-0005-polytao-alias": (
+        "scripts/nexpoly-reconcile-production-0005-polytao-alias"
+    ),
 }
 CONTROL_SOURCE_MANIFEST = "scripts/control-release.json"
 CONTROLLER_SCHEMA_VERSION = 1
@@ -5092,10 +5096,28 @@ class PullDeployController:
         self.active_slot_path = self.state_dir / "monomer-md-active-slot.json"
         self.active_control_path = self.state_dir / "active-control.json"
 
-    def _require_no_contract_maintenance(self) -> None:
+    def _require_no_contract_maintenance(
+        self, *, require_alias_completed: bool = True
+    ) -> None:
         if self.contract_marker_path.exists() or self.contract_marker_path.is_symlink():
             raise PullDeployError(
                 "interrupted 0012 maintenance must be recovered before code deployment"
+            )
+        try:
+            alias_marker = _control_runtime.load_production_0005_alias_gate(
+                self.runtime_root, require_completed=require_alias_completed
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "completed production 0005 alias reconciliation is required"
+            ) from exc
+        if (
+            not require_alias_completed
+            and alias_marker is not None
+            and alias_marker.get("phase") != "completed"
+        ):
+            raise PullDeployError(
+                "interrupted production 0005 alias reconciliation must recover first"
             )
 
     def ensure_roots(self, *, mutating: bool) -> None:
@@ -6882,7 +6904,7 @@ class PullDeployController:
         self.ensure_roots(mutating=False)
         target_sha = require_sha(target_sha, "target SHA")
         operation_id = require_operation_id(operation_id)
-        self._require_no_contract_maintenance()
+        self._require_no_contract_maintenance(require_alias_completed=False)
         if self.marker_path.exists() or self.marker_path.is_symlink():
             raise PullDeployError(
                 "an interrupted deployment must be recovered before planning"
@@ -7158,7 +7180,7 @@ class PullDeployController:
         """
 
         with self.deployment_lock():
-            self._require_no_contract_maintenance()
+            self._require_no_contract_maintenance(require_alias_completed=False)
             if self.marker_path.exists() or self.marker_path.is_symlink():
                 raise PullDeployError(
                     "an interrupted deployment must be recovered before prepare"
@@ -7343,7 +7365,7 @@ class PullDeployController:
                 target_sha=target_sha, operation_id=operation_id
             )
         with self.deployment_lock():
-            self._require_no_contract_maintenance()
+            self._require_no_contract_maintenance(require_alias_completed=False)
             if handoff_record is not None:
                 # Revalidate after acquiring the lock; pre-lock validation is
                 # intentionally not authority for descriptor preparation.

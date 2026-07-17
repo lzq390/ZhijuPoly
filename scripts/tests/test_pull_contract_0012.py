@@ -31,6 +31,196 @@ def _write_private_json(path: Path, document: dict[str, object]) -> None:
     os.chmod(path, 0o600)
 
 
+def _write_private(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    path.write_text(payload, encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def _seed_completed_alias_gate(
+    runtime: Path, manifest: dict[str, object], control_root: Path
+) -> None:
+    selector = contract.pull._control_runtime
+    operation_id = "alias-0005-fixture"
+    audit_dir = runtime / selector.ALIAS_AUDIT_ROOT_RELATIVE / operation_id
+    backup_dir = runtime / selector.ALIAS_BACKUP_ROOT_RELATIVE / operation_id
+    for directory in (audit_dir, backup_dir):
+        directory.mkdir(parents=True, mode=0o700)
+        os.chmod(directory, 0o700)
+    dump = backup_dir / "nexpoly-before.dump"
+    _write_private(dump, "fixture database dump\n")
+    dump_sha = selector.sha256_file(dump).removeprefix("sha256:")
+    _write_private(backup_dir / "nexpoly-before.dump.sha256", dump_sha + "\n")
+    restore_list = audit_dir / "pg-restore.list"
+    _write_private(
+        restore_list,
+        "TABLE DATA generation polytao_jobs\n"
+        "TABLE DATA governance schema_migrations\n",
+    )
+    def ledger_rows(pairs: list[tuple[str, str]]) -> list[dict[str, str]]:
+        return [
+            {
+                "version": version,
+                "checksum": checksum,
+                "applied_at": (
+                    selector.ALIAS_APPLIED_AT
+                    if version == selector.ALIAS_VERSION
+                    else f"2026-07-08T02:{index:02d}:00.000000Z"
+                ),
+            }
+            for index, (version, checksum) in enumerate(pairs)
+        ]
+
+    archive = {
+        "row_count": 12,
+        "status_counts": {"completed": 8, "failed": 4},
+        "rows_sha256": "c" * 64,
+        "schema_sha256": selector.ALIAS_EXPECTED_SCHEMA_SHA256,
+        "structure_counts": selector.ALIAS_EXPECTED_STRUCTURE_COUNTS,
+    }
+    relation = {
+        "kind": "r",
+        "persistence": "p",
+        "is_partition": False,
+        "row_security": False,
+        "force_row_security": False,
+        "owner": "polyprop",
+        "parents": 0,
+        "children": 0,
+    }
+    before = {
+        "database": "nexpoly",
+        "current_user": "polyprop",
+        "database_owner": "polyprop",
+        "server_version_num": 160014,
+        "in_recovery": False,
+        "system_identifier": selector.ALIAS_SYSTEM_IDENTIFIER,
+        "ledger": ledger_rows(selector.ALIAS_PRE_LEDGER),
+        "archive": archive,
+        "ledger_schema_sha256": selector.ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256,
+        "ledger_structure_counts": selector.ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS,
+        "polytao_relation": relation,
+        "ledger_relation": relation,
+    }
+    after = {
+        **before,
+        "ledger": [
+            row
+            for row in before["ledger"]
+            if row["version"] != selector.ALIAS_VERSION
+        ],
+    }
+    restored = {
+        **before,
+        "database": "nexpoly_alias_restore",
+        "current_user": "postgres",
+        "database_owner": "postgres",
+        "system_identifier": "123456789",
+        "polytao_relation": {**relation, "owner": "postgres"},
+        "ledger_relation": {**relation, "owner": "postgres"},
+    }
+    entrypoint = manifest["entrypoints"]["reconcile-production-0005-alias"]
+    identity = {
+        "operation_id": operation_id,
+        "control": {
+            "release_id": manifest["release_id"],
+            "source_sha": manifest["source_sha"],
+            "source_tree": manifest["source_tree"],
+            "manifest_sha256": selector.sha256_file(
+                control_root / selector.CONTROL_MANIFEST_NAME
+            ).removeprefix("sha256:"),
+            "script_sha256": selector.sha256_file(
+                control_root / entrypoint["file"]
+            ).removeprefix("sha256:"),
+        },
+        "legacy_source": {"sha": "1" * 40, "tree": "2" * 40},
+        "binaries_sha256": {"/fixture/bin": "b" * 64},
+        "database_endpoint": selector.ALIAS_DATABASE_ENDPOINT,
+        "database_system_identifier": selector.ALIAS_SYSTEM_IDENTIFIER,
+        "restore_image": {
+            "digest_ref": selector.ALIAS_RESTORE_IMAGE,
+            "image_id": "sha256:" + "d" * 64,
+        },
+        "alias": {
+            "version": selector.ALIAS_VERSION,
+            "checksum": selector.ALIAS_CHECKSUM,
+            "applied_at": selector.ALIAS_APPLIED_AT,
+        },
+    }
+    backup = {
+        "dump_path": str(dump),
+        "dump_sha256": dump_sha,
+        "dump_size": dump.stat().st_size,
+        "restore_list_sha256": selector.sha256_file(restore_list).removeprefix(
+            "sha256:"
+        ),
+    }
+    restore = {
+        "image": {
+            "digest_ref": selector.ALIAS_RESTORE_IMAGE,
+            "image_id": "sha256:" + "d" * 64,
+        },
+        "container_name": "nexpoly-alias-restore-fixture",
+        "network_mode": "none",
+        "dump_sha256": dump_sha,
+        "archive": before["archive"],
+        "ledger_schema_sha256": before["ledger_schema_sha256"],
+        "database_inventory": restored,
+        "verified_at": "2026-07-17T00:00:00Z",
+    }
+    _write_private_json(audit_dir / "isolated-postgres16-restore.json", restore)
+    _write_private_json(audit_dir / "database-after.json", after)
+    files = selector._alias_evidence_files(audit_dir, backup_dir)
+    completed_at = "2026-07-17T00:00:01Z"
+    audit = {
+        "schema_version": 1,
+        "operation_id": operation_id,
+        "outcome": "completed",
+        "identity": identity,
+        "database_before": before,
+        "database_after": after,
+        "database_backup": backup,
+        "isolated_restore": restore,
+        "binaries": {"/fixture/bin": {"sha256": "b" * 64}},
+        "files": files,
+        "completed_at": completed_at,
+    }
+    audit_path = audit_dir / "AUDIT-MANIFEST.json"
+    _write_private_json(audit_path, audit)
+    marker = {
+        "schema_version": 1,
+        "action": selector.ALIAS_ACTION,
+        "phase": "completed",
+        "identity": identity,
+        "operation_directories": {
+            "audit": str(audit_dir),
+            "backup": str(backup_dir),
+        },
+        "started_at": "2026-07-17T00:00:00Z",
+        "updated_at": completed_at,
+        "runtime_stop_fence": {"fixture": True},
+        "before": before,
+        "database_backup": backup,
+        "restore_container": {"name": "fixture"},
+        "isolated_restore": restore,
+        "mutation_intent": {
+            "database_system_identifier": selector.ALIAS_SYSTEM_IDENTIFIER,
+            "alias": identity["alias"],
+            "pre_ledger": before["ledger"],
+            "archive": before["archive"],
+            "dump_sha256": dump_sha,
+            "restore_dump_sha256": dump_sha,
+        },
+        "after": after,
+        "audit_manifest_sha256": selector.sha256_file(audit_path).removeprefix(
+            "sha256:"
+        ),
+        "completed_at": completed_at,
+    }
+    _write_private_json(runtime / selector.ALIAS_MARKER_RELATIVE, marker)
+
+
 class FakePullController:
     def __init__(
         self,
@@ -602,6 +792,7 @@ class PullContract0012Tests(unittest.TestCase):
             },
             "deployed_at": "2026-07-16T00:00:00Z",
         }
+        _seed_completed_alias_gate(self.runtime, control_manifest, control_root)
 
     def _fake_controller(self) -> FakePullController:
         return FakePullController(
@@ -1657,10 +1848,10 @@ class PullContract0012Tests(unittest.TestCase):
 
     def test_archive_requires_pinned_isolated_postgres16_restore(self) -> None:
         backup = self.runtime / "backups/database.dump"
-        backup.parent.mkdir(parents=True)
+        backup.parent.mkdir(parents=True, exist_ok=True)
         backup.write_bytes(b"dump")
         audit = self.runtime / "audit"
-        audit.mkdir()
+        audit.mkdir(exist_ok=True)
         pull_controller = object()
         lifecycle = mock.Mock()
         archive_evidence = {
@@ -1719,10 +1910,10 @@ class PullContract0012Tests(unittest.TestCase):
 
     def test_archive_fails_before_contract_when_isolated_restore_fails(self) -> None:
         backup = self.runtime / "backups/database.dump"
-        backup.parent.mkdir(parents=True)
+        backup.parent.mkdir(parents=True, exist_ok=True)
         backup.write_bytes(b"dump")
         audit = self.runtime / "audit"
-        audit.mkdir()
+        audit.mkdir(exist_ok=True)
         lifecycle = mock.Mock()
         lifecycle.verify_contract_postgres16_restore.side_effect = (
             contract.pull.PullDeployError("restore failed")
@@ -1905,7 +2096,7 @@ class PullContract0012Tests(unittest.TestCase):
     ) -> None:
         maintenance = object.__new__(contract.PullContractMaintenance)
         marker = self.runtime / "state/contract-0012-in-progress.json"
-        marker.parent.mkdir(parents=True)
+        marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("{}", encoding="utf-8")
         os.chmod(marker, 0o644)
         with self.assertRaisesRegex(contract.PullContractError, "unsafe or invalid"):

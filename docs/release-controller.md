@@ -11,6 +11,7 @@ deployment.
 source checkout  /data/lzq/gith/nexpoly
 runtime root     /data/lzq/gith/nexpoly-runtime
 controller       /data/lzq/gith/nexpoly-runtime/bin/nexpoly-pull-deploy
+alias repair     /data/lzq/gith/nexpoly-runtime/bin/nexpoly-reconcile-production-0005-polytao-alias
 configuration    /data/lzq/gith/nexpoly-runtime/config
 state            /data/lzq/gith/nexpoly-runtime/state
 audit            /data/lzq/gith/nexpoly-runtime/audit
@@ -50,11 +51,16 @@ An operation ID cannot be reused for a different SHA. Repeating a completed
 phase with the same identity is idempotent; an unknown previous result or an
 identity mismatch stops for recovery.
 
-The Pull bridge PR is not immediate production-deploy authorization. The
+Control-plane bootstrap is not immediate production-deploy authorization. The
 known duplicate production `0005_polytao_jobs` ledger alias must first be
-reconciled by the separate fixed-purpose PR2 maintenance tool, with its backup
-and isolated restore evidence. Before that gate, do not invoke production
-`apply` or `bootstrap-expand`.
+reconciled through the content-addressed fixed-purpose maintenance entrypoint,
+with its backup and isolated restore evidence. The required order is bootstrap
+controls; run Pull `plan`/`prepare` while production is online; run the alias
+dry-run; enter maintenance and stop every source/database client; apply the
+alias with the same operation ID; then run the already prepared Pull `apply`.
+Before that gate, do not invoke production Pull `apply` or `bootstrap-expand`.
+If an alias marker is incomplete, even `plan`/`prepare` remain blocked until the
+recorded alias control recovers it.
 
 ## Planning
 
@@ -184,8 +190,8 @@ epoch. It stops before an unapproved trailing contract.
 
 The checksum-pinned `0012_drop_polytao_jobs` operation remains a separate
 maintenance command. The retired bundle controller deliberately does not expose
-it. `runtime/bin` contains only the immutable selector and the
-`nexpoly-pull-deploy` / `nexpoly-pull-contract-0012` wrappers. The selector loads
+it. `runtime/bin` contains only the immutable selector and the stable deploy,
+0012, and fixed-purpose 0005-alias wrappers. The selector loads
 `pull_contract_0012.py` and its byte-identical, CLI-retired governance core from
 the active content-addressed control release. The adapter binds the successful
 pull deployment record, sealed prepared descriptor, clean live SHA/tree and

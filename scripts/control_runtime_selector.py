@@ -32,14 +32,100 @@ BOOTSTRAP_IMMUTABLE_FILES = {
     "control_runtime_selector.py",
     "nexpoly-pull-deploy",
     "nexpoly-pull-contract-0012",
+    "nexpoly-reconcile-production-0005-polytao-alias",
 }
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+HEX_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 RELEASE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}\.py$")
 SAFE_ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
 SAFE_CONFIG_RE = re.compile(r"^config/[a-z][a-z0-9_.-]{0,127}$")
+ALIAS_MARKER_RELATIVE = Path("state/maintenance/0005-polytao-alias/operation.json")
+ALIAS_AUDIT_ROOT_RELATIVE = Path("audit/maintenance/0005-polytao-alias")
+ALIAS_BACKUP_ROOT_RELATIVE = Path("backups/maintenance/0005-polytao-alias")
+ALIAS_ACTION = "reconcile-production-0005-polytao-alias"
+ALIAS_VERSION = "0005_polytao_jobs"
+ALIAS_CHECKSUM = (
+    "b15268a475e8daf8dd58be988a228a0440e59a31dbf11d5d6b52e0974c3daab5"
+)
+ALIAS_APPLIED_AT = "2026-07-08T03:44:05.662979Z"
+ALIAS_RESTORE_IMAGE = (
+    "postgres:16-alpine@sha256:"
+    "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+)
+ALIAS_SYSTEM_IDENTIFIER = "7659245354718314530"
+ALIAS_DATABASE_ENDPOINT = {
+    "host_sha256": "12ca17b49af2289436f303e0166030a21e525d266e209267433801a8fd4071a0",
+    "port": 55432,
+    "database": "nexpoly",
+    "user": "polyprop",
+    "sslmode": "disable",
+}
+ALIAS_CANONICAL_LEDGER = [
+    (
+        "0001_app_data_governance",
+        "d5fc9f3d063f1cba476834f3530519b7970cd54f3c3711d05aba1f1cb2fd34f9",
+    ),
+    (
+        "0002_lab_identity_defaults",
+        "580ed6dc7c34970aabd662bc47765e9d02446c28aea1c4fa8fb2a99f05b1ac2f",
+    ),
+    (
+        "0003_runtime_postgres_cutover",
+        "0888ac9abd1b6b642f0addd42274b5408981a26c27f1140b7b656ff34ad73ce3",
+    ),
+    (
+        "0004_monomer_md_jobs",
+        "b3ad64728f399f42b2bf9edb47ad035ac70f09fce6ced48e7b422ea74d5a7e8e",
+    ),
+    (
+        "0005_byteff2_formal_monomer_md",
+        "c9ec808c50915b82a696ab482ed676c62bc75f00a9af21baf9e7f66b185bacb5",
+    ),
+    (
+        "0006_property_filter_records",
+        "57b103dc656334cf5e52bdc9512576a303ae0044ec5fb64eb7cba802021eceaa",
+    ),
+    ("0007_polytao_jobs", ALIAS_CHECKSUM),
+    (
+        "0008_polytao_backend_runtime",
+        "d0d8b2187aad8657269600873d3d2630e30c7d72da2f6662e18ab22031deff90",
+    ),
+]
+ALIAS_PRE_LEDGER = sorted(
+    [*ALIAS_CANONICAL_LEDGER, (ALIAS_VERSION, ALIAS_CHECKSUM)]
+)
+ALIAS_POST_LEDGER = sorted(ALIAS_CANONICAL_LEDGER)
+ALIAS_EXPECTED_SCHEMA_SHA256 = (
+    "8594868c661024af0766627a2d48280fc6967b8efe445878fc2a252a4520000c"
+)
+ALIAS_EXPECTED_STRUCTURE_COUNTS = {
+    "columns": 23,
+    "indexes": 3,
+    "constraints": 6,
+    "triggers": 0,
+}
+ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256 = (
+    "db77ff078329ed4ec8b00f70172be743b9f3e67924d27716fba26277466ecfdd"
+)
+ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS = {
+    "columns": 3,
+    "indexes": 1,
+    "constraints": 1,
+    "triggers": 0,
+}
+ALIAS_AUDIT_NAMES = {
+    "pg-restore.list",
+    "isolated-postgres16-restore.json",
+    "database-after.json",
+    "AUDIT-MANIFEST.json",
+}
+ALIAS_BACKUP_NAMES = {
+    "nexpoly-before.dump",
+    "nexpoly-before.dump.sha256",
+}
 REQUIRED_COMPATIBILITY = {
     "handoff_protocol_versions": 1,
     "descriptor_schema_versions": 2,
@@ -114,6 +200,394 @@ def _load_private_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ControlRuntimeError(f"control record is invalid: {path}")
     return value
+
+
+def _private_file_identity(path: Path) -> dict[str, Any]:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ControlRuntimeError(f"alias evidence is unavailable: {path}") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+    ):
+        raise ControlRuntimeError(f"alias evidence is unsafe: {path}")
+    return {
+        "size": metadata.st_size,
+        "sha256": sha256_file(path).removeprefix("sha256:"),
+        "mode": 0o600,
+    }
+
+
+def _alias_evidence_files(
+    audit_dir: Path, backup_dir: Path
+) -> dict[str, dict[str, Any]]:
+    paths = {
+        "audit/pg-restore.list": audit_dir / "pg-restore.list",
+        "audit/isolated-postgres16-restore.json": (
+            audit_dir / "isolated-postgres16-restore.json"
+        ),
+        "audit/database-after.json": audit_dir / "database-after.json",
+        "backup/nexpoly-before.dump": backup_dir / "nexpoly-before.dump",
+        "backup/nexpoly-before.dump.sha256": (
+            backup_dir / "nexpoly-before.dump.sha256"
+        ),
+    }
+    return {name: _private_file_identity(path) for name, path in paths.items()}
+
+
+def _alias_ledger_pairs(value: object) -> list[tuple[str, str]] | None:
+    if not isinstance(value, list):
+        return None
+    pairs: list[tuple[str, str]] = []
+    for row in value:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"version", "checksum", "applied_at"}
+            or not isinstance(row.get("version"), str)
+            or not isinstance(row.get("checksum"), str)
+            or not isinstance(row.get("applied_at"), str)
+            or not row["applied_at"]
+        ):
+            return None
+        pairs.append((row["version"], row["checksum"]))
+    return pairs
+
+
+def _alias_archive_is_valid(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "row_count",
+        "status_counts",
+        "rows_sha256",
+        "schema_sha256",
+        "structure_counts",
+    }:
+        return False
+    row_count = value.get("row_count")
+    status_counts = value.get("status_counts")
+    return bool(
+        not isinstance(row_count, bool)
+        and isinstance(row_count, int)
+        and row_count >= 0
+        and isinstance(status_counts, dict)
+        and all(
+            isinstance(status, str)
+            and bool(status)
+            and not isinstance(count, bool)
+            and isinstance(count, int)
+            and count >= 0
+            for status, count in status_counts.items()
+        )
+        and sum(status_counts.values()) == row_count
+        and isinstance(value.get("rows_sha256"), str)
+        and HEX_DIGEST_RE.fullmatch(value["rows_sha256"]) is not None
+        and value.get("schema_sha256") == ALIAS_EXPECTED_SCHEMA_SHA256
+        and value.get("structure_counts") == ALIAS_EXPECTED_STRUCTURE_COUNTS
+    )
+
+
+def _alias_restore_image_is_valid(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and set(value) == {"digest_ref", "image_id"}
+        and value.get("digest_ref") == ALIAS_RESTORE_IMAGE
+        and isinstance(value.get("image_id"), str)
+        and DIGEST_RE.fullmatch(value["image_id"]) is not None
+    )
+
+
+def _alias_relation_is_valid(value: object, *, owner: str) -> bool:
+    return value == {
+        "kind": "r",
+        "persistence": "p",
+        "is_partition": False,
+        "row_security": False,
+        "force_row_security": False,
+        "owner": owner,
+        "parents": 0,
+        "children": 0,
+    }
+
+
+def _alias_live_inventory_is_valid(
+    value: object,
+    *,
+    ledger: list[tuple[str, str]],
+    archive: object | None = None,
+) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "database",
+        "current_user",
+        "database_owner",
+        "server_version_num",
+        "in_recovery",
+        "system_identifier",
+        "ledger",
+        "archive",
+        "ledger_schema_sha256",
+        "ledger_structure_counts",
+        "polytao_relation",
+        "ledger_relation",
+    }:
+        return False
+    rows = value.get("ledger")
+    alias_rows = (
+        [row for row in rows if row.get("version") == ALIAS_VERSION]
+        if isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
+        else []
+    )
+    return bool(
+        value.get("database") == ALIAS_DATABASE_ENDPOINT["database"]
+        and value.get("current_user") == ALIAS_DATABASE_ENDPOINT["user"]
+        and value.get("database_owner") == "polyprop"
+        and not isinstance(value.get("server_version_num"), bool)
+        and isinstance(value.get("server_version_num"), int)
+        and 160000 <= value["server_version_num"] < 170000
+        and value.get("in_recovery") is False
+        and str(value.get("system_identifier")) == ALIAS_SYSTEM_IDENTIFIER
+        and _alias_ledger_pairs(rows) == ledger
+        and (
+            not any(pair[0] == ALIAS_VERSION for pair in ledger)
+            or len(alias_rows) == 1
+            and alias_rows[0].get("applied_at") == ALIAS_APPLIED_AT
+        )
+        and (
+            _alias_archive_is_valid(value.get("archive"))
+            if archive is None
+            else value.get("archive") == archive
+        )
+        and value.get("ledger_schema_sha256")
+        == ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256
+        and value.get("ledger_structure_counts")
+        == ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS
+        and _alias_relation_is_valid(value.get("polytao_relation"), owner="polyprop")
+        and _alias_relation_is_valid(value.get("ledger_relation"), owner="polyprop")
+    )
+
+
+def _alias_restore_inventory_matches(before: object, restored: object) -> bool:
+    if not isinstance(before, dict) or not isinstance(restored, dict):
+        return False
+    return bool(
+        set(restored) == set(before)
+        and restored.get("database") == "nexpoly_alias_restore"
+        and restored.get("current_user") == "postgres"
+        and restored.get("database_owner") == "postgres"
+        and restored.get("in_recovery") is False
+        and not isinstance(restored.get("server_version_num"), bool)
+        and isinstance(restored.get("server_version_num"), int)
+        and 160000 <= restored["server_version_num"] < 170000
+        and isinstance(restored.get("system_identifier"), str)
+        and restored["system_identifier"].isdigit()
+        and restored.get("ledger") == before.get("ledger")
+        and restored.get("archive") == before.get("archive")
+        and restored.get("ledger_schema_sha256")
+        == before.get("ledger_schema_sha256")
+        and restored.get("ledger_structure_counts")
+        == before.get("ledger_structure_counts")
+        and _alias_relation_is_valid(restored.get("polytao_relation"), owner="postgres")
+        and _alias_relation_is_valid(restored.get("ledger_relation"), owner="postgres")
+    )
+
+
+def load_production_0005_alias_gate(
+    runtime_root: Path, *, require_completed: bool
+) -> dict[str, Any] | None:
+    """Validate the durable one-purpose alias repair gate and all evidence."""
+
+    marker_path = runtime_root / ALIAS_MARKER_RELATIVE
+    if not (marker_path.exists() or marker_path.is_symlink()):
+        if require_completed:
+            raise ControlRuntimeError(
+                "production 0005 ledger-alias reconciliation is required"
+            )
+        return None
+    marker = _load_private_json(marker_path)
+    identity = marker.get("identity")
+    operation_id = identity.get("operation_id") if isinstance(identity, dict) else None
+    directories = marker.get("operation_directories")
+    if (
+        marker.get("schema_version") != 1
+        or marker.get("action") != ALIAS_ACTION
+        or marker.get("phase") not in {
+            "directory-intent",
+            "planned",
+            "runtime-fenced",
+            "locked-preverified",
+            "backup-started",
+            "backup-complete",
+            "restore-started",
+            "restore-verified",
+            "mutation-intent",
+            "mutation-commit-started",
+            "mutation-committed",
+            "completed",
+        }
+        or not isinstance(operation_id, str)
+        or OPERATION_ID_RE.fullmatch(operation_id) is None
+        or directories
+        != {
+            "audit": str(runtime_root / ALIAS_AUDIT_ROOT_RELATIVE / operation_id),
+            "backup": str(runtime_root / ALIAS_BACKUP_ROOT_RELATIVE / operation_id),
+        }
+    ):
+        raise ControlRuntimeError("production 0005 alias marker is invalid")
+    if marker["phase"] != "completed":
+        if require_completed:
+            raise ControlRuntimeError(
+                "production 0005 ledger-alias reconciliation is incomplete"
+            )
+        return marker
+    expected_alias = {
+        "version": ALIAS_VERSION,
+        "checksum": ALIAS_CHECKSUM,
+        "applied_at": ALIAS_APPLIED_AT,
+    }
+    audit_dir = runtime_root / ALIAS_AUDIT_ROOT_RELATIVE / operation_id
+    backup_dir = runtime_root / ALIAS_BACKUP_ROOT_RELATIVE / operation_id
+    _require_private_directory(audit_dir)
+    _require_private_directory(backup_dir)
+    if {entry.name for entry in audit_dir.iterdir()} != ALIAS_AUDIT_NAMES or {
+        entry.name for entry in backup_dir.iterdir()
+    } != ALIAS_BACKUP_NAMES:
+        raise ControlRuntimeError("production 0005 alias evidence inventory differs")
+    if identity.get("alias") != expected_alias:
+        raise ControlRuntimeError("production 0005 alias identity differs")
+    manifest_path = audit_dir / "AUDIT-MANIFEST.json"
+    manifest = _load_private_json(manifest_path)
+    manifest_sha = sha256_file(manifest_path).removeprefix("sha256:")
+    after = _load_private_json(audit_dir / "database-after.json")
+    restore = _load_private_json(audit_dir / "isolated-postgres16-restore.json")
+    backup = marker.get("database_backup")
+    before = marker.get("before")
+    mutation_intent = marker.get("mutation_intent")
+    dump_path = backup_dir / "nexpoly-before.dump"
+    sidecar_path = backup_dir / "nexpoly-before.dump.sha256"
+    _private_file_identity(dump_path)
+    _private_file_identity(sidecar_path)
+    try:
+        sidecar = sidecar_path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError) as exc:
+        raise ControlRuntimeError("production 0005 alias dump hash is invalid") from exc
+    actual_dump_sha = sha256_file(dump_path).removeprefix("sha256:")
+    files = _alias_evidence_files(audit_dir, backup_dir)
+    binary_hashes = identity.get("binaries_sha256")
+    audit_binaries = manifest.get("binaries")
+    restore_image = identity.get("restore_image")
+    if (
+        not isinstance(backup, dict)
+        or not isinstance(before, dict)
+        or not isinstance(mutation_intent, dict)
+        or identity.get("database_endpoint") != ALIAS_DATABASE_ENDPOINT
+        or identity.get("database_system_identifier") != ALIAS_SYSTEM_IDENTIFIER
+        or not _alias_live_inventory_is_valid(before, ledger=ALIAS_PRE_LEDGER)
+        or not _alias_live_inventory_is_valid(
+            after,
+            ledger=ALIAS_POST_LEDGER,
+            archive=before.get("archive"),
+        )
+        or any(
+            before.get(key) != after.get(key)
+            for key in before
+            if key != "ledger"
+        )
+        or after.get("ledger")
+        != [
+            row
+            for row in before.get("ledger", [])
+            if isinstance(row, dict) and row.get("version") != ALIAS_VERSION
+        ]
+        or backup.get("dump_path") != str(dump_path)
+        or backup.get("dump_sha256") != actual_dump_sha
+        or backup.get("dump_size") != dump_path.stat().st_size
+        or backup.get("restore_list_sha256")
+        != files["audit/pg-restore.list"]["sha256"]
+        or sidecar != actual_dump_sha
+        or restore != marker.get("isolated_restore")
+        or restore.get("dump_sha256") != actual_dump_sha
+        or not _alias_restore_image_is_valid(restore_image)
+        or restore.get("image") != restore_image
+        or restore.get("archive") != before.get("archive")
+        or restore.get("ledger_schema_sha256")
+        != before.get("ledger_schema_sha256")
+        or not _alias_restore_inventory_matches(
+            before, restore.get("database_inventory")
+        )
+        or mutation_intent
+        != {
+            "database_system_identifier": identity.get(
+                "database_system_identifier"
+            ),
+            "alias": expected_alias,
+            "pre_ledger": before.get("ledger"),
+            "archive": before.get("archive"),
+            "dump_sha256": actual_dump_sha,
+            "restore_dump_sha256": actual_dump_sha,
+        }
+        or after != marker.get("after")
+        or marker.get("audit_manifest_sha256") != manifest_sha
+        or manifest.get("schema_version") != 1
+        or manifest.get("operation_id") != operation_id
+        or manifest.get("outcome") != "completed"
+        or manifest.get("identity") != identity
+        or manifest.get("database_before") != marker.get("before")
+        or manifest.get("database_after") != after
+        or manifest.get("database_backup") != backup
+        or manifest.get("isolated_restore") != restore
+        or manifest.get("files") != files
+        or manifest.get("completed_at") != marker.get("completed_at")
+        or set(manifest)
+        != {
+            "schema_version",
+            "operation_id",
+            "outcome",
+            "identity",
+            "database_before",
+            "database_after",
+            "database_backup",
+            "isolated_restore",
+            "binaries",
+            "files",
+            "completed_at",
+        }
+        or not isinstance(binary_hashes, dict)
+        or not isinstance(audit_binaries, dict)
+        or {
+            path: record.get("sha256")
+            for path, record in audit_binaries.items()
+            if isinstance(path, str) and isinstance(record, dict)
+        }
+        != binary_hashes
+        or not isinstance(marker.get("completed_at"), str)
+        or HEX_DIGEST_RE.fullmatch(str(manifest_sha)) is None
+    ):
+        raise ControlRuntimeError("production 0005 alias completion evidence differs")
+    control = identity.get("control")
+    if not isinstance(control, dict):
+        raise ControlRuntimeError("production 0005 alias control identity is invalid")
+    release_id = control.get("release_id")
+    if not isinstance(release_id, str) or RELEASE_ID_RE.fullmatch(release_id) is None:
+        raise ControlRuntimeError("production 0005 alias control release is invalid")
+    control_manifest, control_root = load_control_release(runtime_root, release_id)
+    entrypoint = control_manifest["entrypoints"].get(
+        "reconcile-production-0005-alias"
+    )
+    if (
+        control.get("source_sha") != control_manifest["source_sha"]
+        or control.get("source_tree") != control_manifest["source_tree"]
+        or control.get("manifest_sha256")
+        != sha256_file(control_root / CONTROL_MANIFEST_NAME).removeprefix("sha256:")
+        or not isinstance(entrypoint, dict)
+        or entrypoint.get("kind") != "python"
+        or control.get("script_sha256")
+        != sha256_file(control_root / str(entrypoint.get("file"))).removeprefix(
+            "sha256:"
+        )
+    ):
+        raise ControlRuntimeError("production 0005 alias control evidence differs")
+    return marker
 
 
 def _validate_compatibility(value: object) -> dict[str, Any]:
@@ -787,13 +1261,79 @@ def _selected_release(
 ) -> tuple[dict[str, Any], Path]:
     """Route recovery/apply to a sealed candidate; all other calls use active."""
 
-    active, manifest, root = load_active_control(runtime_root)
-    if role == "contract-0012":
+    alias_marker = None
+    deploy_command = arguments[0] if role == "deploy" and arguments else None
+    deploy_preparation = deploy_command in {"plan", "prepare"}
+    if role in {
+        "deploy",
+        "contract-0012",
+        "reconcile-production-0005-alias",
+    }:
+        alias_marker = load_production_0005_alias_gate(
+            runtime_root,
+            require_completed=(
+                role == "contract-0012"
+                or (role == "deploy" and not deploy_preparation)
+            ),
+        )
+    if (
+        role == "deploy"
+        and deploy_preparation
+        and alias_marker is not None
+        and alias_marker.get("phase") != "completed"
+    ):
+        raise ControlRuntimeError(
+            "interrupted alias reconciliation must recover before deployment preparation"
+        )
+    if role in {"contract-0012", "reconcile-production-0005-alias"}:
         deploy_marker = runtime_root / "state/deploy-in-progress.json"
         if deploy_marker.exists() or deploy_marker.is_symlink():
             raise ControlRuntimeError(
-                "0012 maintenance is blocked by an interrupted code deployment"
+                "database maintenance is blocked by an interrupted code deployment"
             )
+    if role == "reconcile-production-0005-alias":
+        contract_marker = runtime_root / "state/contract-0012-in-progress.json"
+        if contract_marker.exists() or contract_marker.is_symlink():
+            raise ControlRuntimeError(
+                "ledger-alias maintenance is blocked by interrupted 0012 maintenance"
+            )
+    if (
+        role == "reconcile-production-0005-alias"
+        and alias_marker is not None
+    ):
+        _validate_bootstrap_authority(runtime_root)
+        identity = alias_marker.get("identity")
+        control = identity.get("control") if isinstance(identity, dict) else None
+        release_id = control.get("release_id") if isinstance(control, dict) else None
+        if not isinstance(release_id, str) or RELEASE_ID_RE.fullmatch(release_id) is None:
+            raise ControlRuntimeError(
+                "recorded alias reconciliation lacks sealed control authority"
+            )
+        recovery_manifest, recovery_root = load_control_release(
+            runtime_root, release_id
+        )
+        entrypoint = recovery_manifest["entrypoints"].get(
+            "reconcile-production-0005-alias"
+        )
+        if (
+            not isinstance(entrypoint, dict)
+            or entrypoint.get("kind") != "python"
+            or control.get("source_sha") != recovery_manifest["source_sha"]
+            or control.get("source_tree") != recovery_manifest["source_tree"]
+            or control.get("manifest_sha256")
+            != sha256_file(recovery_root / CONTROL_MANIFEST_NAME).removeprefix(
+                "sha256:"
+            )
+            or control.get("script_sha256")
+            != sha256_file(recovery_root / str(entrypoint.get("file"))).removeprefix(
+                "sha256:"
+            )
+        ):
+            raise ControlRuntimeError(
+                "recorded alias reconciliation control authority differs"
+            )
+        return recovery_manifest, recovery_root
+    active, manifest, root = load_active_control(runtime_root)
     if role == "monomer-md":
         _validate_worker_route_authority(runtime_root, active, manifest)
     if role != "deploy" or not arguments:
@@ -907,6 +1447,18 @@ def _exec_role(
     )
     clean_environment["NEXPOLY_ACTIVE_CONTROL_ROOT"] = str(release)
     clean_environment["NEXPOLY_ACTIVE_CONTROL_RELEASE_ID"] = manifest["release_id"]
+    if role == "reconcile-production-0005-alias":
+        dsn = environment.get("NEXPOLY_PRODUCTION_POSTGRES_DSN")
+        if (
+            not isinstance(dsn, str)
+            or not dsn
+            or len(dsn) > 8192
+            or any(character in dsn for character in ("\x00", "\r", "\n"))
+        ):
+            raise ControlRuntimeError(
+                "production PostgreSQL DSN is unavailable or malformed"
+            )
+        clean_environment["NEXPOLY_PRODUCTION_POSTGRES_DSN"] = dsn
     python = "/usr/bin/python3"
     if entrypoint["kind"] == "python":
         target = release / entrypoint["file"]

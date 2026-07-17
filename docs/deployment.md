@@ -178,6 +178,65 @@ private, atomically replaces the pathname with a new verified inode, runs
 or manually reload that unit. Remove the temporary bootstrap source only after
 the installed immutable inventory and completed bootstrap authority verify.
 
+### One-time production ledger-alias gate
+
+The audited legacy production ledger contains one duplicate historical alias,
+`0005_polytao_jobs`. The first full Pull deployment is deliberately blocked
+until the fixed-purpose reconciliation control has removed exactly that ledger
+row. Bootstrap installs this control outside the still-legacy checkout. Complete
+Pull `plan` and `prepare` while the current production runtime is still online,
+then enter the maintenance window, reconcile the alias, and run the already
+prepared Pull `apply`. Once an alias operation marker exists but is incomplete,
+all Pull commands remain blocked until that same alias operation recovers. Do
+not update the production checkout first.
+
+Provision the one-line production DSN out of band into a deploy-user-owned
+mode-`0600` credential file. It must use the pinned
+`polyprop@127.0.0.1:55432/nexpoly?sslmode=disable` endpoint and must never
+appear in a command argument, terminal input, shell history, log or audit
+record. Load it without echoing the value; the first invocation is read-only:
+
+```bash
+install -d -m 0700 /data/lzq/gith/nexpoly-runtime/config
+credential=/data/lzq/gith/nexpoly-runtime/config/production-postgres.dsn
+if [[ ! -e "$credential" ]]; then
+  install -m 0600 /dev/null "$credential"
+  echo "Populate $credential through the approved secret provisioner, then rerun." >&2
+  exit 1
+fi
+[[ -f "$credential" && ! -L "$credential" ]]
+[[ "$(stat -c '%u:%a' "$credential")" == "$(id -u):600" ]]
+IFS= read -r NEXPOLY_PRODUCTION_POSTGRES_DSN \
+  < "$credential"
+[[ -n "$NEXPOLY_PRODUCTION_POSTGRES_DSN" ]]
+export NEXPOLY_PRODUCTION_POSTGRES_DSN
+/data/lzq/gith/nexpoly-runtime/bin/nexpoly-reconcile-production-0005-polytao-alias \
+  --operation-id alias-0005-<utc-timestamp>
+```
+
+After reviewing the exact cluster, ledger, dynamically sealed business-row
+archive, PostgreSQL client, backup and isolated-restore plan, repeat the same
+operation ID with the explicit write confirmation during a maintenance window. Isolate ingress; stop the
+Backend, Web/Nginx, `postgres-init`, and all MD/DFT Worker processes while
+keeping PostgreSQL running. Apply refuses a production database with any other
+client session:
+
+```bash
+/data/lzq/gith/nexpoly-runtime/bin/nexpoly-reconcile-production-0005-polytao-alias \
+  --operation-id alias-0005-<utc-timestamp> \
+  --apply \
+  --confirm-database nexpoly
+```
+
+The tool accepts no database, migration, checksum, SQL, audit-root or backup
+path selector. It pins the production cluster identity, canonical 0001-0008
+ledger, alias tuple, PolyTAO archive/schema digests and PostgreSQL 16 execution
+surface. Apply holds the shared deployment lock and database locks across a
+full custom dump, digest/list evidence, an isolated PostgreSQL 16 restore,
+lock-internal revalidation and a one-row compare-and-swap delete. Any unknown
+commit result remains fenced by its durable operation marker and is recoverable
+only with that same operation ID.
+
 Every attempt uses a unique lowercase operation ID and the full 40-character
 SHA currently at `origin/main`:
 
@@ -241,11 +300,10 @@ the production ledger, registered database inventory, asset identity or
 rollback evidence differs from the reviewed plan, the operation stops before
 mutation.
 
-> **PR1 stop condition:** merging the Pull bridge installs capability only.
-> Production currently contains the known duplicate
-> `0005_polytao_jobs` ledger alias. Until the dedicated, reviewed PR2 CAS tool
-> has backed up, restore-tested, and removed exactly that alias, operators must
-> not run the first production `apply` or `bootstrap-expand`.
+> **First-deployment stop condition:** control bootstrap alone is permitted.
+> Until the dedicated reconciliation control has backed up, restore-tested and
+> removed exactly `0005_polytao_jobs`, operators must not run the first
+> production `apply` or `bootstrap-expand`.
 
 ## Rollback and interrupted attempts
 

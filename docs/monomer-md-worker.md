@@ -20,7 +20,8 @@ All mutable or host-specific state is external:
 ├── bin/
 │   ├── control_runtime_selector.py
 │   ├── nexpoly-pull-deploy
-│   └── nexpoly-pull-contract-0012
+│   ├── nexpoly-pull-contract-0012
+│   └── nexpoly-reconcile-production-0005-polytao-alias
 ├── control-releases/<content-addressed-release>/
 │   ├── monomer_worker_env.py
 │   ├── monomer_md_worker_launcher.py
@@ -40,7 +41,7 @@ All mutable or host-specific state is external:
 ```
 
 There is no active-venv symlink. `runtime/bin` must contain exactly the immutable
-selector and two stable wrappers shown above. The selector verifies the active
+selector and three stable wrappers shown above. The selector verifies the active
 control authority and content-addressed release before loading its environment
 helper and launcher. The launcher reads the active-slot and slot records,
 validates their owner/mode/schema/source identity, selects the recorded final

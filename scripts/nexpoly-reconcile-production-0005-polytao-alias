@@ -1,0 +1,47 @@
+#!/usr/bin/python3 -I
+"""Immutable entrypoint for the one-purpose production ledger repair."""
+
+import os
+import sys
+
+if not sys.flags.isolated:
+    raise SystemExit(
+        "nexpoly-reconcile-production-0005-polytao-alias requires isolated Python startup"
+    )
+
+
+PYTHON = "/usr/bin/python3"
+SELECTOR = "/data/lzq/gith/nexpoly-runtime/bin/control_runtime_selector.py"
+ENVIRONMENT = {
+    "HOME": "/home/devuser",
+    "USER": "devuser",
+    "LOGNAME": "devuser",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "XDG_RUNTIME_DIR": "/run/user/1001",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
+dsn = os.environ.get("NEXPOLY_PRODUCTION_POSTGRES_DSN")
+if (
+    not isinstance(dsn, str)
+    or not dsn
+    or len(dsn) > 8192
+    or any(character in dsn for character in ("\x00", "\r", "\n"))
+):
+    raise SystemExit("NEXPOLY_PRODUCTION_POSTGRES_DSN is required and malformed")
+ENVIRONMENT["NEXPOLY_PRODUCTION_POSTGRES_DSN"] = dsn
+
+os.execve(
+    PYTHON,
+    [
+        PYTHON,
+        "-I",
+        "-B",
+        SELECTOR,
+        "run",
+        "reconcile-production-0005-alias",
+        *sys.argv[1:],
+    ],
+    ENVIRONMENT,
+)

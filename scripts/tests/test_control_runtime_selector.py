@@ -45,6 +45,7 @@ class SelectorTests(unittest.TestCase):
         source_tree: str,
         variant: str,
         dft: bool = False,
+        alias: bool = True,
         imports_sibling: bool = False,
     ) -> tuple[dict[str, object], Path]:
         payloads = {
@@ -79,6 +80,12 @@ class SelectorTests(unittest.TestCase):
                 "environment_loader": "env.py",
                 "launcher": "dft.py",
                 "config_relative": "config/dft-worker.env",
+            }
+        if alias:
+            payloads["alias.py"] = f"# alias {variant}\n".encode()
+            entrypoints["reconcile-production-0005-alias"] = {
+                "kind": "python",
+                "file": "alias.py",
             }
         files = {
             name: {
@@ -178,7 +185,221 @@ class SelectorTests(unittest.TestCase):
                 + b"\n",
                 0o600,
             )
+        alias_marker = self.runtime / SELECTOR.ALIAS_MARKER_RELATIVE
+        if not alias_marker.exists():
+            self._complete_alias_gate(manifest)
         return active
+
+    def _complete_alias_gate(self, manifest: dict[str, object]) -> None:
+        operation_id = "alias-0005-fixture"
+        audit_dir = (
+            self.runtime / SELECTOR.ALIAS_AUDIT_ROOT_RELATIVE / operation_id
+        )
+        backup_dir = (
+            self.runtime / SELECTOR.ALIAS_BACKUP_ROOT_RELATIVE / operation_id
+        )
+        audit_dir.mkdir(parents=True, mode=0o700)
+        backup_dir.mkdir(parents=True, mode=0o700)
+        os.chmod(audit_dir.parent, 0o700)
+        os.chmod(backup_dir.parent, 0o700)
+        os.chmod(audit_dir, 0o700)
+        os.chmod(backup_dir, 0o700)
+        dump = backup_dir / "nexpoly-before.dump"
+        self._write(dump, b"fixture database dump\n", 0o600)
+        dump_sha = SELECTOR.sha256_file(dump).removeprefix("sha256:")
+        self._write(
+            backup_dir / "nexpoly-before.dump.sha256",
+            (dump_sha + "\n").encode(),
+            0o600,
+        )
+        restore_list = audit_dir / "pg-restore.list"
+        self._write(
+            restore_list,
+            b"TABLE DATA generation polytao_jobs\n"
+            b"TABLE DATA governance schema_migrations\n",
+            0o600,
+        )
+        def ledger_rows(pairs: list[tuple[str, str]]) -> list[dict[str, str]]:
+            return [
+                {
+                    "version": version,
+                    "checksum": checksum,
+                    "applied_at": (
+                        SELECTOR.ALIAS_APPLIED_AT
+                        if version == SELECTOR.ALIAS_VERSION
+                        else f"2026-07-08T02:{index:02d}:00.000000Z"
+                    ),
+                }
+                for index, (version, checksum) in enumerate(pairs)
+            ]
+
+        archive = {
+            "row_count": 12,
+            "status_counts": {"completed": 8, "failed": 4},
+            "rows_sha256": "c" * 64,
+            "schema_sha256": SELECTOR.ALIAS_EXPECTED_SCHEMA_SHA256,
+            "structure_counts": SELECTOR.ALIAS_EXPECTED_STRUCTURE_COUNTS,
+        }
+        relation = {
+            "kind": "r",
+            "persistence": "p",
+            "is_partition": False,
+            "row_security": False,
+            "force_row_security": False,
+            "owner": "polyprop",
+            "parents": 0,
+            "children": 0,
+        }
+        before = {
+            "database": "nexpoly",
+            "current_user": "polyprop",
+            "database_owner": "polyprop",
+            "server_version_num": 160014,
+            "in_recovery": False,
+            "system_identifier": SELECTOR.ALIAS_SYSTEM_IDENTIFIER,
+            "ledger": ledger_rows(SELECTOR.ALIAS_PRE_LEDGER),
+            "archive": archive,
+            "ledger_schema_sha256": SELECTOR.ALIAS_EXPECTED_LEDGER_SCHEMA_SHA256,
+            "ledger_structure_counts": (
+                SELECTOR.ALIAS_EXPECTED_LEDGER_STRUCTURE_COUNTS
+            ),
+            "polytao_relation": relation,
+            "ledger_relation": relation,
+        }
+        after = {
+            **before,
+            "ledger": [
+                row
+                for row in before["ledger"]
+                if row["version"] != SELECTOR.ALIAS_VERSION
+            ],
+        }
+        restored = {
+            **before,
+            "database": "nexpoly_alias_restore",
+            "current_user": "postgres",
+            "database_owner": "postgres",
+            "system_identifier": "123456789",
+            "polytao_relation": {**relation, "owner": "postgres"},
+            "ledger_relation": {**relation, "owner": "postgres"},
+        }
+        root = self.runtime / "control-releases" / str(manifest["release_id"])
+        entrypoint = manifest["entrypoints"]["reconcile-production-0005-alias"]
+        control = {
+            "release_id": manifest["release_id"],
+            "source_sha": manifest["source_sha"],
+            "source_tree": manifest["source_tree"],
+            "manifest_sha256": SELECTOR.sha256_file(
+                root / SELECTOR.CONTROL_MANIFEST_NAME
+            ).removeprefix("sha256:"),
+            "script_sha256": SELECTOR.sha256_file(
+                root / entrypoint["file"]
+            ).removeprefix("sha256:"),
+        }
+        binary_hashes = {"/fixture/bin": "b" * 64}
+        identity = {
+            "operation_id": operation_id,
+            "control": control,
+            "legacy_source": {"sha": "a" * 40, "tree": "b" * 40},
+            "binaries_sha256": binary_hashes,
+            "database_endpoint": SELECTOR.ALIAS_DATABASE_ENDPOINT,
+            "database_system_identifier": SELECTOR.ALIAS_SYSTEM_IDENTIFIER,
+            "restore_image": {
+                "digest_ref": SELECTOR.ALIAS_RESTORE_IMAGE,
+                "image_id": "sha256:" + "d" * 64,
+            },
+            "alias": {
+                "version": SELECTOR.ALIAS_VERSION,
+                "checksum": SELECTOR.ALIAS_CHECKSUM,
+                "applied_at": SELECTOR.ALIAS_APPLIED_AT,
+            },
+        }
+        backup = {
+            "dump_path": str(dump),
+            "dump_sha256": dump_sha,
+            "dump_size": dump.stat().st_size,
+            "restore_list_sha256": SELECTOR.sha256_file(
+                restore_list
+            ).removeprefix("sha256:"),
+        }
+        restore = {
+            "image": {
+                "digest_ref": SELECTOR.ALIAS_RESTORE_IMAGE,
+                "image_id": "sha256:" + "d" * 64,
+            },
+            "container_name": "nexpoly-alias-restore-fixture",
+            "network_mode": "none",
+            "dump_sha256": dump_sha,
+            "archive": before["archive"],
+            "ledger_schema_sha256": before["ledger_schema_sha256"],
+            "database_inventory": restored,
+            "verified_at": "2026-07-17T00:00:00Z",
+        }
+        self._write(
+            audit_dir / "isolated-postgres16-restore.json",
+            SELECTOR.canonical_json_bytes(restore) + b"\n",
+            0o600,
+        )
+        self._write(
+            audit_dir / "database-after.json",
+            SELECTOR.canonical_json_bytes(after) + b"\n",
+            0o600,
+        )
+        files = SELECTOR._alias_evidence_files(audit_dir, backup_dir)
+        completed_at = "2026-07-17T00:00:01Z"
+        audit = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "outcome": "completed",
+            "identity": identity,
+            "database_before": before,
+            "database_after": after,
+            "database_backup": backup,
+            "isolated_restore": restore,
+            "binaries": {"/fixture/bin": {"sha256": "b" * 64}},
+            "files": files,
+            "completed_at": completed_at,
+        }
+        audit_path = audit_dir / "AUDIT-MANIFEST.json"
+        self._write(
+            audit_path, SELECTOR.canonical_json_bytes(audit) + b"\n", 0o600
+        )
+        marker = {
+            "schema_version": 1,
+            "action": SELECTOR.ALIAS_ACTION,
+            "phase": "completed",
+            "identity": identity,
+            "operation_directories": {
+                "audit": str(audit_dir),
+                "backup": str(backup_dir),
+            },
+            "started_at": "2026-07-17T00:00:00Z",
+            "updated_at": completed_at,
+            "runtime_stop_fence": {"fixture": True},
+            "before": before,
+            "database_backup": backup,
+            "restore_container": {"name": "fixture"},
+            "isolated_restore": restore,
+            "mutation_intent": {
+                "database_system_identifier": SELECTOR.ALIAS_SYSTEM_IDENTIFIER,
+                "alias": identity["alias"],
+                "pre_ledger": before["ledger"],
+                "archive": before["archive"],
+                "dump_sha256": dump_sha,
+                "restore_dump_sha256": dump_sha,
+            },
+            "after": after,
+            "audit_manifest_sha256": SELECTOR.sha256_file(
+                audit_path
+            ).removeprefix("sha256:"),
+            "completed_at": completed_at,
+        }
+        marker_path = self.runtime / SELECTOR.ALIAS_MARKER_RELATIVE
+        marker_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(marker_path.parent, 0o700)
+        self._write(
+            marker_path, SELECTOR.canonical_json_bytes(marker) + b"\n", 0o600
+        )
 
     def test_manifest_inventory_hash_mode_and_extra_are_fail_closed(self) -> None:
         manifest, root = self.release(
@@ -338,6 +559,186 @@ class SelectorTests(unittest.TestCase):
             manifest["release_id"],
         )
 
+    def test_alias_role_passes_only_the_dedicated_dsn_and_blocks_contract_marker(
+        self,
+    ) -> None:
+        manifest, root = self.release(
+            source_sha="9" * 40,
+            source_tree="a" * 40,
+            variant="alias",
+            alias=True,
+        )
+        self.activate(manifest, operation_id="bootstrap-controls-alias")
+        captured: dict[str, object] = {}
+
+        def fake_exec(path: str, argv: list[str], environment: dict[str, str]) -> None:
+            captured.update(path=path, argv=argv, environment=environment)
+            raise RuntimeError("captured")
+
+        secret = "postgresql://operator:secret@db.invalid/nexpoly"
+        with mock.patch.object(SELECTOR.os, "execve", fake_exec):
+            with self.assertRaisesRegex(RuntimeError, "captured"):
+                SELECTOR._exec_role(
+                    "reconcile-production-0005-alias",
+                    ["--operation-id", "alias-20260717-0001"],
+                    {
+                        "NEXPOLY_PRODUCTION_POSTGRES_DSN": secret,
+                        "LD_PRELOAD": "/tmp/evil.so",
+                        "PYTHONPATH": "/tmp/evil",
+                    },
+                    runtime_root=self.runtime,
+                )
+        self.assertIn(str(root / "alias.py"), captured["argv"])
+        environment = dict(captured["environment"])
+        self.assertEqual(environment["NEXPOLY_PRODUCTION_POSTGRES_DSN"], secret)
+        self.assertNotIn("LD_PRELOAD", environment)
+        self.assertNotIn("PYTHONPATH", environment)
+
+        self._write(
+            self.runtime / "state/contract-0012-in-progress.json",
+            b"{}\n",
+            0o600,
+        )
+        with self.assertRaisesRegex(SELECTOR.ControlRuntimeError, "0012"):
+            SELECTOR._selected_release(
+                self.runtime,
+                "reconcile-production-0005-alias",
+                ["--operation-id", "alias-20260717-0001"],
+            )
+
+    def test_alias_role_rejects_missing_or_control_character_dsn(self) -> None:
+        manifest, _root = self.release(
+            source_sha="b" * 40,
+            source_tree="c" * 40,
+            variant="alias-dsn",
+            alias=True,
+        )
+        self.activate(manifest, operation_id="bootstrap-controls-alias-dsn")
+        for environment in (
+            {},
+            {"NEXPOLY_PRODUCTION_POSTGRES_DSN": ""},
+            {"NEXPOLY_PRODUCTION_POSTGRES_DSN": "postgresql://db/nexpoly\nleak"},
+        ):
+            with self.subTest(environment=environment):
+                with self.assertRaisesRegex(
+                    SELECTOR.ControlRuntimeError, "DSN is unavailable or malformed"
+                ):
+                    SELECTOR._exec_role(
+                        "reconcile-production-0005-alias",
+                        [],
+                        environment,
+                        runtime_root=self.runtime,
+                    )
+
+    def test_deploy_plan_prepare_allow_missing_alias_but_not_interrupted_alias(
+        self,
+    ) -> None:
+        manifest, root = self.release(
+            source_sha="d" * 40,
+            source_tree="e" * 40,
+            variant="deploy-before-alias",
+        )
+        self.activate(manifest, operation_id="bootstrap-controls-before-alias")
+        marker_path = self.runtime / SELECTOR.ALIAS_MARKER_RELATIVE
+        completed = SELECTOR._load_private_json(marker_path)
+        marker_path.unlink()
+
+        for command in ("plan", "prepare"):
+            with self.subTest(command=command):
+                selected, selected_root = SELECTOR._selected_release(
+                    self.runtime,
+                    "deploy",
+                    [command, "--operation-id", "deploy-before-alias"],
+                )
+                self.assertEqual(selected["release_id"], manifest["release_id"])
+                self.assertEqual(selected_root, root)
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError, "reconciliation is required"
+        ):
+            SELECTOR._selected_release(
+                self.runtime,
+                "deploy",
+                ["apply", "--operation-id", "deploy-before-alias"],
+            )
+
+        interrupted = {**completed, "phase": "planned"}
+        self._write(
+            marker_path,
+            SELECTOR.canonical_json_bytes(interrupted) + b"\n",
+            0o600,
+        )
+        for command in ("plan", "prepare"):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(
+                    SELECTOR.ControlRuntimeError,
+                    "interrupted alias reconciliation",
+                ):
+                    SELECTOR._selected_release(
+                        self.runtime,
+                        "deploy",
+                        [command, "--operation-id", "deploy-before-alias"],
+                    )
+
+    def test_completed_alias_gate_accepts_dynamic_rows_and_binds_restore_image(
+        self,
+    ) -> None:
+        manifest, _root = self.release(
+            source_sha="a" * 40,
+            source_tree="b" * 40,
+            variant="dynamic-alias-evidence",
+        )
+        self.activate(manifest, operation_id="bootstrap-controls-dynamic-alias")
+        gate = SELECTOR.load_production_0005_alias_gate(
+            self.runtime, require_completed=True
+        )
+        self.assertEqual(gate["before"]["archive"]["row_count"], 12)
+        self.assertEqual(
+            gate["isolated_restore"]["image"],
+            gate["identity"]["restore_image"],
+        )
+        self.assertNotEqual(
+            gate["identity"]["restore_image"]["image_id"],
+            "sha256:"
+            + SELECTOR.ALIAS_RESTORE_IMAGE.rsplit("@sha256:", 1)[1],
+        )
+
+        marker_path = self.runtime / SELECTOR.ALIAS_MARKER_RELATIVE
+        tampered = SELECTOR._load_private_json(marker_path)
+        tampered["identity"]["restore_image"]["image_id"] = "sha256:" + "e" * 64
+        self._write(
+            marker_path,
+            SELECTOR.canonical_json_bytes(tampered) + b"\n",
+            0o600,
+        )
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError, "completion evidence differs"
+        ):
+            SELECTOR.load_production_0005_alias_gate(
+                self.runtime, require_completed=True
+            )
+
+    def test_completed_alias_replay_uses_its_recorded_control_release(self) -> None:
+        original, original_root = self.release(
+            source_sha="1" * 40,
+            source_tree="2" * 40,
+            variant="alias-original",
+        )
+        self.activate(original, operation_id="bootstrap-controls-alias-original")
+        replacement, _replacement_root = self.release(
+            source_sha="3" * 40,
+            source_tree="4" * 40,
+            variant="alias-replacement",
+        )
+        self.activate(replacement, operation_id="deploy-controls-alias-replacement")
+
+        selected, selected_root = SELECTOR._selected_release(
+            self.runtime,
+            "reconcile-production-0005-alias",
+            ["--operation-id", "alias-0005-fixture", "--apply"],
+        )
+        self.assertEqual(selected["release_id"], original["release_id"])
+        self.assertEqual(selected_root, original_root)
+
     def test_python_roles_are_bytecode_free_and_release_inventory_stays_exact(self) -> None:
         manifest, root = self.release(
             source_sha="7" * 40,
@@ -374,7 +775,13 @@ class SelectorTests(unittest.TestCase):
         self.assertFalse((root / "__pycache__").exists())
         self.assertEqual(
             {path.name for path in root.iterdir()},
-            {SELECTOR.CONTROL_MANIFEST_NAME, "deploy.py", "env.py", "md.py"},
+            {
+                SELECTOR.CONTROL_MANIFEST_NAME,
+                "deploy.py",
+                "env.py",
+                "md.py",
+                "alias.py",
+            },
         )
 
     def test_three_immutable_releases_preserve_old_rollback_targets(self) -> None:
