@@ -1177,6 +1177,77 @@ class PullRuntimeController(legacy.ReleaseController):
                 "live runtime identity evidence is not serializable"
             ) from exc
 
+    def capture_mutable_data(
+        self,
+        *,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Capture the contract window through the descriptor-pinned helper."""
+
+        if (
+            self.pull_controller.production_config_evidence(
+                check_free_space=False
+            )
+            != self.binding.live_production_config
+        ):
+            raise PullContractError(
+                "0012 mutable-data production configuration changed"
+            )
+        contract = self.pull_controller.mutable_data_contract()
+        if contract != self.binding.descriptor.get("mutable_data"):
+            raise PullContractError(
+                "0012 mutable-data helper differs from the sealed descriptor"
+            )
+        before_fence = pull.validate_postgres_runtime_fence(
+            self.lifecycle.postgres_runtime_identity(
+                self.pull_controller,
+                self.runtime_descriptor,
+            )
+        )
+        runtime_identity = pull.postgres_runtime_fence_identity(before_fence)
+        if runtime_identity["host_endpoint"] != {
+            "host": contract["connection"]["host"],
+            "port": contract["connection"]["port"],
+            "container_port": 5432,
+            "protocol": "tcp",
+        }:
+            raise PullContractError(
+                "0012 mutable-data endpoint differs from PostgreSQL"
+            )
+        environment = self.pull_controller.control_environment()
+        environment["NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON"] = json.dumps(
+            runtime_identity,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        environment["NEXPOLY_MUTABLE_AUDIT_OPERATION_ID"] = operation_id
+        result = self.pull_controller.runner.run(
+            [contract["helper_path"]],
+            cwd=self.root,
+            env=environment,
+            text=True,
+        )
+        evidence = pull.validate_mutable_data_evidence(
+            pull.parse_command_json(result.stdout, "0012 mutable-data audit")
+        )
+        after_fence = pull.validate_postgres_runtime_fence(
+            self.lifecycle.postgres_runtime_identity(
+                self.pull_controller,
+                self.runtime_descriptor,
+            )
+        )
+        if (
+            pull.postgres_runtime_fence_identity(after_fence)
+            != runtime_identity
+            or evidence["postgres_runtime"] != runtime_identity
+            or evidence["connection"] != contract["connection"]
+            or evidence["operation_id"] != operation_id
+        ):
+            raise PullContractError(
+                "0012 mutable-data audit did not bind the exact PostgreSQL runtime"
+            )
+        return evidence
+
     def bind_contract_marker_persistence(
         self,
         *,
@@ -1758,6 +1829,8 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         )
         self.contract_record = self._contract_record()
         self._database_recovery_drain_gate: dict[str, Any] | None = None
+        self._contract_mutable_data_before: dict[str, Any] | None = None
+        self._contract_mutable_data_pair: dict[str, Any] | None = None
         self.controller.bind_contract_marker_persistence(
             loader=self._load_runtime_recovery_marker,
             writer=self._write_marker,
@@ -1831,9 +1904,29 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         )
 
     def _write_current_state(self, state: dict[str, Any]) -> None:
+        projected = _pull_state_projection(self.binding, state)
+        pair = self._contract_mutable_data_pair
+        if pair is None:
+            marker = self._load_runtime_recovery_marker()
+            raw_pair = marker.get("contract_mutable_data_audit")
+            if raw_pair is not None:
+                pair = pull.validate_mutable_data_pair(raw_pair)
+        if pair is None:
+            raise PullContractError(
+                "0012 state commit lacks mutable-data transition evidence"
+            )
+        if (
+            pair["transition"]["kind"] != "contract-0012"
+            or pair["transition"]["operation_id"] != self.operation_id
+        ):
+            raise PullContractError(
+                "0012 mutable-data transition belongs to another operation"
+            )
+        projected["contract_mutable_data_audit"] = pair
+        pull.validate_current_deployment_state(projected)
         legacy.atomic_json(
             self.state_path,
-            _pull_state_projection(self.binding, state),
+            projected,
         )
 
     def _maintenance_authority(self) -> dict[str, Any]:
@@ -1875,6 +1968,24 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
 
     def _write_marker(self, marker: dict[str, Any]) -> None:
         self._validate_installed_authority()
+        if self._contract_mutable_data_before is not None:
+            marker["mutable_data_before"] = (
+                self._contract_mutable_data_before
+            )
+            marker["mutable_data_before_sha256"] = (
+                pull.canonical_json_digest(
+                    pull.mutable_data_identity(
+                        self._contract_mutable_data_before
+                    )
+                )
+            )
+        if self._contract_mutable_data_pair is not None:
+            marker["mutable_data_after"] = self._contract_mutable_data_pair[
+                "after"
+            ]
+            marker["contract_mutable_data_audit"] = (
+                self._contract_mutable_data_pair
+            )
         authority = self._maintenance_authority()
         marker["pull_maintenance_authority"] = authority
         marker["pull_maintenance_authority_sha256"] = pull.canonical_json_digest(
@@ -1887,6 +1998,43 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
                 canary
             )
         legacy.atomic_json(self.marker_path, marker)
+
+    def _sealed_mutable_data_before(
+        self,
+        marker: dict[str, Any],
+    ) -> dict[str, Any]:
+        before = pull.validate_mutable_data_evidence(
+            marker.get("mutable_data_before")
+        )
+        if marker.get("mutable_data_before_sha256") != (
+            pull.canonical_json_digest(pull.mutable_data_identity(before))
+        ):
+            raise PullContractError(
+                "0012 pre-mutation mutable-data seal differs"
+            )
+        return before
+
+    def _write_mutable_audit_document(
+        self,
+        name: str,
+        document: dict[str, Any],
+    ) -> None:
+        path = self.audit_dir / name
+        if path.exists() or path.is_symlink():
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or self._load_operation_document(
+                    path,
+                    "mutable-data audit evidence",
+                )
+                != document
+            ):
+                raise PullContractError(
+                    "existing 0012 mutable-data audit evidence differs"
+                )
+            return
+        legacy.atomic_json(path, document)
 
     def _audit_manifest(self) -> dict[str, Any]:
         self._validate_installed_authority()
@@ -2173,10 +2321,50 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         previous_state: dict[str, Any],
         database_inventory: dict[str, Any],
     ) -> dict[str, Any]:
+        marker = self._load_runtime_recovery_marker()
+        raw_before = marker.get("mutable_data_before")
+        before = (
+            self._sealed_mutable_data_before(marker)
+            if raw_before is not None
+            else self.controller.capture_mutable_data(
+                operation_id=self.operation_id
+            )
+        )
+        if (
+            before["operation_id"] != self.operation_id
+            or before["migration_ledger"][-1]["version"]
+            != "0011_monomer_md_demo_steps"
+            or before["migration_exception"]["state"] != "present"
+        ):
+            raise PullContractError(
+                "0012 pre-mutation mutable-data evidence is not pre-0012"
+            )
+        if raw_before is None:
+            self._contract_mutable_data_before = before
+            marker["mutable_data_before"] = before
+            marker["mutable_data_before_sha256"] = (
+                pull.canonical_json_digest(
+                    pull.mutable_data_identity(before)
+                )
+            )
+            self._write_marker(marker)
+        else:
+            self._contract_mutable_data_before = before
         evidence = super()._archive_legacy_table(
             environment,
             previous_state,
             database_inventory,
+        )
+        if (
+            evidence.get("row_count")
+            != before["migration_exception"]["row_count"]
+        ):
+            raise PullContractError(
+                "0012 dynamic archive and mutable-data seal count differ"
+            )
+        self._write_mutable_audit_document(
+            "mutable-data.before.json",
+            before,
         )
         backup = self.controller.backup_path
         if backup is None:
@@ -2223,6 +2411,59 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         )
         return evidence
 
+    def _restore_previous_database(
+        self,
+        environment: dict[str, str],
+        previous_state: dict[str, Any],
+        *,
+        recorded_database_inventory: object | None = None,
+    ) -> None:
+        """Prove a failed 0012 rollback restored every non-exception row."""
+
+        super()._restore_previous_database(
+            environment,
+            previous_state,
+            recorded_database_inventory=recorded_database_inventory,
+        )
+        marker = self._load_runtime_recovery_marker()
+        before = self._sealed_mutable_data_before(marker)
+        restored = self.controller.capture_mutable_data(
+            operation_id=self.operation_id
+        )
+        for name in (
+            "database",
+            "database_system_identifier",
+            "connection",
+            "postgres_runtime",
+            "migration_ledger",
+            "business_tables",
+            "static_tables",
+            "migration_exception",
+            "sequences",
+        ):
+            if before[name] != restored[name]:
+                raise PullContractError(
+                    f"0012 rollback did not restore mutable-data field: {name}"
+                )
+        if (
+            before["governed_controls"][
+                "database_analytics_snapshots"
+            ]
+            != restored["governed_controls"][
+                "database_analytics_snapshots"
+            ]
+        ):
+            raise PullContractError(
+                "0012 rollback changed database analytics snapshots"
+            )
+        marker["mutable_data_restored"] = restored
+        marker["mutable_data_restored_sha256"] = (
+            pull.canonical_json_digest(
+                pull.mutable_data_identity(restored)
+            )
+        )
+        self._write_marker(marker)
+
     def _success_journal(
         self,
         marker: dict[str, Any],
@@ -2230,6 +2471,48 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         audit_manifest: dict[str, Any],
         verification: dict[str, Any],
     ) -> dict[str, Any]:
+        del audit_manifest
+        raw_pair = marker.get("contract_mutable_data_audit")
+        if raw_pair is not None:
+            pair = pull.validate_mutable_data_pair(raw_pair)
+            if pair["before"] != self._sealed_mutable_data_before(marker):
+                raise PullContractError(
+                    "0012 mutable-data transition changed its before seal"
+                )
+        else:
+            before = self._sealed_mutable_data_before(marker)
+            after = self.controller.capture_mutable_data(
+                operation_id=self.operation_id
+            )
+            pair = pull.build_mutable_data_pair(before, after)
+        transition = pair["transition"]
+        archive = marker.get("archive_evidence")
+        if (
+            transition.get("kind") != "contract-0012"
+            or transition.get("operation_id") != self.operation_id
+            or not isinstance(transition.get("polytao_exception"), dict)
+            or not isinstance(archive, dict)
+            or transition["polytao_exception"].get("row_count")
+            != archive.get("row_count")
+        ):
+            raise PullContractError(
+                "0012 success lacks its exact PolyTAO mutable-data transition"
+            )
+        evidence_files = {
+            "mutable-data.before.json": pair["before"],
+            "mutable-data.after.json": pair["after"],
+            "mutable-data.transition.json": pair,
+        }
+        for name, document in evidence_files.items():
+            self._write_mutable_audit_document(name, document)
+        audit_manifest = self._audit_manifest()
+        marker["mutable_data_after"] = pair["after"]
+        marker["contract_mutable_data_audit"] = pair
+        marker["audit_manifest_sha256"] = legacy.sha256_file(
+            self.audit_dir / "AUDIT-MANIFEST.json"
+        )
+        self._contract_mutable_data_pair = pair
+        self._write_marker(marker)
         journal = super()._success_journal(
             marker, approval, audit_manifest, verification
         )
@@ -2246,6 +2529,7 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             )
         journal["ingress_isolated_canary"] = canary
         journal["ingress_isolated_canary_sha256"] = canary_digest
+        journal["contract_mutable_data_audit"] = pair
         return journal
 
     def _validate_success_journal(
@@ -2267,6 +2551,7 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             "verification",
             "ingress_isolated_canary",
             "ingress_isolated_canary_sha256",
+            "contract_mutable_data_audit",
         }
         if not isinstance(journal, dict) or set(journal) != expected_fields:
             raise PullContractError(
@@ -2288,6 +2573,16 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         ):
             raise PullContractError(
                 "existing 0012 success journal has an invalid identity"
+            )
+        pair = pull.validate_mutable_data_pair(
+            journal.get("contract_mutable_data_audit")
+        )
+        if (
+            pair["transition"]["kind"] != "contract-0012"
+            or pair["transition"]["operation_id"] != self.operation_id
+        ):
+            raise PullContractError(
+                "existing 0012 mutable-data journal belongs to another operation"
             )
         backup = journal.get("database_backup")
         backup_digest = journal.get("database_backup_sha256")
@@ -2324,6 +2619,7 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             != audit_manifest
         ):
             raise PullContractError("existing 0012 audit evidence differs from disk")
+        self._contract_mutable_data_pair = pair
         return dict(journal)
 
     def run(self) -> dict[str, Any]:

@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 import unittest
@@ -45,6 +46,53 @@ class SiteHelperContractTests(unittest.TestCase):
             path = self.config / name
             path.write_text(f"#!/bin/sh\n# {name}\n", encoding="utf-8")
             os.chmod(path, 0o700)
+
+    def test_every_migration_table_has_one_data_boundary(self) -> None:
+        migrations = ROOT / "backend/migrations/postgres"
+        created: set[tuple[str, str]] = set()
+        pattern = re.compile(
+            r"\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+            r"([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)",
+            re.IGNORECASE,
+        )
+        for path in sorted(migrations.glob("[0-9][0-9][0-9][0-9]_*.sql")):
+            created.update(
+                (schema.lower(), table.lower())
+                for schema, table in pattern.findall(
+                    path.read_text(encoding="utf-8")
+                )
+            )
+
+        categories = (
+            set(CONTRACTS.BUSINESS_MUTABLE_TABLES)
+            | set(CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES)
+            | set(CONTRACTS.GOVERNED_CONTROL_TABLES)
+            | set(CONTRACTS.STATIC_IMPORT_TABLES)
+            | {
+                CONTRACTS.MIGRATION_LEDGER_TABLE,
+                CONTRACTS.CONTRACT_0012_EXCEPTION_TABLE,
+            }
+        )
+        category_sizes = sum(
+            len(group)
+            for group in (
+                CONTRACTS.BUSINESS_MUTABLE_TABLES,
+                CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES,
+                CONTRACTS.GOVERNED_CONTROL_TABLES,
+                CONTRACTS.STATIC_IMPORT_TABLES,
+                (
+                    CONTRACTS.MIGRATION_LEDGER_TABLE,
+                    CONTRACTS.CONTRACT_0012_EXCEPTION_TABLE,
+                ),
+            )
+        )
+        self.assertEqual(len(categories), category_sizes)
+        planned = (
+            set()
+            if (migrations / "0013_monomer_dft_jobs.sql").is_file()
+            else set(CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES)
+        )
+        self.assertEqual(categories, created | planned)
 
     def test_readiness_hashes_but_never_executes_all_fixed_helpers(self) -> None:
         self.install_helpers()
@@ -330,23 +378,78 @@ class SiteHelperContractTests(unittest.TestCase):
             )
 
     def test_mutable_data_audit_binds_exact_tables_and_one_snapshot(self) -> None:
-        tables = [
-            {
-                "schema": "online_knowledge",
-                "table": "history",
-                "row_count": 17,
-                "schema_sha256": DIGEST_A,
-                "content_sha256": DIGEST_B,
-            },
-            {
-                "schema": "online_knowledge",
-                "table": "jobs",
-                "row_count": 9,
-                "schema_sha256": DIGEST_B,
-                "content_sha256": DIGEST_C,
-            },
+        def table_record(
+            relation: tuple[str, str],
+            index: int,
+            *,
+            present: bool = True,
+            rows: int | None = None,
+        ) -> dict[str, object]:
+            return {
+                "schema": relation[0],
+                "table": relation[1],
+                "state": "present" if present else "absent",
+                "row_count": (
+                    index + 1 if rows is None else rows
+                )
+                if present
+                else None,
+                "schema_sha256": (
+                    "sha256:" + f"{(index + 1) % 16:x}" * 64
+                    if present
+                    else None
+                ),
+                "content_sha256": (
+                    "sha256:" + f"{(index + 8) % 16:x}" * 64
+                    if present
+                    else None
+                ),
+            }
+
+        business_tables = [
+            table_record(relation, index)
+            for index, relation in enumerate(
+                CONTRACTS.BUSINESS_MUTABLE_TABLES
+            )
         ]
+        business_tables.extend(
+            table_record(relation, index + 5, present=False)
+            for index, relation in enumerate(
+                CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES
+            )
+        )
+        static_tables = [
+            table_record(relation, index + 8)
+            for index, relation in enumerate(CONTRACTS.STATIC_IMPORT_TABLES)
+        ]
+        deployment_table = table_record(
+            CONTRACTS.GOVERNED_CONTROL_TABLES[0], 23, rows=1
+        )
+        analytics_table = table_record(
+            CONTRACTS.GOVERNED_CONTROL_TABLES[1], 24, rows=0
+        )
+        sequences = []
+        for schema, sequence, owned_by in CONTRACTS.DATA_SEQUENCES:
+            present = schema != "monomer_dft"
+            sequences.append(
+                {
+                    "schema": schema,
+                    "sequence": sequence,
+                    "owned_by": owned_by,
+                    "state": "present" if present else "absent",
+                    "data_type": "bigint" if present else None,
+                    "start_value": 1 if present else None,
+                    "min_value": 1 if present else None,
+                    "max_value": 9223372036854775807 if present else None,
+                    "increment_by": 1 if present else None,
+                    "cache_size": 1 if present else None,
+                    "cycle": False if present else None,
+                    "last_value": 5 if present else None,
+                    "is_called": True if present else None,
+                }
+            )
         identity = {
+            "operation_id": "deploy-20260717-fixture",
             "database": "nexpoly",
             "database_system_identifier": "7659245354718314530",
             "connection": {
@@ -379,11 +482,42 @@ class SiteHelperContractTests(unittest.TestCase):
                 },
                 "system_identifier": "7659245354718314530",
             },
-            "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
-            "tables": tables,
+            "digest_algorithm": "sha256-postgres-jsonb-copy-v2",
+            "migration_ledger": [
+                {"version": version, "checksum": checksum}
+                for version, checksum in CONTRACTS.CANONICAL_MIGRATION_LEDGER[
+                    :11
+                ]
+            ],
+            "business_tables": business_tables,
+            "governed_controls": {
+                "deployment_control": {
+                    "table": deployment_table,
+                    "row": {
+                        "control_key": "production",
+                        "drain_enabled": True,
+                        "reason": "pull deployment deploy-20260717-fixture",
+                        "release_sha": "1" * 40,
+                        "activated_at": "2026-07-17T00:00:00Z",
+                        "activated_by": "pull-deploy-controller",
+                        "updated_at": "2026-07-17T00:00:00Z",
+                    },
+                },
+                "database_analytics_snapshots": {
+                    "table": analytics_table,
+                    "entries": [],
+                },
+            },
+            "static_tables": static_tables,
+            "migration_exception": table_record(
+                CONTRACTS.CONTRACT_0012_EXCEPTION_TABLE,
+                25,
+                rows=9,
+            ),
+            "sequences": sequences,
         }
         document = {
-            "schema_version": 2,
+            "schema_version": 3,
             **identity,
             "transaction_isolation": "repeatable read",
             "transaction_read_only": True,
@@ -398,17 +532,32 @@ class SiteHelperContractTests(unittest.TestCase):
             document,
         )
         mutations = (
-            ("table", lambda value: value["tables"][0].update(table="jobs")),
+            (
+                "table",
+                lambda value: value["business_tables"][0].update(
+                    table="jobs"
+                ),
+            ),
             (
                 "content",
-                lambda value: value["tables"][1].update(
+                lambda value: value["business_tables"][1].update(
                     content_sha256="sha256:" + "f" * 64
                 ),
             ),
             (
                 "schema",
-                lambda value: value["tables"][0].update(
+                lambda value: value["business_tables"][0].update(
                     schema_sha256="sha256:" + "e" * 64
+                ),
+            ),
+            (
+                "sequence",
+                lambda value: value["sequences"][0].update(last_value=99),
+            ),
+            (
+                "ledger",
+                lambda value: value["migration_ledger"][8].update(
+                    checksum="a" * 64
                 ),
             ),
             (

@@ -323,9 +323,27 @@ MUTABLE_DATA_HOST = "127.0.0.1"
 MUTABLE_DATA_PORT = 55432
 MUTABLE_DATA_DATABASE = "nexpoly"
 MUTABLE_DATA_USER = "nexpoly_mutable_audit"
-MUTABLE_DATA_TABLES = (
-    "online_knowledge.history",
-    "online_knowledge.jobs",
+MUTABLE_DATA_BUSINESS_TABLES = tuple(
+    f"{schema}.{table}"
+    for schema, table in (
+        _site_helper_contracts.BUSINESS_MUTABLE_TABLES
+        + _site_helper_contracts.POST_0013_BUSINESS_MUTABLE_TABLES
+    )
+)
+MUTABLE_DATA_GOVERNED_CONTROLS = tuple(
+    f"{schema}.{table}"
+    for schema, table in _site_helper_contracts.GOVERNED_CONTROL_TABLES
+)
+MUTABLE_DATA_STATIC_TABLES = tuple(
+    f"{schema}.{table}"
+    for schema, table in _site_helper_contracts.STATIC_IMPORT_TABLES
+)
+MUTABLE_DATA_EXCEPTION = ".".join(
+    _site_helper_contracts.CONTRACT_0012_EXCEPTION_TABLE
+)
+MUTABLE_DATA_SEQUENCES = tuple(
+    f"{schema}.{sequence}"
+    for schema, sequence, _owned_by in _site_helper_contracts.DATA_SEQUENCES
 )
 DEPLOY_USER_HOME = Path("/home/devuser")
 SOURCE_URL = "https://github.com/lzq390/ZhijuPoly"
@@ -505,6 +523,9 @@ CURRENT_STATE_FIELDS = {
     "database_backup",
     "mutable_data_audit",
     "deployed_at",
+}
+CURRENT_STATE_OPTIONAL_FIELDS = {
+    "contract_mutable_data_audit",
 }
 MIGRATION_COMPATIBILITY_FIELDS = {
     "schema_version",
@@ -1071,15 +1092,26 @@ def validate_mutable_data_contract(document: object) -> dict[str, Any]:
         "helper_sha256",
         "dependencies",
         "connection",
-        "tables",
+        "business_tables",
+        "governed_controls",
+        "static_tables",
+        "migration_exception",
+        "sequences",
         "evidence_schema_version",
     }
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 2
-        or document.get("evidence_schema_version") != 2
-        or document.get("tables") != list(MUTABLE_DATA_TABLES)
+        or document.get("schema_version") != 3
+        or document.get("evidence_schema_version") != 3
+        or document.get("business_tables")
+        != list(MUTABLE_DATA_BUSINESS_TABLES)
+        or document.get("governed_controls")
+        != list(MUTABLE_DATA_GOVERNED_CONTROLS)
+        or document.get("static_tables")
+        != list(MUTABLE_DATA_STATIC_TABLES)
+        or document.get("migration_exception") != MUTABLE_DATA_EXCEPTION
+        or document.get("sequences") != list(MUTABLE_DATA_SEQUENCES)
         or not isinstance(document.get("helper_path"), str)
         or not Path(document["helper_path"]).is_absolute()
         or Path(document["helper_path"]).name != MUTABLE_DATA_AUDIT_HELPER
@@ -1125,44 +1157,332 @@ def validate_mutable_data_evidence(document: object) -> dict[str, Any]:
         raise PullDeployError("mutable-data audit evidence is invalid") from exc
     if [
         f"{record['schema']}.{record['table']}"
-        for record in validated["tables"]
-    ] != list(MUTABLE_DATA_TABLES):
-        raise PullDeployError("mutable-data audit selected unexpected tables")
+        for record in validated["business_tables"]
+    ] != list(MUTABLE_DATA_BUSINESS_TABLES):
+        raise PullDeployError(
+            "mutable-data audit selected unexpected business tables"
+        )
+    if [
+        f"{record['schema']}.{record['table']}"
+        for record in validated["static_tables"]
+    ] != list(MUTABLE_DATA_STATIC_TABLES):
+        raise PullDeployError(
+            "mutable-data audit selected unexpected static tables"
+        )
+    if [
+        f"{record['schema']}.{record['sequence']}"
+        for record in validated["sequences"]
+    ] != list(MUTABLE_DATA_SEQUENCES):
+        raise PullDeployError(
+            "mutable-data audit selected unexpected sequences"
+        )
     return validated
 
 
 def mutable_data_identity(document: object) -> dict[str, Any]:
     validated = validate_mutable_data_evidence(document)
     return {
+        "operation_id": validated["operation_id"],
         "database": validated["database"],
         "database_system_identifier": validated["database_system_identifier"],
         "connection": validated["connection"],
         "postgres_runtime": validated["postgres_runtime"],
         "digest_algorithm": validated["digest_algorithm"],
-        "tables": validated["tables"],
+        "migration_ledger": validated["migration_ledger"],
+        "business_tables": validated["business_tables"],
+        "governed_controls": validated["governed_controls"],
+        "static_tables": validated["static_tables"],
+        "migration_exception": validated["migration_exception"],
+        "sequences": validated["sequences"],
         "snapshot_sha256": validated["snapshot_sha256"],
     }
+
+
+def _mutable_table_map(
+    records: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        f"{record['schema']}.{record['table']}": record
+        for record in records
+    }
+
+
+def _mutable_sequence_map(
+    records: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        f"{record['schema']}.{record['sequence']}": record
+        for record in records
+    }
+
+
+def _control_transition(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    migration_version: str | None,
+    operation_id: str,
+) -> dict[str, Any]:
+    before_control = before["governed_controls"]["deployment_control"]
+    after_control = after["governed_controls"]["deployment_control"]
+    before_row = before_control["row"]
+    after_row = after_control["row"]
+    expected_actor = (
+        "pull-contract-0012"
+        if migration_version == "0012_drop_polytao_jobs"
+        else "pull-deploy-controller"
+    )
+    expected_after_reason = (
+        f"0012 maintenance {operation_id}"
+        if migration_version == "0012_drop_polytao_jobs"
+        else f"post-canary drain {operation_id}"
+    )
+    expected_before_reasons = (
+        {expected_after_reason}
+        if migration_version == "0012_drop_polytao_jobs"
+        else {
+            f"pull deployment {operation_id}",
+            f"post-canary drain {operation_id}",
+        }
+    )
+    if (
+        before_control == after_control
+        and before_row.get("drain_enabled") is True
+        and before_row.get("activated_by") == expected_actor
+        and before_row.get("reason") in expected_before_reasons
+    ):
+        return {
+            "mode": "unchanged-operation-drain",
+            "release_sha": before_row["release_sha"],
+            "activated_by": before_row["activated_by"],
+            "reason": before_row["reason"],
+            "before_content_sha256": before_control["table"][
+                "content_sha256"
+            ],
+            "after_content_sha256": after_control["table"][
+                "content_sha256"
+            ],
+        }
+    if (
+        before_control["table"]["schema_sha256"]
+        != after_control["table"]["schema_sha256"]
+        or before_control["table"]["row_count"] != 1
+        or after_control["table"]["row_count"] != 1
+        or after_row.get("drain_enabled") is not True
+        or (
+            before_row.get("drain_enabled") is True
+            and before_row.get("release_sha") != after_row.get("release_sha")
+        )
+        or (
+            before_row.get("drain_enabled") is True
+            and (
+                before_row.get("activated_by") != expected_actor
+                or before_row.get("reason") not in expected_before_reasons
+            )
+        )
+        or after_row.get("activated_by") != expected_actor
+        or after_row.get("reason") != expected_after_reason
+    ):
+        raise PullDeployError(
+            "deployment-control row changed outside the current operation"
+        )
+    return {
+        "mode": "post-canary-redrain",
+        "release_sha": after_row["release_sha"],
+        "activated_by": expected_actor,
+        "reason": expected_after_reason,
+        "before_content_sha256": before_control["table"]["content_sha256"],
+        "after_content_sha256": after_control["table"]["content_sha256"],
+    }
+
+
+def _derive_mutable_data_transition(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    if before["operation_id"] != after["operation_id"]:
+        raise PullDeployError(
+            "mutable-data evidence belongs to different operations"
+        )
+    operation_id = before["operation_id"]
+    before_ledger = before["migration_ledger"]
+    after_ledger = after["migration_ledger"]
+    migration: dict[str, Any] | None = None
+    if after_ledger == before_ledger:
+        kind = "code-deploy"
+    elif (
+        len(after_ledger) == len(before_ledger) + 1
+        and after_ledger[:-1] == before_ledger
+        and after_ledger[-1]["version"]
+        in {"0012_drop_polytao_jobs", "0013_monomer_dft_jobs"}
+    ):
+        migration = dict(after_ledger[-1])
+        kind = (
+            "contract-0012"
+            if migration["version"] == "0012_drop_polytao_jobs"
+            else "expand-0013"
+        )
+    else:
+        raise PullDeployError(
+            "mutable-data audit observed an unauthorized migration transition"
+        )
+    migration_version = None if migration is None else migration["version"]
+
+    before_business = _mutable_table_map(before["business_tables"])
+    after_business = _mutable_table_map(after["business_tables"])
+    dft_relations = set(
+        MUTABLE_DATA_BUSINESS_TABLES[
+            -len(_site_helper_contracts.POST_0013_BUSINESS_MUTABLE_TABLES) :
+        ]
+    )
+    for relation in MUTABLE_DATA_BUSINESS_TABLES:
+        if (
+            migration_version == "0013_monomer_dft_jobs"
+            and relation in dft_relations
+        ):
+            created = after_business[relation]
+            if (
+                before_business[relation]["state"] != "absent"
+                or created["state"] != "present"
+                or created["row_count"] != 0
+            ):
+                raise PullDeployError(
+                    "0013 did not create one empty DFT business relation"
+                )
+        elif before_business[relation] != after_business[relation]:
+            raise PullDeployError(
+                f"mutable business table changed during deployment: {relation}"
+            )
+
+    if before["static_tables"] != after["static_tables"]:
+        raise PullDeployError(
+            "static import tables changed although dataset import was disabled"
+        )
+    before_analytics = before["governed_controls"][
+        "database_analytics_snapshots"
+    ]
+    after_analytics = after["governed_controls"][
+        "database_analytics_snapshots"
+    ]
+    if before_analytics != after_analytics:
+        raise PullDeployError(
+            "database analytics snapshots changed without a release-bound refresh"
+        )
+
+    before_exception = before["migration_exception"]
+    after_exception = after["migration_exception"]
+    exception: dict[str, Any] | None = None
+    if migration_version == "0012_drop_polytao_jobs":
+        if (
+            before_exception["state"] != "present"
+            or after_exception
+            != {
+                "schema": "generation",
+                "table": "polytao_jobs",
+                "state": "absent",
+                "row_count": None,
+                "schema_sha256": None,
+                "content_sha256": None,
+            }
+        ):
+            raise PullDeployError(
+                "0012 PolyTAO exception did not perform its exact sealed drop"
+            )
+        exception = {
+            "relation": MUTABLE_DATA_EXCEPTION,
+            "operation_id": operation_id,
+            "row_count": before_exception["row_count"],
+            "schema_sha256": before_exception["schema_sha256"],
+            "content_sha256": before_exception["content_sha256"],
+        }
+    elif before_exception != after_exception:
+        raise PullDeployError(
+            "PolyTAO business rows changed outside the 0012 contract"
+        )
+
+    before_sequences = _mutable_sequence_map(before["sequences"])
+    after_sequences = _mutable_sequence_map(after["sequences"])
+    dft_sequence = "monomer_dft.jobs_enqueue_sequence_seq"
+    for name in MUTABLE_DATA_SEQUENCES:
+        if (
+            migration_version == "0013_monomer_dft_jobs"
+            and name == dft_sequence
+        ):
+            created = after_sequences[name]
+            if (
+                before_sequences[name]["state"] != "absent"
+                or created["state"] != "present"
+                or created["last_value"] != created["start_value"]
+                or created["is_called"] is not False
+            ):
+                raise PullDeployError(
+                    "0013 DFT identity sequence is not pristine"
+                )
+        elif before_sequences[name] != after_sequences[name]:
+            raise PullDeployError(
+                f"database sequence changed during deployment: {name}"
+            )
+
+    control = _control_transition(
+        before,
+        after,
+        migration_version=migration_version,
+        operation_id=operation_id,
+    )
+    return {
+        "kind": kind,
+        "operation_id": operation_id,
+        "migration": migration,
+        "control": control,
+        "analytics": "unchanged",
+        "polytao_exception": exception,
+        "dft_relations": (
+            sorted(dft_relations)
+            if migration_version == "0013_monomer_dft_jobs"
+            else []
+        ),
+    }
+
+
+def build_mutable_data_pair(
+    before_document: object,
+    after_document: object,
+) -> dict[str, Any]:
+    before = validate_mutable_data_evidence(before_document)
+    after = validate_mutable_data_evidence(after_document)
+    return validate_mutable_data_pair(
+        {
+            "before": before,
+            "after": after,
+            "identity_sha256": canonical_json_digest(
+                mutable_data_identity(before)
+            ),
+            "transition": _derive_mutable_data_transition(before, after),
+        }
+    )
 
 
 def validate_mutable_data_pair(document: object) -> dict[str, Any]:
     if (
         not isinstance(document, dict)
-        or set(document) != {"before", "after", "identity_sha256"}
+        or set(document)
+        != {"before", "after", "identity_sha256", "transition"}
     ):
         raise PullDeployError("mutable-data deployment evidence has an invalid shape")
     before = validate_mutable_data_evidence(document["before"])
     after = validate_mutable_data_evidence(document["after"])
     before_identity = mutable_data_identity(before)
-    after_identity = mutable_data_identity(after)
-    if before_identity != after_identity:
-        raise PullDeployError("mutable online business tables changed during deployment")
     digest = canonical_json_digest(before_identity)
     if document.get("identity_sha256") != digest:
         raise PullDeployError("mutable-data deployment identity differs")
+    transition = _derive_mutable_data_transition(before, after)
+    if document.get("transition") != transition:
+        raise PullDeployError("mutable-data transition evidence differs")
     return {
         "before": before,
         "after": after,
         "identity_sha256": digest,
+        "transition": transition,
     }
 
 
@@ -2742,7 +3062,13 @@ def validate_migration_compatibility_state(
 def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any]:
     """Validate the durable state that a new prepare seals by digest."""
 
-    if not isinstance(document, dict) or set(document) != CURRENT_STATE_FIELDS:
+    if (
+        not isinstance(document, dict)
+        or not CURRENT_STATE_FIELDS.issubset(document)
+        or not set(document).issubset(
+            CURRENT_STATE_FIELDS | CURRENT_STATE_OPTIONAL_FIELDS
+        )
+    ):
         raise PullDeployError("current deployment state has an invalid shape")
     if document.get("schema_version") != 2 or document.get("status") != "success":
         raise PullDeployError("current deployment state is not successful schema V2")
@@ -2851,6 +3177,21 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
         )
     validate_production_config_evidence(document.get("production_config"))
     validate_mutable_data_pair(document.get("mutable_data_audit"))
+    contract_mutable = document.get("contract_mutable_data_audit")
+    if contract_mutable is not None:
+        contract_pair = validate_mutable_data_pair(contract_mutable)
+        if (
+            contract_pair["transition"]["kind"] != "contract-0012"
+            or contract_pair["transition"]["operation_id"]
+            != document.get("last_contract_operation")
+            or not any(
+                record.get("version") == "0012_drop_polytao_jobs"
+                for record in history
+            )
+        ):
+            raise PullDeployError(
+                "current 0012 mutable-data evidence differs from contract state"
+            )
     backup = document.get("database_backup")
     if (
         not isinstance(backup, dict)
@@ -6838,13 +7179,19 @@ class PullDeployController:
         )
         return validate_mutable_data_contract(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "helper_path": str(path),
                 "helper_sha256": sha256_file(path),
                 "dependencies": dependencies,
                 "connection": connection,
-                "tables": list(MUTABLE_DATA_TABLES),
-                "evidence_schema_version": 2,
+                "business_tables": list(MUTABLE_DATA_BUSINESS_TABLES),
+                "governed_controls": list(
+                    MUTABLE_DATA_GOVERNED_CONTROLS
+                ),
+                "static_tables": list(MUTABLE_DATA_STATIC_TABLES),
+                "migration_exception": MUTABLE_DATA_EXCEPTION,
+                "sequences": list(MUTABLE_DATA_SEQUENCES),
+                "evidence_schema_version": 3,
             }
         )
 
@@ -6894,6 +7241,9 @@ class PullDeployController:
             sort_keys=True,
             separators=(",", ":"),
         )
+        environment["NEXPOLY_MUTABLE_AUDIT_OPERATION_ID"] = descriptor[
+            "operation_id"
+        ]
         result = self.runner.run(
             [contract["helper_path"]],
             cwd=self.production_root,
@@ -6949,15 +7299,7 @@ class PullDeployController:
     ) -> dict[str, Any]:
         before = self._bind_mutable_data_before(marker, descriptor)
         after = self._capture_mutable_data(descriptor)
-        pair = validate_mutable_data_pair(
-            {
-                "before": before,
-                "after": after,
-                "identity_sha256": canonical_json_digest(
-                    mutable_data_identity(before)
-                ),
-            }
-        )
+        pair = build_mutable_data_pair(before, after)
         postgres = marker.get("postgres_runtime_fence")
         if (
             isinstance(postgres, dict)
@@ -11450,11 +11792,15 @@ class PullDeployController:
         barrier = None
         floor = None
         last_contract_operation = None
+        contract_mutable_data_audit = None
         if isinstance(previous, dict):
             approvals = list(previous.get("approved_contracts", []))
             barrier = previous.get("migration_epoch_barrier")
             floor = previous.get("schema_compatibility_floor")
             last_contract_operation = previous.get("last_contract_operation")
+            contract_mutable_data_audit = previous.get(
+                "contract_mutable_data_audit"
+            )
         history = marker.get("migration_history")
         if not isinstance(history, list) or not history:
             raise PullDeployError(
@@ -11487,14 +11833,9 @@ class PullDeployController:
             )
         mutable_before = marker.get("mutable_data_before")
         mutable_after = marker.get("mutable_data_after")
-        mutable_pair = validate_mutable_data_pair(
-            {
-                "before": mutable_before,
-                "after": mutable_after,
-                "identity_sha256": canonical_json_digest(
-                    mutable_data_identity(mutable_before)
-                ),
-            }
+        mutable_pair = build_mutable_data_pair(
+            mutable_before,
+            mutable_after,
         )
         return {
             "schema_version": 2,
@@ -11515,6 +11856,7 @@ class PullDeployController:
             "migration_epoch_barrier": barrier,
             "schema_compatibility_floor": floor,
             "last_contract_operation": last_contract_operation,
+            "contract_mutable_data_audit": contract_mutable_data_audit,
             "migration_compatibility": migration_compatibility,
             "active_monomer_md_slot": active,
             "monomer_md_worker_env": descriptor["monomer_md"]["worker_env"],

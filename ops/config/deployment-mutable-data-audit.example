@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install as runtime/config/deployment-mutable-data-audit, owned by the deploy
-# user and mode 0700.  Provision the referenced pg_service/pgpass files outside
+# user and mode 0700. Provision the referenced pg_service/pgpass files outside
 # Git as mode 0600; never place a password in this script or its argv.
 set -euo pipefail
 umask 077
@@ -10,6 +10,7 @@ readonly audit_root="${runtime_root}/audit/mutable-data"
 readonly pg_service_file="${runtime_root}/config/mutable-data-audit.pg_service.conf"
 readonly pg_pass_file="${runtime_root}/config/mutable-data-audit.pgpass"
 readonly runtime_identity_json="${NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON:?sealed PostgreSQL runtime identity is required}"
+readonly operation_id="${NEXPOLY_MUTABLE_AUDIT_OPERATION_ID:?deployment operation identity is required}"
 
 test -d "${audit_root}"
 test ! -L "${audit_root}"
@@ -25,34 +26,240 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-# Every COPY below runs in one repeatable-read, read-only transaction.  The
-# only files containing business rows are private temporaries removed by the
-# trap; stdout contains counts and digests only.
+# Generate a fixed psql program without consulting the database. Every COPY
+# then executes inside one read-only repeatable-read snapshot. Optional
+# relations are permitted only at their exact governed migration boundaries.
+/usr/bin/env -i \
+  HOME="/nonexistent" \
+  PATH="/usr/bin:/bin" \
+  /usr/bin/python3 -I -B - "${capture}" <<'PY'
+from pathlib import Path
+import sys
+
+
+root = Path(sys.argv[1])
+tables = (
+    ("governance", "deployment_control", "control_key", None),
+    ("governance", "database_analytics_snapshots", "snapshot_key", None),
+    ("governance", "source_files", "source_file_id", None),
+    ("governance", "import_batches", "import_batch_id", None),
+    ("core", "polymers", "polymer_id", None),
+    ("core", "polymer_properties", "property_id", None),
+    ("core", "polymer_property_filter_records", "filter_record_id", None),
+    ("knowledge", "documents", "knowledge_id", None),
+    ("knowledge", "formulation_records", "formulation_id", None),
+    ("online_knowledge", "history", "history_id", None),
+    ("online_knowledge", "jobs", "job_id", None),
+    ("pi", "polymers", "id", None),
+    ("pi", "tg_predictions", "id", None),
+    ("pi", "monomer_iupac", "smiles", None),
+    ("dft", "molecule_final", "mol_id", None),
+    ("dft", "energy_trace", "mol_id, step", None),
+    ("lab", "test_projects", "id", None),
+    ("lab", "sample_measurements", "id", None),
+    ("experimental", "process_records", "record_id", None),
+    ("experimental", "property_records", "record_id", None),
+    ("model_registry", "assets", "asset_id", None),
+    ("md", "monomer_md_jobs", "job_id", None),
+    ("generation", "polytao_jobs", "job_id", "polytao_present"),
+    ("monomer_dft", "jobs", "job_id", "dft_jobs_present"),
+    (
+        "monomer_dft",
+        "job_attempts",
+        "job_id, attempt",
+        "dft_job_attempts_present",
+    ),
+    (
+        "monomer_dft",
+        "artifacts",
+        "job_id, artifact_id",
+        "dft_artifacts_present",
+    ),
+)
+sequences = (
+    (
+        "governance",
+        "source_files_source_file_id_seq",
+        "governance.source_files.source_file_id",
+        None,
+    ),
+    (
+        "governance",
+        "import_batches_import_batch_id_seq",
+        "governance.import_batches.import_batch_id",
+        None,
+    ),
+    (
+        "knowledge",
+        "formulation_records_formulation_id_seq",
+        "knowledge.formulation_records.formulation_id",
+        None,
+    ),
+    (
+        "online_knowledge",
+        "history_history_id_seq",
+        "online_knowledge.history.history_id",
+        None,
+    ),
+    (
+        "lab",
+        "test_projects_id_seq",
+        "lab.test_projects.id",
+        None,
+    ),
+    (
+        "lab",
+        "sample_measurements_id_seq",
+        "lab.sample_measurements.id",
+        None,
+    ),
+    (
+        "experimental",
+        "process_records_record_id_seq",
+        "experimental.process_records.record_id",
+        None,
+    ),
+    (
+        "experimental",
+        "property_records_record_id_seq",
+        "experimental.property_records.record_id",
+        None,
+    ),
+    (
+        "model_registry",
+        "assets_asset_id_seq",
+        "model_registry.assets.asset_id",
+        None,
+    ),
+    (
+        "monomer_dft",
+        "jobs_enqueue_sequence_seq",
+        "monomer_dft.jobs.enqueue_sequence",
+        "dft_jobs_enqueue_sequence_present",
+    ),
+)
+
+
+def literal(path: Path) -> str:
+    return str(path).replace("'", "''")
+
+
+schema_query = (
+    "SELECT jsonb_build_object("
+    "'kind','column','position',a.attnum,'name',a.attname,"
+    "'type',pg_catalog.format_type(a.atttypid,a.atttypmod),"
+    "'not_null',a.attnotnull,'default',pg_get_expr(d.adbin,d.adrelid))::text "
+    "FROM pg_attribute AS a LEFT JOIN pg_attrdef AS d "
+    "ON d.adrelid=a.attrelid AND d.adnum=a.attnum "
+    "WHERE a.attrelid='{relation}'::regclass "
+    "AND a.attnum>0 AND NOT a.attisdropped "
+    "UNION ALL SELECT jsonb_build_object("
+    "'kind','constraint','name',c.conname,"
+    "'definition',pg_get_constraintdef(c.oid,true))::text "
+    "FROM pg_constraint AS c WHERE c.conrelid='{relation}'::regclass "
+    "UNION ALL SELECT jsonb_build_object("
+    "'kind','index','name',i.indexrelid::regclass::text,"
+    "'definition',pg_get_indexdef(i.indexrelid))::text "
+    "FROM pg_index AS i WHERE i.indrelid='{relation}'::regclass ORDER BY 1"
+)
+commands = [
+    "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE;",
+    (
+        "\\copy (SELECT json_build_object("
+        "'database',current_database(),'audit_user',current_user,"
+        "'server_port',inet_server_port(),"
+        "'database_system_identifier',system_identifier::text,"
+        "'transaction_isolation',current_setting('transaction_isolation'),"
+        "'transaction_read_only',current_setting('transaction_read_only')::boolean,"
+        "'transaction_deferrable',current_setting('transaction_deferrable')::boolean"
+        ")::text FROM pg_control_system()) TO "
+        f"'{literal(root / 'metadata.json')}'"
+    ),
+    (
+        "SELECT (to_regclass('generation.polytao_jobs') IS NOT NULL) "
+        "AS polytao_present \\gset"
+    ),
+    (
+        "\\copy (SELECT jsonb_build_object('version',version,"
+        "'checksum',checksum)::text FROM governance.schema_migrations "
+        f"ORDER BY version) TO '{literal(root / 'migration_ledger.rows')}'"
+    ),
+]
+for variable, relation in (
+    ("dft_jobs_present", "monomer_dft.jobs"),
+    ("dft_job_attempts_present", "monomer_dft.job_attempts"),
+    ("dft_artifacts_present", "monomer_dft.artifacts"),
+    (
+        "dft_jobs_enqueue_sequence_present",
+        "monomer_dft.jobs_enqueue_sequence_seq",
+    ),
+):
+    commands.append(
+        f"SELECT (to_regclass('{relation}') IS NOT NULL) "
+        f"AS {variable} \\gset"
+    )
+for schema, table, order, condition in tables:
+    relation = f"{schema}.{table}"
+    stem = f"{schema}__{table}"
+    if condition is not None:
+        commands.append(f"\\if :{condition}")
+    commands.append(
+        "\\copy (SELECT to_jsonb(value)::text "
+        f"FROM {relation} AS value ORDER BY {order}) "
+        f"TO '{literal(root / (stem + '.rows'))}'"
+    )
+    commands.append(
+        f"\\copy ({schema_query.format(relation=relation)}) "
+        f"TO '{literal(root / (stem + '.schema'))}'"
+    )
+    if condition is not None:
+        commands.append("\\endif")
+for schema, sequence, owned_by, condition in sequences:
+    relation = f"{schema}.{sequence}"
+    stem = f"{schema}__{sequence}.sequence"
+    if condition is not None:
+        commands.append(f"\\if :{condition}")
+    commands.append(
+        "\\copy (SELECT jsonb_build_object("
+        f"'schema','{schema}','sequence','{sequence}',"
+        f"'owned_by','{owned_by}',"
+        "'data_type',pg_catalog.format_type(s.seqtypid,NULL),"
+        "'start_value',s.seqstart,'min_value',s.seqmin,"
+        "'max_value',s.seqmax,'increment_by',s.seqincrement,"
+        "'cache_size',s.seqcache,'cycle',s.seqcycle,"
+        "'last_value',q.last_value,'is_called',q.is_called)::text "
+        f"FROM pg_sequence AS s CROSS JOIN {relation} AS q "
+        f"WHERE s.seqrelid='{relation}'::regclass) "
+        f"TO '{literal(root / (stem + '.json'))}'"
+    )
+    if condition is not None:
+        commands.append("\\endif")
+commands.extend(("COMMIT;", ""))
+(root / "capture.sql").write_text("\n".join(commands), encoding="utf-8")
+PY
+
 /usr/bin/env -i \
   HOME="/nonexistent" \
   PATH="/usr/bin:/bin" \
   PGSERVICE="nexpoly-mutable-audit" \
   PGSERVICEFILE="${pg_service_file}" \
+  PGPASSFILE="${pg_pass_file}" \
   PGAPPNAME="nexpoly-mutable-data-audit" \
   /usr/bin/psql \
   --no-psqlrc \
   --set=ON_ERROR_STOP=1 \
   --quiet \
-  --dbname=service=nexpoly-mutable-audit <<SQL
-BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE;
-\copy (SELECT json_build_object('database', current_database(), 'audit_user', current_user, 'server_port', inet_server_port(), 'database_system_identifier', system_identifier::text, 'transaction_isolation', current_setting('transaction_isolation'), 'transaction_read_only', current_setting('transaction_read_only')::boolean, 'transaction_deferrable', current_setting('transaction_deferrable')::boolean)::text FROM pg_control_system()) TO '${capture}/metadata.json'
-\copy (SELECT to_jsonb(value)::text FROM online_knowledge.history AS value ORDER BY history_id) TO '${capture}/history.rows'
-\copy (SELECT to_jsonb(value)::text FROM online_knowledge.jobs AS value ORDER BY job_id) TO '${capture}/jobs.rows'
-\copy (SELECT jsonb_build_object('kind','column','position',a.attnum,'name',a.attname,'type',pg_catalog.format_type(a.atttypid,a.atttypmod),'not_null',a.attnotnull,'default',pg_get_expr(d.adbin,d.adrelid))::text FROM pg_attribute AS a LEFT JOIN pg_attrdef AS d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid='online_knowledge.history'::regclass AND a.attnum>0 AND NOT a.attisdropped UNION ALL SELECT jsonb_build_object('kind','constraint','name',c.conname,'definition',pg_get_constraintdef(c.oid,true))::text FROM pg_constraint AS c WHERE c.conrelid='online_knowledge.history'::regclass UNION ALL SELECT jsonb_build_object('kind','index','name',i.indexrelid::regclass::text,'definition',pg_get_indexdef(i.indexrelid))::text FROM pg_index AS i WHERE i.indrelid='online_knowledge.history'::regclass ORDER BY 1) TO '${capture}/history.schema'
-\copy (SELECT jsonb_build_object('kind','column','position',a.attnum,'name',a.attname,'type',pg_catalog.format_type(a.atttypid,a.atttypmod),'not_null',a.attnotnull,'default',pg_get_expr(d.adbin,d.adrelid))::text FROM pg_attribute AS a LEFT JOIN pg_attrdef AS d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid='online_knowledge.jobs'::regclass AND a.attnum>0 AND NOT a.attisdropped UNION ALL SELECT jsonb_build_object('kind','constraint','name',c.conname,'definition',pg_get_constraintdef(c.oid,true))::text FROM pg_constraint AS c WHERE c.conrelid='online_knowledge.jobs'::regclass UNION ALL SELECT jsonb_build_object('kind','index','name',i.indexrelid::regclass::text,'definition',pg_get_indexdef(i.indexrelid))::text FROM pg_index AS i WHERE i.indrelid='online_knowledge.jobs'::regclass ORDER BY 1) TO '${capture}/jobs.schema'
-COMMIT;
-SQL
+  --dbname=service=nexpoly-mutable-audit \
+  --file="${capture}/capture.sql"
 
+# Convert private row files into count/digest evidence. Business rows never
+# leave the 0700 temporary directory and are removed by the trap.
 /usr/bin/env -i \
   HOME="/nonexistent" \
   PATH="/usr/bin:/bin" \
   TZ="UTC" \
   NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON="${runtime_identity_json}" \
+  NEXPOLY_MUTABLE_AUDIT_OPERATION_ID="${operation_id}" \
   /usr/bin/python3 -I -B - "${capture}" <<'PY'
 from __future__ import annotations
 
@@ -61,10 +268,86 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 
 
 root = Path(sys.argv[1])
+business = (
+    ("online_knowledge", "history"),
+    ("online_knowledge", "jobs"),
+    ("lab", "test_projects"),
+    ("lab", "sample_measurements"),
+    ("md", "monomer_md_jobs"),
+    ("monomer_dft", "jobs"),
+    ("monomer_dft", "job_attempts"),
+    ("monomer_dft", "artifacts"),
+)
+static = (
+    ("governance", "source_files"),
+    ("governance", "import_batches"),
+    ("core", "polymers"),
+    ("core", "polymer_properties"),
+    ("core", "polymer_property_filter_records"),
+    ("knowledge", "documents"),
+    ("knowledge", "formulation_records"),
+    ("pi", "polymers"),
+    ("pi", "tg_predictions"),
+    ("pi", "monomer_iupac"),
+    ("dft", "molecule_final"),
+    ("dft", "energy_trace"),
+    ("experimental", "process_records"),
+    ("experimental", "property_records"),
+    ("model_registry", "assets"),
+)
+sequence_specs = (
+    (
+        "governance",
+        "source_files_source_file_id_seq",
+        "governance.source_files.source_file_id",
+    ),
+    (
+        "governance",
+        "import_batches_import_batch_id_seq",
+        "governance.import_batches.import_batch_id",
+    ),
+    (
+        "knowledge",
+        "formulation_records_formulation_id_seq",
+        "knowledge.formulation_records.formulation_id",
+    ),
+    (
+        "online_knowledge",
+        "history_history_id_seq",
+        "online_knowledge.history.history_id",
+    ),
+    ("lab", "test_projects_id_seq", "lab.test_projects.id"),
+    (
+        "lab",
+        "sample_measurements_id_seq",
+        "lab.sample_measurements.id",
+    ),
+    (
+        "experimental",
+        "process_records_record_id_seq",
+        "experimental.process_records.record_id",
+    ),
+    (
+        "experimental",
+        "property_records_record_id_seq",
+        "experimental.property_records.record_id",
+    ),
+    (
+        "model_registry",
+        "assets_asset_id_seq",
+        "model_registry.assets.asset_id",
+    ),
+    (
+        "monomer_dft",
+        "jobs_enqueue_sequence_seq",
+        "monomer_dft.jobs.enqueue_sequence",
+    ),
+)
 
 
 def canonical(value: object) -> bytes:
@@ -77,27 +360,57 @@ def digest(value: object) -> str:
     return "sha256:" + hashlib.sha256(canonical(value)).hexdigest()
 
 
-def load_json_lines(path: Path) -> list[object]:
-    values: list[object] = []
-    with path.open("r", encoding="utf-8") as stream:
-        for line in stream:
-            if line.strip():
-                values.append(json.loads(line))
-    return values
+def file_digest(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-metadata_rows = load_json_lines(root / "metadata.json")
-if len(metadata_rows) != 1:
-    raise SystemExit("mutable audit metadata is incomplete")
-metadata = metadata_rows[0]
-if not isinstance(metadata, dict):
+def json_lines(path: Path) -> list[object]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def table_record(schema: str, table: str) -> dict[str, object]:
+    stem = f"{schema}__{table}"
+    rows = root / f"{stem}.rows"
+    schema_file = root / f"{stem}.schema"
+    if not rows.exists() and not schema_file.exists():
+        return {
+            "schema": schema,
+            "table": table,
+            "state": "absent",
+            "row_count": None,
+            "schema_sha256": None,
+            "content_sha256": None,
+        }
+    if not rows.is_file() or not schema_file.is_file():
+        raise SystemExit(f"incomplete relation capture: {schema}.{table}")
+    payload = rows.read_bytes()
+    return {
+        "schema": schema,
+        "table": table,
+        "state": "present",
+        "row_count": sum(1 for line in payload.splitlines() if line),
+        "schema_sha256": file_digest(schema_file),
+        "content_sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+    }
+
+
+metadata_rows = json_lines(root / "metadata.json")
+if len(metadata_rows) != 1 or not isinstance(metadata_rows[0], dict):
     raise SystemExit("mutable audit metadata is invalid")
+metadata = metadata_rows[0]
 if (
     metadata.get("database") != "nexpoly"
     or metadata.get("audit_user") != "nexpoly_mutable_audit"
     or metadata.get("server_port") != 5432
 ):
     raise SystemExit("mutable audit connected to an unexpected database identity")
+operation_id = os.environ.get("NEXPOLY_MUTABLE_AUDIT_OPERATION_ID", "")
+if re.fullmatch(r"[a-z0-9][a-z0-9._-]{7,127}", operation_id) is None:
+    raise SystemExit("mutable audit operation identity is invalid")
 try:
     postgres_runtime = json.loads(
         os.environ["NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON"]
@@ -112,36 +425,94 @@ connection = {
     "user": "nexpoly_mutable_audit",
 }
 
-tables = []
-for table in ("history", "jobs"):
-    rows_path = root / f"{table}.rows"
-    schema_path = root / f"{table}.schema"
-    # PostgreSQL jsonb text is canonical for object-key order and numeric
-    # spelling; COPY text escaping is deterministic.  Hash its bytes directly
-    # so no IEEE-754 conversion can collapse distinct numeric values.
-    rows_payload = rows_path.read_bytes()
-    schema_payload = schema_path.read_bytes()
-    row_count = sum(1 for line in rows_payload.splitlines() if line)
-    tables.append(
+deployment_table = table_record("governance", "deployment_control")
+deployment_rows = json_lines(root / "governance__deployment_control.rows")
+if len(deployment_rows) != 1 or not isinstance(deployment_rows[0], dict):
+    raise SystemExit("deployment-control inventory is incomplete")
+analytics_table = table_record(
+    "governance", "database_analytics_snapshots"
+)
+analytics_payload = (
+    root / "governance__database_analytics_snapshots.rows"
+).read_bytes()
+analytics_entries = []
+for line in analytics_payload.splitlines(keepends=True):
+    if not line.strip():
+        continue
+    row = json.loads(line)
+    if not isinstance(row, dict):
+        raise SystemExit("analytics snapshot row is invalid")
+    analytics_entries.append(
         {
-            "schema": "online_knowledge",
-            "table": table,
-            "row_count": row_count,
-            "schema_sha256": "sha256:" + hashlib.sha256(schema_payload).hexdigest(),
-            "content_sha256": "sha256:" + hashlib.sha256(rows_payload).hexdigest(),
+            "snapshot_key": row.get("snapshot_key"),
+            "source_sha": row.get("source_sha"),
+            "row_sha256": (
+                "sha256:" + hashlib.sha256(line).hexdigest()
+            ),
         }
     )
+analytics_entries.sort(key=lambda value: str(value["snapshot_key"]))
 
+sequences = []
+sequence_value_fields = (
+    "data_type",
+    "start_value",
+    "min_value",
+    "max_value",
+    "increment_by",
+    "cache_size",
+    "cycle",
+    "last_value",
+    "is_called",
+)
+for schema, sequence, owned_by in sequence_specs:
+    path = root / f"{schema}__{sequence}.sequence.json"
+    if not path.exists():
+        sequences.append(
+            {
+                "schema": schema,
+                "sequence": sequence,
+                "owned_by": owned_by,
+                "state": "absent",
+                **{name: None for name in sequence_value_fields},
+            }
+        )
+        continue
+    values = json_lines(path)
+    if len(values) != 1 or not isinstance(values[0], dict):
+        raise SystemExit(f"sequence capture is invalid: {schema}.{sequence}")
+    sequences.append({"state": "present", **values[0]})
+
+ledger = json_lines(root / "migration_ledger.rows")
 identity = {
+    "operation_id": operation_id,
     "database": metadata["database"],
     "database_system_identifier": metadata["database_system_identifier"],
     "connection": connection,
     "postgres_runtime": postgres_runtime,
-    "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
-    "tables": tables,
+    "digest_algorithm": "sha256-postgres-jsonb-copy-v2",
+    "migration_ledger": ledger,
+    "business_tables": [
+        table_record(schema, table) for schema, table in business
+    ],
+    "governed_controls": {
+        "deployment_control": {
+            "table": deployment_table,
+            "row": deployment_rows[0],
+        },
+        "database_analytics_snapshots": {
+            "table": analytics_table,
+            "entries": analytics_entries,
+        },
+    },
+    "static_tables": [
+        table_record(schema, table) for schema, table in static
+    ],
+    "migration_exception": table_record("generation", "polytao_jobs"),
+    "sequences": sequences,
 }
 document = {
-    "schema_version": 2,
+    "schema_version": 3,
     **identity,
     "transaction_isolation": metadata["transaction_isolation"],
     "transaction_read_only": metadata["transaction_read_only"],

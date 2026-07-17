@@ -24,6 +24,8 @@ PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 MAX_EVIDENCE_BYTES = 64 * 1024
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 CONTAINER_RE = re.compile(r"^[0-9a-f]{64}$")
+FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
 MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9_]+$")
 ROLE_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,62}$")
 SYSTEMD_UNIT_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,128}\.service$")
@@ -43,9 +45,146 @@ ACTIVE_JOB_FIELDS_V1 = frozenset(
     }
 )
 ACTIVE_JOB_FIELDS_V2 = ACTIVE_JOB_FIELDS_V1 | {"monomer_dft"}
-MUTABLE_DATA_TABLES = (
+BUSINESS_MUTABLE_TABLES = (
     ("online_knowledge", "history"),
     ("online_knowledge", "jobs"),
+    ("lab", "test_projects"),
+    ("lab", "sample_measurements"),
+    ("md", "monomer_md_jobs"),
+)
+POST_0013_BUSINESS_MUTABLE_TABLES = (
+    ("monomer_dft", "jobs"),
+    ("monomer_dft", "job_attempts"),
+    ("monomer_dft", "artifacts"),
+)
+GOVERNED_CONTROL_TABLES = (
+    ("governance", "deployment_control"),
+    ("governance", "database_analytics_snapshots"),
+)
+STATIC_IMPORT_TABLES = (
+    ("governance", "source_files"),
+    ("governance", "import_batches"),
+    ("core", "polymers"),
+    ("core", "polymer_properties"),
+    ("core", "polymer_property_filter_records"),
+    ("knowledge", "documents"),
+    ("knowledge", "formulation_records"),
+    ("pi", "polymers"),
+    ("pi", "tg_predictions"),
+    ("pi", "monomer_iupac"),
+    ("dft", "molecule_final"),
+    ("dft", "energy_trace"),
+    ("experimental", "process_records"),
+    ("experimental", "property_records"),
+    ("model_registry", "assets"),
+)
+MIGRATION_LEDGER_TABLE = ("governance", "schema_migrations")
+CONTRACT_0012_EXCEPTION_TABLE = ("generation", "polytao_jobs")
+DATA_SEQUENCES = (
+    (
+        "governance",
+        "source_files_source_file_id_seq",
+        "governance.source_files.source_file_id",
+    ),
+    (
+        "governance",
+        "import_batches_import_batch_id_seq",
+        "governance.import_batches.import_batch_id",
+    ),
+    (
+        "knowledge",
+        "formulation_records_formulation_id_seq",
+        "knowledge.formulation_records.formulation_id",
+    ),
+    (
+        "online_knowledge",
+        "history_history_id_seq",
+        "online_knowledge.history.history_id",
+    ),
+    (
+        "lab",
+        "test_projects_id_seq",
+        "lab.test_projects.id",
+    ),
+    (
+        "lab",
+        "sample_measurements_id_seq",
+        "lab.sample_measurements.id",
+    ),
+    (
+        "experimental",
+        "process_records_record_id_seq",
+        "experimental.process_records.record_id",
+    ),
+    (
+        "experimental",
+        "property_records_record_id_seq",
+        "experimental.property_records.record_id",
+    ),
+    (
+        "model_registry",
+        "assets_asset_id_seq",
+        "model_registry.assets.asset_id",
+    ),
+    (
+        "monomer_dft",
+        "jobs_enqueue_sequence_seq",
+        "monomer_dft.jobs.enqueue_sequence",
+    ),
+)
+CANONICAL_MIGRATION_LEDGER = (
+    (
+        "0001_app_data_governance",
+        "d5fc9f3d063f1cba476834f3530519b7970cd54f3c3711d05aba1f1cb2fd34f9",
+    ),
+    (
+        "0002_lab_identity_defaults",
+        "580ed6dc7c34970aabd662bc47765e9d02446c28aea1c4fa8fb2a99f05b1ac2f",
+    ),
+    (
+        "0003_runtime_postgres_cutover",
+        "0888ac9abd1b6b642f0addd42274b5408981a26c27f1140b7b656ff34ad73ce3",
+    ),
+    (
+        "0004_monomer_md_jobs",
+        "b3ad64728f399f42b2bf9edb47ad035ac70f09fce6ced48e7b422ea74d5a7e8e",
+    ),
+    (
+        "0005_byteff2_formal_monomer_md",
+        "c9ec808c50915b82a696ab482ed676c62bc75f00a9af21baf9e7f66b185bacb5",
+    ),
+    (
+        "0006_property_filter_records",
+        "57b103dc656334cf5e52bdc9512576a303ae0044ec5fb64eb7cba802021eceaa",
+    ),
+    (
+        "0007_polytao_jobs",
+        "b15268a475e8daf8dd58be988a228a0440e59a31dbf11d5d6b52e0974c3daab5",
+    ),
+    (
+        "0008_polytao_backend_runtime",
+        "d0d8b2187aad8657269600873d3d2630e30c7d72da2f6662e18ab22031deff90",
+    ),
+    (
+        "0009_monomer_md_job_leases",
+        "ef1757a81976f351459e8257bd492aa6267cbf507c4ea85506fefa2d465d2db8",
+    ),
+    (
+        "0010_deployment_control",
+        "f7fad29bcf1da1c6903a688a7312a67216bc11002ac558209ff56e25f69cf7cd",
+    ),
+    (
+        "0011_monomer_md_demo_steps",
+        "9a03f38329199aa707818c2099b9811d46366bafe0ddaeb39ae53bc20d0a68ed",
+    ),
+    (
+        "0012_drop_polytao_jobs",
+        "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728",
+    ),
+    (
+        "0013_monomer_dft_jobs",
+        "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc",
+    ),
 )
 
 HELPERS: dict[str, dict[str, str]] = {
@@ -898,9 +1037,299 @@ def validate_external_database_audit(
     }
 
 
+def _validate_table_inventory(
+    records: object,
+    expected_relations: tuple[tuple[str, str], ...],
+    *,
+    absent_relations: frozenset[tuple[str, str]] = frozenset(),
+) -> list[dict[str, Any]]:
+    if not isinstance(records, list) or len(records) != len(expected_relations):
+        raise SiteHelperContractError("mutable-data audit table inventory differs")
+    normalized: list[dict[str, Any]] = []
+    fields = {
+        "schema",
+        "table",
+        "state",
+        "row_count",
+        "schema_sha256",
+        "content_sha256",
+    }
+    for record, expected in zip(records, expected_relations, strict=True):
+        expected_state = "absent" if expected in absent_relations else "present"
+        if (
+            not isinstance(record, dict)
+            or set(record) != fields
+            or (record.get("schema"), record.get("table")) != expected
+            or record.get("state") != expected_state
+        ):
+            raise SiteHelperContractError(
+                "mutable-data audit table record is invalid"
+            )
+        if expected_state == "absent":
+            if any(
+                record.get(name) is not None
+                for name in ("row_count", "schema_sha256", "content_sha256")
+            ):
+                raise SiteHelperContractError(
+                    "absent mutable-data relation contains fabricated evidence"
+                )
+            normalized.append(dict(record))
+            continue
+        if (
+            isinstance(record.get("row_count"), bool)
+            or not isinstance(record.get("row_count"), int)
+            or record["row_count"] < 0
+        ):
+            raise SiteHelperContractError(
+                "mutable-data audit table row count is invalid"
+            )
+        normalized.append(
+            {
+                "schema": expected[0],
+                "table": expected[1],
+                "state": "present",
+                "row_count": record["row_count"],
+                "schema_sha256": _require_digest(
+                    record.get("schema_sha256"),
+                    "mutable-data schema digest",
+                ),
+                "content_sha256": _require_digest(
+                    record.get("content_sha256"),
+                    "mutable-data content digest",
+                ),
+            }
+        )
+    return normalized
+
+
+def _validate_mutable_ledger(records: object) -> list[dict[str, str]]:
+    if not isinstance(records, list) or len(records) not in {11, 12, 13}:
+        raise SiteHelperContractError(
+            "mutable-data audit migration ledger is not a governed B/F state"
+        )
+    expected = [
+        {"version": version, "checksum": checksum}
+        for version, checksum in CANONICAL_MIGRATION_LEDGER[: len(records)]
+    ]
+    if records != expected:
+        raise SiteHelperContractError(
+            "mutable-data audit migration ledger is non-canonical"
+        )
+    return [dict(record) for record in expected]
+
+
+def _validate_sequence_inventory(
+    records: object,
+    *,
+    dft_ready: bool,
+) -> list[dict[str, Any]]:
+    if not isinstance(records, list) or len(records) != len(DATA_SEQUENCES):
+        raise SiteHelperContractError("mutable-data sequence inventory differs")
+    fields = {
+        "schema",
+        "sequence",
+        "owned_by",
+        "state",
+        "data_type",
+        "start_value",
+        "min_value",
+        "max_value",
+        "increment_by",
+        "cache_size",
+        "cycle",
+        "last_value",
+        "is_called",
+    }
+    normalized: list[dict[str, Any]] = []
+    for record, expected in zip(records, DATA_SEQUENCES, strict=True):
+        optional_dft = expected[0] == "monomer_dft"
+        expected_state = "present" if dft_ready or not optional_dft else "absent"
+        if (
+            not isinstance(record, dict)
+            or set(record) != fields
+            or (
+                record.get("schema"),
+                record.get("sequence"),
+                record.get("owned_by"),
+            )
+            != expected
+            or record.get("state") != expected_state
+        ):
+            raise SiteHelperContractError(
+                "mutable-data sequence record is invalid"
+            )
+        value_fields = (
+            "data_type",
+            "start_value",
+            "min_value",
+            "max_value",
+            "increment_by",
+            "cache_size",
+            "cycle",
+            "last_value",
+            "is_called",
+        )
+        if expected_state == "absent":
+            if any(record.get(name) is not None for name in value_fields):
+                raise SiteHelperContractError(
+                    "absent mutable-data sequence contains fabricated evidence"
+                )
+            normalized.append(dict(record))
+            continue
+        if (
+            not isinstance(record.get("data_type"), str)
+            or not record["data_type"]
+            or any(
+                isinstance(record.get(name), bool)
+                or not isinstance(record.get(name), int)
+                for name in (
+                    "start_value",
+                    "min_value",
+                    "max_value",
+                    "increment_by",
+                    "cache_size",
+                    "last_value",
+                )
+            )
+            or not isinstance(record.get("cycle"), bool)
+            or not isinstance(record.get("is_called"), bool)
+        ):
+            raise SiteHelperContractError(
+                "mutable-data sequence state is invalid"
+            )
+        normalized.append(dict(record))
+    return normalized
+
+
+def _validate_governed_controls(document: object) -> dict[str, Any]:
+    if (
+        not isinstance(document, dict)
+        or set(document)
+        != {"deployment_control", "database_analytics_snapshots"}
+    ):
+        raise SiteHelperContractError("governed-control inventory differs")
+    deployment = document["deployment_control"]
+    if (
+        not isinstance(deployment, dict)
+        or set(deployment) != {"table", "row"}
+    ):
+        raise SiteHelperContractError("deployment-control evidence is invalid")
+    deployment_table = _validate_table_inventory(
+        [deployment["table"]],
+        (GOVERNED_CONTROL_TABLES[0],),
+    )[0]
+    row = deployment["row"]
+    if (
+        deployment_table["row_count"] != 1
+        or not isinstance(row, dict)
+        or set(row)
+        != {
+            "control_key",
+            "drain_enabled",
+            "reason",
+            "release_sha",
+            "activated_at",
+            "activated_by",
+            "updated_at",
+        }
+        or row.get("control_key") != "production"
+        or not isinstance(row.get("drain_enabled"), bool)
+        or not isinstance(row.get("updated_at"), str)
+        or not row["updated_at"]
+    ):
+        raise SiteHelperContractError(
+            "deployment-control row is invalid"
+        )
+    if row["drain_enabled"]:
+        if (
+            not isinstance(row.get("reason"), str)
+            or not row["reason"]
+            or not isinstance(row.get("release_sha"), str)
+            or FULL_SHA_RE.fullmatch(row["release_sha"]) is None
+            or not isinstance(row.get("activated_at"), str)
+            or not row["activated_at"]
+            or not isinstance(row.get("activated_by"), str)
+            or not row["activated_by"]
+        ):
+            raise SiteHelperContractError(
+                "deployment-control drain lacks an operation owner"
+            )
+    elif any(
+        row.get(name) is not None
+        for name in (
+            "reason",
+            "release_sha",
+            "activated_at",
+            "activated_by",
+        )
+    ):
+        raise SiteHelperContractError(
+            "open deployment-control row retains stale drain authority"
+        )
+
+    analytics = document["database_analytics_snapshots"]
+    if (
+        not isinstance(analytics, dict)
+        or set(analytics) != {"table", "entries"}
+        or not isinstance(analytics.get("entries"), list)
+    ):
+        raise SiteHelperContractError("analytics control evidence is invalid")
+    analytics_table = _validate_table_inventory(
+        [analytics["table"]],
+        (GOVERNED_CONTROL_TABLES[1],),
+    )[0]
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in analytics["entries"]:
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"snapshot_key", "source_sha", "row_sha256"}
+            or not isinstance(entry.get("snapshot_key"), str)
+            or not entry["snapshot_key"]
+            or entry["snapshot_key"] in seen
+            or (
+                entry.get("source_sha") is not None
+                and (
+                    not isinstance(entry["source_sha"], str)
+                    or FULL_SHA_RE.fullmatch(entry["source_sha"]) is None
+                )
+            )
+        ):
+            raise SiteHelperContractError("analytics snapshot entry is invalid")
+        seen.add(entry["snapshot_key"])
+        entries.append(
+            {
+                "snapshot_key": entry["snapshot_key"],
+                "source_sha": entry["source_sha"],
+                "row_sha256": _require_digest(
+                    entry.get("row_sha256"),
+                    "analytics snapshot row digest",
+                ),
+            }
+        )
+    if (
+        entries != sorted(entries, key=lambda value: value["snapshot_key"])
+        or analytics_table["row_count"] != len(entries)
+    ):
+        raise SiteHelperContractError(
+            "analytics snapshot inventory is incomplete or unordered"
+        )
+    return {
+        "deployment_control": {
+            "table": deployment_table,
+            "row": dict(row),
+        },
+        "database_analytics_snapshots": {
+            "table": analytics_table,
+            "entries": entries,
+        },
+    }
+
+
 def validate_mutable_data_audit(document: object) -> dict[str, Any]:
     fields = {
         "schema_version",
+        "operation_id",
         "database",
         "database_system_identifier",
         "connection",
@@ -909,14 +1338,21 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         "transaction_read_only",
         "transaction_deferrable",
         "digest_algorithm",
-        "tables",
+        "migration_ledger",
+        "business_tables",
+        "governed_controls",
+        "static_tables",
+        "migration_exception",
+        "sequences",
         "snapshot_sha256",
         "captured_at",
     }
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 2
+        or document.get("schema_version") != 3
+        or not isinstance(document.get("operation_id"), str)
+        or OPERATION_ID_RE.fullmatch(document["operation_id"]) is None
         or document.get("database") != "nexpoly"
         or not isinstance(document.get("database_system_identifier"), str)
         or re.fullmatch(
@@ -927,7 +1363,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         or document.get("transaction_read_only") is not True
         or document.get("transaction_deferrable") is not True
         or document.get("digest_algorithm")
-        != "sha256-postgres-jsonb-copy-v1"
+        != "sha256-postgres-jsonb-copy-v2"
         or not isinstance(document.get("captured_at"), str)
         or not document["captured_at"]
     ):
@@ -1003,58 +1439,63 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         raise SiteHelperContractError(
             "mutable-data audit endpoint is not the sealed PostgreSQL container"
         )
-    records = document.get("tables")
-    if not isinstance(records, list) or len(records) != len(MUTABLE_DATA_TABLES):
-        raise SiteHelperContractError("mutable-data audit table inventory differs")
-    normalized: list[dict[str, Any]] = []
-    for record, expected in zip(records, MUTABLE_DATA_TABLES, strict=True):
-        if (
-            not isinstance(record, dict)
-            or set(record)
-            != {
-                "schema",
-                "table",
-                "row_count",
-                "schema_sha256",
-                "content_sha256",
-            }
-            or (record.get("schema"), record.get("table")) != expected
-            or isinstance(record.get("row_count"), bool)
-            or not isinstance(record.get("row_count"), int)
-            or record["row_count"] < 0
-        ):
-            raise SiteHelperContractError(
-                "mutable-data audit table record is invalid"
-            )
-        normalized.append(
-            {
-                "schema": expected[0],
-                "table": expected[1],
-                "row_count": record["row_count"],
-                "schema_sha256": _require_digest(
-                    record.get("schema_sha256"),
-                    "mutable-data schema digest",
-                ),
-                "content_sha256": _require_digest(
-                    record.get("content_sha256"),
-                    "mutable-data content digest",
-                ),
-            }
-        )
+
+    ledger = _validate_mutable_ledger(document.get("migration_ledger"))
+    versions = {record["version"] for record in ledger}
+    dft_ready = "0013_monomer_dft_jobs" in versions
+    contract_applied = "0012_drop_polytao_jobs" in versions
+    business_relations = (
+        BUSINESS_MUTABLE_TABLES + POST_0013_BUSINESS_MUTABLE_TABLES
+    )
+    business_tables = _validate_table_inventory(
+        document.get("business_tables"),
+        business_relations,
+        absent_relations=(
+            frozenset()
+            if dft_ready
+            else frozenset(POST_0013_BUSINESS_MUTABLE_TABLES)
+        ),
+    )
+    static_tables = _validate_table_inventory(
+        document.get("static_tables"),
+        STATIC_IMPORT_TABLES,
+    )
+    migration_exception = _validate_table_inventory(
+        [document.get("migration_exception")],
+        (CONTRACT_0012_EXCEPTION_TABLE,),
+        absent_relations=(
+            frozenset({CONTRACT_0012_EXCEPTION_TABLE})
+            if contract_applied
+            else frozenset()
+        ),
+    )[0]
+    governed_controls = _validate_governed_controls(
+        document.get("governed_controls")
+    )
+    sequences = _validate_sequence_inventory(
+        document.get("sequences"),
+        dft_ready=dft_ready,
+    )
     identity = {
+        "operation_id": document["operation_id"],
         "database": "nexpoly",
         "database_system_identifier": document["database_system_identifier"],
         "connection": connection,
         "postgres_runtime": runtime,
-        "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
-        "tables": normalized,
+        "digest_algorithm": "sha256-postgres-jsonb-copy-v2",
+        "migration_ledger": ledger,
+        "business_tables": business_tables,
+        "governed_controls": governed_controls,
+        "static_tables": static_tables,
+        "migration_exception": migration_exception,
+        "sequences": sequences,
     }
     if document.get("snapshot_sha256") != sha256_bytes(
         canonical_json_bytes(identity)
     ):
         raise SiteHelperContractError("mutable-data snapshot digest differs")
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,

@@ -55,24 +55,96 @@ def image_record(role: str, sha: str = TARGET_SHA) -> dict[str, str]:
     }
 
 
-def mutable_data_evidence() -> dict[str, object]:
-    tables = [
-        {
-            "schema": "online_knowledge",
-            "table": "history",
-            "row_count": 17,
-            "schema_sha256": "sha256:" + "1" * 64,
-            "content_sha256": "sha256:" + "2" * 64,
-        },
-        {
-            "schema": "online_knowledge",
-            "table": "jobs",
-            "row_count": 9,
-            "schema_sha256": "sha256:" + "3" * 64,
-            "content_sha256": "sha256:" + "4" * 64,
-        },
+def mutable_data_evidence(
+    *,
+    ledger_length: int = 11,
+    operation_id: str = OPERATION_ID,
+) -> dict[str, object]:
+    def table_record(
+        schema: str,
+        table: str,
+        index: int,
+        *,
+        present: bool = True,
+        rows: int | None = None,
+    ) -> dict[str, object]:
+        return {
+            "schema": schema,
+            "table": table,
+            "state": "present" if present else "absent",
+            "row_count": (index + 1 if rows is None else rows) if present else None,
+            "schema_sha256": (
+                "sha256:" + f"{(index + 1) % 16:x}" * 64
+                if present
+                else None
+            ),
+            "content_sha256": (
+                "sha256:" + f"{(index + 9) % 16:x}" * 64
+                if present
+                else None
+            ),
+        }
+
+    dft_ready = ledger_length == 13
+    contract_applied = ledger_length >= 12
+    business_tables = [
+        table_record(schema, table, index)
+        for index, (schema, table) in enumerate(
+            CONTROLLER._site_helper_contracts.BUSINESS_MUTABLE_TABLES
+        )
     ]
+    business_tables.extend(
+        table_record(
+            schema,
+            table,
+            index + len(business_tables),
+            present=dft_ready,
+            rows=0,
+        )
+        for index, (schema, table) in enumerate(
+            CONTROLLER._site_helper_contracts.POST_0013_BUSINESS_MUTABLE_TABLES
+        )
+    )
+    static_tables = [
+        table_record(schema, table, index + 8)
+        for index, (schema, table) in enumerate(
+            CONTROLLER._site_helper_contracts.STATIC_IMPORT_TABLES
+        )
+    ]
+    deployment_table = table_record(
+        "governance", "deployment_control", 7, rows=1
+    )
+    analytics_table = table_record(
+        "governance", "database_analytics_snapshots", 8, rows=0
+    )
+    sequences: list[dict[str, object]] = []
+    for index, (schema, sequence, owned_by) in enumerate(
+        CONTROLLER._site_helper_contracts.DATA_SEQUENCES
+    ):
+        present = schema != "monomer_dft" or dft_ready
+        sequences.append(
+            {
+                "schema": schema,
+                "sequence": sequence,
+                "owned_by": owned_by,
+                "state": "present" if present else "absent",
+                "data_type": "bigint" if present else None,
+                "start_value": 1 if present else None,
+                "min_value": 1 if present else None,
+                "max_value": 9223372036854775807 if present else None,
+                "increment_by": 1 if present else None,
+                "cache_size": 1 if present else None,
+                "cycle": False if present else None,
+                "last_value": 1 if present else None,
+                "is_called": (
+                    False
+                    if present and schema == "monomer_dft"
+                    else (True if present else None)
+                ),
+            }
+        )
     identity = {
+        "operation_id": operation_id,
         "database": "nexpoly",
         "database_system_identifier": "7659245354718314530",
         "connection": {
@@ -104,11 +176,46 @@ def mutable_data_evidence() -> dict[str, object]:
             },
             "system_identifier": "7659245354718314530",
         },
-        "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
-        "tables": tables,
+        "digest_algorithm": "sha256-postgres-jsonb-copy-v2",
+        "migration_ledger": [
+            {"version": version, "checksum": checksum}
+            for version, checksum in (
+                CONTROLLER._site_helper_contracts.CANONICAL_MIGRATION_LEDGER[
+                    :ledger_length
+                ]
+            )
+        ],
+        "business_tables": business_tables,
+        "governed_controls": {
+            "deployment_control": {
+                "table": deployment_table,
+                "row": {
+                    "control_key": "production",
+                    "drain_enabled": True,
+                    "reason": f"pull deployment {operation_id}",
+                    "release_sha": TARGET_SHA,
+                    "activated_at": "2026-07-17T00:00:00Z",
+                    "activated_by": "pull-deploy-controller",
+                    "updated_at": "2026-07-17T00:00:00Z",
+                },
+            },
+            "database_analytics_snapshots": {
+                "table": analytics_table,
+                "entries": [],
+            },
+        },
+        "static_tables": static_tables,
+        "migration_exception": table_record(
+            "generation",
+            "polytao_jobs",
+            23,
+            present=not contract_applied,
+            rows=9,
+        ),
+        "sequences": sequences,
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,
@@ -116,6 +223,29 @@ def mutable_data_evidence() -> dict[str, object]:
         "snapshot_sha256": CONTROLLER.canonical_json_digest(identity),
         "captured_at": "2026-07-17T00:00:00Z",
     }
+
+
+def reseal_mutable_data_evidence(
+    document: dict[str, object],
+) -> dict[str, object]:
+    identity_fields = (
+        "operation_id",
+        "database",
+        "database_system_identifier",
+        "connection",
+        "postgres_runtime",
+        "digest_algorithm",
+        "migration_ledger",
+        "business_tables",
+        "governed_controls",
+        "static_tables",
+        "migration_exception",
+        "sequences",
+    )
+    document["snapshot_sha256"] = CONTROLLER.canonical_json_digest(
+        {name: document[name] for name in identity_fields}
+    )
+    return document
 
 
 def seed_completed_alias_gate(
@@ -1958,14 +2088,9 @@ class SlotAndDescriptorTests(PullDeployTestCase):
 
     def test_mutable_online_tables_are_sealed_before_and_after_apply(self) -> None:
         before = mutable_data_evidence()
-        pair = CONTROLLER.validate_mutable_data_pair(
-            {
-                "before": before,
-                "after": json.loads(json.dumps(before)),
-                "identity_sha256": CONTROLLER.canonical_json_digest(
-                    CONTROLLER.mutable_data_identity(before)
-                ),
-            }
+        pair = CONTROLLER.build_mutable_data_pair(
+            before,
+            json.loads(json.dumps(before)),
         )
         self.assertEqual(pair["before"], pair["after"])
 
@@ -1976,33 +2101,118 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         ):
             with self.subTest(label=label):
                 after = json.loads(json.dumps(before))
-                after["tables"][0][field] = replacement
-                identity = {
-                    "database": after["database"],
-                    "database_system_identifier": after[
-                        "database_system_identifier"
-                    ],
-                    "connection": after["connection"],
-                    "postgres_runtime": after["postgres_runtime"],
-                    "digest_algorithm": after["digest_algorithm"],
-                    "tables": after["tables"],
-                }
-                after["snapshot_sha256"] = CONTROLLER.canonical_json_digest(
-                    identity
-                )
+                after["business_tables"][0][field] = replacement
+                reseal_mutable_data_evidence(after)
                 with self.assertRaisesRegex(
                     CONTROLLER.PullDeployError,
-                    "changed during deployment",
+                    "mutable business table changed",
                 ):
-                    CONTROLLER.validate_mutable_data_pair(
-                        {
-                            "before": before,
-                            "after": after,
-                            "identity_sha256": CONTROLLER.canonical_json_digest(
-                                CONTROLLER.mutable_data_identity(before)
-                            ),
-                        }
-                    )
+                    CONTROLLER.build_mutable_data_pair(before, after)
+
+    def test_mutable_data_allows_only_exact_0012_exception(self) -> None:
+        before = mutable_data_evidence(ledger_length=11)
+        before_control = before["governed_controls"]["deployment_control"]
+        before_control["row"].update(
+            {
+                "reason": f"0012 maintenance {OPERATION_ID}",
+                "activated_by": "pull-contract-0012",
+            }
+        )
+        reseal_mutable_data_evidence(before)
+        after = mutable_data_evidence(ledger_length=12)
+        after_control = after["governed_controls"]["deployment_control"]
+        after_control["row"].update(
+            {
+                "reason": f"0012 maintenance {OPERATION_ID}",
+                "activated_by": "pull-contract-0012",
+                "updated_at": "2026-07-17T00:01:00Z",
+            }
+        )
+        after_control["table"]["content_sha256"] = "sha256:" + "e" * 64
+        reseal_mutable_data_evidence(after)
+
+        pair = CONTROLLER.build_mutable_data_pair(before, after)
+
+        self.assertEqual(pair["transition"]["kind"], "contract-0012")
+        self.assertEqual(
+            pair["transition"]["polytao_exception"]["row_count"],
+            before["migration_exception"]["row_count"],
+        )
+
+        changed = json.loads(json.dumps(after))
+        changed["business_tables"][0]["content_sha256"] = "sha256:" + "f" * 64
+        reseal_mutable_data_evidence(changed)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "mutable business table changed",
+        ):
+            CONTROLLER.build_mutable_data_pair(before, changed)
+
+    def test_mutable_data_allows_only_pristine_0013_expansion(self) -> None:
+        before = mutable_data_evidence(ledger_length=12)
+        after = mutable_data_evidence(ledger_length=13)
+
+        pair = CONTROLLER.build_mutable_data_pair(before, after)
+
+        self.assertEqual(pair["transition"]["kind"], "expand-0013")
+        self.assertEqual(
+            pair["transition"]["dft_relations"],
+            sorted(CONTROLLER.MUTABLE_DATA_BUSINESS_TABLES[-3:]),
+        )
+
+        nonempty = json.loads(json.dumps(after))
+        nonempty["business_tables"][-1]["row_count"] = 1
+        reseal_mutable_data_evidence(nonempty)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "empty DFT business relation",
+        ):
+            CONTROLLER.build_mutable_data_pair(before, nonempty)
+
+        advanced = json.loads(json.dumps(after))
+        advanced["sequences"][-1]["is_called"] = True
+        reseal_mutable_data_evidence(advanced)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "DFT identity sequence is not pristine",
+        ):
+            CONTROLLER.build_mutable_data_pair(before, advanced)
+
+    def test_mutable_data_rejects_static_control_and_analytics_drift(self) -> None:
+        before = mutable_data_evidence()
+        mutations = (
+            (
+                "static",
+                "static import tables changed",
+                lambda value: value["static_tables"][0].update(
+                    content_sha256="sha256:" + "f" * 64
+                ),
+            ),
+            (
+                "control",
+                "current operation",
+                lambda value: value["governed_controls"][
+                    "deployment_control"
+                ]["row"].update(reason="pull deployment another-operation"),
+            ),
+            (
+                "analytics",
+                "analytics snapshots changed",
+                lambda value: value["governed_controls"][
+                    "database_analytics_snapshots"
+                ]["table"].update(content_sha256="sha256:" + "f" * 64),
+            ),
+        )
+        for label, message, mutate in mutations:
+            with self.subTest(label=label):
+                after = json.loads(json.dumps(before))
+                mutate(after)
+                reseal_mutable_data_evidence(after)
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    message,
+                ):
+                    CONTROLLER.build_mutable_data_pair(before, after)
 
     def test_mutable_helper_is_descriptor_bound_and_asset_rebuild_is_empty(
         self,

@@ -38,22 +38,94 @@ def _write_private(path: Path, payload: str) -> None:
     os.chmod(path, 0o600)
 
 
-def _mutable_data_evidence() -> dict[str, object]:
-    tables = [
-        {
-            "schema": schema,
-            "table": table,
-            "row_count": index + 1,
-            "schema_sha256": "sha256:" + f"{index + 1:x}" * 64,
+def _mutable_data_evidence(
+    *,
+    operation_id: str = DEPLOY_OPERATION,
+    ledger_length: int = 11,
+) -> dict[str, object]:
+    helpers = contract.pull._site_helper_contracts
+
+    def table_record(
+        relation: tuple[str, str],
+        index: int,
+        *,
+        present: bool = True,
+        rows: int | None = None,
+    ) -> dict[str, object]:
+        return {
+            "schema": relation[0],
+            "table": relation[1],
+            "state": "present" if present else "absent",
+            "row_count": (
+                index + 1 if rows is None else rows
+            )
+            if present
+            else None,
+            "schema_sha256": (
+                "sha256:" + f"{(index + 1) % 16:x}" * 64
+                if present
+                else None
+            ),
             "content_sha256": (
                 "sha256:" + f"{(index + 9) % 16:x}" * 64
+                if present
+                else None
             ),
         }
-        for index, (schema, table) in enumerate(
-            contract.pull._site_helper_contracts.MUTABLE_DATA_TABLES
-        )
+
+    dft_ready = ledger_length == 13
+    contract_applied = ledger_length >= 12
+    business_tables = [
+        table_record(relation, index)
+        for index, relation in enumerate(helpers.BUSINESS_MUTABLE_TABLES)
     ]
+    business_tables.extend(
+        table_record(
+            relation,
+            index + len(helpers.BUSINESS_MUTABLE_TABLES),
+            present=dft_ready,
+            rows=0,
+        )
+        for index, relation in enumerate(
+            helpers.POST_0013_BUSINESS_MUTABLE_TABLES
+        )
+    )
+    static_tables = [
+        table_record(relation, index + 8)
+        for index, relation in enumerate(helpers.STATIC_IMPORT_TABLES)
+    ]
+    sequences: list[dict[str, object]] = []
+    for schema, sequence, owned_by in helpers.DATA_SEQUENCES:
+        present = schema != "monomer_dft" or dft_ready
+        sequences.append(
+            {
+                "schema": schema,
+                "sequence": sequence,
+                "owned_by": owned_by,
+                "state": "present" if present else "absent",
+                "data_type": "bigint" if present else None,
+                "start_value": 1 if present else None,
+                "min_value": 1 if present else None,
+                "max_value": 9223372036854775807 if present else None,
+                "increment_by": 1 if present else None,
+                "cache_size": 1 if present else None,
+                "cycle": False if present else None,
+                "last_value": 1 if present else None,
+                "is_called": (
+                    False
+                    if present and schema == "monomer_dft"
+                    else (True if present else None)
+                ),
+            }
+        )
+    deployment_table = table_record(
+        helpers.GOVERNED_CONTROL_TABLES[0], 23, rows=1
+    )
+    analytics_table = table_record(
+        helpers.GOVERNED_CONTROL_TABLES[1], 24, rows=0
+    )
     identity = {
+        "operation_id": operation_id,
         "database": contract.pull.MUTABLE_DATA_DATABASE,
         "database_system_identifier": "7659245354718314530",
         "connection": {
@@ -85,11 +157,43 @@ def _mutable_data_evidence() -> dict[str, object]:
             },
             "system_identifier": "7659245354718314530",
         },
-        "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
-        "tables": tables,
+        "digest_algorithm": "sha256-postgres-jsonb-copy-v2",
+        "migration_ledger": [
+            {"version": version, "checksum": checksum}
+            for version, checksum in helpers.CANONICAL_MIGRATION_LEDGER[
+                :ledger_length
+            ]
+        ],
+        "business_tables": business_tables,
+        "governed_controls": {
+            "deployment_control": {
+                "table": deployment_table,
+                "row": {
+                    "control_key": "production",
+                    "drain_enabled": True,
+                    "reason": f"pull deployment {operation_id}",
+                    "release_sha": SHA,
+                    "activated_at": "2026-07-17T00:00:00Z",
+                    "activated_by": "pull-deploy-controller",
+                    "updated_at": "2026-07-17T00:00:00Z",
+                },
+            },
+            "database_analytics_snapshots": {
+                "table": analytics_table,
+                "entries": [],
+            },
+        },
+        "static_tables": static_tables,
+        "migration_exception": table_record(
+            helpers.CONTRACT_0012_EXCEPTION_TABLE,
+            25,
+            present=not contract_applied,
+            rows=9,
+        ),
+        "sequences": sequences,
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,
@@ -97,6 +201,61 @@ def _mutable_data_evidence() -> dict[str, object]:
         "snapshot_sha256": contract.pull.canonical_json_digest(identity),
         "captured_at": "2026-07-17T00:00:00Z",
     }
+
+
+def _reseal_mutable_data_evidence(
+    document: dict[str, object],
+) -> dict[str, object]:
+    fields = (
+        "operation_id",
+        "database",
+        "database_system_identifier",
+        "connection",
+        "postgres_runtime",
+        "digest_algorithm",
+        "migration_ledger",
+        "business_tables",
+        "governed_controls",
+        "static_tables",
+        "migration_exception",
+        "sequences",
+    )
+    document["snapshot_sha256"] = contract.pull.canonical_json_digest(
+        {name: document[name] for name in fields}
+    )
+    return document
+
+
+def _contract_mutable_data_pair() -> dict[str, object]:
+    before = _mutable_data_evidence(
+        operation_id=CONTRACT_OPERATION,
+        ledger_length=11,
+    )
+    before_control = before["governed_controls"]["deployment_control"]
+    before_control["table"]["content_sha256"] = "sha256:" + "d" * 64
+    before_control["row"].update(
+        {
+            "reason": f"0012 maintenance {CONTRACT_OPERATION}",
+            "activated_by": "pull-contract-0012",
+        }
+    )
+    _reseal_mutable_data_evidence(before)
+    after = _mutable_data_evidence(
+        operation_id=CONTRACT_OPERATION,
+        ledger_length=12,
+    )
+    control = after["governed_controls"]["deployment_control"]
+    control["table"]["content_sha256"] = "sha256:" + "e" * 64
+    control["row"].update(
+        {
+            "reason": f"0012 maintenance {CONTRACT_OPERATION}",
+            "activated_by": "pull-contract-0012",
+            "activated_at": "2026-07-17T00:10:00Z",
+            "updated_at": "2026-07-17T00:10:00Z",
+        }
+    )
+    _reseal_mutable_data_evidence(after)
+    return contract.pull.build_mutable_data_pair(before, after)
 
 
 def _seed_completed_alias_gate(
@@ -848,11 +1007,10 @@ class PullContract0012Tests(unittest.TestCase):
         mutable_identity = contract.pull.canonical_json_digest(
             contract.pull.mutable_data_identity(mutable_before)
         )
-        mutable_data_audit = {
-            "before": mutable_before,
-            "after": mutable_after,
-            "identity_sha256": mutable_identity,
-        }
+        mutable_data_audit = contract.pull.build_mutable_data_pair(
+            mutable_before,
+            mutable_after,
+        )
         self.state: dict[str, object] = {
             "schema_version": 2,
             "status": "success",
@@ -1752,6 +1910,16 @@ class PullContract0012Tests(unittest.TestCase):
         marker = contract.pull.load_private_json(marker_path)
         marker["phase"] = "verifying"
         marker["database_change_started"] = True
+        marker["mutable_data_before"] = _contract_mutable_data_pair()[
+            "before"
+        ]
+        marker["mutable_data_before_sha256"] = (
+            contract.pull.canonical_json_digest(
+                contract.pull.mutable_data_identity(
+                    marker["mutable_data_before"]
+                )
+            )
+        )
         contract.legacy.atomic_json(marker_path, marker)
 
         maintenance = object.__new__(contract.PullContractMaintenance)
@@ -1784,6 +1952,11 @@ class PullContract0012Tests(unittest.TestCase):
                 side_effect=lambda *_args, **_kwargs: lifecycle.events.append(
                     "database:restore"
                 ),
+            ),
+            mock.patch.object(
+                runtime,
+                "capture_mutable_data",
+                return_value=marker["mutable_data_before"],
             ),
         ):
             maintenance._reconcile_owned_verification_database({})
@@ -2017,6 +2190,19 @@ class PullContract0012Tests(unittest.TestCase):
         )
         maintenance.operation_id = CONTRACT_OPERATION
         maintenance.audit_dir = audit
+        before = _contract_mutable_data_pair()["before"]
+        maintenance._contract_mutable_data_before = None
+        maintenance._contract_mutable_data_pair = None
+        maintenance._load_runtime_recovery_marker = (  # type: ignore[method-assign]
+            lambda: {
+                "mutable_data_before": before,
+                "mutable_data_before_sha256": (
+                    contract.pull.canonical_json_digest(
+                        contract.pull.mutable_data_identity(before)
+                    )
+                ),
+            }
+        )
         with mock.patch.object(
             contract.legacy.PolytaoContractMaintenance,
             "_archive_legacy_table",
@@ -2056,6 +2242,19 @@ class PullContract0012Tests(unittest.TestCase):
         )
         maintenance.operation_id = CONTRACT_OPERATION
         maintenance.audit_dir = audit
+        before = _contract_mutable_data_pair()["before"]
+        maintenance._contract_mutable_data_before = None
+        maintenance._contract_mutable_data_pair = None
+        maintenance._load_runtime_recovery_marker = (  # type: ignore[method-assign]
+            lambda: {
+                "mutable_data_before": before,
+                "mutable_data_before_sha256": (
+                    contract.pull.canonical_json_digest(
+                        contract.pull.mutable_data_identity(before)
+                    )
+                ),
+            }
+        )
         with (
             mock.patch.object(
                 contract.legacy.PolytaoContractMaintenance,
@@ -2290,6 +2489,9 @@ class PullContract0012Tests(unittest.TestCase):
             )
         maintenance.apply = True
         maintenance.controller.apply = True
+        mutable_pair = _contract_mutable_data_pair()
+        maintenance._contract_mutable_data_before = mutable_pair["before"]
+        maintenance._contract_mutable_data_pair = mutable_pair
 
         def archive(*_args):  # type: ignore[no-untyped-def]
             events.append("backup-pg16")
@@ -2628,13 +2830,28 @@ class PullContract0012Tests(unittest.TestCase):
             "approved_at": approved_at,
         }
         committed["last_contract_operation"] = CONTRACT_OPERATION
+        mutable_pair = _contract_mutable_data_pair()
+        maintenance._contract_mutable_data_pair = mutable_pair
         maintenance._write_current_state(committed)
 
+        archive_evidence = {
+            "schema_version": 2,
+            "row_count": 9,
+            "status_counts": {"completed": 7, "failed": 2},
+            "rows_sha256": "1" * 64,
+            "schema_sha256": "2" * 64,
+            "structure_counts": {
+                "columns": 1,
+                "indexes": 1,
+                "constraints": 1,
+                "triggers": 0,
+            },
+        }
         maintenance.audit_dir.mkdir(parents=True, mode=0o700)
         os.chmod(maintenance.audit_dir, 0o700)
         contract.legacy.atomic_json(
             maintenance.audit_dir / "legacy-table-evidence.json",
-            {"schema_version": 2},
+            archive_evidence,
         )
         with mock.patch.object(maintenance, "_validate_installed_authority"):
             audit_manifest = maintenance._audit_manifest()
@@ -2652,6 +2869,16 @@ class PullContract0012Tests(unittest.TestCase):
             "audit_manifest_sha256": contract.legacy.sha256_file(audit_path),
             "database_change_started": True,
             "worker_drain_attempted": True,
+            "archive_evidence": archive_evidence,
+            "mutable_data_before": mutable_pair["before"],
+            "mutable_data_before_sha256": (
+                contract.pull.canonical_json_digest(
+                    contract.pull.mutable_data_identity(
+                        mutable_pair["before"]
+                    )
+                )
+            ),
+            "contract_mutable_data_audit": mutable_pair,
             "database_inventory": {
                 "external_registered_database_inventory": {},
             },
@@ -2721,7 +2948,15 @@ class PullContract0012Tests(unittest.TestCase):
         self.assertFalse(maintenance.marker_path.exists())
         journal = contract.pull.load_private_json(maintenance.journal_path)
         self.assertEqual(journal["approval"], approval)
-        self.assertEqual(journal["audit_manifest"], audit_manifest)
+        self.assertNotEqual(journal["audit_manifest"], audit_manifest)
+        self.assertEqual(
+            journal["audit_manifest"],
+            contract.pull.load_private_json(audit_path),
+        )
+        self.assertEqual(
+            journal["contract_mutable_data_audit"],
+            mutable_pair,
+        )
         resume.assert_called_once_with({}, worker_was_drained=True)
 
     def test_recovery_rejects_wrong_operation_before_cleanup(self) -> None:
