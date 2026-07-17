@@ -66,6 +66,8 @@ REQUIRED_RECOVERY_PATHS = {
     "scripts/nexpoly-legacy-takeover",
     "scripts/nexpoly-bridge-recover",
     "scripts/nexpoly-maintenance-prefetch",
+    "scripts/nexpoly-production-readiness",
+    "scripts/production_readiness.py",
     "scripts/pull_deploy_controller.py",
     "scripts/site_helper_contracts.py",
 }
@@ -76,6 +78,7 @@ PREFETCH_CONTROLLER_PATHS = {
     "scripts/bridge_deploy_core.py",
     "scripts/git_source_trust.py",
     "scripts/maintenance_prefetch.py",
+    "scripts/production_readiness.py",
     "scripts/worker_slot_runtime.py",
 }
 SAFE_PATH = "/usr/local/bin:/usr/bin:/bin"

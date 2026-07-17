@@ -64,6 +64,7 @@ DIRECTORIES = {
     "state/monomer-md-worker-runs": 0o700,
     "state/gpu-resource": 0o700,
     "audit": 0o700,
+    "audit/production-readiness": 0o700,
     "audit/mutable-data": 0o700,
     "audit/bootstrap-worker-unit": 0o700,
     "audit/contracts/0012": 0o700,
@@ -82,6 +83,10 @@ DIRECTORIES = {
 IMMUTABLE_FILES = {
     "control_runtime_selector.py": (SCRIPT_ROOT / "control_runtime_selector.py", 0o700),
     "nexpoly-pull-deploy": (SCRIPT_ROOT / "nexpoly-pull-deploy", 0o700),
+    "nexpoly-production-readiness": (
+        SCRIPT_ROOT / "nexpoly-production-readiness",
+        0o700,
+    ),
     "nexpoly-pull-contract-0012": (
         SCRIPT_ROOT / "nexpoly-pull-contract-0012",
         0o700,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Immutable router for content-addressed production control releases.
 
-Only this module and the two tiny stable wrappers live in ``runtime/bin``.  Every
+Only this module and the tiny stable wrappers live in ``runtime/bin``.  Every
 controller, maintenance helper, and Worker launcher is loaded from an
 immutable, manifest-sealed release below ``runtime/control-releases``.
 """
@@ -31,6 +31,7 @@ BOOTSTRAP_AUTHORITY_NAME = "bootstrap-control.json"
 BOOTSTRAP_IMMUTABLE_FILES = {
     "control_runtime_selector.py",
     "nexpoly-pull-deploy",
+    "nexpoly-production-readiness",
     "nexpoly-pull-contract-0012",
     "nexpoly-reconcile-production-0005-polytao-alias",
 }

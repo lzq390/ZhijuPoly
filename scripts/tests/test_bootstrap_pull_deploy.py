@@ -241,6 +241,7 @@ class BootstrapPullDeployTests(unittest.TestCase):
         os.chmod(fake_bash, 0o700)
         for name in (
             "nexpoly-pull-deploy",
+            "nexpoly-production-readiness",
             "nexpoly-pull-contract-0012",
             "nexpoly-reconcile-production-0005-polytao-alias",
         ):

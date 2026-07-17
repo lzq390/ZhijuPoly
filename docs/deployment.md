@@ -5,6 +5,9 @@ Actions validates every candidate and publishes the Backend and Web images, but
 it never contacts or mutates the production host. An operator runs the stable
 deployment command during an authorized maintenance window.
 
+The final read-only F/B admission report and its strict evidence contract are
+documented in [production-readiness.md](production-readiness.md).
+
 ## Filesystem boundaries
 
 The source checkout is fixed at:

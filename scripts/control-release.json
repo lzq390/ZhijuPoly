@@ -25,6 +25,10 @@
       "kind": "python",
       "file": "site_helper_contracts.py"
     },
+    "production-readiness": {
+      "kind": "python",
+      "file": "production_readiness.py"
+    },
     "contract-0012": {
       "kind": "python",
       "file": "pull_contract_0012.py"
@@ -99,6 +103,11 @@
     {
       "name": "pull_deploy_controller.py",
       "source": "scripts/pull_deploy_controller.py",
+      "mode": 448
+    },
+    {
+      "name": "production_readiness.py",
+      "source": "scripts/production_readiness.py",
       "mode": 448
     },
     {

@@ -2,7 +2,7 @@
 """Governed, commit-pinned production deployment from the live Git checkout.
 
 The controller executes from a content-addressed control release outside the
-checkout.  ``runtime/bin`` contains only an immutable selector and three stable
+checkout.  ``runtime/bin`` contains only an immutable selector and four stable
 Python wrappers;
 source fetch, candidate preparation and image pulls happen before the
 maintenance window, while ``apply`` consumes sealed evidence using the target
@@ -396,12 +396,14 @@ SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS = {
 }
 STABLE_HELPER_FILES = (
     "control_runtime_selector.py",
+    "nexpoly-production-readiness",
     "nexpoly-pull-contract-0012",
     "nexpoly-pull-deploy",
     "nexpoly-reconcile-production-0005-polytao-alias",
 )
 CONTROL_SOURCE_PATHS = {
     "control_runtime_selector.py": "scripts/control_runtime_selector.py",
+    "nexpoly-production-readiness": "scripts/nexpoly-production-readiness",
     "nexpoly-pull-contract-0012": "scripts/nexpoly-pull-contract-0012",
     "nexpoly-pull-deploy": "scripts/nexpoly-pull-deploy",
     "nexpoly-reconcile-production-0005-polytao-alias": (
