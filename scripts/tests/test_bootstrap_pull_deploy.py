@@ -103,6 +103,21 @@ class BootstrapPullDeployTests(unittest.TestCase):
             os.umask(previous_umask)
         return path
 
+    def ready_private_repo(self, path: Path) -> Path:
+        source = self.committed_private_repo(path)
+        subprocess.run(
+            [
+                "git",
+                "remote",
+                "add",
+                "origin",
+                BOOTSTRAP.REPOSITORY_SSH_URL,
+            ],
+            cwd=source,
+            check=True,
+        )
+        return source
+
     def test_dry_run_is_non_mutating_and_lists_external_layout(self) -> None:
         result, output, error = self.run_main(
             "--sha",
@@ -538,6 +553,128 @@ class BootstrapPullDeployTests(unittest.TestCase):
             os.umask(previous_umask)
         with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "hard-linked"):
             BOOTSTRAP._assert_private_bootstrap_source(local_clone)
+
+    def test_source_readiness_accepts_only_exact_private_canonical_clone(self) -> None:
+        source = self.ready_private_repo(self.root / "ready-source")
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        report = BOOTSTRAP.bootstrap_source_readiness(
+            source,
+            expected_sha=sha,
+        )
+        self.assertTrue(report["ready"])
+        self.assertEqual(report["source_sha"], sha)
+        self.assertEqual(report["ignored_entries"], 0)
+        self.assertEqual(report["unreachable_objects"], 0)
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError, "commit identity"
+        ):
+            BOOTSTRAP.bootstrap_source_readiness(
+                source,
+                expected_sha="f" * 40,
+            )
+
+    def test_source_readiness_rejects_shallow_ignored_and_unreachable_objects(
+        self,
+    ) -> None:
+        shallow = self.ready_private_repo(self.root / "shallow-source")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=shallow,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        (shallow / ".git/shallow").write_text(head + "\n", encoding="ascii")
+        os.chmod(shallow / ".git/shallow", 0o600)
+        with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "must not be shallow"):
+            BOOTSTRAP.bootstrap_source_readiness(shallow)
+
+        ignored = self.ready_private_repo(self.root / "ignored-source")
+        (ignored / ".gitignore").write_text("runtime-cache/\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitignore"], cwd=ignored, check=True)
+        subprocess.run(
+            ["git", "commit", "--quiet", "-m", "ignore fixture"],
+            cwd=ignored,
+            check=True,
+        )
+        cache = ignored / "runtime-cache"
+        cache.mkdir(mode=0o700)
+        (cache / "value").write_text("ignored\n", encoding="utf-8")
+        os.chmod(cache / "value", 0o600)
+        with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "ignored paths"):
+            BOOTSTRAP.bootstrap_source_readiness(ignored)
+
+        dangling = self.ready_private_repo(self.root / "dangling-source")
+        subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=dangling,
+            input=b"unreviewed object\n",
+            check=True,
+            stdout=subprocess.PIPE,
+        )
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError, "dangling or unreachable"
+        ):
+            BOOTSTRAP.bootstrap_source_readiness(dangling)
+
+    def test_source_readiness_rejects_worktree_and_group_writable_clone(self) -> None:
+        source = self.ready_private_repo(self.root / "worktree-owner")
+        worktree_parent = self.root / "private-worktrees"
+        worktree_parent.mkdir(mode=0o700)
+        linked = worktree_parent / "linked"
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", str(linked), "HEAD"],
+            cwd=source,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError, "standalone private clone"
+        ):
+            BOOTSTRAP.bootstrap_source_readiness(linked)
+
+        writable = self.ready_private_repo(self.root / "writable-source")
+        os.chmod(writable, 0o770)
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError, "standalone private clone"
+        ):
+            BOOTSTRAP.bootstrap_source_readiness(writable)
+
+    def test_source_readiness_cli_is_read_only(self) -> None:
+        source = self.ready_private_repo(self.root / "readiness-cli-source")
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        result, output, error = self.run_main(
+            "--sha",
+            sha,
+            "--check-source-readiness",
+            "--source-root",
+            str(source),
+        )
+        self.assertEqual(result, 0, error)
+        self.assertTrue(json.loads(output)["ready"])
+        self.assertFalse(self.runtime.exists())
+        result, _output, error = self.run_main(
+            "--sha",
+            sha,
+            "--check-source-readiness",
+            "--source-root",
+            str(source),
+            "--apply",
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("read-only", error)
 
     def test_strict_object_verification_rejects_hash_path_mismatch(self) -> None:
         source = self.committed_private_repo(self.root / "corrupt-source")

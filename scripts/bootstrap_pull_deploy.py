@@ -710,6 +710,110 @@ def _verify_git_object_database(root: Path) -> None:
         raise BootstrapError("Git object database failed strict verification") from exc
 
 
+def bootstrap_source_readiness(
+    root: Path,
+    *,
+    expected_sha: str | None = None,
+) -> dict[str, object]:
+    """Prove that ``root`` is a standalone, immutable bootstrap authority.
+
+    This check is deliberately read-only.  In particular, it does not fetch,
+    repack, expire reflogs, run maintenance, or remove unreachable objects.
+    A clone with unreachable objects is rejected so a later bootstrap cannot
+    silently depend on reflog-only or otherwise unreviewed bytes.
+    """
+
+    root = root.absolute()
+    _assert_private_bootstrap_source(root)
+    shallow = root / ".git/shallow"
+    if shallow.exists() or shallow.is_symlink():
+        raise BootstrapError("bootstrap source clone must not be shallow")
+    _verify_git_object_database(root)
+    environment = _git_environment(root, home=os.environ.get("HOME", ""))
+
+    def git(*arguments: str, text: bool = True) -> str | bytes:
+        result = subprocess.run(
+            _git_command(root, *arguments),
+            cwd=root,
+            env=environment,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=text,
+        )
+        return result.stdout
+
+    try:
+        branch = str(git("symbolic-ref", "--short", "HEAD")).strip()
+        origin = str(git("remote", "get-url", "origin")).strip()
+        source_sha = str(git("rev-parse", "HEAD")).strip()
+        source_tree = str(git("rev-parse", "HEAD^{tree}")).strip()
+        local_main = str(git("rev-parse", "refs/heads/main")).strip()
+        dirty = str(git("status", "--porcelain=v1", "--untracked-files=all"))
+        ignored = bytes(
+            git(
+                "ls-files",
+                "-z",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                text=False,
+            )
+        )
+        unreachable = subprocess.run(
+            _git_command(
+                root,
+                "fsck",
+                "--full",
+                "--strict",
+                "--no-reflogs",
+                "--unreachable",
+            ),
+            cwd=root,
+            env=environment,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BootstrapError("cannot establish bootstrap source readiness") from exc
+    if branch != "main" or local_main != source_sha:
+        raise BootstrapError("bootstrap source must be the exact local main checkout")
+    if origin != REPOSITORY_SSH_URL:
+        raise BootstrapError("bootstrap source must use the canonical deploy-key SSH origin")
+    if (
+        SHA_RE.fullmatch(source_sha) is None
+        or SHA_RE.fullmatch(source_tree) is None
+        or expected_sha is not None
+        and source_sha != expected_sha
+    ):
+        raise BootstrapError("bootstrap source commit identity differs")
+    if dirty:
+        raise BootstrapError("bootstrap source contains tracked or untracked changes")
+    if ignored:
+        raise BootstrapError("bootstrap source contains ignored paths")
+    unreachable_output = unreachable.stdout + unreachable.stderr
+    if unreachable_output.strip():
+        raise BootstrapError(
+            "bootstrap source contains dangling or unreachable Git objects"
+        )
+    return {
+        "schema_version": 1,
+        "ready": True,
+        "source_root": str(root),
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "branch": branch,
+        "origin": origin,
+        "standalone_object_database": True,
+        "shallow": False,
+        "dirty_entries": 0,
+        "ignored_entries": 0,
+        "unreachable_objects": 0,
+        "group_or_world_writable": False,
+    }
+
+
 def _read_git_policy(path: Path, *, root: Path) -> tuple[bytes, int]:
     try:
         metadata = path.lstat()
@@ -1540,6 +1644,15 @@ def _production_repository_identity(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
+    parser.add_argument(
+        "--check-source-readiness",
+        action="store_true",
+        help="only validate a standalone bootstrap source and print JSON",
+    )
+    parser.add_argument(
+        "--source-root",
+        help="source clone inspected by --check-source-readiness",
+    )
     parser.add_argument("--production-root", default=str(PRODUCTION_ROOT))
     parser.add_argument("--runtime-root", default=str(RUNTIME_ROOT))
     parser.add_argument("--apply", action="store_true")
@@ -1559,6 +1672,31 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     args = build_parser().parse_args(argv)
+    if args.check_source_readiness:
+        if args.apply:
+            print(
+                "bootstrap-pull-deploy: error: source readiness is read-only",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            report = bootstrap_source_readiness(
+                Path(args.source_root).absolute()
+                if args.source_root
+                else REPOSITORY_ROOT,
+                expected_sha=args.sha,
+            )
+        except (BootstrapError, OSError, subprocess.SubprocessError) as exc:
+            print(f"bootstrap-pull-deploy: error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if args.source_root is not None:
+        print(
+            "bootstrap-pull-deploy: error: --source-root requires --check-source-readiness",
+            file=sys.stderr,
+        )
+        return 2
     production_root = Path(args.production_root).absolute()
     runtime_root = Path(args.runtime_root).absolute()
     test_unit = _worker_unit_path(production_root, allow_test=True)

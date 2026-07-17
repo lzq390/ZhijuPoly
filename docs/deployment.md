@@ -143,7 +143,19 @@ git clone --no-local git@github.com:lzq390/ZhijuPoly.git \
 Invoke the script
 directly through its fixed isolated-Python shebang, or explicitly with
 `/usr/bin/python3 -I -B`; ordinary `python3 scripts/...` is rejected. First run
-the non-mutating plan:
+the standalone source-readiness check. It performs no fetch or maintenance and
+rejects shared worktrees/object stores, shallow history, ignored content,
+unreachable objects, writable paths, a non-canonical origin, and any SHA
+mismatch:
+
+```bash
+./scripts/bootstrap_pull_deploy.py \
+  --check-source-readiness \
+  --source-root /home/devuser/nexpoly-bootstrap/source \
+  --sha <main-sha>
+```
+
+Then run the non-mutating bootstrap plan:
 
 ```bash
 ./scripts/bootstrap_pull_deploy.py \
