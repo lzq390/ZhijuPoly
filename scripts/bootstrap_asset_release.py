@@ -185,12 +185,94 @@ def inspect_builder_source(
     used to create the release; a later commit may publish the resulting
     content-addressed digest without changing that historical identity.
     """
-    root = root.resolve()
-    if not root.is_dir() or root.is_symlink():
-        raise AssetError(f"builder source must be a real directory: {root}")
+    structural_git_environment = {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    }
+    if any(os.environ.get(name) for name in structural_git_environment):
+        raise AssetError(
+            "builder source must not use external Git environment state"
+        )
+    root = root.absolute()
+    try:
+        root_metadata = root.lstat()
+        resolved_root = root.resolve(strict=True)
+    except OSError as exc:
+        raise AssetError("builder source is unavailable") from exc
+    if (
+        resolved_root != root
+        or not stat.S_ISDIR(root_metadata.st_mode)
+        or root.is_symlink()
+        or root_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(root_metadata.st_mode) != 0o700
+    ):
+        raise AssetError(
+            "builder source must be an owner-private real directory"
+        )
+    git_directory = root / ".git"
+    try:
+        git_metadata = git_directory.lstat()
+    except OSError as exc:
+        raise AssetError(
+            "builder source must be a standalone Git repository"
+        ) from exc
+    if (
+        not stat.S_ISDIR(git_metadata.st_mode)
+        or git_directory.is_symlink()
+        or git_metadata.st_uid != os.geteuid()
+        or git_metadata.st_mode & 0o022
+    ):
+        raise AssetError(
+            "builder source must be a standalone Git repository"
+        )
     top_level = Path(git_output(root, "rev-parse", "--show-toplevel").strip()).resolve()
     if top_level != root:
         raise AssetError("builder source must be the Git top-level directory")
+    git_dir = git_output(root, "rev-parse", "--git-dir").strip()
+    common_dir = git_output(root, "rev-parse", "--git-common-dir").strip()
+    object_dir = Path(
+        git_output(root, "rev-parse", "--git-path", "objects").strip()
+    )
+    if not object_dir.is_absolute():
+        object_dir = root / object_dir
+    if (
+        git_dir != ".git"
+        or common_dir != ".git"
+        or object_dir.resolve(strict=True) != (git_directory / "objects").resolve()
+        or (git_directory / "objects/info/alternates").exists()
+        or (git_directory / "objects/info/alternates").is_symlink()
+        or (git_directory / "info/grafts").exists()
+        or (git_directory / "info/grafts").is_symlink()
+    ):
+        raise AssetError(
+            "builder source must use a standalone object database"
+        )
+    if git_output(root, "rev-parse", "--is-shallow-repository").strip() != "false":
+        raise AssetError("builder source must contain complete Git history")
+    partial = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "config",
+            "--get-regexp",
+            r"^(extensions\.partialClone|remote\..*\.promisor)$",
+        ],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if partial.returncode not in {1} or partial.stdout:
+        raise AssetError("builder source must not use promisor or partial objects")
+    if git_output(root, "for-each-ref", "--format=%(refname)", "refs/replace").strip():
+        raise AssetError("builder source must not contain replacement objects")
     source = git_output(root, "remote", "get-url", "origin").strip()
     if source != expected_source:
         raise AssetError("builder source origin differs from the approved repository")
@@ -198,6 +280,50 @@ def inspect_builder_source(
     tree = git_tree(root)
     if not FULL_SHA.fullmatch(commit):
         raise AssetError("builder source does not resolve to a full commit SHA")
+    if (
+        git_output(root, "symbolic-ref", "--quiet", "--short", "HEAD").strip()
+        != "main"
+        or git_output(root, "rev-parse", "--verify", "refs/heads/main").strip()
+        != commit
+        or git_output(
+            root,
+            "rev-parse",
+            "--verify",
+            "refs/remotes/origin/main",
+        ).strip()
+        != commit
+        or git_output(
+            root,
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ).strip()
+        != "origin/main"
+    ):
+        raise AssetError(
+            "builder source must be an exact checkout of origin/main"
+        )
+    fsck = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "fsck",
+            "--full",
+            "--strict",
+            "--no-reflogs",
+            "--unreachable",
+        ],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if fsck.returncode != 0 or fsck.stdout or fsck.stderr:
+        raise AssetError(
+            "builder source contains missing, dangling, or unreachable objects"
+        )
     relative = Path(script_path)
     if (
         relative.is_absolute()
@@ -252,6 +378,13 @@ def inspect_builder_source(
         git_output(root, "rev-parse", "--verify", "HEAD^{commit}").strip() != commit
         or git_tree(root) != tree
         or git_output(root, "rev-parse", f"HEAD:{script_path}").strip() != blob
+        or git_output(
+            root,
+            "rev-parse",
+            "--verify",
+            "refs/remotes/origin/main",
+        ).strip()
+        != commit
     ):
         raise AssetError("builder source identity changed while it was inspected")
     return {

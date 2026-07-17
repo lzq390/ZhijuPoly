@@ -948,7 +948,7 @@ def verify_builder_from_bundle(
                 str(clone),
                 "config",
                 "--get-regexp",
-                r"^(extensions\\.partialClone|remote\\..*\\.promisor)$",
+                r"^(extensions\.partialClone|remote\..*\.promisor)$",
             ],
             cwd=None,
             environment=environment,

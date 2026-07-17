@@ -148,6 +148,31 @@ class AssetBootstrapTests(unittest.TestCase):
             "script_blob": "3" * 40,
         }
 
+    def initialize_builder_repository(
+        self,
+        root: Path,
+        *,
+        script_path: str = "builder.py",
+    ) -> str:
+        root.mkdir(mode=0o700)
+        self.git(root, "init", "--quiet", "-b", "main")
+        self.git(root, "config", "user.email", "ci@example.invalid")
+        self.git(root, "config", "user.name", "CI")
+        (root / script_path).write_text("print('builder')\n", encoding="utf-8")
+        self.git(root, "add", script_path)
+        self.git(root, "commit", "--quiet", "-m", "add builder")
+        commit = self.git(root, "rev-parse", "HEAD")
+        self.git(
+            root,
+            "remote",
+            "add",
+            "origin",
+            assets.BUILD_SOURCE_REPOSITORY,
+        )
+        self.git(root, "update-ref", "refs/remotes/origin/main", commit)
+        self.git(root, "branch", "--set-upstream-to", "origin/main", "main")
+        return commit
+
     def initialize_repository(
         self,
         root: Path,
@@ -392,15 +417,7 @@ class AssetBootstrapTests(unittest.TestCase):
     def test_builder_source_identity_binds_clean_commit_tree_and_script_blob(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw) / "builder"
-            root.mkdir()
-            self.git(root, "init", "--quiet")
-            self.git(root, "config", "user.email", "ci@example.invalid")
-            self.git(root, "config", "user.name", "CI")
-            (root / "builder.py").write_text("print('builder')\n", encoding="utf-8")
-            self.git(root, "add", "builder.py")
-            self.git(root, "commit", "--quiet", "-m", "add builder")
-            commit = self.git(root, "rev-parse", "HEAD")
-            self.git(root, "remote", "add", "origin", assets.BUILD_SOURCE_REPOSITORY)
+            commit = self.initialize_builder_repository(root)
 
             identity = assets.inspect_builder_source(
                 root,
@@ -419,6 +436,12 @@ class AssetBootstrapTests(unittest.TestCase):
             (root / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
             self.git(root, "add", ".gitignore")
             self.git(root, "commit", "--quiet", "-m", "ignore cache")
+            self.git(
+                root,
+                "update-ref",
+                "refs/remotes/origin/main",
+                self.git(root, "rev-parse", "HEAD"),
+            )
             (root / "__pycache__").mkdir()
             (root / "__pycache__" / "builder.pyc").write_bytes(b"unreviewed")
             with self.assertRaisesRegex(assets.AssetError, "no modified, untracked, or ignored"):
@@ -427,6 +450,150 @@ class AssetBootstrapTests(unittest.TestCase):
                     script_path="builder.py",
                     expected_source=assets.BUILD_SOURCE_REPOSITORY,
                 )
+
+    def test_builder_source_rejects_linked_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            source = workspace / "source"
+            self.initialize_builder_repository(source)
+            linked = workspace / "linked"
+            self.git(
+                source,
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "linked",
+                str(linked),
+                "HEAD",
+            )
+            linked.chmod(0o700)
+
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "standalone Git repository",
+            ):
+                assets.inspect_builder_source(
+                    linked,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
+
+    def test_builder_source_rejects_alternates_and_promisor_objects(self) -> None:
+        for mutation, message in (
+            ("alternates", "standalone object database"),
+            ("promisor", "promisor or partial"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as raw:
+                workspace = Path(raw)
+                root = workspace / "builder"
+                self.initialize_builder_repository(root)
+                if mutation == "alternates":
+                    external = workspace / "external-objects"
+                    external.mkdir()
+                    alternate = root / ".git/objects/info/alternates"
+                    alternate.write_text(str(external) + "\n", encoding="utf-8")
+                else:
+                    self.git(root, "config", "remote.origin.promisor", "true")
+
+                with self.assertRaisesRegex(assets.AssetError, message):
+                    assets.inspect_builder_source(
+                        root,
+                        script_path="builder.py",
+                        expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                    )
+
+    def test_builder_source_rejects_shallow_and_dangling_history(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            source = workspace / "source"
+            self.initialize_builder_repository(source)
+            shallow = workspace / "shallow"
+            subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--quiet",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    "main",
+                    source.as_uri(),
+                    str(shallow),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            shallow.chmod(0o700)
+            self.git(
+                shallow,
+                "remote",
+                "set-url",
+                "origin",
+                assets.BUILD_SOURCE_REPOSITORY,
+            )
+            with self.assertRaisesRegex(assets.AssetError, "complete Git history"):
+                assets.inspect_builder_source(
+                    shallow,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
+
+            dangling = workspace / "dangling"
+            self.initialize_builder_repository(dangling)
+            subprocess.run(
+                ["git", "-C", str(dangling), "hash-object", "-w", "--stdin"],
+                input=b"unreachable builder object\n",
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "dangling, or unreachable",
+            ):
+                assets.inspect_builder_source(
+                    dangling,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
+
+    def test_builder_source_requires_owner_private_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "builder"
+            self.initialize_builder_repository(root)
+            root.chmod(0o755)
+
+            with self.assertRaisesRegex(assets.AssetError, "owner-private"):
+                assets.inspect_builder_source(
+                    root,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
+
+    def test_builder_source_rejects_external_git_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            root = workspace / "builder"
+            self.initialize_builder_repository(root)
+            external_objects = workspace / "external-objects"
+            external_objects.mkdir()
+
+            with mock.patch.dict(
+                os.environ,
+                {"GIT_OBJECT_DIRECTORY": str(external_objects)},
+                clear=False,
+            ):
+                with self.assertRaisesRegex(
+                    assets.AssetError,
+                    "external Git environment",
+                ):
+                    assets.inspect_builder_source(
+                        root,
+                        script_path="builder.py",
+                        expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                    )
 
     def test_canonical_isolated_invocation_creates_no_ignored_bytecode(
         self,
