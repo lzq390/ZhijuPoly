@@ -1828,6 +1828,56 @@ class PostgresRuntimeFencingTests(unittest.TestCase):
 
 
 class SlotAndDescriptorTests(PullDeployTestCase):
+    def test_pull_uses_shared_strict_schema_v2_asset_contract(self) -> None:
+        root = (
+            CONTROLLER.ASSET_RELEASES_ROOT
+            / CONTROLLER.SCHEMA_V2_ASSET_MANIFEST_DIGEST.removeprefix(
+                "sha256:"
+            )
+        )
+        evidence = {
+            "root": str(root),
+            "manifest_sha256": CONTROLLER.SCHEMA_V2_ASSET_MANIFEST_DIGEST,
+            "schema_version": 2,
+            "byteff2_commit": "8" * 40,
+            "inventory_sha256": "sha256:" + "9" * 64,
+        }
+        with mock.patch.object(
+            CONTROLLER._asset_release_contract,
+            "validate_schema_v2_release",
+            return_value=evidence,
+        ) as validator:
+            self.assertEqual(
+                CONTROLLER.inspect_asset_release(
+                    root,
+                    CONTROLLER.SCHEMA_V2_ASSET_MANIFEST_DIGEST,
+                ),
+                evidence,
+            )
+        validator.assert_called_once_with(
+            root,
+            expected_digest=CONTROLLER.SCHEMA_V2_ASSET_MANIFEST_DIGEST,
+            releases_root=CONTROLLER.ASSET_RELEASES_ROOT,
+        )
+
+        with (
+            mock.patch.object(
+                CONTROLLER._asset_release_contract,
+                "validate_schema_v2_release",
+                side_effect=CONTROLLER._asset_release_contract.AssetContractError(
+                    "tampered predecessor"
+                ),
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "strict external schema-v2",
+            ),
+        ):
+            CONTROLLER.inspect_asset_release(
+                root,
+                CONTROLLER.SCHEMA_V2_ASSET_MANIFEST_DIGEST,
+            )
+
     def test_alias_gate_allows_preparation_only_before_reconciliation_starts(
         self,
     ) -> None:
@@ -1998,6 +2048,10 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 "asset_manifest_digest"
             ],
             "asset_inventory_sha256": "sha256:" + "9" * 64,
+            "asset_contract_sha256": "sha256:" + "c" * 64,
+            "asset_builder_proof_sha256": "sha256:" + "d" * 64,
+            "asset_predecessor_inventory_sha256": "sha256:" + "e" * 64,
+            "live_asset_pointer_sha256": "sha256:" + "f" * 64,
             "recovery_tools_sha256": "sha256:" + "a" * 64,
             "created_at": "2026-07-17T00:00:00Z",
         }

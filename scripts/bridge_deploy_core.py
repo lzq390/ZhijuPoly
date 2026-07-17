@@ -32,7 +32,6 @@ DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 RELEASE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
 LEDGER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
-DATASET_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 TARGET_REF_RE = re.compile(
     r"^refs/nexpoly/bridge-target/([0-9a-f]{40})$"
 )
@@ -383,16 +382,11 @@ def validate_policy(document: object) -> dict[str, Any]:
     datasets = document.get("datasets_on_asset_change")
     if (
         not isinstance(datasets, list)
-        or len(datasets) > 64
-        or datasets != sorted(set(datasets))
-        or any(
-            not isinstance(dataset, str)
-            or DATASET_RE.fullmatch(dataset) is None
-            or dataset in {"all", "none"}
-            for dataset in datasets
-        )
+        or datasets != []
     ):
-        raise BridgeDeployError("bridge asset dataset policy is invalid")
+        raise BridgeDeployError(
+            "bridge assets must not request database dataset rebuilds"
+        )
     if document.get("final_migration") != FINAL_MIGRATION:
         raise BridgeDeployError("bridge final 0013 registration differs")
     normalized_ledgers = _validate_accepted_ledgers(

@@ -335,6 +335,7 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 "web": f"{PREFETCH.ROLE_IMAGE_ROOTS['web']}@{DIGEST_D}",
             },
             "asset_manifest_digest": DIGEST_A,
+            "datasets_on_asset_change": [],
         }
 
     def _document(self) -> dict[str, object]:
@@ -478,6 +479,62 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 runtime_root=Path("/private/runtime"),
             )
         self.assertEqual(validated["identity_sha256"], document["identity_sha256"])
+
+    def test_asset_evidence_rejects_pointer_drift_and_dataset_rebuilds(
+        self,
+    ) -> None:
+        pointer = {
+            "path": "/private/runtime/state/current-assets",
+            "present": False,
+        }
+        document = {
+            "live_pointer_start": pointer,
+            "live_pointer_end": {
+                **pointer,
+                "present": True,
+            },
+        }
+        with self.assertRaisesRegex(
+            PREFETCH.MaintenancePrefetchError,
+            "pointer changed",
+        ):
+            PREFETCH.validate_asset_evidence(
+                document,
+                expected_digest=DIGEST_A,
+                runtime_root=Path("/private/runtime"),
+                bundle_evidence={
+                    "path": "/private/runtime/prefetch/source.bundle",
+                    "sha256": DIGEST_B,
+                },
+                authority={"sha": AUTHORITY_SHA, "tree": AUTHORITY_TREE},
+                target={"sha": TARGET_SHA, "tree": TARGET_TREE},
+                datasets_on_asset_change=[],
+            )
+
+        document["live_pointer_end"] = pointer
+        with (
+            mock.patch.object(
+                PREFETCH.asset_release_contract,
+                "snapshot_live_asset_pointer",
+                return_value=pointer,
+            ),
+            self.assertRaisesRegex(
+                PREFETCH.MaintenancePrefetchError,
+                "must not rebuild",
+            ),
+        ):
+            PREFETCH.validate_asset_evidence(
+                document,
+                expected_digest=DIGEST_A,
+                runtime_root=Path("/private/runtime"),
+                bundle_evidence={
+                    "path": "/private/runtime/prefetch/source.bundle",
+                    "sha256": DIGEST_B,
+                },
+                authority={"sha": AUTHORITY_SHA, "tree": AUTHORITY_TREE},
+                target={"sha": TARGET_SHA, "tree": TARGET_TREE},
+                datasets_on_asset_change=["database"],
+            )
 
     def test_ready_evidence_rejects_tampering_and_missing_f_or_b_wheels(self) -> None:
         document = self._document()

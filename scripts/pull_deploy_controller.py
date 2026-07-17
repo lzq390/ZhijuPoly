@@ -238,6 +238,7 @@ def _load_legacy_takeover_evidence() -> Any:
 
 def _load_prefetch_evidence(
     *,
+    asset_release_contract: Any,
     bridge_core: Any,
     worker_slot_runtime: Any,
 ) -> Any:
@@ -259,6 +260,7 @@ def _load_prefetch_evidence(
         "bootstrap_pull_deploy.py",
     )
     aliases = {
+        "asset_release_contract": asset_release_contract,
         "bootstrap_pull_deploy": bootstrap,
         "bridge_deploy_core": bridge_core,
         "worker_slot_runtime": worker_slot_runtime,
@@ -290,7 +292,12 @@ _control_runtime = _load_control_runtime()
 _bridge_core = _load_bridge_core()
 _site_helper_contracts = _load_site_helper_contracts()
 _legacy_takeover_evidence = _load_legacy_takeover_evidence()
+_asset_release_contract = _load_exact_sibling_module(
+    "nexpoly_pull_deploy_asset_release_contract",
+    "asset_release_contract.py",
+)
 _prefetch_evidence = _load_prefetch_evidence(
+    asset_release_contract=_asset_release_contract,
     bridge_core=_bridge_core,
     worker_slot_runtime=_worker_slot_runtime,
 )
@@ -349,7 +356,7 @@ DEPLOY_USER_HOME = Path("/home/devuser")
 SOURCE_URL = "https://github.com/lzq390/ZhijuPoly"
 ASSET_RELEASES_ROOT = Path("/data/lzq/nexpoly-assets/releases")
 SCHEMA_V2_ASSET_MANIFEST_DIGEST = (
-    "sha256:15600f50c9aa720e8ae72352191f60b9e9f013613f152fc8df317ff9ee599d1e"
+    "sha256:d2bbe277b47274f242b93923623e5221d85553965e9634b0af355e47c80f2d49"
 )
 SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST = (
     "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
@@ -993,6 +1000,10 @@ PREFETCH_BINDING_FIELDS = {
     "wheel_caches_sha256",
     "asset_manifest_sha256",
     "asset_inventory_sha256",
+    "asset_contract_sha256",
+    "asset_builder_proof_sha256",
+    "asset_predecessor_inventory_sha256",
+    "live_asset_pointer_sha256",
     "recovery_tools_sha256",
     "created_at",
     "binding_sha256",
@@ -2724,6 +2735,25 @@ def validate_active_slot_record(document: dict[str, Any]) -> dict[str, Any]:
 
 def inspect_asset_release(asset_root: Path, expected_digest: str) -> dict[str, Any]:
     """Validate and bind the immutable external production asset release."""
+
+    if expected_digest == SCHEMA_V2_ASSET_MANIFEST_DIGEST:
+        try:
+            evidence = _asset_release_contract.validate_schema_v2_release(
+                asset_root,
+                expected_digest=expected_digest,
+                releases_root=ASSET_RELEASES_ROOT,
+            )
+        except _asset_release_contract.AssetContractError as exc:
+            raise PullDeployError(
+                "strict external schema-v2 asset validation failed"
+            ) from exc
+        return {
+            "root": evidence["root"],
+            "manifest_sha256": evidence["manifest_sha256"],
+            "schema_version": evidence["schema_version"],
+            "byteff2_commit": evidence["byteff2_commit"],
+            "inventory_sha256": evidence["inventory_sha256"],
+        }
 
     try:
         root_metadata = asset_root.lstat()
@@ -9500,6 +9530,16 @@ class PullDeployController:
             ),
             "asset_manifest_sha256": ready["asset"]["manifest_sha256"],
             "asset_inventory_sha256": ready["asset"]["inventory_sha256"],
+            "asset_contract_sha256": ready["asset"]["identity_sha256"],
+            "asset_builder_proof_sha256": ready["asset"][
+                "builder_proof"
+            ]["proof_sha256"],
+            "asset_predecessor_inventory_sha256": ready["asset"][
+                "predecessor_inventory_sha256"
+            ],
+            "live_asset_pointer_sha256": canonical_json_digest(
+                ready["asset"]["live_pointer_end"]
+            ),
             "recovery_tools_sha256": canonical_json_digest(
                 ready["recovery_tools"]
             ),

@@ -36,6 +36,7 @@ import tempfile
 from typing import Any, Mapping, Sequence
 import zipfile
 
+import asset_release_contract
 import bootstrap_pull_deploy
 import bridge_deploy_core
 import worker_slot_runtime
@@ -52,6 +53,7 @@ POSTGRES16_IMAGE = (
 WORKER_LOCK_RELATIVE_PATH = "workers/monomer_md_worker/requirements.lock"
 CONTROL_MANIFEST_RELATIVE_PATH = "scripts/control-release.json"
 REQUIRED_RECOVERY_PATHS = {
+    "scripts/asset_release_contract.py",
     "scripts/bootstrap_pull_deploy.py",
     "scripts/control-release.json",
     "scripts/control_runtime_selector.py",
@@ -64,6 +66,7 @@ REQUIRED_RECOVERY_PATHS = {
     "scripts/site_helper_contracts.py",
 }
 PREFETCH_CONTROLLER_PATHS = {
+    "scripts/asset_release_contract.py",
     "scripts/bootstrap_pull_deploy.py",
     "scripts/bridge_deploy_core.py",
     "scripts/maintenance_prefetch.py",
@@ -805,155 +808,51 @@ def validate_asset_evidence(
     document: object,
     *,
     expected_digest: str,
+    runtime_root: Path,
+    bundle_evidence: object,
+    authority: Mapping[str, str],
+    target: Mapping[str, str],
+    datasets_on_asset_change: object,
 ) -> dict[str, Any]:
-    fields = {
-        "root",
-        "manifest_path",
-        "manifest_sha256",
-        "predecessor_asset_digest",
-        "changed_asset_trees",
-        "inventory_sha256",
-        "file_count",
-        "read_only",
-    }
-    if not isinstance(document, dict) or set(document) != fields:
+    """Recompute the deep asset and offline B0 -> B1 -> F proof."""
+
+    if not isinstance(document, dict):
         raise MaintenancePrefetchError("prefetched asset evidence is malformed")
-    expected_digest = require_digest(expected_digest, "asset manifest")
-    root = Path(str(document.get("root", "")))
-    expected_root = Path("/data/lzq/nexpoly-assets/releases") / expected_digest.removeprefix(
-        "sha256:"
-    )
-    manifest = root / "ASSET-MANIFEST.json"
+    if (
+        not isinstance(bundle_evidence, dict)
+        or not isinstance(bundle_evidence.get("path"), str)
+        or not isinstance(bundle_evidence.get("sha256"), str)
+    ):
+        raise MaintenancePrefetchError("prefetched Git bundle binding is malformed")
+    start = document.get("live_pointer_start")
+    end = document.get("live_pointer_end")
+    if not isinstance(start, dict) or not isinstance(end, dict) or start != end:
+        raise MaintenancePrefetchError(
+            "live asset pointer changed during maintenance prefetch"
+        )
     try:
-        root_metadata = root.lstat()
-    except OSError as exc:
-        raise MaintenancePrefetchError("schema-v2 asset root is unavailable") from exc
-    if (
-        root != expected_root
-        or root.is_symlink()
-        or not stat.S_ISDIR(root_metadata.st_mode)
-        or root_metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(root_metadata.st_mode) != 0o500
-        or document.get("manifest_path") != str(manifest)
-        or document.get("manifest_sha256") != expected_digest
-        or sha256_file(manifest) != expected_digest
-        or document.get("read_only") is not True
-    ):
-        raise MaintenancePrefetchError("prefetched schema-v2 asset identity differs")
-    try:
-        parsed = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise MaintenancePrefetchError("schema-v2 asset manifest is invalid") from exc
-    if (
-        not isinstance(parsed, dict)
-        or parsed.get("schema_version") != 2
-        or parsed.get("predecessor_asset_digest")
-        != "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
-        or parsed.get("changed_asset_trees") != ["byteff2"]
-        or document.get("predecessor_asset_digest")
-        != parsed.get("predecessor_asset_digest")
-        or document.get("changed_asset_trees") != ["byteff2"]
-    ):
-        raise MaintenancePrefetchError("schema-v2 predecessor contract differs")
-    assets = parsed.get("assets")
-    if (
-        not isinstance(assets, dict)
-        or set(assets) != {"backend-data", "byteff2", "database", "model"}
-    ):
-        raise MaintenancePrefetchError("schema-v2 asset tree set differs")
-    expected_files = {"ASSET-MANIFEST.json"}
-    expected_directories = set(assets)
-    for tree_name, records in assets.items():
-        if not isinstance(records, list):
-            raise MaintenancePrefetchError("schema-v2 asset records are malformed")
-        seen: set[str] = set()
-        for record in records:
-            if (
-                not isinstance(record, dict)
-                or set(record) != {"path", "sha256", "size"}
-                or not isinstance(record.get("path"), str)
-                or not record["path"]
-                or record["path"] in seen
-                or Path(record["path"]).is_absolute()
-                or ".." in Path(record["path"]).parts
-                or not isinstance(record.get("sha256"), str)
-                or re.fullmatch(r"^[0-9a-f]{64}$", record["sha256"]) is None
-                or not isinstance(record.get("size"), int)
-                or isinstance(record.get("size"), bool)
-                or record["size"] < 0
-            ):
-                raise MaintenancePrefetchError(
-                    "schema-v2 asset record is invalid"
-                )
-            seen.add(record["path"])
-            relative = Path(tree_name) / record["path"]
-            expected_files.add(relative.as_posix())
-            current = relative.parent
-            while current != Path("."):
-                expected_directories.add(current.as_posix())
-                current = current.parent
-            path = root / relative
-            try:
-                metadata = path.lstat()
-            except OSError as exc:
-                raise MaintenancePrefetchError(
-                    "schema-v2 asset file is unavailable"
-                ) from exc
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or path.is_symlink()
-                or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) != 0o400
-                or metadata.st_nlink != 1
-                or metadata.st_size != record["size"]
-                or sha256_file(path).removeprefix("sha256:") != record["sha256"]
-            ):
-                raise MaintenancePrefetchError(
-                    "schema-v2 asset file differs from its manifest"
-                )
-    digest = hashlib.sha256()
-    count = 0
-    actual_files: set[str] = set()
-    actual_directories: set[str] = set()
-    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
-        metadata = path.lstat()
-        relative = path.relative_to(root).as_posix().encode("utf-8")
-        if stat.S_ISDIR(metadata.st_mode):
-            if (
-                path.is_symlink()
-                or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) != 0o500
-            ):
-                raise MaintenancePrefetchError("asset directory is unsafe or writable")
-            actual_directories.add(relative.decode("utf-8"))
-            digest.update(b"D\0" + relative + b"\0")
-        elif stat.S_ISREG(metadata.st_mode):
-            if (
-                path.is_symlink()
-                or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) != 0o400
-                or metadata.st_nlink != 1
-            ):
-                raise MaintenancePrefetchError("asset file is unsafe or writable")
-            count += 1
-            actual_files.add(relative.decode("utf-8"))
-            digest.update(b"F\0" + relative + b"\0")
-            with path.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            digest.update(b"\0")
-        else:
-            raise MaintenancePrefetchError("asset contains a symlink or special file")
-    inventory = "sha256:" + digest.hexdigest()
-    if (
-        actual_files != expected_files
-        or actual_directories != expected_directories
-        or document.get("inventory_sha256") != inventory
-        or document.get("file_count") != count
-        or count < 1
-    ):
-        raise MaintenancePrefetchError("prefetched asset inventory differs")
-    return dict(document)
+        current = asset_release_contract.snapshot_live_asset_pointer(
+            runtime_root / "state/current-assets"
+        )
+        expected = asset_release_contract.build_asset_evidence(
+            expected_digest=expected_digest,
+            bundle_path=Path(bundle_evidence["path"]),
+            expected_bundle_sha256=str(bundle_evidence["sha256"]),
+            target=target,
+            authority=authority,
+            live_pointer_start=start,
+            live_pointer_end=end,
+            datasets_on_asset_change=datasets_on_asset_change,
+        )
+    except asset_release_contract.AssetContractError as exc:
+        raise MaintenancePrefetchError(
+            f"strict schema-v2 asset evidence is invalid: {exc}"
+        ) from exc
+    if current != end or document != expected:
+        raise MaintenancePrefetchError(
+            "prefetched schema-v2 asset or live pointer evidence differs"
+        )
+    return dict(expected)
 
 
 def validate_recovery_tools(
@@ -1140,6 +1039,7 @@ def validate_ready_evidence(
         document.get("policy_sha256") != sha256_bytes(canonical_json_bytes(policy))
         or policy["target_sha"] != target["sha"]
         or policy["target_tree"] != target["tree"]
+        or policy["datasets_on_asset_change"] != []
     ):
         raise MaintenancePrefetchError("prefetch policy binding differs")
     docker_config = document.get("docker_config")
@@ -1215,6 +1115,11 @@ def validate_ready_evidence(
     validate_asset_evidence(
         document.get("asset"),
         expected_digest=policy["asset_manifest_digest"],
+        runtime_root=runtime_root,
+        bundle_evidence=document.get("git_bundle"),
+        authority=authority,
+        target=target,
+        datasets_on_asset_change=policy["datasets_on_asset_change"],
     )
     validate_recovery_tools(
         document.get("recovery_tools"),
@@ -1933,64 +1838,32 @@ class MaintenancePrefetch:
             for source_sha in sorted(unique)
         ]
 
-    def _asset_evidence(self, expected_digest: str) -> dict[str, Any]:
-        root = Path("/data/lzq/nexpoly-assets/releases") / expected_digest.removeprefix(
-            "sha256:"
-        )
-        manifest = root / "ASSET-MANIFEST.json"
+    def _asset_evidence(
+        self,
+        expected_digest: str,
+        *,
+        bundle_evidence: Mapping[str, Any],
+        authority: Mapping[str, str],
+        target: Mapping[str, str],
+        live_pointer_start: Mapping[str, Any],
+        live_pointer_end: Mapping[str, Any],
+        datasets_on_asset_change: object,
+    ) -> dict[str, Any]:
         try:
-            parsed = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return asset_release_contract.build_asset_evidence(
+                expected_digest=expected_digest,
+                bundle_path=Path(str(bundle_evidence["path"])),
+                expected_bundle_sha256=str(bundle_evidence["sha256"]),
+                target=target,
+                authority=authority,
+                live_pointer_start=live_pointer_start,
+                live_pointer_end=live_pointer_end,
+                datasets_on_asset_change=datasets_on_asset_change,
+            )
+        except (KeyError, asset_release_contract.AssetContractError) as exc:
             raise MaintenancePrefetchError(
-                "schema-v2 asset manifest is unavailable"
+                f"strict schema-v2 asset prefetch failed: {exc}"
             ) from exc
-        digest = hashlib.sha256()
-        count = 0
-        for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
-            metadata = path.lstat()
-            relative = path.relative_to(root).as_posix().encode("utf-8")
-            if stat.S_ISDIR(metadata.st_mode):
-                if (
-                    path.is_symlink()
-                    or metadata.st_uid != os.geteuid()
-                    or stat.S_IMODE(metadata.st_mode) != 0o500
-                ):
-                    raise MaintenancePrefetchError(
-                        "asset directory is unsafe or writable"
-                    )
-                digest.update(b"D\0" + relative + b"\0")
-            elif stat.S_ISREG(metadata.st_mode):
-                if (
-                    path.is_symlink()
-                    or metadata.st_uid != os.geteuid()
-                    or stat.S_IMODE(metadata.st_mode) != 0o400
-                    or metadata.st_nlink != 1
-                ):
-                    raise MaintenancePrefetchError("asset file is unsafe or writable")
-                count += 1
-                digest.update(b"F\0" + relative + b"\0")
-                with path.open("rb") as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                        digest.update(chunk)
-                digest.update(b"\0")
-            else:
-                raise MaintenancePrefetchError(
-                    "asset contains a symlink or special file"
-                )
-        evidence = {
-            "root": str(root),
-            "manifest_path": str(manifest),
-            "manifest_sha256": sha256_file(manifest),
-            "predecessor_asset_digest": parsed.get("predecessor_asset_digest"),
-            "changed_asset_trees": parsed.get("changed_asset_trees"),
-            "inventory_sha256": "sha256:" + digest.hexdigest(),
-            "file_count": count,
-            "read_only": True,
-        }
-        return validate_asset_evidence(
-            evidence,
-            expected_digest=expected_digest,
-        )
 
     def _control_paths(self, source_sha: str) -> list[str]:
         try:
@@ -2251,6 +2124,16 @@ class MaintenancePrefetch:
                 ) from exc
             self._assert_lock_inode(stream.fileno())
             self._validate_production_contract()
+            try:
+                live_pointer_start = (
+                    asset_release_contract.snapshot_live_asset_pointer(
+                        self.runtime_root / "state/current-assets"
+                    )
+                )
+            except asset_release_contract.AssetContractError as exc:
+                raise MaintenancePrefetchError(
+                    f"live asset pointer cannot be sealed: {exc}"
+                ) from exc
             require_private_directory(self.prefetch_root, create=True)
             require_private_directory(self.operation_root, create=True)
             for stale in self.operation_root.glob(".ready.json.*.tmp"):
@@ -2267,7 +2150,47 @@ class MaintenancePrefetch:
                     ) from exc
                 return self._revalidate_ready(existing)
             readiness, authority, target, policy = self._source_and_policy()
+            if policy.get("datasets_on_asset_change") != []:
+                raise MaintenancePrefetchError(
+                    "maintenance assets must not request database dataset rebuilds"
+                )
             controller = self._controller_evidence(authority=authority)
+            git_bundle = self._publish_bundle(
+                authority=authority,
+                target=target,
+            )
+            images = self._prefetch_images(
+                authority=authority,
+                target=target,
+                policy=policy,
+            )
+            wheel_caches = self._prefetch_wheels(
+                authority=authority,
+                target=target,
+            )
+            recovery_tools = self._prefetch_recovery_tools(
+                authority=authority,
+                target=target,
+            )
+            try:
+                live_pointer_end = (
+                    asset_release_contract.snapshot_live_asset_pointer(
+                        self.runtime_root / "state/current-assets"
+                    )
+                )
+            except asset_release_contract.AssetContractError as exc:
+                raise MaintenancePrefetchError(
+                    f"live asset pointer cannot be resealed: {exc}"
+                ) from exc
+            asset = self._asset_evidence(
+                policy["asset_manifest_digest"],
+                bundle_evidence=git_bundle,
+                authority=authority,
+                target=target,
+                live_pointer_start=live_pointer_start,
+                live_pointer_end=live_pointer_end,
+                datasets_on_asset_change=policy["datasets_on_asset_change"],
+            )
             document: dict[str, Any] = {
                 "schema_version": PREFETCH_SCHEMA_VERSION,
                 "status": PREFETCH_STATUS,
@@ -2286,28 +2209,29 @@ class MaintenancePrefetch:
                 "docker_config": {
                     "path": str(self.docker_config),
                 },
-                "git_bundle": self._publish_bundle(
-                    authority=authority,
-                    target=target,
-                ),
-                "images": self._prefetch_images(
-                    authority=authority,
-                    target=target,
-                    policy=policy,
-                ),
-                "wheel_caches": self._prefetch_wheels(
-                    authority=authority,
-                    target=target,
-                ),
-                "asset": self._asset_evidence(policy["asset_manifest_digest"]),
-                "recovery_tools": self._prefetch_recovery_tools(
-                    authority=authority,
-                    target=target,
-                ),
+                "git_bundle": git_bundle,
+                "images": images,
+                "wheel_caches": wheel_caches,
+                "asset": asset,
+                "recovery_tools": recovery_tools,
                 "created_at": utc_now(),
                 "identity_sha256": "",
             }
             self._remove_ephemeral_network_state()
+            try:
+                live_pointer_before_publish = (
+                    asset_release_contract.snapshot_live_asset_pointer(
+                        self.runtime_root / "state/current-assets"
+                    )
+                )
+            except asset_release_contract.AssetContractError as exc:
+                raise MaintenancePrefetchError(
+                    f"live asset pointer cannot be verified: {exc}"
+                ) from exc
+            if live_pointer_before_publish != live_pointer_end:
+                raise MaintenancePrefetchError(
+                    "live asset pointer changed before readiness publication"
+                )
             document["identity_sha256"] = sha256_bytes(
                 canonical_json_bytes(ready_identity(document))
             )

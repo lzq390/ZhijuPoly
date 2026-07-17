@@ -42,6 +42,11 @@
   },
   "files": [
     {
+      "name": "asset_release_contract.py",
+      "source": "scripts/asset_release_contract.py",
+      "mode": 448
+    },
+    {
       "name": "bootstrap_pull_deploy.py",
       "source": "scripts/bootstrap_pull_deploy.py",
       "mode": 448

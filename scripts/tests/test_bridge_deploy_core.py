@@ -64,6 +64,19 @@ def policy() -> dict[str, object]:
 
 
 class BridgePolicyTests(unittest.TestCase):
+    def test_policy_rejects_any_asset_driven_dataset_rebuild(self) -> None:
+        document = policy()
+        document["datasets_on_asset_change"] = ["database"]
+        identity = {
+            key: value for key, value in document.items() if key != "policy_id"
+        }
+        document["policy_id"] = BRIDGE.canonical_json_digest(identity)
+        with self.assertRaisesRegex(
+            BRIDGE.BridgeDeployError,
+            "must not request",
+        ):
+            BRIDGE.validate_policy(document)
+
     def test_exact_policy_relation_and_descriptor_are_self_authenticating(self) -> None:
         document = policy()
         validated = BRIDGE.validate_policy(document)
