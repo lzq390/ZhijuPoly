@@ -5,6 +5,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -2076,6 +2077,101 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         descriptor["prefetch"] = prefetch
         return descriptor
 
+    def bind_bridge_token(
+        self,
+        controller: FixtureController,
+        descriptor: dict[str, object],
+    ) -> str:
+        bridge = descriptor["bridge"]
+        token = CONTROLLER._bridge_core.reserve_token(
+            controller.state_dir,
+            operation_id=OPERATION_ID,
+            policy_id=bridge["policy"]["policy_id"],
+            token=b"bridge-token-fixture-entropy-0001",
+        )
+        bridge["token"] = {
+            "token_id": token["token_id"],
+            "token_sha256": token["token_sha256"],
+        }
+        CONTROLLER.validate_descriptor(descriptor)
+        descriptor_digest = CONTROLLER.sha256_bytes(
+            CONTROLLER.canonical_json_bytes(descriptor) + b"\n"
+        )
+        CONTROLLER._bridge_core.bind_token_descriptor(
+            controller.state_dir,
+            operation_id=OPERATION_ID,
+            policy_id=bridge["policy"]["policy_id"],
+            descriptor_sha256=descriptor_digest,
+        )
+        return descriptor_digest
+
+    def bind_bridge_recovery_capsule(
+        self,
+        controller: FixtureController,
+        descriptor: dict[str, object],
+        descriptor_digest: str,
+        marker: dict[str, object],
+    ) -> dict[str, object]:
+        with controller.deployment_lock():
+            capsule = controller._prepare_bridge_recovery_capsule(
+                descriptor, descriptor_digest
+            )
+        marker["bridge_recovery_capsule"] = (
+            controller._bridge_recovery_capsule_binding(capsule)
+        )
+        return capsule
+
+    def test_bridge_recovery_capsule_publish_is_crash_idempotent_and_tamper_evident(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        descriptor_digest = self.bind_bridge_token(controller, descriptor)
+        original_rename = CONTROLLER.os.rename
+
+        def publish_then_lose_response(source, target):  # type: ignore[no-untyped-def]
+            original_rename(source, target)
+            raise RuntimeError("injected capsule rename response loss")
+
+        with (
+            mock.patch.object(
+                CONTROLLER.os,
+                "rename",
+                side_effect=publish_then_lose_response,
+            ),
+            self.assertRaisesRegex(RuntimeError, "rename response loss"),
+            controller.deployment_lock(),
+        ):
+            controller._prepare_bridge_recovery_capsule(
+                descriptor, descriptor_digest
+            )
+        with controller.deployment_lock():
+            capsule = controller._prepare_bridge_recovery_capsule(
+                descriptor, descriptor_digest
+            )
+        observed, observed_descriptor = (
+            controller._load_bridge_recovery_capsule(
+                capsule["capsule_sha256"]
+            )
+        )
+        self.assertEqual(observed, capsule)
+        self.assertEqual(observed_descriptor, descriptor)
+
+        root = (
+            controller.runtime_root
+            / CONTROLLER.BRIDGE_RECOVERY_CAPSULE_ROOT_RELATIVE
+            / capsule["capsule_sha256"].removeprefix("sha256:")
+        )
+        entry = root / "control/bridge_recovery_capsule.py"
+        entry.write_bytes(entry.read_bytes() + b"# tampered\n")
+        os.chmod(entry, 0o700)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "file changed"
+        ):
+            controller._load_bridge_recovery_capsule(
+                capsule["capsule_sha256"]
+            )
+
     def test_v3_descriptor_binds_f_authority_exact_b_and_empty_datasets(
         self,
     ) -> None:
@@ -2563,6 +2659,9 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             "binding_sha256": "sha256:" + "6" * 64,
         }
         marker = {
+            "descriptor_sha256": CONTROLLER.sha256_bytes(
+                CONTROLLER.canonical_json_bytes(descriptor) + b"\n"
+            ),
             "database_change_started": False,
             "source_switched": True,
             "slot_switched": False,
@@ -2683,7 +2782,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
     ) -> None:
         controller = self.controller()
         descriptor = self.bridge_descriptor(controller)
-        descriptor_digest = CONTROLLER.canonical_json_digest(descriptor)
+        descriptor_digest = self.bind_bridge_token(controller, descriptor)
         restored = {
             "restored_terminal_sha256": "sha256:" + "7" * 64,
         }
@@ -2710,6 +2809,9 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             "asset_switched": False,
             "database_change_started": False,
         }
+        self.bind_bridge_recovery_capsule(
+            controller, descriptor, descriptor_digest, marker
+        )
         CONTROLLER.atomic_json(controller.marker_path, marker)
         with (
             mock.patch.object(
@@ -2730,7 +2832,8 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 ),
             ),
         ):
-            self.assertIsNone(controller.recover_interrupted())
+            with controller.deployment_lock():
+                self.assertIsNone(controller.recover_interrupted())
         self.assertFalse(controller.marker_path.exists())
         terminal_dir = (
             controller.runtime_root
@@ -2750,6 +2853,371 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         self.assertFalse(
             (controller.audit_dir / OPERATION_ID).exists()
         )
+        token = CONTROLLER._bridge_core.load_token_authority(
+            controller.state_dir
+        )
+        self.assertEqual(token["status"], "retired-precommit")
+        self.assertEqual(
+            token["retirement"]["restored_terminal_sha256"],
+            restored["restored_terminal_sha256"],
+        )
+
+    def test_failed_first_bridge_recovery_crash_matrix_preserves_order(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        descriptor_digest = self.bind_bridge_token(controller, descriptor)
+        restored = {
+            "restored_terminal_sha256": "sha256:" + "7" * 64,
+        }
+        marker = {
+            "schema_version": 2,
+            "action": "deploy",
+            "operation_id": OPERATION_ID,
+            "source_sha": TARGET_SHA,
+            "descriptor_sha256": descriptor_digest,
+            "executor_control": descriptor["controller"]["executor_control"],
+            "executor_control_sha256": descriptor["controller"][
+                "executor_control_sha256"
+            ],
+            "phase": "failed",
+            "started_at": CONTROLLER.utc_now(),
+            "updated_at": CONTROLLER.utc_now(),
+            "runtime_stopped": True,
+            "source_switched": True,
+            "slot_switched": False,
+            "control_switched": True,
+            "unit_switched": True,
+            "asset_switched": False,
+            "database_change_started": False,
+        }
+        self.bind_bridge_recovery_capsule(
+            controller, descriptor, descriptor_digest, marker
+        )
+        CONTROLLER.atomic_json(controller.marker_path, marker)
+        terminal_dir = (
+            controller.runtime_root
+            / "legacy-takeover"
+            / "runtime"
+            / "pull-terminal"
+            / OPERATION_ID
+        )
+        audit_path = terminal_dir / "recovered-takeover-restore.json"
+        state_path = terminal_dir / "operation-state.json"
+
+        def recover_with_published_crash(method_name: str) -> None:
+            original = getattr(controller, method_name)
+
+            def publish_then_crash(*args, **kwargs):  # type: ignore[no-untyped-def]
+                original(*args, **kwargs)
+                raise RuntimeError(f"injected {method_name} response loss")
+
+            with (
+                mock.patch.object(
+                    controller,
+                    "_load_prepared",
+                    return_value=(descriptor, descriptor_digest),
+                ),
+                mock.patch.object(
+                    controller,
+                    "_probe_restored_legacy_takeover",
+                    return_value=restored,
+                ),
+                mock.patch.object(
+                    controller,
+                    method_name,
+                    side_effect=publish_then_crash,
+                ),
+                self.assertRaisesRegex(RuntimeError, "response loss"),
+                controller.deployment_lock(),
+            ):
+                controller.recover_interrupted()
+
+        recover_with_published_crash("_finalize_restored_legacy_takeover")
+        self.assertTrue(controller.marker_path.exists())
+        self.assertFalse(audit_path.exists())
+        self.assertFalse(state_path.exists())
+        self.assertEqual(
+            CONTROLLER._bridge_core.load_token_authority(
+                controller.state_dir
+            )["status"],
+            "prepared",
+        )
+
+        recover_with_published_crash("_audit_attempt")
+        self.assertTrue(audit_path.exists())
+        self.assertFalse(state_path.exists())
+        self.assertEqual(
+            CONTROLLER._bridge_core.load_token_authority(
+                controller.state_dir
+            )["status"],
+            "prepared",
+        )
+
+        recover_with_published_crash("_record_operation_outcome")
+        self.assertTrue(state_path.exists())
+        self.assertEqual(
+            CONTROLLER._bridge_core.load_token_authority(
+                controller.state_dir
+            )["status"],
+            "prepared",
+        )
+
+        recover_with_published_crash("_retire_failed_first_bridge_token")
+        self.assertTrue(controller.marker_path.exists())
+        self.assertEqual(
+            CONTROLLER._bridge_core.load_token_authority(
+                controller.state_dir
+            )["status"],
+            "retired-precommit",
+        )
+
+        with (
+            mock.patch.object(
+                controller,
+                "_load_prepared",
+                return_value=(descriptor, descriptor_digest),
+            ),
+            mock.patch.object(
+                controller,
+                "_probe_restored_legacy_takeover",
+                return_value=restored,
+            ),
+            controller.deployment_lock(),
+        ):
+            self.assertIsNone(controller.recover_interrupted())
+        self.assertFalse(controller.marker_path.exists())
+        self.assertEqual(
+            CONTROLLER._bridge_core.load_token_authority(
+                controller.state_dir
+            )["status"],
+            "retired-precommit",
+        )
+
+    def test_restored_bridge_recovery_bypasses_only_checkout_permissions(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        descriptor_digest = self.bind_bridge_token(controller, descriptor)
+        restored_terminal = "sha256:" + "7" * 64
+        restored = {"restored_terminal_sha256": restored_terminal}
+        marker = {
+            "schema_version": 2,
+            "action": "deploy",
+            "operation_id": OPERATION_ID,
+            "source_sha": TARGET_SHA,
+            "descriptor_sha256": descriptor_digest,
+            "executor_control": descriptor["controller"]["executor_control"],
+            "executor_control_sha256": descriptor["controller"][
+                "executor_control_sha256"
+            ],
+            "phase": "failed",
+            "started_at": CONTROLLER.utc_now(),
+            "updated_at": CONTROLLER.utc_now(),
+            "runtime_stopped": True,
+            "source_switched": True,
+            "slot_switched": False,
+            "control_switched": True,
+            "unit_switched": True,
+            "asset_switched": False,
+            "database_change_started": False,
+        }
+        capsule = self.bind_bridge_recovery_capsule(
+            controller, descriptor, descriptor_digest, marker
+        )
+        CONTROLLER.atomic_json(controller.marker_path, marker)
+        os.chmod(controller.production_root, 0o775)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "owner-controlled"
+        ):
+            controller.ensure_roots(mutating=True)
+
+        with (
+            mock.patch.object(
+                controller,
+                "_load_prepared",
+                return_value=(descriptor, descriptor_digest),
+            ),
+            mock.patch.object(
+                controller,
+                "_probe_restored_legacy_takeover",
+                return_value=restored,
+            ),
+        ):
+            result = controller.recover_restored_first_bridge(
+                authority_sha=descriptor["bridge"]["authority"]["sha"],
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+                capsule_sha256=capsule["capsule_sha256"],
+                descriptor_sha256=descriptor_digest,
+                restored_terminal_sha256=restored_terminal,
+            )
+        self.assertTrue(result["apply"])
+        self.assertEqual(result["token_status"], "retired-precommit")
+        self.assertFalse(controller.marker_path.exists())
+
+    def test_restored_bridge_recovery_rejects_wrong_content_address(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        descriptor_digest = self.bind_bridge_token(controller, descriptor)
+        restored_terminal = "sha256:" + "7" * 64
+        marker = {
+            "schema_version": 2,
+            "action": "deploy",
+            "operation_id": OPERATION_ID,
+            "source_sha": TARGET_SHA,
+            "descriptor_sha256": descriptor_digest,
+            "executor_control": descriptor["controller"]["executor_control"],
+            "executor_control_sha256": descriptor["controller"][
+                "executor_control_sha256"
+            ],
+            "phase": "failed",
+            "started_at": CONTROLLER.utc_now(),
+            "updated_at": CONTROLLER.utc_now(),
+            "runtime_stopped": True,
+            "source_switched": True,
+            "slot_switched": False,
+            "control_switched": True,
+            "unit_switched": True,
+            "asset_switched": False,
+            "database_change_started": False,
+        }
+        capsule = self.bind_bridge_recovery_capsule(
+            controller, descriptor, descriptor_digest, marker
+        )
+        CONTROLLER.atomic_json(controller.marker_path, marker)
+        os.chmod(controller.production_root, 0o775)
+        with (
+            mock.patch.object(
+                controller,
+                "_load_prepared",
+                return_value=(descriptor, descriptor_digest),
+            ),
+            mock.patch.object(
+                controller,
+                "_probe_restored_legacy_takeover",
+                return_value={
+                    "restored_terminal_sha256": restored_terminal
+                },
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError, "terminal identity differs"
+            ),
+        ):
+            controller.recover_restored_first_bridge(
+                authority_sha=descriptor["bridge"]["authority"]["sha"],
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+                capsule_sha256=capsule["capsule_sha256"],
+                descriptor_sha256=descriptor_digest,
+                restored_terminal_sha256="sha256:" + "8" * 64,
+            )
+        self.assertTrue(controller.marker_path.exists())
+        self.assertEqual(
+            CONTROLLER._bridge_core.load_token_authority(
+                controller.state_dir
+            )["status"],
+            "prepared",
+        )
+
+    def test_successor_generation_requires_untampered_failed_restore_chain(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        descriptor_digest = self.bind_bridge_token(controller, descriptor)
+        restored = {
+            "restored_terminal_sha256": "sha256:" + "7" * 64,
+        }
+        marker = {
+            "schema_version": 2,
+            "action": "deploy",
+            "operation_id": OPERATION_ID,
+            "source_sha": TARGET_SHA,
+            "descriptor_sha256": descriptor_digest,
+            "executor_control": descriptor["controller"]["executor_control"],
+            "executor_control_sha256": descriptor["controller"][
+                "executor_control_sha256"
+            ],
+            "phase": "failed",
+            "started_at": CONTROLLER.utc_now(),
+            "updated_at": CONTROLLER.utc_now(),
+            "runtime_stopped": True,
+            "source_switched": True,
+            "slot_switched": False,
+            "control_switched": True,
+            "unit_switched": True,
+            "asset_switched": False,
+            "database_change_started": False,
+        }
+        self.bind_bridge_recovery_capsule(
+            controller, descriptor, descriptor_digest, marker
+        )
+        CONTROLLER.atomic_json(controller.marker_path, marker)
+        with (
+            mock.patch.object(
+                controller,
+                "_load_prepared",
+                return_value=(descriptor, descriptor_digest),
+            ),
+            mock.patch.object(
+                controller,
+                "_probe_restored_legacy_takeover",
+                return_value=restored,
+            ),
+            controller.deployment_lock(),
+        ):
+            controller.recover_interrupted()
+
+        terminal_dir = (
+            controller.runtime_root
+            / "legacy-takeover"
+            / "runtime"
+            / "pull-terminal"
+            / OPERATION_ID
+        )
+        audit_path = terminal_dir / "recovered-takeover-restore.json"
+        original_audit = audit_path.read_bytes()
+        operation, _descriptor_path, _ready_path = (
+            controller._operation_paths(OPERATION_ID)
+        )
+        shutil.rmtree(operation)
+        with (
+            mock.patch.object(
+                controller,
+                "_probe_restored_legacy_takeover",
+                return_value=restored,
+            ),
+        ):
+            successor_authority = (
+                controller._bridge_token_successor_authority()
+            )
+        self.assertIsNotNone(successor_authority)
+
+        audit_path.write_bytes(original_audit.replace(b"recovered", b"tampered!", 1))
+        os.chmod(audit_path, 0o600)
+        with (
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError, "terminal audit authority differs"
+            ),
+        ):
+            controller._bridge_token_successor_authority()
+        audit_path.write_bytes(original_audit)
+        os.chmod(audit_path, 0o600)
+
+        successor = CONTROLLER._bridge_core.reserve_token(
+            controller.state_dir,
+            operation_id="deploy-20260716-0002",
+            policy_id=descriptor["bridge"]["policy"]["policy_id"],
+            token=b"bridge-token-fixture-entropy-0002",
+            predecessor_retirement=successor_authority,
+        )
+        self.assertEqual(successor["generation"], 2)
+        self.assertEqual(successor["status"], "reserved")
 
     def test_first_bridge_pre_stopped_rollback_never_drains_again(
         self,
@@ -4660,6 +5128,54 @@ class LifecycleStateMachineTests(PullDeployTestCase):
                     "--apply",
                 ]
             )
+
+    def test_restored_bridge_cli_dispatches_every_content_address(self) -> None:
+        descriptor_digest = "sha256:" + "a" * 64
+        restored_terminal = "sha256:" + "b" * 64
+        capsule_digest = "sha256:" + "c" * 64
+        authority_sha = "5" * 40
+        fake = mock.Mock()
+        fake.recover_restored_first_bridge.return_value = {
+            "action": "bridge-recover-restored",
+            "apply": True,
+        }
+        arguments = [
+            "bridge-recover-restored",
+            "--authority-sha",
+            authority_sha,
+            "--target-sha",
+            TARGET_SHA,
+            "--operation-id",
+            OPERATION_ID,
+            "--capsule-sha256",
+            capsule_digest,
+            "--descriptor-sha256",
+            descriptor_digest,
+            "--restored-terminal-sha256",
+            restored_terminal,
+        ]
+        with (
+            mock.patch.object(
+                CONTROLLER,
+                "PullDeployController",
+                return_value=fake,
+            ) as constructor,
+            mock.patch("builtins.print"),
+        ):
+            self.assertEqual(CONTROLLER.main(arguments), 0)
+        constructor.assert_called_once_with(
+            CONTROLLER.PRODUCTION_ROOT,
+            CONTROLLER.RUNTIME_ROOT,
+            apply=True,
+        )
+        fake.recover_restored_first_bridge.assert_called_once_with(
+            authority_sha=authority_sha,
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+            capsule_sha256=capsule_digest,
+            descriptor_sha256=descriptor_digest,
+            restored_terminal_sha256=restored_terminal,
+        )
 
 
 class UnitTransitionRunner:

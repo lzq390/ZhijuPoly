@@ -35,6 +35,7 @@ REVIEWED_WRAPPERS = {
     "bootstrap-rollback": "ops/config/bootstrap-rollback.example",
 }
 RECOVERY_FILES = {
+    "bridge_recovery_launcher.py": "scripts/bridge_recovery_launcher.py",
     "bootstrap_pull_deploy.py": "scripts/bootstrap_pull_deploy.py",
     "bridge_deploy_core.py": "scripts/bridge_deploy_core.py",
     "legacy_takeover.py": "scripts/legacy_takeover.py",
@@ -43,9 +44,11 @@ RECOVERY_FILES = {
     "worker_slot_runtime.py": "scripts/worker_slot_runtime.py",
     "site_helper_contracts.py": "scripts/site_helper_contracts.py",
     "nexpoly-legacy-takeover": "scripts/nexpoly-legacy-takeover",
+    "nexpoly-bridge-recover": "scripts/nexpoly-bridge-recover",
     "nexpoly-maintenance-prefetch": "scripts/nexpoly-maintenance-prefetch",
 }
 ATTESTATION_FILES = {
+    "bridge_recovery_capsule.py": "scripts/bridge_recovery_capsule.py",
     "install_legacy_takeover_prerequisites.py": (
         "scripts/install_legacy_takeover_prerequisites.py"
     ),

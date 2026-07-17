@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+exec /usr/bin/python3 -I -B \
+  /data/lzq/gith/nexpoly-runtime/legacy-takeover/bin/bridge_recovery_launcher.py \
+  "$@"

@@ -57,6 +57,11 @@
       "mode": 448
     },
     {
+      "name": "bridge_recovery_capsule.py",
+      "source": "scripts/bridge_recovery_capsule.py",
+      "mode": 448
+    },
+    {
       "name": "legacy_takeover.py",
       "source": "scripts/legacy_takeover.py",
       "mode": 448

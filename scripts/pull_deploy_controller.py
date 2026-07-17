@@ -390,6 +390,14 @@ CONTROL_SOURCE_MANIFEST = "scripts/control-release.json"
 CONTROLLER_SCHEMA_VERSION = 1
 DESCRIPTOR_SCHEMA_VERSION = 2
 BRIDGE_DESCRIPTOR_SCHEMA_VERSION = 3
+BRIDGE_RECOVERY_CAPSULE_FILES = (
+    "bridge_deploy_core.py",
+    "bridge_recovery_capsule.py",
+    "legacy_takeover_evidence.py",
+)
+BRIDGE_RECOVERY_CAPSULE_ROOT_RELATIVE = Path(
+    "legacy-takeover/runtime/bridge-recovery-capsules"
+)
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
@@ -674,6 +682,7 @@ MARKER_OPTIONAL_FIELDS = {
     "takeover_pre_stopped_fence_sha256",
     "takeover_restore_started",
     "takeover_restored_terminal_sha256",
+    "bridge_recovery_capsule",
 }
 
 POSTGRES_RUNTIME_FENCE_FIELDS = {
@@ -3668,6 +3677,30 @@ def validate_recovery_marker(
             marker["takeover_restored_terminal_sha256"],
             "takeover restored terminal digest",
         )
+    if "bridge_recovery_capsule" in marker:
+        capsule = marker["bridge_recovery_capsule"]
+        if (
+            descriptor.get("schema_version")
+            != BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            or not isinstance(capsule, dict)
+            or set(capsule)
+            != {
+                "capsule_sha256",
+                "descriptor_sha256",
+                "control_release_id",
+                "recovery_entry_sha256",
+            }
+            or capsule.get("descriptor_sha256") != descriptor_digest
+            or capsule.get("control_release_id")
+            != descriptor["controller"]["executor_control"]["release_id"]
+        ):
+            raise PullDeployError(
+                "interrupted bridge recovery capsule binding differs"
+            )
+        for name in ("capsule_sha256", "recovery_entry_sha256"):
+            require_digest(
+                capsule.get(name), f"bridge recovery capsule {name}"
+            )
     if "runtime_start_intent" in marker:
         intent = marker["runtime_start_intent"]
         if (
@@ -6972,7 +7005,7 @@ class PullDeployController:
                 "interrupted production 0005 alias reconciliation must recover first"
             )
 
-    def ensure_roots(self, *, mutating: bool) -> None:
+    def _ensure_control_runtime_roots(self, *, mutating: bool) -> None:
         if mutating and self.apply_enabled and not self.test_root_mode:
             if (
                 self.production_root != PRODUCTION_ROOT
@@ -7036,6 +7069,8 @@ class PullDeployController:
             if mutating and not canary_state_existed:
                 fsync_directory(canary_state_directory)
                 fsync_directory(self.state_dir)
+
+    def _ensure_production_checkout_root(self) -> None:
         try:
             root_metadata = self.production_root.lstat()
             git_metadata = (self.production_root / ".git").lstat()
@@ -7054,6 +7089,10 @@ class PullDeployController:
             raise PullDeployError(
                 "production checkout and .git must be owner-controlled and non-writable by group/other"
             )
+
+    def ensure_roots(self, *, mutating: bool) -> None:
+        self._ensure_control_runtime_roots(mutating=mutating)
+        self._ensure_production_checkout_root()
 
     @contextlib.contextmanager
     def deployment_lock(self) -> Iterable[int]:
@@ -10937,10 +10976,14 @@ class PullDeployController:
                             "materialized B images or asset differ from F policy"
                         )
                     try:
+                        predecessor_retirement = (
+                            self._bridge_token_successor_authority()
+                        )
                         token_record = _bridge_core.reserve_token(
                             self.state_dir,
                             operation_id=operation_id,
                             policy_id=bridge_relation["policy"]["policy_id"],
+                            predecessor_retirement=predecessor_retirement,
                         )
                         bridge_descriptor = _bridge_core.build_bridge_descriptor(
                             operation_id=operation_id,
@@ -12078,7 +12121,7 @@ class PullDeployController:
             "deployed_at": utc_now(),
         }
 
-    def _audit_attempt(self, marker: dict[str, Any], status: str) -> None:
+    def _audit_attempt(self, marker: dict[str, Any], status: str) -> Path:
         operation_id = require_operation_id(marker["operation_id"])
         normal, external = self._operation_directories(operation_id)
         if marker.get("takeover_restored_terminal_sha256") is not None:
@@ -12090,10 +12133,25 @@ class PullDeployController:
         else:
             operation_dir = normal
         self._ensure_private_operation_directory(operation_dir)
+        path = operation_dir / f"{status}.json"
+        expected = {**marker, "status": status}
+        if path.exists() or path.is_symlink():
+            existing = load_private_json(path)
+            recorded_at = existing.pop("recorded_at", None)
+            if (
+                not isinstance(recorded_at, str)
+                or not recorded_at
+                or existing != expected
+            ):
+                raise PullDeployError(
+                    "terminal deployment audit changed across recovery"
+                )
+            return path
         atomic_json(
-            operation_dir / f"{status}.json",
-            {**marker, "status": status, "recorded_at": utc_now()},
+            path,
+            {**expected, "recorded_at": utc_now()},
         )
+        return path
 
     def _candidate_current_state(
         self,
@@ -12277,6 +12335,490 @@ class PullDeployController:
             raise PullDeployError("bridge token consumption failed") from exc
         if token["status"] != "consumed":
             raise PullDeployError("bridge token did not become permanently consumed")
+
+    @staticmethod
+    def _bridge_recovery_capsule_binding(
+        metadata: dict[str, Any],
+    ) -> dict[str, str]:
+        return {
+            "capsule_sha256": metadata["capsule_sha256"],
+            "descriptor_sha256": metadata["descriptor_sha256"],
+            "control_release_id": metadata["control_release_id"],
+            "recovery_entry_sha256": metadata["files"][
+                "bridge_recovery_capsule.py"
+            ]["sha256"],
+        }
+
+    def _load_bridge_recovery_capsule(
+        self,
+        capsule_sha256: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        capsule_sha256 = require_digest(
+            capsule_sha256, "bridge recovery capsule digest"
+        )
+        base = (
+            self.runtime_root / BRIDGE_RECOVERY_CAPSULE_ROOT_RELATIVE
+        )
+        current = self.runtime_root
+        ensure_private_directory(current)
+        for component in BRIDGE_RECOVERY_CAPSULE_ROOT_RELATIVE.parts:
+            current = current / component
+            ensure_private_directory(current)
+        if current != base:
+            raise PullDeployError("bridge recovery capsule root is inconsistent")
+        root = base / capsule_sha256.removeprefix("sha256:")
+        ensure_private_directory(root)
+        metadata = load_private_json(root / "capsule.json")
+        fields = {
+            "schema_version",
+            "capsule_sha256",
+            "operation_id",
+            "authority_sha",
+            "target_sha",
+            "descriptor_sha256",
+            "control_release_id",
+            "takeover_operation_id",
+            "files",
+        }
+        if (
+            set(metadata) != fields
+            or metadata.get("schema_version") != 1
+            or metadata.get("capsule_sha256") != capsule_sha256
+            or canonical_json_digest(
+                {
+                    key: value
+                    for key, value in metadata.items()
+                    if key != "capsule_sha256"
+                }
+            )
+            != capsule_sha256
+            or not isinstance(metadata.get("control_release_id"), str)
+            or re.fullmatch(
+                r"^[0-9a-f]{64}$", metadata["control_release_id"]
+            )
+            is None
+        ):
+            raise PullDeployError("bridge recovery capsule identity is invalid")
+        require_operation_id(metadata.get("operation_id"))
+        require_sha(metadata.get("authority_sha"), "capsule authority SHA")
+        require_sha(metadata.get("target_sha"), "capsule target SHA")
+        require_digest(
+            metadata.get("descriptor_sha256"),
+            "capsule descriptor digest",
+        )
+        if (
+            not isinstance(metadata.get("takeover_operation_id"), str)
+            or not metadata["takeover_operation_id"].startswith("takeover-")
+        ):
+            raise PullDeployError(
+                "bridge recovery capsule takeover identity is invalid"
+            )
+        files = metadata.get("files")
+        if (
+            not isinstance(files, dict)
+            or set(files) != set(BRIDGE_RECOVERY_CAPSULE_FILES)
+        ):
+            raise PullDeployError(
+                "bridge recovery capsule file inventory is invalid"
+            )
+        control = root / "control"
+        ensure_private_directory(control)
+        if {path.name for path in control.iterdir()} != set(
+            BRIDGE_RECOVERY_CAPSULE_FILES
+        ):
+            raise PullDeployError(
+                "bridge recovery capsule contains extra control files"
+            )
+        for name in BRIDGE_RECOVERY_CAPSULE_FILES:
+            record = files.get(name)
+            path = control / name
+            try:
+                file_metadata = path.lstat()
+            except OSError as exc:
+                raise PullDeployError(
+                    f"bridge recovery capsule file is unavailable: {name}"
+                ) from exc
+            if (
+                not isinstance(record, dict)
+                or set(record) != {"sha256", "mode"}
+                or record.get("mode") != "0700"
+                or not stat.S_ISREG(file_metadata.st_mode)
+                or path.is_symlink()
+                or file_metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(file_metadata.st_mode) != 0o700
+                or sha256_file(path)
+                != require_digest(
+                    record.get("sha256"),
+                    f"bridge recovery capsule {name}",
+                )
+            ):
+                raise PullDeployError(
+                    f"bridge recovery capsule file changed: {name}"
+                )
+        descriptor_path = root / "descriptor.json"
+        descriptor = validate_descriptor(load_private_json(descriptor_path))
+        if (
+            sha256_file(descriptor_path)
+            != metadata["descriptor_sha256"]
+            or descriptor.get("operation_id") != metadata["operation_id"]
+            or descriptor["repository"]["target_sha"]
+            != metadata["target_sha"]
+            or descriptor["bridge"]["authority"]["sha"]
+            != metadata["authority_sha"]
+            or descriptor["legacy_takeover"]["operation_id"]
+            != metadata["takeover_operation_id"]
+            or descriptor["controller"]["executor_control"]["release_id"]
+            != metadata["control_release_id"]
+        ):
+            raise PullDeployError(
+                "bridge recovery capsule descriptor authority differs"
+            )
+        return metadata, descriptor
+
+    def _prepare_bridge_recovery_capsule(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+    ) -> dict[str, Any]:
+        """Publish the minimum exact B controls outside the restored layout."""
+
+        if (
+            not self._is_first_bridge(descriptor)
+            or self._held_deploy_lock_fd is None
+        ):
+            raise PullDeployError(
+                "bridge recovery capsule requires locked first-bridge authority"
+            )
+        descriptor_digest = require_digest(
+            descriptor_digest, "bridge recovery descriptor digest"
+        )
+        executor = descriptor["controller"]["executor_control"]
+        try:
+            _candidate, manifest, candidate_root = (
+                _control_runtime.load_candidate_control(
+                    self.runtime_root, executor
+                )
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "B recovery control release is unavailable"
+            ) from exc
+        files: dict[str, dict[str, str]] = {}
+        payloads: dict[str, bytes] = {}
+        for name in BRIDGE_RECOVERY_CAPSULE_FILES:
+            record = manifest["files"].get(name)
+            path = candidate_root / name
+            if (
+                not isinstance(record, dict)
+                or record.get("mode") != 0o700
+                or not path.is_file()
+                or path.is_symlink()
+            ):
+                raise PullDeployError(
+                    f"B recovery control is unavailable: {name}"
+                )
+            payload = path.read_bytes()
+            digest = sha256_bytes(payload)
+            if digest != record.get("sha256"):
+                raise PullDeployError(
+                    f"B recovery control digest differs: {name}"
+                )
+            payloads[name] = payload
+            files[name] = {"sha256": digest, "mode": "0700"}
+        descriptor_payload = canonical_json_bytes(descriptor) + b"\n"
+        if sha256_bytes(descriptor_payload) != descriptor_digest:
+            raise PullDeployError(
+                "bridge recovery descriptor changed before capsule"
+            )
+        identity = {
+            "schema_version": 1,
+            "operation_id": descriptor["operation_id"],
+            "authority_sha": descriptor["bridge"]["authority"]["sha"],
+            "target_sha": descriptor["repository"]["target_sha"],
+            "descriptor_sha256": descriptor_digest,
+            "control_release_id": executor["release_id"],
+            "takeover_operation_id": descriptor["legacy_takeover"][
+                "operation_id"
+            ],
+            "files": files,
+        }
+        capsule_sha256 = canonical_json_digest(identity)
+        metadata = {**identity, "capsule_sha256": capsule_sha256}
+        base = (
+            self.runtime_root / BRIDGE_RECOVERY_CAPSULE_ROOT_RELATIVE
+        )
+        self._ensure_private_operation_directory(base)
+        final = base / capsule_sha256.removeprefix("sha256:")
+        if final.exists() or final.is_symlink():
+            observed, observed_descriptor = (
+                self._load_bridge_recovery_capsule(capsule_sha256)
+            )
+            if observed != metadata or observed_descriptor != descriptor:
+                raise PullDeployError(
+                    "existing bridge recovery capsule conflicts"
+                )
+            return observed
+        staging = base / (
+            f".{capsule_sha256.removeprefix('sha256:')}.staging"
+        )
+        if staging.exists() or staging.is_symlink():
+            ensure_private_directory(staging)
+            shutil.rmtree(staging)
+            fsync_directory(base)
+        staging.mkdir(mode=0o700)
+        control = staging / "control"
+        control.mkdir(mode=0o700)
+        try:
+            for name, payload in payloads.items():
+                atomic_bytes(control / name, payload, mode=0o700)
+            atomic_bytes(
+                staging / "descriptor.json",
+                descriptor_payload,
+                mode=0o600,
+            )
+            atomic_json(staging / "capsule.json", metadata)
+            fsync_directory(control)
+            fsync_directory(staging)
+            os.rename(staging, final)
+            fsync_directory(base)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(staging)
+                fsync_directory(base)
+            raise
+        observed, observed_descriptor = self._load_bridge_recovery_capsule(
+            capsule_sha256
+        )
+        if observed != metadata or observed_descriptor != descriptor:
+            raise PullDeployError(
+                "published bridge recovery capsule differs"
+            )
+        return observed
+
+    def _retire_failed_first_bridge_token(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+        marker: dict[str, Any],
+        audit_path: Path,
+    ) -> dict[str, Any]:
+        """Retire only a prepared token bound to a terminal failed restore."""
+
+        if self._held_deploy_lock_fd is None:
+            raise PullDeployError("bridge token retirement lacks deploy.lock ownership")
+        if not self._is_first_bridge(descriptor):
+            raise PullDeployError("only the first bridge token can retire precommit")
+        if self.current_state_path.exists() or self.current_state_path.is_symlink():
+            raise PullDeployError(
+                "bridge token cannot retire after current state committed"
+            )
+        restored_terminal = require_digest(
+            marker.get("takeover_restored_terminal_sha256"),
+            "legacy takeover restored terminal digest",
+        )
+        capsule_binding = marker.get("bridge_recovery_capsule")
+        if not isinstance(capsule_binding, dict):
+            raise PullDeployError(
+                "bridge token retirement lacks recovery capsule authority"
+            )
+        capsule_sha256 = require_digest(
+            capsule_binding.get("capsule_sha256"),
+            "bridge token recovery capsule",
+        )
+        capsule, capsule_descriptor = self._load_bridge_recovery_capsule(
+            capsule_sha256
+        )
+        if (
+            self._bridge_recovery_capsule_binding(capsule)
+            != capsule_binding
+            or capsule.get("descriptor_sha256") != descriptor_digest
+            or capsule_descriptor != descriptor
+        ):
+            raise PullDeployError(
+                "bridge token recovery capsule authority differs"
+            )
+        operation_id = descriptor["operation_id"]
+        operation_state = self._load_operation_state(operation_id)
+        if (
+            operation_state is None
+            or operation_state.get("outcome") != "failed"
+            or operation_state.get("descriptor_sha256") != descriptor_digest
+        ):
+            raise PullDeployError(
+                "bridge token retirement lacks terminal failed operation state"
+            )
+        normal, external = self._operation_directories(operation_id)
+        operation_state_path = external / "operation-state.json"
+        if (
+            normal.exists()
+            or normal.is_symlink()
+            or not operation_state_path.exists()
+        ):
+            raise PullDeployError(
+                "bridge token retirement operation state is in the wrong audit root"
+            )
+        if audit_path.parent != external or audit_path.name == "operation-state.json":
+            raise PullDeployError(
+                "bridge token retirement audit is in the wrong audit root"
+            )
+        try:
+            token = _bridge_core.retire_precommit_token(
+                self.state_dir,
+                operation_id=operation_id,
+                descriptor_sha256=descriptor_digest,
+                operation_state_sha256=sha256_file(operation_state_path),
+                terminal_audit_sha256=sha256_file(audit_path),
+                restored_terminal_sha256=restored_terminal,
+                recovery_capsule_sha256=capsule_sha256,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "failed bridge token could not retire exactly"
+            ) from exc
+        if (
+            token["status"] != "retired-precommit"
+            or token["operation_id"] != operation_id
+            or token["descriptor_sha256"] != descriptor_digest
+            or token["retirement"]["restored_terminal_sha256"]
+            != restored_terminal
+        ):
+            raise PullDeployError("retired bridge token identity differs")
+        return token
+
+    def _complete_failed_first_bridge_recovery(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+        marker: dict[str, Any],
+        *,
+        audit_status: str,
+    ) -> None:
+        """Commit a failed F -> B recovery in one strictly ordered sequence."""
+
+        if self._held_deploy_lock_fd is None:
+            raise PullDeployError(
+                "failed bridge recovery lacks deploy.lock ownership"
+            )
+        restored = self._probe_restored_legacy_takeover(descriptor)
+        if restored is None:
+            raise PullDeployError(
+                "failed bridge recovery lacks exact terminal legacy restore"
+            )
+        # Ordering is security-sensitive: marker truth and terminal evidence
+        # must be durable before the global one-time token can be retired.
+        self._finalize_restored_legacy_takeover(
+            descriptor,
+            marker,
+            restored,
+        )
+        audit_path = self._audit_attempt(marker, audit_status)
+        self._record_operation_outcome(
+            operation_id=descriptor["operation_id"],
+            descriptor_sha256=descriptor_digest,
+            outcome="failed",
+        )
+        self._retire_failed_first_bridge_token(
+            descriptor,
+            descriptor_digest,
+            marker,
+            audit_path,
+        )
+        self.marker_path.unlink()
+        fsync_directory(self.marker_path.parent)
+
+    def _bridge_token_successor_authority(
+        self,
+    ) -> dict[str, Any] | None:
+        """Validate the complete failed/restore chain before allocating a generation."""
+
+        if not (
+            self.bridge_token_path.exists()
+            or self.bridge_token_path.is_symlink()
+        ):
+            return None
+        try:
+            token = _bridge_core.load_token_authority(self.state_dir)
+        except Exception as exc:
+            raise PullDeployError("bridge token authority is invalid") from exc
+        if token["status"] != "retired-precommit":
+            return None
+        try:
+            authority = _bridge_core.retirement_reuse_authority(token)
+        except Exception as exc:
+            raise PullDeployError(
+                "retired bridge token successor authority is invalid"
+            ) from exc
+        operation_id = token["operation_id"]
+        capsule, descriptor = self._load_bridge_recovery_capsule(
+            authority["recovery_capsule_sha256"]
+        )
+        descriptor_digest = capsule["descriptor_sha256"]
+        if (
+            not self._is_first_bridge(descriptor)
+            or descriptor.get("operation_id") != operation_id
+            or descriptor_digest != token["descriptor_sha256"]
+        ):
+            raise PullDeployError(
+                "retired bridge token descriptor authority differs"
+            )
+        state = self._load_operation_state(operation_id)
+        normal, external = self._operation_directories(operation_id)
+        state_path = external / "operation-state.json"
+        if (
+            normal.exists()
+            or normal.is_symlink()
+            or state is None
+            or state.get("outcome") != "failed"
+            or state.get("descriptor_sha256") != descriptor_digest
+            or not state_path.exists()
+            or sha256_file(state_path)
+            != authority["operation_state_sha256"]
+        ):
+            raise PullDeployError(
+                "retired bridge token failed operation authority differs"
+            )
+        matching_audits: list[Path] = []
+        for path in external.glob("*.json"):
+            if path.name == "operation-state.json":
+                continue
+            load_private_json(path)
+            if sha256_file(path) == authority["terminal_audit_sha256"]:
+                matching_audits.append(path)
+        if len(matching_audits) != 1:
+            raise PullDeployError(
+                "retired bridge token terminal audit authority differs"
+            )
+        audit = load_private_json(matching_audits[0])
+        if (
+            audit.get("operation_id") != operation_id
+            or audit.get("descriptor_sha256") != descriptor_digest
+            or audit.get("takeover_restored_terminal_sha256")
+            != authority["restored_terminal_sha256"]
+            or not isinstance(audit.get("bridge_recovery_capsule"), dict)
+            or audit["bridge_recovery_capsule"].get("capsule_sha256")
+            != authority["recovery_capsule_sha256"]
+            or audit.get("status")
+            not in {
+                "failed",
+                "recovered-takeover-restore",
+                "recovered-partial-takeover-restore",
+            }
+        ):
+            raise PullDeployError(
+                "retired bridge token terminal audit content differs"
+            )
+        restored = self._probe_restored_legacy_takeover(descriptor)
+        if (
+            restored is None
+            or restored.get("restored_terminal_sha256")
+            != authority["restored_terminal_sha256"]
+            or self.current_state_path.exists()
+            or self.current_state_path.is_symlink()
+        ):
+            raise PullDeployError(
+                "retired bridge token restored identity differs"
+            )
+        return authority
 
     def _bridge_precommit_is_retryable(
         self,
@@ -12577,6 +13119,26 @@ class PullDeployController:
             raise PullDeployError(
                 "legacy takeover terminal restore digest changed"
             )
+        if existing == terminal:
+            if (
+                any(
+                    marker.get(field) is not False
+                    for field in (
+                        "source_switched",
+                        "slot_switched",
+                        "control_switched",
+                        "unit_switched",
+                        "asset_switched",
+                        "runtime_stopped",
+                    )
+                )
+                or marker.get("runtime_start_intent") is not None
+                or marker.get("verification") is not None
+            ):
+                raise PullDeployError(
+                    "legacy takeover terminal marker is internally inconsistent"
+                )
+            return
         marker["source_switched"] = False
         marker["slot_switched"] = False
         marker["control_switched"] = False
@@ -12734,6 +13296,23 @@ class PullDeployController:
             marker["takeover_restore_started"] = intent
             marker["updated_at"] = utc_now()
             self._write_marker(marker)
+        capsule = self._prepare_bridge_recovery_capsule(
+            descriptor,
+            require_digest(
+                marker.get("descriptor_sha256"),
+                "bridge recovery descriptor digest",
+            ),
+        )
+        capsule_binding = self._bridge_recovery_capsule_binding(capsule)
+        existing_capsule = marker.get("bridge_recovery_capsule")
+        if existing_capsule is None:
+            marker["bridge_recovery_capsule"] = capsule_binding
+            marker["updated_at"] = utc_now()
+            self._write_marker(marker)
+        elif existing_capsule != capsule_binding:
+            raise PullDeployError(
+                "bridge recovery capsule changed before legacy restore"
+            )
         launcher = (
             self.runtime_root
             / "legacy-takeover/bin/nexpoly-legacy-takeover"
@@ -13342,36 +13921,21 @@ class PullDeployController:
                 # This must precede repository/effect reconciliation: exact
                 # restore intentionally brought back HTTPS origin, ignored
                 # legacy content and the old open runtime.
-                self._finalize_restored_legacy_takeover(
+                self._complete_failed_first_bridge_recovery(
                     descriptor,
+                    descriptor_digest,
                     marker,
-                    restored_takeover,
+                    audit_status="recovered-takeover-restore",
                 )
-                self._audit_attempt(
-                    marker,
-                    "recovered-takeover-restore",
-                )
-                self._record_operation_outcome(
-                    operation_id=operation_id,
-                    descriptor_sha256=descriptor_digest,
-                    outcome="failed",
-                )
-                self.marker_path.unlink()
-                fsync_directory(self.marker_path.parent)
                 return None
             if marker.get("takeover_restore_started") is not None:
                 self._rollback_failed_attempt(descriptor, marker)
-                self._audit_attempt(
+                self._complete_failed_first_bridge_recovery(
+                    descriptor,
+                    descriptor_digest,
                     marker,
-                    "recovered-partial-takeover-restore",
+                    audit_status="recovered-partial-takeover-restore",
                 )
-                self._record_operation_outcome(
-                    operation_id=operation_id,
-                    descriptor_sha256=descriptor_digest,
-                    outcome="failed",
-                )
-                self.marker_path.unlink()
-                fsync_directory(self.marker_path.parent)
                 return None
         if self._is_pre_stop_abort_marker(descriptor, marker):
             # This path must precede effect reconciliation.  Candidate and
@@ -13439,6 +14003,14 @@ class PullDeployController:
             fsync_directory(self.marker_path.parent)
             return None
         self._rollback_failed_attempt(descriptor, marker)
+        if self._is_first_bridge(descriptor):
+            self._complete_failed_first_bridge_recovery(
+                descriptor,
+                descriptor_digest,
+                marker,
+                audit_status="recovered-takeover-restore",
+            )
+            return None
         self._audit_attempt(marker, "recovered-rollback")
         if not self._bridge_precommit_is_retryable(
             descriptor, descriptor_digest
@@ -13709,6 +14281,14 @@ class PullDeployController:
                         "deployment and rollback failed; admission remains isolated"
                     ) from rollback_exc
                 marker["rollback"] = "success"
+                if self._is_first_bridge(descriptor):
+                    self._complete_failed_first_bridge_recovery(
+                        descriptor,
+                        descriptor_digest,
+                        marker,
+                        audit_status="failed",
+                    )
+                    raise
                 self._audit_attempt(marker, "failed")
                 if not self._bridge_precommit_is_retryable(
                     descriptor, descriptor_digest
@@ -13743,6 +14323,107 @@ class PullDeployController:
             operation_id=operation_id,
             bridge_authority_sha=authority_sha,
         )
+
+    def recover_restored_first_bridge(
+        self,
+        *,
+        authority_sha: str,
+        target_sha: str,
+        operation_id: str,
+        capsule_sha256: str,
+        descriptor_sha256: str,
+        restored_terminal_sha256: str,
+    ) -> dict[str, Any]:
+        """Finalize only an exact restored first bridge without trusting live Git."""
+
+        # Exact legacy restore intentionally reinstates the old HTTPS origin,
+        # ignored files and checkout permissions.  Validate only the sealed B
+        # control/runtime roots here; every ordinary command still calls
+        # ensure_roots() and therefore rejects that checkout.
+        self._ensure_control_runtime_roots(mutating=True)
+        authority_sha = require_sha(authority_sha, "bridge authority SHA")
+        target_sha = require_sha(target_sha, "bridge target SHA")
+        operation_id = require_operation_id(operation_id)
+        capsule_sha256 = require_digest(
+            capsule_sha256, "bridge recovery capsule digest"
+        )
+        descriptor_sha256 = require_digest(
+            descriptor_sha256, "bridge descriptor digest"
+        )
+        restored_terminal_sha256 = require_digest(
+            restored_terminal_sha256,
+            "legacy takeover restored terminal digest",
+        )
+        if not self.apply_enabled:
+            return {
+                "action": "bridge-recover-restored",
+                "apply": False,
+                "operation_id": operation_id,
+                "capsule_sha256": capsule_sha256,
+                "authority_sha": authority_sha,
+                "target_sha": target_sha,
+                "descriptor_sha256": descriptor_sha256,
+                "restored_terminal_sha256": restored_terminal_sha256,
+            }
+        with self.deployment_lock():
+            self._require_no_contract_maintenance()
+            if not (
+                self.marker_path.exists()
+                or self.marker_path.is_symlink()
+            ):
+                raise PullDeployError(
+                    "restored bridge recovery marker is unavailable"
+                )
+            marker = load_private_json(self.marker_path)
+            capsule, descriptor = self._load_bridge_recovery_capsule(
+                capsule_sha256
+            )
+            observed_descriptor_sha256 = capsule["descriptor_sha256"]
+            if (
+                observed_descriptor_sha256 != descriptor_sha256
+                or capsule["operation_id"] != operation_id
+                or not self._is_first_bridge(descriptor)
+                or descriptor["bridge"]["authority"]["sha"] != authority_sha
+                or descriptor["repository"]["target_sha"] != target_sha
+            ):
+                raise PullDeployError(
+                    "restored bridge recovery content authority differs"
+                )
+            validate_recovery_marker(
+                marker,
+                descriptor=descriptor,
+                descriptor_digest=descriptor_sha256,
+            )
+            restored = self._probe_restored_legacy_takeover(descriptor)
+            if (
+                restored is None
+                or restored.get("restored_terminal_sha256")
+                != restored_terminal_sha256
+                or marker.get("bridge_recovery_capsule")
+                != self._bridge_recovery_capsule_binding(capsule)
+                or self.current_state_path.exists()
+                or self.current_state_path.is_symlink()
+            ):
+                raise PullDeployError(
+                    "restored bridge recovery terminal identity differs"
+                )
+            self._complete_failed_first_bridge_recovery(
+                descriptor,
+                descriptor_sha256,
+                marker,
+                audit_status="recovered-takeover-restore",
+            )
+            return {
+                "action": "bridge-recover-restored",
+                "apply": True,
+                "operation_id": operation_id,
+                "authority_sha": authority_sha,
+                "target_sha": target_sha,
+                "descriptor_sha256": descriptor_sha256,
+                "capsule_sha256": capsule_sha256,
+                "restored_terminal_sha256": restored_terminal_sha256,
+                "token_status": "retired-precommit",
+            }
 
     def rollback(self, *, operation_id: str) -> dict[str, Any]:
         self.ensure_roots(mutating=True)
@@ -13935,6 +14616,15 @@ def parser() -> argparse.ArgumentParser:
     bridge_apply = commands.add_parser("bridge-apply")
     bridge_apply.add_argument("--authority-sha", required=True)
     bridge_apply.add_argument("--operation-id", required=True)
+    bridge_recover = commands.add_parser("bridge-recover-restored")
+    bridge_recover.add_argument("--authority-sha", required=True)
+    bridge_recover.add_argument("--target-sha", required=True)
+    bridge_recover.add_argument("--operation-id", required=True)
+    bridge_recover.add_argument("--capsule-sha256", required=True)
+    bridge_recover.add_argument("--descriptor-sha256", required=True)
+    bridge_recover.add_argument(
+        "--restored-terminal-sha256", required=True
+    )
     rollback = commands.add_parser("rollback")
     rollback.add_argument("--operation-id", required=True)
     return result
@@ -13970,6 +14660,15 @@ def main(argv: list[str] | None = None) -> int:
             document = controller.apply_bridge(
                 authority_sha=args.authority_sha,
                 operation_id=args.operation_id,
+            )
+        elif args.command == "bridge-recover-restored":
+            document = controller.recover_restored_first_bridge(
+                authority_sha=args.authority_sha,
+                target_sha=args.target_sha,
+                operation_id=args.operation_id,
+                capsule_sha256=args.capsule_sha256,
+                descriptor_sha256=args.descriptor_sha256,
+                restored_terminal_sha256=args.restored_terminal_sha256,
             )
         elif args.command == "prepare":
             document = controller.prepare(

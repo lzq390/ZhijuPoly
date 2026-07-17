@@ -244,6 +244,10 @@ class BridgeTokenTests(unittest.TestCase):
         os.chmod(self.state, 0o700)
         self.descriptor_digest = "sha256:" + "b" * 64
         self.candidate_digest = "sha256:" + "c" * 64
+        self.operation_state_digest = "sha256:" + "d" * 64
+        self.terminal_audit_digest = "sha256:" + "e" * 64
+        self.restored_terminal_digest = "sha256:" + "f" * 64
+        self.recovery_capsule_digest = "sha256:" + "1" * 64
 
     def prepare(self) -> dict[str, object]:
         return BRIDGE.prepare_token(
@@ -415,6 +419,197 @@ class BridgeTokenTests(unittest.TestCase):
                 descriptor_sha256="sha256:" + "d" * 64,
                 token=b"z" * 32,
             )
+
+    def retire(self) -> dict[str, object]:
+        return BRIDGE.retire_precommit_token(
+            self.state,
+            operation_id=OPERATION_ID,
+            descriptor_sha256=self.descriptor_digest,
+            operation_state_sha256=self.operation_state_digest,
+            terminal_audit_sha256=self.terminal_audit_digest,
+            restored_terminal_sha256=self.restored_terminal_digest,
+            recovery_capsule_sha256=self.recovery_capsule_digest,
+        )
+
+    def test_precommit_retirement_is_terminal_and_successor_is_archived(self) -> None:
+        self.prepare()
+        retired = self.retire()
+        self.assertEqual(retired["status"], "retired-precommit")
+        self.assertEqual(retired["generation"], 1)
+        authority = BRIDGE.retirement_reuse_authority(retired)
+
+        with self.assertRaisesRegex(
+            BRIDGE.BridgeDeployError, "exact failed restore"
+        ):
+            BRIDGE.reserve_token(
+                self.state,
+                operation_id="bridge-20260717-0002",
+                policy_id=str(policy()["policy_id"]),
+                token=b"y" * 32,
+            )
+        with self.assertRaisesRegex(BRIDGE.BridgeDeployError, "cannot be rearmed"):
+            BRIDGE.reserve_token(
+                self.state,
+                operation_id=OPERATION_ID,
+                policy_id=str(policy()["policy_id"]),
+                token=b"y" * 32,
+                predecessor_retirement=authority,
+            )
+        with self.assertRaisesRegex(
+            BRIDGE.BridgeDeployError, "commit authority is terminal"
+        ):
+            BRIDGE.begin_state_commit(
+                self.state,
+                operation_id=OPERATION_ID,
+                descriptor_sha256=self.descriptor_digest,
+                candidate_state_sha256=self.candidate_digest,
+            )
+
+        successor = BRIDGE.reserve_token(
+            self.state,
+            operation_id="bridge-20260717-0002",
+            policy_id=str(policy()["policy_id"]),
+            token=b"y" * 32,
+            predecessor_retirement=authority,
+        )
+        self.assertEqual(successor["generation"], 2)
+        self.assertEqual(successor["status"], "reserved")
+        self.assertEqual(
+            successor["previous_retirement_sha256"],
+            authority["retired_token_sha256"],
+        )
+        archive = (
+            self.state
+            / BRIDGE.TOKEN_RETIREMENT_DIRECTORY
+            / (
+                str(authority["retired_token_sha256"]).removeprefix("sha256:")
+                + ".json"
+            )
+        )
+        self.assertEqual(BRIDGE._load_token(archive), retired)
+        self.assertEqual(BRIDGE.load_token_authority(self.state), successor)
+
+        second_descriptor = "sha256:" + "2" * 64
+        BRIDGE.bind_token_descriptor(
+            self.state,
+            operation_id="bridge-20260717-0002",
+            policy_id=str(policy()["policy_id"]),
+            descriptor_sha256=second_descriptor,
+        )
+        second_retired = BRIDGE.retire_precommit_token(
+            self.state,
+            operation_id="bridge-20260717-0002",
+            descriptor_sha256=second_descriptor,
+            operation_state_sha256="sha256:" + "3" * 64,
+            terminal_audit_sha256="sha256:" + "4" * 64,
+            restored_terminal_sha256="sha256:" + "5" * 64,
+            recovery_capsule_sha256="sha256:" + "6" * 64,
+        )
+        third = BRIDGE.reserve_token(
+            self.state,
+            operation_id="bridge-20260717-0003",
+            policy_id=str(policy()["policy_id"]),
+            token=b"z" * 32,
+            predecessor_retirement=BRIDGE.retirement_reuse_authority(
+                second_retired
+            ),
+        )
+        self.assertEqual(third["generation"], 3)
+        self.assertEqual(BRIDGE.load_token_authority(self.state), third)
+
+    def test_retirement_and_successor_publish_are_crash_idempotent(self) -> None:
+        self.prepare()
+        original = BRIDGE._atomic_json
+
+        def lose_retirement_response(path, document):  # type: ignore[no-untyped-def]
+            original(path, document)
+            if document.get("status") == "retired-precommit":
+                raise RuntimeError("injected retirement response loss")
+
+        with (
+            mock.patch.object(
+                BRIDGE, "_atomic_json", side_effect=lose_retirement_response
+            ),
+            self.assertRaisesRegex(RuntimeError, "retirement response loss"),
+        ):
+            self.retire()
+        retired = self.retire()
+        authority = BRIDGE.retirement_reuse_authority(retired)
+
+        def lose_successor_response(path, document):  # type: ignore[no-untyped-def]
+            original(path, document)
+            if document.get("generation") == 2:
+                raise RuntimeError("injected successor response loss")
+
+        with (
+            mock.patch.object(
+                BRIDGE, "_atomic_json", side_effect=lose_successor_response
+            ),
+            self.assertRaisesRegex(RuntimeError, "successor response loss"),
+        ):
+            BRIDGE.reserve_token(
+                self.state,
+                operation_id="bridge-20260717-0002",
+                policy_id=str(policy()["policy_id"]),
+                token=b"y" * 32,
+                predecessor_retirement=authority,
+            )
+        successor = BRIDGE.reserve_token(
+            self.state,
+            operation_id="bridge-20260717-0002",
+            policy_id=str(policy()["policy_id"]),
+            token=b"z" * 32,
+            predecessor_retirement=authority,
+        )
+        self.assertEqual(successor["generation"], 2)
+        self.assertEqual(
+            successor["token_sha256"], BRIDGE.token_identity(b"y" * 32)["token_sha256"]
+        )
+
+    def test_retirement_rejects_postcommit_and_archive_tampering(self) -> None:
+        self.prepare()
+        BRIDGE.begin_state_commit(
+            self.state,
+            operation_id=OPERATION_ID,
+            descriptor_sha256=self.descriptor_digest,
+            candidate_state_sha256=self.candidate_digest,
+        )
+        with self.assertRaisesRegex(
+            BRIDGE.BridgeDeployError, "only a prepared precommit"
+        ):
+            self.retire()
+
+        # Use a fresh authority to exercise the immutable archive chain.
+        (self.state / BRIDGE.TOKEN_RELATIVE_PATH.name).unlink()
+        self.prepare()
+        retired = self.retire()
+        authority = BRIDGE.retirement_reuse_authority(retired)
+        BRIDGE.reserve_token(
+            self.state,
+            operation_id="bridge-20260717-0002",
+            policy_id=str(policy()["policy_id"]),
+            token=b"y" * 32,
+            predecessor_retirement=authority,
+        )
+        archive = (
+            self.state
+            / BRIDGE.TOKEN_RETIREMENT_DIRECTORY
+            / (
+                str(authority["retired_token_sha256"]).removeprefix("sha256:")
+                + ".json"
+            )
+        )
+        original = archive.read_bytes()
+        archive.write_bytes(original.replace(b"failed", b"foiled", 1))
+        with self.assertRaises(BRIDGE.BridgeDeployError):
+            BRIDGE.load_token_authority(self.state)
+        archive.write_bytes(original)
+        os.chmod(archive, 0o600)
+        os.chmod(archive.parent, 0o755)
+        with self.assertRaisesRegex(
+            BRIDGE.BridgeDeployError, "state directory is unsafe"
+        ):
+            BRIDGE.load_token_authority(self.state)
 
 
 if __name__ == "__main__":

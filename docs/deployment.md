@@ -397,6 +397,32 @@ occurred immediately before current-state rename; a consumed token without its
 current state fails closed. Ordinary v2 deployments neither consume nor reset
 this one-time authority.
 
+Before invoking the legacy restore, B publishes a minimum owner-private
+recovery capsule outside the control layout that restore removes. The capsule
+binds the exact B recovery entry, descriptor, authority SHA, target SHA and
+control release by SHA-256. If the process crashes after legacy restore has
+reinstated the old HTTPS checkout and permissions, only the source-pinned
+recovery launcher may finish bookkeeping:
+
+```bash
+/data/lzq/gith/nexpoly-runtime/legacy-takeover/bin/nexpoly-bridge-recover \
+  --capsule-sha256 <marker-capsule-sha256> \
+  --authority-sha <full-F-sha> \
+  --target-sha <full-B-sha> \
+  --operation-id <bridge-operation-id> \
+  --descriptor-sha256 <marker-descriptor-sha256> \
+  --restored-terminal-sha256 <takeover-terminal-sha256>
+```
+
+That entry cannot touch Git, containers, services, the database, assets or
+admission. Under the shared deploy lock it only revalidates the exact terminal
+legacy restore, finalizes the marker, writes the terminal audit and failed
+operation state, changes a still-`prepared` token to
+`retired-precommit`, and unlinks the marker last. A new bridge attempt requires
+a new operation ID and generation; the retired generation is first written to
+an immutable digest-addressed archive chain. `commit-intent` and `consumed`
+generations can never be retired or rearmed.
+
 `apply` obtains the exclusive deployment lock and then:
 
 1. Enables Backend and Worker drain and waits for all active work to finish.

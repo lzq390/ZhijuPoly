@@ -12,6 +12,7 @@ source checkout  /data/lzq/gith/nexpoly
 runtime root     /data/lzq/gith/nexpoly-runtime
 controller       /data/lzq/gith/nexpoly-runtime/bin/nexpoly-pull-deploy
 alias repair     /data/lzq/gith/nexpoly-runtime/bin/nexpoly-reconcile-production-0005-polytao-alias
+bridge recovery  /data/lzq/gith/nexpoly-runtime/legacy-takeover/bin/nexpoly-bridge-recover
 configuration    /data/lzq/gith/nexpoly-runtime/config
 state            /data/lzq/gith/nexpoly-runtime/state
 audit            /data/lzq/gith/nexpoly-runtime/audit

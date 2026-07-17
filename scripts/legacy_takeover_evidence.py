@@ -55,6 +55,7 @@ SITE_HELPERS = {
     "deployment-mutable-data-audit",
 }
 RECOVERY_FILES = {
+    "bridge_recovery_launcher.py",
     "bootstrap_pull_deploy.py",
     "bridge_deploy_core.py",
     "legacy_takeover.py",
@@ -63,6 +64,7 @@ RECOVERY_FILES = {
     "worker_slot_runtime.py",
     "site_helper_contracts.py",
     "nexpoly-legacy-takeover",
+    "nexpoly-bridge-recover",
     "nexpoly-maintenance-prefetch",
 }
 PRIVATE_CONFIG_FILES = {
@@ -80,6 +82,7 @@ REQUIRED_SOURCE_HASH_NAMES = (
     REVIEWED_WRAPPERS
     | RECOVERY_FILES
     | {
+        "bridge_recovery_capsule.py",
         "install_legacy_takeover_prerequisites.py",
         "bootstrap-active-jobs-probe.example",
         "bootstrap-legacy-runtime-status.example",

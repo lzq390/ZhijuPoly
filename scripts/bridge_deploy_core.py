@@ -22,11 +22,12 @@ from typing import Any
 
 POLICY_SCHEMA_VERSION = 1
 BRIDGE_DESCRIPTOR_SCHEMA_VERSION = 1
-TOKEN_SCHEMA_VERSION = 1
+TOKEN_SCHEMA_VERSION = 2
 BRIDGE_MODE = "first-governed-takeover"
 AUTHORITY_REF = "refs/heads/main"
 POLICY_RELATIVE_PATH = "ops/config/production-bridge-policy.json"
 TOKEN_RELATIVE_PATH = Path("state/bridge-takeover.json")
+TOKEN_RETIREMENT_DIRECTORY = Path("bridge-token-retirements")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 RELEASE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -64,7 +65,13 @@ FINAL_MIGRATION_RECORD = {
     "epoch": 2,
     "requires_contracts": [dict(CONTRACT_MIGRATION)],
 }
-TOKEN_STATUSES = {"reserved", "prepared", "commit-intent", "consumed"}
+TOKEN_STATUSES = {
+    "reserved",
+    "prepared",
+    "commit-intent",
+    "consumed",
+    "retired-precommit",
+}
 
 
 class BridgeDeployError(RuntimeError):
@@ -711,7 +718,9 @@ def load_token_authority(state_root: Path) -> dict[str, Any]:
     """Load the permanent global bridge-token authority without mutating it."""
 
     _require_private_state_directory(state_root)
-    return _load_token(state_root / TOKEN_RELATIVE_PATH.name)
+    document = _load_token(state_root / TOKEN_RELATIVE_PATH.name)
+    _validate_retirement_chain(state_root, document)
+    return document
 
 
 def token_identity(token: bytes) -> dict[str, str]:
@@ -729,6 +738,8 @@ def validate_token(document: object) -> dict[str, Any]:
     fields = {
         "schema_version",
         "mode",
+        "generation",
+        "previous_retirement_sha256",
         "status",
         "operation_id",
         "policy_id",
@@ -739,6 +750,7 @@ def validate_token(document: object) -> dict[str, Any]:
         "prepared_at",
         "commit_started_at",
         "consumed_at",
+        "retirement",
     }
     if (
         not isinstance(document, dict)
@@ -748,6 +760,17 @@ def validate_token(document: object) -> dict[str, Any]:
         or document.get("status") not in TOKEN_STATUSES
     ):
         raise BridgeDeployError("bridge token authority has an invalid shape")
+    generation = document.get("generation")
+    previous_retirement = document.get("previous_retirement_sha256")
+    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+        raise BridgeDeployError("bridge token generation is invalid")
+    if generation == 1:
+        if previous_retirement is not None:
+            raise BridgeDeployError("first bridge token has a retirement predecessor")
+    else:
+        _require_digest(
+            previous_retirement, "bridge token retirement predecessor"
+        )
     _require_operation_id(document.get("operation_id"))
     _require_digest(document.get("policy_id"), "bridge token policy")
     descriptor_sha256 = document.get("descriptor_sha256")
@@ -756,6 +779,7 @@ def validate_token(document: object) -> dict[str, Any]:
     candidate = document.get("candidate_state_sha256")
     started = document.get("commit_started_at")
     consumed = document.get("consumed_at")
+    retirement = document.get("retirement")
     if not isinstance(document.get("prepared_at"), str) or not document["prepared_at"]:
         raise BridgeDeployError("bridge token preparation timestamp is invalid")
     if document["status"] == "reserved":
@@ -764,18 +788,29 @@ def validate_token(document: object) -> dict[str, Any]:
             or candidate is not None
             or started is not None
             or consumed is not None
+            or retirement is not None
         ):
             raise BridgeDeployError("reserved bridge token has committed effects")
     elif document["status"] == "prepared":
         _require_digest(descriptor_sha256, "bridge token descriptor")
-        if candidate is not None or started is not None or consumed is not None:
+        if (
+            candidate is not None
+            or started is not None
+            or consumed is not None
+            or retirement is not None
+        ):
             raise BridgeDeployError("prepared bridge token has committed effects")
     elif document["status"] == "commit-intent":
         _require_digest(descriptor_sha256, "bridge token descriptor")
         _require_digest(candidate, "bridge candidate state")
-        if not isinstance(started, str) or not started or consumed is not None:
+        if (
+            not isinstance(started, str)
+            or not started
+            or consumed is not None
+            or retirement is not None
+        ):
             raise BridgeDeployError("bridge commit intent is incomplete")
-    else:
+    elif document["status"] == "consumed":
         _require_digest(descriptor_sha256, "bridge token descriptor")
         _require_digest(candidate, "bridge candidate state")
         if (
@@ -783,9 +818,161 @@ def validate_token(document: object) -> dict[str, Any]:
             or not started
             or not isinstance(consumed, str)
             or not consumed
+            or retirement is not None
         ):
             raise BridgeDeployError("consumed bridge token is incomplete")
+    else:
+        _require_digest(descriptor_sha256, "retired bridge token descriptor")
+        if (
+            candidate is not None
+            or started is not None
+            or consumed is not None
+            or not isinstance(retirement, dict)
+            or set(retirement)
+            != {
+                "reason",
+                "operation_state_sha256",
+                "terminal_audit_sha256",
+                "restored_terminal_sha256",
+                "recovery_capsule_sha256",
+                "retired_at",
+            }
+            or retirement.get("reason") != "failed-precommit-restored"
+            or not isinstance(retirement.get("retired_at"), str)
+            or not retirement["retired_at"]
+        ):
+            raise BridgeDeployError("retired bridge token is incomplete")
+        _require_digest(
+            retirement.get("operation_state_sha256"),
+            "retired bridge operation state",
+        )
+        _require_digest(
+            retirement.get("terminal_audit_sha256"),
+            "retired bridge terminal audit",
+        )
+        _require_digest(
+            retirement.get("restored_terminal_sha256"),
+            "retired bridge restore terminal",
+        )
+        _require_digest(
+            retirement.get("recovery_capsule_sha256"),
+            "retired bridge recovery capsule",
+        )
     return dict(document)
+
+
+def token_record_digest(document: object) -> str:
+    """Digest the exact durable JSON representation of one token generation."""
+
+    record = validate_token(document)
+    return sha256_bytes(canonical_json_bytes(record) + b"\n")
+
+
+def retirement_reuse_authority(document: object) -> dict[str, Any]:
+    """Return the exact content-addressed proof needed to allocate a successor."""
+
+    record = validate_token(document)
+    if record["status"] != "retired-precommit":
+        raise BridgeDeployError("bridge token is not a retired precommit authority")
+    retirement = record["retirement"]
+    return {
+        "generation": record["generation"],
+        "operation_id": record["operation_id"],
+        "descriptor_sha256": record["descriptor_sha256"],
+        "operation_state_sha256": retirement["operation_state_sha256"],
+        "terminal_audit_sha256": retirement["terminal_audit_sha256"],
+        "restored_terminal_sha256": retirement["restored_terminal_sha256"],
+        "recovery_capsule_sha256": retirement["recovery_capsule_sha256"],
+        "retired_token_sha256": token_record_digest(record),
+    }
+
+
+def _retirement_archive_path(state_root: Path, digest: str) -> Path:
+    digest = _require_digest(digest, "bridge token retirement archive")
+    return (
+        state_root
+        / TOKEN_RETIREMENT_DIRECTORY
+        / f"{digest.removeprefix('sha256:')}.json"
+    )
+
+
+def _load_retirement_archive(
+    state_root: Path, digest: str
+) -> dict[str, Any]:
+    _require_private_state_directory(
+        state_root / TOKEN_RETIREMENT_DIRECTORY
+    )
+    path = _retirement_archive_path(state_root, digest)
+    record = _load_token(path)
+    if token_record_digest(record) != digest:
+        raise BridgeDeployError("bridge token retirement archive digest differs")
+    if record["status"] != "retired-precommit":
+        raise BridgeDeployError("bridge token retirement archive is not terminal")
+    return record
+
+
+def _validate_retirement_chain(
+    state_root: Path, current: dict[str, Any]
+) -> None:
+    expected_generation = current["generation"] - 1
+    digest = current["previous_retirement_sha256"]
+    seen: set[str] = set()
+    while expected_generation:
+        if digest in seen:
+            raise BridgeDeployError("bridge token retirement chain contains a cycle")
+        seen.add(digest)
+        archived = _load_retirement_archive(state_root, digest)
+        if archived["generation"] != expected_generation:
+            raise BridgeDeployError("bridge token retirement generation is discontinuous")
+        digest = archived["previous_retirement_sha256"]
+        expected_generation -= 1
+    if digest is not None:
+        raise BridgeDeployError("bridge token retirement chain has an extra ancestor")
+
+
+def _ensure_retirement_directory(state_root: Path) -> Path:
+    directory = state_root / TOKEN_RETIREMENT_DIRECTORY
+    try:
+        directory.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    _require_private_state_directory(directory)
+    return directory
+
+
+def _archive_retired_token(
+    state_root: Path, record: dict[str, Any]
+) -> str:
+    digest = token_record_digest(record)
+    directory = _ensure_retirement_directory(state_root)
+    path = _retirement_archive_path(state_root, digest)
+    payload = canonical_json_bytes(record) + b"\n"
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except FileExistsError:
+        archived = _load_retirement_archive(state_root, digest)
+        if archived != record:
+            raise BridgeDeployError("bridge token retirement archive conflicts")
+        return digest
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o600)
+            os.fsync(stream.fileno())
+        _fsync_directory(directory)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            path.unlink()
+        raise
+    return digest
 
 
 def reserve_token(
@@ -794,24 +981,49 @@ def reserve_token(
     operation_id: str,
     policy_id: str,
     token: bytes | None = None,
+    predecessor_retirement: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _require_private_state_directory(state_root)
     path = state_root / TOKEN_RELATIVE_PATH.name
     operation_id = _require_operation_id(operation_id)
     policy_id = _require_digest(policy_id, "bridge policy identity")
     if path.exists() or path.is_symlink():
-        existing = _load_token(path)
+        existing = load_token_authority(state_root)
         if (
             existing["operation_id"] == operation_id
             and existing["policy_id"] == policy_id
+            and existing["status"] != "retired-precommit"
         ):
             return existing
-        raise BridgeDeployError("bridge takeover token is already owned or consumed")
+        if existing["status"] != "retired-precommit":
+            raise BridgeDeployError(
+                "bridge takeover token is already owned or consumed"
+            )
+        expected_predecessor = retirement_reuse_authority(existing)
+        if predecessor_retirement != expected_predecessor:
+            raise BridgeDeployError(
+                "bridge token successor lacks exact failed restore authority"
+            )
+        if existing["operation_id"] == operation_id:
+            raise BridgeDeployError(
+                "retired bridge operation ID cannot be rearmed"
+            )
+        predecessor_digest = _archive_retired_token(state_root, existing)
+        generation = existing["generation"] + 1
+    else:
+        if predecessor_retirement is not None:
+            raise BridgeDeployError(
+                "first bridge token cannot claim a retirement predecessor"
+            )
+        predecessor_digest = None
+        generation = 1
     token = os.urandom(32) if token is None else token
     identity = token_identity(token)
     document = {
         "schema_version": TOKEN_SCHEMA_VERSION,
         "mode": BRIDGE_MODE,
+        "generation": generation,
+        "previous_retirement_sha256": predecessor_digest,
         "status": "reserved",
         "operation_id": operation_id,
         "policy_id": policy_id,
@@ -821,9 +1033,10 @@ def reserve_token(
         "prepared_at": utc_now(),
         "commit_started_at": None,
         "consumed_at": None,
+        "retirement": None,
     }
     _atomic_json(path, document)
-    return _load_token(path)
+    return load_token_authority(state_root)
 
 
 def bind_token_descriptor(
@@ -837,7 +1050,7 @@ def bind_token_descriptor(
 
     _require_private_state_directory(state_root)
     path = state_root / TOKEN_RELATIVE_PATH.name
-    record = _load_token(path)
+    record = load_token_authority(state_root)
     operation_id = _require_operation_id(operation_id)
     policy_id = _require_digest(policy_id, "bridge policy identity")
     descriptor_sha256 = _require_digest(
@@ -856,7 +1069,7 @@ def bind_token_descriptor(
             }
         )
         _atomic_json(path, record)
-        return _load_token(path)
+        return load_token_authority(state_root)
     if record["descriptor_sha256"] == descriptor_sha256:
         return record
     raise BridgeDeployError("bridge token is bound to another descriptor")
@@ -869,6 +1082,7 @@ def prepare_token(
     policy_id: str,
     descriptor_sha256: str,
     token: bytes | None = None,
+    predecessor_retirement: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compatibility helper that reserves and binds in two durable steps."""
 
@@ -877,6 +1091,7 @@ def prepare_token(
         operation_id=operation_id,
         policy_id=policy_id,
         token=token,
+        predecessor_retirement=predecessor_retirement,
     )
     return bind_token_descriptor(
         state_root,
@@ -884,6 +1099,72 @@ def prepare_token(
         policy_id=policy_id,
         descriptor_sha256=descriptor_sha256,
     )
+
+
+def retire_precommit_token(
+    state_root: Path,
+    *,
+    operation_id: str,
+    descriptor_sha256: str,
+    operation_state_sha256: str,
+    terminal_audit_sha256: str,
+    restored_terminal_sha256: str,
+    recovery_capsule_sha256: str,
+) -> dict[str, Any]:
+    """Permanently end one prepared generation after an exact legacy restore."""
+
+    _require_private_state_directory(state_root)
+    path = state_root / TOKEN_RELATIVE_PATH.name
+    record = load_token_authority(state_root)
+    operation_id = _require_operation_id(operation_id)
+    descriptor_sha256 = _require_digest(
+        descriptor_sha256, "retired bridge descriptor"
+    )
+    operation_state_sha256 = _require_digest(
+        operation_state_sha256, "retired bridge operation state"
+    )
+    terminal_audit_sha256 = _require_digest(
+        terminal_audit_sha256, "retired bridge terminal audit"
+    )
+    restored_terminal_sha256 = _require_digest(
+        restored_terminal_sha256, "retired bridge restore terminal"
+    )
+    recovery_capsule_sha256 = _require_digest(
+        recovery_capsule_sha256, "retired bridge recovery capsule"
+    )
+    if (
+        record["operation_id"] != operation_id
+        or record["descriptor_sha256"] != descriptor_sha256
+    ):
+        raise BridgeDeployError("bridge token retirement belongs to another deployment")
+    retirement = {
+        "reason": "failed-precommit-restored",
+        "operation_state_sha256": operation_state_sha256,
+        "terminal_audit_sha256": terminal_audit_sha256,
+        "restored_terminal_sha256": restored_terminal_sha256,
+        "recovery_capsule_sha256": recovery_capsule_sha256,
+        "retired_at": (
+            record["retirement"]["retired_at"]
+            if record["status"] == "retired-precommit"
+            else utc_now()
+        ),
+    }
+    if record["status"] == "retired-precommit":
+        if record["retirement"] != retirement:
+            raise BridgeDeployError("retired bridge token authority differs")
+        return record
+    if record["status"] != "prepared":
+        raise BridgeDeployError(
+            "only a prepared precommit bridge token can be retired"
+        )
+    record.update(
+        {
+            "status": "retired-precommit",
+            "retirement": retirement,
+        }
+    )
+    _atomic_json(path, record)
+    return load_token_authority(state_root)
 
 
 def begin_state_commit(
@@ -895,7 +1176,7 @@ def begin_state_commit(
 ) -> dict[str, Any]:
     _require_private_state_directory(state_root)
     path = state_root / TOKEN_RELATIVE_PATH.name
-    record = _load_token(path)
+    record = load_token_authority(state_root)
     if (
         record["operation_id"] != _require_operation_id(operation_id)
         or record["descriptor_sha256"]
@@ -914,7 +1195,7 @@ def begin_state_commit(
             }
         )
         _atomic_json(path, record)
-        return _load_token(path)
+        return load_token_authority(state_root)
     if (
         record["status"] in {"commit-intent", "consumed"}
         and record["candidate_state_sha256"] == candidate_state_sha256
@@ -932,7 +1213,7 @@ def reconcile_token(
 ) -> dict[str, Any]:
     _require_private_state_directory(state_root)
     path = state_root / TOKEN_RELATIVE_PATH.name
-    record = _load_token(path)
+    record = load_token_authority(state_root)
     if (
         record["operation_id"] != _require_operation_id(operation_id)
         or record["descriptor_sha256"]
@@ -959,7 +1240,7 @@ def reconcile_token(
     if record["status"] == "commit-intent":
         record.update({"status": "consumed", "consumed_at": utc_now()})
         _atomic_json(path, record)
-        return _load_token(path)
+        return load_token_authority(state_root)
     return record
 
 

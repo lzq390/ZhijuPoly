@@ -54,6 +54,8 @@ WORKER_LOCK_RELATIVE_PATH = "workers/monomer_md_worker/requirements.lock"
 CONTROL_MANIFEST_RELATIVE_PATH = "scripts/control-release.json"
 REQUIRED_RECOVERY_PATHS = {
     "scripts/asset_release_contract.py",
+    "scripts/bridge_recovery_capsule.py",
+    "scripts/bridge_recovery_launcher.py",
     "scripts/bootstrap_pull_deploy.py",
     "scripts/control-release.json",
     "scripts/control_runtime_selector.py",
@@ -61,12 +63,14 @@ REQUIRED_RECOVERY_PATHS = {
     "scripts/legacy_takeover.py",
     "scripts/legacy_takeover_evidence.py",
     "scripts/nexpoly-legacy-takeover",
+    "scripts/nexpoly-bridge-recover",
     "scripts/nexpoly-maintenance-prefetch",
     "scripts/pull_deploy_controller.py",
     "scripts/site_helper_contracts.py",
 }
 PREFETCH_CONTROLLER_PATHS = {
     "scripts/asset_release_contract.py",
+    "scripts/bridge_recovery_capsule.py",
     "scripts/bootstrap_pull_deploy.py",
     "scripts/bridge_deploy_core.py",
     "scripts/maintenance_prefetch.py",
