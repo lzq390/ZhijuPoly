@@ -53,6 +53,23 @@ from monomer_worker_env import (  # noqa: E402 - load the verified sibling helpe
 PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
 ASSET_RELEASES_ROOT = Path("/data/lzq/nexpoly-assets/releases")
 MAIN_REPOSITORY_URL = "https://github.com/lzq390/ZhijuPoly.git"
+SCHEMA_V2_ASSET_MANIFEST_DIGEST = (
+    "sha256:15600f50c9aa720e8ae72352191f60b9e9f013613f152fc8df317ff9ee599d1e"
+)
+SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST = (
+    "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
+)
+SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS = {
+    "backend-data": (
+        "sha256:1e8dc53143d0676753805ba7a4bf167431e59d92d227ea3aff39e679e43402e1"
+    ),
+    "database": (
+        "sha256:e6bf224836664723124bc7201d14afbdb6dc13cebd289df8b6f86e7a0be0bdcd"
+    ),
+    "model": (
+        "sha256:40e88b7d9d5103ab5db4cd911219dfe37c2ac62319a10824c69c0b36d9556f25"
+    ),
+}
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$")
@@ -2578,6 +2595,15 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
         "byteff2_submodules",
         "assets",
     }
+    legacy_schema_v2_fields = base_fields | {
+        "byteff2_source",
+        "byteff2_audited_overlays",
+    }
+    predecessor_schema_v2_fields = legacy_schema_v2_fields | {
+        "predecessor_asset_digest",
+        "changed_asset_trees",
+        "unchanged_asset_tree_digests",
+    }
     schema_version = (
         document.get("schema_version") if isinstance(document, dict) else None
     )
@@ -2587,8 +2613,8 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
             (schema_version == 1 and set(document) == base_fields)
             or (
                 schema_version == 2
-                and set(document)
-                == base_fields | {"byteff2_source", "byteff2_audited_overlays"}
+                and frozenset(document)
+                in {frozenset(legacy_schema_v2_fields), frozenset(predecessor_schema_v2_fields)}
             )
         )
     )
@@ -2625,6 +2651,17 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
             document["byteff2_audited_overlays"],
             require_exact_identity=False,
         )
+        if set(document) == predecessor_schema_v2_fields:
+            if (
+                document["predecessor_asset_digest"]
+                != SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+                or document["changed_asset_trees"] != ["byteff2"]
+                or document["unchanged_asset_tree_digests"]
+                != SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS
+            ):
+                raise ReleaseError(
+                    "pinned schema-v2 asset manifest has invalid predecessor evidence"
+                )
     root_entries = {entry.name for entry in asset_root.iterdir()}
     if root_entries != expected_trees | {"ASSET-MANIFEST.json"}:
         raise ReleaseError("pinned asset release contains unmanifested root entries")
@@ -2720,7 +2757,37 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
                 raise ReleaseError(
                     f"pinned asset file digest differs from manifest: {tree_name}/{relative}"
                 )
+        if (
+            schema_version == 2
+            and set(document) == predecessor_schema_v2_fields
+            and tree_name in SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS
+        ):
+            inventory_payload = (
+                json.dumps(
+                    {"files": records},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            inventory_digest = sha256_bytes(inventory_payload)
+            if (
+                inventory_digest
+                != document["unchanged_asset_tree_digests"][tree_name]
+            ):
+                raise ReleaseError(
+                    "pinned schema-v2 unchanged asset tree evidence differs "
+                    f"from its inventory: {tree_name}"
+                )
     digest = sha256_file(asset_manifest)
+    if (
+        schema_version == 2
+        and set(document) == predecessor_schema_v2_fields
+        and digest != SCHEMA_V2_ASSET_MANIFEST_DIGEST
+    ):
+        raise ReleaseError(
+            "pinned schema-v2 asset manifest differs from the frozen manifest digest"
+        )
     byteff2_commit_file = asset_root / "byteff2" / "BYTEFF2-COMMIT"
     if not byteff2_commit_file.is_file() or byteff2_commit_file.is_symlink():
         raise ReleaseError(
@@ -3151,16 +3218,22 @@ def load_release_input(path: Path) -> dict[str, Any]:
     """Load the small, reviewed asset/data input committed with a release."""
 
     document = load_manifest(path)
+    schema_version = document.get("schema_version")
+    v1_fields = {
+        "schema_version",
+        "asset_manifest_digest",
+        "datasets_on_asset_change",
+    }
+    v2_fields = v1_fields | {
+        "predecessor_asset_manifest_digest",
+        "changed_asset_trees",
+    }
     if (
-        set(document)
-        != {
-            "schema_version",
-            "asset_manifest_digest",
-            "datasets_on_asset_change",
-        }
-        or document.get("schema_version") != 1
+        (schema_version == 1 and set(document) != v1_fields)
+        or (schema_version == 2 and set(document) != v2_fields)
+        or schema_version not in {1, 2}
     ):
-        raise ReleaseError("release input must use the supported three-field schema")
+        raise ReleaseError("release input uses an unsupported schema")
     asset_digest = require_digest(
         str(document.get("asset_manifest_digest", "")),
         "release input asset manifest digest",
@@ -3168,7 +3241,6 @@ def load_release_input(path: Path) -> dict[str, Any]:
     datasets = document.get("datasets_on_asset_change")
     if (
         not isinstance(datasets, list)
-        or not datasets
         or any(
             not isinstance(dataset, str)
             or not SAFE_DATASET_RE.fullmatch(dataset)
@@ -3178,11 +3250,33 @@ def load_release_input(path: Path) -> dict[str, Any]:
         or len(set(datasets)) != len(datasets)
     ):
         raise ReleaseError(
-            "datasets_on_asset_change must be a non-empty duplicate-free list of explicit datasets"
+            "datasets_on_asset_change must be a duplicate-free list of explicit datasets"
         )
+    if schema_version == 1 and not datasets:
+        raise ReleaseError("schema-v1 release input requires at least one dataset")
+    predecessor_digest: str | None = None
+    changed_asset_trees: list[str] = []
+    if schema_version == 2:
+        predecessor_digest = require_digest(
+            str(document.get("predecessor_asset_manifest_digest", "")),
+            "release input predecessor asset manifest digest",
+        )
+        changed_asset_trees = document.get("changed_asset_trees")
+        if (
+            changed_asset_trees != ["byteff2"]
+            or datasets
+            or predecessor_digest == asset_digest
+        ):
+            raise ReleaseError(
+                "schema-v2 ByteFF2-only release input must change only byteff2 "
+                "and must not rebuild PostgreSQL datasets"
+            )
     return {
+        "schema_version": schema_version,
         "asset_manifest_digest": asset_digest,
         "datasets_on_asset_change": datasets,
+        "predecessor_asset_manifest_digest": predecessor_digest,
+        "changed_asset_trees": changed_asset_trees,
     }
 
 
@@ -3321,10 +3415,6 @@ def validate_manifest(
     ):
         raise ReleaseError(
             "datasets_on_asset_change must contain explicit safe dataset names"
-        )
-    if not datasets:
-        raise ReleaseError(
-            "single-bundle releases require explicit datasets_on_asset_change"
         )
     migrations = release_migration_records(document)
     for migration in migrations:
@@ -6667,9 +6757,7 @@ class ReleaseController:
     def rebuild_datasets(self, environment: dict[str, str]) -> None:
         datasets = self.document.get("datasets_on_asset_change", [])
         if not datasets:
-            raise ReleaseError(
-                "asset changes require explicit datasets_on_asset_change"
-            )
+            return
         command = self.compose(
             self.candidate_dir,
             "run",

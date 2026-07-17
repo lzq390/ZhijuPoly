@@ -443,6 +443,62 @@ class ReleaseControllerTests(unittest.TestCase):
                 )
             )
 
+    def test_schema_v2_release_input_pins_predecessor_and_skips_database_rebuilds(
+        self,
+    ) -> None:
+        self.release_input.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "asset_manifest_digest": (
+                        release_controller.SCHEMA_V2_ASSET_MANIFEST_DIGEST
+                    ),
+                    "predecessor_asset_manifest_digest": (
+                        release_controller.SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+                    ),
+                    "changed_asset_trees": ["byteff2"],
+                    "datasets_on_asset_change": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = release_controller.load_release_input(self.release_input)
+        output = self.build_single_bundle()
+        document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(loaded["changed_asset_trees"], ["byteff2"])
+        self.assertEqual(loaded["datasets_on_asset_change"], [])
+        self.assertEqual(
+            document["asset_manifest_digest"],
+            release_controller.SCHEMA_V2_ASSET_MANIFEST_DIGEST,
+        )
+        self.assertEqual(document["datasets_on_asset_change"], [])
+
+    def test_schema_v2_release_input_rejects_database_rebuild_declarations(self) -> None:
+        self.release_input.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "asset_manifest_digest": (
+                        release_controller.SCHEMA_V2_ASSET_MANIFEST_DIGEST
+                    ),
+                    "predecessor_asset_manifest_digest": (
+                        release_controller.SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+                    ),
+                    "changed_asset_trees": ["byteff2"],
+                    "datasets_on_asset_change": ["online"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "must not rebuild PostgreSQL datasets",
+        ):
+            release_controller.load_release_input(self.release_input)
+
     def test_asset_release_verifies_every_manifested_file(self) -> None:
         release = self.make_asset_release()
 
@@ -457,6 +513,62 @@ class ReleaseControllerTests(unittest.TestCase):
         os.chmod(checkpoint, 0o444)
         with self.assertRaisesRegex(release_controller.ReleaseError, "size differs|digest differs"):
             release_controller.inspect_asset_release(release)
+
+    def test_predecessor_schema_v2_asset_verifies_unchanged_tree_evidence(
+        self,
+    ) -> None:
+        release = self.make_asset_release()
+        manifest_path = release / "ASSET-MANIFEST.json"
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        unchanged_digests = {
+            tree: release_controller.sha256_bytes(
+                (
+                    json.dumps(
+                        {"files": document["assets"][tree]},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            for tree in ("model", "database", "backend-data")
+        }
+        document.update(
+            {
+                "predecessor_asset_digest": (
+                    release_controller.SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+                ),
+                "changed_asset_trees": ["byteff2"],
+                "unchanged_asset_tree_digests": unchanged_digests,
+            }
+        )
+        os.chmod(release, 0o755)
+        os.chmod(manifest_path, 0o644)
+        manifest_path.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(manifest_path, 0o444)
+        os.chmod(release, 0o555)
+        digest = release_controller.sha256_file(manifest_path)
+
+        with (
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS",
+                unchanged_digests,
+            ),
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_ASSET_MANIFEST_DIGEST",
+                digest,
+            ),
+        ):
+            _resolved, actual_digest, _commit = (
+                release_controller.inspect_asset_release(release)
+            )
+
+        self.assertEqual(actual_digest, digest)
 
     def test_asset_release_rejects_unmanifested_or_writable_content(self) -> None:
         release = self.make_asset_release()
@@ -5306,6 +5418,21 @@ class ReleaseControllerTests(unittest.TestCase):
         declared = controller.document["datasets_on_asset_change"]
         selected = [command[index + 1] for index, value in enumerate(command) if value == "--dataset"]
         self.assertEqual(selected, declared)
+
+    def test_byteff2_only_asset_change_does_not_run_database_rebuild(self) -> None:
+        manifest = self.build_single_bundle()
+        controller = release_controller.ReleaseController(
+            self.root / "production",
+            manifest,
+            "auto",
+            False,
+        )
+        controller.document["datasets_on_asset_change"] = []
+
+        with mock.patch.object(controller, "run") as run:
+            controller.rebuild_datasets({})
+
+        run.assert_not_called()
 
     def test_previous_release_gpu_preflight_uses_previous_compose_tree(self) -> None:
         manifest = self.build()

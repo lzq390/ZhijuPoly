@@ -20,17 +20,12 @@ PINNED_ACTION = re.compile(
 ANY_ACTION = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SAFE_DATASET = re.compile(r"^[A-Za-z0-9_.-]+$")
-EXPECTED_DATASETS = [
-    "governance",
-    "core",
-    "knowledge",
-    "online",
-    "pi",
-    "dft",
-    "experimental",
-    "lab",
-    "property_filter",
-]
+EXPECTED_ASSET_DIGEST = (
+    "sha256:15600f50c9aa720e8ae72352191f60b9e9f013613f152fc8df317ff9ee599d1e"
+)
+EXPECTED_PREDECESSOR_ASSET_DIGEST = (
+    "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
+)
 
 
 def require_markers(text: str, markers: tuple[str, ...], failures: list[str]) -> None:
@@ -48,19 +43,28 @@ def validate_release_input(failures: list[str]) -> None:
     if not isinstance(document, dict) or set(document) != {
         "schema_version",
         "asset_manifest_digest",
+        "predecessor_asset_manifest_digest",
+        "changed_asset_trees",
         "datasets_on_asset_change",
     }:
         failures.append("release-input.json must contain exactly the reviewed schema fields")
         return
-    if document["schema_version"] != 1:
-        failures.append("release-input.json schema_version must be 1")
+    if document["schema_version"] != 2:
+        failures.append("release-input.json schema_version must be 2")
     digest = document["asset_manifest_digest"]
-    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
-        failures.append("release-input.json asset_manifest_digest must be an immutable sha256 digest")
-    datasets = document["datasets_on_asset_change"]
-    if datasets != EXPECTED_DATASETS:
+    if digest != EXPECTED_ASSET_DIGEST:
+        failures.append("release-input.json asset_manifest_digest must equal frozen schema-v2")
+    predecessor = document["predecessor_asset_manifest_digest"]
+    if predecessor != EXPECTED_PREDECESSOR_ASSET_DIGEST:
         failures.append(
-            "release-input.json datasets_on_asset_change must equal the reviewed explicit dataset order"
+            "release-input.json predecessor_asset_manifest_digest must equal frozen schema-v1"
+        )
+    if document["changed_asset_trees"] != ["byteff2"]:
+        failures.append("release-input.json must declare byteff2 as the only changed tree")
+    datasets = document["datasets_on_asset_change"]
+    if datasets != []:
+        failures.append(
+            "release-input.json must not rebuild PostgreSQL datasets for a ByteFF2-only asset change"
         )
     if not isinstance(datasets, list):
         return
