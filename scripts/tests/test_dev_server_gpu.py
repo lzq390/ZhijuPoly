@@ -161,6 +161,18 @@ class DevServerGpuScriptTests(unittest.TestCase):
         ):
             self.assertNotIn(destructive_command, source)
 
+    def test_canary_state_is_dev_private_and_fenced_from_production(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        compose = DEV_COMPOSE.read_text(encoding="utf-8")
+        self.assertIn("MONOMER_MD_DEV_CANARY_STATE_DIR", source)
+        self.assertIn("MONOMER_MD_DEV_CANARY_STATE_DIR", compose)
+        self.assertIn(
+            "/data/lzq/gith/nexpoly-runtime/*",
+            source,
+        )
+        self.assertIn('[[ ! -L "$CANARY_STATE_DIR" ]]', source)
+        self.assertIn('chmod 700 "$CANARY_STATE_DIR"', source)
+
     def test_loaded_tag_matches_compose_and_drift_verification(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         compose = DEV_COMPOSE.read_text(encoding="utf-8")

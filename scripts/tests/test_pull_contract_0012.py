@@ -1678,6 +1678,14 @@ class PullContract0012Tests(unittest.TestCase):
         redrain.assert_called_once_with()
         runtime.lifecycle.resume.assert_not_called()
         self.assertEqual(runtime._drain_evidence, internal_drain)
+        smoke_compose = next(
+            call.args
+            for call in runtime.lifecycle._compose.call_args_list
+            if "--operation-id" in call.args
+        )
+        self.assertIn(CONTRACT_OPERATION, smoke_compose)
+        self.assertIn("--source-sha", smoke_compose)
+        self.assertIn(SHA, smoke_compose)
 
     def test_contract_resume_opens_backend_before_nginx_and_recovers_lost_response(
         self,

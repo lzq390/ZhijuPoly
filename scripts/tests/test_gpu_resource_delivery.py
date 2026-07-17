@@ -209,6 +209,10 @@ class GpuResourceDeliveryTests(unittest.TestCase):
             "${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket",
             production,
         )
+        self.assertIn(
+            "${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-canaries",
+            production,
+        )
         self.assertNotIn("/data/lzq/gith/nexpoly/ops/state", production)
         self.assertNotIn("./ops/state", base)
 

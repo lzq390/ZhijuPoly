@@ -3465,6 +3465,9 @@ class ReleaseControllerTests(unittest.TestCase):
         self.assertIn("backend", smoke_command)
         self.assertIn("http://127.0.0.1:8000", smoke_command)
         self.assertIn("--expected-byteff2-commit", smoke_command)
+        self.assertIn("--operation-id", smoke_command)
+        self.assertIn(f"release-smoke-{SHA}", smoke_command)
+        self.assertIn("--source-sha", smoke_command)
         self.assertEqual(smoke_command[-1], SHA)
         self.assertEqual(calls[3], ("drain", True))
 
@@ -4607,7 +4610,9 @@ class ReleaseControllerTests(unittest.TestCase):
                 mock.patch.object(
                     controller,
                     "run_ingress_isolated_monomer_smoke",
-                    side_effect=lambda _environment: events.append("monomer"),
+                    side_effect=lambda _environment, **_kwargs: events.append(
+                        "monomer"
+                    ),
                 )
             )
             stack.enter_context(
@@ -5077,7 +5082,11 @@ class ReleaseControllerTests(unittest.TestCase):
         backend_health.assert_called_once_with(mock.ANY, release=previous_release)
         contract_smoke.assert_called_once_with(mock.ANY, release=previous_release)
         runtime_health.assert_called_once()
-        worker_smoke.assert_called_once_with(mock.ANY, release=previous_release)
+        worker_smoke.assert_called_once_with(
+            mock.ANY,
+            release=previous_release,
+            operation_id=f"rollback-smoke-{SHA}-{previous_sha}",
+        )
         self.assertEqual(smoke_events, ["backend", "contract", "worker", "web"])
         self.assertEqual(controller.candidate_dir, previous_release)
 
@@ -6762,7 +6771,10 @@ while True:
         self.assertIn("self.restart_or_defer_worker(environment)", source)
         self.assertIn("self.resume_worker(environment)", source)
         self.assertIn("self.run_ingress_isolated_contract_smoke(environment)", source)
-        self.assertIn("self.run_ingress_isolated_monomer_smoke(environment)", source)
+        self.assertIn(
+            'operation_id=f"deploy-smoke-{self.sha}"',
+            source,
+        )
 
 
 if __name__ == "__main__":

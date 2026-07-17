@@ -6518,6 +6518,7 @@ class ReleaseController:
         environment: dict[str, str],
         *,
         release: Path | None = None,
+        operation_id: str | None = None,
     ) -> None:
         timeout = int(
             environment.get("NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS", "300")
@@ -6527,6 +6528,17 @@ class ReleaseController:
                 "NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS must be between 30 and 3600"
             )
         smoke_release = release or self.release_dir
+        source_sha = require_sha(
+            smoke_release.name,
+            "monomer MD smoke source SHA",
+        )
+        smoke_operation_id = (
+            operation_id or f"release-smoke-{source_sha}"
+        )
+        if OPERATION_ID_RE.fullmatch(smoke_operation_id) is None:
+            raise ReleaseError(
+                "monomer MD smoke operation ID must be 8-128 lowercase safe characters"
+            )
         script = smoke_release / "scripts" / "monomer_md_smoke.py"
         if not script.is_file():
             raise ReleaseError("release does not contain the monomer MD smoke script")
@@ -6556,6 +6568,10 @@ class ReleaseController:
                     str(timeout),
                     "--expected-byteff2-commit",
                     expected_byteff2_commit,
+                    "--operation-id",
+                    smoke_operation_id,
+                    "--source-sha",
+                    source_sha,
                 ),
                 env=environment,
                 stdin=source,
@@ -6566,6 +6582,7 @@ class ReleaseController:
         environment: dict[str, str],
         *,
         release: Path | None = None,
+        operation_id: str | None = None,
     ) -> None:
         """Temporarily admit a Worker smoke only while public nginx is stopped."""
 
@@ -6573,7 +6590,11 @@ class ReleaseController:
         self.run(self.compose(smoke_release, "stop", "nginx"), env=environment)
         try:
             self.drain(environment, False)
-            self.run_monomer_md_smoke(environment, release=smoke_release)
+            self.run_monomer_md_smoke(
+                environment,
+                release=smoke_release,
+                operation_id=operation_id,
+            )
         finally:
             self.drain(environment, True)
 
@@ -7209,7 +7230,11 @@ class ReleaseController:
                 env=rollback_env,
             )
         if release_uses_worker(previous_manifest):
-            self.run_ingress_isolated_monomer_smoke(rollback_env, release=previous)
+            self.run_ingress_isolated_monomer_smoke(
+                rollback_env,
+                release=previous,
+                operation_id=f"rollback-smoke-{self.sha}-{previous_sha}",
+            )
         self.run(
             self.compose(
                 previous,
@@ -7723,6 +7748,25 @@ class ReleaseController:
                     "unfinished release provisioning exists; rerun provision-release first"
                 )
             environment = self.environment()
+            runtime_root = Path(
+                environment.get("NEXPOLY_RUNTIME_ROOT", str(self.ops))
+            )
+            if not runtime_root.is_absolute():
+                raise ReleaseError("NEXPOLY_RUNTIME_ROOT must be absolute")
+            canary_state_directory = (
+                runtime_root / "state" / "monomer-md-canaries"
+            )
+            ensure_durable_directory(canary_state_directory)
+            canary_metadata = canary_state_directory.lstat()
+            if (
+                canary_state_directory.is_symlink()
+                or not stat.S_ISDIR(canary_metadata.st_mode)
+                or canary_metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(canary_metadata.st_mode) != 0o700
+            ):
+                raise ReleaseError(
+                    "monomer MD canary state directory must be deploy-user-owned mode 0700"
+                )
             code_migration_mode = "expand"
             if self.state_path.exists():
                 if self.mode == "bootstrap":
@@ -8008,7 +8052,10 @@ class ReleaseController:
                     release_uses_worker(self.document)
                     and not self.worker_restart_deferred
                 ):
-                    self.run_ingress_isolated_monomer_smoke(environment)
+                    self.run_ingress_isolated_monomer_smoke(
+                        environment,
+                        operation_id=f"deploy-smoke-{self.sha}",
+                    )
                 self.run_isolated_web_smoke(environment)
                 # Real GPU/Worker smokes can take several minutes.  Recheck
                 # main before nginx is started, while drain is still active.

@@ -6391,6 +6391,10 @@ class SystemLifecycle:
                     "600",
                     "--expected-byteff2-commit",
                     descriptor["release_input"]["asset"]["byteff2_commit"],
+                    "--operation-id",
+                    descriptor["operation_id"],
+                    "--source-sha",
+                    descriptor["repository"]["target_sha"],
                 ),
                 cwd=controller.production_root,
                 env=environment,
@@ -6848,6 +6852,19 @@ class PullDeployController:
             self.slots_state_dir,
         ):
             ensure_private_directory(directory)
+        canary_state_directory = self.state_dir / "monomer-md-canaries"
+        canary_state_existed = (
+            canary_state_directory.exists()
+            or canary_state_directory.is_symlink()
+        )
+        if canary_state_existed or mutating:
+            ensure_private_directory(
+                canary_state_directory,
+                create=mutating,
+            )
+            if mutating and not canary_state_existed:
+                fsync_directory(canary_state_directory)
+                fsync_directory(self.state_dir)
         try:
             root_metadata = self.production_root.lstat()
             git_metadata = (self.production_root / ".git").lstat()

@@ -760,6 +760,14 @@ def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypat
     monkeypatch.setattr(worker_main, "settings", settings)
     monkeypatch.setattr(worker_main, "runner", worker_main.MonomerMdRunner(settings))
     monkeypatch.setattr(worker_main, "active_jobs", {})
+    fsync_directories: list[Path] = []
+    original_fsync_directory = worker_main._fsync_directory
+
+    def record_fsync(path: Path) -> None:
+        fsync_directories.append(path)
+        original_fsync_directory(path)
+
+    monkeypatch.setattr(worker_main, "_fsync_directory", record_fsync)
     output_dir = settings.job_root / "job-1"
     output_dir.mkdir(parents=True)
     (output_dir / "density_demo_results.json").write_text("{}", encoding="utf-8")
@@ -771,6 +779,51 @@ def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypat
     payload = response.json()
     assert payload["deleted"] is True
     assert not output_dir.exists()
+    assert fsync_directories == [settings.job_root]
+
+    repeated = client.delete("/jobs/job-1/artifacts")
+    assert repeated.status_code == 200
+    assert repeated.json()["deleted"] is False
+    assert fsync_directories == [settings.job_root, settings.job_root]
+
+    outside = tmp_path / "outside-artifacts"
+    outside.mkdir()
+    (outside / "must-remain.txt").write_text("preserved", encoding="utf-8")
+    output_dir.symlink_to(outside, target_is_directory=True)
+    symlink_cleanup = client.delete("/jobs/job-1/artifacts")
+    assert symlink_cleanup.status_code == 200
+    assert symlink_cleanup.json()["deleted"] is True
+    assert not output_dir.exists()
+    assert not output_dir.is_symlink()
+    assert (outside / "must-remain.txt").read_text(encoding="utf-8") == "preserved"
+    assert fsync_directories == [
+        settings.job_root,
+        settings.job_root,
+        settings.job_root,
+    ]
+
+
+def test_delete_job_artifacts_refuses_active_exact_job(
+    tmp_path: Path,
+    monkeypatch,
+):
+    settings = _settings(tmp_path, app_postgres_dsn=None)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(
+        worker_main,
+        "runner",
+        worker_main.MonomerMdRunner(settings),
+    )
+    active_task = object()
+    monkeypatch.setattr(worker_main, "active_jobs", {"job-1": active_task})
+    output_dir = settings.job_root / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "active.txt").write_text("active", encoding="utf-8")
+
+    response = TestClient(worker_main.app).delete("/jobs/job-1/artifacts")
+
+    assert response.status_code == 409
+    assert (output_dir / "active.txt").read_text(encoding="utf-8") == "active"
 
 
 def test_repository_update_query_guards_terminal_statuses():

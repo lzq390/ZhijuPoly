@@ -7,14 +7,22 @@ from threading import Event, Thread
 from types import SimpleNamespace
 
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 import pytest
+from starlette.requests import Request
 
 from app import deployment_drain_middleware
 from app.deployment_control_cli import _build_parser
 from app.deployment_drain_middleware import DeploymentDrainMiddleware
 from app.postgres_database import postgres_connection
-from app.routers.deployment_status import router as deployment_status_router
+from app.routers.deployment_status import (
+    DeploymentMonomerMdCanaryContinuationRequest,
+    DeploymentMonomerMdCanaryRequest,
+    _require_direct_loopback,
+    router as deployment_status_router,
+)
 from app.services.analytics_snapshot_store import load_analytics_snapshot, save_analytics_snapshot
 from app.services.deployment_control import (
     InflightApiWriteTracker,
@@ -79,6 +87,72 @@ def _ensure_drain_disabled(connection) -> None:
         expected_activated_by=state.activated_by,
         expected_release_sha=state.release_sha,
     )
+
+
+def _request_from(
+    host: str,
+    *,
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/internal/deployment/monomer-md-canary/cleanup",
+            "raw_path": b"/internal/deployment/monomer-md-canary/cleanup",
+            "query_string": b"",
+            "headers": headers or [],
+            "client": (host, 12345),
+            "server": ("127.0.0.1", 8000),
+        }
+    )
+
+
+def test_monomer_md_canary_control_is_loopback_only_and_not_public() -> None:
+    _require_direct_loopback(_request_from("127.0.0.1"))
+    _require_direct_loopback(_request_from("::1"))
+
+    with pytest.raises(HTTPException) as remote:
+        _require_direct_loopback(_request_from("10.0.0.8"))
+    assert remote.value.status_code == 403
+
+    with pytest.raises(HTTPException) as forwarded:
+        _require_direct_loopback(
+            _request_from(
+                "127.0.0.1",
+                headers=[(b"x-forwarded-for", b"127.0.0.1")],
+            )
+        )
+    assert forwarded.value.status_code == 403
+
+    canary_paths = {
+        route.path
+        for route in deployment_status_router.routes
+        if "monomer-md-canary" in route.path
+    }
+    assert canary_paths == {
+        "/internal/deployment/monomer-md-canary/submit",
+        "/internal/deployment/monomer-md-canary/validated",
+        "/internal/deployment/monomer-md-canary/cleanup",
+    }
+    assert all(
+        "{job_id}" not in path and not path.startswith("/api/")
+        for path in canary_paths
+    )
+    identity = {
+        "operation_id": "pull-deploy-canary-0001",
+        "source_sha": "a" * 40,
+        "expected_byteff2_commit": "b" * 40,
+    }
+    with pytest.raises(ValidationError):
+        DeploymentMonomerMdCanaryRequest(
+            **identity,
+            job_id="arbitrary-business-row",  # type: ignore[call-arg]
+        )
+    with pytest.raises(ValidationError):
+        DeploymentMonomerMdCanaryContinuationRequest(**identity)
 
 
 def test_persistent_job_count_fails_closed_when_a_required_table_is_missing() -> None:
