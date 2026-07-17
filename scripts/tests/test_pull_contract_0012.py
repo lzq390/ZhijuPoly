@@ -38,6 +38,67 @@ def _write_private(path: Path, payload: str) -> None:
     os.chmod(path, 0o600)
 
 
+def _mutable_data_evidence() -> dict[str, object]:
+    tables = [
+        {
+            "schema": schema,
+            "table": table,
+            "row_count": index + 1,
+            "schema_sha256": "sha256:" + f"{index + 1:x}" * 64,
+            "content_sha256": (
+                "sha256:" + f"{(index + 9) % 16:x}" * 64
+            ),
+        }
+        for index, (schema, table) in enumerate(
+            contract.pull._site_helper_contracts.MUTABLE_DATA_TABLES
+        )
+    ]
+    identity = {
+        "database": contract.pull.MUTABLE_DATA_DATABASE,
+        "database_system_identifier": "7659245354718314530",
+        "connection": {
+            "service": contract.pull.MUTABLE_DATA_SERVICE,
+            "host": contract.pull.MUTABLE_DATA_HOST,
+            "port": contract.pull.MUTABLE_DATA_PORT,
+            "database": contract.pull.MUTABLE_DATA_DATABASE,
+            "user": contract.pull.MUTABLE_DATA_USER,
+        },
+        "postgres_runtime": {
+            "container_id": "1" * 64,
+            "image_id": "sha256:" + "2" * 64,
+            "configured_image": "postgres:16-alpine",
+            "data_volume": {
+                "type": "volume",
+                "name": "nexpoly_postgres_data",
+                "source": (
+                    "/var/lib/docker/volumes/nexpoly_postgres_data/_data"
+                ),
+                "destination": "/var/lib/postgresql/data",
+                "driver": "local",
+                "read_write": True,
+            },
+            "host_endpoint": {
+                "host": contract.pull.MUTABLE_DATA_HOST,
+                "port": contract.pull.MUTABLE_DATA_PORT,
+                "container_port": 5432,
+                "protocol": "tcp",
+            },
+            "system_identifier": "7659245354718314530",
+        },
+        "digest_algorithm": "sha256-postgres-jsonb-copy-v1",
+        "tables": tables,
+    }
+    return {
+        "schema_version": 2,
+        **identity,
+        "transaction_isolation": "repeatable read",
+        "transaction_read_only": True,
+        "transaction_deferrable": True,
+        "snapshot_sha256": contract.pull.canonical_json_digest(identity),
+        "captured_at": "2026-07-17T00:00:00Z",
+    }
+
+
 def _seed_completed_alias_gate(
     runtime: Path, manifest: dict[str, object], control_root: Path
 ) -> None:
@@ -599,7 +660,7 @@ class PullContract0012Tests(unittest.TestCase):
             },
             "release_input": {
                 "asset_manifest_digest": ASSET_DIGEST,
-                "datasets_on_asset_change": ["governance"],
+                "datasets_on_asset_change": [],
                 "asset": {
                     "pointer_path": str(self.runtime / "state/current-assets"),
                     "root": str(self.runtime / "fixture-asset"),
@@ -631,6 +692,9 @@ class PullContract0012Tests(unittest.TestCase):
                 "bootstrap_legacy_runtime_resume_unchanged_sha256": "sha256:"
                 + "d" * 64,
                 "bootstrap_legacy_runtime_restore_sha256": "sha256:" + "4" * 64,
+                "deployment_mutable_data_audit_sha256": "sha256:" + "5" * 64,
+                "mutable_data_audit_pg_service_sha256": "sha256:" + "6" * 64,
+                "mutable_data_audit_pgpass_sha256": "sha256:" + "7" * 64,
             },
             "controller": {
                 "helpers": {
@@ -751,6 +815,44 @@ class PullContract0012Tests(unittest.TestCase):
             "operation_id": DEPLOY_OPERATION,
             "activated_at": "2026-07-16T00:00:00Z",
         }
+        current_history = [
+            dict(record)
+            for record in self.raw_manifest["migrations"]
+            if record["version"] != contract.CONTRACT_VERSION
+        ]
+        accepted_ledgers = (
+            contract.pull._bridge_core.expected_migration_registry(
+                target_manifest_sha256=self.descriptor["migrations"][
+                    "sha256"
+                ],
+                target_records=self.raw_manifest["migrations"],
+                authority_manifest_sha256="sha256:" + "f" * 64,
+                authority_records=[
+                    *self.raw_manifest["migrations"],
+                    contract.pull._bridge_core.FINAL_MIGRATION_RECORD,
+                ],
+            )
+        )
+        migration_compatibility = (
+            contract.pull.build_migration_compatibility_state(
+                {
+                    "policy_id": "sha256:" + "e" * 64,
+                    "accepted_migration_ledgers": accepted_ledgers,
+                },
+                code_manifest_sha256=self.descriptor["migrations"]["sha256"],
+                migrations=current_history,
+            )
+        )
+        mutable_before = _mutable_data_evidence()
+        mutable_after = json.loads(json.dumps(mutable_before))
+        mutable_identity = contract.pull.canonical_json_digest(
+            contract.pull.mutable_data_identity(mutable_before)
+        )
+        mutable_data_audit = {
+            "before": mutable_before,
+            "after": mutable_after,
+            "identity_sha256": mutable_identity,
+        }
         self.state: dict[str, object] = {
             "schema_version": 2,
             "status": "success",
@@ -763,15 +865,12 @@ class PullContract0012Tests(unittest.TestCase):
             "asset_manifest_digest": ASSET_DIGEST,
             "asset_identity": self.descriptor["release_input"]["asset"],
             "byteff2_commit": "7" * 40,
-            "migrations": [
-                dict(record)
-                for record in self.raw_manifest["migrations"]
-                if record["version"] != contract.CONTRACT_VERSION
-            ],
+            "migrations": current_history,
             "approved_contracts": [],
             "migration_epoch_barrier": None,
             "schema_compatibility_floor": None,
             "last_contract_operation": None,
+            "migration_compatibility": migration_compatibility,
             "active_monomer_md_slot": active_slot,
             "monomer_md_worker_env": self.descriptor["monomer_md"]["worker_env"],
             "monomer_md_systemd_unit": {
@@ -789,7 +888,9 @@ class PullContract0012Tests(unittest.TestCase):
                 "path": str(self.runtime / "backups/deploy/database.dump"),
                 "sha256": "sha256:" + "c" * 64,
                 "restore_verification": {},
+                "mutable_data_before_sha256": mutable_identity,
             },
+            "mutable_data_audit": mutable_data_audit,
             "deployed_at": "2026-07-16T00:00:00Z",
         }
         _seed_completed_alias_gate(self.runtime, control_manifest, control_root)
@@ -1257,6 +1358,10 @@ class PullContract0012Tests(unittest.TestCase):
         )
 
     def test_load_binding_requires_exact_ordered_canonical_history(self) -> None:
+        # A pre-bridge governed deployment legitimately has no frozen B/F
+        # compatibility registry.  Exercise the contract adapter's own
+        # canonical-prefix guard independently of the stricter bridge guard.
+        self.state["migration_compatibility"] = None
         histories = (
             list(self.state["migrations"])[1:],
             list(reversed(self.state["migrations"])),
@@ -1315,6 +1420,9 @@ class PullContract0012Tests(unittest.TestCase):
         self.assertEqual(document["source_sha"], SHA)
 
     def test_legacy_transition_round_trips_record_based_pull_state(self) -> None:
+        mutable_data_audit = json.loads(
+            json.dumps(self.state["mutable_data_audit"])
+        )
         projected = contract._legacy_state_projection(self.state)
         self.assertTrue(all(isinstance(item, str) for item in projected["migrations"]))
         projected["migrations"].append(contract.CONTRACT_VERSION)
@@ -1330,6 +1438,18 @@ class PullContract0012Tests(unittest.TestCase):
         self.assertEqual(
             persisted["migrations"][-1]["checksum"],
             contract.CONTRACT_CHECKSUM,
+        )
+        self.assertEqual(
+            persisted["migration_compatibility"]["ledger_state"]["name"],
+            "post-0012",
+        )
+        self.assertEqual(
+            persisted["mutable_data_audit"],
+            mutable_data_audit,
+        )
+        self.assertEqual(
+            contract.pull.validate_current_deployment_state(persisted),
+            persisted,
         )
         self.assertNotIn("applied_migrations", persisted)
 
@@ -1828,6 +1948,13 @@ class PullContract0012Tests(unittest.TestCase):
             "approved_at": approved_at,
         }
         self.state["last_contract_operation"] = CONTRACT_OPERATION
+        self.state["migration_compatibility"] = (
+            contract.pull.build_migration_compatibility_state(
+                self.state["migration_compatibility"],
+                code_manifest_sha256=self.descriptor["migrations"]["sha256"],
+                migrations=self.state["migrations"],
+            )
+        )
         after_fake = self._fake_controller()
         with mock.patch.object(
             contract.pull,
