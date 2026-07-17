@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "asset_manifest_digest": "sha256:6206954724efe3d98b0122afcfc5b4aa5b04c1ca3601a56f1735fdd30603c951",
+  "asset_manifest_digest": "sha256:d2bbe277b47274f242b93923623e5221d85553965e9634b0af355e47c80f2d49",
   "predecessor_asset_manifest_digest": "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2",
   "changed_asset_trees": [
     "byteff2"
