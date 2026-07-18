@@ -1501,6 +1501,61 @@ class CompleteDockerDiscoveryTests(unittest.TestCase):
             "Scope": "local",
         }
 
+    def test_volume_probe_ignores_per_database_pg_version_files(self) -> None:
+        name = "postgres16-with-database-version-files"
+        runner = FakeDockerRunner(
+            [],
+            [self.volume(name)],
+            {
+                name: (
+                    postgres_signature("/source")
+                    + "V\t/source/base/1/PG_VERSION\t16\n"
+                    + "V\t/source/base/16384/PG_VERSION\t16\n"
+                    + "V\t/source/base/5/PG_VERSION\t16\n"
+                )
+            },
+        )
+
+        result = MEDIA._probe_volume_signature(
+            runner,
+            IMAGE,
+            name,
+            operation=PassthroughScratchOperation(runner, self.root),
+            resource_key="postgres16-signature-probe",
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "signature": "postgres",
+                "data_subpath": ".",
+                "postgres_major": 16,
+            },
+        )
+
+    def test_volume_probe_still_rejects_a_second_cluster_root(self) -> None:
+        name = "multiple-postgres-clusters"
+        runner = FakeDockerRunner(
+            [],
+            [self.volume(name)],
+            {
+                name: (
+                    postgres_signature("/source")
+                    + postgres_signature("/source/other")
+                )
+            },
+        )
+
+        result = MEDIA._probe_volume_signature(
+            runner,
+            IMAGE,
+            name,
+            operation=PassthroughScratchOperation(runner, self.root),
+            resource_key="multiple-cluster-signature-probe",
+        )
+
+        self.assertEqual(result["signature"], "damaged-postgres")
+
     def test_unregistered_backup_in_any_approved_root_fails_closed(self) -> None:
         unexpected = self.backups / "unexpected.dump"
         private_file(unexpected, b"PGDMP" + b"\0" * 1024)

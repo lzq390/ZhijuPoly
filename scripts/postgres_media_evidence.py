@@ -3691,13 +3691,52 @@ def _probe_volume_signature(
             "data_subpath": ".",
             "postgres_major": None,
         }
-    if len(roots) != 1:
+
+    # PostgreSQL 16 stores a PG_VERSION file in each database directory below
+    # PGDATA/base in addition to the cluster-level PG_VERSION.  Those nested
+    # files are not independent clusters and must not turn every healthy
+    # physical cluster into a false "damaged-postgres" result.  Ignore only
+    # version-only descendants of the one complete cluster's base directory;
+    # any second complete root or any other partial marker still fails closed.
+    complete_roots = [
+        root
+        for root, markers in roots.items()
+        if isinstance(markers["version"], int)
+        and markers["pg_control"]
+        and markers["base"]
+    ]
+    if len(complete_roots) != 1:
         return {
             "signature": "damaged-postgres",
             "data_subpath": ".",
             "postgres_major": None,
         }
-    root_value, markers = next(iter(roots.items()))
+    root_value = complete_roots[0]
+    cluster_base = PurePosixPath(root_value) / "base"
+    unexpected_roots = []
+    for candidate, candidate_markers in roots.items():
+        if candidate == root_value:
+            continue
+        candidate_path = PurePosixPath(candidate)
+        try:
+            candidate_path.relative_to(cluster_base)
+        except ValueError:
+            nested_database_version = False
+        else:
+            nested_database_version = (
+                isinstance(candidate_markers["version"], int)
+                and not candidate_markers["pg_control"]
+                and not candidate_markers["base"]
+            )
+        if not nested_database_version:
+            unexpected_roots.append(candidate)
+    if unexpected_roots:
+        return {
+            "signature": "damaged-postgres",
+            "data_subpath": ".",
+            "postgres_major": None,
+        }
+    markers = roots[root_value]
     relative = PurePosixPath(root_value).relative_to("/source")
     value = "." if not relative.parts else relative.as_posix()
     if (
