@@ -74,8 +74,8 @@ class BridgePolicyTests(unittest.TestCase):
             document["external_database_audit"],
             {
                 "schema_version": 1,
-                "evidence_schema_version": 2,
-                "registry_schema_version": 2,
+                "evidence_schema_version": 3,
+                "registry_schema_version": 3,
                 "require_exact_registry_digest": True,
                 "require_fresh_snapshot": True,
                 "media_registry_sha256": "sha256:" + "5" * 64,

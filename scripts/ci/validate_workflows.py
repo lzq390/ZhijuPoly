@@ -31,6 +31,10 @@ EXPECTED_ASSET_DIGEST = (
 EXPECTED_PREDECESSOR_ASSET_DIGEST = (
     "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
 )
+EXPECTED_POSTGRES_IMAGE = (
+    "postgres:16-alpine@sha256:"
+    "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+)
 
 
 def require_markers(text: str, markers: tuple[str, ...], failures: list[str]) -> None:
@@ -160,8 +164,13 @@ def main() -> int:
             'NEXPOLY_ALIAS_DOCKER_INTEGRATION: "1"',
             "NEXPOLY_ALIAS_DOCKER_TEST_ACK: ephemeral-localhost-only",
             "NEXPOLY_ALIAS_TEST_PG_BIN: /usr/lib/postgresql/16/bin",
+            'NEXPOLY_RUN_POSTGRES_MEDIA_INTEGRATION: "1"',
+            "NEXPOLY_POSTGRES_MEDIA_TEST_ACK: ephemeral-localhost-only",
+            f"NEXPOLY_TEST_POSTGRES_IMAGE: {EXPECTED_POSTGRES_IMAGE}",
             "docker pull \"$POSTGRES_IMAGE\"",
             "test_reconcile_production_0005_polytao_alias_integration.py",
+            "Run real all-media PostgreSQL 16 audit integration",
+            "scripts/tests/test_postgres_media_evidence.py",
             "      - production-alias-integration",
             "      - bridge-validation",
             "python3 scripts/ci/validate_dependency_locks.py",
@@ -234,6 +243,15 @@ def main() -> int:
         failures.append("every checkout must disable persisted GitHub credentials")
     if ci_text.count("runs-on:") != ci_text.count("timeout-minutes:"):
         failures.append("every job must define a timeout")
+    if ci_text.count(f"POSTGRES_IMAGE: {EXPECTED_POSTGRES_IMAGE}") != 2:
+        failures.append(
+            "global and all-media integration PostgreSQL images must use "
+            "the same exact pinned Alpine digest"
+        )
+    if ci_text.count("Run real all-media PostgreSQL 16 audit integration") != 1:
+        failures.append(
+            "ci.yml must run the real all-media PostgreSQL integration once"
+        )
     if ci_text.count("git ls-files -z -- '*.sh'") < 2:
         failures.append("ci.yml must syntax-check and ShellCheck every tracked shell script")
     if "workers/polytao_worker" in ci_text or "POLYTAO_WORKER_BASE_URL" in ci_text:

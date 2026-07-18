@@ -146,6 +146,9 @@ jobs:
       NEXPOLY_ALIAS_DOCKER_INTEGRATION: "1"
       NEXPOLY_ALIAS_DOCKER_TEST_ACK: ephemeral-localhost-only
       NEXPOLY_ALIAS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+      NEXPOLY_RUN_POSTGRES_MEDIA_INTEGRATION: "1"
+      NEXPOLY_POSTGRES_MEDIA_TEST_ACK: ephemeral-localhost-only
+      NEXPOLY_TEST_POSTGRES_IMAGE: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     steps:
       - name: Check out candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -167,6 +170,10 @@ jobs:
         run: >-
           python3 -m unittest -v
           scripts/tests/test_reconcile_production_0005_polytao_alias_integration.py
+      - name: Run real all-media PostgreSQL 16 audit integration
+        run: >-
+          python3 -m unittest -v
+          scripts/tests/test_postgres_media_evidence.py
 
   backend-tests:
     name: Backend tests (shard ${{ matrix.shard }})

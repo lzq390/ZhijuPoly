@@ -50,6 +50,148 @@ LEGACY_0005_ALIAS_CHECKSUM = (
 KNOWN_DIRTY_0009_CHECKSUM = (
     "79a6956fc934794d61bc003f02a6b5280e9e8bd77a217b61a28d3dbdb8b7be0b"
 )
+LEDGER_SCHEMA_AUTHORITY = {
+    "relation_kind": "ordinary-table",
+    "columns": [
+        {
+            "name": "version",
+            "type": "text",
+            "not_null": True,
+            "default": None,
+        },
+        {
+            "name": "checksum",
+            "type": "text",
+            "not_null": True,
+            "default": None,
+        },
+        {
+            "name": "applied_at",
+            "type": "timestamp with time zone",
+            "not_null": True,
+            "default": "now()",
+        },
+    ],
+    "indexes": [
+        {
+            "name": "schema_migrations_pkey",
+            "definition": (
+                "CREATE UNIQUE INDEX schema_migrations_pkey ON "
+                "governance.schema_migrations USING btree (version)"
+            ),
+        }
+    ],
+    "constraints": [
+        {
+            "name": "schema_migrations_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (version)",
+        }
+    ],
+}
+LEGACY_SCHEMA_COLUMNS = [
+    ("job_id", "text", True, None),
+    ("status", "text", True, "'pending'::text"),
+    ("input_smiles", "text", False, None),
+    ("canonical_smiles", "text", False, None),
+    ("descriptor_prompt", "text", True, None),
+    ("descriptors", "jsonb", True, "'{}'::jsonb"),
+    ("request_data", "jsonb", True, "'{}'::jsonb"),
+    ("requested_count", "integer", True, "10"),
+    ("returned_count", "integer", True, "0"),
+    ("attempts", "integer", True, "0"),
+    ("progress_percent", "integer", True, "0"),
+    ("progress_stage", "text", True, "'pending'::text"),
+    (
+        "progress_message",
+        "text",
+        True,
+        "'Waiting for the PolyTAO backend runtime to start.'::text",
+    ),
+    ("worker_id", "text", False, None),
+    ("worker_job_id", "text", False, None),
+    ("worker_version", "text", False, None),
+    ("engine", "text", True, "'polytao-backend'::text"),
+    ("result_data", "jsonb", False, None),
+    ("error_message", "text", False, None),
+    ("created_at", "timestamp with time zone", True, "now()"),
+    ("updated_at", "timestamp with time zone", True, "now()"),
+    ("started_at", "timestamp with time zone", False, None),
+    ("finished_at", "timestamp with time zone", False, None),
+]
+LEGACY_SCHEMA_AUTHORITY = {
+    "relation_kind": "ordinary-table",
+    "columns": [
+        {
+            "name": name,
+            "type": data_type,
+            "not_null": not_null,
+            "default": default,
+        }
+        for name, data_type, not_null, default in LEGACY_SCHEMA_COLUMNS
+    ],
+    "indexes": [
+        {
+            "name": "idx_polytao_jobs_created_at",
+            "definition": (
+                "CREATE INDEX idx_polytao_jobs_created_at ON "
+                "generation.polytao_jobs USING btree (created_at DESC)"
+            ),
+        },
+        {
+            "name": "idx_polytao_jobs_status",
+            "definition": (
+                "CREATE INDEX idx_polytao_jobs_status ON "
+                "generation.polytao_jobs USING btree (status)"
+            ),
+        },
+        {
+            "name": "polytao_jobs_pkey",
+            "definition": (
+                "CREATE UNIQUE INDEX polytao_jobs_pkey ON "
+                "generation.polytao_jobs USING btree (job_id)"
+            ),
+        },
+    ],
+    "constraints": [
+        {
+            "name": "polytao_jobs_attempts_check",
+            "type": "c",
+            "definition": "CHECK (attempts >= 0)",
+        },
+        {
+            "name": "polytao_jobs_pkey",
+            "type": "p",
+            "definition": "PRIMARY KEY (job_id)",
+        },
+        {
+            "name": "polytao_jobs_progress_percent_check",
+            "type": "c",
+            "definition": (
+                "CHECK (progress_percent >= 0 AND progress_percent <= 100)"
+            ),
+        },
+        {
+            "name": "polytao_jobs_requested_count_check",
+            "type": "c",
+            "definition": "CHECK (requested_count > 0)",
+        },
+        {
+            "name": "polytao_jobs_returned_count_check",
+            "type": "c",
+            "definition": "CHECK (returned_count >= 0)",
+        },
+        {
+            "name": "polytao_jobs_status_check",
+            "type": "c",
+            "definition": (
+                "CHECK (status = ANY (ARRAY['pending'::text, "
+                "'submitted'::text, 'running'::text, 'completed'::text, "
+                "'failed'::text, 'cancelled'::text]))"
+            ),
+        },
+    ],
+}
 
 ACTIVE_JOB_FIELDS_V1 = frozenset(
     {
@@ -150,6 +292,35 @@ DATA_SEQUENCES = (
         "jobs_enqueue_sequence_seq",
         "monomer_dft.jobs.enqueue_sequence",
     ),
+)
+DATA_SEQUENCE_OWNERSHIP = (
+    ("governance", "source_files", "source_file_id", 1, "a"),
+    ("governance", "import_batches", "import_batch_id", 1, "a"),
+    ("knowledge", "formulation_records", "formulation_id", 1, "a"),
+    ("online_knowledge", "history", "history_id", 1, "a"),
+    ("lab", "test_projects", "id", 1, "i"),
+    ("lab", "sample_measurements", "id", 1, "i"),
+    ("experimental", "process_records", "record_id", 1, "a"),
+    ("experimental", "property_records", "record_id", 1, "a"),
+    ("model_registry", "assets", "asset_id", 1, "a"),
+    ("monomer_dft", "jobs", "enqueue_sequence", 2, "i"),
+)
+MONOMER_DFT_TABLE_SCHEMA_SHA256 = {
+    ("monomer_dft", "jobs"): (
+        "sha256:"
+        "a96507d1fa4575f9d9c9a6b6f1b418c6c4b6d2b4aea2d09f8fa18fefe0a603ef"
+    ),
+    ("monomer_dft", "job_attempts"): (
+        "sha256:"
+        "9a79e9e3aa2342de49d0cf0f280bc3524e4f595ce12a85027f332707cf4bac47"
+    ),
+    ("monomer_dft", "artifacts"): (
+        "sha256:"
+        "4b1342737e358385c9d94566872861cb3865bb2573d613e325f92aede57dbbf0"
+    ),
+}
+EMPTY_POSTGRES_COPY_SHA256 = (
+    "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
 CANONICAL_MIGRATION_LEDGER = (
     (
@@ -1832,7 +2003,7 @@ def _external_relation_v2(
     return dict(value)
 
 
-def validate_external_database_audit(
+def _validate_external_database_audit_schema_v2_retired(
     document: object,
     *,
     expected_users: dict[str, str] | None,
@@ -2472,6 +2643,1206 @@ def validate_external_database_audit(
     }
 
 
+def _external_reviewed_file_identity_v3(
+    value: object,
+    *,
+    media_id: str,
+) -> dict[str, Any]:
+    fields = {
+        "path",
+        "device",
+        "inode",
+        "size_bytes",
+        "mtime_ns",
+        "mode",
+        "uid",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SiteHelperContractError(
+            "reviewed non-PostgreSQL file identity is invalid"
+        )
+    path = value.get("path")
+    if (
+        not isinstance(path, str)
+        or not Path(path).is_absolute()
+        or ".." in Path(path).parts
+        or media_id != f"reviewed-file:{path}"
+        or value.get("mode") != 0o600
+    ):
+        raise SiteHelperContractError(
+            "reviewed non-PostgreSQL file identity differs"
+        )
+    for name in fields - {"path"}:
+        field = value.get(name)
+        if isinstance(field, bool) or not isinstance(field, int) or field < 0:
+            raise SiteHelperContractError(
+                "reviewed non-PostgreSQL file metadata is invalid"
+            )
+    return dict(value)
+
+
+def _external_source_identity_v3(
+    value: object,
+    *,
+    kind: str,
+    media_id: str,
+) -> dict[str, Any]:
+    if kind == "reviewed_file":
+        return _external_reviewed_file_identity_v3(
+            value,
+            media_id=media_id,
+        )
+    return _external_source_identity_v2(
+        value,
+        kind=kind,
+        media_id=media_id,
+    )
+
+
+def _external_relation_v3(
+    value: object,
+    *,
+    relation: str,
+    owner: str,
+    rows: object,
+    present: bool,
+) -> dict[str, Any]:
+    fields = {
+        "state",
+        "row_count",
+        "schema_sha256",
+        "schema_authority",
+        "content_sha256",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SiteHelperContractError(
+            "external media relation-v3 evidence is invalid"
+        )
+    is_ledger = relation == "ledger"
+    expected_state = "present" if present else "absent"
+    expected_row_count = (
+        len(rows)
+        if is_ledger and isinstance(rows, list)
+        else None
+    )
+    expected_content = (
+        sha256_bytes(canonical_json_bytes(rows))
+        if is_ledger
+        else None
+    )
+    if (
+        value.get("state") != expected_state
+        or (
+            is_ledger
+            and (
+                value.get("row_count") != expected_row_count
+                or value.get("content_sha256") != expected_content
+            )
+        )
+        or (
+            not is_ledger
+            and present
+            and (
+                isinstance(value.get("row_count"), bool)
+                or not isinstance(value.get("row_count"), int)
+                or value["row_count"] < 0
+                or DIGEST_RE.fullmatch(
+                    str(value.get("content_sha256"))
+                )
+                is None
+            )
+        )
+        or (
+            not is_ledger
+            and not present
+            and (
+                value.get("row_count") is not None
+                or value.get("content_sha256") is not None
+            )
+        )
+    ):
+        raise SiteHelperContractError(
+            "external media relation-v3 content differs"
+        )
+    if not present:
+        if (
+            value.get("schema_sha256") is not None
+            or value.get("schema_authority") is not None
+        ):
+            raise SiteHelperContractError(
+                "absent external relation fabricated schema authority"
+            )
+        return dict(value)
+    expected = (
+        LEDGER_SCHEMA_AUTHORITY
+        if is_ledger
+        else LEGACY_SCHEMA_AUTHORITY
+    )
+    expected_authority = {**expected, "owner": owner}
+    authority = value.get("schema_authority")
+    if authority != expected_authority:
+        raise SiteHelperContractError(
+            "external relation differs from canonical migration authority"
+        )
+    if value.get("schema_sha256") != sha256_bytes(
+        canonical_json_bytes(authority)
+    ):
+        raise SiteHelperContractError(
+            "external canonical relation authority digest differs"
+        )
+    return dict(value)
+
+
+def _external_database_record_v3(
+    value: object,
+    *,
+    authority: dict[str, Any],
+    method: str,
+    disposition: str,
+) -> tuple[dict[str, Any], bool]:
+    fields = {
+        "database_identity",
+        "database_identity_sha256",
+        "current_user",
+        "transaction_read_only",
+        "role_superuser",
+        "role_create_db",
+        "role_create_role",
+        "ledger",
+        "ledger_sha256",
+        "ledger_relation",
+        "ledger_analysis",
+        "legacy_relation_present",
+        "legacy_relation",
+        "migration_0013",
+        "requires_0014",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SiteHelperContractError(
+            "external per-database audit-v3 record is invalid"
+        )
+    identity = value.get("database_identity")
+    identity_fields = {
+        "database",
+        "system_identifier",
+        "system_identifier_scope",
+        "database_oid",
+        "database_owner",
+        "encoding",
+        "collate",
+        "ctype",
+        "server_version_num",
+        "data_directory",
+    }
+    expected_scope = (
+        "source-cluster"
+        if method == "live-read-only"
+        else "isolated-restore-cluster"
+        if method == "isolated-backup-restore-read-only"
+        else "copied-source-cluster"
+    )
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != identity_fields
+        or identity.get("database") != authority["name"]
+        or identity.get("database_oid") != authority["oid"]
+        or identity.get("database_owner") != authority["owner"]
+        or identity.get("system_identifier_scope") != expected_scope
+        or not isinstance(identity.get("system_identifier"), str)
+        or PG_SYSTEM_ID_RE.fullmatch(identity["system_identifier"]) is None
+        or isinstance(identity.get("server_version_num"), bool)
+        or not isinstance(identity.get("server_version_num"), int)
+        or identity["server_version_num"] // 10000 != 16
+        or not isinstance(identity.get("data_directory"), str)
+        or not Path(identity["data_directory"]).is_absolute()
+    ):
+        raise SiteHelperContractError(
+            "external per-database PostgreSQL identity differs"
+        )
+    if value.get("database_identity_sha256") != sha256_bytes(
+        canonical_json_bytes(identity)
+    ):
+        raise SiteHelperContractError(
+            "external per-database identity digest differs"
+        )
+    isolated = disposition == "retained-private-isolated"
+    if (
+        value.get("current_user") != authority["audit_role"]
+        or value.get("transaction_read_only") is not True
+        or value.get("role_superuser") is not isolated
+        or not isinstance(value.get("role_create_db"), bool)
+        or not isinstance(value.get("role_create_role"), bool)
+        or (
+            not isolated
+            and (
+                value["role_create_db"]
+                or value["role_create_role"]
+            )
+        )
+    ):
+        raise SiteHelperContractError(
+            "external per-database audit role is unsafe"
+        )
+    ledger = value.get("ledger")
+    if value.get("ledger_sha256") != sha256_bytes(
+        canonical_json_bytes(ledger)
+    ):
+        raise SiteHelperContractError(
+            "external per-database ledger digest differs"
+        )
+    legacy_present = value.get("legacy_relation_present")
+    if not isinstance(legacy_present, bool):
+        raise SiteHelperContractError(
+            "external per-database legacy state is invalid"
+        )
+    migration_scope = authority["migration_scope"]
+    if migration_scope == "nexpoly-ledger":
+        expected_analysis, expected_0013, requires_0014 = (
+            _external_media_ledger_v2(
+                ledger,
+                legacy_relation_present=legacy_present,
+                isolated=isolated,
+            )
+        )
+    elif migration_scope == "adjacent-record-only":
+        if ledger != [] or legacy_present:
+            raise SiteHelperContractError(
+                "adjacent database contains Nexpoly migration relations"
+            )
+        expected_analysis = {
+            "status": "adjacent-no-nexpoly-relations",
+            "canonical_prefix_length": 0,
+            "historical_0005_alias_present": False,
+            "checksum_mismatches": [],
+        }
+        expected_0013 = {"state": "absent", "checksum": None}
+        requires_0014 = False
+    else:
+        raise SiteHelperContractError(
+            "external database migration scope is invalid"
+        )
+    if (
+        value.get("ledger_analysis") != expected_analysis
+        or value.get("migration_0013") != expected_0013
+        or value.get("requires_0014") is not requires_0014
+    ):
+        raise SiteHelperContractError(
+            "external per-database migration analysis differs"
+        )
+    ledger_present = (
+        isinstance(value.get("ledger_relation"), dict)
+        and value["ledger_relation"].get("state") == "present"
+    )
+    if migration_scope == "adjacent-record-only" and ledger_present:
+        raise SiteHelperContractError(
+            "adjacent database fabricated a migration ledger"
+        )
+    _external_relation_v3(
+        value.get("ledger_relation"),
+        relation="ledger",
+        owner=authority["owner"],
+        rows=ledger,
+        present=ledger_present,
+    )
+    _external_relation_v3(
+        value.get("legacy_relation"),
+        relation="legacy",
+        owner=authority["owner"],
+        rows=None,
+        present=legacy_present,
+    )
+    return dict(value), requires_0014
+
+
+def _external_audit_runtime_v3(
+    audit: object,
+    *,
+    method: str,
+    isolation: dict[str, object],
+) -> tuple[dict[str, Any], tuple[str, str, int, int, str, str]]:
+    fields = {
+        "method",
+        "complete",
+        "auditor_sha256",
+        "postgres_major",
+        "postgres_uid",
+        "postgres_gid",
+        "postgres_image",
+        "postgres_image_id",
+        "pg_service_file_sha256",
+        "audited_at",
+        "isolation",
+        "evidence_sha256",
+    }
+    if (
+        not isinstance(audit, dict)
+        or set(audit) != fields
+        or audit.get("method") != method
+        or audit.get("complete") is not True
+        or audit.get("postgres_major") != 16
+        or isinstance(audit.get("postgres_uid"), bool)
+        or not isinstance(audit.get("postgres_uid"), int)
+        or audit.get("postgres_uid") != 70
+        or isinstance(audit.get("postgres_gid"), bool)
+        or not isinstance(audit.get("postgres_gid"), int)
+        or audit.get("postgres_gid") != 70
+        or not isinstance(audit.get("postgres_image"), str)
+        or OCI_IMAGE_DIGEST_RE.fullmatch(audit["postgres_image"]) is None
+        or not isinstance(audit.get("audited_at"), str)
+        or RFC3339_UTC_RE.fullmatch(audit["audited_at"]) is None
+        or audit.get("isolation") != isolation
+    ):
+        raise SiteHelperContractError(
+            "external media-v3 audit runtime or isolation differs"
+        )
+    auditor = _require_digest(
+        audit.get("auditor_sha256"),
+        "media-v3 auditor digest",
+    )
+    image_id = _require_digest(
+        audit.get("postgres_image_id"),
+        "media-v3 PostgreSQL image ID",
+    )
+    service = _require_digest(
+        audit.get("pg_service_file_sha256"),
+        "media-v3 service-file digest",
+    )
+    _require_digest(
+        audit.get("evidence_sha256"),
+        "media-v3 evidence digest",
+    )
+    return dict(audit), (
+        auditor,
+        audit["postgres_image"],
+        audit["postgres_uid"],
+        audit["postgres_gid"],
+        image_id,
+        service,
+    )
+
+
+def _external_record_only_medium_v3(
+    record: object,
+    *,
+    volume_names: list[str],
+    container_ids: list[str],
+) -> tuple[dict[str, Any], tuple[str, str, int, int, str, str]]:
+    fields = {
+        "record_type",
+        "media_id",
+        "kind",
+        "classification",
+        "disposition",
+        "source_identity_before",
+        "source_identity_after",
+        "source_content_sha256",
+        "content_identity_algorithm",
+        "postgres_signature",
+        "readers",
+        "excluded_from_nexpoly_migration",
+        "audit",
+    }
+    if not isinstance(record, dict) or set(record) != fields:
+        raise SiteHelperContractError(
+            "record-only external medium-v3 shape is invalid"
+        )
+    media_id = record.get("media_id")
+    kind = record.get("kind")
+    classification = record.get("classification")
+    if (
+        not isinstance(media_id, str)
+        or MEDIA_ID_RE.fullmatch(media_id) is None
+        or kind not in {
+            "docker_volume",
+            "container_bind",
+            "reviewed_file",
+        }
+        or classification
+        not in {"adjacent-record-only", "reviewed-non-pg"}
+        or record.get("record_type") != classification
+        or record.get("disposition") != "excluded-from-nexpoly-migration"
+        or record.get("excluded_from_nexpoly_migration") is not True
+    ):
+        raise SiteHelperContractError(
+            "record-only external medium-v3 identity differs"
+        )
+    before = _external_source_identity_v3(
+        record.get("source_identity_before"),
+        kind=kind,
+        media_id=media_id,
+    )
+    after = _external_source_identity_v3(
+        record.get("source_identity_after"),
+        kind=kind,
+        media_id=media_id,
+    )
+    readers = record.get("readers")
+    expected_readers = (
+        before.get("attached")
+        if kind in {"docker_volume", "container_bind"}
+        else []
+    )
+    if before != after or readers != expected_readers:
+        raise SiteHelperContractError(
+            "record-only external medium changed or reader set differs"
+        )
+    if any(
+        value["container_id"] not in container_ids
+        for value in readers
+    ):
+        raise SiteHelperContractError(
+            "record-only reader is outside Docker inventory"
+        )
+    if kind == "docker_volume" and before["name"] not in volume_names:
+        raise SiteHelperContractError(
+            "record-only volume is outside Docker inventory"
+        )
+    signature = record.get("postgres_signature")
+    if (
+        not isinstance(signature, dict)
+        or set(signature) != {"state", "major", "data_subpath"}
+        or not isinstance(signature.get("data_subpath"), str)
+    ):
+        raise SiteHelperContractError(
+            "record-only PostgreSQL signature is invalid"
+        )
+    if classification == "adjacent-record-only":
+        method = "adjacent-record-only"
+        algorithm = (
+            "docker-volume-tree-sha256-v1"
+            if kind == "docker_volume"
+            else "private-bind-tree-sha256-v1"
+        )
+        if (
+            kind not in {"docker_volume", "container_bind"}
+            or signature.get("state") != "postgres"
+            or isinstance(signature.get("major"), bool)
+            or not isinstance(signature.get("major"), int)
+            or not 9 <= signature["major"] <= 16
+        ):
+            raise SiteHelperContractError(
+                "adjacent PostgreSQL record-only signature differs"
+            )
+    else:
+        method = "reviewed-content-only"
+        algorithm = (
+            "sha256-file-v1"
+            if kind == "reviewed_file"
+            else "docker-volume-tree-sha256-v1"
+            if kind == "docker_volume"
+            else "private-bind-tree-sha256-v1"
+        )
+        if (
+            signature.get("state") != "non-postgres"
+            or signature.get("major") is not None
+        ):
+            raise SiteHelperContractError(
+                "reviewed non-PG medium contains a PostgreSQL signature"
+            )
+    if record.get("content_identity_algorithm") != algorithm:
+        raise SiteHelperContractError(
+            "record-only content identity algorithm differs"
+        )
+    _require_digest(
+        record.get("source_content_sha256"),
+        "record-only source content digest",
+    )
+    isolation = (
+        {
+            "source_mounted_read_only": True,
+            "source_started_as_postgres": False,
+            "content_cas_verified": True,
+        }
+        if kind == "docker_volume"
+        else {
+            "source_opened_with_openat_no_follow": True,
+            "source_started_as_postgres": False,
+            "content_cas_verified": True,
+        }
+        if kind == "container_bind"
+        else {
+            "source_opened_with_openat_no_follow": True,
+            "source_passed_to_docker": False,
+            "content_cas_verified": True,
+        }
+    )
+    audit, runtime = _external_audit_runtime_v3(
+        record.get("audit"),
+        method=method,
+        isolation=isolation,
+    )
+    unsealed = {
+        **record,
+        "audit": {
+            key: value
+            for key, value in audit.items()
+            if key != "evidence_sha256"
+        },
+    }
+    if audit["evidence_sha256"] != sha256_bytes(
+        canonical_json_bytes(unsealed)
+    ):
+        raise SiteHelperContractError(
+            "record-only medium self-seal differs"
+        )
+    return dict(record), runtime
+
+
+def _external_nexpoly_medium_v3(
+    record: object,
+    *,
+    volume_names: list[str],
+    container_ids: list[str],
+) -> tuple[
+    dict[str, Any],
+    tuple[str, str, int, int, str, str],
+    bool,
+]:
+    primary_fields = {
+        "database_identity",
+        "database_identity_sha256",
+        "current_user",
+        "transaction_read_only",
+        "role_superuser",
+        "role_create_db",
+        "role_create_role",
+        "ledger",
+        "ledger_sha256",
+        "ledger_relation",
+        "ledger_analysis",
+        "legacy_relation_present",
+        "legacy_relation",
+        "migration_0013",
+    }
+    fields = {
+        "record_type",
+        "media_id",
+        "kind",
+        "classification",
+        "database",
+        "disposition",
+        "source_identity_before",
+        "source_identity_after",
+        "source_system_identifier",
+        "source_content_sha256",
+        "content_identity_algorithm",
+        "database_inventory",
+        "database_inventory_sha256",
+        "databases",
+        "audit",
+        *primary_fields,
+    }
+    if not isinstance(record, dict) or set(record) != fields:
+        raise SiteHelperContractError(
+            "Nexpoly external medium-v3 shape is invalid"
+        )
+    media_id = record.get("media_id")
+    kind = record.get("kind")
+    database_name = record.get("database")
+    disposition = record.get("disposition")
+    if (
+        record.get("record_type") != "nexpoly-db"
+        or record.get("classification") != "nexpoly-db"
+        or not isinstance(media_id, str)
+        or MEDIA_ID_RE.fullmatch(media_id) is None
+        or kind
+        not in {"docker_volume", "container_bind", "postgres_backup"}
+        or not isinstance(database_name, str)
+        or ROLE_RE.fullmatch(database_name) is None
+        or disposition
+        not in {
+            "writable-target",
+            "read-only-online",
+            "retained-private-isolated",
+        }
+    ):
+        raise SiteHelperContractError(
+            "Nexpoly external medium-v3 identity differs"
+        )
+    before = _external_source_identity_v3(
+        record.get("source_identity_before"),
+        kind=kind,
+        media_id=media_id,
+    )
+    after = _external_source_identity_v3(
+        record.get("source_identity_after"),
+        kind=kind,
+        media_id=media_id,
+    )
+    if before != after:
+        raise SiteHelperContractError(
+            "Nexpoly external medium changed during audit"
+        )
+    attachments = (
+        before.get("attached")
+        if kind in {"docker_volume", "container_bind"}
+        else []
+    )
+    if (
+        kind == "docker_volume"
+        and before["name"] not in volume_names
+        or any(
+            value["container_id"] not in container_ids
+            for value in attachments
+        )
+    ):
+        raise SiteHelperContractError(
+            "Nexpoly external medium is outside Docker inventory"
+        )
+    method = (
+        "live-read-only"
+        if disposition != "retained-private-isolated"
+        else "isolated-volume-copy-read-only"
+        if kind == "docker_volume"
+        else "isolated-bind-copy-read-only"
+        if kind == "container_bind"
+        else "isolated-backup-restore-read-only"
+    )
+    active = [
+        value
+        for value in attachments
+        if value["state"]
+        in {"created", "running", "paused", "restarting", "removing"}
+    ]
+    if (
+        method == "live-read-only"
+        and len(active) != 1
+        or method != "live-read-only"
+        and active
+    ):
+        raise SiteHelperContractError(
+            "Nexpoly external medium reader state differs"
+        )
+    expected_algorithm = {
+        "live-read-only": "logical-cluster-inventory-v3",
+        "isolated-volume-copy-read-only": (
+            "postgres-data-directory-tar-sha256-v1"
+        ),
+        "isolated-bind-copy-read-only": (
+            "postgres-private-tree-sha256-v1"
+        ),
+        "isolated-backup-restore-read-only": "sha256-file-v1",
+    }[method]
+    if record.get("content_identity_algorithm") != expected_algorithm:
+        raise SiteHelperContractError(
+            "Nexpoly external content algorithm differs"
+        )
+    source_digest = _require_digest(
+        record.get("source_content_sha256"),
+        "Nexpoly external source content digest",
+    )
+    inventory = record.get("database_inventory")
+    databases = record.get("databases")
+    if (
+        not isinstance(inventory, list)
+        or not inventory
+        or not isinstance(databases, list)
+        or len(databases) != len(inventory)
+        or record.get("database_inventory_sha256")
+        != sha256_bytes(canonical_json_bytes(inventory))
+    ):
+        raise SiteHelperContractError(
+            "Nexpoly complete database inventory is invalid"
+        )
+    base_fields = {
+        "name",
+        "oid",
+        "owner",
+        "allow_connections",
+        "template",
+    }
+    authority_fields = {
+        *base_fields,
+        "audit_role",
+        "migration_scope",
+        "audit_state",
+        "audit",
+    }
+    names: list[str] = []
+    oids: set[str] = set()
+    primary_audit: dict[str, Any] | None = None
+    requires_0014 = False
+    system_identifiers: set[str] = set()
+    for observed, database_record in zip(
+        inventory,
+        databases,
+        strict=True,
+    ):
+        if (
+            not isinstance(observed, dict)
+            or set(observed) != base_fields
+            or not isinstance(database_record, dict)
+            or set(database_record) != authority_fields
+            or {
+                key: database_record[key]
+                for key in base_fields
+            }
+            != observed
+            or not isinstance(observed.get("name"), str)
+            or ROLE_RE.fullmatch(observed["name"]) is None
+            or not isinstance(observed.get("oid"), str)
+            or not observed["oid"].isdigit()
+            or observed["oid"] in oids
+            or not isinstance(observed.get("owner"), str)
+            or ROLE_RE.fullmatch(observed["owner"]) is None
+            or not isinstance(observed.get("allow_connections"), bool)
+            or observed.get("template") is not False
+        ):
+            raise SiteHelperContractError(
+                "Nexpoly database inventory entry differs"
+            )
+        names.append(observed["name"])
+        oids.add(observed["oid"])
+        authority = {
+            key: database_record[key]
+            for key in (
+                "name",
+                "oid",
+                "owner",
+                "allow_connections",
+                "template",
+                "audit_role",
+                "migration_scope",
+            )
+        }
+        if database_record.get("audit_state") == "complete":
+            if (
+                observed["allow_connections"] is not True
+                or not isinstance(authority["audit_role"], str)
+                or ROLE_RE.fullmatch(authority["audit_role"]) is None
+            ):
+                raise SiteHelperContractError(
+                    "complete database inventory role differs"
+                )
+            database_audit, needs_0014 = _external_database_record_v3(
+                database_record.get("audit"),
+                authority=authority,
+                method=method,
+                disposition=disposition,
+            )
+            requires_0014 = requires_0014 or needs_0014
+            system_identifiers.add(
+                database_audit["database_identity"]["system_identifier"]
+            )
+            if observed["name"] == database_name:
+                primary_audit = database_audit
+        elif database_record.get("audit_state") == "not-connectable-record-only":
+            if (
+                observed["allow_connections"] is not False
+                or authority["audit_role"] is not None
+                or authority["migration_scope"] != "adjacent-record-only"
+                or database_record.get("audit") is not None
+            ):
+                raise SiteHelperContractError(
+                    "non-connectable database record differs"
+                )
+        else:
+            raise SiteHelperContractError(
+                "database inventory audit state differs"
+            )
+    if names != sorted(set(names)) or primary_audit is None:
+        raise SiteHelperContractError(
+            "Nexpoly database inventory is not canonical or lacks primary"
+        )
+    if any(
+        record.get(field) != primary_audit[field]
+        for field in primary_fields
+    ):
+        raise SiteHelperContractError(
+            "Nexpoly primary database projection was spliced"
+        )
+    source_system_identifier = record.get("source_system_identifier")
+    if kind == "postgres_backup":
+        if source_system_identifier is not None:
+            raise SiteHelperContractError(
+                "logical backup fabricated a source system identifier"
+            )
+    elif (
+        len(system_identifiers) != 1
+        or source_system_identifier not in system_identifiers
+        or not isinstance(source_system_identifier, str)
+    ):
+        raise SiteHelperContractError(
+            "physical medium database cluster identities differ"
+        )
+    if kind == "postgres_backup" and source_digest != before["sha256"]:
+        raise SiteHelperContractError(
+            "logical backup content digest differs"
+        )
+    if method == "live-read-only":
+        logical_digest = sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "database_inventory": inventory,
+                    "databases": databases,
+                }
+            )
+        )
+        if source_digest != logical_digest:
+            raise SiteHelperContractError(
+                "online complete-cluster logical digest differs"
+            )
+    isolation = {
+        "live-read-only": {
+            "source_mounted_by_auditor": False,
+            "source_started_by_auditor": False,
+            "transaction_read_only": True,
+        },
+        "isolated-volume-copy-read-only": {
+            "source_mounted_read_only": True,
+            "source_started_as_postgres": False,
+            "scratch_network": "none",
+            "scratch_destroyed": True,
+            "copy_method": "readonly-tar-copy-to-disposable-volume-v1",
+        },
+        "isolated-bind-copy-read-only": {
+            "source_mounted_read_only": False,
+            "source_opened_with_openat_no_follow": True,
+            "source_started_as_postgres": False,
+            "scratch_network": "none",
+            "scratch_destroyed": True,
+            "copy_method": "private-openat-copy-to-disposable-volume-v1",
+        },
+        "isolated-backup-restore-read-only": {
+            "source_opened_with_openat_no_follow": True,
+            "source_passed_to_docker": False,
+            "staged_snapshot_mounted_read_only": True,
+            "source_started_as_postgres": False,
+            "scratch_network": "none",
+            "scratch_destroyed": True,
+            "restore_method": "pg_restore-no-owner-no-privileges-v1",
+        },
+    }[method]
+    audit, runtime = _external_audit_runtime_v3(
+        record.get("audit"),
+        method=method,
+        isolation=isolation,
+    )
+    unsealed = {
+        **record,
+        "audit": {
+            key: value
+            for key, value in audit.items()
+            if key != "evidence_sha256"
+        },
+    }
+    if audit["evidence_sha256"] != sha256_bytes(
+        canonical_json_bytes(unsealed)
+    ):
+        raise SiteHelperContractError(
+            "Nexpoly external medium self-seal differs"
+        )
+    return dict(record), runtime, requires_0014
+
+
+def validate_external_database_audit(
+    document: object,
+    *,
+    expected_users: dict[str, str] | None,
+    expected_media_registry_digest: str | None = None,
+) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "inventory_complete",
+        "writable_target",
+        "media_registry",
+        "databases",
+        "media",
+        "requires_0014",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != 3
+        or document.get("inventory_complete") is not True
+        or document.get("writable_target")
+        != {"stack": "production", "database": "nexpoly"}
+    ):
+        raise SiteHelperContractError(
+            "external-database evidence is not explicit schema v3"
+        )
+    registry = document.get("media_registry")
+    registry_fields = {
+        "schema_version",
+        "sha256",
+        "discovery_boundary_sha256",
+        "discovery_state_sha256_before",
+        "discovery_state_sha256_after",
+        "captured_at",
+        "expected_media_ids",
+        "discovered_media_ids",
+        "docker_inventory_sha256",
+        "backup_inventory_sha256",
+        "scanned_volume_names",
+        "scanned_container_ids",
+    }
+    if (
+        not isinstance(registry, dict)
+        or set(registry) != registry_fields
+        or registry.get("schema_version") != 3
+        or not isinstance(registry.get("captured_at"), str)
+        or RFC3339_UTC_RE.fullmatch(registry["captured_at"]) is None
+    ):
+        raise SiteHelperContractError(
+            "external media registry-v3 identity is invalid"
+        )
+    registry_digest = _require_digest(
+        registry.get("sha256"),
+        "external media registry-v3 digest",
+    )
+    if (
+        expected_media_registry_digest is not None
+        and registry_digest
+        != _require_digest(
+            expected_media_registry_digest,
+            "expected external media registry-v3 digest",
+        )
+    ):
+        raise SiteHelperContractError(
+            "external media registry-v3 digest differs"
+        )
+    for name in (
+        "discovery_boundary_sha256",
+        "discovery_state_sha256_before",
+        "discovery_state_sha256_after",
+        "docker_inventory_sha256",
+        "backup_inventory_sha256",
+    ):
+        _require_digest(registry.get(name), name)
+    if (
+        registry["discovery_state_sha256_before"]
+        != registry["discovery_state_sha256_after"]
+    ):
+        raise SiteHelperContractError(
+            "external media discovery boundary changed during audit"
+        )
+    expected_ids = registry.get("expected_media_ids")
+    discovered_ids = registry.get("discovered_media_ids")
+    volume_names = registry.get("scanned_volume_names")
+    container_ids = registry.get("scanned_container_ids")
+    if (
+        not isinstance(expected_ids, list)
+        or not expected_ids
+        or expected_ids != sorted(set(expected_ids))
+        or any(
+            not isinstance(media_id, str)
+            or MEDIA_ID_RE.fullmatch(media_id) is None
+            for media_id in expected_ids
+        )
+        or discovered_ids != expected_ids
+        or not isinstance(volume_names, list)
+        or volume_names != sorted(set(volume_names))
+        or any(
+            not isinstance(name, str)
+            or VOLUME_RE.fullmatch(name) is None
+            for name in volume_names
+        )
+        or not isinstance(container_ids, list)
+        or container_ids != sorted(set(container_ids))
+        or any(
+            not isinstance(container_id, str)
+            or CONTAINER_RE.fullmatch(container_id) is None
+            for container_id in container_ids
+        )
+    ):
+        raise SiteHelperContractError(
+            "external media registry-v3 complete inventory differs"
+        )
+    expected_volume_ids = {
+        f"docker-volume:{name}" for name in volume_names
+    }
+    if {
+        media_id
+        for media_id in expected_ids
+        if media_id.startswith("docker-volume:")
+    } != expected_volume_ids:
+        raise SiteHelperContractError(
+            "external media-v3 did not classify every local volume"
+        )
+    raw_media = document.get("media")
+    if not isinstance(raw_media, list):
+        raise SiteHelperContractError(
+            "external media-v3 record list is invalid"
+        )
+    normalized: dict[str, dict[str, Any]] = {}
+    common_runtime: tuple[str, str, int, int, str, str] | None = None
+    requires_0014 = False
+    for raw in raw_media:
+        if not isinstance(raw, dict):
+            raise SiteHelperContractError(
+                "external media-v3 record is invalid"
+            )
+        if raw.get("record_type") == "nexpoly-db":
+            record, runtime, needs_0014 = _external_nexpoly_medium_v3(
+                raw,
+                volume_names=volume_names,
+                container_ids=container_ids,
+            )
+            requires_0014 = requires_0014 or needs_0014
+        else:
+            record, runtime = _external_record_only_medium_v3(
+                raw,
+                volume_names=volume_names,
+                container_ids=container_ids,
+            )
+        media_id = record["media_id"]
+        if media_id in normalized:
+            raise SiteHelperContractError(
+                "external media-v3 contains duplicate identities"
+            )
+        if common_runtime is None:
+            common_runtime = runtime
+        elif common_runtime != runtime:
+            raise SiteHelperContractError(
+                "external media-v3 mixes audit runtimes"
+            )
+        normalized[media_id] = record
+    if sorted(normalized) != expected_ids:
+        raise SiteHelperContractError(
+            "external media-v3 records differ from complete registry"
+        )
+    writable = [
+        record
+        for record in normalized.values()
+        if record.get("disposition") == "writable-target"
+    ]
+    if (
+        len(writable) != 1
+        or writable[0].get("record_type") != "nexpoly-db"
+        or writable[0].get("database") != "nexpoly"
+        or writable[0].get("kind")
+        not in {"docker_volume", "container_bind"}
+    ):
+        raise SiteHelperContractError(
+            "external media-v3 lacks one production writable target"
+        )
+    databases = document.get("databases")
+    database_fields = {
+        "stack",
+        "media_id",
+        "database",
+        "current_user",
+        "transaction_read_only",
+        "role_superuser",
+        "role_create_db",
+        "role_create_role",
+        "system_identifier",
+        "database_identity_sha256",
+        "ledger",
+        "ledger_sha256",
+        "legacy_relation_present",
+    }
+    if not isinstance(databases, list) or len(databases) not in {1, 2}:
+        raise SiteHelperContractError(
+            "external online database-v3 evidence is incomplete"
+        )
+    expected_stacks = (
+        ["nexpoly_dev"]
+        if len(databases) == 1
+        else ["nexpoly_dev", "nexpoly_md_health_opt"]
+    )
+    normalized_databases: list[dict[str, Any]] = []
+    for database, stack in zip(
+        databases,
+        expected_stacks,
+        strict=True,
+    ):
+        if (
+            not isinstance(database, dict)
+            or set(database) != database_fields
+            or database.get("stack") != stack
+            or database.get("database") != stack
+            or database.get("media_id") not in normalized
+        ):
+            raise SiteHelperContractError(
+                "external online database-v3 identity differs"
+            )
+        source = normalized[database["media_id"]]
+        if (
+            source.get("record_type") != "nexpoly-db"
+            or source.get("database") != stack
+        ):
+            raise SiteHelperContractError(
+                "external online database-v3 maps to another medium"
+            )
+        expected_projection = {
+            "stack": stack,
+            "media_id": database["media_id"],
+            "database": source["database"],
+            "current_user": source["current_user"],
+            "transaction_read_only": source["transaction_read_only"],
+            "role_superuser": source["role_superuser"],
+            "role_create_db": source["role_create_db"],
+            "role_create_role": source["role_create_role"],
+            "system_identifier": source["database_identity"][
+                "system_identifier"
+            ],
+            "database_identity_sha256": source[
+                "database_identity_sha256"
+            ],
+            "ledger": source["ledger"],
+            "ledger_sha256": source["ledger_sha256"],
+            "legacy_relation_present": source[
+                "legacy_relation_present"
+            ],
+        }
+        if database != expected_projection:
+            raise SiteHelperContractError(
+                "external online database-v3 projection was spliced"
+            )
+        if (
+            expected_users is not None
+            and database["current_user"] != expected_users.get(stack)
+        ):
+            raise SiteHelperContractError(
+                "external online database-v3 audit user differs"
+            )
+        normalized_databases.append(dict(database))
+    health_records = [
+        record
+        for record in normalized.values()
+        if record.get("record_type") == "nexpoly-db"
+        and record.get("database") == "nexpoly_md_health_opt"
+    ]
+    health_online = "nexpoly_md_health_opt" in expected_stacks
+    if not health_records:
+        raise SiteHelperContractError(
+            "external media-v3 omits the retained side-dev health medium"
+        )
+    if not health_online and any(
+        record.get("disposition") != "retained-private-isolated"
+        or record["audit"].get("method") == "live-read-only"
+        for record in health_records
+    ):
+        raise SiteHelperContractError(
+            "external media-v3 side-dev health medium is not retained-isolated"
+        )
+    if health_online:
+        projected_health = normalized_databases[-1]
+        source = normalized[projected_health["media_id"]]
+        if (
+            source.get("database") != "nexpoly_md_health_opt"
+            or source.get("disposition") != "read-only-online"
+            or source["audit"].get("method") != "live-read-only"
+        ):
+            raise SiteHelperContractError(
+                "external media-v3 online side-dev projection is not live"
+            )
+    if document.get("requires_0014") is not requires_0014:
+        raise SiteHelperContractError(
+            "external media-v3 0014 requirement differs from every database"
+        )
+    return {
+        "schema_version": 3,
+        "inventory_complete": True,
+        "writable_target": {"stack": "production", "database": "nexpoly"},
+        "media_registry": dict(registry),
+        "databases": normalized_databases,
+        "media": [normalized[name] for name in sorted(normalized)],
+        "requires_0014": requires_0014,
+    }
+
+
 def _validate_table_inventory(
     records: object,
     expected_relations: tuple[tuple[str, str], ...],
@@ -2538,7 +3909,7 @@ def _validate_table_inventory(
 
 
 def _validate_mutable_ledger(records: object) -> list[dict[str, str]]:
-    if not isinstance(records, list) or len(records) not in {11, 12, 13}:
+    if not isinstance(records, list) or len(records) not in {8, 11, 12, 13}:
         raise SiteHelperContractError(
             "mutable-data audit migration ledger is not a governed B/F state"
         )
@@ -2563,7 +3934,7 @@ def _validate_sequence_inventory(
     fields = {
         "schema",
         "sequence",
-        "owned_by",
+        "ownership",
         "state",
         "data_type",
         "start_value",
@@ -2576,7 +3947,12 @@ def _validate_sequence_inventory(
         "is_called",
     }
     normalized: list[dict[str, Any]] = []
-    for record, expected in zip(records, DATA_SEQUENCES, strict=True):
+    for record, expected, expected_owner in zip(
+        records,
+        DATA_SEQUENCES,
+        DATA_SEQUENCE_OWNERSHIP,
+        strict=True,
+    ):
         optional_dft = expected[0] == "monomer_dft"
         expected_state = "present" if dft_ready or not optional_dft else "absent"
         if (
@@ -2585,9 +3961,8 @@ def _validate_sequence_inventory(
             or (
                 record.get("schema"),
                 record.get("sequence"),
-                record.get("owned_by"),
             )
-            != expected
+            != expected[:2]
             or record.get("state") != expected_state
         ):
             raise SiteHelperContractError(
@@ -2605,14 +3980,25 @@ def _validate_sequence_inventory(
             "is_called",
         )
         if expected_state == "absent":
-            if any(record.get(name) is not None for name in value_fields):
+            if (
+                record.get("ownership") is not None
+                or any(record.get(name) is not None for name in value_fields)
+            ):
                 raise SiteHelperContractError(
                     "absent mutable-data sequence contains fabricated evidence"
                 )
             normalized.append(dict(record))
             continue
+        expected_ownership = {
+            "schema": expected_owner[0],
+            "table": expected_owner[1],
+            "column": expected_owner[2],
+            "ordinal": expected_owner[3],
+            "deptype": expected_owner[4],
+        }
         if (
-            not isinstance(record.get("data_type"), str)
+            record.get("ownership") != expected_ownership
+            or not isinstance(record.get("data_type"), str)
             or not record["data_type"]
             or any(
                 isinstance(record.get(name), bool)
@@ -2632,11 +4018,38 @@ def _validate_sequence_inventory(
             raise SiteHelperContractError(
                 "mutable-data sequence state is invalid"
             )
+        if optional_dft and {
+            name: record[name]
+            for name in (
+                "data_type",
+                "start_value",
+                "min_value",
+                "max_value",
+                "increment_by",
+                "cache_size",
+                "cycle",
+            )
+        } != {
+            "data_type": "bigint",
+            "start_value": 1,
+            "min_value": 1,
+            "max_value": 9223372036854775807,
+            "increment_by": 1,
+            "cache_size": 1,
+            "cycle": False,
+        }:
+            raise SiteHelperContractError(
+                "monomer DFT identity sequence parameters differ"
+            )
         normalized.append(dict(record))
     return normalized
 
 
-def _validate_governed_controls(document: object) -> dict[str, Any]:
+def _validate_governed_controls(
+    document: object,
+    *,
+    controls_ready: bool,
+) -> dict[str, Any]:
     if (
         not isinstance(document, dict)
         or set(document)
@@ -2652,9 +4065,19 @@ def _validate_governed_controls(document: object) -> dict[str, Any]:
     deployment_table = _validate_table_inventory(
         [deployment["table"]],
         (GOVERNED_CONTROL_TABLES[0],),
+        absent_relations=(
+            frozenset()
+            if controls_ready
+            else frozenset({GOVERNED_CONTROL_TABLES[0]})
+        ),
     )[0]
     row = deployment["row"]
-    if (
+    if not controls_ready:
+        if row is not None:
+            raise SiteHelperContractError(
+                "pre-0010 deployment-control evidence fabricated a row"
+            )
+    elif (
         deployment_table["row_count"] != 1
         or not isinstance(row, dict)
         or set(row)
@@ -2675,7 +4098,10 @@ def _validate_governed_controls(document: object) -> dict[str, Any]:
         raise SiteHelperContractError(
             "deployment-control row is invalid"
         )
-    if row["drain_enabled"]:
+    if (
+        controls_ready
+        and row["drain_enabled"]
+    ):
         if (
             not isinstance(row.get("reason"), str)
             or not row["reason"]
@@ -2689,7 +4115,7 @@ def _validate_governed_controls(document: object) -> dict[str, Any]:
             raise SiteHelperContractError(
                 "deployment-control drain lacks an operation owner"
             )
-    elif any(
+    elif controls_ready and any(
         row.get(name) is not None
         for name in (
             "reason",
@@ -2712,7 +4138,16 @@ def _validate_governed_controls(document: object) -> dict[str, Any]:
     analytics_table = _validate_table_inventory(
         [analytics["table"]],
         (GOVERNED_CONTROL_TABLES[1],),
+        absent_relations=(
+            frozenset()
+            if controls_ready
+            else frozenset({GOVERNED_CONTROL_TABLES[1]})
+        ),
     )[0]
+    if not controls_ready and analytics["entries"]:
+        raise SiteHelperContractError(
+            "pre-0010 analytics evidence fabricated rows"
+        )
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
     for entry in analytics["entries"]:
@@ -2744,7 +4179,10 @@ def _validate_governed_controls(document: object) -> dict[str, Any]:
         )
     if (
         entries != sorted(entries, key=lambda value: value["snapshot_key"])
-        or analytics_table["row_count"] != len(entries)
+        or (
+            controls_ready
+            and analytics_table["row_count"] != len(entries)
+        )
     ):
         raise SiteHelperContractError(
             "analytics snapshot inventory is incomplete or unordered"
@@ -2752,12 +4190,83 @@ def _validate_governed_controls(document: object) -> dict[str, Any]:
     return {
         "deployment_control": {
             "table": deployment_table,
-            "row": dict(row),
+            "row": dict(row) if isinstance(row, dict) else None,
         },
         "database_analytics_snapshots": {
             "table": analytics_table,
             "entries": entries,
         },
+    }
+
+
+def _validate_bridge_projection(
+    document: object,
+    *,
+    leases_ready: bool,
+) -> dict[str, Any]:
+    fields = {
+        "schema",
+        "table",
+        "projection",
+        "state",
+        "row_count",
+        "content_sha256",
+        "lease_columns",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema") != "md"
+        or document.get("table") != "monomer_md_jobs"
+        or document.get("projection") != "pre-0009-row-json-v1"
+        or document.get("state") != "present"
+        or isinstance(document.get("row_count"), bool)
+        or not isinstance(document.get("row_count"), int)
+        or document["row_count"] < 0
+    ):
+        raise SiteHelperContractError(
+            "mutable-data bridge projection is invalid"
+        )
+    lease_columns = document["lease_columns"]
+    column_names = {
+        "worker_instance_id",
+        "heartbeat_at",
+        "lease_expires_at",
+    }
+    expected_state = "present" if leases_ready else "absent"
+    if (
+        not isinstance(lease_columns, dict)
+        or set(lease_columns) != {"state", "non_null_counts"}
+        or lease_columns.get("state") != expected_state
+        or not isinstance(lease_columns.get("non_null_counts"), dict)
+        or set(lease_columns["non_null_counts"]) != column_names
+        or (
+            leases_ready
+            and any(
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+                or value > document["row_count"]
+                for value in lease_columns["non_null_counts"].values()
+            )
+        )
+        or (
+            not leases_ready
+            and any(
+                value is not None
+                for value in lease_columns["non_null_counts"].values()
+            )
+        )
+    ):
+        raise SiteHelperContractError(
+            "mutable-data bridge lease-column projection is invalid"
+        )
+    return {
+        **dict(document),
+        "content_sha256": _require_digest(
+            document.get("content_sha256"),
+            "mutable-data bridge projection digest",
+        ),
     }
 
 
@@ -2847,13 +4356,14 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         "static_tables",
         "migration_exception",
         "sequences",
+        "bridge_projection",
         "snapshot_sha256",
         "captured_at",
     }
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 4
+        or document.get("schema_version") != 5
         or not isinstance(document.get("operation_id"), str)
         or OPERATION_ID_RE.fullmatch(document["operation_id"]) is None
         or document.get("database") != "nexpoly"
@@ -2866,7 +4376,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         or document.get("transaction_read_only") is not True
         or document.get("transaction_deferrable") is not True
         or document.get("digest_algorithm")
-        != "sha256-postgres-jsonb-copy-v3"
+        != "sha256-postgres-jsonb-copy-v4"
         or not isinstance(document.get("captured_at"), str)
         or not document["captured_at"]
     ):
@@ -2948,6 +4458,8 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
 
     ledger = _validate_mutable_ledger(document.get("migration_ledger"))
     versions = {record["version"] for record in ledger}
+    controls_ready = "0010_deployment_control" in versions
+    leases_ready = "0009_monomer_md_job_leases" in versions
     dft_ready = "0013_monomer_dft_jobs" in versions
     contract_applied = "0012_drop_polytao_jobs" in versions
     business_relations = (
@@ -2962,6 +4474,23 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
             else frozenset(POST_0013_BUSINESS_MUTABLE_TABLES)
         ),
     )
+    if dft_ready:
+        for record in business_tables:
+            relation = (record["schema"], record["table"])
+            expected_schema = MONOMER_DFT_TABLE_SCHEMA_SHA256.get(relation)
+            if expected_schema is None:
+                continue
+            if (
+                record["schema_sha256"] != expected_schema
+                or (
+                    record["row_count"] == 0
+                    and record["content_sha256"]
+                    != EMPTY_POSTGRES_COPY_SHA256
+                )
+            ):
+                raise SiteHelperContractError(
+                    "monomer DFT table schema or empty content differs"
+                )
     static_tables = _validate_table_inventory(
         document.get("static_tables"),
         STATIC_IMPORT_TABLES,
@@ -2976,12 +4505,27 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         ),
     )[0]
     governed_controls = _validate_governed_controls(
-        document.get("governed_controls")
+        document.get("governed_controls"),
+        controls_ready=controls_ready,
     )
     sequences = _validate_sequence_inventory(
         document.get("sequences"),
         dft_ready=dft_ready,
     )
+    bridge_projection = _validate_bridge_projection(
+        document.get("bridge_projection"),
+        leases_ready=leases_ready,
+    )
+    monomer_md = next(
+        record
+        for record in business_tables
+        if (record["schema"], record["table"])
+        == ("md", "monomer_md_jobs")
+    )
+    if bridge_projection["row_count"] != monomer_md["row_count"]:
+        raise SiteHelperContractError(
+            "mutable-data bridge projection row count differs"
+        )
     identity = {
         "operation_id": document["operation_id"],
         "database": "nexpoly",
@@ -2989,26 +4533,88 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         "connection": connection,
         "postgres_runtime": runtime,
         "role_security": role_security,
-        "digest_algorithm": "sha256-postgres-jsonb-copy-v3",
+        "digest_algorithm": "sha256-postgres-jsonb-copy-v4",
         "migration_ledger": ledger,
         "business_tables": business_tables,
         "governed_controls": governed_controls,
         "static_tables": static_tables,
         "migration_exception": migration_exception,
         "sequences": sequences,
+        "bridge_projection": bridge_projection,
     }
     if document.get("snapshot_sha256") != sha256_bytes(
         canonical_json_bytes(identity)
     ):
         raise SiteHelperContractError("mutable-data snapshot digest differs")
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,
         "transaction_deferrable": True,
         "snapshot_sha256": document["snapshot_sha256"],
         "captured_at": document["captured_at"],
+    }
+
+
+def validate_monomer_dft_0013_creation(
+    document: object,
+) -> dict[str, Any]:
+    """Return the exact pristine DFT projection created by migration 0013."""
+
+    validated = validate_mutable_data_audit(document)
+    if (
+        validated["migration_ledger"][-1]
+        != {
+            "version": "0013_monomer_dft_jobs",
+            "checksum": CANONICAL_0013_CHECKSUM,
+        }
+    ):
+        raise SiteHelperContractError(
+            "monomer DFT creation evidence is not at canonical 0013"
+        )
+    tables = [
+        record
+        for record in validated["business_tables"]
+        if (record["schema"], record["table"])
+        in MONOMER_DFT_TABLE_SCHEMA_SHA256
+    ]
+    if (
+        len(tables) != len(MONOMER_DFT_TABLE_SCHEMA_SHA256)
+        or any(
+            record["state"] != "present"
+            or record["row_count"] != 0
+            or record["content_sha256"] != EMPTY_POSTGRES_COPY_SHA256
+            for record in tables
+        )
+    ):
+        raise SiteHelperContractError(
+            "migration 0013 did not create three empty DFT tables"
+        )
+    sequence = next(
+        (
+            record
+            for record in validated["sequences"]
+            if (
+                record["schema"],
+                record["sequence"],
+            )
+            == ("monomer_dft", "jobs_enqueue_sequence_seq")
+        ),
+        None,
+    )
+    if (
+        sequence is None
+        or sequence["state"] != "present"
+        or sequence["last_value"] != 1
+        or sequence["is_called"] is not False
+    ):
+        raise SiteHelperContractError(
+            "migration 0013 identity sequence is not pristine"
+        )
+    return {
+        "tables": [dict(record) for record in tables],
+        "sequence": dict(sequence),
     }
 
 

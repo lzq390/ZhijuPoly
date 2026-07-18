@@ -439,6 +439,49 @@ class ReconcileTests(unittest.TestCase):
                 {"schema_version": 1, "fixture": "takeover-runtime"},
             )
         )
+        transition_path = (
+            operation.audit_dir
+            / "external-database-alias-transition.json"
+        )
+        transition_document = {"schema_version": 1, "fixture": True}
+        transition_reference = {
+            "path": str(transition_path),
+            "sha256": "sha256:"
+            + MODULE.sha256_bytes(
+                MODULE.canonical_json_bytes(transition_document) + b"\n"
+            ),
+            "identity_sha256": "sha256:" + "1" * 64,
+            "before_state_sha256": "sha256:" + "2" * 64,
+            "after_state_sha256": "sha256:" + "3" * 64,
+            "descriptor_sha256": "sha256:" + "4" * 64,
+            "operation_id": operation.operation_id,
+            "kind": "alias-0005-reconciliation",
+        }
+
+        def ensure_transition(_marker: object) -> dict[str, object]:
+            transition_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=0o700,
+            )
+            os.chmod(transition_path.parent, 0o700)
+            if not transition_path.exists():
+                MODULE.atomic_json(
+                    transition_path,
+                    transition_document,
+                )
+            transition_reference["sha256"] = (
+                "sha256:" + MODULE.sha256_file(transition_path)
+            )
+            return dict(transition_reference)
+
+        operation._ensure_external_database_alias_transition = mock.Mock(
+            side_effect=ensure_transition
+        )
+        operation._external_database_alias_transition_pair = mock.Mock(
+            return_value={"schema_version": 1, "fixture": True}
+        )
+        operation._fixture_external_transition = transition_reference
         operation._require_takeover_runtime_match = mock.Mock()
         operation._runtime_stop_fence = mock.Mock(return_value={"fixture": True})
         operation._validate_mandatory_evidence = mock.Mock(
@@ -505,7 +548,23 @@ class ReconcileTests(unittest.TestCase):
             marker, "mutation-intent", mutation_intent={"fixture": True}
         )
         phase = "mutation-committed" if committed else "mutation-commit-started"
-        operation._write_marker(marker, phase, after=after)  # type: ignore[attr-defined]
+        extra = (
+            {
+                "external_database_alias_transition": (
+                    operation._ensure_external_database_alias_transition(  # type: ignore[attr-defined]
+                        marker
+                    )
+                )
+            }
+            if committed
+            else {}
+        )
+        operation._write_marker(  # type: ignore[attr-defined]
+            marker,
+            phase,
+            after=after,
+            **extra,
+        )
 
     @staticmethod
     def _write_finalization_evidence(
@@ -551,6 +610,9 @@ class ReconcileTests(unittest.TestCase):
             "runtime_stop_fence_sha256": MODULE.sha256_bytes(
                 MODULE.canonical_json_bytes(marker["runtime_stop_fence"])
             ),
+            "external_database_alias_transition": marker[
+                "external_database_alias_transition"
+            ],
             "binaries": binaries,
             "files": operation._evidence_file_inventory(),  # type: ignore[attr-defined]
             "completed_at": completed_at,
@@ -608,6 +670,7 @@ class ReconcileTests(unittest.TestCase):
         operation._begin_recovery_locked = mock.Mock(
             return_value=("post", recovered)
         )
+        operation._begin_post_locked = mock.Mock(return_value=recovered)
         result = operation.apply()
         self.assertEqual(result["status"], "completed")
         self.assertFalse(any("WITH deleted AS" in sql for sql in session.json_sql))
@@ -632,6 +695,7 @@ class ReconcileTests(unittest.TestCase):
         operation._begin_recovery_locked = mock.Mock(
             return_value=("post", recovered)
         )
+        operation._begin_post_locked = mock.Mock(return_value=recovered)
         result = operation.apply()
         self.assertEqual(result["status"], "completed")
         self.assertEqual(session.json_sql, [])

@@ -39,8 +39,18 @@ import sys
 
 root = Path(sys.argv[1])
 tables = (
-    ("governance", "deployment_control", "control_key", None),
-    ("governance", "database_analytics_snapshots", "snapshot_key", None),
+    (
+        "governance",
+        "deployment_control",
+        "control_key",
+        "deployment_control_present",
+    ),
+    (
+        "governance",
+        "database_analytics_snapshots",
+        "snapshot_key",
+        "database_analytics_snapshots_present",
+    ),
     ("governance", "source_files", "source_file_id", None),
     ("governance", "import_batches", "import_batch_id", None),
     ("core", "polymers", "polymer_id", None),
@@ -80,61 +90,51 @@ sequences = (
     (
         "governance",
         "source_files_source_file_id_seq",
-        "governance.source_files.source_file_id",
         None,
     ),
     (
         "governance",
         "import_batches_import_batch_id_seq",
-        "governance.import_batches.import_batch_id",
         None,
     ),
     (
         "knowledge",
         "formulation_records_formulation_id_seq",
-        "knowledge.formulation_records.formulation_id",
         None,
     ),
     (
         "online_knowledge",
         "history_history_id_seq",
-        "online_knowledge.history.history_id",
         None,
     ),
     (
         "lab",
         "test_projects_id_seq",
-        "lab.test_projects.id",
         None,
     ),
     (
         "lab",
         "sample_measurements_id_seq",
-        "lab.sample_measurements.id",
         None,
     ),
     (
         "experimental",
         "process_records_record_id_seq",
-        "experimental.process_records.record_id",
         None,
     ),
     (
         "experimental",
         "property_records_record_id_seq",
-        "experimental.property_records.record_id",
         None,
     ),
     (
         "model_registry",
         "assets_asset_id_seq",
-        "model_registry.assets.asset_id",
         None,
     ),
     (
         "monomer_dft",
         "jobs_enqueue_sequence_seq",
-        "monomer_dft.jobs.enqueue_sequence",
         "dft_jobs_enqueue_sequence_present",
     ),
 )
@@ -148,19 +148,24 @@ schema_query = (
     "SELECT jsonb_build_object("
     "'kind','column','position',a.attnum,'name',a.attname,"
     "'type',pg_catalog.format_type(a.atttypid,a.atttypmod),"
-    "'not_null',a.attnotnull,'default',pg_get_expr(d.adbin,d.adrelid))::text "
-    "FROM pg_attribute AS a LEFT JOIN pg_attrdef AS d "
+    "'not_null',a.attnotnull,'identity',a.attidentity,"
+    "'generated',a.attgenerated,"
+    "'default',pg_catalog.pg_get_expr(d.adbin,d.adrelid))::text "
+    "FROM pg_catalog.pg_attribute AS a "
+    "LEFT JOIN pg_catalog.pg_attrdef AS d "
     "ON d.adrelid=a.attrelid AND d.adnum=a.attnum "
     "WHERE a.attrelid='{relation}'::regclass "
     "AND a.attnum>0 AND NOT a.attisdropped "
     "UNION ALL SELECT jsonb_build_object("
     "'kind','constraint','name',c.conname,"
-    "'definition',pg_get_constraintdef(c.oid,true))::text "
-    "FROM pg_constraint AS c WHERE c.conrelid='{relation}'::regclass "
+    "'definition',pg_catalog.pg_get_constraintdef(c.oid,true))::text "
+    "FROM pg_catalog.pg_constraint AS c "
+    "WHERE c.conrelid='{relation}'::regclass "
     "UNION ALL SELECT jsonb_build_object("
     "'kind','index','name',i.indexrelid::regclass::text,"
-    "'definition',pg_get_indexdef(i.indexrelid))::text "
-    "FROM pg_index AS i WHERE i.indrelid='{relation}'::regclass ORDER BY 1"
+    "'definition',pg_catalog.pg_get_indexdef(i.indexrelid))::text "
+    "FROM pg_catalog.pg_index AS i "
+    "WHERE i.indrelid='{relation}'::regclass ORDER BY 1"
 )
 role_security_query = """
 WITH target AS (
@@ -506,6 +511,14 @@ commands = [
         "AS polytao_present \\gset"
     ),
     (
+        "SELECT (to_regclass('governance.deployment_control') IS NOT NULL) "
+        "AS deployment_control_present \\gset"
+    ),
+    (
+        "SELECT (to_regclass('governance.database_analytics_snapshots') "
+        "IS NOT NULL) AS database_analytics_snapshots_present \\gset"
+    ),
+    (
         "\\copy (SELECT jsonb_build_object('version',version,"
         "'checksum',checksum)::text FROM governance.schema_migrations "
         f"ORDER BY version) TO '{literal(root / 'migration_ledger.rows')}'"
@@ -540,21 +553,69 @@ for schema, table, order, condition in tables:
     )
     if condition is not None:
         commands.append("\\endif")
-for schema, sequence, owned_by, condition in sequences:
+commands.append(
+    "\\copy (SELECT (to_jsonb(value) - "
+    "ARRAY['worker_instance_id','heartbeat_at','lease_expires_at']::text[])::text "
+    "FROM md.monomer_md_jobs AS value ORDER BY job_id) "
+    f"TO '{literal(root / 'md__monomer_md_jobs.pre-0009-row-json-v1.rows')}'"
+)
+commands.append(
+    "\\copy (SELECT jsonb_build_object("
+    "'columns_present', (SELECT count(*) = 3 FROM pg_catalog.pg_attribute "
+    "WHERE attrelid='md.monomer_md_jobs'::regclass AND attnum > 0 "
+    "AND NOT attisdropped AND attname IN "
+    "('worker_instance_id','heartbeat_at','lease_expires_at')),"
+    "'worker_instance_id_non_null', count(*) FILTER "
+    "(WHERE to_jsonb(value)->'worker_instance_id' <> 'null'::jsonb),"
+    "'heartbeat_at_non_null', count(*) FILTER "
+    "(WHERE to_jsonb(value)->'heartbeat_at' <> 'null'::jsonb),"
+    "'lease_expires_at_non_null', count(*) FILTER "
+    "(WHERE to_jsonb(value)->'lease_expires_at' <> 'null'::jsonb)"
+    ")::text FROM md.monomer_md_jobs AS value) "
+    f"TO '{literal(root / 'md__monomer_md_jobs.lease-columns.json')}'"
+)
+for schema, sequence, condition in sequences:
     relation = f"{schema}.{sequence}"
     stem = f"{schema}__{sequence}.sequence"
     if condition is not None:
         commands.append(f"\\if :{condition}")
     commands.append(
         "\\copy (SELECT jsonb_build_object("
-        f"'schema','{schema}','sequence','{sequence}',"
-        f"'owned_by','{owned_by}',"
+        "'schema',sequence_namespace.nspname,"
+        "'sequence',sequence_relation.relname,"
+        "'ownership',jsonb_build_object("
+        "'schema',owner_namespace.nspname,"
+        "'table',owner_relation.relname,"
+        "'column',owner_attribute.attname,"
+        "'ordinal',owner_attribute.attnum,"
+        "'deptype',dependency.deptype),"
         "'data_type',pg_catalog.format_type(s.seqtypid,NULL),"
         "'start_value',s.seqstart,'min_value',s.seqmin,"
         "'max_value',s.seqmax,'increment_by',s.seqincrement,"
         "'cache_size',s.seqcache,'cycle',s.seqcycle,"
         "'last_value',q.last_value,'is_called',q.is_called)::text "
-        f"FROM pg_sequence AS s CROSS JOIN {relation} AS q "
+        "FROM pg_catalog.pg_sequence AS s "
+        "JOIN pg_catalog.pg_class AS sequence_relation "
+        "ON sequence_relation.oid=s.seqrelid "
+        "JOIN pg_catalog.pg_namespace AS sequence_namespace "
+        "ON sequence_namespace.oid=sequence_relation.relnamespace "
+        "JOIN pg_catalog.pg_depend AS dependency "
+        "ON dependency.classid='pg_catalog.pg_class'::regclass "
+        "AND dependency.objid=s.seqrelid "
+        "AND dependency.objsubid=0 "
+        "AND dependency.refclassid='pg_catalog.pg_class'::regclass "
+        "AND dependency.refobjsubid>0 "
+        "AND dependency.deptype IN ('a','i') "
+        "JOIN pg_catalog.pg_class AS owner_relation "
+        "ON owner_relation.oid=dependency.refobjid "
+        "JOIN pg_catalog.pg_namespace AS owner_namespace "
+        "ON owner_namespace.oid=owner_relation.relnamespace "
+        "JOIN pg_catalog.pg_attribute AS owner_attribute "
+        "ON owner_attribute.attrelid=dependency.refobjid "
+        "AND owner_attribute.attnum=dependency.refobjsubid "
+        "AND owner_attribute.attnum>0 "
+        "AND NOT owner_attribute.attisdropped "
+        f"CROSS JOIN {relation} AS q "
         f"WHERE s.seqrelid='{relation}'::regclass) "
         f"TO '{literal(root / (stem + '.json'))}'"
     )
@@ -630,48 +691,39 @@ sequence_specs = (
     (
         "governance",
         "source_files_source_file_id_seq",
-        "governance.source_files.source_file_id",
     ),
     (
         "governance",
         "import_batches_import_batch_id_seq",
-        "governance.import_batches.import_batch_id",
     ),
     (
         "knowledge",
         "formulation_records_formulation_id_seq",
-        "knowledge.formulation_records.formulation_id",
     ),
     (
         "online_knowledge",
         "history_history_id_seq",
-        "online_knowledge.history.history_id",
     ),
-    ("lab", "test_projects_id_seq", "lab.test_projects.id"),
+    ("lab", "test_projects_id_seq"),
     (
         "lab",
         "sample_measurements_id_seq",
-        "lab.sample_measurements.id",
     ),
     (
         "experimental",
         "process_records_record_id_seq",
-        "experimental.process_records.record_id",
     ),
     (
         "experimental",
         "property_records_record_id_seq",
-        "experimental.property_records.record_id",
     ),
     (
         "model_registry",
         "assets_asset_id_seq",
-        "model_registry.assets.asset_id",
     ),
     (
         "monomer_dft",
         "jobs_enqueue_sequence_seq",
-        "monomer_dft.jobs.enqueue_sequence",
     ),
 )
 
@@ -752,15 +804,25 @@ connection = {
 }
 
 deployment_table = table_record("governance", "deployment_control")
-deployment_rows = json_lines(root / "governance__deployment_control.rows")
-if len(deployment_rows) != 1 or not isinstance(deployment_rows[0], dict):
-    raise SystemExit("deployment-control inventory is incomplete")
+deployment_rows_path = root / "governance__deployment_control.rows"
+deployment_rows = (
+    json_lines(deployment_rows_path)
+    if deployment_rows_path.exists()
+    else []
+)
+if deployment_table["state"] == "present":
+    if len(deployment_rows) != 1 or not isinstance(deployment_rows[0], dict):
+        raise SystemExit("deployment-control inventory is incomplete")
+    deployment_row = deployment_rows[0]
+else:
+    if deployment_rows:
+        raise SystemExit("absent deployment-control contains rows")
+    deployment_row = None
 analytics_table = table_record(
     "governance", "database_analytics_snapshots"
 )
-analytics_payload = (
-    root / "governance__database_analytics_snapshots.rows"
-).read_bytes()
+analytics_path = root / "governance__database_analytics_snapshots.rows"
+analytics_payload = analytics_path.read_bytes() if analytics_path.exists() else b""
 analytics_entries = []
 for line in analytics_payload.splitlines(keepends=True):
     if not line.strip():
@@ -791,14 +853,14 @@ sequence_value_fields = (
     "last_value",
     "is_called",
 )
-for schema, sequence, owned_by in sequence_specs:
+for schema, sequence in sequence_specs:
     path = root / f"{schema}__{sequence}.sequence.json"
     if not path.exists():
         sequences.append(
             {
                 "schema": schema,
                 "sequence": sequence,
-                "owned_by": owned_by,
+                "ownership": None,
                 "state": "absent",
                 **{name: None for name in sequence_value_fields},
             }
@@ -810,6 +872,19 @@ for schema, sequence, owned_by in sequence_specs:
     sequences.append({"state": "present", **values[0]})
 
 ledger = json_lines(root / "migration_ledger.rows")
+bridge_projection_payload = (
+    root / "md__monomer_md_jobs.pre-0009-row-json-v1.rows"
+).read_bytes()
+lease_projection_rows = json_lines(
+    root / "md__monomer_md_jobs.lease-columns.json"
+)
+if (
+    len(lease_projection_rows) != 1
+    or not isinstance(lease_projection_rows[0], dict)
+):
+    raise SystemExit("mutable audit lease-column projection is invalid")
+lease_projection = lease_projection_rows[0]
+lease_columns_present = lease_projection.get("columns_present") is True
 role_security_rows = json_lines(root / "role_security.json")
 if len(role_security_rows) != 1 or not isinstance(role_security_rows[0], dict):
     raise SystemExit("mutable audit role-security evidence is invalid")
@@ -819,7 +894,7 @@ identity = {
     "database_system_identifier": metadata["database_system_identifier"],
     "connection": connection,
     "postgres_runtime": postgres_runtime,
-    "digest_algorithm": "sha256-postgres-jsonb-copy-v3",
+    "digest_algorithm": "sha256-postgres-jsonb-copy-v4",
     "role_security": role_security_rows[0],
     "migration_ledger": ledger,
     "business_tables": [
@@ -828,7 +903,7 @@ identity = {
     "governed_controls": {
         "deployment_control": {
             "table": deployment_table,
-            "row": deployment_rows[0],
+            "row": deployment_row,
         },
         "database_analytics_snapshots": {
             "table": analytics_table,
@@ -840,9 +915,36 @@ identity = {
     ],
     "migration_exception": table_record("generation", "polytao_jobs"),
     "sequences": sequences,
+    "bridge_projection": {
+        "schema": "md",
+        "table": "monomer_md_jobs",
+        "projection": "pre-0009-row-json-v1",
+        "state": "present",
+        "row_count": sum(
+            1 for line in bridge_projection_payload.splitlines() if line
+        ),
+        "content_sha256": (
+            "sha256:" + hashlib.sha256(bridge_projection_payload).hexdigest()
+        ),
+        "lease_columns": {
+            "state": "present" if lease_columns_present else "absent",
+            "non_null_counts": {
+                name: (
+                    lease_projection.get(f"{name}_non_null")
+                    if lease_columns_present
+                    else None
+                )
+                for name in (
+                    "worker_instance_id",
+                    "heartbeat_at",
+                    "lease_expires_at",
+                )
+            },
+        },
+    },
 }
 document = {
-    "schema_version": 4,
+    "schema_version": 5,
     **identity,
     "transaction_isolation": metadata["transaction_isolation"],
     "transaction_read_only": metadata["transaction_read_only"],

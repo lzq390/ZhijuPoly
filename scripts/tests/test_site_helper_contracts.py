@@ -160,13 +160,91 @@ class SiteHelperContractTests(unittest.TestCase):
                 ROOT / "ops/config/postgres-media-registry.json.example"
             ).read_text(encoding="utf-8")
         )
-        self.assertEqual(registry["schema_version"], 2)
-        self.assertIn(
+        self.assertEqual(registry["schema_version"], 3)
+        self.assertEqual(
+            registry["audit_runtime"]["postgres_uid"],
+            70,
+        )
+        self.assertEqual(
+            registry["audit_runtime"]["postgres_gid"],
+            70,
+        )
+        self.assertEqual(
+            registry["audit_runtime"]["postgres_image"],
             (
-                "/data/lzq/gith/nexpoly-runtime/legacy-takeover/"
-                "preserved-postgres-backups"
+                "docker.io/library/postgres@sha256:"
+                "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
             ),
+        )
+        self.assertTrue(
+            all(
+                (
+                    record.get("classification") == "nexpoly-db"
+                    and isinstance(record.get("databases"), list)
+                    and record["databases"]
+                )
+                or (
+                    record.get("classification") == "unsupported-blocking"
+                    and record.get("audit_method") == "unsupported-blocking"
+                    and record.get("databases") == []
+                )
+                for record in registry["expected_media"]
+            )
+        )
+        self.assertEqual(
             registry["discovery_boundary"]["backup_roots"],
+            [
+                "/data/lzq/gith/nexpoly/backups",
+                (
+                    "/data/lzq/gith/nexpoly-runtime/legacy-takeover/"
+                    "preserved-postgres-backups"
+                ),
+                "/data/lzq/recovery/nexpoly-postgres-media",
+                (
+                    "/data/lzq/recovery/"
+                    "nexpoly-pre-merge-20260717T090623Z/"
+                    "dev-0009-quarantine"
+                ),
+            ],
+        )
+        blockers = [
+            record["media_id"]
+            for record in registry["expected_media"]
+            if record["classification"] == "unsupported-blocking"
+        ]
+        self.assertEqual(len(blockers), 2)
+        self.assertTrue(
+            all("replace-with-every-discovered-backup" in item for item in blockers)
+        )
+        self.assertEqual(
+            [record["media_id"] for record in registry["expected_media"]],
+            sorted(
+                record["media_id"]
+                for record in registry["expected_media"]
+            ),
+        )
+        health = next(
+            record
+            for record in registry["expected_media"]
+            if record["database"] == "nexpoly_md_health_opt"
+        )
+        self.assertEqual(health["disposition"], "retained-private-isolated")
+        self.assertEqual(
+            health["audit_method"],
+            "isolated-volume-copy-read-only",
+        )
+        self.assertIsNone(health["pg_service"])
+        self.assertEqual(
+            registry["required_online_databases"],
+            [
+                {
+                    "stack": "nexpoly_dev",
+                    "media_id": (
+                        "docker-volume:"
+                        "nexpoly_dev_nexpoly_dev_postgres_data"
+                    ),
+                }
+            ],
         )
         helper = (
             ROOT / "ops/config/contract-0012-external-database-audit.example"
@@ -543,7 +621,7 @@ class SiteHelperContractTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(
             CONTRACTS.SiteHelperContractError,
-            "registry v2",
+            "schema v3",
         ):
             CONTRACTS.validate_external_database_audit(
                 document,
@@ -720,13 +798,30 @@ class SiteHelperContractTests(unittest.TestCase):
             CONTRACTS.GOVERNED_CONTROL_TABLES[1], 24, rows=0
         )
         sequences = []
-        for schema, sequence, owned_by in CONTRACTS.DATA_SEQUENCES:
+        for (
+            (schema, sequence, _owned_by),
+            expected_owner,
+        ) in zip(
+            CONTRACTS.DATA_SEQUENCES,
+            CONTRACTS.DATA_SEQUENCE_OWNERSHIP,
+            strict=True,
+        ):
             present = schema != "monomer_dft"
             sequences.append(
                 {
                     "schema": schema,
                     "sequence": sequence,
-                    "owned_by": owned_by,
+                    "ownership": (
+                        {
+                            "schema": expected_owner[0],
+                            "table": expected_owner[1],
+                            "column": expected_owner[2],
+                            "ordinal": expected_owner[3],
+                            "deptype": expected_owner[4],
+                        }
+                        if present
+                        else None
+                    ),
                     "state": "present" if present else "absent",
                     "data_type": "bigint" if present else None,
                     "start_value": 1 if present else None,
@@ -803,7 +898,7 @@ class SiteHelperContractTests(unittest.TestCase):
                 "direct_write_grants": [],
                 "effective_write_privileges": [],
             },
-            "digest_algorithm": "sha256-postgres-jsonb-copy-v3",
+            "digest_algorithm": "sha256-postgres-jsonb-copy-v4",
             "migration_ledger": [
                 {"version": version, "checksum": checksum}
                 for version, checksum in CONTRACTS.CANONICAL_MIGRATION_LEDGER[
@@ -836,9 +931,30 @@ class SiteHelperContractTests(unittest.TestCase):
                 rows=9,
             ),
             "sequences": sequences,
+            "bridge_projection": {
+                "schema": "md",
+                "table": "monomer_md_jobs",
+                "projection": "pre-0009-row-json-v1",
+                "state": "present",
+                "row_count": next(
+                    record["row_count"]
+                    for record in business_tables
+                    if record["schema"] == "md"
+                    and record["table"] == "monomer_md_jobs"
+                ),
+                "content_sha256": "sha256:" + "f" * 64,
+                "lease_columns": {
+                    "state": "present",
+                    "non_null_counts": {
+                        "worker_instance_id": 0,
+                        "heartbeat_at": 0,
+                        "lease_expires_at": 0,
+                    },
+                },
+            },
         }
         document = {
-            "schema_version": 4,
+            "schema_version": 5,
             **identity,
             "transaction_isolation": "repeatable read",
             "transaction_read_only": True,
@@ -936,6 +1052,146 @@ class SiteHelperContractTests(unittest.TestCase):
                 mutate(changed)
                 with self.assertRaises(CONTRACTS.SiteHelperContractError):
                     CONTRACTS.validate_mutable_data_audit(changed)
+
+        def reseal(value: dict[str, object]) -> None:
+            snapshot_identity = {
+                name: value[name]
+                for name in identity
+            }
+            value["snapshot_sha256"] = CONTRACTS.sha256_bytes(
+                CONTRACTS.canonical_json_bytes(snapshot_identity)
+            )
+
+        post_0013 = json.loads(json.dumps(document))
+        post_0013["migration_ledger"] = [
+            {"version": version, "checksum": checksum}
+            for version, checksum in CONTRACTS.CANONICAL_MIGRATION_LEDGER
+        ]
+        post_0013["migration_exception"] = table_record(
+            CONTRACTS.CONTRACT_0012_EXCEPTION_TABLE,
+            25,
+            present=False,
+        )
+        for record in post_0013["business_tables"]:
+            relation = (record["schema"], record["table"])
+            expected_schema = CONTRACTS.MONOMER_DFT_TABLE_SCHEMA_SHA256.get(
+                relation
+            )
+            if expected_schema is None:
+                continue
+            record.update(
+                state="present",
+                row_count=0,
+                schema_sha256=expected_schema,
+                content_sha256=CONTRACTS.EMPTY_POSTGRES_COPY_SHA256,
+            )
+        dft_sequence = post_0013["sequences"][-1]
+        dft_owner = CONTRACTS.DATA_SEQUENCE_OWNERSHIP[-1]
+        dft_sequence.update(
+            ownership={
+                "schema": dft_owner[0],
+                "table": dft_owner[1],
+                "column": dft_owner[2],
+                "ordinal": dft_owner[3],
+                "deptype": dft_owner[4],
+            },
+            state="present",
+            data_type="bigint",
+            start_value=1,
+            min_value=1,
+            max_value=9223372036854775807,
+            increment_by=1,
+            cache_size=1,
+            cycle=False,
+            last_value=1,
+            is_called=False,
+        )
+        reseal(post_0013)
+        self.assertEqual(
+            CONTRACTS.validate_mutable_data_audit(post_0013),
+            post_0013,
+        )
+        pristine = CONTRACTS.validate_monomer_dft_0013_creation(post_0013)
+        self.assertEqual(len(pristine["tables"]), 3)
+        self.assertEqual(pristine["sequence"], dft_sequence)
+
+        semantic_mutations = (
+            (
+                "missing-ownership",
+                lambda value: value["sequences"][-1].pop("ownership"),
+            ),
+            (
+                "same-name-orphan-sequence",
+                lambda value: value["sequences"][-1].update(
+                    ownership=None
+                ),
+            ),
+            (
+                "fabricated-auto-dependency",
+                lambda value: value["sequences"][-1]["ownership"].update(
+                    deptype="a"
+                ),
+            ),
+            (
+                "wrong-owner-ordinal",
+                lambda value: value["sequences"][-1]["ownership"].update(
+                    ordinal=1
+                ),
+            ),
+            (
+                "identity-attribute-removed",
+                lambda value: value["business_tables"][5].update(
+                    schema_sha256=(
+                        "sha256:"
+                        "f971871a61a107af1ed84650f763e0df"
+                        "53d2717f382baa0a27c4a559d79de24b"
+                    )
+                ),
+            ),
+            (
+                "sequence-cache-tamper",
+                lambda value: value["sequences"][-1].update(cache_size=2),
+            ),
+            (
+                "sequence-max-tamper",
+                lambda value: value["sequences"][-1].update(
+                    max_value=2147483647
+                ),
+            ),
+        )
+        for label, mutate in semantic_mutations:
+            with self.subTest(label=f"0013-{label}"):
+                changed = json.loads(json.dumps(post_0013))
+                mutate(changed)
+                reseal(changed)
+                with self.assertRaises(CONTRACTS.SiteHelperContractError):
+                    CONTRACTS.validate_mutable_data_audit(changed)
+
+        for label, mutation in (
+            ("last-value", {"last_value": 2}),
+            ("is-called", {"is_called": True}),
+        ):
+            with self.subTest(label=f"0013-pristine-{label}"):
+                changed = json.loads(json.dumps(post_0013))
+                changed["sequences"][-1].update(mutation)
+                reseal(changed)
+                CONTRACTS.validate_mutable_data_audit(changed)
+                with self.assertRaises(CONTRACTS.SiteHelperContractError):
+                    CONTRACTS.validate_monomer_dft_0013_creation(changed)
+
+    def test_mutable_helper_captures_identity_and_catalog_ownership(self) -> None:
+        helper = (
+            ROOT / "ops/config/deployment-mutable-data-audit.example"
+        ).read_text(encoding="utf-8")
+        for required in (
+            "'identity',a.attidentity",
+            "'generated',a.attgenerated",
+            "JOIN pg_catalog.pg_depend AS dependency",
+            "'ordinal',owner_attribute.attnum",
+            "'deptype',dependency.deptype",
+        ):
+            self.assertIn(required, helper)
+        self.assertNotIn("f\"'owned_by','{owned_by}',\"", helper)
 
     def test_cli_validate_never_changes_input(self) -> None:
         evidence = self.runtime / "active-jobs.json"

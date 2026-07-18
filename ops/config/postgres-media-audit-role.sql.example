@@ -1,6 +1,11 @@
 \set ON_ERROR_STOP on
 
--- Run once in each reviewed online database with both variables supplied:
+-- Run once in every connectable, non-template database declared by the
+-- media-registry v3 inventory, with both variables supplied. This includes
+-- adjacent databases such as "postgres"; the auditor proves those databases
+-- do not contain an undeclared Nexpoly migration ledger.
+-- Do not start or connect to retained-private-isolated media such as the
+-- side-dev health volume. Its disposable copy is audited as local postgres.
 --   psql -X -v audit_role=nexpoly_dev_auditor \
 --     -v audit_database=nexpoly_dev -f postgres-media-audit-role.sql
 -- Provision the role's login secret separately; never put it in this file.
@@ -30,9 +35,13 @@ ALTER ROLE :"audit_role" SET statement_timeout = '5min';
 ALTER ROLE :"audit_role" SET lock_timeout = '5s';
 
 GRANT CONNECT ON DATABASE :"audit_database" TO :"audit_role";
-GRANT USAGE ON SCHEMA governance TO :"audit_role";
-GRANT SELECT ON governance.schema_migrations TO :"audit_role";
 GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO :"audit_role";
+
+SELECT to_regclass('governance.schema_migrations') IS NOT NULL AS ledger_present \gset
+\if :ledger_present
+  GRANT USAGE ON SCHEMA governance TO :"audit_role";
+  GRANT SELECT ON governance.schema_migrations TO :"audit_role";
+\endif
 
 SELECT to_regclass('generation.polytao_jobs') IS NOT NULL AS legacy_present \gset
 \if :legacy_present

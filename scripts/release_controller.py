@@ -8774,6 +8774,34 @@ class PolytaoContractMaintenance:
         next_state: dict[str, Any],
     ) -> dict[str, Any]:
         candidate = self._prepare_current_state_candidate(next_state)
+        return self._seal_prepared_current_state_postcondition(
+            marker,
+            candidate,
+        )
+
+    def _seal_prepared_current_state_postcondition(
+        self,
+        marker: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Seal a deployment-specific candidate already validated in memory."""
+
+        if (
+            "current_state_postcondition" in marker
+            or "current_state_postcondition_sha256" in marker
+        ):
+            existing = self._sealed_state(
+                marker,
+                field="current_state_postcondition",
+                digest_field="current_state_postcondition_sha256",
+                label="current-state postcondition",
+                required=True,
+            )
+            if existing != candidate:
+                raise ReleaseError(
+                    "0012 marker current-state postcondition changed"
+                )
+            return existing
         marker["current_state_postcondition"] = candidate
         marker["current_state_postcondition_sha256"] = canonical_json_digest(
             candidate
@@ -8842,6 +8870,18 @@ class PolytaoContractMaintenance:
             )
         return status
 
+    def _persist_current_state(self, state: dict[str, Any]) -> None:
+        """Persist one validated state using the deployment format's writer."""
+
+        atomic_json(self.state_path, state)
+
+    def _validate_current_state_commit_candidate(
+        self,
+        marker: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> None:
+        """Run deployment-specific live checks immediately before the CAS."""
+
     def _write_current_state(self, state: dict[str, Any]) -> None:
         """Commit only the exact marker-sealed post-state from the exact pre-state."""
 
@@ -8858,6 +8898,7 @@ class PolytaoContractMaintenance:
             raise ReleaseError(
                 "0012 state commit differs from its sealed postcondition"
             )
+        self._validate_current_state_commit_candidate(marker, candidate)
         status = self._revalidate_current_state_authority(
             marker,
             require_postcondition=True,
@@ -8866,7 +8907,7 @@ class PolytaoContractMaintenance:
             return
         if status != "precondition":
             raise ReleaseError("0012 state commit precondition is invalid")
-        atomic_json(self.state_path, candidate)
+        self._persist_current_state(candidate)
         if (
             self._load_persisted_current_state() != postcondition
             or self._revalidate_current_state_authority(
@@ -8903,7 +8944,7 @@ class PolytaoContractMaintenance:
             return
         if status != "postcondition":
             raise ReleaseError("0012 rollback current-state authority is invalid")
-        atomic_json(self.state_path, precondition)
+        self._persist_current_state(precondition)
         if (
             self._load_persisted_current_state() != precondition
             or self._revalidate_current_state_authority(

@@ -121,6 +121,7 @@ ALIAS_AUDIT_NAMES = {
     "pg-restore.list",
     "isolated-postgres16-restore.json",
     "database-after.json",
+    "external-database-alias-transition.json",
     "AUDIT-MANIFEST.json",
 }
 ALIAS_BACKUP_NAMES = {
@@ -231,6 +232,9 @@ def _alias_evidence_files(
             audit_dir / "isolated-postgres16-restore.json"
         ),
         "audit/database-after.json": audit_dir / "database-after.json",
+        "audit/external-database-alias-transition.json": (
+            audit_dir / "external-database-alias-transition.json"
+        ),
         "backup/nexpoly-before.dump": backup_dir / "nexpoly-before.dump",
         "backup/nexpoly-before.dump.sha256": (
             backup_dir / "nexpoly-before.dump.sha256"
@@ -751,6 +755,12 @@ def load_production_0005_alias_gate(
     before = marker.get("before")
     mutation_intent = marker.get("mutation_intent")
     runtime_stop_fence = marker.get("runtime_stop_fence")
+    external_transition = marker.get(
+        "external_database_alias_transition"
+    )
+    external_transition_path = (
+        audit_dir / "external-database-alias-transition.json"
+    )
     dump_path = backup_dir / "nexpoly-before.dump"
     sidecar_path = backup_dir / "nexpoly-before.dump.sha256"
     _private_file_identity(dump_path)
@@ -769,6 +779,36 @@ def load_production_0005_alias_gate(
         or not isinstance(before, dict)
         or not isinstance(mutation_intent, dict)
         or not isinstance(runtime_stop_fence, dict)
+        or not isinstance(external_transition, dict)
+        or set(external_transition)
+        != {
+            "path",
+            "sha256",
+            "identity_sha256",
+            "before_state_sha256",
+            "after_state_sha256",
+            "descriptor_sha256",
+            "operation_id",
+            "kind",
+        }
+        or external_transition.get("path")
+        != str(external_transition_path)
+        or external_transition.get("sha256")
+        != sha256_file(external_transition_path)
+        or external_transition.get("operation_id") != operation_id
+        or external_transition.get("kind")
+        != "alias-0005-reconciliation"
+        or any(
+            not isinstance(external_transition.get(name), str)
+            or DIGEST_RE.fullmatch(external_transition[name]) is None
+            for name in (
+                "sha256",
+                "identity_sha256",
+                "before_state_sha256",
+                "after_state_sha256",
+                "descriptor_sha256",
+            )
+        )
         or (
             runtime_root == PRODUCTION_RUNTIME_ROOT
             and not _alias_bridge_authority_is_valid(runtime_root, identity)
@@ -836,6 +876,8 @@ def load_production_0005_alias_gate(
         or manifest.get("runtime_stop_fence") != runtime_stop_fence
         or manifest.get("runtime_stop_fence_sha256")
         != canonical_json_digest(runtime_stop_fence).removeprefix("sha256:")
+        or manifest.get("external_database_alias_transition")
+        != external_transition
         or manifest.get("files") != files
         or manifest.get("completed_at") != marker.get("completed_at")
         or set(manifest)
@@ -850,6 +892,7 @@ def load_production_0005_alias_gate(
             "isolated_restore",
             "runtime_stop_fence",
             "runtime_stop_fence_sha256",
+            "external_database_alias_transition",
             "binaries",
             "files",
             "completed_at",

@@ -401,6 +401,27 @@ class SelectorTests(unittest.TestCase):
             SELECTOR.canonical_json_bytes(after) + b"\n",
             0o600,
         )
+        external_transition_path = (
+            audit_dir / "external-database-alias-transition.json"
+        )
+        self._write(
+            external_transition_path,
+            SELECTOR.canonical_json_bytes(
+                {"schema_version": 1, "fixture": True}
+            )
+            + b"\n",
+            0o600,
+        )
+        external_transition = {
+            "path": str(external_transition_path),
+            "sha256": SELECTOR.sha256_file(external_transition_path),
+            "identity_sha256": "sha256:" + "1" * 64,
+            "before_state_sha256": "sha256:" + "2" * 64,
+            "after_state_sha256": "sha256:" + "3" * 64,
+            "descriptor_sha256": "sha256:" + "4" * 64,
+            "operation_id": operation_id,
+            "kind": "alias-0005-reconciliation",
+        }
         files = SELECTOR._alias_evidence_files(audit_dir, backup_dir)
         completed_at = "2026-07-17T00:00:01Z"
         runtime_stop_fence = {"fixture": True}
@@ -417,6 +438,7 @@ class SelectorTests(unittest.TestCase):
             "runtime_stop_fence_sha256": SELECTOR.canonical_json_digest(
                 runtime_stop_fence
             ).removeprefix("sha256:"),
+            "external_database_alias_transition": external_transition,
             "binaries": {"/fixture/bin": {"sha256": "b" * 64}},
             "files": files,
             "completed_at": completed_at,
@@ -450,6 +472,7 @@ class SelectorTests(unittest.TestCase):
                 "restore_dump_sha256": dump_sha,
             },
             "after": after,
+            "external_database_alias_transition": external_transition,
             "audit_manifest_sha256": SELECTOR.sha256_file(
                 audit_path
             ).removeprefix("sha256:"),

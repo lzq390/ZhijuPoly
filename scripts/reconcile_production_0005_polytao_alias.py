@@ -202,6 +202,7 @@ AUDIT_EVIDENCE_NAMES = {
     "pg-restore.list",
     "isolated-postgres16-restore.json",
     "database-after.json",
+    "external-database-alias-transition.json",
     "AUDIT-MANIFEST.json",
 }
 BACKUP_EVIDENCE_NAMES = {
@@ -1391,6 +1392,9 @@ class Reconciliation:
         self,
         control: Mapping[str, Any],
         source: Mapping[str, str],
+        *,
+        external_database_transition: object | None = None,
+        allow_external_transition_pending: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         try:
             module = self.bridge_controller_loader()
@@ -1403,6 +1407,12 @@ class Reconciliation:
                 controller.prepared_alias_bridge_authority(
                     control=control,
                     legacy_source=source,
+                    external_database_transition=(
+                        external_database_transition
+                    ),
+                    allow_external_transition_pending=(
+                        allow_external_transition_pending
+                    ),
                 )
             )
         except Exception as exc:
@@ -1433,15 +1443,55 @@ class Reconciliation:
                 raise ReconcileError("ledger-alias marker belongs to another operation")
             marker_phase = phase
         control, source, binaries = self.identities()
+        external_transition = (
+            self._external_database_alias_transition_pair(existing_marker)
+            if existing_marker is not None
+            and existing_marker.get(
+                "external_database_alias_transition"
+            )
+            is not None
+            else None
+        )
         bridge_authority, takeover_runtime = self._bridge_authority(
-            control, source
+            control,
+            source,
+            external_database_transition=external_transition,
+            allow_external_transition_pending=(
+                existing_marker is not None
+                and marker_phase == "mutation-commit-started"
+                and external_transition is None
+            ),
         )
         runtime_stop_fence = self._runtime_stop_fence()
         self._require_takeover_runtime_match(
             takeover_runtime,
             runtime_stop_fence,
         )
-        inventory = self._database_inventory(phase="pre")
+        if marker_phase == "mutation-commit-started":
+            raw_inventory = _psql_json(
+                self.runner,
+                self._pg_environment,
+                INVENTORY_SQL,
+            )
+            try:
+                inventory = validate_inventory(
+                    raw_inventory,
+                    expected_phase="post",
+                )
+            except ReconcileError:
+                inventory = validate_inventory(
+                    raw_inventory,
+                    expected_phase="pre",
+                )
+        else:
+            inventory = self._database_inventory(
+                phase=(
+                    "post"
+                    if marker_phase
+                    in {"mutation-committed", "completed"}
+                    else "pre"
+                )
+            )
         image = self._image_identity()
         expected_identity = _marker_identity(
             operation_id=self.operation_id,
@@ -1575,6 +1625,10 @@ class Reconciliation:
             ("mutation-intent", "mutation_intent"),
             ("mutation-commit-started", "after"),
             ("mutation-committed", "after"),
+            (
+                "mutation-committed",
+                "external_database_alias_transition",
+            ),
             ("completed", "audit_manifest_sha256"),
             ("completed", "completed_at"),
         )
@@ -1592,12 +1646,54 @@ class Reconciliation:
             "isolated_restore",
             "mutation_intent",
             "after",
+            "external_database_alias_transition",
         ):
             if field in marker and not isinstance(marker[field], dict):
                 raise ReconcileError(f"ledger-alias marker {field} evidence is malformed")
         if marker.get("runtime_stop_fence_history") not in (None, []):
             raise ReconcileError(
                 "ledger-alias runtime fence adoption history is forbidden"
+            )
+        external_transition = marker.get(
+            "external_database_alias_transition"
+        )
+        if external_transition is not None and (
+            not isinstance(external_transition, dict)
+            or set(external_transition)
+            != {
+                "path",
+                "sha256",
+                "identity_sha256",
+                "before_state_sha256",
+                "after_state_sha256",
+                "descriptor_sha256",
+                "operation_id",
+                "kind",
+            }
+            or external_transition.get("path")
+            != str(
+                self.audit_dir
+                / "external-database-alias-transition.json"
+            )
+            or external_transition.get("operation_id")
+            != self.operation_id
+            or external_transition.get("kind")
+            != "alias-0005-reconciliation"
+            or any(
+                not isinstance(external_transition.get(name), str)
+                or DIGEST_RE.fullmatch(external_transition[name])
+                is None
+                for name in (
+                    "sha256",
+                    "identity_sha256",
+                    "before_state_sha256",
+                    "after_state_sha256",
+                    "descriptor_sha256",
+                )
+            )
+        ):
+            raise ReconcileError(
+                "ledger-alias external transition reference is malformed"
             )
         return phase
 
@@ -2513,8 +2609,16 @@ class Reconciliation:
         self, marker: Mapping[str, Any], binaries: Mapping[str, Any]
     ) -> None:
         control, source, current_binaries = self.identities()
+        external_transition = (
+            self._external_database_alias_transition_pair(marker)
+            if marker.get("external_database_alias_transition")
+            is not None
+            else None
+        )
         bridge_authority, takeover_runtime = self._bridge_authority(
-            control, source
+            control,
+            source,
+            external_database_transition=external_transition,
         )
         expected = _marker_identity(
             operation_id=self.operation_id,
@@ -2546,6 +2650,10 @@ class Reconciliation:
                 self.audit_dir / "isolated-postgres16-restore.json"
             ),
             "audit/database-after.json": self.audit_dir / "database-after.json",
+            "audit/external-database-alias-transition.json": (
+                self.audit_dir
+                / "external-database-alias-transition.json"
+            ),
             "backup/nexpoly-before.dump": self.dump_path,
             "backup/nexpoly-before.dump.sha256": self.dump_sha_path,
         }
@@ -2558,6 +2666,163 @@ class Reconciliation:
                 "mode": stat.S_IMODE(metadata.st_mode),
             }
         return result
+
+    def _external_database_alias_transition_pair(
+        self,
+        marker: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        identity = marker.get("identity")
+        authority = (
+            identity.get("bridge_authority")
+            if isinstance(identity, Mapping)
+            else None
+        )
+        if not isinstance(authority, dict):
+            raise ReconcileError(
+                "ledger-alias bridge authority is unavailable"
+            )
+        path = self.audit_dir / "external-database-alias-transition.json"
+        reference = marker.get("external_database_alias_transition")
+        if (
+            not isinstance(reference, dict)
+            or set(reference)
+            != {
+                "path",
+                "sha256",
+                "identity_sha256",
+                "before_state_sha256",
+                "after_state_sha256",
+                "descriptor_sha256",
+                "operation_id",
+                "kind",
+            }
+            or reference.get("path") != str(path)
+            or reference.get("operation_id") != self.operation_id
+            or reference.get("kind") != "alias-0005-reconciliation"
+            or reference.get("sha256")
+            != "sha256:" + sha256_file(path)
+        ):
+            raise ReconcileError(
+                "ledger-alias external transition reference is invalid"
+            )
+        try:
+            module = self.bridge_controller_loader()
+            descriptor_record = authority.get("descriptor")
+            if not isinstance(descriptor_record, dict):
+                raise ReconcileError(
+                    "ledger-alias descriptor authority is malformed"
+                )
+            descriptor_path = Path(str(descriptor_record.get("path")))
+            descriptor = module.validate_descriptor(
+                module.load_private_json(descriptor_path)
+            )
+            pair = module.validate_external_database_alias_pair(
+                module.load_private_json(path),
+                before_binding=descriptor["external_database_audit"],
+            )
+            if (
+                pair["descriptor_sha256"]
+                != descriptor_record.get("sha256")
+                or reference["identity_sha256"]
+                != pair["identity_sha256"]
+                or reference["before_state_sha256"]
+                != pair["before_state_sha256"]
+                or reference["after_state_sha256"]
+                != pair["after_binding"]["state_sha256"]
+                or reference["descriptor_sha256"]
+                != pair["descriptor_sha256"]
+            ):
+                raise ReconcileError(
+                    "ledger-alias external transition belongs to "
+                    "another descriptor or state"
+                )
+        except ReconcileError:
+            raise
+        except Exception as exc:
+            raise ReconcileError(
+                "post-alias external database transition is invalid"
+            ) from exc
+        return dict(pair)
+
+    def _ensure_external_database_alias_transition(
+        self,
+        marker: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Seal or recover the post-COMMIT external media transition."""
+
+        if marker.get("external_database_alias_transition") is not None:
+            self._external_database_alias_transition_pair(marker)
+            return dict(marker["external_database_alias_transition"])
+        identity = marker.get("identity")
+        authority = (
+            identity.get("bridge_authority")
+            if isinstance(identity, Mapping)
+            else None
+        )
+        if not isinstance(authority, dict):
+            raise ReconcileError(
+                "ledger-alias bridge authority is unavailable"
+            )
+        path = self.audit_dir / "external-database-alias-transition.json"
+        try:
+            module = self.bridge_controller_loader()
+            descriptor_record = authority.get("descriptor")
+            if not isinstance(descriptor_record, dict):
+                raise ReconcileError(
+                    "ledger-alias descriptor authority is malformed"
+                )
+            descriptor_path = Path(str(descriptor_record.get("path")))
+            descriptor = module.validate_descriptor(
+                module.load_private_json(descriptor_path)
+            )
+            if path.exists() or path.is_symlink():
+                pair = module.validate_external_database_alias_pair(
+                    module.load_private_json(path),
+                    before_binding=descriptor[
+                        "external_database_audit"
+                    ],
+                )
+            else:
+                controller = module.PullDeployController(
+                    PRODUCTION_ROOT,
+                    RUNTIME_ROOT,
+                    apply=False,
+                )
+                pair = (
+                    controller.capture_alias_external_database_transition(
+                        bridge_authority=authority,
+                        alias_operation_id=self.operation_id,
+                    )
+                )
+                atomic_json(path, pair)
+                if module.load_private_json(path) != pair:
+                    raise ReconcileError(
+                        "ledger-alias external transition did not seal exactly"
+                    )
+            if (
+                pair["descriptor_sha256"]
+                != descriptor_record.get("sha256")
+            ):
+                raise ReconcileError(
+                    "ledger-alias external transition belongs to "
+                    "another descriptor"
+                )
+        except ReconcileError:
+            raise
+        except Exception as exc:
+            raise ReconcileError(
+                "post-alias external database transition is invalid"
+            ) from exc
+        return {
+            "path": str(path),
+            "sha256": "sha256:" + sha256_file(path),
+            "identity_sha256": pair["identity_sha256"],
+            "before_state_sha256": pair["before_state_sha256"],
+            "after_state_sha256": pair["after_binding"]["state_sha256"],
+            "descriptor_sha256": pair["descriptor_sha256"],
+            "operation_id": pair["operation_id"],
+            "kind": pair["kind"],
+        }
 
     def _finalize(
         self,
@@ -2603,6 +2868,9 @@ class Reconciliation:
             "runtime_stop_fence_sha256": sha256_bytes(
                 canonical_json_bytes(marker["runtime_stop_fence"])
             ),
+            "external_database_alias_transition": marker[
+                "external_database_alias_transition"
+            ],
             "binaries": dict(binaries),
             "files": files,
             "completed_at": completed_at,
@@ -2665,6 +2933,8 @@ class Reconciliation:
             != sha256_bytes(
                 canonical_json_bytes(marker.get("runtime_stop_fence"))
             )
+            or audit.get("external_database_alias_transition")
+            != marker.get("external_database_alias_transition")
             or audit.get("binaries") != binaries
             or marker.get("audit_manifest_sha256") != sha256_file(audit_path)
         ):
@@ -2700,8 +2970,39 @@ class Reconciliation:
             self._conflicting_markers()
             self._prepare_roots()
             control, source, binaries = self.identities()
+            existing_marker: dict[str, Any] | None = None
+            existing_phase: str | None = None
+            if self.marker_path.exists() or self.marker_path.is_symlink():
+                existing_marker = load_private_json(self.marker_path)
+                existing_phase = self._validate_marker_shape(
+                    existing_marker
+                )
+                if (
+                    existing_marker["identity"]["operation_id"]
+                    != self.operation_id
+                ):
+                    raise ReconcileError(
+                        "ledger-alias marker belongs to another identity"
+                    )
+            external_transition = (
+                self._external_database_alias_transition_pair(
+                    existing_marker
+                )
+                if existing_marker is not None
+                and existing_marker.get(
+                    "external_database_alias_transition"
+                )
+                is not None
+                else None
+            )
             bridge_authority, takeover_runtime = self._bridge_authority(
-                control, source
+                control,
+                source,
+                external_database_transition=external_transition,
+                allow_external_transition_pending=(
+                    existing_phase == "mutation-commit-started"
+                    and external_transition is None
+                ),
             )
             image = self._image_identity()
             identity = _marker_identity(
@@ -2723,7 +3024,6 @@ class Reconciliation:
                 with self.session_factory(self._pg_environment) as session:
                     try:
                         database_phase, locked = self._begin_recovery_locked(session)
-                        self._require_execution_identity(marker, binaries)
                         if database_phase == "post":
                             if MARKER_PHASE_INDEX[phase] < MARKER_PHASE_INDEX[
                                 "mutation-intent"
@@ -2758,20 +3058,42 @@ class Reconciliation:
                                 raise ReconcileError(
                                     "recovered post-commit inventory differs"
                                 )
+                            session.command("COMMIT")
+                            transition = (
+                                self._ensure_external_database_alias_transition(
+                                    marker
+                                )
+                            )
                             self._write_marker(
                                 marker,
                                 "mutation-committed",
                                 after=locked,
                                 recovered=True,
+                                external_database_alias_transition=(
+                                    transition
+                                ),
+                            )
+                            fresh = self._begin_post_locked(
+                                session,
+                                advisory_already_held=True,
+                            )
+                            _require_post_matches_before(
+                                marker.get("before"),
+                                fresh,
+                            )
+                            self._require_execution_identity(
+                                marker,
+                                binaries,
                             )
                             result = self._finalize(
                                 marker,
                                 after=locked,
-                                fresh=locked,
+                                fresh=fresh,
                                 binaries=binaries,
                             )
                             session.command("COMMIT")
                             return result
+                        self._require_execution_identity(marker, binaries)
                         if phase in {"mutation-committed", "completed"}:
                             raise ReconcileError(
                                 "committed ledger-alias marker has pre-mutation database"
@@ -2844,7 +3166,17 @@ class Reconciliation:
                     _require_post_matches_before(before, after)
                     self._write_marker(marker, "mutation-commit-started", after=after)
                     session.command("COMMIT")
-                    self._write_marker(marker, "mutation-committed", after=after)
+                    transition = (
+                        self._ensure_external_database_alias_transition(
+                            marker
+                        )
+                    )
+                    self._write_marker(
+                        marker,
+                        "mutation-committed",
+                        after=after,
+                        external_database_alias_transition=transition,
+                    )
                     fresh = self._begin_post_locked(
                         session, advisory_already_held=True
                     )

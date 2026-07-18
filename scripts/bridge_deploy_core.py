@@ -49,8 +49,8 @@ REQUIRED_LEDGER_ORDER = ("pre-0012", "post-0012", "post-0013")
 REQUIRED_LEDGER_NAMES = set(REQUIRED_LEDGER_ORDER)
 EXTERNAL_DATABASE_AUDIT_POLICY = {
     "schema_version": 1,
-    "evidence_schema_version": 2,
-    "registry_schema_version": 2,
+    "evidence_schema_version": 3,
+    "registry_schema_version": 3,
     "require_exact_registry_digest": True,
     "require_fresh_snapshot": True,
 }
