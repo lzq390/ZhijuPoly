@@ -232,6 +232,16 @@ relax the fixed PG16 runtime or permit a Nexpoly database/backup to be started
 or restored under another major. A partial signature or an unsupported
 classification blocks deployable evidence. Reviewed non-PG
 content is hashed and excluded from Nexpoly migration, never silently ignored.
+Valid custom/tar dumps that contain only an adjacent PostgreSQL system or
+administrative database may be classified `postgres_backup` plus
+`adjacent-record-only`. That path never restores, starts, mounts, or passes the
+source to Docker: it opens the file through the fixed private-root
+`openat`/`O_NOFOLLOW` chain and CAS-seals format, path, device, inode, size,
+nanosecond mtime, mode, owner, and complete digest before and after. Unknown,
+partial, or magic-mismatched formats still fail discovery or require an
+explicit non-PG/blocking review. Nexpoly logical dumps remain
+`isolated-backup-restore-read-only`; record-only classification cannot replace
+their disposable restore and ledger audit.
 An exited PostgreSQL-candidate container may retain an empty or otherwise
 complete non-PG volume at its former PGDATA mount only when the registry
 explicitly classifies that volume as `reviewed-non-pg`: every attachment and

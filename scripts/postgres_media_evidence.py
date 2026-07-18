@@ -3031,6 +3031,7 @@ def load_registry(
             and method
             not in {
                 "isolated-backup-restore-read-only",
+                "adjacent-record-only",
                 "unsupported-blocking",
             }
             or kind == "container_bind"
@@ -3077,8 +3078,16 @@ def load_registry(
             or classification == "adjacent-record-only"
             and (
                 method != "adjacent-record-only"
-                or kind not in {"docker_volume", "container_bind"}
-                or source_postgres_major is None
+                or kind
+                not in {
+                    "docker_volume",
+                    "container_bind",
+                    "postgres_backup",
+                }
+                or kind == "postgres_backup"
+                and source_postgres_major is not None
+                or kind != "postgres_backup"
+                and source_postgres_major is None
             )
             or classification == "reviewed-non-pg"
             and (
@@ -4277,17 +4286,24 @@ def discover_media(
         if descriptor.classification in {
             "nexpoly-db",
             "adjacent-record-only",
-        } and (
-            value.signature not in {"postgres", "postgres-backup"}
-            or (
-                value.kind != "postgres_backup"
-                and value.postgres_major
-                != descriptor.source_postgres_major
-            )
-        ):
-            raise MediaEvidenceError(
-                "PostgreSQL media signature or major differs from registry"
-            )
+        }:
+            if (
+                value.kind == "postgres_backup"
+                and (
+                    value.signature != "postgres-backup"
+                    or value.postgres_major is not None
+                    or descriptor.source_postgres_major is not None
+                )
+                or value.kind != "postgres_backup"
+                and (
+                    value.signature != "postgres"
+                    or value.postgres_major
+                    != descriptor.source_postgres_major
+                )
+            ):
+                raise MediaEvidenceError(
+                    "PostgreSQL media signature or major differs from registry"
+                )
         if descriptor.classification == "reviewed-non-pg" and (
             value.signature != "non-postgres"
             or value.postgres_major is not None
@@ -6729,6 +6745,7 @@ def _record_only_medium(
     source: DiscoveredMedia,
     workspace: Path,
     *,
+    policy: DiscoveryPolicy,
     operation: ScratchOperation,
     resource_prefix: str,
     auditor_sha256: str,
@@ -6825,6 +6842,49 @@ def _record_only_medium(
         isolation = {
             "source_opened_with_openat_no_follow": True,
             "source_passed_to_docker": False,
+            "content_cas_verified": True,
+        }
+    elif source.kind == "postgres_backup":
+        if (
+            descriptor.classification != "adjacent-record-only"
+            or descriptor.audit_method != "adjacent-record-only"
+            or source.signature != "postgres-backup"
+            or source.postgres_major is not None
+            or source.backup_format
+            not in {"postgres-custom-v1", "postgres-tar-v1"}
+        ):
+            raise MediaEvidenceError(
+                "adjacent PostgreSQL backup identity is invalid"
+            )
+        path = Path(source.locator)
+        backup_root = _find_backup_root(path, policy)
+        first_descriptor = open_private_regular(path, root=backup_root)
+        try:
+            before = _fd_identity(
+                first_descriptor,
+                path,
+                include_digest=True,
+            )
+        finally:
+            os.close(first_descriptor)
+        second_descriptor = open_private_regular(path, root=backup_root)
+        try:
+            after = _fd_identity(
+                second_descriptor,
+                path,
+                include_digest=True,
+            )
+        finally:
+            os.close(second_descriptor)
+        before = {**before, "format": source.backup_format}
+        after = {**after, "format": source.backup_format}
+        before_digest = str(before["sha256"])
+        after_digest = str(after["sha256"])
+        algorithm = "sha256-file-v1"
+        isolation = {
+            "source_opened_with_openat_no_follow": True,
+            "source_passed_to_docker": False,
+            "source_started_as_postgres": False,
             "content_cas_verified": True,
         }
     else:
@@ -7072,6 +7132,7 @@ def build_evidence(
                     descriptor,
                     source,
                     workspace,
+                    policy=policy,
                     operation=operation,
                     resource_prefix=f"medium-{index:04d}-record",
                     auditor_sha256=auditor_sha256,

@@ -3057,6 +3057,7 @@ def _external_record_only_medium_v3(
         or kind not in {
             "docker_volume",
             "container_bind",
+            "postgres_backup",
             "reviewed_file",
         }
         or classification
@@ -3113,16 +3114,31 @@ def _external_record_only_medium_v3(
         algorithm = (
             "docker-volume-tree-sha256-v1"
             if kind == "docker_volume"
+            else "sha256-file-v1"
+            if kind == "postgres_backup"
             else "private-bind-tree-sha256-v1"
         )
         if (
-            kind not in {"docker_volume", "container_bind"}
-            or signature.get("state") != "postgres"
-            or isinstance(signature.get("major"), bool)
-            or not isinstance(signature.get("major"), int)
-            or not ADJACENT_POSTGRES_MAJOR_MIN
-            <= signature["major"]
-            <= ADJACENT_POSTGRES_MAJOR_MAX
+            kind
+            not in {
+                "docker_volume",
+                "container_bind",
+                "postgres_backup",
+            }
+            or kind == "postgres_backup"
+            and (
+                signature.get("state") != "postgres-backup"
+                or signature.get("major") is not None
+            )
+            or kind != "postgres_backup"
+            and (
+                signature.get("state") != "postgres"
+                or isinstance(signature.get("major"), bool)
+                or not isinstance(signature.get("major"), int)
+                or not ADJACENT_POSTGRES_MAJOR_MIN
+                <= signature["major"]
+                <= ADJACENT_POSTGRES_MAJOR_MAX
+            )
         ):
             raise SiteHelperContractError(
                 "adjacent PostgreSQL record-only signature differs"
@@ -3147,10 +3163,17 @@ def _external_record_only_medium_v3(
         raise SiteHelperContractError(
             "record-only content identity algorithm differs"
         )
-    _require_digest(
+    source_digest = _require_digest(
         record.get("source_content_sha256"),
         "record-only source content digest",
     )
+    if (
+        kind == "postgres_backup"
+        and before.get("sha256") != source_digest
+    ):
+        raise SiteHelperContractError(
+            "record-only PostgreSQL backup content digest differs"
+        )
     isolation = (
         {
             "source_mounted_read_only": True,
@@ -3164,6 +3187,13 @@ def _external_record_only_medium_v3(
             "content_cas_verified": True,
         }
         if kind == "container_bind"
+        else {
+            "source_opened_with_openat_no_follow": True,
+            "source_passed_to_docker": False,
+            "source_started_as_postgres": False,
+            "content_cas_verified": True,
+        }
+        if kind == "postgres_backup"
         else {
             "source_opened_with_openat_no_follow": True,
             "source_passed_to_docker": False,

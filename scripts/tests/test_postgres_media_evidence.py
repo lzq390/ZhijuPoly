@@ -419,6 +419,52 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
                 private_root=self.config,
             )
 
+    def test_adjacent_system_backup_has_no_fabricated_database_inventory(
+        self,
+    ) -> None:
+        value = self.valid_document()
+        backup = self.backup_a / "postgres.dump"
+        adjacent = {
+            **descriptor(
+                f"postgres-backup:{backup}",
+                "none",
+                disposition="excluded-from-nexpoly-migration",
+                method="adjacent-record-only",
+                user="none",
+                service=None,
+                classification="adjacent-record-only",
+            ),
+            "databases": [],
+        }
+        value["expected_media"].append(adjacent)
+        value["expected_media"].sort(key=lambda record: record["media_id"])
+        self.write_registry(value)
+        loaded = MEDIA.load_registry(
+            self.registry,
+            policy=self.policy,
+            private_root=self.config,
+        )
+        selected = next(
+            item
+            for item in loaded.descriptors
+            if item.media_id == adjacent["media_id"]
+        )
+        self.assertEqual(selected.kind, "postgres_backup")
+        self.assertIsNone(selected.source_postgres_major)
+        self.assertEqual(selected.databases, ())
+
+        value["expected_media"][-1]["source_postgres_major"] = 16
+        self.write_registry(value)
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "audit method conflicts",
+        ):
+            MEDIA.load_registry(
+                self.registry,
+                policy=self.policy,
+                private_root=self.config,
+            )
+
     def test_private_open_rejects_group_access_hardlinks_and_symlink_parent(self) -> None:
         value = self.valid_document()
         self.write_registry(value)
@@ -1073,6 +1119,7 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
             current,
             source,
             self.workspace,
+            policy=MEDIA.DiscoveryPolicy(backup_roots=(self.root,)),
             operation=self.operation,
             resource_prefix="medium-record",
             auditor_sha256="sha256:" + "6" * 64,
@@ -1140,6 +1187,7 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
                 current,
                 source,
                 self.workspace,
+                policy=MEDIA.DiscoveryPolicy(backup_roots=(self.root,)),
                 operation=self.operation,
                 resource_prefix="medium-record",
                 auditor_sha256="sha256:" + "6" * 64,
@@ -1155,6 +1203,106 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
             volume_names=["adjacent-pg18"],
             container_ids=[],
         )
+
+    def test_adjacent_system_backup_is_content_sealed_without_restore(
+        self,
+    ) -> None:
+        backups = self.root / "backups"
+        private_directory(backups)
+        path = backups / "postgres.dump"
+        private_file(path, b"PGDMP" + b"\0" * 1024)
+        media_id = f"postgres-backup:{path}"
+        current = MEDIA.MediaDescriptor(
+            media_id=media_id,
+            kind="postgres_backup",
+            database="none",
+            database_user="none",
+            disposition="excluded-from-nexpoly-migration",
+            audit_method="adjacent-record-only",
+            pg_service=None,
+            classification="adjacent-record-only",
+            source_postgres_major=None,
+        )
+        source = MEDIA.DiscoveredMedia(
+            media_id=media_id,
+            kind="postgres_backup",
+            locator=str(path),
+            data_subpath=".",
+            attached=(),
+            backup_format="postgres-custom-v1",
+            signature="postgres-backup",
+            postgres_major=None,
+        )
+        record = MEDIA._record_only_medium(
+            MEDIA.CommandRunner(),
+            self.registry,
+            current,
+            source,
+            self.workspace,
+            policy=MEDIA.DiscoveryPolicy(backup_roots=(backups,)),
+            operation=self.operation,
+            resource_prefix="medium-record",
+            auditor_sha256="sha256:" + "6" * 64,
+            audit_image_id="sha256:" + "5" * 64,
+            service_file_sha256="sha256:" + "7" * 64,
+            audited_at="2026-07-17T12:00:00Z",
+        )
+        validated, _runtime = (
+            CONTRACTS._external_record_only_medium_v3(
+                record,
+                volume_names=[],
+                container_ids=[],
+            )
+        )
+        self.assertEqual(
+            validated["source_identity_before"]["format"],
+            "postgres-custom-v1",
+        )
+        self.assertEqual(
+            validated["source_content_sha256"],
+            validated["source_identity_before"]["sha256"],
+        )
+        self.assertEqual(
+            validated["audit"]["isolation"],
+            {
+                "source_opened_with_openat_no_follow": True,
+                "source_passed_to_docker": False,
+                "source_started_as_postgres": False,
+                "content_cas_verified": True,
+            },
+        )
+
+        tampered = copy.deepcopy(record)
+        tampered["source_content_sha256"] = "sha256:" + "9" * 64
+        with self.assertRaisesRegex(
+            CONTRACTS.SiteHelperContractError,
+            "content digest differs",
+        ):
+            CONTRACTS._external_record_only_medium_v3(
+                tampered,
+                volume_names=[],
+                container_ids=[],
+            )
+
+        os.chmod(path, 0o640)
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "private file is unsafe",
+        ):
+            MEDIA._record_only_medium(
+                MEDIA.CommandRunner(),
+                self.registry,
+                current,
+                source,
+                self.workspace,
+                policy=MEDIA.DiscoveryPolicy(backup_roots=(backups,)),
+                operation=self.operation,
+                resource_prefix="medium-record-unsafe",
+                auditor_sha256="sha256:" + "6" * 64,
+                audit_image_id="sha256:" + "5" * 64,
+                service_file_sha256="sha256:" + "7" * 64,
+                audited_at="2026-07-17T12:00:00Z",
+            )
 
 
 class FakeDockerRunner(MEDIA.CommandRunner):
