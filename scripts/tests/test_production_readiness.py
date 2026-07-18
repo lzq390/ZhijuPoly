@@ -109,6 +109,10 @@ def policy() -> dict[str, object]:
             READINESS.bridge_deploy_core.FINAL_MIGRATION
         ),
         "accepted_migration_ledgers": registry,
+        "external_database_audit": {
+            **READINESS.bridge_deploy_core.EXTERNAL_DATABASE_AUDIT_POLICY,
+            "media_registry_sha256": digest("f"),
+        },
         "required_ci_jobs": sorted(
             READINESS.bridge_deploy_core.REQUIRED_CI_JOBS
         ),
