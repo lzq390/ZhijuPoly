@@ -86,6 +86,16 @@ class Settings:
         monomer_md_rate_limit_per_ip_per_minute: int | None = None,
         monomer_md_rate_limit_window_seconds: int | None = None,
         monomer_md_max_active_jobs: int | None = None,
+        monomer_dft_worker_base_url: str | None = None,
+        monomer_dft_worker_uds: str | None = None,
+        monomer_dft_worker_timeout_seconds: float | None = None,
+        monomer_dft_submit_enabled: bool | None = None,
+        monomer_dft_max_active_jobs: int | None = None,
+        monomer_dft_reconcile_interval_seconds: float | None = None,
+        monomer_dft_artifact_retention_days: int | None = None,
+        monomer_dft_validation_concurrency: int | None = None,
+        monomer_dft_download_max_concurrent: int | None = None,
+        monomer_dft_download_spool_root: str | None = None,
         allowed_origins: str | None = None,
         model_enabled: bool | None = None,
         model_dir: str | None = None,
@@ -336,6 +346,85 @@ class Settings:
             else os.getenv(
                 "MONOMER_MD_MAX_ACTIVE_JOBS",
                 str(env_values.get("MONOMER_MD_MAX_ACTIVE_JOBS", "1")),
+            )
+        )
+        raw_monomer_dft_worker_base_url = monomer_dft_worker_base_url
+        if raw_monomer_dft_worker_base_url is None:
+            raw_monomer_dft_worker_base_url = os.getenv(
+                "MONOMER_DFT_WORKER_BASE_URL",
+                env_values.get("MONOMER_DFT_WORKER_BASE_URL", "http://monomer-dft-worker"),
+            )
+        raw_monomer_dft_worker_uds = monomer_dft_worker_uds
+        if raw_monomer_dft_worker_uds is None:
+            raw_monomer_dft_worker_uds = os.getenv(
+                "MONOMER_DFT_WORKER_UDS",
+                env_values.get("MONOMER_DFT_WORKER_UDS", ""),
+            )
+        raw_monomer_dft_worker_timeout_seconds = (
+            str(monomer_dft_worker_timeout_seconds)
+            if monomer_dft_worker_timeout_seconds is not None
+            else os.getenv(
+                "MONOMER_DFT_WORKER_TIMEOUT_SECONDS",
+                str(env_values.get("MONOMER_DFT_WORKER_TIMEOUT_SECONDS", "30")),
+            )
+        )
+        raw_monomer_dft_submit_enabled = monomer_dft_submit_enabled
+        if raw_monomer_dft_submit_enabled is None:
+            raw_monomer_dft_submit_enabled = os.getenv(
+                "MONOMER_DFT_SUBMIT_ENABLED",
+                str(env_values.get("MONOMER_DFT_SUBMIT_ENABLED", "false")),
+            ).strip().lower() in {"1", "true", "yes", "on"}
+        raw_monomer_dft_max_active_jobs = (
+            str(monomer_dft_max_active_jobs)
+            if monomer_dft_max_active_jobs is not None
+            else os.getenv(
+                "MONOMER_DFT_MAX_ACTIVE_JOBS",
+                str(env_values.get("MONOMER_DFT_MAX_ACTIVE_JOBS", "9")),
+            )
+        )
+        raw_monomer_dft_reconcile_interval_seconds = (
+            str(monomer_dft_reconcile_interval_seconds)
+            if monomer_dft_reconcile_interval_seconds is not None
+            else os.getenv(
+                "MONOMER_DFT_RECONCILE_INTERVAL_SECONDS",
+                str(env_values.get("MONOMER_DFT_RECONCILE_INTERVAL_SECONDS", "2")),
+            )
+        )
+        raw_monomer_dft_artifact_retention_days = (
+            str(monomer_dft_artifact_retention_days)
+            if monomer_dft_artifact_retention_days is not None
+            else os.getenv(
+                "MONOMER_DFT_ARTIFACT_RETENTION_DAYS",
+                str(env_values.get("MONOMER_DFT_ARTIFACT_RETENTION_DAYS", "30")),
+            )
+        )
+        raw_monomer_dft_validation_concurrency = (
+            str(monomer_dft_validation_concurrency)
+            if monomer_dft_validation_concurrency is not None
+            else os.getenv(
+                "MONOMER_DFT_VALIDATION_CONCURRENCY",
+                str(env_values.get("MONOMER_DFT_VALIDATION_CONCURRENCY", "2")),
+            )
+        )
+        raw_monomer_dft_download_max_concurrent = (
+            str(monomer_dft_download_max_concurrent)
+            if monomer_dft_download_max_concurrent is not None
+            else os.getenv(
+                "MONOMER_DFT_DOWNLOAD_MAX_CONCURRENT",
+                str(env_values.get("MONOMER_DFT_DOWNLOAD_MAX_CONCURRENT", "2")),
+            )
+        )
+        raw_monomer_dft_download_spool_root = (
+            monomer_dft_download_spool_root
+            if monomer_dft_download_spool_root is not None
+            else os.getenv(
+                "MONOMER_DFT_DOWNLOAD_SPOOL_ROOT",
+                str(
+                    env_values.get(
+                        "MONOMER_DFT_DOWNLOAD_SPOOL_ROOT",
+                        "/tmp/monomer-dft-downloads",
+                    )
+                ),
             )
         )
         raw_allowed_origins = allowed_origins or os.getenv(
@@ -687,6 +776,48 @@ class Settings:
         self.monomer_md_rate_limit_per_ip_per_minute = max(1, int(raw_monomer_md_rate_limit_per_ip_per_minute))
         self.monomer_md_rate_limit_window_seconds = max(1, int(raw_monomer_md_rate_limit_window_seconds))
         self.monomer_md_max_active_jobs = max(1, int(raw_monomer_md_max_active_jobs))
+        self.monomer_dft_worker_base_url = raw_monomer_dft_worker_base_url.strip().rstrip("/")
+        self.monomer_dft_worker_uds = (
+            _absolute_from_root(raw_monomer_dft_worker_uds.strip())
+            if raw_monomer_dft_worker_uds.strip()
+            else ""
+        )
+        self.monomer_dft_worker_timeout_seconds = max(
+            1.0, float(raw_monomer_dft_worker_timeout_seconds)
+        )
+        self.monomer_dft_submit_enabled = bool(raw_monomer_dft_submit_enabled)
+        self.monomer_dft_max_active_jobs = int(raw_monomer_dft_max_active_jobs)
+        if self.monomer_dft_max_active_jobs != 9:
+            raise ValueError(
+                "MONOMER_DFT_MAX_ACTIVE_JOBS must be exactly 9 "
+                "(one running job plus eight queued jobs)"
+            )
+        self.monomer_dft_reconcile_interval_seconds = max(
+            0.25, float(raw_monomer_dft_reconcile_interval_seconds)
+        )
+        self.monomer_dft_artifact_retention_days = max(
+            1, int(raw_monomer_dft_artifact_retention_days)
+        )
+        self.monomer_dft_validation_concurrency = int(
+            raw_monomer_dft_validation_concurrency
+        )
+        if not 1 <= self.monomer_dft_validation_concurrency <= 4:
+            raise ValueError(
+                "MONOMER_DFT_VALIDATION_CONCURRENCY must be between 1 and 4"
+            )
+        self.monomer_dft_download_max_concurrent = int(
+            raw_monomer_dft_download_max_concurrent
+        )
+        if self.monomer_dft_download_max_concurrent != 2:
+            raise ValueError("MONOMER_DFT_DOWNLOAD_MAX_CONCURRENT must be exactly 2")
+        self.monomer_dft_download_spool_root = _absolute_from_root(
+            raw_monomer_dft_download_spool_root.strip()
+        )
+        if self.monomer_dft_submit_enabled and not self.monomer_dft_worker_uds:
+            raise ValueError(
+                "MONOMER_DFT_WORKER_UDS is required when "
+                "MONOMER_DFT_SUBMIT_ENABLED is true"
+            )
         self.allowed_origins = raw_allowed_origins
         self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)

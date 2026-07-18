@@ -80,6 +80,7 @@ def main() -> None:
     print(
         json.dumps(
             {
+                "active_jobs_schema_version": jobs.active_jobs_schema_version,
                 "drain": _state_payload(state),
                 "active_jobs": jobs.counts,
                 "active_total": jobs.total,

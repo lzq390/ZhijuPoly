@@ -12,6 +12,11 @@ from app.config import Settings
 from app.migration_compatibility import compatible_forward_versions
 from app.migration_policy import validate_migration_manifest_entries
 from app.postgres_database import PostgresUnavailableError, postgres_connection
+from app.services.monomer_dft_schema import (
+    MONOMER_DFT_MIGRATION_VERSION,
+    MonomerDftSchemaState,
+    probe_monomer_dft_schema,
+)
 
 SQLITE_TABLES = {
     "main": ["polymers", "properties", "knowledge_documents", "online_knowledge_history", "online_knowledge_jobs"],
@@ -43,6 +48,12 @@ POSTGRES_TABLES = [
     ("model_registry", "assets"),
     ("md", "monomer_md_jobs"),
 ]
+MONOMER_DFT_POSTGRES_TABLES = [
+    ("monomer_dft", "jobs"),
+    ("monomer_dft", "job_attempts"),
+    ("monomer_dft", "artifacts"),
+]
+POSTGRES_TABLES = [*POSTGRES_TABLES, *MONOMER_DFT_POSTGRES_TABLES]
 
 _MIGRATION_MANIFEST = (
     Path(__file__).resolve().parents[1] / "migrations" / "postgres" / "manifest.json"
@@ -70,10 +81,39 @@ STRICT_REQUIRED_MIGRATIONS = tuple(
         or migration.version in _REQUIRED_CONTRACT_DEPENDENCIES
     )
 )
+STARTUP_REQUIRED_MIGRATIONS = tuple(
+    version
+    for version in STRICT_REQUIRED_MIGRATIONS
+    if version != MONOMER_DFT_MIGRATION_VERSION
+)
 KNOWN_CONTRACT_MIGRATIONS = tuple(
     migration.version for migration in _MIGRATION_POLICY if migration.kind == "contract"
 )
 STRICT_RUNTIME_TABLES = tuple(POSTGRES_TABLES)
+STARTUP_RUNTIME_TABLES = tuple(
+    table for table in POSTGRES_TABLES if table not in MONOMER_DFT_POSTGRES_TABLES
+)
+SCHEMA_TARGET_STARTUP = "startup-through-0012"
+SCHEMA_TARGET_FINAL = "final-0013"
+SCHEMA_TARGETS = frozenset({SCHEMA_TARGET_STARTUP, SCHEMA_TARGET_FINAL})
+
+
+def _required_migrations(schema_target: str) -> tuple[str, ...]:
+    if schema_target == SCHEMA_TARGET_STARTUP:
+        return STARTUP_REQUIRED_MIGRATIONS
+    if schema_target == SCHEMA_TARGET_FINAL:
+        return STRICT_REQUIRED_MIGRATIONS
+    raise ValueError(f"unsupported schema target: {schema_target}")
+
+
+def _required_runtime_tables(
+    schema_target: str,
+) -> tuple[tuple[str, str], ...]:
+    if schema_target == SCHEMA_TARGET_STARTUP:
+        return STARTUP_RUNTIME_TABLES
+    if schema_target == SCHEMA_TARGET_FINAL:
+        return STRICT_RUNTIME_TABLES
+    raise ValueError(f"unsupported schema target: {schema_target}")
 
 
 def _safe_dsn_label(dsn: str) -> str:
@@ -209,6 +249,11 @@ def strict_preflight_errors(report: dict[str, object]) -> list[str]:
         errors.append(f"PostgreSQL database is not reachable: {detail or 'unknown error'}")
         return errors
 
+    schema_target = report.get("schema_target", SCHEMA_TARGET_FINAL)
+    if not isinstance(schema_target, str) or schema_target not in SCHEMA_TARGETS:
+        errors.append("Postgres preflight schema target is invalid")
+        return errors
+
     migrations = report.get("migrations")
     if not isinstance(migrations, dict):
         errors.append("Postgres migration status is unavailable")
@@ -238,12 +283,28 @@ def strict_preflight_errors(report: dict[str, object]) -> list[str]:
     if not isinstance(tables, dict):
         errors.append("Postgres table status is unavailable")
     else:
-        for schema, table in STRICT_RUNTIME_TABLES:
+        for schema, table in _required_runtime_tables(schema_target):
             key = f"{schema}.{table}"
             if tables.get(key) is None:
                 errors.append(f"Required Postgres table is missing: {key}")
         if report.get("mode") == "runtime" and tables.get("core.polymer_property_filter_records") == 0:
             errors.append("Property filter records are empty; run the property_filter import before deployment.")
+
+    dft_schema = report.get("monomer_dft_schema")
+    dft_state = dft_schema.get("state") if isinstance(dft_schema, dict) else None
+    if dft_state == MonomerDftSchemaState.INVALID.value:
+        reason = dft_schema.get("reason") if isinstance(dft_schema, dict) else None
+        errors.append(
+            "Monomer DFT schema is partial or invalid: "
+            f"{reason or 'unknown reason'}"
+        )
+    elif (
+        schema_target == SCHEMA_TARGET_FINAL
+        and dft_state != MonomerDftSchemaState.READY.value
+    ):
+        errors.append(
+            "Final runtime requires the checksum-exact 0013 monomer DFT schema"
+        )
 
     if report.get("mode") == "runtime":
         files = report.get("files")
@@ -288,31 +349,44 @@ def run_preflight(
     mode: str = "runtime",
     strict: bool = False,
     expected_source_sha: str | None = None,
+    schema_target: str = SCHEMA_TARGET_FINAL,
 ) -> dict[str, object]:
     if mode not in {"runtime", "migration", "schema"}:
         raise ValueError("mode must be 'runtime', 'migration', or 'schema'")
+    if schema_target not in SCHEMA_TARGETS:
+        raise ValueError(
+            "schema_target must be "
+            f"{SCHEMA_TARGET_STARTUP!r} or {SCHEMA_TARGET_FINAL!r}"
+        )
     if expected_source_sha is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_source_sha):
         raise ValueError("expected_source_sha must be a full lowercase 40-character SHA")
 
+    required_migrations = _required_migrations(schema_target)
     target_dsn = dsn or settings.app_postgres_dsn
     report: dict[str, object] = {
         "mode": mode,
         "strict": strict,
+        "schema_target": schema_target,
         "expected_source_sha": expected_source_sha,
         "structured_data_backend": settings.structured_data_backend,
         "app_postgres_dsn": _safe_dsn_label(target_dsn),
         "postgres": {"reachable": False, "tables": {}},
         "migrations": {
-            "required": list(STRICT_REQUIRED_MIGRATIONS),
+            "required": list(required_migrations),
             "contracts": list(KNOWN_CONTRACT_MIGRATIONS),
             "applied": [],
-            "missing": list(STRICT_REQUIRED_MIGRATIONS),
+            "missing": list(required_migrations),
             "pending_contracts": list(KNOWN_CONTRACT_MIGRATIONS),
             "checksum_mismatches": [],
             "dependency_errors": [],
             "unknown_migrations": [],
             "forward_compatible_migrations": [],
             "duplicate_migrations": [],
+        },
+        "monomer_dft_schema": {
+            "state": "unavailable",
+            "reason": "postgres_unavailable",
+            "catalog_sha256": None,
         },
         "files": {},
     }
@@ -385,21 +459,50 @@ def run_preflight(
                 .difference(_MIGRATION_CHECKSUMS)
                 .difference(forward_compatible_migrations)
             )
+            dft_schema = probe_monomer_dft_schema(connection)
+            table_counts = {
+                f"{schema}.{table}": _postgres_count(connection, schema, table)
+                for schema, table in STARTUP_RUNTIME_TABLES
+            }
+            if dft_schema.state is MonomerDftSchemaState.READY:
+                table_counts.update(
+                    {
+                        f"{schema}.{table}": _postgres_count(
+                            connection,
+                            schema,
+                            table,
+                        )
+                        for schema, table in MONOMER_DFT_POSTGRES_TABLES
+                    }
+                )
+            else:
+                table_counts.update(
+                    {
+                        f"{schema}.{table}": None
+                        for schema, table in MONOMER_DFT_POSTGRES_TABLES
+                    }
+                )
             report["postgres"] = {
                 "reachable": True,
                 "database": version["database"],
                 "user": version["user"],
                 "version": str(version["version"]).split(",", 1)[0],
-                "tables": {
-                    f"{schema}.{table}": _postgres_count(connection, schema, table)
-                    for schema, table in POSTGRES_TABLES
-                },
+                "tables": table_counts,
+            }
+            report["monomer_dft_schema"] = {
+                "state": dft_schema.state.value,
+                "reason": dft_schema.reason,
+                "catalog_sha256": dft_schema.catalog_sha256,
             }
             report["migrations"] = {
-                "required": list(STRICT_REQUIRED_MIGRATIONS),
+                "required": list(required_migrations),
                 "contracts": list(KNOWN_CONTRACT_MIGRATIONS),
                 "applied": list(applied_migrations),
-                "missing": [version for version in STRICT_REQUIRED_MIGRATIONS if version not in applied_migrations],
+                "missing": [
+                    version
+                    for version in required_migrations
+                    if version not in applied_migrations
+                ],
                 "pending_contracts": [
                     version
                     for version in KNOWN_CONTRACT_MIGRATIONS
@@ -430,6 +533,12 @@ def main() -> None:
     parser.add_argument("--mode", choices=["runtime", "migration", "schema"], default="runtime")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when required migrations or runtime tables are missing.")
     parser.add_argument("--expected-source-sha", help="Require the stored analytics snapshot to match this release SHA.")
+    parser.add_argument(
+        "--schema-target",
+        choices=sorted(SCHEMA_TARGETS),
+        default=SCHEMA_TARGET_FINAL,
+        help="Validate startup compatibility through 0012 or final readiness through 0013.",
+    )
     args = parser.parse_args()
     report = run_preflight(
         Settings(),
@@ -437,6 +546,7 @@ def main() -> None:
         args.mode,
         strict=args.strict,
         expected_source_sha=args.expected_source_sha,
+        schema_target=args.schema_target,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if args.strict and report["strict_errors"]:

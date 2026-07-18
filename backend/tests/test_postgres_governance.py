@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
@@ -356,6 +357,9 @@ _BUSINESS_MUTABLE_TABLE_KEYS = {
     ("lab", "test_projects"): "id",
     ("lab", "sample_measurements"): "id",
     ("md", "monomer_md_jobs"): "job_id",
+    ("monomer_dft", "jobs"): "job_id",
+    ("monomer_dft", "job_attempts"): "attempt_token",
+    ("monomer_dft", "artifacts"): "artifact_id",
 }
 
 
@@ -431,6 +435,59 @@ def _seed_business_mutable_rows(connection) -> None:
           'integrating', 'must survive'
         )
         """
+    )
+    connection.execute(
+        """
+        INSERT INTO monomer_dft.jobs (
+          job_id, idempotency_key, request_sha256, request_json,
+          calculation_type, model_name, input_smiles, multiplicity,
+          status, attempt_token
+        ) VALUES (
+          '00000000-0000-4000-8000-000000009001',
+          'mutable-dft-job',
+          %s,
+          '{"smiles": "O"}'::jsonb,
+          'single_point',
+          'aimnet2',
+          'O',
+          1,
+          'running',
+          %s
+        )
+        """,
+        ("9" * 64, "a" * 64),
+    )
+    connection.execute(
+        """
+        INSERT INTO monomer_dft.job_attempts (
+          job_id, attempt, attempt_token, request_sha256, status
+        ) VALUES (
+          '00000000-0000-4000-8000-000000009001',
+          1,
+          %s,
+          %s,
+          'running'
+        )
+        """,
+        ("a" * 64, "9" * 64),
+    )
+    connection.execute(
+        """
+        INSERT INTO monomer_dft.artifacts (
+          job_id, artifact_id, name, relative_location,
+          media_type, size_bytes, sha256, metadata
+        ) VALUES (
+          '00000000-0000-4000-8000-000000009001',
+          'mutable-result',
+          'result.json',
+          'artifacts/result.json',
+          'application/json',
+          2,
+          %s,
+          '{"kept": true}'::jsonb
+        )
+        """,
+        ("b" * 64,),
     )
 
 
@@ -702,7 +759,7 @@ def test_epoch_two_migration_requires_exact_prior_contract_before_any_ddl(
 ) -> None:
     migrations_dir = tmp_path / "migrations"
     shutil.copytree(MIGRATIONS_DIR, migrations_dir)
-    epoch_two_version = "0013_epoch_bridge_probe"
+    epoch_two_version = "9999_epoch_bridge_probe"
     epoch_two_path = migrations_dir / f"{epoch_two_version}.sql"
     epoch_two_path.write_text(
         "CREATE TABLE governance.epoch_bridge_probe (id integer PRIMARY KEY);\n",
@@ -891,6 +948,7 @@ def test_static_rebuild_contract_excludes_mutable_tables_and_cascade() -> None:
     connection = CaptureConnection()
     truncate_static_import_tables(connection, set(STATIC_IMPORT_DATASETS))
 
+    assert set(_BUSINESS_MUTABLE_TABLE_KEYS) == set(BUSINESS_MUTABLE_TABLES)
     assert rebuild_tables.isdisjoint(BUSINESS_MUTABLE_TABLES)
     assert connection.query is not None
     assert "CASCADE" not in repr(connection.query).upper()
@@ -1076,6 +1134,144 @@ def test_strict_runtime_preflight_passes_after_migrations(tmp_path: Path, postgr
     assert report["strict_errors"] == []
     assert report["postgres"]["reachable"] is True
     assert report["migrations"]["missing"] == []
+    assert report["schema_target"] == postgres_preflight.SCHEMA_TARGET_FINAL
+    assert report["monomer_dft_schema"] == {
+        "state": "ready",
+        "reason": "exact_0013",
+        "catalog_sha256": (
+            "6dc2e6ca7e1bb052836afec2bbdd46c6aa0928e97efdbbc6669b9b220f9bf6f8"
+        ),
+    }
+
+
+def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
+    tmp_path: Path,
+    postgres_dsn: str,
+    monkeypatch,
+) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    statements: list[tuple[str, object]] = []
+    original_connection_factory = postgres_preflight.postgres_connection
+
+    class RecordingConnection:
+        def __init__(self, connection) -> None:
+            self.connection = connection
+
+        def execute(self, query, parameters=None):
+            statements.append((str(query), parameters))
+            if parameters is None:
+                return self.connection.execute(query)
+            return self.connection.execute(query, parameters)
+
+    @contextmanager
+    def recording_connection_factory(dsn: str):
+        with original_connection_factory(dsn) as connection:
+            yield RecordingConnection(connection)
+
+    monkeypatch.setattr(
+        postgres_preflight,
+        "postgres_connection",
+        recording_connection_factory,
+    )
+    monkeypatch.setattr(
+        postgres_preflight,
+        "_analytics_snapshot_report",
+        lambda connection: {
+            "generated_at": "fixture",
+            "source": "postgres",
+            "comparisons": {},
+            "warnings": [],
+        },
+    )
+
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute("DROP SCHEMA monomer_dft CASCADE")
+        connection.execute(
+            """
+            DELETE FROM governance.schema_migrations
+            WHERE version = '0013_monomer_dft_jobs'
+            """
+        )
+
+    try:
+        startup = postgres_preflight.run_preflight(
+            settings,
+            dsn=postgres_dsn,
+            mode="runtime",
+            strict=True,
+            schema_target=postgres_preflight.SCHEMA_TARGET_STARTUP,
+        )
+        final = postgres_preflight.run_preflight(
+            settings,
+            dsn=postgres_dsn,
+            mode="runtime",
+            strict=True,
+            schema_target=postgres_preflight.SCHEMA_TARGET_FINAL,
+        )
+
+        assert startup["status"] == "ok"
+        assert startup["strict_ok"] is True
+        assert startup["migrations"]["missing"] == []
+        assert startup["migrations"]["required"][-1] == "0012_drop_polytao_jobs"
+        assert startup["monomer_dft_schema"] == {
+            "state": "absent",
+            "reason": "migration_not_applied",
+            "catalog_sha256": None,
+        }
+        assert startup["postgres"]["tables"]["monomer_dft.jobs"] is None
+        assert startup["postgres"]["tables"]["monomer_dft.job_attempts"] is None
+        assert startup["postgres"]["tables"]["monomer_dft.artifacts"] is None
+
+        assert final["status"] == "failed"
+        assert final["strict_ok"] is False
+        assert final["migrations"]["missing"] == ["0013_monomer_dft_jobs"]
+        assert any(
+            "checksum-exact 0013" in error for error in final["strict_errors"]
+        )
+
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute("CREATE SCHEMA monomer_dft")
+        partial = postgres_preflight.run_preflight(
+            settings,
+            dsn=postgres_dsn,
+            mode="runtime",
+            strict=True,
+            schema_target=postgres_preflight.SCHEMA_TARGET_STARTUP,
+        )
+        assert partial["status"] == "failed"
+        assert partial["monomer_dft_schema"] == {
+            "state": "invalid",
+            "reason": "unmanaged_or_partial_schema",
+            "catalog_sha256": None,
+        }
+        assert any(
+            "partial or invalid" in error for error in partial["strict_errors"]
+        )
+    finally:
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute("DROP SCHEMA IF EXISTS monomer_dft CASCADE")
+            connection.execute(
+                """
+                DELETE FROM governance.schema_migrations
+                WHERE version = '0013_monomer_dft_jobs'
+                """
+            )
+        apply_postgres_migrations(
+            postgres_dsn,
+            allowed_kinds={"baseline", "expand"},
+            allow_contract_on_fresh_database=True,
+        )
+
+    assert not any(
+        "from monomer_dft." in " ".join(query.lower().split())
+        or 'from "monomer_dft".' in " ".join(query.lower().split())
+        or (
+            isinstance(parameters, (tuple, list))
+            and bool(parameters)
+            and parameters[0] == "monomer_dft"
+        )
+        for query, parameters in statements
+    )
 
 
 def test_strict_runtime_preflight_requires_matching_snapshot_source_sha(
@@ -1139,7 +1335,7 @@ def test_polytao_database_contract_is_applied(postgres_dsn: str) -> None:
     assert schema is None
 
 
-def test_bootstrap_expand_defers_trailing_contract_and_schema_preflight_passes(
+def test_historical_bootstrap_expand_defers_trailing_contract(
     tmp_path: Path,
     postgres_dsn: str,
     monkeypatch,
@@ -1148,16 +1344,49 @@ def test_bootstrap_expand_defers_trailing_contract_and_schema_preflight_passes(
 
     settings = _governance_settings(tmp_path, postgres_dsn)
     version = "0012_drop_polytao_jobs"
+    dft_version = "0013_monomer_dft_jobs"
+    dft_checksum = migration_checksum(MIGRATIONS_DIR / f"{dft_version}.sql")
     monkeypatch.setattr(
         postgres_preflight,
         "_analytics_snapshot_report",
-        lambda connection: {"generated_at": "fixture", "source": "postgres", "comparisons": {}, "warnings": []},
+        lambda connection: {
+            "generated_at": "fixture",
+            "source": "postgres",
+            "comparisons": {},
+            "warnings": [],
+        },
+    )
+    historical_dir = tmp_path / "migrations-through-0012"
+    historical_dir.mkdir()
+    for source in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        if source.stem <= version:
+            shutil.copy2(source, historical_dir / source.name)
+    historical_manifest = json.loads(
+        (MIGRATIONS_DIR / "manifest.json").read_text(encoding="utf-8")
+    )
+    historical_manifest["migrations"] = [
+        entry
+        for entry in historical_manifest["migrations"]
+        if entry["version"] <= version
+    ]
+    (historical_dir / "manifest.json").write_text(
+        json.dumps(historical_manifest, indent=2) + "\n",
+        encoding="utf-8",
     )
 
     with postgres_connection(postgres_dsn) as connection:
         connection.execute(
-            "DELETE FROM governance.schema_migrations WHERE version >= %s",
-            ("0009_monomer_md_job_leases",),
+            """
+            DELETE FROM governance.schema_migrations
+            WHERE version = ANY(%s)
+            """,
+            ([
+                "0009_monomer_md_job_leases",
+                "0010_deployment_control",
+                "0011_monomer_md_demo_steps",
+                version,
+                dft_version,
+            ],),
         )
         connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
         connection.execute(
@@ -1169,6 +1398,7 @@ def test_bootstrap_expand_defers_trailing_contract_and_schema_preflight_passes(
     try:
         results = apply_postgres_migrations(
             postgres_dsn,
+            historical_dir,
             allowed_kinds={"baseline", "expand"},
             defer_trailing_contracts=True,
         )
@@ -1232,6 +1462,15 @@ def test_bootstrap_expand_defers_trailing_contract_and_schema_preflight_passes(
             )
         finally:
             _restore_applied_polytao_contract_state(postgres_dsn)
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute(
+                """
+                INSERT INTO governance.schema_migrations (version, checksum)
+                VALUES (%s, %s)
+                ON CONFLICT (version) DO UPDATE SET checksum = excluded.checksum
+                """,
+                (dft_version, dft_checksum),
+            )
 
 
 def test_polytao_contract_rolls_back_when_generation_schema_is_not_empty(
@@ -1819,7 +2058,12 @@ def test_runtime_preflight_cli_exits_nonzero_for_strict_errors(monkeypatch, caps
     monkeypatch.setattr(
         postgres_preflight,
         "run_preflight",
-        lambda settings, dsn=None, mode="runtime", strict=False, expected_source_sha=None: {
+        lambda settings,
+        dsn=None,
+        mode="runtime",
+        strict=False,
+        expected_source_sha=None,
+        schema_target=postgres_preflight.SCHEMA_TARGET_FINAL: {
             "status": "failed",
             "blockers": ["Required Postgres migration is missing: 0003_runtime_postgres_cutover"],
             "strict_ok": False,
@@ -1839,7 +2083,17 @@ def test_runtime_preflight_cli_returns_zero_for_ready_report(monkeypatch, capsys
     monkeypatch.setattr(
         postgres_preflight,
         "run_preflight",
-        lambda settings, dsn=None, mode="runtime", strict=False, expected_source_sha=None: {"status": "ok", "blockers": [], "strict_ok": True, "strict_errors": []},
+        lambda settings,
+        dsn=None,
+        mode="runtime",
+        strict=False,
+        expected_source_sha=None,
+        schema_target=postgres_preflight.SCHEMA_TARGET_FINAL: {
+            "status": "ok",
+            "blockers": [],
+            "strict_ok": True,
+            "strict_errors": [],
+        },
     )
     monkeypatch.setattr(sys, "argv", ["postgres_preflight", "--mode", "runtime", "--strict"])
 

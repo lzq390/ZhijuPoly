@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import json
+import sys
 from threading import Event, Thread
 from types import SimpleNamespace
 
@@ -13,7 +15,7 @@ from pydantic import ValidationError
 import pytest
 from starlette.requests import Request
 
-from app import deployment_drain_middleware
+from app import deployment_control_cli, deployment_drain_middleware
 from app.deployment_control_cli import _build_parser
 from app.deployment_drain_middleware import DeploymentDrainMiddleware
 from app.postgres_database import postgres_connection
@@ -204,6 +206,64 @@ def test_deployment_control_cli_accepts_full_release_sha(command: str) -> None:
     parsed = _build_parser("postgresql://test").parse_args(arguments)
 
     assert parsed.release_sha == "a" * 40
+
+
+def test_deployment_control_cli_status_includes_snapshot_schema_version(
+    monkeypatch,
+    capsys,
+) -> None:
+    now = datetime.now(timezone.utc)
+
+    @contextmanager
+    def connection_factory(_dsn: str):
+        yield object()
+
+    monkeypatch.setattr(
+        deployment_control_cli,
+        "Settings",
+        lambda: SimpleNamespace(app_postgres_dsn="postgresql://fixture"),
+    )
+    monkeypatch.setattr(
+        deployment_control_cli,
+        "postgres_connection",
+        connection_factory,
+    )
+    monkeypatch.setattr(
+        deployment_control_cli,
+        "get_drain_state",
+        lambda _connection: SimpleNamespace(
+            enabled=False,
+            reason=None,
+            release_sha=None,
+            activated_at=None,
+            activated_by=None,
+            updated_at=now,
+        ),
+    )
+    monkeypatch.setattr(
+        deployment_control_cli,
+        "aggregate_active_jobs",
+        lambda _connection: SimpleNamespace(
+            counts={
+                "monomer_md": 0,
+                "online_knowledge": 0,
+                "monomer_dft": 0,
+            },
+            total=0,
+            active_jobs_schema_version=2,
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", ["deployment-control", "status"])
+
+    deployment_control_cli.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["active_jobs_schema_version"] == 2
+    assert payload["active_jobs"] == {
+        "monomer_md": 0,
+        "online_knowledge": 0,
+        "monomer_dft": 0,
+    }
 
 
 def test_drain_state_is_persistent_and_blocks_public_writes(postgres_dsn: str) -> None:
@@ -525,10 +585,146 @@ def test_active_job_summary_covers_persistent_job_types(postgres_dsn: str) -> No
             VALUES ('online-active', 'running', 'polymer', 'synthesis', 5)
             """
         )
+        for index, status in enumerate(
+            ("pending", "queued", "running", "cancel_requested", "completed"),
+            start=1,
+        ):
+            connection.execute(
+                """
+                INSERT INTO monomer_dft.jobs (
+                  job_id, idempotency_key, request_sha256, request_json,
+                  calculation_type, model_name, input_smiles, multiplicity,
+                  status, attempt_token
+                )
+                VALUES (%s, %s, %s, '{}'::jsonb, 'single_point', 'aimnet2',
+                        'O', 1, %s, %s)
+                """,
+                (
+                    f"00000000-0000-0000-0000-{index:012d}",
+                    f"active-dft-{index}",
+                    f"{index:064x}",
+                    status,
+                    f"{index + 10:064x}",
+                ),
+            )
         summary = aggregate_active_jobs(connection)
 
-    assert summary.counts == {"monomer_md": 1, "online_knowledge": 1}
-    assert summary.total == 2
+    assert summary.counts == {
+        "monomer_md": 1,
+        "online_knowledge": 1,
+        "monomer_dft": 4,
+    }
+    assert summary.active_jobs_schema_version == 2
+    assert summary.total == 6
+
+
+def test_active_job_snapshot_v1_never_queries_dft_business_tables(
+    postgres_dsn: str,
+) -> None:
+    class RollbackMutation(Exception):
+        pass
+
+    class RecordingConnection:
+        def __init__(self, connection) -> None:
+            self.connection = connection
+            self.statements: list[tuple[str, object]] = []
+
+        def execute(self, query, parameters=None):
+            self.statements.append((str(query), parameters))
+            if parameters is None:
+                return self.connection.execute(query)
+            return self.connection.execute(query, parameters)
+
+    with postgres_connection(postgres_dsn) as connection:
+        recorder = RecordingConnection(connection)
+        with pytest.raises(RollbackMutation):
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO md.monomer_md_jobs (
+                      job_id, input_smiles, canonical_smiles
+                    ) VALUES ('md-v1-active', 'CC', 'CC')
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO online_knowledge.jobs (
+                      job_id, status, material, mode, max_papers
+                    ) VALUES ('online-v1-active', 'running', 'polymer', 'synthesis', 5)
+                    """
+                )
+                connection.execute("DROP SCHEMA monomer_dft CASCADE")
+                connection.execute(
+                    """
+                    DELETE FROM governance.schema_migrations
+                    WHERE version = '0013_monomer_dft_jobs'
+                    """
+                )
+
+                summary = count_active_postgres_jobs(recorder)
+
+                assert summary.active_jobs_schema_version == 1
+                assert summary.counts == {
+                    "monomer_md": 1,
+                    "online_knowledge": 1,
+                }
+                assert summary.total == 2
+                raise RollbackMutation
+
+        assert not any(
+            "from monomer_dft." in " ".join(query.lower().split())
+            or (
+                isinstance(parameters, (tuple, list))
+                and bool(parameters)
+                and parameters[0] == "monomer_dft"
+            )
+            for query, parameters in recorder.statements
+        )
+
+
+def test_active_job_snapshot_rejects_partial_0013_without_dft_business_sql(
+    postgres_dsn: str,
+) -> None:
+    class RollbackMutation(Exception):
+        pass
+
+    class RecordingConnection:
+        def __init__(self, connection) -> None:
+            self.connection = connection
+            self.statements: list[tuple[str, object]] = []
+
+        def execute(self, query, parameters=None):
+            self.statements.append((str(query), parameters))
+            if parameters is None:
+                return self.connection.execute(query)
+            return self.connection.execute(query, parameters)
+
+    with postgres_connection(postgres_dsn) as connection:
+        recorder = RecordingConnection(connection)
+        with pytest.raises(RollbackMutation):
+            with connection.transaction():
+                connection.execute(
+                    """
+                    DELETE FROM governance.schema_migrations
+                    WHERE version = '0013_monomer_dft_jobs'
+                    """
+                )
+                with pytest.raises(
+                    RuntimeError,
+                    match="monomer DFT deployment schema is invalid",
+                ):
+                    count_active_postgres_jobs(recorder)
+                raise RollbackMutation
+
+        assert not any(
+            "from monomer_dft." in " ".join(query.lower().split())
+            or (
+                isinstance(parameters, (tuple, list))
+                and bool(parameters)
+                and parameters[0] == "monomer_dft"
+            )
+            for query, parameters in recorder.statements
+        )
 
 
 def test_active_job_summary_covers_in_memory_job_managers() -> None:
@@ -670,10 +866,11 @@ def test_deployment_status_remains_available_when_all_gpu_features_are_disabled(
         response = client.get("/internal/deployment/status")
 
     assert response.status_code == 200
-    assert response.json()["active_jobs_schema_version"] == 1
+    assert response.json()["active_jobs_schema_version"] == 2
     assert response.json()["active_jobs"] == {
         "monomer_md": 0,
         "online_knowledge": 0,
+        "monomer_dft": 0,
         "inflight_api_writes": 0,
         "conditional_generation": 0,
         "reverse_design": 0,
