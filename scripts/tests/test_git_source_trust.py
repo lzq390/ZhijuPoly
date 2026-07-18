@@ -2,16 +2,55 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
-
-import pytest
+import tempfile
+import unittest
+from contextlib import contextmanager
+from typing import Callable
 
 from scripts import git_source_trust as trust
 from scripts import legacy_takeover
 from scripts import pull_deploy_controller
 from scripts import reconcile_production_0005_polytao_alias as alias_reconcile
 from scripts import worker_slot_runtime
+
+
+@contextmanager
+def raises(
+    expected: type[BaseException],
+    *,
+    match: str,
+):
+    """Dependency-free equivalent of the small pytest.raises surface used here."""
+
+    try:
+        yield
+    except expected as error:
+        if re.search(match, str(error)) is None:
+            raise AssertionError(
+                f"{expected.__name__} message {str(error)!r} does not match "
+                f"{match!r}"
+            ) from error
+    else:
+        raise AssertionError(f"{expected.__name__} was not raised")
+
+
+class MonkeyPatch:
+    """Minimal reversible setattr helper for the one integration seam below."""
+
+    def __init__(self) -> None:
+        self._original: list[tuple[object, str, object]] = []
+
+    def setattr(self, target: object, name: str, value: object) -> None:
+        self._original.append((target, name, getattr(target, name)))
+        setattr(target, name, value)
+
+    def undo(self) -> None:
+        while self._original:
+            target, name, value = self._original.pop()
+            setattr(target, name, value)
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -90,31 +129,30 @@ def evidence(root: Path, source_sha: str, source_tree: str):
     )
 
 
-@pytest.mark.parametrize(
-    ("operation", "crash_at"),
-    [
-        ("takeover", "permission:captured"),
-        ("takeover", "permission:root-intent"),
-        ("takeover", "permission:root:action"),
-        ("takeover", "permission:root-hardened"),
-        ("takeover", "permission:metadata-directories-intent"),
-        ("takeover", "permission:directory:.git:action"),
-        ("takeover", "permission:metadata-directories-hardened"),
-        ("takeover", "permission:metadata-files-intent"),
-        ("takeover", "permission:file:.git/config:action"),
-        ("takeover", "permission:metadata-files-hardened"),
-        ("takeover", "permission:hardened"),
-        ("restore", "permission:restore-files-intent"),
-        ("restore", "permission:restore-file:.git/config:action"),
-        ("restore", "permission:restore-files-restored"),
-        ("restore", "permission:restore-directories-intent"),
-        ("restore", "permission:restore-directory:.git:action"),
-        ("restore", "permission:restore-directories-restored"),
-        ("restore", "permission:restore-root-intent"),
-        ("restore", "permission:restore-root:action"),
-        ("restore", "permission:restored"),
-    ],
-)
+PERMISSION_CRASH_CASES = [
+    ("takeover", "permission:captured"),
+    ("takeover", "permission:root-intent"),
+    ("takeover", "permission:root:action"),
+    ("takeover", "permission:root-hardened"),
+    ("takeover", "permission:metadata-directories-intent"),
+    ("takeover", "permission:directory:.git:action"),
+    ("takeover", "permission:metadata-directories-hardened"),
+    ("takeover", "permission:metadata-files-intent"),
+    ("takeover", "permission:file:.git/config:action"),
+    ("takeover", "permission:metadata-files-hardened"),
+    ("takeover", "permission:hardened"),
+    ("restore", "permission:restore-files-intent"),
+    ("restore", "permission:restore-file:.git/config:action"),
+    ("restore", "permission:restore-files-restored"),
+    ("restore", "permission:restore-directories-intent"),
+    ("restore", "permission:restore-directory:.git:action"),
+    ("restore", "permission:restore-directories-restored"),
+    ("restore", "permission:restore-root-intent"),
+    ("restore", "permission:restore-root:action"),
+    ("restore", "permission:restored"),
+]
+
+
 def test_permission_takeover_resumes_every_marker_and_action_phase(
     tmp_path: Path,
     operation: str,
@@ -136,14 +174,14 @@ def test_permission_takeover_resumes_every_marker_and_action_phase(
         hardened = trust.verify_repository_permission_takeover(root, marker)
         assert hardened["phase"] == "hardened"
         assert evidence(root, source_sha, source_tree)["policy"] == trust.POLICY_NAME
-        with pytest.raises(RuntimeError, match="injected crash"):
+        with raises(RuntimeError, match="injected crash"):
             trust.restore_repository_permissions(
                 root,
                 marker,
                 checkpoint=checkpoint,
             )
     else:
-        with pytest.raises(RuntimeError, match="injected crash"):
+        with raises(RuntimeError, match="injected crash"):
             trust.takeover_repository_permissions(
                 root,
                 marker,
@@ -166,7 +204,7 @@ def test_permission_takeover_resumes_every_marker_and_action_phase(
         path = root if relative == "." else root / relative
         assert (path.lstat().st_mode & 0o777) == mode
     assert trust.restore_repository_permissions(root, marker) == restored
-    with pytest.raises(
+    with raises(
         trust.GitPermissionTakeoverError,
         match="cannot be silently reused",
     ):
@@ -188,7 +226,7 @@ def test_permission_takeover_rejects_immutable_object_drift(
     loose.chmod(0o600)
     loose.write_bytes(loose.read_bytes() + b"tamper")
     loose.chmod(0o400)
-    with pytest.raises(
+    with raises(
         trust.GitPermissionTakeoverError,
         match="content changed",
     ):
@@ -221,33 +259,32 @@ def test_evidence_binds_interpreted_config_index_refs_and_objects(
         "raw_sha256"
     ]
     assert after["evidence_sha256"] != before["evidence_sha256"]
-    with pytest.raises(trust.GitSourceTrustError, match="trust surface"):
+    with raises(trust.GitSourceTrustError, match="trust surface"):
         trust.require_stable_trust_surface(before, after)
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_COUNT",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_TRACE",
-        "GIT_SSH_COMMAND",
-        "SSH_ASKPASS",
-    ],
-)
+HOSTILE_AMBIENT_NAMES = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_COUNT",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_TRACE",
+    "GIT_SSH_COMMAND",
+    "SSH_ASKPASS",
+]
+
+
 def test_hostile_ambient_git_redirects_are_rejected(
     tmp_path: Path,
     name: str,
 ) -> None:
     root, source_sha, source_tree = repository(tmp_path)
-    with pytest.raises(
+    with raises(
         trust.GitSourceTrustError,
         match="ambient Git control",
     ):
@@ -261,20 +298,19 @@ def test_hostile_ambient_git_redirects_are_rejected(
         )
 
 
-@pytest.mark.parametrize(
-    ("section", "key", "value"),
-    [
-        ("include", "path", "/tmp/evil"),
-        ('includeIf "gitdir:/data/**"', "path", "/tmp/evil"),
-        ("core", "worktree", "/tmp/evil"),
-        ("core", "fsmonitor", "/tmp/evil"),
-        ("core", "sparseCheckout", "true"),
-        ("core", "hooksPath", "/tmp/evil"),
-        ("extensions", "partialClone", "origin"),
-        ('remote "origin"', "promisor", "true"),
-        ("filter", "evil.clean", "/tmp/evil"),
-    ],
-)
+REDIRECT_CONFIG_CASES = [
+    ("include", "path", "/tmp/evil"),
+    ('includeIf "gitdir:/data/**"', "path", "/tmp/evil"),
+    ("core", "worktree", "/tmp/evil"),
+    ("core", "fsmonitor", "/tmp/evil"),
+    ("core", "sparseCheckout", "true"),
+    ("core", "hooksPath", "/tmp/evil"),
+    ("extensions", "partialClone", "origin"),
+    ('remote "origin"', "promisor", "true"),
+    ("filter", "evil.clean", "/tmp/evil"),
+]
+
+
 def test_executable_redirect_and_partial_clone_config_is_rejected(
     tmp_path: Path,
     section: str,
@@ -284,23 +320,22 @@ def test_executable_redirect_and_partial_clone_config_is_rejected(
     root, source_sha, source_tree = repository(tmp_path)
     with (root / ".git/config").open("a", encoding="utf-8") as stream:
         stream.write(f'\n[{section}]\n\t{key} = {value}\n')
-    with pytest.raises(trust.GitSourceTrustError, match="config"):
+    with raises(trust.GitSourceTrustError, match="config"):
         evidence(root, source_sha, source_tree)
 
 
-@pytest.mark.parametrize(
-    "relative",
-    [
-        "commondir",
-        "shallow",
-        "config.worktree",
-        "info/grafts",
-        "info/sparse-checkout",
-        "objects/info/alternates",
-        "objects/info/http-alternates",
-        "refs/replace",
-    ],
-)
+FORBIDDEN_STORAGE_MARKERS = [
+    "commondir",
+    "shallow",
+    "config.worktree",
+    "info/grafts",
+    "info/sparse-checkout",
+    "objects/info/alternates",
+    "objects/info/http-alternates",
+    "refs/replace",
+]
+
+
 def test_external_storage_replace_grafts_shallow_and_sparse_are_rejected(
     tmp_path: Path,
     relative: str,
@@ -312,7 +347,7 @@ def test_external_storage_replace_grafts_shallow_and_sparse_are_rejected(
         marker.mkdir()
     else:
         marker.write_text("/tmp/untrusted\n", encoding="utf-8")
-    with pytest.raises(
+    with raises(
         trust.GitSourceTrustError,
         match="forbidden Git storage|policy marker",
     ):
@@ -326,7 +361,7 @@ def test_promisor_pack_shared_object_and_linked_worktree_are_rejected(
     promisor = root / ".git/objects/pack/fixture.promisor"
     promisor.parent.mkdir(parents=True, exist_ok=True)
     promisor.write_bytes(b"promisor")
-    with pytest.raises(trust.GitSourceTrustError, match="promisor"):
+    with raises(trust.GitSourceTrustError, match="promisor"):
         evidence(root, source_sha, source_tree)
     promisor.unlink()
 
@@ -337,13 +372,13 @@ def test_promisor_pack_shared_object_and_linked_worktree_are_rejected(
     )
     external = tmp_path / "shared-object"
     os.link(loose, external)
-    with pytest.raises(trust.GitSourceTrustError, match="unsafe metadata"):
+    with raises(trust.GitSourceTrustError, match="unsafe metadata"):
         evidence(root, source_sha, source_tree)
     external.unlink()
 
     linked = tmp_path / "linked"
     git(root, "worktree", "add", "--detach", str(linked), source_sha)
-    with pytest.raises(
+    with raises(
         trust.GitSourceTrustError,
         match="metadata directory",
     ):
@@ -354,7 +389,7 @@ def test_external_index_fsmonitor_and_sparse_index_extensions_are_rejected(
     tmp_path: Path,
 ) -> None:
     root, source_sha, source_tree = repository(tmp_path)
-    with pytest.raises(trust.GitSourceTrustError, match="ambient Git control"):
+    with raises(trust.GitSourceTrustError, match="ambient Git control"):
         trust.safe_git_environment(
             root,
             ambient={"GIT_INDEX_FILE": str(tmp_path / "index")},
@@ -369,7 +404,7 @@ def test_external_index_fsmonitor_and_sparse_index_extensions_are_rejected(
     index.write_bytes(
         original[:-20] + b"FSMN" + (0).to_bytes(4, "big") + original[-20:]
     )
-    with pytest.raises(trust.GitSourceTrustError, match="FSMN"):
+    with raises(trust.GitSourceTrustError, match="FSMN"):
         evidence(root, source_sha, source_tree)
 
 
@@ -394,9 +429,9 @@ def test_safe_child_environment_does_not_inherit_loader_or_user_config(
     assert child["GIT_INDEX_FILE"] == str(root / ".git/index")
     assert child["GIT_NO_REPLACE_OBJECTS"] == "1"
     assert child["GIT_SSH_COMMAND"] == "/bin/false"
-    with pytest.raises(trust.GitSourceTrustError, match="subcommand"):
+    with raises(trust.GitSourceTrustError, match="subcommand"):
         trust.safe_git_command(root, "-c", "include.path=/tmp/evil", "status")
-    with pytest.raises(trust.GitSourceTrustError, match="executable"):
+    with raises(trust.GitSourceTrustError, match="executable"):
         trust.safe_git_command(root, "status", executable="git")
     assert trust.safe_git_command(root, "status")[0] == "/usr/bin/git"
 
@@ -407,7 +442,7 @@ def test_object_store_symlink_is_rejected(tmp_path: Path) -> None:
     moved = root / ".git/objects-real"
     objects.rename(moved)
     objects.symlink_to(moved, target_is_directory=True)
-    with pytest.raises(
+    with raises(
         trust.GitSourceTrustError,
         match="object database",
     ):
@@ -424,7 +459,7 @@ def test_worker_slot_checkout_uses_shared_trust_policy(tmp_path: Path) -> None:
     assert checkout.trust_evidence["evidence_sha256"].startswith("sha256:")
 
     git(root, "config", "core.fsmonitor", "/tmp/evil")
-    with pytest.raises(
+    with raises(
         worker_slot_runtime.WorkerSlotError,
         match="trust preflight",
     ):
@@ -444,7 +479,7 @@ def test_legacy_takeover_uses_shared_trust_policy(tmp_path: Path) -> None:
 
     with (root / ".git/config").open("a", encoding="utf-8") as stream:
         stream.write("\n[include]\n\tpath = /tmp/evil\n")
-    with pytest.raises(
+    with raises(
         legacy_takeover.LegacyTakeoverError,
         match="trust preflight",
     ):
@@ -473,7 +508,7 @@ def test_pull_controller_uses_shared_trust_policy(tmp_path: Path) -> None:
     assert identity["trust"]["policy"] == trust.POLICY_NAME
 
     git(root, "config", "core.sparseCheckout", "true")
-    with pytest.raises(
+    with raises(
         pull_deploy_controller.PullDeployError,
         match="trust preflight",
     ):
@@ -482,7 +517,7 @@ def test_pull_controller_uses_shared_trust_policy(tmp_path: Path) -> None:
 
 def test_alias_reconcile_uses_shared_trust_policy(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     root, source_sha, source_tree = repository(tmp_path)
     canonical_remote(root)
@@ -502,8 +537,119 @@ def test_alias_reconcile_uses_shared_trust_policy(
     alternate = root / ".git/objects/info/alternates"
     alternate.write_text("/tmp/untrusted\n", encoding="utf-8")
     alternate.chmod(0o600)
-    with pytest.raises(
+    with raises(
         alias_reconcile.ReconcileError,
         match="trust preflight",
     ):
         alias_reconcile._source_identity(alias_reconcile.SystemRunner())
+
+
+def _temporary_path_case(
+    name: str,
+    function: Callable[..., None],
+    *arguments: object,
+    monkeypatch: bool = False,
+) -> unittest.FunctionTestCase:
+    def run() -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="nexpoly-git-source-trust-"
+        ) as directory:
+            tmp_path = Path(directory)
+            if not monkeypatch:
+                function(tmp_path, *arguments)
+                return
+            patcher = MonkeyPatch()
+            try:
+                function(tmp_path, patcher, *arguments)
+            finally:
+                patcher.undo()
+
+    run.__name__ = name
+    return unittest.FunctionTestCase(run)
+
+
+def load_tests(
+    _loader: unittest.TestLoader,
+    _tests: unittest.TestSuite,
+    _pattern: str | None,
+) -> unittest.TestSuite:
+    """Expose every trust case to the stdlib runner used by script-tests."""
+
+    suite = unittest.TestSuite()
+    for operation, crash_at in PERMISSION_CRASH_CASES:
+        label = re.sub(r"[^a-z0-9]+", "_", crash_at.lower()).strip("_")
+        suite.addTest(
+            _temporary_path_case(
+                f"permission_{operation}_{label}",
+                test_permission_takeover_resumes_every_marker_and_action_phase,
+                operation,
+                crash_at,
+            )
+        )
+    suite.addTest(
+        _temporary_path_case(
+            "permission_rejects_immutable_object_drift",
+            test_permission_takeover_rejects_immutable_object_drift,
+        )
+    )
+    suite.addTest(
+        _temporary_path_case(
+            "evidence_binds_git_interpretation",
+            test_evidence_binds_interpreted_config_index_refs_and_objects,
+        )
+    )
+    for name in HOSTILE_AMBIENT_NAMES:
+        suite.addTest(
+            _temporary_path_case(
+                f"ambient_{name.lower()}_rejected",
+                test_hostile_ambient_git_redirects_are_rejected,
+                name,
+            )
+        )
+    for index, (section, key, value) in enumerate(REDIRECT_CONFIG_CASES):
+        suite.addTest(
+            _temporary_path_case(
+                f"redirect_config_{index}_{key.lower()}_rejected",
+                test_executable_redirect_and_partial_clone_config_is_rejected,
+                section,
+                key,
+                value,
+            )
+        )
+    for relative in FORBIDDEN_STORAGE_MARKERS:
+        label = re.sub(r"[^a-z0-9]+", "_", relative.lower()).strip("_")
+        suite.addTest(
+            _temporary_path_case(
+                f"storage_marker_{label}_rejected",
+                test_external_storage_replace_grafts_shallow_and_sparse_are_rejected,
+                relative,
+            )
+        )
+    direct_cases = [
+        (
+            "promisor_shared_object_and_worktree_rejected",
+            test_promisor_pack_shared_object_and_linked_worktree_are_rejected,
+        ),
+        (
+            "external_index_extensions_rejected",
+            test_external_index_fsmonitor_and_sparse_index_extensions_are_rejected,
+        ),
+        (
+            "safe_child_environment",
+            test_safe_child_environment_does_not_inherit_loader_or_user_config,
+        ),
+        ("object_store_symlink_rejected", test_object_store_symlink_is_rejected),
+        ("worker_slot_uses_trust_policy", test_worker_slot_checkout_uses_shared_trust_policy),
+        ("legacy_takeover_uses_trust_policy", test_legacy_takeover_uses_shared_trust_policy),
+        ("pull_controller_uses_trust_policy", test_pull_controller_uses_shared_trust_policy),
+    ]
+    for name, function in direct_cases:
+        suite.addTest(_temporary_path_case(name, function))
+    suite.addTest(
+        _temporary_path_case(
+            "alias_reconcile_uses_trust_policy",
+            test_alias_reconcile_uses_shared_trust_policy,
+            monkeypatch=True,
+        )
+    )
+    return suite
