@@ -156,6 +156,14 @@ ACTIVE_JOB_CATEGORIES_V1 = (
     "inflight_api_writes",
 )
 ACTIVE_JOB_CATEGORIES_V2 = (*ACTIVE_JOB_CATEGORIES_V1, "monomer_dft")
+PERSISTENT_ACTIVE_JOB_CATEGORIES_V1 = (
+    "monomer_md",
+    "online_knowledge",
+)
+PERSISTENT_ACTIVE_JOB_CATEGORIES_V2 = (
+    *PERSISTENT_ACTIVE_JOB_CATEGORIES_V1,
+    "monomer_dft",
+)
 # Compatibility for existing operational tooling and tests. New consumers
 # should select a category set through the payload schema version.
 ACTIVE_JOB_CATEGORIES = ACTIVE_JOB_CATEGORIES_V1
@@ -1539,6 +1547,47 @@ def validated_active_total(
             )
         total -= normalized["monomer_md"]
     return total
+
+
+def validated_persistent_active_total(
+    payload: object,
+    expected_categories: set[str],
+    *,
+    ignore_monomer_md: bool = False,
+) -> int:
+    """Validate the database-only snapshot emitted by postgres-init.
+
+    The bootstrap helper cannot observe in-process managers and must never
+    invent zeroes for them. Versioned V1/V2 payloads therefore use their own
+    exact persistent category sets; unversioned payloads retain the historical
+    caller-supplied shape solely for bridge compatibility.
+    """
+
+    if not isinstance(payload, dict) or "active_jobs_schema_version" not in payload:
+        return validated_active_total(
+            payload,
+            expected_categories,
+            ignore_monomer_md=ignore_monomer_md,
+        )
+    schema_version = payload["active_jobs_schema_version"]
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        raise ReleaseError("deployment status has an unsupported schema version")
+    if schema_version == 1:
+        required_categories = set(PERSISTENT_ACTIVE_JOB_CATEGORIES_V1)
+    elif schema_version == 2:
+        required_categories = set(PERSISTENT_ACTIVE_JOB_CATEGORIES_V2)
+    else:
+        raise ReleaseError("deployment status has an unsupported schema version")
+    unversioned = {
+        key: value
+        for key, value in payload.items()
+        if key != "active_jobs_schema_version"
+    }
+    return validated_active_total(
+        unversioned,
+        required_categories,
+        ignore_monomer_md=ignore_monomer_md,
+    )
 
 
 def rollback_allows_resume(database_changed: bool, rollback: str | None) -> bool:
@@ -6889,9 +6938,9 @@ class ReleaseController:
                 )
                 try:
                     payload = json.loads(result.stdout)
-                    active = validated_active_total(
+                    active = validated_persistent_active_total(
                         payload,
-                        {"monomer_md", "online_knowledge"},
+                        {"monomer_md", "online_knowledge", "monomer_dft"},
                         ignore_monomer_md=ignore_monomer_md,
                     )
                 except (ReleaseError, json.JSONDecodeError) as exc:
@@ -7768,7 +7817,7 @@ class ReleaseController:
         raw_digest = marker.get("database_backup_sha256")
         if not isinstance(raw_path, str) or not isinstance(raw_digest, str):
             raise ReleaseError(
-                "interrupted data change has no verified backup evidence"
+                "interrupted database change has no verified backup evidence"
             )
         backup = Path(raw_path)
         if (
@@ -7892,8 +7941,15 @@ class ReleaseController:
         previous_release = self.ops / "releases" / previous_sha
         if not previous_release.is_dir() or previous_release.is_symlink():
             raise ReleaseError("interrupted deployment previous release is unavailable")
+        database_change_started = marker.get("database_change_started") is True
         data_change_started = marker.get("data_change_started") is True
         asset_change_started = marker.get("asset_switch_started") is True
+        if data_change_started and not database_change_started:
+            raise ReleaseError(
+                "interrupted deployment recorded data changes without a database backup boundary"
+            )
+        if database_change_started:
+            self.backup_path = self.marker_backup(marker)
         if asset_change_started or data_change_started:
             previous_asset_root = Path(str(marker.get("previous_asset_root", "")))
             resolved_previous, previous_digest, previous_byteff2_commit = (
@@ -7912,10 +7968,11 @@ class ReleaseController:
             self.document["current_asset_manifest_digest"] = previous_digest
             self.document["current_byteff2_commit"] = previous_byteff2_commit
             environment["NEXPOLY_ASSET_MANIFEST_DIGEST"] = previous_digest
-        if data_change_started:
-            # Compatibility recovery for markers emitted by the retired
-            # asset-triggered database rebuild implementation.
-            self.backup_path = self.marker_backup(marker)
+        if database_change_started:
+            # A migration-only attempt mutates the governed ledger even when no
+            # dataset or asset pointer changes. Stop every possible client and
+            # restore the checksum-verified pre-deploy boundary before an older
+            # immutable runtime is allowed to start against that database.
             self.run(
                 self.compose(self.release_dir, "stop", "nginx", "backend"),
                 env=environment,
@@ -7928,7 +7985,7 @@ class ReleaseController:
 
         runtime_restarted = (
             marker.get("runtime_switch_started") is True
-            or marker.get("database_change_started") is True
+            or database_change_started
             or data_change_started
         )
         if runtime_restarted:
@@ -8698,6 +8755,32 @@ class ReleaseController:
                         state["rollback_error"] = str(rollback_exc)[:500]
                 elif self.database_changed:
                     try:
+                        # The verified backup is the rollback boundary for every
+                        # database mutation, including an expand-only migration.
+                        # An older release rejects ledger entries absent from its
+                        # immutable manifest, so restore the schema before its
+                        # runtime is allowed to start.
+                        failed_release = (
+                            self.release_dir
+                            if self.release_dir.is_dir()
+                            else self.candidate_dir
+                        )
+                        self.run(
+                            self.compose(
+                                failed_release, "stop", "nginx", "backend"
+                            ),
+                            env=environment,
+                        )
+                        if release_uses_worker(self.document):
+                            self.run(
+                                [
+                                    "systemctl",
+                                    "--user",
+                                    "stop",
+                                    "nexpoly-monomer-md-worker.service",
+                                ],
+                                env=environment,
+                            )
                         if asset_changed:
                             previous_asset_root = Path(
                                 self.document["current_asset_root"]
@@ -8708,37 +8791,13 @@ class ReleaseController:
                             environment["NEXPOLY_ASSET_MANIFEST_DIGEST"] = str(
                                 self.document["current_asset_manifest_digest"]
                             )
-                            failed_release = (
-                                self.release_dir
-                                if self.release_dir.is_dir()
-                                else self.candidate_dir
-                            )
-                            self.run(
-                                self.compose(
-                                    failed_release, "stop", "nginx", "backend"
-                                ),
-                                env=environment,
-                            )
-                            if release_uses_worker(self.document):
-                                self.run(
-                                    [
-                                        "systemctl",
-                                        "--user",
-                                        "stop",
-                                        "nexpoly-monomer-md-worker.service",
-                                    ],
-                                    env=environment,
-                                )
-                            previous_sha_value = self.previous_state.get("source_sha")
-                            if not isinstance(previous_sha_value, str):
-                                raise ReleaseError(
-                                    "asset/data rollback requires a previous release SHA"
-                                )
-                            previous_release = (
-                                self.ops / "releases" / previous_sha_value
-                            )
-                            self.restore_database(environment, release=previous_release)
-                            state["database_restore"] = "success"
+                        previous_sha_value = require_sha(
+                            str(self.previous_state.get("source_sha", "")),
+                            "database rollback previous release SHA",
+                        )
+                        previous_release = self.ops / "releases" / previous_sha_value
+                        self.restore_database(environment, release=previous_release)
+                        state["database_restore"] = "success"
                         self.rollback_runtime(environment)
                         state["rollback"] = "success"
                         safe_to_resume = True
