@@ -137,6 +137,13 @@ def validate_exact_b_bridge(failures: list[str]) -> None:
         'git merge-base --is-ancestor "$B_SHA" "$candidate_sha"',
         'python -m app.postgres_migrations --mode bootstrap',
         "schema_not_ready",
+        'assert_schema_not_ready_route "$port" POST "/jobs" "$submit_body"',
+        'assert_schema_not_ready_route "$port" DELETE "/jobs/${job_id}/artifacts"',
+        "'lab_test_projects'",
+        "'lab_sample_measurements'",
+        "'mutable_sequences'",
+        "assert_frozen_b_parser_accepts_policy",
+        "--add-host backend:127.0.0.1",
         '[[ "$(business_digest "$F_DATABASE")" == "$before_digest" ]]',
     ):
         if marker not in text:
@@ -245,6 +252,7 @@ def main() -> int:
             "      - production-alias-integration",
             "      - postgres-media-integration",
             "      - bridge-validation",
+            "      - exact-b-bridge",
             "python3 scripts/ci/validate_dependency_locks.py",
             "python3 -m app.migration_policy",
             "python3 scripts/validate_monomer_dft_release_contract.py --require-committed",

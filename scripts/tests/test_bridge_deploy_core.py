@@ -69,6 +69,21 @@ def policy() -> dict[str, object]:
 
 
 class BridgePolicyTests(unittest.TestCase):
+    def test_policy_explicitly_requires_exact_b_compatibility_ci(self) -> None:
+        self.assertEqual(
+            BRIDGE.REQUIRED_CI_JOBS,
+            {
+                "ci-gate",
+                "Publish and smoke immutable main images",
+                "bridge-validation",
+                "exact-B bridge compatibility",
+            },
+        )
+        self.assertIn(
+            "exact-B bridge compatibility",
+            policy()["required_ci_jobs"],
+        )
+
     def test_policy_pins_authority_but_not_runtime_registry(self) -> None:
         document = policy()
         self.assertEqual(

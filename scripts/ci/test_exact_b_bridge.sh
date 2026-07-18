@@ -149,23 +149,80 @@ PY
   rm -f -- "$temporary"
 
   if [[ "$expected_ready" == "false" ]]; then
-    temporary="$(mktemp)"
-    http_status="$(
-      curl --silent --show-error --output "$temporary" --write-out '%{http_code}' \
-        "http://127.0.0.1:${port}/api/v1/monomer-dft/jobs"
+    local job_id="018f0000-0000-4000-8000-000000000001"
+    local submit_body
+    submit_body="$(
+      python3 - <<'PY'
+import json
+
+print(json.dumps({
+    "input": {
+        "smiles": "CCO",
+        "net_charge": None,
+        "multiplicity": 1,
+        "psmiles_mode": None,
+    },
+    "calculation_type": "single_point",
+    "model": "aimnet2",
+    "conformer": {"seed": 1, "max_iterations": 500},
+    "single_point": {"properties": ["energy", "forces", "charges"]},
+}, separators=(",", ":")))
+PY
     )"
-    [[ "$http_status" == "503" ]]
-    python3 - "$temporary" <<'PY'
+    assert_schema_not_ready_route "$port" GET "/jobs"
+    assert_schema_not_ready_route "$port" POST "/jobs" "$submit_body"
+    assert_schema_not_ready_route "$port" GET "/jobs/${job_id}"
+    assert_schema_not_ready_route "$port" POST "/jobs/${job_id}/cancel"
+    assert_schema_not_ready_route \
+      "$port" GET "/jobs/${job_id}/artifacts/scientific_result"
+    assert_schema_not_ready_route "$port" GET "/jobs/${job_id}/bundle"
+    assert_schema_not_ready_route "$port" DELETE "/jobs/${job_id}/artifacts"
+  fi
+}
+
+assert_schema_not_ready_route() {
+  local port="$1"
+  local method="$2"
+  local path="$3"
+  local body="${4:-}"
+  local temporary http_status
+  local -a request=(
+    --silent
+    --show-error
+    --output
+    ""
+    --write-out
+    "%{http_code}"
+    --request
+    "$method"
+    --header
+    "Idempotency-Key: bridge-schema-gate-0001"
+  )
+  temporary="$(mktemp)"
+  request[3]="$temporary"
+  if [[ -n "$body" ]]; then
+    request+=(--header "Content-Type: application/json" --data-binary "$body")
+  fi
+  http_status="$(
+    curl "${request[@]}" \
+      "http://127.0.0.1:${port}/api/v1/monomer-dft${path}"
+  )"
+  [[ "$http_status" == "503" ]]
+  python3 - "$temporary" "$method" "$path" <<'PY'
 import json
 import pathlib
 import sys
 
 document = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-assert document["code"] == "schema_not_ready", document
+assert document == {
+    "code": "schema_not_ready",
+    "message": "monomer DFT schema is not ready",
+    "retryable": True,
+    "details": {},
+}, (sys.argv[2], sys.argv[3], document)
 assert document["retryable"] is True, document
 PY
-    rm -f -- "$temporary"
-  fi
+  rm -f -- "$temporary"
 }
 
 business_digest() {
@@ -191,6 +248,12 @@ SELECT jsonb_build_object(
   'md_jobs',
     (SELECT jsonb_agg(to_jsonb(row) ORDER BY job_id)
        FROM (SELECT * FROM md.monomer_md_jobs ORDER BY job_id) AS row),
+  'lab_test_projects',
+    (SELECT jsonb_agg(to_jsonb(row) ORDER BY id)
+       FROM (SELECT * FROM lab.test_projects ORDER BY id) AS row),
+  'lab_sample_measurements',
+    (SELECT jsonb_agg(to_jsonb(row) ORDER BY id)
+       FROM (SELECT * FROM lab.sample_measurements ORDER BY id) AS row),
   'dft_jobs',
     (SELECT jsonb_agg(to_jsonb(row) ORDER BY job_id)
        FROM (SELECT * FROM monomer_dft.jobs ORDER BY job_id) AS row),
@@ -199,11 +262,123 @@ SELECT jsonb_build_object(
        FROM (SELECT * FROM monomer_dft.job_attempts ORDER BY job_id, attempt) AS row),
   'dft_artifacts',
     (SELECT jsonb_agg(to_jsonb(row) ORDER BY job_id, artifact_id)
-       FROM (SELECT * FROM monomer_dft.artifacts ORDER BY job_id, artifact_id) AS row)
+       FROM (SELECT * FROM monomer_dft.artifacts ORDER BY job_id, artifact_id) AS row),
+  'mutable_sequences',
+    jsonb_build_object(
+      'online_history',
+        (SELECT jsonb_build_object(
+           'last_value', last_value,
+           'is_called', is_called
+         ) FROM online_knowledge.history_history_id_seq),
+      'lab_test_projects',
+        (SELECT jsonb_build_object(
+           'last_value', last_value,
+           'is_called', is_called
+         ) FROM lab.test_projects_id_seq),
+      'lab_sample_measurements',
+        (SELECT jsonb_build_object(
+           'last_value', last_value,
+           'is_called', is_called
+         ) FROM lab.sample_measurements_id_seq),
+      'dft_jobs',
+        (SELECT jsonb_build_object(
+           'last_value', last_value,
+           'is_called', is_called
+         ) FROM monomer_dft.jobs_enqueue_sequence_seq)
+    )
 )::text;
 COMMIT;
 SQL
 }
+
+assert_frozen_b_parser_accepts_policy() {
+  local temporary status=0
+  temporary="$(mktemp -d)"
+  if ! git show "${B_SHA}:scripts/bridge_deploy_core.py" \
+    >"$temporary/bridge_deploy_core_b.py" \
+    || ! git show "${B_SHA}:backend/migrations/postgres/manifest.json" \
+      >"$temporary/manifest-b.json"; then
+    rm -rf -- "$temporary"
+    return 1
+  fi
+  python3 - \
+    "$temporary/bridge_deploy_core_b.py" \
+    "$temporary/manifest-b.json" \
+    "$REPOSITORY_ROOT/scripts/bridge_deploy_core.py" \
+    "$REPOSITORY_ROOT/backend/migrations/postgres/manifest.json" <<'PY' \
+    || status=$?
+import hashlib
+import importlib.util
+import json
+import pathlib
+import sys
+
+
+def load(name: str, path: pathlib.Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+b_path, b_manifest_path, f_path, f_manifest_path = map(pathlib.Path, sys.argv[1:])
+b = load("nexpoly_exact_bridge_frozen_b", b_path)
+f = load("nexpoly_exact_bridge_candidate_f", f_path)
+b_manifest_bytes = b_manifest_path.read_bytes()
+f_manifest_bytes = f_manifest_path.read_bytes()
+b_manifest = json.loads(b_manifest_bytes)
+f_manifest = json.loads(f_manifest_bytes)
+policy = {
+    "schema_version": f.POLICY_SCHEMA_VERSION,
+    "mode": f.BRIDGE_MODE,
+    "authority_ref": f.AUTHORITY_REF,
+    "target_sha": "7df4ebf123982da8392ba00d2ce26205e74734b2",
+    "target_tree": "94d3176fc42ad4753a7a18b68d8a767be53a697d",
+    "target_ref": (
+        "refs/nexpoly/bridge-target/"
+        "7df4ebf123982da8392ba00d2ce26205e74734b2"
+    ),
+    "target_images": {
+        "backend": (
+            "ghcr.io/lzq390/nexpoly-backend@sha256:"
+            "9a82b06c4411570699a332df3e54c5cf6f34ca08ecedd49c18f1c62a79fe0c45"
+        ),
+        "web": (
+            "ghcr.io/lzq390/nexpoly-web@sha256:"
+            "2bac8c62ffc42a50a03ac15c6b04568c47d39685fdbac23ffb9a2b1e2abac2ac"
+        ),
+    },
+    "asset_manifest_digest": "sha256:" + "1" * 64,
+    "datasets_on_asset_change": [],
+    "final_migration": dict(f.FINAL_MIGRATION),
+    "accepted_migration_ledgers": f.expected_migration_registry(
+        target_manifest_sha256=(
+            "sha256:" + hashlib.sha256(b_manifest_bytes).hexdigest()
+        ),
+        target_records=b_manifest["migrations"],
+        authority_manifest_sha256=(
+            "sha256:" + hashlib.sha256(f_manifest_bytes).hexdigest()
+        ),
+        authority_records=f_manifest["migrations"],
+    ),
+    "external_database_audit": {
+        **f.EXTERNAL_DATABASE_AUDIT_POLICY,
+        "media_registry_sha256": "sha256:" + "2" * 64,
+    },
+    "required_ci_jobs": sorted(f.REQUIRED_CI_JOBS),
+}
+policy["policy_id"] = f.canonical_json_digest(policy)
+assert "exact-B bridge compatibility" in policy["required_ci_jobs"]
+assert "exact-B bridge compatibility" not in b.REQUIRED_CI_JOBS
+assert f.validate_policy(policy)["policy_id"] == policy["policy_id"]
+assert b.validate_policy(policy)["policy_id"] == policy["policy_id"]
+PY
+  rm -rf -- "$temporary"
+  return "$status"
+}
+
+assert_frozen_b_parser_accepts_policy
 
 docker pull "$B_BACKEND_IMAGE" >/dev/null
 docker pull "$B_WEB_IMAGE" >/dev/null
@@ -281,6 +456,20 @@ INSERT INTO md.monomer_md_jobs (
   '{"energy": -1.25}'::jsonb, '2026-07-18T00:00:00Z',
   '2026-07-18T00:01:00Z', '2026-07-18T00:01:00Z'
 );
+INSERT INTO lab.test_projects (
+  project_name, result_unit
+) VALUES (
+  'bridge-ci-project', 'MPa'
+);
+INSERT INTO lab.sample_measurements (
+  sample_id, experiment_project, instrument_id, "operator",
+  collection_time, temperature, concentration, result_value,
+  result_unit, remarks
+) VALUES (
+  'bridge-ci-sample', 'bridge-ci-project', 'bridge-instrument',
+  'bridge-operator', '2026-07-18T00:00:30', 25.00, 0.1250,
+  42.5000, 'MPa', 'mutable row retained across F/B/F'
+);
 INSERT INTO monomer_dft.jobs (
   job_id, idempotency_key, request_sha256, request_json, calculation_type,
   model_name, input_smiles, canonical_smiles, effective_charge, multiplicity,
@@ -288,7 +477,7 @@ INSERT INTO monomer_dft.jobs (
   result_json, timings, provenance, created_at, updated_at, submitted_at,
   started_at, finished_at, last_reconciled_at
 ) VALUES (
-  '018f0000-0000-7000-8000-000000000001',
+  '018f0000-0000-4000-8000-000000000001',
   'bridge-ci-job-0001',
   repeat('1', 64),
   '{"smiles": "O", "calculation_type": "single_point"}'::jsonb,
@@ -304,7 +493,7 @@ INSERT INTO monomer_dft.job_attempts (
   job_id, attempt, attempt_token, request_sha256, status, outcome,
   created_at, submitted_at, started_at, finished_at
 ) VALUES (
-  '018f0000-0000-7000-8000-000000000001', 1, repeat('2', 64),
+  '018f0000-0000-4000-8000-000000000001', 1, repeat('2', 64),
   repeat('1', 64), 'completed', '{"energy_ev": -7.5}'::jsonb,
   '2026-07-18T00:00:00Z', '2026-07-18T00:00:10Z',
   '2026-07-18T00:00:20Z', '2026-07-18T00:01:00Z'
@@ -313,7 +502,7 @@ INSERT INTO monomer_dft.artifacts (
   job_id, artifact_id, name, relative_location, media_type, size_bytes,
   sha256, metadata, created_at, updated_at
 ) VALUES (
-  '018f0000-0000-7000-8000-000000000001', 'result-json',
+  '018f0000-0000-4000-8000-000000000001', 'result-json',
   'result.json', 'artifacts/result.json', 'application/json', 19,
   repeat('3', 64), '{"source": "bridge-ci"}'::jsonb,
   '2026-07-18T00:01:00Z', '2026-07-18T00:01:00Z'
@@ -350,7 +539,14 @@ stop_backend "$f_after_name"
 [[ "$(business_digest "$F_DATABASE")" == "$before_digest" ]]
 
 web_name="${CONTAINER_PREFIX}-b-web"
-docker run -d --name "$web_name" -p 127.0.0.1:18105:80 "$B_WEB_IMAGE" >/dev/null
+# The frozen B Nginx configuration resolves its production ``backend``
+# upstream at startup even though this smoke reads only the immutable static
+# root.  Give that name a loopback-only, non-routable target so the container
+# can start without attaching it to any application or production network.
+docker run -d --name "$web_name" \
+  --add-host backend:127.0.0.1 \
+  -p 127.0.0.1:18105:80 \
+  "$B_WEB_IMAGE" >/dev/null
 managed_containers+=("$web_name")
 for _ in {1..30}; do
   if curl --fail --silent --show-error http://127.0.0.1:18105/ >/dev/null; then

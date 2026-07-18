@@ -94,6 +94,10 @@ site_helper_contracts = _load_sibling(
     "nexpoly_readiness_site_helper_contracts",
     "site_helper_contracts.py",
 )
+monomer_dft_runtime_contract = _load_sibling(
+    "nexpoly_readiness_monomer_dft_runtime_contract",
+    "monomer_dft_runtime_contract.py",
+)
 
 SCHEMA_VERSION = 1
 OUTPUT_SCHEMA_VERSION = 1
@@ -1111,17 +1115,30 @@ def _validate_native_runtime(
         "gpu_acceptance",
     }
     section = _sealed(value, fields, "native Worker runtime evidence")
+    runtime_lock = monomer_dft_runtime_contract.RUNTIME_CONTRACT
+    wheel_lock = runtime_lock["wheel"]
+    source_lock = runtime_lock["source"]
     if (
         section["status"] != "ready"
         or section["authority_sha"] != authority["sha"]
         or not isinstance(section["python_version"], str)
         or PYTHON_VERSION_RE.fullmatch(section["python_version"]) is None
+        or ".".join(section["python_version"].split(".")[:2])
+        != runtime_lock["python_minor"]
         or not isinstance(section["uv_version"], str)
         or UV_VERSION_RE.fullmatch(section["uv_version"]) is None
+        or section["uv_version"] != runtime_lock["uv_version"]
         or not isinstance(section["wheel_filename"], str)
         or WHEEL_RE.fullmatch(section["wheel_filename"]) is None
+        or section["build_lock_sha256"] != runtime_lock["build_lock_sha256"]
+        or section["wheel_filename"] != wheel_lock["filename"]
+        or section["wheel_sha256"] != wheel_lock["sha256"]
+        or section["wheel_inventory_sha256"] != wheel_lock["inventory_sha256"]
+        or section["record_sha256"] != wheel_lock["record_sha256"]
+        or section["model_registry_sha256"] != runtime_lock["registry_sha256"]
+        or section["models_sha256"] != runtime_lock["models_sha256"]
     ):
-        _fail("native Worker build identity is invalid")
+        _fail("native Worker build identity differs from the fixed AIMNet runtime lock")
     for name in (
         "build_lock_sha256",
         "wheel_sha256",
@@ -1140,6 +1157,11 @@ def _validate_native_runtime(
     _sha(source["commit"], "AIMNet commit")
     _sha(source["tree"], "AIMNet tree")
     _digest(source["archive_sha256"], "AIMNet archive")
+    if (
+        source["commit"] != source_lock["commit"]
+        or source["tree"] != source_lock["tree"]
+    ):
+        _fail("AIMNet source differs from the fixed runtime lock")
     acceptance = _exact_dict(
         section["gpu_acceptance"],
         {

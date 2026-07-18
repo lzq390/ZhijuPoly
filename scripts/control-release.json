@@ -96,6 +96,11 @@
       "mode": 448
     },
     {
+      "name": "monomer_dft_runtime_contract.py",
+      "source": "scripts/monomer_dft_runtime_contract.py",
+      "mode": 448
+    },
+    {
       "name": "monomer_worker_env.py",
       "source": "scripts/monomer_worker_env.py",
       "mode": 448

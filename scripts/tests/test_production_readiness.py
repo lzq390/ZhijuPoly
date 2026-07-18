@@ -463,25 +463,47 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
                 "status": "ready",
                 "authority_sha": AUTHORITY_SHA,
                 "python_version": "3.12.3",
-                "uv_version": "0.11.21",
-                "build_lock_sha256": digest("4"),
-                "wheel_filename": "aimnet2calc-0.1-py3-none-any.whl",
-                "wheel_sha256": digest("5"),
-                "wheel_inventory_sha256": digest("6"),
-                "record_sha256": digest("7"),
+                "uv_version": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "uv_version"
+                ],
+                "build_lock_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "build_lock_sha256"
+                ],
+                "wheel_filename": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "wheel"
+                ]["filename"],
+                "wheel_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "wheel"
+                ]["sha256"],
+                "wheel_inventory_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "wheel"
+                ]["inventory_sha256"],
+                "record_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "wheel"
+                ]["record_sha256"],
                 "aimnet_source": {
-                    "commit": "2" * 40,
-                    "tree": "3" * 40,
+                    "commit": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                        "source"
+                    ]["commit"],
+                    "tree": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                        "source"
+                    ]["tree"],
                     "archive_sha256": digest("8"),
                 },
-                "model_registry_sha256": digest("9"),
-                "models_sha256": digest("a"),
+                "model_registry_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "registry_sha256"
+                ],
+                "models_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "models_sha256"
+                ],
                 "prefetch_wheel_caches_sha256": PREFETCH_WHEELS_SHA256,
                 "gpu_acceptance": {
                     "status": "passed",
                     "authority_tree": AUTHORITY_TREE,
                     "image_digest": authority_images["backend"]["index_digest"],
-                    "model_registry_sha256": digest("9"),
+                    "model_registry_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                        "registry_sha256"
+                    ],
                     "gpus": [1, 3],
                     "production_gpu_2_touched": False,
                     "report_sha256": digest("b"),
@@ -769,6 +791,41 @@ class ProductionReadinessTests(unittest.TestCase):
             READINESS.ProductionReadinessError, "GPU acceptance"
         ):
             self.validate(document)
+
+    def test_native_runtime_must_equal_every_fixed_aimnet_lock_identity(self) -> None:
+        mutations = (
+            ("python_version", "3.13.0"),
+            ("uv_version", "9.9.9"),
+            ("build_lock_sha256", digest("0")),
+            ("wheel_filename", "different-9.9-py3-none-any.whl"),
+            ("wheel_sha256", digest("1")),
+            ("wheel_inventory_sha256", digest("2")),
+            ("record_sha256", digest("3")),
+            ("model_registry_sha256", digest("4")),
+            ("models_sha256", digest("5")),
+        )
+        for field, value in mutations:
+            document = fixture()
+            native = document["native_runtime"]  # type: ignore[assignment]
+            native[field] = value  # type: ignore[index]
+            if field == "model_registry_sha256":
+                native["gpu_acceptance"]["model_registry_sha256"] = value  # type: ignore[index]
+            reseal_section(document, "native_runtime")
+            with self.subTest(field=field), self.assertRaisesRegex(
+                READINESS.ProductionReadinessError,
+                "fixed AIMNet runtime lock",
+            ):
+                self.validate(document)
+
+        for field, value in (("commit", "a" * 40), ("tree", "b" * 40)):
+            document = fixture()
+            document["native_runtime"]["aimnet_source"][field] = value  # type: ignore[index]
+            reseal_section(document, "native_runtime")
+            with self.subTest(source_field=field), self.assertRaisesRegex(
+                READINESS.ProductionReadinessError,
+                "AIMNet source differs",
+            ):
+                self.validate(document)
 
     def test_any_conflict_marker_is_rejected(self) -> None:
         document = fixture()

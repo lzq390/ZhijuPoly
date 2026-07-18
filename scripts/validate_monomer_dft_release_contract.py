@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -493,6 +494,65 @@ def validate_aimnet_build_contract(root: Path, failures: list[str]) -> None:
     else:
         if source.get("build_requirements_sha256") != build_lock_checksum:
             failures.append("AIMNet build-requirements checksum does not match source lock")
+
+    runtime_contract_path = root / "scripts/monomer_dft_runtime_contract.py"
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "nexpoly_release_runtime_contract",
+            runtime_contract_path,
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("module specification is unavailable")
+        runtime_contract_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runtime_contract_module)
+        runtime_contract = runtime_contract_module.RUNTIME_CONTRACT
+    except (OSError, RuntimeError, AttributeError) as exc:
+        failures.append(f"cannot load fixed native runtime contract: {exc}")
+    else:
+        models = lock.get("models")
+        expected_runtime_contract = {
+            "schema_version": 1,
+            "python_minor": source.get("python_minor"),
+            "uv_version": source.get("uv_version"),
+            "build_lock_sha256": (
+                f"sha256:{source.get('build_requirements_sha256')}"
+            ),
+            "source": {
+                key: source.get(key)
+                for key in (
+                    "repository_url",
+                    "commit",
+                    "tree",
+                    "package_name",
+                    "package_version",
+                    "source_date_epoch",
+                )
+            },
+            "wheel": {
+                key: (
+                    f"sha256:{expected_wheel[key]}"
+                    if key in {"sha256", "inventory_sha256", "record_sha256"}
+                    else expected_wheel[key]
+                )
+                for key in expected_wheel
+            },
+            "registry_sha256": f"sha256:{lock.get('registry', {}).get('sha256')}",
+            "models_sha256": (
+                "sha256:"
+                + hashlib.sha256(
+                    json.dumps(
+                        models,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=True,
+                    ).encode("utf-8")
+                ).hexdigest()
+            ),
+        }
+        if runtime_contract != expected_runtime_contract:
+            failures.append(
+                "production native runtime contract differs from the AIMNet source lock"
+            )
 
     setup = _read_text(root, "scripts/setup_monomer_dft_env.sh", failures)
     for marker in (
