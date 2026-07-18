@@ -43,6 +43,7 @@ REPOSITORY_API_ROOT = "https://api.github.com/repos/lzq390/ZhijuPoly"
 SYSTEM_CA_BUNDLE = Path("/etc/ssl/certs/ca-certificates.crt")
 GIT_EXTERNAL_STORAGE_MARKERS = (
     Path(".git/commondir"),
+    Path(".git/info/grafts"),
     Path(".git/objects/info/alternates"),
     Path(".git/objects/info/http-alternates"),
 )
@@ -63,6 +64,8 @@ DIRECTORIES = {
     "state/monomer-md-worker-runs": 0o700,
     "state/gpu-resource": 0o700,
     "audit": 0o700,
+    "audit/production-readiness": 0o700,
+    "audit/mutable-data": 0o700,
     "audit/bootstrap-worker-unit": 0o700,
     "audit/contracts/0012": 0o700,
     "audit/maintenance": 0o700,
@@ -80,6 +83,10 @@ DIRECTORIES = {
 IMMUTABLE_FILES = {
     "control_runtime_selector.py": (SCRIPT_ROOT / "control_runtime_selector.py", 0o700),
     "nexpoly-pull-deploy": (SCRIPT_ROOT / "nexpoly-pull-deploy", 0o700),
+    "nexpoly-production-readiness": (
+        SCRIPT_ROOT / "nexpoly-production-readiness",
+        0o700,
+    ),
     "nexpoly-pull-contract-0012": (
         SCRIPT_ROOT / "nexpoly-pull-contract-0012",
         0o700,
@@ -119,6 +126,93 @@ def _control_runtime(*, source_sha: str, allow_test: bool) -> object:
     except BaseException as exc:
         raise BootstrapError("cannot load reviewed immutable control runtime") from exc
     return module
+
+
+def _legacy_takeover_evidence(
+    *, source_sha: str, allow_test: bool
+) -> object:
+    """Load the takeover validator from the exact reviewed F commit."""
+
+    payload = _read_reviewed_source(
+        "scripts/legacy_takeover_evidence.py",
+        source_sha=source_sha,
+        allow_test=allow_test,
+    )
+    module = types.ModuleType("nexpoly_bootstrap_legacy_takeover_evidence")
+    module.__file__ = (
+        f"git:{source_sha}:scripts/legacy_takeover_evidence.py"
+    )
+    try:
+        exec(compile(payload, module.__file__, "exec"), module.__dict__)
+    except BaseException as exc:
+        raise BootstrapError(
+            "reviewed legacy takeover validator cannot be loaded"
+        ) from exc
+    return module
+
+
+def _takeover_git_identity(
+    production_repository: dict[str, object],
+) -> dict[str, str]:
+    head = production_repository.get("head")
+    tree = production_repository.get("tree")
+    if (
+        production_repository.get("branch") != "main"
+        or not isinstance(head, str)
+        or SHA_RE.fullmatch(head) is None
+        or not isinstance(tree, str)
+        or SHA_RE.fullmatch(tree) is None
+    ):
+        raise BootstrapError(
+            "production repository cannot bind legacy takeover"
+        )
+    return {
+        "branch": "refs/heads/main",
+        "head_sha": head,
+        "head_tree": tree,
+        "local_main_sha": head,
+    }
+
+
+def _completed_legacy_takeover(
+    runtime_root: Path,
+    operation_id: str,
+    *,
+    source_sha: str,
+    source_tree: str,
+    production_repository: dict[str, object],
+    allow_test: bool,
+) -> dict[str, object]:
+    """Require source-pinned, completed, exact pre-stopped takeover evidence."""
+
+    validator = _legacy_takeover_evidence(
+        source_sha=source_sha,
+        allow_test=allow_test,
+    )
+    try:
+        binding = validator.validate_completed(
+            runtime_root,
+            operation_id,
+            source_sha,
+            source_tree,
+            expected_git_identity=_takeover_git_identity(
+                production_repository
+            ),
+        )
+    except Exception as exc:
+        raise BootstrapError(
+            "completed exact legacy takeover authority is required"
+        ) from exc
+    if (
+        not isinstance(binding, dict)
+        or binding.get("operation_id") != operation_id
+        or binding.get("authority_sha") != source_sha
+        or binding.get("authority_tree") != source_tree
+        or not isinstance(binding.get("binding_sha256"), str)
+        or not str(binding["binding_sha256"]).startswith("sha256:")
+    ):
+        raise BootstrapError("legacy takeover binding is invalid")
+    return dict(binding)
 
 
 def _github_token(runtime_root: Path) -> str:
@@ -209,16 +303,19 @@ def _delivery_gate(
     allow_test: bool,
     sealed: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    required = set(
+        _required_ci_jobs(
+            source_sha=source_sha,
+            allow_test=allow_test,
+        )
+    )
     if allow_test:
         evidence = {
             "remote_main": source_sha,
             "ci": {
                 "head_sha": source_sha,
                 "conclusion": "success",
-                "required_jobs": [
-                    "Publish and smoke immutable main images",
-                    "ci-gate",
-                ],
+                "required_jobs": sorted(required),
             },
         }
         if sealed is not None and sealed != evidence:
@@ -327,7 +424,6 @@ def _delivery_gate(
         for job in jobs
         if isinstance(job, dict) and job.get("conclusion") == "success"
     }
-    required = {"ci-gate", "Publish and smoke immutable main images"}
     if not required.issubset(successful):
         raise BootstrapError("target CI lacks required successful jobs")
     ci = {
@@ -344,6 +440,34 @@ def _delivery_gate(
     if sealed is not None and evidence != sealed:
         raise BootstrapError("sealed bootstrap delivery evidence changed")
     return evidence
+
+
+def _required_ci_jobs(*, source_sha: str, allow_test: bool) -> tuple[str, ...]:
+    """Read the sole required-job contract from exact F authority bytes."""
+
+    payload = _read_reviewed_source(
+        "scripts/bridge_deploy_core.py",
+        source_sha=source_sha,
+        allow_test=allow_test,
+    )
+    module = types.ModuleType("nexpoly_bootstrap_bridge_ci_contract")
+    module.__file__ = f"git:{source_sha}:scripts/bridge_deploy_core.py"
+    try:
+        exec(compile(payload, module.__file__, "exec"), module.__dict__)
+    except BaseException as exc:
+        raise BootstrapError("F bridge CI contract cannot be loaded") from exc
+    raw = getattr(module, "REQUIRED_CI_JOBS", None)
+    if (
+        not isinstance(raw, (set, frozenset))
+        or not raw
+        or len(raw) > 32
+        or any(not isinstance(value, str) or not value for value in raw)
+    ):
+        raise BootstrapError("F bridge CI contract is invalid")
+    jobs = tuple(sorted(raw))
+    if len(jobs) != len(raw):
+        raise BootstrapError("F bridge CI contract contains duplicate jobs")
+    return jobs
 
 
 def _safe_source(path: Path) -> bytes:
@@ -429,7 +553,7 @@ def _sealed_bootstrap_delivery_gate(
     record = _load_private_json(path)
     gate = record.get("delivery_gate")
     if (
-        record.get("schema_version") != 1
+        record.get("schema_version") != 2
         or record.get("status") not in {"prepared", "completed"}
         or record.get("source_sha") != source_sha
         or record.get("source_tree") != source_tree
@@ -540,9 +664,14 @@ def _git_environment(root: Path, *, home: str) -> dict[str, str]:
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_NO_LAZY_FETCH": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_PROTOCOL_FROM_USER": "0",
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_ASKPASS": "/bin/false",
+        "GIT_SSH_COMMAND": "/bin/false",
+        "SSH_ASKPASS": "/bin/false",
         "GIT_PAGER": "cat",
         "GIT_EDITOR": "/bin/false",
     }
@@ -550,7 +679,7 @@ def _git_environment(root: Path, *, home: str) -> dict[str, str]:
 
 def _git_command(root: Path, *arguments: str) -> list[str]:
     return [
-        "git",
+        "/usr/bin/git",
         "-c",
         "credential.helper=",
         "-c",
@@ -562,12 +691,19 @@ def _git_command(root: Path, *arguments: str) -> list[str]:
         "-c",
         "core.attributesFile=/dev/null",
         "-c",
+        "protocol.allow=never",
+        "-c",
         f"core.worktree={root.absolute()}",
         *arguments,
     ]
 
 
-def _validate_local_git_config(payload: bytes, *, label: str) -> None:
+def _validate_local_git_config(
+    payload: bytes,
+    *,
+    label: str,
+    allow_runtime_overrides: bool,
+) -> None:
     """Reject local Git policy that can execute code or redirect identity."""
 
     if len(payload) > 1024 * 1024:
@@ -585,16 +721,16 @@ def _validate_local_git_config(payload: bytes, *, label: str) -> None:
             "logallrefupdates",
             "ignorecase",
             "precomposeunicode",
-            # These three are explicitly overridden on every Git invocation.
-            "worktree",
-            "fsmonitor",
-            "untrackedcache",
         },
         'remote "origin"': {"url", "fetch", "tagopt"},
         # VS Code records only a ref name here; Git does not execute it.
         'branch "main"': {"remote", "merge", "vscode-merge-base"},
         "user": {"name", "email"},
     }
+    if allow_runtime_overrides:
+        # The legacy production checkout may contain these values. Every
+        # takeover Git call overrides them before the files are sealed.
+        allowed["core"].update({"worktree", "fsmonitor", "untrackedcache"})
     for section in parser.sections():
         normalized = section.lower()
         permitted = allowed.get(normalized)
@@ -710,7 +846,167 @@ def _verify_git_object_database(root: Path) -> None:
         raise BootstrapError("Git object database failed strict verification") from exc
 
 
-def _read_git_policy(path: Path, *, root: Path) -> tuple[bytes, int]:
+def bootstrap_source_readiness(
+    root: Path,
+    *,
+    expected_sha: str | None = None,
+) -> dict[str, object]:
+    """Prove that ``root`` is a standalone, immutable bootstrap authority.
+
+    This check is deliberately read-only.  In particular, it does not fetch,
+    repack, expire reflogs, run maintenance, or remove unreachable objects.
+    A clone with unreachable objects is rejected so a later bootstrap cannot
+    silently depend on reflog-only or otherwise unreviewed bytes.
+    """
+
+    root = root.absolute()
+    _assert_private_bootstrap_source(root)
+    shallow = root / ".git/shallow"
+    if shallow.exists() or shallow.is_symlink():
+        raise BootstrapError("bootstrap source clone must not be shallow")
+    _verify_git_object_database(root)
+    environment = _git_environment(root, home=os.environ.get("HOME", ""))
+
+    def git(*arguments: str, text: bool = True) -> str | bytes:
+        result = subprocess.run(
+            _git_command(root, *arguments),
+            cwd=root,
+            env=environment,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=text,
+        )
+        return result.stdout
+
+    try:
+        branch = str(git("symbolic-ref", "--short", "HEAD")).strip()
+        remote_names = str(git("remote")).splitlines()
+        origin_fetch_urls = str(
+            git("remote", "get-url", "--all", "origin")
+        ).splitlines()
+        origin_push_urls = str(
+            git("remote", "get-url", "--push", "--all", "origin")
+        ).splitlines()
+        source_sha = str(git("rev-parse", "HEAD")).strip()
+        source_tree = str(git("rev-parse", "HEAD^{tree}")).strip()
+        local_main = str(git("rev-parse", "refs/heads/main")).strip()
+        origin_main = str(
+            git("rev-parse", "refs/remotes/origin/main")
+        ).strip()
+        replace_refs = str(
+            git(
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/replace/",
+            )
+        ).splitlines()
+        index_entries = bytes(
+            git("ls-files", "--sparse", "-v", "-z", text=False)
+        ).split(b"\0")
+        dirty = str(
+            git(
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            )
+        )
+        ignored = bytes(
+            git(
+                "ls-files",
+                "-z",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                text=False,
+            )
+        )
+        unreachable = subprocess.run(
+            _git_command(
+                root,
+                "fsck",
+                "--full",
+                "--strict",
+                "--no-reflogs",
+                "--unreachable",
+            ),
+            cwd=root,
+            env=environment,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BootstrapError("cannot establish bootstrap source readiness") from exc
+    if branch != "main" or local_main != source_sha or origin_main != source_sha:
+        raise BootstrapError("bootstrap source must be the exact local main checkout")
+    if (
+        remote_names != ["origin"]
+        or origin_fetch_urls != [REPOSITORY_SSH_URL]
+        or origin_push_urls != [REPOSITORY_SSH_URL]
+    ):
+        raise BootstrapError(
+            "bootstrap source must use one canonical deploy-key SSH remote"
+        )
+    if (
+        SHA_RE.fullmatch(source_sha) is None
+        or SHA_RE.fullmatch(source_tree) is None
+        or expected_sha is not None
+        and source_sha != expected_sha
+    ):
+        raise BootstrapError("bootstrap source commit identity differs")
+    if dirty:
+        raise BootstrapError("bootstrap source contains tracked or untracked changes")
+    if ignored:
+        raise BootstrapError("bootstrap source contains ignored paths")
+    if replace_refs:
+        raise BootstrapError("bootstrap source contains Git replacement refs")
+    special_index_entries = [
+        entry
+        for entry in index_entries
+        if entry and not entry.startswith(b"H ")
+    ]
+    if special_index_entries:
+        raise BootstrapError(
+            "bootstrap source index contains sparse or hidden entries"
+        )
+    unreachable_output = unreachable.stdout + unreachable.stderr
+    if unreachable_output.strip():
+        raise BootstrapError(
+            "bootstrap source contains dangling or unreachable Git objects"
+        )
+    return {
+        "schema_version": 2,
+        "ready": True,
+        "source_root": str(root),
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "branch": branch,
+        "origin": origin_fetch_urls[0],
+        "remote_names": remote_names,
+        "origin_fetch_urls": origin_fetch_urls,
+        "origin_push_urls": origin_push_urls,
+        "origin_main_sha": origin_main,
+        "standalone_object_database": True,
+        "shallow": False,
+        "dirty_entries": 0,
+        "ignored_entries": 0,
+        "unreachable_objects": 0,
+        "replace_refs": 0,
+        "special_index_entries": 0,
+        "sparse_index": False,
+        "owner_private": True,
+        "group_or_world_writable": False,
+    }
+
+
+def _read_git_policy(
+    path: Path,
+    *,
+    root: Path,
+    allow_runtime_overrides: bool = False,
+) -> tuple[bytes, int]:
     try:
         metadata = path.lstat()
         payload = path.read_bytes()
@@ -724,7 +1020,11 @@ def _read_git_policy(path: Path, *, root: Path) -> tuple[bytes, int]:
     ):
         raise BootstrapError(f"Git policy file is unsafe: {path}")
     if path.name in {"config", "config.worktree"} and path.parent == root / ".git":
-        _validate_local_git_config(payload, label=str(path))
+        _validate_local_git_config(
+            payload,
+            label=str(path),
+            allow_runtime_overrides=allow_runtime_overrides,
+        )
         return payload, 0o600
     _validate_git_attributes(payload, label=str(path))
     return payload, stat.S_IMODE(metadata.st_mode) & ~0o022
@@ -750,14 +1050,15 @@ def _assert_private_bootstrap_source(root: Path) -> None:
         not stat.S_ISDIR(parent.st_mode)
         or root.parent.is_symlink()
         or parent.st_uid != os.geteuid()
-        or parent.st_mode & 0o022
+        or parent.st_mode & 0o077
         or not stat.S_ISDIR(root_metadata.st_mode)
         or root.is_symlink()
         or root_metadata.st_uid != os.geteuid()
-        or root_metadata.st_mode & 0o022
+        or root_metadata.st_mode & 0o077
         or not stat.S_ISDIR(git_metadata.st_mode)
         or (root / ".git").is_symlink()
         or git_metadata.st_uid != os.geteuid()
+        or git_metadata.st_mode & 0o077
     ):
         raise BootstrapError(
             "bootstrap source must be an owner-controlled standalone private clone"
@@ -770,7 +1071,7 @@ def _assert_private_bootstrap_source(root: Path) -> None:
             not stat.S_ISDIR(metadata.st_mode)
             or current.is_symlink()
             or metadata.st_uid != os.geteuid()
-            or metadata.st_mode & 0o022
+            or metadata.st_mode & 0o077
         ):
             raise BootstrapError(f"bootstrap source directory is unsafe: {current}")
         for name in (*names, *files):
@@ -779,7 +1080,7 @@ def _assert_private_bootstrap_source(root: Path) -> None:
             if (
                 stat.S_ISLNK(metadata.st_mode)
                 or metadata.st_uid != os.geteuid()
-                or metadata.st_mode & 0o022
+                or metadata.st_mode & 0o077
                 or not (
                     stat.S_ISDIR(metadata.st_mode)
                     or stat.S_ISREG(metadata.st_mode)
@@ -1024,7 +1325,11 @@ def _harden_checkout(root: Path) -> None:
             else:
                 raise BootstrapError(f"special production Git entry: {child}")
     policy_payloads = {
-        path: _read_git_policy(path, root=root)
+        path: _read_git_policy(
+            path,
+            root=root,
+            allow_runtime_overrides=True,
+        )
         for path in _git_policy_paths(root)
     }
     for path, (payload, mode) in policy_payloads.items():
@@ -1073,17 +1378,43 @@ def _initialize_runtime_root(root: Path) -> None:
 
 
 def _open_deploy_lock(path: Path):  # type: ignore[no-untyped-def]
+    try:
+        root_metadata = path.parent.parent.lstat()
+    except OSError as exc:
+        raise BootstrapError(
+            "pre-takeover installer must create the shared deploy.lock"
+        ) from exc
+    if (
+        not stat.S_ISDIR(root_metadata.st_mode)
+        or path.parent.parent.is_symlink()
+        or root_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(root_metadata.st_mode) != 0o700
+    ):
+        raise BootstrapError("runtime root is unsafe before deploy.lock")
+    try:
+        state_metadata = path.parent.lstat()
+    except OSError as exc:
+        raise BootstrapError(
+            "pre-takeover installer must create the shared deploy.lock"
+        ) from exc
+    if (
+        not stat.S_ISDIR(state_metadata.st_mode)
+        or path.parent.is_symlink()
+        or state_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(state_metadata.st_mode) != 0o700
+    ):
+        raise BootstrapError("runtime root is unsafe before deploy.lock")
     flags = (
         os.O_RDWR
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
-    created = False
     try:
-        descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
-        created = True
-    except FileExistsError:
         descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise BootstrapError(
+            "pre-takeover installer must create the shared deploy.lock"
+        ) from exc
     try:
         metadata = os.fstat(descriptor)
         if (
@@ -1092,9 +1423,6 @@ def _open_deploy_lock(path: Path):  # type: ignore[no-untyped-def]
             or stat.S_IMODE(metadata.st_mode) != 0o600
         ):
             raise BootstrapError("deploy.lock is unsafe")
-        if created:
-            os.fsync(descriptor)
-            _fsync_directory(path.parent)
         stream = os.fdopen(descriptor, "a+", encoding="utf-8")
         descriptor = -1
         return stream
@@ -1540,6 +1868,15 @@ def _production_repository_identity(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
+    parser.add_argument(
+        "--check-source-readiness",
+        action="store_true",
+        help="only validate a standalone bootstrap source and print JSON",
+    )
+    parser.add_argument(
+        "--source-root",
+        help="source clone inspected by --check-source-readiness",
+    )
     parser.add_argument("--production-root", default=str(PRODUCTION_ROOT))
     parser.add_argument("--runtime-root", default=str(RUNTIME_ROOT))
     parser.add_argument("--apply", action="store_true")
@@ -1547,6 +1884,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirm-runtime-root")
     parser.add_argument("--confirm-source-tree")
     parser.add_argument("--confirm-worker-unit-sha256")
+    parser.add_argument(
+        "--legacy-takeover-operation-id",
+        help=(
+            "exact completed pre-stopped takeover operation consumed by "
+            "bootstrap"
+        ),
+    )
     return parser
 
 
@@ -1559,6 +1903,38 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     args = build_parser().parse_args(argv)
+    if args.check_source_readiness:
+        if args.apply:
+            print(
+                "bootstrap-pull-deploy: error: source readiness is read-only",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            report = bootstrap_source_readiness(
+                Path(args.source_root).absolute()
+                if args.source_root
+                else REPOSITORY_ROOT,
+                expected_sha=args.sha,
+            )
+        except (BootstrapError, OSError, subprocess.SubprocessError) as exc:
+            print(f"bootstrap-pull-deploy: error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if args.source_root is not None:
+        print(
+            "bootstrap-pull-deploy: error: --source-root requires --check-source-readiness",
+            file=sys.stderr,
+        )
+        return 2
+    if not args.legacy_takeover_operation_id:
+        print(
+            "bootstrap-pull-deploy: error: "
+            "--legacy-takeover-operation-id is required",
+            file=sys.stderr,
+        )
+        return 2
     production_root = Path(args.production_root).absolute()
     runtime_root = Path(args.runtime_root).absolute()
     test_unit = _worker_unit_path(production_root, allow_test=True)
@@ -1577,13 +1953,49 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         if not allow_test:
-            _assert_private_bootstrap_source(REPOSITORY_ROOT)
-            _verify_git_object_database(REPOSITORY_ROOT)
-        source_sha, source_tree = _source_identity(allow_test=allow_test)
+            source_readiness = bootstrap_source_readiness(
+                REPOSITORY_ROOT,
+                expected_sha=args.sha,
+            )
+            source_sha = str(source_readiness["source_sha"])
+            source_tree = str(source_readiness["source_tree"])
+        else:
+            source_sha, source_tree = _source_identity(allow_test=True)
+            source_readiness = {
+                "schema_version": 2,
+                "ready": True,
+                "source_root": str(REPOSITORY_ROOT),
+                "source_sha": source_sha,
+                "source_tree": source_tree,
+                "branch": "main",
+                "origin": REPOSITORY_SSH_URL,
+                "remote_names": ["origin"],
+                "origin_fetch_urls": [REPOSITORY_SSH_URL],
+                "origin_push_urls": [REPOSITORY_SSH_URL],
+                "origin_main_sha": source_sha,
+                "standalone_object_database": True,
+                "shallow": False,
+                "dirty_entries": 0,
+                "ignored_entries": 0,
+                "unreachable_objects": 0,
+                "replace_refs": 0,
+                "special_index_entries": 0,
+                "sparse_index": False,
+                "owner_private": True,
+                "group_or_world_writable": False,
+            }
         if args.sha != source_sha:
             raise BootstrapError(
                 "requested bootstrap SHA differs from the clean source checkout"
             )
+        source_readiness_sha256 = digest(
+            json.dumps(
+                source_readiness,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        )
         if args.apply and not allow_test and (
             production_root != PRODUCTION_ROOT
             or runtime_root != RUNTIME_ROOT
@@ -1633,17 +2045,17 @@ def main(argv: list[str] | None = None) -> int:
             "checkout": _path_inventory(production_root),
             "git": _path_inventory(production_root / ".git"),
         }
-        if allow_test:
-            production_repository = _production_repository_identity(
-                production_root, source_sha, allow_test=allow_test
-            )
-        else:
-            production_repository = {
-                "validation": "deferred-until-confirmed-apply",
-                "expected_branch": "main",
-                "expected_origin": REPOSITORY_SSH_URL,
-                "target": source_sha,
-            }
+        production_repository = _production_repository_identity(
+            production_root, source_sha, allow_test=allow_test
+        )
+        legacy_takeover = _completed_legacy_takeover(
+            runtime_root,
+            args.legacy_takeover_operation_id,
+            source_sha=source_sha,
+            source_tree=source_tree,
+            production_repository=production_repository,
+            allow_test=allow_test,
+        )
     except (BootstrapError, OSError, subprocess.SubprocessError) as exc:
         print(f"bootstrap-pull-deploy: error: {exc}", file=sys.stderr)
         return 2
@@ -1662,6 +2074,9 @@ def main(argv: list[str] | None = None) -> int:
         "runtime_root": str(runtime_root),
         "source_sha": source_sha,
         "source_tree": source_tree,
+        "source_readiness": source_readiness,
+        "source_readiness_sha256": source_readiness_sha256,
+        "legacy_takeover": legacy_takeover,
         "delivery_gate": delivery_gate,
         "production_repository": production_repository,
         "directories": [str(runtime_root / relative) for relative in DIRECTORIES],
@@ -1701,22 +2116,57 @@ def main(argv: list[str] | None = None) -> int:
             allow_test=allow_test,
         )
         os.umask(0o077)
-        _initialize_runtime_root(runtime_root)
-        for relative, mode in DIRECTORIES.items():
-            path = runtime_root / relative
-            path.mkdir(parents=True, exist_ok=True, mode=mode)
-            if path.is_symlink() or not path.is_dir() or path.stat().st_uid != os.geteuid():
-                raise BootstrapError(f"runtime directory is unsafe: {path}")
-            os.chmod(path, mode)
         lock = runtime_root / "state/deploy.lock"
         with _open_deploy_lock(lock) as stream:
             try:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise BootstrapError("another deployment holds deploy.lock") from exc
-            locked_source = _source_identity(allow_test=allow_test)
-            if locked_source != (source_sha, source_tree):
-                raise BootstrapError("bootstrap source changed before installation")
+            if allow_test:
+                locked_readiness = source_readiness
+            else:
+                locked_readiness = bootstrap_source_readiness(
+                    REPOSITORY_ROOT,
+                    expected_sha=source_sha,
+                )
+            if locked_readiness != source_readiness:
+                raise BootstrapError(
+                    "bootstrap source readiness changed before installation"
+                )
+            if digest(
+                json.dumps(
+                    locked_readiness,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode("utf-8")
+            ) != source_readiness_sha256:
+                raise BootstrapError(
+                    "bootstrap source readiness digest changed before installation"
+                )
+            locked_takeover = _completed_legacy_takeover(
+                runtime_root,
+                args.legacy_takeover_operation_id,
+                source_sha=source_sha,
+                source_tree=source_tree,
+                production_repository=production_repository,
+                allow_test=allow_test,
+            )
+            if locked_takeover != legacy_takeover:
+                raise BootstrapError(
+                    "legacy takeover authority changed before installation"
+                )
+            _initialize_runtime_root(runtime_root)
+            for relative, mode in DIRECTORIES.items():
+                path = runtime_root / relative
+                path.mkdir(parents=True, exist_ok=True, mode=mode)
+                if (
+                    path.is_symlink()
+                    or not path.is_dir()
+                    or path.stat().st_uid != os.geteuid()
+                ):
+                    raise BootstrapError(f"runtime directory is unsafe: {path}")
+                os.chmod(path, mode)
             locked_gate = _delivery_gate(
                 production_root,
                 runtime_root,
@@ -1730,13 +2180,20 @@ def main(argv: list[str] | None = None) -> int:
             locked_repository = _production_repository_identity(
                 production_root, source_sha, allow_test=allow_test
             )
-            if production_repository.get("validation") == (
-                "deferred-until-confirmed-apply"
-            ):
-                production_repository = locked_repository
-                plan["production_repository"] = locked_repository
-            elif locked_repository != production_repository:
+            if locked_repository != production_repository:
                 raise BootstrapError("production Git identity changed before install")
+            locked_takeover = _completed_legacy_takeover(
+                runtime_root,
+                args.legacy_takeover_operation_id,
+                source_sha=source_sha,
+                source_tree=source_tree,
+                production_repository=locked_repository,
+                allow_test=allow_test,
+            )
+            if locked_takeover != legacy_takeover:
+                raise BootstrapError(
+                    "legacy takeover authority changed during installation"
+                )
             locked_unit = _preflight_worker_unit(
                 runtime_root,
                 worker_unit_path,
@@ -1765,7 +2222,14 @@ def main(argv: list[str] | None = None) -> int:
                 source_tree=source_tree,
                 allow_test=allow_test,
             )
-            final_source = _source_identity(allow_test=allow_test)
+            final_readiness = (
+                source_readiness
+                if allow_test
+                else bootstrap_source_readiness(
+                    REPOSITORY_ROOT,
+                    expected_sha=source_sha,
+                )
+            )
             final_gate = _delivery_gate(
                 production_root,
                 runtime_root,
@@ -1776,6 +2240,14 @@ def main(argv: list[str] | None = None) -> int:
             final_repository = _production_repository_identity(
                 production_root, source_sha, allow_test=allow_test
             )
+            final_takeover = _completed_legacy_takeover(
+                runtime_root,
+                args.legacy_takeover_operation_id,
+                source_sha=source_sha,
+                source_tree=source_tree,
+                production_repository=final_repository,
+                allow_test=allow_test,
+            )
             final_unit = _preflight_worker_unit(
                 runtime_root,
                 worker_unit_path,
@@ -1783,9 +2255,10 @@ def main(argv: list[str] | None = None) -> int:
                 allow_test=allow_test,
             )
             if (
-                final_source != (source_sha, source_tree)
+                final_readiness != source_readiness
                 or final_gate != delivery_gate
                 or final_repository != production_repository
+                or final_takeover != legacy_takeover
                 or final_unit.get("present") is True
                 and (
                     final_unit.get("mode") != "0600"
@@ -1853,9 +2326,12 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 active = stored_active
             bootstrap_record_base = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "source_sha": source_sha,
                 "source_tree": source_tree,
+                "source_readiness": source_readiness,
+                "source_readiness_sha256": source_readiness_sha256,
+                "legacy_takeover": legacy_takeover,
                 "delivery_gate": delivery_gate,
                 "production_repository": production_repository,
                 "immutable_files": installed,

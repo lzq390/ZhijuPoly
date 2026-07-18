@@ -284,7 +284,9 @@ def test_transport_native_link_gate_rejects_not_found_without_leaking_output(
     assert sentinel not in error
 
 
-def test_transport_readiness_ignores_unrelated_plugin_failure(monkeypatch):
+def test_transport_readiness_ignores_unrelated_plugin_failure_with_openmm_dependency_text(
+    monkeypatch,
+):
     _PlatformWithFailures.failures = [
         "Error loading libExampleAnalysisPlugin.so: "
         "libOpenMM.so: optional dependency not found"
@@ -324,6 +326,32 @@ def test_transport_readiness_classifies_plugin_inspection_failure():
     )
 
     assert error == runtime_probe.TRANSPORT_PLUGIN_INSPECTION_FAILURE
+
+
+def test_transport_readiness_ignores_unrelated_plugin_failure_without_openmm_name(
+    monkeypatch,
+):
+    _PlatformWithFailures.failures = [
+        "Error loading libExampleAnalysisPlugin.so: optional dependency not found"
+    ]
+    smoke_calls = 0
+
+    def fake_smoke(*args):
+        nonlocal smoke_calls
+        smoke_calls += 1
+
+    monkeypatch.setattr(runtime_probe, "_run_transport_cuda_smoke", fake_smoke)
+
+    error = runtime_probe._transport_runtime_error(
+        _OpenMMForReadiness,
+        object(),
+        object(),
+        transport_cuda_smoke=True,
+        integrator_class=object,
+    )
+
+    assert error is None
+    assert smoke_calls == 1
 
 
 def test_transport_readiness_requires_enabled_cuda_smoke(monkeypatch):

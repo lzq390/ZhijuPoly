@@ -182,6 +182,25 @@ async def wait_for_process_group(
         )
 
 
+MAX_TERMINATION_GRACE_SECONDS = 10.0
+PROCESS_GROUP_POLL_SECONDS = 0.05
+PROCESS_GROUP_KILL_OBSERVE_SECONDS = 1.0
+
+
+async def _wait_for_process_group_exit(
+    process_group_id: int,
+    *,
+    deadline: float,
+) -> bool:
+    loop = asyncio.get_running_loop()
+    while _process_group_alive(process_group_id):
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(PROCESS_GROUP_POLL_SECONDS, remaining))
+    return True
+
+
 async def terminate_process_group(
     process: asyncio.subprocess.Process,
     *,
@@ -213,6 +232,8 @@ async def _terminate_process_group(
         except Exception:
             execution_lease.fail_closed()
             raise
+    loop = asyncio.get_running_loop()
+    termination_deadline = loop.time() + MAX_TERMINATION_GRACE_SECONDS
     group_alive = _process_group_alive(process.pid)
     if group_alive:
         try:
@@ -226,16 +247,17 @@ async def _terminate_process_group(
                 "MPS-safe process group termination could not send SIGTERM",
             ) from exc
     if not process_already_waited and process.returncode is None:
+        remaining = termination_deadline - loop.time()
         try:
-            await asyncio.wait_for(process.wait(), timeout=10)
+            if remaining > 0:
+                await asyncio.wait_for(process.wait(), timeout=remaining)
         except asyncio.TimeoutError:
             pass
     if group_alive:
-        for _ in range(20):
-            if not _process_group_alive(process.pid):
-                group_alive = False
-                break
-            await asyncio.sleep(0.05)
+        group_alive = not await _wait_for_process_group_exit(
+            process.pid,
+            deadline=termination_deadline,
+        )
     if group_alive:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -247,13 +269,25 @@ async def _terminate_process_group(
                 "gpu_runtime_unhealthy",
                 "MPS-safe process group termination could not send SIGKILL",
             ) from exc
+    kill_deadline = loop.time() + PROCESS_GROUP_KILL_OBSERVE_SECONDS
     if process.returncode is None:
-        await process.wait()
+        remaining = kill_deadline - loop.time()
+        try:
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            await asyncio.wait_for(process.wait(), timeout=remaining)
+        except asyncio.TimeoutError:
+            await _quarantine_failed_cleanup(execution_lease)
+            raise GpuBrokerClientError(
+                "gpu_runtime_unhealthy",
+                "process leader survived MPS-safe SIGKILL; GPU remains quarantined",
+            ) from None
     if group_alive:
-        for _ in range(100):
-            if not _process_group_alive(process.pid):
-                return
-            await asyncio.sleep(0.05)
+        if await _wait_for_process_group_exit(
+            process.pid,
+            deadline=kill_deadline,
+        ):
+            return
         await _quarantine_failed_cleanup(execution_lease)
         raise GpuBrokerClientError(
             "gpu_runtime_unhealthy",

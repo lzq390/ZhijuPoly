@@ -13,6 +13,7 @@ from app.migration_policy import (
     canonical_migration_checksum,
     validate_migration_manifest_entries,
 )
+from app.migration_compatibility import require_known_or_exact_forward_ledger
 from app.postgres_database import postgres_connection
 
 MIGRATIONS_DIR = PROJECT_ROOT / "backend" / "migrations" / "postgres"
@@ -222,12 +223,13 @@ def apply_postgres_migrations(
             )
         applied = applied_migrations(connection)
 
-        unknown_versions = sorted(set(applied).difference(entries_by_version))
-        if unknown_versions:
-            raise RuntimeError(
-                "Migration ledger contains versions absent from the canonical manifest: "
-                + ", ".join(unknown_versions)
-            )
+        require_known_or_exact_forward_ledger(
+            applied,
+            {
+                entry.version: str(entry.checksum)
+                for entry in entries
+            },
+        )
 
         # Validate the entire known ledger before planning any migration SQL.
         # In particular, a database cannot enter a later epoch using only a

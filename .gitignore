@@ -74,6 +74,7 @@ nexpoly-release-*.tar.gz
 !/backend/tests/test_assistant.py
 !/backend/tests/test_data_import_cli.py
 !/backend/tests/test_deployment_control.py
+!/backend/tests/test_deployment_monomer_md_canary.py
 !/backend/tests/test_gpu_runtime_registry.py
 !/backend/tests/test_gpu_preflight.py
 !/backend/tests/test_gpu_broker_interface.py

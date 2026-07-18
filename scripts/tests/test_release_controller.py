@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from contextlib import ExitStack, contextmanager
 import fcntl
 import inspect
@@ -19,6 +20,10 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+
+from scripts.tests.test_postgres_media_evidence import (
+    external_inventory_fixture,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -116,6 +121,41 @@ def write_worker_base_identity(release: Path) -> dict[str, object]:
 
 
 class ReleaseControllerTests(unittest.TestCase):
+    def test_production_compose_up_never_controls_postgres_dependencies(
+        self,
+    ) -> None:
+        calls: list[tuple[Path, int, list[str]]] = []
+        for source_path in (
+            REPOSITORY_ROOT / "scripts/release_controller.py",
+            REPOSITORY_ROOT / "scripts/pull_deploy_controller.py",
+        ):
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                function = node.func
+                if (
+                    not isinstance(function, ast.Attribute)
+                    or function.attr not in {"compose", "_compose"}
+                ):
+                    continue
+                literals = [
+                    argument.value
+                    for argument in node.args
+                    if isinstance(argument, ast.Constant)
+                    and isinstance(argument.value, str)
+                ]
+                if "up" in literals:
+                    calls.append((source_path, node.lineno, literals))
+
+        self.assertEqual(len(calls), 12)
+        for source_path, line, literals in calls:
+            with self.subTest(source=source_path.name, line=line):
+                self.assertIn("--no-deps", literals)
+                self.assertNotIn("lab-postgres", literals)
+                self.assertNotIn("postgres-init", literals)
+                self.assertIn(literals[-1], {"backend", "nginx"})
+
     def setUp(self) -> None:
         for patcher in (
             mock.patch.object(
@@ -175,19 +215,13 @@ class ReleaseControllerTests(unittest.TestCase):
         self.release_input.write_text(
             json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "asset_manifest_digest": DIGEST,
-                    "datasets_on_asset_change": [
-                        "governance",
-                        "core",
-                        "knowledge",
-                        "online",
-                        "pi",
-                        "dft",
-                        "experimental",
-                        "lab",
-                        "property_filter",
-                    ],
+                    "predecessor_asset_manifest_digest": (
+                        "sha256:" + "d" * 64
+                    ),
+                    "changed_asset_trees": ["byteff2"],
+                    "datasets_on_asset_change": [],
                 }
             ),
             encoding="utf-8",
@@ -407,6 +441,80 @@ class ReleaseControllerTests(unittest.TestCase):
                 )
             )
 
+    def test_schema_v2_release_input_pins_predecessor_and_skips_database_rebuilds(
+        self,
+    ) -> None:
+        self.release_input.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "asset_manifest_digest": (
+                        release_controller.SCHEMA_V2_ASSET_MANIFEST_DIGEST
+                    ),
+                    "predecessor_asset_manifest_digest": (
+                        release_controller.SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+                    ),
+                    "changed_asset_trees": ["byteff2"],
+                    "datasets_on_asset_change": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = release_controller.load_release_input(self.release_input)
+        output = self.build_single_bundle()
+        document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(loaded["changed_asset_trees"], ["byteff2"])
+        self.assertEqual(loaded["datasets_on_asset_change"], [])
+        self.assertEqual(
+            document["asset_manifest_digest"],
+            release_controller.SCHEMA_V2_ASSET_MANIFEST_DIGEST,
+        )
+        self.assertEqual(document["datasets_on_asset_change"], [])
+
+    def test_schema_v2_release_input_rejects_database_rebuild_declarations(self) -> None:
+        self.release_input.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "asset_manifest_digest": (
+                        release_controller.SCHEMA_V2_ASSET_MANIFEST_DIGEST
+                    ),
+                    "predecessor_asset_manifest_digest": (
+                        release_controller.SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+                    ),
+                    "changed_asset_trees": ["byteff2"],
+                    "datasets_on_asset_change": ["online"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "must not rebuild PostgreSQL datasets",
+        ):
+            release_controller.load_release_input(self.release_input)
+
+    def test_schema_v1_release_input_is_retired(self) -> None:
+        self.release_input.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "asset_manifest_digest": DIGEST,
+                    "datasets_on_asset_change": ["online"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "must use the non-rebuilding schema-v2 contract",
+        ):
+            release_controller.load_release_input(self.release_input)
+
     def test_asset_release_verifies_every_manifested_file(self) -> None:
         release = self.make_asset_release()
 
@@ -422,6 +530,183 @@ class ReleaseControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(release_controller.ReleaseError, "size differs|digest differs"):
             release_controller.inspect_asset_release(release)
 
+    def test_predecessor_schema_v2_asset_verifies_unchanged_tree_evidence(
+        self,
+    ) -> None:
+        release = self.make_asset_release()
+        manifest_path = release / "ASSET-MANIFEST.json"
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        unchanged_digests = {
+            tree: release_controller.sha256_bytes(
+                (
+                    json.dumps(
+                        {"files": document["assets"][tree]},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            for tree in ("model", "database", "backend-data")
+        }
+        document.update(
+            {
+                "predecessor_asset_digest": (
+                    release_controller.SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+                ),
+                "changed_asset_trees": ["byteff2"],
+                "unchanged_asset_tree_digests": unchanged_digests,
+            }
+        )
+        os.chmod(release, 0o755)
+        os.chmod(manifest_path, 0o644)
+        manifest_path.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(manifest_path, 0o444)
+        os.chmod(release, 0o555)
+        digest = release_controller.sha256_file(manifest_path)
+
+        with (
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS",
+                unchanged_digests,
+            ),
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_ASSET_MANIFEST_DIGEST",
+                digest,
+            ),
+        ):
+            _resolved, actual_digest, _commit = (
+                release_controller.inspect_asset_release(release)
+            )
+
+        self.assertEqual(actual_digest, digest)
+
+    def test_provenance_schema_v2_asset_verifies_all_tree_and_build_evidence(
+        self,
+    ) -> None:
+        release = self.make_asset_release()
+        manifest_path = release / "ASSET-MANIFEST.json"
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        tree_digests = {
+            tree: release_controller.sha256_bytes(
+                (
+                    json.dumps(
+                        {"files": document["assets"][tree]},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            for tree in ("model", "database", "backend-data", "byteff2")
+        }
+        unchanged_digests = {
+            tree: tree_digests[tree]
+            for tree in ("model", "database", "backend-data")
+        }
+        predecessor_digest = (
+            release_controller.SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+        )
+        document.update(
+            {
+                "predecessor_asset_digest": predecessor_digest,
+                "changed_asset_trees": ["byteff2"],
+                "unchanged_asset_tree_digests": unchanged_digests,
+                "asset_tree_digests": tree_digests,
+                "byteff2_tree": release_controller.BYTEFF2_GIT_TREE,
+                "byteff2_submodule_trees": {},
+                "build_provenance": {
+                    "schema_version": 1,
+                    "builder_source": {
+                        "repository": (
+                            release_controller.ASSET_BUILD_SOURCE_REPOSITORY
+                        ),
+                        "commit": "1" * 40,
+                        "tree": "2" * 40,
+                        "script_path": release_controller.ASSET_BUILD_SOURCE_SCRIPT,
+                        "script_blob": "3" * 40,
+                    },
+                    "evidence": {
+                        "predecessor_manifest_digest": predecessor_digest,
+                        "predecessor_all_trees_rehashed": [
+                            "model",
+                            "database",
+                            "backend-data",
+                            "byteff2",
+                        ],
+                        "unchanged_trees_byte_identical": [
+                            "model",
+                            "database",
+                            "backend-data",
+                        ],
+                        "asset_tree_digest_algorithm": (
+                            "canonical-manifest-inventory-v1"
+                        ),
+                        "byteff2_source_verification": (
+                            "clean-recursive-commit-and-tree"
+                        ),
+                        "staging_directory_mode": "0700",
+                        "file_and_directory_fsync": True,
+                        "publication": "atomic-rename",
+                        "existing_target": "full-content-revalidation",
+                    },
+                },
+            }
+        )
+        os.chmod(release, 0o755)
+        os.chmod(manifest_path, 0o644)
+        manifest_path.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(manifest_path, 0o444)
+        os.chmod(release, 0o555)
+        digest = release_controller.sha256_file(manifest_path)
+
+        with (
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS",
+                unchanged_digests,
+            ),
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_ASSET_MANIFEST_DIGEST",
+                digest,
+            ),
+        ):
+            _resolved, actual_digest, _commit = (
+                release_controller.inspect_asset_release(release)
+            )
+        self.assertEqual(actual_digest, digest)
+
+        os.chmod(release, 0o755)
+        os.chmod(manifest_path, 0o644)
+        document["build_provenance"]["builder_source"]["script_blob"] = "short"
+        manifest_path.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(manifest_path, 0o444)
+        os.chmod(release, 0o555)
+        with (
+            mock.patch.object(
+                release_controller,
+                "SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS",
+                unchanged_digests,
+            ),
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "invalid builder identity",
+            ),
+        ):
+            release_controller.inspect_asset_release(release)
+
     def test_asset_release_rejects_unmanifested_or_writable_content(self) -> None:
         release = self.make_asset_release()
         model = release / "model"
@@ -430,7 +715,10 @@ class ReleaseControllerTests(unittest.TestCase):
         os.chmod(model / "unlisted.bin", 0o444)
         os.chmod(model, 0o555)
 
-        with self.assertRaisesRegex(release_controller.ReleaseError, "inventory differs"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "inventory differs",
+        ):
             release_controller.inspect_asset_release(release)
 
     def test_candidate_byteff2_runtime_assets_accept_exact_fixed_contract(self) -> None:
@@ -1478,6 +1766,58 @@ class ReleaseControllerTests(unittest.TestCase):
                 "epoch": 1,
             },
         )
+        self.assertEqual(
+            plan["archive_policy"],
+            {
+                "relation": "generation.polytao_jobs",
+                "rows": "all-at-maintenance-window",
+                "status_counts": "dynamic",
+                "seal_after": "admission-drained-and-active-jobs-zero",
+            },
+        )
+
+    def test_0012_archive_evidence_seals_dynamic_business_rows(self) -> None:
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            "contract-0012-fixture",
+            False,
+        )
+        evidence = {
+            "schema_version": 2,
+            "row_count": 37,
+            "status_counts": {
+                "completed": 20,
+                "failed": 7,
+                "cancelled": 10,
+            },
+            "rows_sha256": "a" * 64,
+            "schema_sha256": "b" * 64,
+            "structure_counts": {
+                "columns": 1,
+                "indexes": 1,
+                "constraints": 1,
+                "triggers": 0,
+            },
+        }
+
+        self.assertEqual(maintenance._validate_archive_evidence(evidence), evidence)
+
+        incomplete = json.loads(json.dumps(evidence))
+        incomplete["status_counts"]["completed"] = 19
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "complete dynamic business-row set",
+        ):
+            maintenance._validate_archive_evidence(incomplete)
+
+        unknown_status = json.loads(json.dumps(evidence))
+        unknown_status["status_counts"] = {"completed": 36, "unexpected": 1}
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "complete dynamic business-row set",
+        ):
+            maintenance._validate_archive_evidence(unknown_status)
 
     def test_0012_maintenance_rejects_name_only_release_manifest(self) -> None:
         with self.assertRaisesRegex(release_controller.ReleaseError, "V2 release manifest"):
@@ -1716,13 +2056,25 @@ class ReleaseControllerTests(unittest.TestCase):
             **environment,
             "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER": "nexpoly_dev_auditor",
             "NEXPOLY_CONTRACT_0012_MD_HEALTH_AUDIT_USER": "nexpoly_health_auditor",
+            "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256": "sha256:" + "c" * 64,
         }
+        backup_digest = "sha256:" + "b" * 64
+        volume_id = "docker-volume:nexpoly_app_postgres_data"
+        media_id = "postgres-backup:/private/backups/nexpoly.dump"
+        media_ids = [volume_id, media_id]
         external_inventory = {
-            "schema_version": 1,
+            "schema_version": 2,
             "inventory_complete": True,
             "writable_target": {
                 "stack": "production",
                 "database": "nexpoly",
+            },
+            "media_registry": {
+                "schema_version": 1,
+                "sha256": "sha256:" + "c" * 64,
+                "captured_at": "2026-07-17T12:00:00Z",
+                "expected_media_ids": media_ids,
+                "discovered_media_ids": media_ids,
             },
             "databases": [
                 {
@@ -1748,7 +2100,105 @@ class ReleaseControllerTests(unittest.TestCase):
                     "legacy_relation_present": True,
                 },
             ],
+            "media": [
+                {
+                    "media_id": volume_id,
+                    "kind": "docker_volume",
+                    "database": "nexpoly",
+                    "source_identity_before": {
+                        "name": "nexpoly_app_postgres_data",
+                        "driver": "local",
+                        "mountpoint": (
+                            "/var/lib/docker/volumes/"
+                            "nexpoly_app_postgres_data/_data"
+                        ),
+                        "labels_sha256": "sha256:" + "1" * 64,
+                        "inspect_sha256": "sha256:" + "2" * 64,
+                        "attached_container_ids": ["3" * 64],
+                    },
+                    "source_identity_after": {
+                        "name": "nexpoly_app_postgres_data",
+                        "driver": "local",
+                        "mountpoint": (
+                            "/var/lib/docker/volumes/"
+                            "nexpoly_app_postgres_data/_data"
+                        ),
+                        "labels_sha256": "sha256:" + "1" * 64,
+                        "inspect_sha256": "sha256:" + "2" * 64,
+                        "attached_container_ids": ["3" * 64],
+                    },
+                    "source_content_sha256": "sha256:" + "4" * 64,
+                    "audit": {
+                        "method": "live-read-only",
+                        "complete": True,
+                        "evidence_sha256": "sha256:" + "5" * 64,
+                        "auditor_sha256": "sha256:" + "6" * 64,
+                        "postgres_major": 16,
+                        "audited_at": "2026-07-17T12:00:00Z",
+                    },
+                    "ledger": through_0008,
+                    "ledger_analysis": {
+                        "status": "canonical",
+                        "checksum_mismatches": [],
+                    },
+                    "legacy_relation_present": True,
+                    "migration_0013": {"state": "absent", "checksum": None},
+                    "disposition": "writable-target",
+                },
+                {
+                    "media_id": media_id,
+                    "kind": "postgres_backup",
+                    "database": "nexpoly",
+                    "source_identity_before": {
+                        "path": "/private/backups/nexpoly.dump",
+                        "device": 1,
+                        "inode": 2,
+                        "size_bytes": 3,
+                        "mtime_ns": 4,
+                        "mode": 0o600,
+                        "uid": os.geteuid(),
+                        "sha256": backup_digest,
+                    },
+                    "source_identity_after": {
+                        "path": "/private/backups/nexpoly.dump",
+                        "device": 1,
+                        "inode": 2,
+                        "size_bytes": 3,
+                        "mtime_ns": 4,
+                        "mode": 0o600,
+                        "uid": os.geteuid(),
+                        "sha256": backup_digest,
+                    },
+                    "source_content_sha256": backup_digest,
+                    "audit": {
+                        "method": "isolated-backup-restore-read-only",
+                        "complete": True,
+                        "evidence_sha256": "sha256:" + "d" * 64,
+                        "auditor_sha256": "sha256:" + "e" * 64,
+                        "postgres_major": 16,
+                        "audited_at": "2026-07-17T12:00:00Z",
+                    },
+                    "ledger": through_0008,
+                    "ledger_analysis": {
+                        "status": "canonical",
+                        "checksum_mismatches": [],
+                    },
+                    "legacy_relation_present": True,
+                    "migration_0013": {"state": "absent", "checksum": None},
+                    "disposition": "retained-private-isolated",
+                }
+            ],
+            "requires_0014": False,
         }
+        external_inventory = external_inventory_fixture(
+            dev_ledger=after_contract,
+            health_ledger=through_0008,
+            registry_digest=external_environment[
+                "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256"
+            ],
+            dev_user="nexpoly_dev_auditor",
+            health_user="nexpoly_health_auditor",
+        )
         self.assertEqual(
             maintenance._validate_external_database_inventory(
                 external_inventory,
@@ -1758,14 +2208,20 @@ class ReleaseControllerTests(unittest.TestCase):
         )
         missing_stack = json.loads(json.dumps(external_inventory))
         missing_stack["databases"].pop()
-        with self.assertRaisesRegex(release_controller.ReleaseError, "missing required stacks"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "external database inventory is unsafe",
+        ):
             maintenance._validate_external_database_inventory(
                 missing_stack,
                 external_environment,
             )
         writable_stack = json.loads(json.dumps(external_inventory))
         writable_stack["databases"][0]["transaction_read_only"] = False
-        with self.assertRaisesRegex(release_controller.ReleaseError, "not provably read-only"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "external database inventory is unsafe",
+        ):
             maintenance._validate_external_database_inventory(
                 writable_stack,
                 external_environment,
@@ -1775,7 +2231,10 @@ class ReleaseControllerTests(unittest.TestCase):
             "stack": "nexpoly_dev",
             "database": "nexpoly_dev",
         }
-        with self.assertRaisesRegex(release_controller.ReleaseError, "only writable target"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "external database inventory is unsafe",
+        ):
             maintenance._validate_external_database_inventory(
                 wrong_writable_target,
                 external_environment,
@@ -1788,7 +2247,10 @@ class ReleaseControllerTests(unittest.TestCase):
                 "database": "nexpoly_shadow",
             }
         )
-        with self.assertRaisesRegex(release_controller.ReleaseError, "unknown"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "external database inventory is unsafe",
+        ):
             maintenance._validate_external_database_inventory(
                 unknown_stack,
                 external_environment,
@@ -2220,6 +2682,7 @@ class ReleaseControllerTests(unittest.TestCase):
             "database_change_started": False,
             "worker_drain_attempted": False,
         }
+        maintenance._seal_current_state_precondition(marker, previous_state)
         release_controller.atomic_json(maintenance.marker_path, marker)
         current_release = production / "ops" / "releases" / SHA
         inventory_with_verify = {
@@ -2330,6 +2793,11 @@ class ReleaseControllerTests(unittest.TestCase):
             "database_change_started": True,
             "worker_drain_attempted": True,
         }
+        maintenance._seal_current_state_precondition(marker, previous_state)
+        marker["current_state_postcondition"] = committed_state
+        marker["current_state_postcondition_sha256"] = (
+            release_controller.canonical_json_digest(committed_state)
+        )
         release_controller.atomic_json(maintenance.marker_path, marker)
         current_release = production / "ops" / "releases" / SHA
 
@@ -2402,6 +2870,7 @@ class ReleaseControllerTests(unittest.TestCase):
             "database_change_started": False,
             "worker_drain_attempted": False,
         }
+        maintenance._seal_current_state_precondition(marker, previous_state)
         release_controller.atomic_json(maintenance.marker_path, marker)
         current_release = production / "ops" / "releases" / SHA
 
@@ -2430,6 +2899,196 @@ class ReleaseControllerTests(unittest.TestCase):
         self.assertEqual(journal["status"], "recovered")
         self.assertTrue(journal["retry_requires_new_operation_id"])
         resume.assert_called_once_with({}, worker_was_drained=False)
+
+    def test_0012_state_commit_response_loss_accepts_only_sealed_postcondition(
+        self,
+    ) -> None:
+        operation_id = "contract-0012-fixture"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        approval = {
+            "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            "operation_id": operation_id,
+            "approved_at": "2026-07-18T00:00:00+00:00",
+        }
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+        }
+        postcondition = {
+            **previous_state,
+            "migrations": [
+                release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION,
+                release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            ],
+            "approved_contracts": [approval],
+            "schema_compatibility_floor": {
+                "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            },
+            "migration_epoch_barrier": {
+                "epoch": 1,
+                "contract": {
+                    "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                    "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                },
+                "operation_id": operation_id,
+                "approved_at": approval["approved_at"],
+            },
+            "last_contract_operation": operation_id,
+        }
+        release_controller.atomic_json(maintenance.state_path, previous_state)
+        marker = {
+            "operation_id": operation_id,
+            "source_sha": SHA,
+            "previous_state": previous_state,
+            "phase": "state-commit-started",
+        }
+        maintenance._seal_current_state_precondition(marker, previous_state)
+        maintenance._seal_current_state_postcondition(marker, postcondition)
+        release_controller.atomic_json(maintenance.marker_path, marker)
+
+        real_atomic_json = release_controller.atomic_json
+        response_lost = False
+
+        def write_then_lose_response(path, document, mode=0o600):  # type: ignore[no-untyped-def]
+            nonlocal response_lost
+            real_atomic_json(path, document, mode)
+            if path == maintenance.state_path and not response_lost:
+                response_lost = True
+                raise OSError("injected response loss after state replace")
+
+        with (
+            mock.patch.object(
+                release_controller,
+                "atomic_json",
+                side_effect=write_then_lose_response,
+            ),
+            self.assertRaisesRegex(OSError, "response loss"),
+        ):
+            maintenance._write_current_state(postcondition)
+
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.state_path),
+            postcondition,
+        )
+        # Recovery/retry treats only the exact sealed candidate as a lost
+        # successful response and does not replace it again.
+        with mock.patch.object(release_controller, "atomic_json") as rewrite:
+            maintenance._write_current_state(postcondition)
+        rewrite.assert_not_called()
+
+    def test_0012_restore_rejects_foreign_valid_state_before_database_restore(
+        self,
+    ) -> None:
+        operation_id = "contract-0012-fixture"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+            "deployed_at": "2026-07-18T00:00:00+00:00",
+        }
+        postcondition = {
+            **previous_state,
+            "deployed_at": "2026-07-18T00:01:00+00:00",
+        }
+        foreign_state = {
+            **previous_state,
+            "deployed_at": "2026-07-18T00:02:00+00:00",
+        }
+        release_controller.atomic_json(maintenance.state_path, foreign_state)
+        marker = {
+            "operation_id": operation_id,
+            "source_sha": SHA,
+            "previous_state": previous_state,
+        }
+        maintenance._seal_current_state_precondition(marker, previous_state)
+        marker["current_state_postcondition"] = postcondition
+        marker["current_state_postcondition_sha256"] = (
+            release_controller.canonical_json_digest(postcondition)
+        )
+        release_controller.atomic_json(maintenance.marker_path, marker)
+
+        with (
+            mock.patch.object(
+                maintenance,
+                "_pre_destructive_database_gate",
+            ) as database_gate,
+            mock.patch.object(
+                maintenance.controller,
+                "restore_database",
+            ) as restore_database,
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "neither exact precondition nor exact postcondition",
+            ),
+        ):
+            maintenance._restore_previous_database({}, previous_state)
+
+        database_gate.assert_not_called()
+        restore_database.assert_not_called()
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.state_path),
+            foreign_state,
+        )
+
+    def test_0012_state_restore_retry_accepts_exact_precondition_without_rewrite(
+        self,
+    ) -> None:
+        operation_id = "contract-0012-fixture"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+        }
+        postcondition = {
+            **previous_state,
+            "migrations": [
+                release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION,
+                release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            ],
+        }
+        release_controller.atomic_json(maintenance.state_path, previous_state)
+        marker = {
+            "operation_id": operation_id,
+            "source_sha": SHA,
+            "previous_state": previous_state,
+        }
+        maintenance._seal_current_state_precondition(marker, previous_state)
+        marker["current_state_postcondition"] = postcondition
+        marker["current_state_postcondition_sha256"] = (
+            release_controller.canonical_json_digest(postcondition)
+        )
+        release_controller.atomic_json(maintenance.marker_path, marker)
+
+        with mock.patch.object(release_controller, "atomic_json") as rewrite:
+            maintenance._restore_current_state(previous_state)
+        rewrite.assert_not_called()
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.state_path),
+            previous_state,
+        )
 
 
 
@@ -2609,7 +3268,7 @@ class ReleaseControllerTests(unittest.TestCase):
             with self.assertRaisesRegex(release_controller.ReleaseError, "post-switch failure"):
                 controller.deploy()
 
-        patched["rebuild_datasets"].assert_called_once()
+        patched["rebuild_datasets"].assert_not_called()
         self.assertEqual(
             [call.args[0] for call in patched["switch_asset_pointer"].call_args_list],
             [target_assets, old_assets],
@@ -3104,6 +3763,60 @@ class ReleaseControllerTests(unittest.TestCase):
         self.assertFalse(controller.staging.exists())
         self.assertFalse(controller.in_progress_path.exists())
 
+    def test_interrupted_asset_pointer_switch_restores_pointer_not_database(self) -> None:
+        manifest = self.build()
+        controller = release_controller.ReleaseController(
+            self.root / "production",
+            manifest,
+            "auto",
+            True,
+        )
+        previous_sha = "1" * 40
+        previous_release = controller.ops / "releases" / previous_sha
+        previous_release.mkdir(parents=True)
+        current = controller.ops / "current"
+        current.symlink_to(Path("releases") / previous_sha)
+        old_assets = self.root / "old-assets"
+        old_digest = "sha256:" + "f" * 64
+        old_commit = "2" * 40
+        marker = {
+            "source_sha": SHA,
+            "phase": "db-changed",
+            "previous_state": {"status": "success", "source_sha": previous_sha},
+            "bootstrap": False,
+            "database_change_started": False,
+            "data_change_started": False,
+            "asset_switch_started": True,
+            "runtime_switch_started": False,
+            "previous_asset_root": str(old_assets),
+            "previous_asset_digest": old_digest,
+        }
+        self.seal_mock_interrupted_release(controller, marker)
+        controller.in_progress_path.parent.mkdir(parents=True, exist_ok=True)
+        controller.in_progress_path.write_text(json.dumps(marker), encoding="utf-8")
+        environment = {"NEXPOLY_ASSET_MANIFEST_DIGEST": DIGEST}
+
+        with (
+            mock.patch.object(controller, "environment", return_value=environment),
+            mock.patch.object(controller, "_validate_provisioned_ready"),
+            mock.patch.object(
+                release_controller,
+                "inspect_asset_release",
+                return_value=(old_assets, old_digest, old_commit),
+            ),
+            mock.patch.object(controller, "switch_asset_pointer") as switch_assets,
+            mock.patch.object(controller, "restore_database") as restore_database,
+            mock.patch.object(controller, "rollback_runtime") as rollback_runtime,
+            mock.patch.object(controller, "drain") as drain,
+        ):
+            controller.recover_interrupted_deployment(marker)
+
+        switch_assets.assert_called_once_with(old_assets)
+        restore_database.assert_not_called()
+        rollback_runtime.assert_not_called()
+        drain.assert_called_once_with(environment, False)
+        self.assertEqual(environment["NEXPOLY_ASSET_MANIFEST_DIGEST"], old_digest)
+
     def test_prepared_interrupted_deploy_retains_ready_release_for_same_sha_retry(self) -> None:
         manifest = self.build()
         controller = release_controller.ReleaseController(
@@ -3413,6 +4126,9 @@ class ReleaseControllerTests(unittest.TestCase):
         self.assertIn("backend", smoke_command)
         self.assertIn("http://127.0.0.1:8000", smoke_command)
         self.assertIn("--expected-byteff2-commit", smoke_command)
+        self.assertIn("--operation-id", smoke_command)
+        self.assertIn(f"release-smoke-{SHA}", smoke_command)
+        self.assertIn("--source-sha", smoke_command)
         self.assertEqual(smoke_command[-1], SHA)
         self.assertEqual(calls[3], ("drain", True))
 
@@ -4555,7 +5271,9 @@ class ReleaseControllerTests(unittest.TestCase):
                 mock.patch.object(
                     controller,
                     "run_ingress_isolated_monomer_smoke",
-                    side_effect=lambda _environment: events.append("monomer"),
+                    side_effect=lambda _environment, **_kwargs: events.append(
+                        "monomer"
+                    ),
                 )
             )
             stack.enter_context(
@@ -4583,7 +5301,8 @@ class ReleaseControllerTests(unittest.TestCase):
             if "up" in command and command[-1] == "backend"
         )
         self.assertIn("lab-postgres", pull_command)
-        self.assertIn("lab-postgres", backend_up)
+        self.assertNotIn("lab-postgres", backend_up)
+        self.assertIn("--no-deps", backend_up)
         self.assertEqual(
             events[-7:],
             ["contract", "monomer", "web", "freshness", "nginx", "health", "freshness"],
@@ -5007,7 +5726,8 @@ class ReleaseControllerTests(unittest.TestCase):
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[0][-2:], ["nginx", "backend"])
         self.assertIn("--wait-timeout", commands[1])
-        self.assertIn("lab-postgres", commands[1])
+        self.assertNotIn("lab-postgres", commands[1])
+        self.assertIn("--no-deps", commands[1])
         self.assertEqual(commands[1][-1], "backend")
         self.assertIn("app.generate_database_analytics_snapshot", commands[2])
         self.assertIn(previous_sha, commands[2])
@@ -5025,7 +5745,11 @@ class ReleaseControllerTests(unittest.TestCase):
         backend_health.assert_called_once_with(mock.ANY, release=previous_release)
         contract_smoke.assert_called_once_with(mock.ANY, release=previous_release)
         runtime_health.assert_called_once()
-        worker_smoke.assert_called_once_with(mock.ANY, release=previous_release)
+        worker_smoke.assert_called_once_with(
+            mock.ANY,
+            release=previous_release,
+            operation_id=f"rollback-smoke-{SHA}-{previous_sha}",
+        )
         self.assertEqual(smoke_events, ["backend", "contract", "worker", "web"])
         self.assertEqual(controller.candidate_dir, previous_release)
 
@@ -5189,7 +5913,7 @@ class ReleaseControllerTests(unittest.TestCase):
         )
 
 
-    def test_asset_change_rebuild_uses_one_explicit_full_dataset_command(self) -> None:
+    def test_asset_change_database_rebuild_entrypoint_fails_closed(self) -> None:
         manifest = self.build_single_bundle()
         controller = release_controller.ReleaseController(
             self.root / "production",
@@ -5197,16 +5921,41 @@ class ReleaseControllerTests(unittest.TestCase):
             "auto",
             False,
         )
+        controller.document["datasets_on_asset_change"] = ["online"]
+        with mock.patch.object(controller, "run") as run:
+            with self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "asset-triggered database rebuilds are retired",
+            ):
+                controller.rebuild_datasets({})
+
+        run.assert_not_called()
+
+    def test_byteff2_only_asset_change_does_not_run_database_rebuild(self) -> None:
+        manifest = self.build_single_bundle()
+        controller = release_controller.ReleaseController(
+            self.root / "production",
+            manifest,
+            "auto",
+            False,
+        )
+        controller.document["datasets_on_asset_change"] = []
+
         with mock.patch.object(controller, "run") as run:
             controller.rebuild_datasets({})
 
-        command = run.call_args.args[0]
-        self.assertIn("--rebuild", command)
-        self.assertIn("--skip-migrations", command)
-        self.assertNotIn("all", command)
-        declared = controller.document["datasets_on_asset_change"]
-        selected = [command[index + 1] for index, value in enumerate(command) if value == "--dataset"]
-        self.assertEqual(selected, declared)
+        run.assert_not_called()
+
+    def test_release_manifest_rejects_legacy_asset_database_rebuilds(self) -> None:
+        manifest_path = self.build_single_bundle()
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        document["datasets_on_asset_change"] = ["core"]
+
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "must not request asset-triggered database rebuilds",
+        ):
+            release_controller.validate_manifest(document)
 
     def test_previous_release_gpu_preflight_uses_previous_compose_tree(self) -> None:
         manifest = self.build()
@@ -6710,7 +7459,10 @@ while True:
         self.assertIn("self.restart_or_defer_worker(environment)", source)
         self.assertIn("self.resume_worker(environment)", source)
         self.assertIn("self.run_ingress_isolated_contract_smoke(environment)", source)
-        self.assertIn("self.run_ingress_isolated_monomer_smoke(environment)", source)
+        self.assertIn(
+            'operation_id=f"deploy-smoke-{self.sha}"',
+            source,
+        )
 
 
 if __name__ == "__main__":

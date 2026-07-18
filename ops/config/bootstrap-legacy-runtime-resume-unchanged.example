@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# SITE_IMPLEMENTATION_REQUIRED
+# Replace this body with an idempotent schema-v2 helper that starts only the
+# sealed, stopped Web container. It must prove Backend PID/start/restart and
+# user Worker PID/invocation/entered timestamp are unchanged before/after.
+echo "site-specific unchanged resume is not implemented" >&2
+exit 2

@@ -1,0 +1,220 @@
+{
+  "schema_version": 3,
+  "discovery_boundary": {
+    "schema_version": 1,
+    "docker_scope": "all-local-containers-volumes-and-pgdata-binds",
+    "backup_roots": [
+      "/data/lzq/gith/nexpoly/backups",
+      "/data/lzq/gith/nexpoly-runtime/legacy-takeover/preserved-postgres-backups",
+      "/data/lzq/recovery/nexpoly-postgres-media",
+      "/data/lzq/recovery/nexpoly-pre-merge-20260717T090623Z/dev-0009-quarantine"
+    ],
+    "backup_formats": [
+      {
+        "name": "postgres-custom-v1",
+        "suffixes": [
+          ".backup",
+          ".dump"
+        ]
+      },
+      {
+        "name": "postgres-tar-v1",
+        "suffixes": [
+          ".tar"
+        ]
+      }
+    ],
+    "discovery_methods": [
+      "all-docker-containers-and-volumes-v1",
+      "container-pgdata-mounts-v1",
+      "all-volume-pg-version-readonly-recursive-probe-v1",
+      "fixed-private-backup-roots-v1"
+    ]
+  },
+  "audit_runtime": {
+    "auditor_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "pg_service_file_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "postgres_image": "docker.io/library/postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+    "postgres_major": 16,
+    "postgres_uid": 70,
+    "postgres_gid": 70
+  },
+  "expected_media": [
+    {
+      "media_id": "docker-volume:nexpoly_app_postgres_data",
+      "kind": "docker_volume",
+      "database": "nexpoly",
+      "database_user": "nexpoly_production_auditor",
+      "disposition": "writable-target",
+      "audit_method": "live-read-only",
+      "pg_service": "nexpoly_production_audit",
+      "classification": "nexpoly-db",
+      "source_postgres_major": 16,
+      "databases": [
+        {
+          "name": "nexpoly",
+          "oid": "16384",
+          "owner": "nexpoly",
+          "allow_connections": true,
+          "template": false,
+          "audit_role": "nexpoly_production_auditor",
+          "migration_scope": "nexpoly-ledger"
+        },
+        {
+          "name": "postgres",
+          "oid": "5",
+          "owner": "postgres",
+          "allow_connections": true,
+          "template": false,
+          "audit_role": "nexpoly_production_auditor",
+          "migration_scope": "adjacent-record-only"
+        }
+      ]
+    },
+    {
+      "media_id": "docker-volume:nexpoly_dev_nexpoly_dev_postgres_data",
+      "kind": "docker_volume",
+      "database": "nexpoly_dev",
+      "database_user": "nexpoly_dev_auditor",
+      "disposition": "read-only-online",
+      "audit_method": "live-read-only",
+      "pg_service": "nexpoly_dev_audit",
+      "classification": "nexpoly-db",
+      "source_postgres_major": 16,
+      "databases": [
+        {
+          "name": "nexpoly_dev",
+          "oid": "16384",
+          "owner": "nexpoly_dev",
+          "allow_connections": true,
+          "template": false,
+          "audit_role": "nexpoly_dev_auditor",
+          "migration_scope": "nexpoly-ledger"
+        },
+        {
+          "name": "postgres",
+          "oid": "5",
+          "owner": "postgres",
+          "allow_connections": true,
+          "template": false,
+          "audit_role": "nexpoly_dev_auditor",
+          "migration_scope": "adjacent-record-only"
+        }
+      ]
+    },
+    {
+      "media_id": "docker-volume:nexpoly_lab_postgres_data",
+      "kind": "docker_volume",
+      "database": "nexpoly",
+      "database_user": "postgres",
+      "disposition": "retained-private-isolated",
+      "audit_method": "isolated-volume-copy-read-only",
+      "pg_service": null,
+      "classification": "nexpoly-db",
+      "source_postgres_major": 16,
+      "databases": [
+        {
+          "name": "nexpoly",
+          "oid": "16384",
+          "owner": "postgres",
+          "allow_connections": true,
+          "template": false,
+          "audit_role": "postgres",
+          "migration_scope": "nexpoly-ledger"
+        },
+        {
+          "name": "postgres",
+          "oid": "5",
+          "owner": "postgres",
+          "allow_connections": true,
+          "template": false,
+          "audit_role": "postgres",
+          "migration_scope": "adjacent-record-only"
+        }
+      ]
+    },
+    {
+      "media_id": "docker-volume:nexpoly_md_health_opt_app_postgres_data",
+      "kind": "docker_volume",
+      "database": "nexpoly_md_health_opt",
+      "database_user": "postgres",
+      "disposition": "retained-private-isolated",
+      "audit_method": "isolated-volume-copy-read-only",
+      "pg_service": null,
+      "classification": "nexpoly-db",
+      "source_postgres_major": 16,
+      "databases": [
+        {
+          "name": "nexpoly_md_health_opt",
+          "oid": "16384",
+          "owner": "postgres",
+          "allow_connections": true,
+          "template": false,
+          "audit_role": "postgres",
+          "migration_scope": "nexpoly-ledger"
+        },
+        {
+          "name": "postgres",
+          "oid": "5",
+          "owner": "postgres",
+          "allow_connections": true,
+          "template": false,
+          "audit_role": "postgres",
+          "migration_scope": "adjacent-record-only"
+        }
+      ]
+    },
+    {
+      "media_id": "postgres-backup:/data/lzq/gith/nexpoly-runtime/legacy-takeover/preserved-postgres-backups/nexpoly-b875829c3f00.dump",
+      "kind": "postgres_backup",
+      "database": "nexpoly",
+      "database_user": "postgres",
+      "disposition": "retained-private-isolated",
+      "audit_method": "isolated-backup-restore-read-only",
+      "pg_service": null,
+      "classification": "nexpoly-db",
+      "source_postgres_major": null,
+      "databases": [
+        {
+          "name": "nexpoly",
+          "oid": "16384",
+          "owner": "postgres",
+          "allow_connections": true,
+          "template": false,
+          "audit_role": "postgres",
+          "migration_scope": "nexpoly-ledger"
+        }
+      ]
+    },
+    {
+      "media_id": "postgres-backup:/data/lzq/gith/nexpoly/backups/replace-with-every-discovered-backup.dump",
+      "kind": "postgres_backup",
+      "database": "none",
+      "database_user": "none",
+      "disposition": "excluded-from-nexpoly-migration",
+      "audit_method": "unsupported-blocking",
+      "pg_service": null,
+      "classification": "unsupported-blocking",
+      "source_postgres_major": null,
+      "databases": []
+    },
+    {
+      "media_id": "postgres-backup:/data/lzq/recovery/nexpoly-pre-merge-20260717T090623Z/dev-0009-quarantine/replace-with-every-discovered-backup.dump",
+      "kind": "postgres_backup",
+      "database": "none",
+      "database_user": "none",
+      "disposition": "excluded-from-nexpoly-migration",
+      "audit_method": "unsupported-blocking",
+      "pg_service": null,
+      "classification": "unsupported-blocking",
+      "source_postgres_major": null,
+      "databases": []
+    }
+  ],
+  "required_online_databases": [
+    {
+      "stack": "nexpoly_dev",
+      "media_id": "docker-volume:nexpoly_dev_nexpoly_dev_postgres_data"
+    }
+  ]
+}

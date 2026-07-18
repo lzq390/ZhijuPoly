@@ -5,6 +5,9 @@ Actions validates every candidate and publishes the Backend and Web images, but
 it never contacts or mutates the production host. An operator runs the stable
 deployment command during an authorized maintenance window.
 
+The final read-only F/B admission report and its strict evidence contract are
+documented in [production-readiness.md](production-readiness.md).
+
 ## Filesystem boundaries
 
 The source checkout is fixed at:
@@ -15,10 +18,12 @@ The source checkout is fixed at:
 
 It must track `origin/main` and be completely clean: no tracked changes, no
 ordinary untracked paths, and no ignored paths. Before the first takeover,
-inventory every existing ignored path with its hash, owner and mode, then move
-secrets, models, caches, journals and results to the runtime root below. Verify
-the external pointers and configuration after the move. Never use `git clean`
-to satisfy this gate. Runtime state is never stored in that checkout:
+inventory every existing ignored path with its hash, owner and mode, and place
+the exact reviewed classification in the private bootstrap input. The
+source-pinned legacy takeover controller—not an operator shell command—moves
+only that sealed inventory to its fixed runtime, secret and asset roots. Never
+use `git clean` or manually move a classified path to satisfy this gate.
+Runtime state is never stored in that checkout:
 
 ```text
 /data/lzq/gith/nexpoly-runtime/
@@ -54,6 +59,8 @@ The single `.github/workflows/ci.yml` runs for pull requests and pushes to
 - Both images carry `revision`, `source` and `version` OCI labels.
 - CI resolves the pushed tags to immutable digests and smokes those exact
   digests against PostgreSQL 16.
+- The named `bridge-validation` job is part of the same required-job contract
+  consumed by bootstrap, Pull and the F→B bridge policy.
 - CI has no production environment, host credentials or production execution
   step.
 
@@ -114,14 +121,74 @@ bootstrap executables are mode `0700`:
   `config/bootstrap-legacy-runtime-status`,
   `config/bootstrap-legacy-runtime-resume-unchanged`, and
   `config/bootstrap-legacy-runtime-restore`.
+- the source-read-only
+  `config/contract-0012-external-database-audit` helper, its source-pinned
+  `nexpoly-postgres-media-evidence` builder, private schema-v2 registry and
+  registry-pinned private `pg_service.conf` digest and PG16 image. It
+  enumerates arbitrary-named PostgreSQL volumes, PGDATA
+  bind mounts, both fixed private backup roots and the independent dev/health
+  stacks. Dormant media are copied before PostgreSQL starts; logical backups
+  restore only into network-none disposable clusters.
+- the reviewed, non-secret
+  `ops/config/postgres-media-audit-role.sql.example` contract for the online
+  audit users. Provision their login secrets separately.
+- a reviewed, non-secret
+  `ops/config/mutable-data-audit-role.sql.example` provisioning/check
+  contract. Run it as the cluster role administrator, connected to `nexpoly`
+  in the maintenance window; provision the `nexpoly_mutable_audit` password
+  out of band and install only the mode-`0600` pgpass value. The helper's
+  schema-v4 evidence rejects any role attribute, membership, ownership or
+  persistent write authority outside the exact `pg_read_all_data` contract.
+- `bootstrap-input/legacy-takeover-classification.json`, mode `0600`, covering
+  the production checkout's ignored paths exactly with `runtime`, `secret` or
+  `asset` classifications. The reviewed file must contain no secret value.
 
-All eight executables are fixed-name, deploy-user-owned mode `0700` files. The
-deployment descriptor seals every hash. The status helper is read-only; the
-unchanged-resume helper may restore ingress only and must prove the Backend and
-Worker processes did not restart; the full restore helper is reserved for a
-runtime already stopped or partially replaced. Each helper must be idempotent
-across a lost response. There are no configurable shell-command selector
-variables.
+All executables are fixed-name, deploy-user-owned mode `0700` files. The
+deployment descriptor seals every bootstrap hash and the 0012 adapter
+independently seals its audit-helper hash. The status and database-audit helpers
+are read-only; the unchanged-resume helper may restore ingress only and must
+prove the Backend and Worker processes did not restart; the full restore helper
+is reserved for a runtime already stopped or partially replaced. Each helper
+must be idempotent across a lost response. There are no configurable
+shell-command selector variables.
+
+The site-specific helpers and classification are first staged under the
+deploy-user-owned mode-`0700` `bootstrap-input` directory. The shipped
+site-specific `.example` files contain `SITE_IMPLEMENTATION_REQUIRED` and are
+deliberately rejected unchanged. The source-pinned prerequisite installer
+copies the reviewed wrappers, customized helpers, classification, validator
+and takeover recovery launcher under one non-blocking
+`state/deploy.lock`. It compares every repository payload with the exact F Git
+blob and rechecks the standalone F source before reading, before installation
+and after installation:
+
+```bash
+./scripts/install_legacy_takeover_prerequisites.py \
+  --authority-sha <full-F-sha> \
+  --authority-tree <40-character-F-tree>
+
+./scripts/install_legacy_takeover_prerequisites.py \
+  --authority-sha <full-F-sha> \
+  --authority-tree <40-character-F-tree> \
+  --apply
+```
+
+The resulting private
+`legacy-takeover/INSTALL-MANIFEST.json` binds F SHA/tree, every installed hash,
+the helper-readiness digest and the classification digest. A conflicting
+existing target is never overwritten.
+
+The installed content-addressed control release exposes a non-executing
+readiness check. It verifies owner/mode/path identity and hashes every helper,
+but deliberately does not invoke recovery helpers:
+
+```bash
+/data/lzq/gith/nexpoly-runtime/bin/control_runtime_selector.py \
+  run site-helper-readiness readiness
+```
+
+Captured site-helper JSON can be validated separately with
+`site-helper-readiness validate --helper <fixed-name> --input <private-json>`.
 
 The initial controller must be installed from a clean temporary standalone
 clone at the reviewed base SHA/tree, beneath an owner-controlled directory that
@@ -143,7 +210,51 @@ git clone --no-local git@github.com:lzq390/ZhijuPoly.git \
 Invoke the script
 directly through its fixed isolated-Python shebang, or explicitly with
 `/usr/bin/python3 -I -B`; ordinary `python3 scripts/...` is rejected. First run
-the non-mutating plan:
+the standalone source-readiness check. It performs no fetch or maintenance and
+rejects shared worktrees/object stores, shallow history, ignored content,
+unreachable objects, writable paths, a non-canonical origin, and any SHA
+mismatch:
+
+```bash
+./scripts/bootstrap_pull_deploy.py \
+  --check-source-readiness \
+  --source-root /home/devuser/nexpoly-bootstrap/source \
+  --sha <main-sha>
+```
+
+Before stopping service, prefetch and verify the exact F authority, policy-
+pinned B commit/tree and OCI digests, schema-v2 asset, wheels and restore tools.
+The prefetch evidence must be complete while ingress is still open; no mutable
+tag or 90-day artifact is an authority. Then seal and apply the legacy takeover
+using only the installed recovery launcher and the classification digest from
+the install manifest:
+
+```bash
+/data/lzq/gith/nexpoly-runtime/legacy-takeover/bin/nexpoly-legacy-takeover \
+  seal \
+  --operation-id takeover-<utc-timestamp> \
+  --classification-sha256 sha256:<64-lowercase-hex>
+
+/data/lzq/gith/nexpoly-runtime/legacy-takeover/bin/nexpoly-legacy-takeover \
+  apply \
+  --operation-id takeover-<utc-timestamp>
+```
+
+Takeover drains to canonical zero active jobs, stops only the sealed Web,
+Backend and user Worker, leaves the exact PostgreSQL container/image/volume
+and system identifier running, backs up the Worker unit and any prior
+`bin`, `control-releases`, `active-control.json`, `bootstrap-control.json`,
+Bootstrap Worker-unit intent/completion audit and Bootstrap Worker-unit backup
+directory, externalizes the exact classified inventory, and CAS-switches the
+canonical HTTPS origin to SSH. It also seals mode/owner/type for every existing
+production checkout and `.git` path outside the classified subtrees; later Git
+objects may be added, but no sealed path may disappear or change type. Its
+public status schema binds the operation ID, classification, legacy runtime,
+Git identity, pre-stopped fence, original control-layout and checkout-
+permission digests, and final applied-record digest.
+
+Only after takeover reports `apply_phase=complete` may the F bootstrap control
+plane be planned:
 
 ```bash
 ./scripts/bootstrap_pull_deploy.py \
@@ -172,8 +283,9 @@ private inodes:
   --confirm-worker-unit-sha256 sha256:<64-lowercase-hex>
 ```
 
-Bootstrap itself backs up the exact existing mode-`0664` Worker unit, makes it
-private, atomically replaces the pathname with a new verified inode, runs
+Bootstrap consumes the already-installed takeover operation and fence from the
+private runtime state; callers do not supply their digests. It atomically
+installs F controls, replaces the exact mode-`0664` Worker unit under CAS, runs
 `daemon-reload`, and records the takeover authority. Never pre-`chmod`, replace
 or manually reload that unit. Remove the temporary bootstrap source only after
 the installed immutable inventory and completed bootstrap authority verify.
@@ -260,10 +372,75 @@ checks, resolves image digests and labels, validates assets and migrations,
 downloads locked wheels, and builds the inactive Worker environment directly
 at its final A/B slot path.
 
+The first governed takeover is the sole exception to “deploy current main”.
+After crash-safe legacy takeover has produced a clean SSH checkout and
+bootstrap has installed the current F control plane, the operator supplies
+only F—not a historical target—to the bridge commands:
+
+```bash
+nexpoly-pull-deploy bridge-plan \
+  --authority-sha <full-F-sha> \
+  --operation-id bridge-<utc-timestamp>
+
+nexpoly-pull-deploy bridge-prepare \
+  --authority-sha <full-F-sha> \
+  --operation-id bridge-<utc-timestamp>
+
+nexpoly-pull-deploy bridge-apply \
+  --authority-sha <full-F-sha> \
+  --operation-id bridge-<utc-timestamp>
+```
+
+F's `ops/config/production-bridge-policy.json` is the only source of B. It pins
+the full B commit/tree, the private `refs/nexpoly/bridge-target/<B>` ref, image
+digests, the schema-v2 asset digest, the empty dataset-rebuild list, accepted
+migration ledgers and all required F CI jobs. F derives and installs B controls;
+B then independently fetches current main, rereads the same F policy, proves
+B→F ancestry and the production-HEAD→B fast-forward, and CAS-creates the exact
+private ref. Tags, branch names, short SHAs and caller-supplied historical SHAs
+are never accepted. The v3 descriptor keeps F authority and B target evidence
+separate. Source switch merges the exact private B ref, never remote main.
+
+A private global bridge token is reserved before READY, bound to the exact
+descriptor digest, moved to commit-intent only after the candidate state is
+sealed in the crash marker, and permanently consumed only with that exact
+current-state digest. Recovery forwards a durable commit-intent if a crash
+occurred immediately before current-state rename; a consumed token without its
+current state fails closed. Ordinary v2 deployments neither consume nor reset
+this one-time authority.
+
+Before invoking the legacy restore, B publishes a minimum owner-private
+recovery capsule outside the control layout that restore removes. The capsule
+binds the exact B recovery entry, descriptor, authority SHA, target SHA and
+control release by SHA-256. If the process crashes after legacy restore has
+reinstated the old HTTPS checkout and permissions, only the source-pinned
+recovery launcher may finish bookkeeping:
+
+```bash
+/data/lzq/gith/nexpoly-runtime/legacy-takeover/bin/nexpoly-bridge-recover \
+  --capsule-sha256 <marker-capsule-sha256> \
+  --authority-sha <full-F-sha> \
+  --target-sha <full-B-sha> \
+  --operation-id <bridge-operation-id> \
+  --descriptor-sha256 <marker-descriptor-sha256> \
+  --restored-terminal-sha256 <takeover-terminal-sha256>
+```
+
+That entry cannot touch Git, containers, services, the database, assets or
+admission. Under the shared deploy lock it only revalidates the exact terminal
+legacy restore, finalizes the marker, writes the terminal audit and failed
+operation state, changes a still-`prepared` token to
+`retired-precommit`, and unlinks the marker last. A new bridge attempt requires
+a new operation ID and generation; the retired generation is first written to
+an immutable digest-addressed archive chain. `commit-intent` and `consumed`
+generations can never be retired or rearmed.
+
 `apply` obtains the exclusive deployment lock and then:
 
 1. Enables Backend and Worker drain and waits for all active work to finish.
 2. Isolates public ingress and stops Backend, Web, MD Worker and DFT Worker.
+   Before the first stop call it durably seals the PostgreSQL container ID,
+   image ID, named data volume and `pg_control_system().system_identifier`.
    PostgreSQL remains running.
 3. Creates a private PostgreSQL backup and proves it can be restored in an
    isolated PostgreSQL 16 instance.
@@ -275,8 +452,11 @@ at its final A/B slot path.
    target code.
 7. Pulls the recorded image digests, applies only allowed expand migrations and
    runs strict schema preflight.
-8. Switches the prepared A/B slots, starts Workers, Backend and Web, and runs
-   required model, database, API, UI and calculation smokes.
+8. Switches the prepared A/B slots and starts Workers and Backend with
+   `compose up --no-deps backend`; the sealed PostgreSQL container is never an
+   `up` target and its full identity is rechecked before and after startup.
+   It then starts Web and runs required model, database, API, UI and
+   calculation smokes.
 9. Writes the successful deployment state atomically before restoring ingress.
 
 All processes that import or execute checkout files are stopped before the Git
@@ -295,15 +475,27 @@ must never infer or execute a pending contract. See
 `docs/postgres-migration-governance.md`.
 
 The first governed deployment must additionally prove the legacy runtime
-identity and install and seal all eight bootstrap executables listed above. If
-the production ledger, registered database inventory, asset identity or
-rollback evidence differs from the reviewed plan, the operation stops before
-mutation.
+identity and install and seal every bootstrap/recovery executable plus the
+source-read-only external-database audit helper and builder listed above. If the production
+ledger, registered database inventory, asset identity or rollback evidence
+differs from the reviewed plan, the operation stops before mutation.
 
-> **First-deployment stop condition:** control bootstrap alone is permitted.
-> Until the dedicated reconciliation control has backed up, restore-tested and
-> removed exactly `0005_polytao_jobs`, operators must not run the first
-> production `apply` or `bootstrap-expand`.
+The frozen schema-v2 asset manifest is
+`sha256:e5088b7954f7ee8f6cc4e45af36761fdc44d2fc374643441fe07283475de06c8`
+and its only accepted predecessor is
+`sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2`.
+The controller re-hashes both releases and requires the `model`, `database`
+and `backend-data` inventories to match the predecessor byte-for-byte. Only
+`byteff2` may differ. Its release input declares an empty
+`datasets_on_asset_change`; switching this asset must not invoke a database
+import or rebuild. The retired controller rebuild entrypoint fails closed, and
+the standalone static importer excludes every business-mutable table.
+
+> **First-deployment stop condition:** control bootstrap and bridge preparation
+> alone are permitted. Until the dedicated reconciliation control has backed
+> up, restore-tested and removed exactly `0005_polytao_jobs`, operators must not
+> run the first production `bridge-apply`, ordinary `apply`, or
+> `bootstrap-expand`.
 
 ## Rollback and interrupted attempts
 
@@ -325,6 +517,27 @@ The deployment marker and journal are stored below
 the operator must run the matching recovery or rollback command under the same
 deployment lock. Never delete the marker, edit the migration ledger, run
 `git clean`, or start services manually to bypass recovery.
+
+For a failed first bootstrap/bridge, rollback order is fixed: the parent
+controller first CAS-restores the sealed legacy main SHA/tree and HTTPS return
+authority, then invokes takeover restore from the independent recovery
+launcher, and only then starts the legacy runtime. Takeover restore accepts a
+changed Worker unit or control layout only when their exact replacement
+digests were sealed by the parent operation. The parent passes its already-held
+`state/deploy.lock` as an authenticated inherited file descriptor; the child
+verifies the same inode, direct-parent lock record and inherited open-file
+description before taking the takeover execution lock. Operators never select
+that descriptor or supply evidence digests manually.
+
+Takeover restore is phase-journaled: after the parent returns the old Git
+SHA/tree it CAS-restores every sealed checkout/`.git` permission deepest-first,
+then restores classified paths, the exact prior controls/audit/backup layout,
+the prior Worker unit and finally the sealed containers/user unit. The current
+permission and control-layout replacement digests are computed from the private
+takeover operation inventory; callers cannot choose the path set. A crash after
+detaching a path may resume only when the remaining trash is an unmodified
+subset of the original recursive seal. The terminal status must bind
+`restored_terminal_sha256`; otherwise ingress remains isolated.
 
 The controller may perform a controlled checkout of the recorded previous SHA
 only in the dedicated production checkout. That authority never applies to a

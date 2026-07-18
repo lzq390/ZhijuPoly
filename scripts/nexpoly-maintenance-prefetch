@@ -1,0 +1,51 @@
+#!/usr/bin/python3 -I
+"""Isolated launcher for the source-pinned maintenance prefetch command."""
+
+import os
+from pathlib import Path
+import stat
+import sys
+
+
+if not sys.flags.isolated:
+    raise SystemExit("nexpoly-maintenance-prefetch requires isolated Python startup")
+
+target = Path(__file__).absolute().with_name("maintenance_prefetch.py")
+parent = target.parent
+try:
+    parent_metadata = parent.lstat()
+    target_metadata = target.lstat()
+except OSError as exc:
+    raise SystemExit("maintenance prefetch implementation is unavailable") from exc
+if (
+    not stat.S_ISDIR(parent_metadata.st_mode)
+    or parent.is_symlink()
+    or parent_metadata.st_uid != os.geteuid()
+    or parent_metadata.st_mode & 0o022
+    or not stat.S_ISREG(target_metadata.st_mode)
+    or target.is_symlink()
+    or target_metadata.st_uid != os.geteuid()
+    or target_metadata.st_mode & 0o022
+):
+    raise SystemExit("maintenance prefetch implementation is unsafe")
+
+environment = {
+    "HOME": "/home/devuser",
+    "USER": "devuser",
+    "LOGNAME": "devuser",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
+os.execve(
+    "/usr/bin/python3",
+    [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        str(target),
+        *sys.argv[1:],
+    ],
+    environment,
+)

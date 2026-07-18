@@ -1,0 +1,3 @@
+# Template only; do not install this file verbatim or commit the real secret.
+# The installed mode-0600 file must contain exactly one line with this identity:
+127.0.0.1:55432:nexpoly:nexpoly_mutable_audit:<provision-owner-only-secret>

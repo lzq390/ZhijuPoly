@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+import os
 import shutil
+import stat
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -306,9 +308,12 @@ async def delete_job_artifacts(job_id: str) -> ArtifactDeletionResponse:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="cannot delete artifacts for an active monomer MD job",
             )
-    artifact_root = runner.output_dir_for_job(job_id)
-    if artifact_root.exists():
-        await asyncio.to_thread(shutil.rmtree, artifact_root)
+        artifact_root = runner.output_dir_for_job(job_id)
+        deleted = await asyncio.to_thread(
+            _durably_remove_artifact_entry,
+            artifact_root,
+        )
+    if deleted:
         return ArtifactDeletionResponse(
             job_id=job_id,
             deleted=True,
@@ -321,6 +326,31 @@ async def delete_job_artifacts(job_id: str) -> ArtifactDeletionResponse:
         artifact_root=str(artifact_root),
         message="artifacts were already absent",
     )
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _durably_remove_artifact_entry(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        _fsync_directory(path.parent)
+        return False
+    if stat.S_ISDIR(metadata.st_mode):
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    _fsync_directory(path.parent)
+    return True
 
 
 async def _build_health_response() -> HealthResponse:
@@ -355,7 +385,9 @@ async def _build_health_response() -> HealthResponse:
             )
     worker_status = "ok"
     if settings.mode == "real" and (
-        not byteff2_root_exists or not settings.db_configured or not runtime_ready
+        not byteff2_root_exists
+        or not settings.db_configured
+        or not runtime_ready
     ):
         worker_status = "degraded"
     if settings.db_configured and not recovery_ready:

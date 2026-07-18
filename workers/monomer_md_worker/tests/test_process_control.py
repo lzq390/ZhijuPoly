@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import sys
 import threading
+import time
 
 import pytest
 
@@ -291,3 +292,50 @@ def test_repeated_cancel_waits_for_mps_and_process_cleanup(monkeypatch) -> None:
     asyncio.run(scenario())
     assert events == ["mps-terminate-client", signal.SIGTERM]
     assert lease.failed_closed is False
+
+
+def test_process_group_deadline_constants_bound_real_cleanup(
+    monkeypatch,
+) -> None:
+    signals: list[signal.Signals] = []
+    monkeypatch.setattr(
+        process_control,
+        "MAX_TERMINATION_GRACE_SECONDS",
+        0.02,
+    )
+    monkeypatch.setattr(
+        process_control,
+        "PROCESS_GROUP_POLL_SECONDS",
+        0.005,
+    )
+    monkeypatch.setattr(
+        process_control,
+        "PROCESS_GROUP_KILL_OBSERVE_SECONDS",
+        0.03,
+    )
+    monkeypatch.setattr(
+        process_control,
+        "_process_group_alive",
+        lambda _pid: True,
+    )
+    monkeypatch.setattr(
+        process_control.os,
+        "killpg",
+        lambda _pid, sent_signal: signals.append(sent_signal),
+    )
+
+    started = time.monotonic()
+    with pytest.raises(
+        GpuBrokerClientError,
+        match="survived MPS-safe termination",
+    ):
+        asyncio.run(
+            process_control.terminate_process_group(
+                _Process(),  # type: ignore[arg-type]
+                process_already_waited=True,
+            )
+        )
+    elapsed = time.monotonic() - started
+
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert 0.04 <= elapsed < 0.25

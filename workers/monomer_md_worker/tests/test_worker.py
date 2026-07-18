@@ -5,9 +5,13 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
+from workers.monomer_md_worker.app import byteff2_formal_runner as formal_runner_module
 from workers.monomer_md_worker.app import main as worker_main
+from workers.monomer_md_worker.app import process_control
+from workers.monomer_md_worker.app.byteff2_env import REQUIRED_OPENMM_FILES
 from workers.monomer_md_worker.app.byteff2_formal_runner import ByteFF2FormalRunner
 from workers.monomer_md_worker.app.config import WorkerSettings
 from workers.monomer_md_worker.app.models import JobRequest
@@ -21,6 +25,19 @@ from workers.monomer_md_worker.app.runtime_health import (
 RELEASE_SHA = "a" * 40
 RELEASE_TREE = "b" * 40
 DIGEST = "sha256:" + "c" * 64
+
+
+def _install_short_process_group_grace(monkeypatch) -> None:
+    monkeypatch.setattr(
+        process_control,
+        "MAX_TERMINATION_GRACE_SECONDS",
+        0.1,
+    )
+    monkeypatch.setattr(
+        process_control,
+        "PROCESS_GROUP_KILL_OBSERVE_SECONDS",
+        0.2,
+    )
 
 
 def _production_runtime_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -244,6 +261,52 @@ def test_runtime_snapshot_initializes_once_and_hot_readiness_never_reprobes(
 
     asyncio.run(scenario())
     assert calls == 1
+
+
+def test_health_response_uses_one_immutable_runtime_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _settings(
+        tmp_path,
+        mode="real",
+        app_postgres_dsn="postgresql://db/app",
+    )
+    object.__setattr__(settings, "gpu_broker_enabled", True)
+    initial = _runtime_snapshot()
+    changed = _runtime_snapshot(
+        ready=False,
+        error="later global snapshot",
+        transport_ready=False,
+    )
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "runtime_snapshot", initial)
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    monkeypatch.setattr(worker_main, "recovery_ready", True)
+    monkeypatch.setattr(worker_main, "draining", False)
+    monkeypatch.setattr(
+        worker_main,
+        "runner",
+        SimpleNamespace(gpu_admission_uncertain=False),
+    )
+
+    async def mutate_during_broker_read(_callback):
+        worker_main.runtime_snapshot = changed
+        return {"draining": False}
+
+    monkeypatch.setattr(
+        worker_main.asyncio,
+        "to_thread",
+        mutate_during_broker_read,
+    )
+
+    response = asyncio.run(worker_main._build_health_response())
+
+    assert worker_main.runtime_snapshot is changed
+    assert response.status == "ok"
+    assert response.byteff2_root_exists is True
+    assert response.runtime_ready is True
+    assert response.runtime_error is None
+    assert response.protocols == initial.protocols_dict()
 
 
 def test_production_runtime_identity_uses_live_checkout_and_active_slot(
@@ -551,19 +614,29 @@ def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
     settings = _settings(tmp_path, mode="real", app_postgres_dsn=None)
     settings.byteff2_root.mkdir()
     object.__setattr__(settings, "byteff2_python", sys.executable)
+    openmm_dir = tmp_path / "openmm"
+    for relative_path in REQUIRED_OPENMM_FILES:
+        path = openmm_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    object.__setattr__(settings, "byteff2_openmm_dir", openmm_dir)
     run_md = settings.byteff2_root / "example" / "4_MD_simulations" / "run_md.py"
     run_md.parent.mkdir(parents=True)
     run_md.write_text(
         "\n".join(
             [
-                "import argparse, json, pathlib",
+                "import argparse, json, os, pathlib",
                 "parser = argparse.ArgumentParser()",
                 "parser.add_argument('--config')",
                 "args = parser.parse_args()",
                 "config = json.loads(pathlib.Path(args.config).read_text())",
                 "out = pathlib.Path(config['output_dir'])",
                 "out.mkdir(parents=True, exist_ok=True)",
-                "(out / 'density_results.json').write_text(json.dumps({'density': 1.02, 'density_std': 0.01}))",
+                "(out / 'density_results.json').write_text(json.dumps({"
+                "'density': 1.02, 'density_std': 0.01, "
+                "'openmm_dir': os.environ.get('OPENMM_DIR'), "
+                "'openmm_plugin_dir': os.environ.get('OPENMM_PLUGIN_DIR'), "
+                "'ld_library_path': os.environ.get('LD_LIBRARY_PATH')}))",
             ]
         ),
         encoding="utf-8",
@@ -595,14 +668,25 @@ def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
     assert result.completed_steps == 1500000
     assert result.result["summary"]["density"] == 1.02
     assert result.result["metrics"]["density_std"] == 0.01
+    assert result.result["metrics"]["openmm_dir"] == str(openmm_dir)
+    assert result.result["metrics"]["openmm_plugin_dir"] == str(
+        openmm_dir / "lib/plugins"
+    )
+    assert result.result["metrics"]["ld_library_path"].split(":")[:2] == [
+        str(openmm_dir / "lib"),
+        str(openmm_dir / "lib/plugins"),
+    ]
     assert any(
         item["path"] == "outputs/density_results.json"
         for item in result.result["artifact_manifest"]["files"]
     )
 
 
-def test_formal_runner_cancellation_terminates_process_group(tmp_path: Path):
+def test_formal_runner_cancellation_terminates_process_group(
+    tmp_path: Path, monkeypatch
+):
     settings = _settings(tmp_path, mode="real", app_postgres_dsn=None)
+    _install_short_process_group_grace(monkeypatch)
     settings.byteff2_root.mkdir()
     object.__setattr__(settings, "byteff2_python", sys.executable)
     run_md = settings.byteff2_root / "example" / "4_MD_simulations" / "run_md.py"
@@ -676,6 +760,14 @@ def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypat
     monkeypatch.setattr(worker_main, "settings", settings)
     monkeypatch.setattr(worker_main, "runner", worker_main.MonomerMdRunner(settings))
     monkeypatch.setattr(worker_main, "active_jobs", {})
+    fsync_directories: list[Path] = []
+    original_fsync_directory = worker_main._fsync_directory
+
+    def record_fsync(path: Path) -> None:
+        fsync_directories.append(path)
+        original_fsync_directory(path)
+
+    monkeypatch.setattr(worker_main, "_fsync_directory", record_fsync)
     output_dir = settings.job_root / "job-1"
     output_dir.mkdir(parents=True)
     (output_dir / "density_demo_results.json").write_text("{}", encoding="utf-8")
@@ -687,6 +779,51 @@ def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypat
     payload = response.json()
     assert payload["deleted"] is True
     assert not output_dir.exists()
+    assert fsync_directories == [settings.job_root]
+
+    repeated = client.delete("/jobs/job-1/artifacts")
+    assert repeated.status_code == 200
+    assert repeated.json()["deleted"] is False
+    assert fsync_directories == [settings.job_root, settings.job_root]
+
+    outside = tmp_path / "outside-artifacts"
+    outside.mkdir()
+    (outside / "must-remain.txt").write_text("preserved", encoding="utf-8")
+    output_dir.symlink_to(outside, target_is_directory=True)
+    symlink_cleanup = client.delete("/jobs/job-1/artifacts")
+    assert symlink_cleanup.status_code == 200
+    assert symlink_cleanup.json()["deleted"] is True
+    assert not output_dir.exists()
+    assert not output_dir.is_symlink()
+    assert (outside / "must-remain.txt").read_text(encoding="utf-8") == "preserved"
+    assert fsync_directories == [
+        settings.job_root,
+        settings.job_root,
+        settings.job_root,
+    ]
+
+
+def test_delete_job_artifacts_refuses_active_exact_job(
+    tmp_path: Path,
+    monkeypatch,
+):
+    settings = _settings(tmp_path, app_postgres_dsn=None)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(
+        worker_main,
+        "runner",
+        worker_main.MonomerMdRunner(settings),
+    )
+    active_task = object()
+    monkeypatch.setattr(worker_main, "active_jobs", {"job-1": active_task})
+    output_dir = settings.job_root / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "active.txt").write_text("active", encoding="utf-8")
+
+    response = TestClient(worker_main.app).delete("/jobs/job-1/artifacts")
+
+    assert response.status_code == 409
+    assert (output_dir / "active.txt").read_text(encoding="utf-8") == "active"
 
 
 def test_repository_update_query_guards_terminal_statuses():

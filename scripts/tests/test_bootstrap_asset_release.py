@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -88,13 +91,20 @@ TEST_BYTEFF2_AUDITED_OVERLAY_FILES = tuple(
 
 class AssetBootstrapTests(unittest.TestCase):
     def setUp(self) -> None:
-        patcher = mock.patch.object(
+        overlay_patcher = mock.patch.object(
             assets,
             "BYTEFF2_AUDITED_OVERLAY_FILES",
             TEST_BYTEFF2_AUDITED_OVERLAY_FILES,
         )
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        symlink_patcher = mock.patch.object(
+            assets,
+            "BYTEFF2_MATERIALIZED_SYMLINKS",
+            {},
+        )
+        overlay_patcher.start()
+        symlink_patcher.start()
+        self.addCleanup(overlay_patcher.stop)
+        self.addCleanup(symlink_patcher.stop)
 
     @staticmethod
     def git(root: Path, *arguments: str) -> str:
@@ -120,6 +130,48 @@ class AssetBootstrapTests(unittest.TestCase):
                 for path, size, digest in assets.BYTEFF2_AUDITED_OVERLAY_FILES
             ],
         ]
+
+    @staticmethod
+    def predecessor_tree_digests() -> dict[str, str]:
+        return {
+            tree_name: assets.tree_inventory_digest([])
+            for tree_name in assets.UNCHANGED_ASSET_TREES
+        }
+
+    @staticmethod
+    def builder_source() -> dict[str, str]:
+        return {
+            "repository": assets.BUILD_SOURCE_REPOSITORY,
+            "commit": "1" * 40,
+            "tree": "2" * 40,
+            "script_path": assets.BUILD_SOURCE_SCRIPT,
+            "script_blob": "3" * 40,
+        }
+
+    def initialize_builder_repository(
+        self,
+        root: Path,
+        *,
+        script_path: str = "builder.py",
+    ) -> str:
+        root.mkdir(mode=0o700)
+        self.git(root, "init", "--quiet", "-b", "main")
+        self.git(root, "config", "user.email", "ci@example.invalid")
+        self.git(root, "config", "user.name", "CI")
+        (root / script_path).write_text("print('builder')\n", encoding="utf-8")
+        self.git(root, "add", script_path)
+        self.git(root, "commit", "--quiet", "-m", "add builder")
+        commit = self.git(root, "rev-parse", "HEAD")
+        self.git(
+            root,
+            "remote",
+            "add",
+            "origin",
+            assets.BUILD_SOURCE_REPOSITORY,
+        )
+        self.git(root, "update-ref", "refs/remotes/origin/main", commit)
+        self.git(root, "branch", "--set-upstream-to", "origin/main", "main")
+        return commit
 
     def initialize_repository(
         self,
@@ -153,6 +205,33 @@ class AssetBootstrapTests(unittest.TestCase):
         self.git(root, "commit", "--quiet", "-m", "initial")
         return self.git(root, "rev-parse", "HEAD")
 
+    def initialize_predecessor(
+        self,
+        store: Path,
+    ) -> tuple[str, Path, dict[str, list[dict[str, object]]]]:
+        staging = store / "predecessor-staging"
+        staging.mkdir(parents=True)
+        inventories: dict[str, list[dict[str, object]]] = {}
+        for tree_name in assets.ASSET_KEYS:
+            tree = staging / tree_name
+            tree.mkdir()
+            (tree / "asset.bin").write_bytes(tree_name.encode("ascii"))
+            inventories[tree_name] = assets.inspect_tree(tree, hash_files=True)
+        manifest = {
+            "schema_version": 1,
+            "byteff2_commit": "c" * 40,
+            "byteff2_submodules": {},
+            "assets": inventories,
+        }
+        manifest_bytes = assets.canonical(manifest)
+        digest = hashlib.sha256(manifest_bytes).hexdigest()
+        (staging / "ASSET-MANIFEST.json").write_bytes(manifest_bytes)
+        releases = store / "releases"
+        releases.mkdir()
+        destination = releases / digest
+        staging.replace(destination)
+        return f"sha256:{digest}", destination, inventories
+
     def test_tree_inventory_is_stable_and_rejects_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -165,6 +244,49 @@ class AssetBootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(assets.AssetError, "symlinks"):
                 assets.inspect_tree(root, hash_files=False)
 
+    def test_predecessor_is_fully_rehashed_and_rejects_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw) / "assets"
+            predecessor_digest, predecessor, inventories = self.initialize_predecessor(
+                store
+            )
+            with mock.patch.object(
+                assets,
+                "PREDECESSOR_ASSET_DIGEST",
+                predecessor_digest,
+            ):
+                loaded_path, _manifest, verified, tree_digests = (
+                    assets.load_verified_predecessor(store, predecessor_digest)
+                )
+                self.assertEqual(loaded_path, predecessor)
+                self.assertEqual(verified, inventories)
+                self.assertEqual(set(tree_digests), set(assets.UNCHANGED_ASSET_TREES))
+
+                (predecessor / "model" / "asset.bin").write_bytes(b"drift")
+                with self.assertRaisesRegex(
+                    assets.AssetError,
+                    "tree differs from manifest",
+                ):
+                    assets.load_verified_predecessor(store, predecessor_digest)
+
+    def test_predecessor_rejects_unapproved_digest_and_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw) / "assets"
+            predecessor_digest, predecessor, _inventories = (
+                self.initialize_predecessor(store)
+            )
+            with self.assertRaisesRegex(assets.AssetError, "only the approved"):
+                assets.load_verified_predecessor(store, predecessor_digest)
+            predecessor.rename(predecessor.with_name("real-release"))
+            predecessor.symlink_to("real-release", target_is_directory=True)
+            with mock.patch.object(
+                assets,
+                "PREDECESSOR_ASSET_DIGEST",
+                predecessor_digest,
+            ):
+                with self.assertRaisesRegex(assets.AssetError, "unavailable"):
+                    assets.load_verified_predecessor(store, predecessor_digest)
+
     def test_manifest_digest_is_canonical(self) -> None:
         left = assets.canonical({"schema_version": 1, "assets": {"model": []}})
         right = assets.canonical({"assets": {"model": []}, "schema_version": 1})
@@ -174,12 +296,30 @@ class AssetBootstrapTests(unittest.TestCase):
         parent = "a" * 40
         child = "b" * 40
         manifest = assets.build_manifest(
-            {"byteff2": self.required_runtime_inventory()},
+            {
+                **{tree: [] for tree in assets.UNCHANGED_ASSET_TREES},
+                "byteff2": self.required_runtime_inventory(),
+            },
             byteff2_commit=parent,
+            byteff2_tree="d" * 40,
             byteff2_submodules={"vendor/nested": child},
+            byteff2_submodule_trees={"vendor/nested": "e" * 40},
+            predecessor_digest=assets.PREDECESSOR_ASSET_DIGEST,
+            predecessor_tree_digests=self.predecessor_tree_digests(),
+            builder_source=self.builder_source(),
         )
         self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(
+            manifest["predecessor_asset_digest"],
+            assets.PREDECESSOR_ASSET_DIGEST,
+        )
+        self.assertEqual(manifest["changed_asset_trees"], ["byteff2"])
         self.assertEqual(manifest["byteff2_commit"], parent)
+        self.assertEqual(manifest["byteff2_tree"], "d" * 40)
+        self.assertEqual(
+            manifest["byteff2_submodule_trees"],
+            {"vendor/nested": "e" * 40},
+        )
         self.assertEqual(
             manifest["byteff2_source"],
             {
@@ -191,6 +331,27 @@ class AssetBootstrapTests(unittest.TestCase):
         self.assertEqual(
             manifest["byteff2_audited_overlays"],
             assets.byteff2_audited_overlays_manifest(),
+        )
+        self.assertEqual(set(manifest["asset_tree_digests"]), set(assets.ASSET_KEYS))
+        self.assertEqual(
+            manifest["build_provenance"]["builder_source"],
+            self.builder_source(),
+        )
+        self.assertEqual(
+            manifest["build_provenance"]["evidence"],
+            {
+                "predecessor_manifest_digest": assets.PREDECESSOR_ASSET_DIGEST,
+                "predecessor_all_trees_rehashed": list(assets.ASSET_KEYS),
+                "unchanged_trees_byte_identical": list(assets.UNCHANGED_ASSET_TREES),
+                "asset_tree_digest_algorithm": "canonical-manifest-inventory-v1",
+                "byteff2_source_verification": (
+                    "clean-recursive-commit-object-materialization-v1"
+                ),
+                "staging_directory_mode": "0700",
+                "file_and_directory_fsync": True,
+                "publication": "atomic-rename",
+                "existing_target": "full-content-revalidation",
+            },
         )
 
     def test_manifest_rejects_missing_or_changed_required_runtime_asset(self) -> None:
@@ -206,9 +367,17 @@ class AssetBootstrapTests(unittest.TestCase):
             with self.subTest(error=error):
                 with self.assertRaisesRegex(assets.AssetError, error):
                     assets.build_manifest(
-                        {"byteff2": inventory},
+                        {
+                            **{tree: [] for tree in assets.UNCHANGED_ASSET_TREES},
+                            "byteff2": inventory,
+                        },
                         byteff2_commit="a" * 40,
+                        byteff2_tree="d" * 40,
                         byteff2_submodules={},
+                        byteff2_submodule_trees={},
+                        predecessor_digest=assets.PREDECESSOR_ASSET_DIGEST,
+                        predecessor_tree_digests=self.predecessor_tree_digests(),
+                        builder_source=self.builder_source(),
                     )
 
     def test_required_runtime_asset_contract_pins_audited_digest(self) -> None:
@@ -228,8 +397,8 @@ class AssetBootstrapTests(unittest.TestCase):
 
     def test_byteff2_git_source_pins_official_v1_revision(self) -> None:
         self.assertEqual(
-            assets.BYTEFF2_SOURCE,
-            Path("/data/lzq/nexpoly-assets/sources/byteff2-v1.0.0"),
+            assets.PREDECESSOR_ASSET_DIGEST,
+            "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2",
         )
         self.assertEqual(
             assets.BYTEFF2_GIT_SOURCE,
@@ -239,9 +408,263 @@ class AssetBootstrapTests(unittest.TestCase):
             assets.BYTEFF2_GIT_REVISION,
             "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2",
         )
+        self.assertEqual(
+            assets.BYTEFF2_GIT_TREE,
+            "2d9ab46fc185e0e830be53c0ad077100e693ce68",
+        )
         assets.require_approved_byteff2_revision(assets.BYTEFF2_GIT_REVISION)
         with self.assertRaisesRegex(assets.AssetError, "official v1.0.0"):
             assets.require_approved_byteff2_revision("0" * 40)
+
+    def test_builder_source_identity_binds_clean_commit_tree_and_script_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "builder"
+            commit = self.initialize_builder_repository(root)
+
+            identity = assets.inspect_builder_source(
+                root,
+                script_path="builder.py",
+                expected_source=assets.BUILD_SOURCE_REPOSITORY,
+            )
+
+            self.assertEqual(identity["repository"], assets.BUILD_SOURCE_REPOSITORY)
+            self.assertEqual(identity["commit"], commit)
+            self.assertEqual(identity["tree"], self.git(root, "rev-parse", "HEAD^{tree}"))
+            self.assertEqual(
+                identity["script_blob"],
+                self.git(root, "rev-parse", "HEAD:builder.py"),
+            )
+
+            (root / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+            self.git(root, "add", ".gitignore")
+            self.git(root, "commit", "--quiet", "-m", "ignore cache")
+            self.git(
+                root,
+                "update-ref",
+                "refs/remotes/origin/main",
+                self.git(root, "rev-parse", "HEAD"),
+            )
+            (root / "__pycache__").mkdir()
+            (root / "__pycache__" / "builder.pyc").write_bytes(b"unreviewed")
+            with self.assertRaisesRegex(assets.AssetError, "no modified, untracked, or ignored"):
+                assets.inspect_builder_source(
+                    root,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
+
+    def test_builder_source_rejects_linked_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            source = workspace / "source"
+            self.initialize_builder_repository(source)
+            linked = workspace / "linked"
+            self.git(
+                source,
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "linked",
+                str(linked),
+                "HEAD",
+            )
+            linked.chmod(0o700)
+
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "standalone Git repository",
+            ):
+                assets.inspect_builder_source(
+                    linked,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
+
+    def test_builder_source_rejects_alternates_and_promisor_objects(self) -> None:
+        for mutation, message in (
+            ("alternates", "standalone object database"),
+            ("promisor", "promisor or partial"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as raw:
+                workspace = Path(raw)
+                root = workspace / "builder"
+                self.initialize_builder_repository(root)
+                if mutation == "alternates":
+                    external = workspace / "external-objects"
+                    external.mkdir()
+                    alternate = root / ".git/objects/info/alternates"
+                    alternate.write_text(str(external) + "\n", encoding="utf-8")
+                else:
+                    self.git(root, "config", "remote.origin.promisor", "true")
+
+                with self.assertRaisesRegex(assets.AssetError, message):
+                    assets.inspect_builder_source(
+                        root,
+                        script_path="builder.py",
+                        expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                    )
+
+    def test_builder_source_rejects_shallow_and_dangling_history(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            source = workspace / "source"
+            self.initialize_builder_repository(source)
+            shallow = workspace / "shallow"
+            subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--quiet",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    "main",
+                    source.as_uri(),
+                    str(shallow),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            shallow.chmod(0o700)
+            self.git(
+                shallow,
+                "remote",
+                "set-url",
+                "origin",
+                assets.BUILD_SOURCE_REPOSITORY,
+            )
+            with self.assertRaisesRegex(assets.AssetError, "complete Git history"):
+                assets.inspect_builder_source(
+                    shallow,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
+
+            dangling = workspace / "dangling"
+            self.initialize_builder_repository(dangling)
+            subprocess.run(
+                ["git", "-C", str(dangling), "hash-object", "-w", "--stdin"],
+                input=b"unreachable builder object\n",
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "dangling, or unreachable",
+            ):
+                assets.inspect_builder_source(
+                    dangling,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
+
+    def test_builder_source_requires_owner_private_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "builder"
+            self.initialize_builder_repository(root)
+            root.chmod(0o755)
+
+            with self.assertRaisesRegex(assets.AssetError, "owner-private"):
+                assets.inspect_builder_source(
+                    root,
+                    script_path="builder.py",
+                    expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                )
+
+    def test_builder_source_rejects_external_git_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            root = workspace / "builder"
+            self.initialize_builder_repository(root)
+            external_objects = workspace / "external-objects"
+            external_objects.mkdir()
+
+            with mock.patch.dict(
+                os.environ,
+                {"GIT_OBJECT_DIRECTORY": str(external_objects)},
+                clear=False,
+            ):
+                with self.assertRaisesRegex(
+                    assets.AssetError,
+                    "external Git environment",
+                ):
+                    assets.inspect_builder_source(
+                        root,
+                        script_path="builder.py",
+                        expected_source=assets.BUILD_SOURCE_REPOSITORY,
+                    )
+
+    def test_canonical_isolated_invocation_creates_no_ignored_bytecode(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "fresh"
+            root.mkdir()
+            tracked = subprocess.run(
+                ["git", "-C", str(REPOSITORY_ROOT), "ls-files", "-z"],
+                check=True,
+                stdout=subprocess.PIPE,
+            ).stdout.split(b"\0")
+            for encoded in tracked:
+                if not encoded:
+                    continue
+                relative = Path(os.fsdecode(encoded))
+                source = REPOSITORY_ROOT / relative
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+            self.git(root, "init", "--quiet")
+            self.git(root, "config", "user.email", "ci@example.invalid")
+            self.git(root, "config", "user.name", "CI")
+            self.git(root, "add", "-f", "--all")
+            self.git(root, "commit", "--quiet", "-m", "fresh builder source")
+            command = [
+                sys.executable,
+                "-I",
+                "-B",
+                str(root / assets.BUILD_SOURCE_SCRIPT),
+                "--help",
+            ]
+            completed = subprocess.run(
+                command,
+                cwd=root,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            status = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                    "--ignored=matching",
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+            ).stdout
+            self.assertEqual(status, b"")
+
+            unsafe = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / assets.BUILD_SOURCE_SCRIPT),
+                    "--help",
+                ],
+                cwd=root,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(unsafe.returncode, 2)
+            self.assertIn(b"python3 -I -B", unsafe.stderr)
 
     def test_audited_overlay_contract_pins_hugging_face_revision_size_and_digest(self) -> None:
         self.assertEqual(
@@ -298,6 +721,121 @@ class AssetBootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(assets.AssetError, "overlay digest mismatch"):
                 assets.inspect_byteff2_checkout(root)
 
+    def test_checkout_policy_rejects_local_include_and_includeif(self) -> None:
+        for key in (
+            "include.path",
+            "includeIf.onbranch:main.path",
+        ):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as raw:
+                workspace = Path(raw)
+                root = workspace / "byteff2"
+                self.initialize_repository(root)
+                hostile = workspace / "hostile.gitconfig"
+                hostile.write_text(
+                    "[fsck]\n\tmissingEmail = ignore\n",
+                    encoding="utf-8",
+                )
+                self.git(
+                    root,
+                    "config",
+                    "--local",
+                    key,
+                    str(hostile),
+                )
+
+                with self.assertRaisesRegex(
+                    assets.AssetError,
+                    "must not use local include or includeIf config",
+                ):
+                    assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_policy_rejects_local_fsck_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "byteff2"
+            self.initialize_repository(root)
+            self.git(
+                root,
+                "config",
+                "--local",
+                "fsck.missingEmail",
+                "ignore",
+            )
+
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "must not override strict fsck policy",
+            ):
+                assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_policy_rejects_worktree_local_include(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            root = workspace / "byteff2"
+            self.initialize_repository(root)
+            hostile = workspace / "hostile.gitconfig"
+            hostile.write_text(
+                "[fsck]\n\tmissingEmail = ignore\n",
+                encoding="utf-8",
+            )
+            self.git(
+                root,
+                "config",
+                "--local",
+                "extensions.worktreeConfig",
+                "true",
+            )
+            self.git(
+                root,
+                "config",
+                "--worktree",
+                "include.path",
+                str(hostile),
+            )
+
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "must not use local include or includeIf config",
+            ):
+                assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_policy_rejects_any_fsck_output(self) -> None:
+        for stream in ("stdout", "stderr"):
+            with self.subTest(stream=stream), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw) / "byteff2"
+                self.initialize_repository(root)
+                real_git_run = assets.git_run
+
+                def noisy_git_run(
+                    repository: Path,
+                    *arguments: str,
+                    **kwargs: object,
+                ) -> subprocess.CompletedProcess[str]:
+                    if arguments and arguments[0] == "fsck":
+                        return subprocess.CompletedProcess(
+                            ["/usr/bin/git", *arguments],
+                            0,
+                            stdout="unexpected fsck output\n"
+                            if stream == "stdout"
+                            else "",
+                            stderr="unexpected fsck error\n"
+                            if stream == "stderr"
+                            else "",
+                        )
+                    return real_git_run(repository, *arguments, **kwargs)
+
+                with (
+                    mock.patch.object(
+                        assets,
+                        "git_run",
+                        side_effect=noisy_git_run,
+                    ),
+                    self.assertRaisesRegex(
+                        assets.AssetError,
+                        "object database failed strict verification",
+                    ),
+                ):
+                    assets.validate_byteff2_git_policy(root, "")
+
     def test_checkout_validation_rejects_missing_required_runtime_asset(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw) / "byteff2"
@@ -337,6 +875,11 @@ class AssetBootstrapTests(unittest.TestCase):
             expected_commit = self.initialize_repository(source)
 
             commit, submodules = assets.inspect_byteff2_checkout(source)
+            byteff2_tree, submodule_trees = assets.inspect_byteff2_tree_identity(
+                source,
+                expected_commit=commit,
+                expected_submodules=submodules,
+            )
             assets.copy_verified_byteff2(
                 source,
                 destination,
@@ -345,9 +888,17 @@ class AssetBootstrapTests(unittest.TestCase):
             )
             inventory = assets.inspect_tree(destination, hash_files=True)
             manifest = assets.build_manifest(
-                {"byteff2": inventory},
+                {
+                    **{tree: [] for tree in assets.UNCHANGED_ASSET_TREES},
+                    "byteff2": inventory,
+                },
                 byteff2_commit=expected_commit,
+                byteff2_tree=byteff2_tree,
                 byteff2_submodules={},
+                byteff2_submodule_trees=submodule_trees,
+                predecessor_digest=assets.PREDECESSOR_ASSET_DIGEST,
+                predecessor_tree_digests=self.predecessor_tree_digests(),
+                builder_source=self.builder_source(),
             )
 
             runtime_path, runtime_digest = assets.BYTEFF2_RUNTIME_REQUIRED_FILES[0]
@@ -484,11 +1035,32 @@ class AssetBootstrapTests(unittest.TestCase):
             destination = workspace / "copied"
             expected_commit = self.initialize_repository(source)
 
-            def commit_switching_copy(copy_source: Path, copy_destination: Path) -> None:
-                shutil.copytree(copy_source, copy_destination)
-                self.git(copy_source, "commit", "--quiet", "--allow-empty", "-m", "concurrent commit")
+            materialize = assets.materialize_byteff2_git_objects
 
-            with mock.patch.object(assets, "copy_tree", side_effect=commit_switching_copy):
+            def commit_switching_copy(
+                copy_source: Path,
+                copy_destination: Path,
+                **kwargs: object,
+            ) -> None:
+                materialize(
+                    copy_source,
+                    copy_destination,
+                    **kwargs,
+                )
+                self.git(
+                    copy_source,
+                    "commit",
+                    "--quiet",
+                    "--allow-empty",
+                    "-m",
+                    "concurrent commit",
+                )
+
+            with mock.patch.object(
+                assets,
+                "materialize_byteff2_git_objects",
+                side_effect=commit_switching_copy,
+            ):
                 with self.assertRaisesRegex(assets.AssetError, "identity changed while copying"):
                     assets.copy_verified_byteff2(
                         source,
@@ -518,6 +1090,39 @@ class AssetBootstrapTests(unittest.TestCase):
             self.assertFalse((destination / ".git").exists())
             self.assertEqual((destination / "tracked.txt").read_text(encoding="utf-8"), "byteff2\n")
 
+    def test_byteff2_copy_materializes_only_the_audited_internal_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            source = workspace / "byteff2"
+            self.initialize_repository(source)
+            target = source / "submodules" / "bytemol" / "bytemol"
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "__init__.py").write_text("AUDITED = True\n", encoding="utf-8")
+            (source / "bytemol").symlink_to("submodules/bytemol/bytemol/")
+            self.git(source, "add", "bytemol", "submodules/bytemol/bytemol/__init__.py")
+            self.git(source, "commit", "--quiet", "-m", "add audited import symlink")
+            expected_commit = self.git(source, "rev-parse", "HEAD")
+            destination = workspace / "copied"
+
+            with mock.patch.object(
+                assets,
+                "BYTEFF2_MATERIALIZED_SYMLINKS",
+                {"bytemol": "submodules/bytemol/bytemol/"},
+            ):
+                assets.copy_verified_byteff2(
+                    source,
+                    destination,
+                    expected_commit=expected_commit,
+                    expected_submodules={},
+                )
+
+            self.assertTrue((destination / "bytemol").is_dir())
+            self.assertFalse((destination / "bytemol").is_symlink())
+            self.assertEqual(
+                (destination / "bytemol" / "__init__.py").read_text(encoding="utf-8"),
+                "AUDITED = True\n",
+            )
+
     def test_byteff2_copy_rechecks_recursive_submodule_after_copy(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = Path(raw)
@@ -538,14 +1143,28 @@ class AssetBootstrapTests(unittest.TestCase):
             self.git(parent, "commit", "--quiet", "-am", "pin child")
             parent_commit = self.git(parent, "rev-parse", "HEAD")
 
-            def submodule_switching_copy(copy_source: Path, copy_destination: Path) -> None:
-                shutil.copytree(copy_source, copy_destination)
+            materialize = assets.materialize_byteff2_git_objects
+
+            def submodule_switching_copy(
+                copy_source: Path,
+                copy_destination: Path,
+                **kwargs: object,
+            ) -> None:
+                materialize(
+                    copy_source,
+                    copy_destination,
+                    **kwargs,
+                )
                 checkout = copy_source / "vendor" / "child"
                 self.git(checkout, "config", "user.email", "ci@example.invalid")
                 self.git(checkout, "config", "user.name", "CI")
                 self.git(checkout, "commit", "--quiet", "--allow-empty", "-m", "concurrent commit")
 
-            with mock.patch.object(assets, "copy_tree", side_effect=submodule_switching_copy):
+            with mock.patch.object(
+                assets,
+                "materialize_byteff2_git_objects",
+                side_effect=submodule_switching_copy,
+            ):
                 with self.assertRaisesRegex(assets.AssetError, "does not match parent gitlink"):
                     assets.copy_verified_byteff2(
                         parent,
@@ -570,6 +1189,261 @@ class AssetBootstrapTests(unittest.TestCase):
             self.git(root, "update-index", "--skip-worktree", "tracked.txt")
             with self.assertRaisesRegex(assets.AssetError, "hidden index state"):
                 assets.inspect_byteff2_checkout(root)
+
+    def test_checkout_validation_rejects_indirect_or_incomplete_objects(self) -> None:
+        for mutation, message in (
+            ("promisor", "promisor or partial"),
+            ("replace", "replacement objects"),
+            ("alternates", "alternate object databases"),
+            ("grafts", "Git grafts"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as raw:
+                workspace = Path(raw)
+                root = workspace / "byteff2"
+                commit = self.initialize_repository(root)
+                if mutation == "promisor":
+                    self.git(root, "config", "remote.origin.promisor", "true")
+                elif mutation == "replace":
+                    self.git(root, "replace", commit, commit)
+                elif mutation == "alternates":
+                    alternate = root / ".git" / "objects" / "info" / "alternates"
+                    alternate.write_text(
+                        str(workspace / "external-objects") + "\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    (root / ".git" / "info" / "grafts").write_text(
+                        commit + "\n",
+                        encoding="ascii",
+                    )
+
+                with self.assertRaisesRegex(assets.AssetError, message):
+                    assets.inspect_byteff2_checkout(root)
+
+    def test_git_object_materialization_ignores_dirty_worktree_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            source = workspace / "byteff2"
+            destination = workspace / "materialized"
+            expected_commit = self.initialize_repository(source)
+            (source / "tracked.txt").write_text(
+                "uncommitted attacker-controlled bytes\n",
+                encoding="utf-8",
+            )
+
+            assets.materialize_byteff2_git_objects(
+                source,
+                destination,
+                expected_commit=expected_commit,
+                expected_submodules={},
+            )
+
+            self.assertEqual(
+                (destination / "tracked.txt").read_text(encoding="utf-8"),
+                "byteff2\n",
+            )
+            self.assertFalse((destination / ".git").exists())
+
+    def test_git_commands_ignore_inherited_config_and_structural_environment(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            root = workspace / "byteff2"
+            expected_commit = self.initialize_repository(root)
+            marker = workspace / "fsmonitor-ran"
+            hook = workspace / "hostile-fsmonitor"
+            hook.write_text(
+                f"#!/bin/sh\n: > {marker}\nexit 1\n",
+                encoding="utf-8",
+            )
+            hook.chmod(0o700)
+            hostile_config = workspace / "hostile.gitconfig"
+            hostile_config.write_text(
+                f"[core]\n\tfsmonitor = {hook}\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "GIT_CONFIG_GLOBAL": str(hostile_config),
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "core.fsmonitor",
+                    "GIT_CONFIG_VALUE_0": str(hook),
+                    "GIT_DIR": str(workspace / "wrong-git-dir"),
+                    "GIT_OBJECT_DIRECTORY": str(workspace / "wrong-objects"),
+                },
+                clear=False,
+            ):
+                commit, submodules = assets.inspect_byteff2_checkout(root)
+
+            self.assertEqual(commit, expected_commit)
+            self.assertEqual(submodules, {})
+            self.assertFalse(marker.exists())
+
+    def test_staging_cleanup_unlinks_symlink_without_chmod_outside_target(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            outside = workspace / "outside"
+            outside.mkdir()
+            outside_file = outside / "keep.txt"
+            outside_file.write_text("keep\n", encoding="utf-8")
+            outside_file.chmod(0o444)
+            outside.chmod(0o555)
+            staging = workspace / ".asset-release-v2.interrupted"
+            staging.mkdir(mode=0o700)
+            (staging / "escape").symlink_to(outside, target_is_directory=True)
+            nested = staging / "nested"
+            nested.mkdir(mode=0o700)
+            (nested / "temporary.bin").write_bytes(b"temporary")
+
+            assets.remove_private_staging_tree(staging)
+
+            self.assertFalse(staging.exists())
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o555)
+            self.assertEqual(stat.S_IMODE(outside_file.stat().st_mode), 0o444)
+            self.assertEqual(outside_file.read_text(encoding="utf-8"), "keep\n")
+
+    def test_staging_cleanup_rejects_special_file(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            staging = Path(raw) / ".asset-release-v2.interrupted"
+            staging.mkdir(mode=0o700)
+            os.mkfifo(staging / "unexpected.fifo", mode=0o600)
+
+            with self.assertRaisesRegex(assets.AssetError, "special file"):
+                assets.remove_private_staging_tree(staging)
+
+            self.assertTrue(staging.exists())
+            self.assertTrue((staging / "unexpected.fifo").exists())
+
+    def test_asset_store_lock_rejects_concurrent_builder(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            runtime = Path(raw)
+            runtime.chmod(0o700)
+            with mock.patch.dict(
+                os.environ,
+                {"XDG_RUNTIME_DIR": str(runtime)},
+                clear=False,
+            ):
+                with assets.asset_store_lock():
+                    with self.assertRaisesRegex(
+                        assets.AssetError,
+                        "another schema-v2 asset build is active",
+                    ):
+                        with assets.asset_store_lock():
+                            self.fail("concurrent builder unexpectedly acquired lock")
+
+    def test_read_only_sealing_rejects_symlink_without_chmod_target(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            outside = workspace / "outside"
+            outside.mkdir()
+            outside.chmod(0o555)
+            staging = workspace / ".asset-release-v2.seal"
+            staging.mkdir(mode=0o700)
+            (staging / "escape").symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaisesRegex(assets.AssetError, "symlink"):
+                assets.make_read_only(staging)
+
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o555)
+
+    def test_read_only_sealing_rejects_file_to_symlink_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            outside = workspace / "outside.bin"
+            outside.write_bytes(b"outside")
+            outside.chmod(0o444)
+            staging = workspace / ".asset-release-v2.race"
+            staging.mkdir(mode=0o700)
+            (staging / "asset.bin").write_bytes(b"staging")
+            original_open = assets._open_verified_regular
+            swapped = False
+
+            def swap_before_open(
+                name: str,
+                *,
+                directory_fd: int,
+                expected_uid: int,
+            ) -> tuple[int, os.stat_result]:
+                nonlocal swapped
+                if name == "asset.bin" and not swapped:
+                    swapped = True
+                    os.unlink(name, dir_fd=directory_fd)
+                    os.symlink(outside, name, dir_fd=directory_fd)
+                return original_open(
+                    name,
+                    directory_fd=directory_fd,
+                    expected_uid=expected_uid,
+                )
+
+            with mock.patch.object(
+                assets,
+                "_open_verified_regular",
+                side_effect=swap_before_open,
+            ):
+                with self.assertRaisesRegex(assets.AssetError, "unsafe"):
+                    assets.make_read_only(staging)
+
+            self.assertTrue(swapped)
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o444)
+            self.assertEqual(outside.read_bytes(), b"outside")
+
+    def test_existing_release_requires_exact_sealed_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            release = Path(raw) / ".asset-release-v2.fixture"
+            release.mkdir(mode=0o700)
+            manifest_assets: dict[str, list[dict[str, object]]] = {}
+            for tree_name in assets.ASSET_KEYS:
+                tree = release / tree_name
+                tree.mkdir()
+                (tree / "asset.bin").write_bytes(tree_name.encode("ascii"))
+                manifest_assets[tree_name] = assets.inspect_tree(
+                    tree,
+                    hash_files=True,
+                )
+            manifest = {
+                "schema_version": 2,
+                "assets": manifest_assets,
+            }
+            payload = assets.canonical(manifest)
+            (release / "ASSET-MANIFEST.json").write_bytes(payload)
+            digest = hashlib.sha256(payload).hexdigest()
+            assets.make_read_only(release)
+            assets.validate_existing_release(
+                release,
+                expected_manifest=manifest,
+                expected_digest=digest,
+            )
+
+            model = release / "model"
+            model.chmod(0o700)
+            extra = model / "empty-extra"
+            extra.mkdir(mode=0o500)
+            model.chmod(0o500)
+            with self.assertRaisesRegex(
+                assets.AssetError,
+                "unmanifested entries",
+            ):
+                assets.validate_existing_release(
+                    release,
+                    expected_manifest=manifest,
+                    expected_digest=digest,
+                )
+            model.chmod(0o700)
+            extra.rmdir()
+            file_path = model / "asset.bin"
+            file_path.chmod(0o440)
+            model.chmod(0o500)
+            with self.assertRaisesRegex(assets.AssetError, "sealed asset file"):
+                assets.validate_existing_release(
+                    release,
+                    expected_manifest=manifest,
+                    expected_digest=digest,
+                )
 
 
 if __name__ == "__main__":

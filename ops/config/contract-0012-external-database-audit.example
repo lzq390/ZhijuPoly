@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# Install this template as the fixed deploy-user-owned mode-0700 site helper.
+# The source-pinned builder discovers the complete reviewed boundary and
+# creates fresh evidence; this wrapper never accepts caller-selected roots,
+# media IDs, Docker resources, restore flags, or audit images.
+runtime_root=/data/lzq/gith/nexpoly-runtime
+registry_file="$runtime_root/config/postgres-media-registry.json"
+service_file="$runtime_root/config/pg_service.conf"
+evidence_root="$runtime_root/audit/postgres-media"
+builder="$runtime_root/legacy-takeover/bin/nexpoly-postgres-media-evidence"
+
+expected_registry_sha256=${NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256:-}
+[[ "$expected_registry_sha256" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+  echo "the prepared bridge must pin a full PostgreSQL media-registry digest" >&2
+  exit 2
+}
+
+for private_file in "$registry_file" "$service_file"; do
+  [[ -f "$private_file" && ! -L "$private_file" ]] || {
+    echo "private PostgreSQL audit input is unavailable: $private_file" >&2
+    exit 2
+  }
+  [[ "$(/usr/bin/stat -c '%u:%a' "$private_file")" == "$(/usr/bin/id -u):600" ]] || {
+    echo "$private_file must be deploy-user-owned mode 0600" >&2
+    exit 2
+  }
+done
+[[ -x "$builder" && ! -L "$builder" ]] || {
+  echo "source-pinned PostgreSQL media builder is unavailable" >&2
+  exit 2
+}
+[[ "$(/usr/bin/stat -c '%u:%a' "$builder")" == "$(/usr/bin/id -u):700" ]] || {
+  echo "source-pinned PostgreSQL media builder is unsafe" >&2
+  exit 2
+}
+
+exec "$builder" build \
+  --registry "$registry_file" \
+  --service-file "$service_file" \
+  --evidence-root "$evidence_root" \
+  --expected-registry-sha256 "$expected_registry_sha256"

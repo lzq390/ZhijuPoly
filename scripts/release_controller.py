@@ -48,11 +48,32 @@ from monomer_worker_env import (  # noqa: E402 - load the verified sibling helpe
     build_worker_process_environment,
     load_worker_env,
 )
+from site_helper_contracts import (  # noqa: E402 - load the verified sibling helper
+    SiteHelperContractError,
+    validate_external_database_audit,
+)
 
 
 PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
 ASSET_RELEASES_ROOT = Path("/data/lzq/nexpoly-assets/releases")
 MAIN_REPOSITORY_URL = "https://github.com/lzq390/ZhijuPoly.git"
+SCHEMA_V2_ASSET_MANIFEST_DIGEST = (
+    "sha256:e5088b7954f7ee8f6cc4e45af36761fdc44d2fc374643441fe07283475de06c8"
+)
+SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST = (
+    "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
+)
+SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS = {
+    "backend-data": (
+        "sha256:1e8dc53143d0676753805ba7a4bf167431e59d92d227ea3aff39e679e43402e1"
+    ),
+    "database": (
+        "sha256:e6bf224836664723124bc7201d14afbdb6dc13cebd289df8b6f86e7a0be0bdcd"
+    ),
+    "model": (
+        "sha256:40e88b7d9d5103ab5db4cd911219dfe37c2ac62319a10824c69c0b36d9556f25"
+    ),
+}
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$")
@@ -99,6 +120,9 @@ BYTEFF2_FORMAL_RUNTIME_ASSETS = (
 )
 BYTEFF2_GIT_SOURCE = "https://github.com/ByteDance-Seed/byteff2.git"
 BYTEFF2_GIT_REVISION = "8f2813407ba5fbecfb5ec5c69e10b124c5b5bdc2"
+BYTEFF2_GIT_TREE = "2d9ab46fc185e0e830be53c0ad077100e693ce68"
+ASSET_BUILD_SOURCE_REPOSITORY = "https://github.com/lzq390/ZhijuPoly.git"
+ASSET_BUILD_SOURCE_SCRIPT = "scripts/bootstrap_asset_release.py"
 BYTEFF2_AUDITED_OVERLAY_SOURCE = "https://huggingface.co/ByteDance-Seed/byteff2"
 BYTEFF2_AUDITED_OVERLAY_REVISION = "b92ac49058c113625012c1f50d98a7bf9cf4e46e"
 BYTEFF2_AUDITED_OVERLAY_ASSETS = BYTEFF2_FORMAL_RUNTIME_ASSETS[1:]
@@ -110,6 +134,9 @@ BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS = {
 }
 CONTRACT_0012_EXTERNAL_AUDIT_COMMAND = (
     "NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND"
+)
+CONTRACT_0012_MEDIA_REGISTRY_DIGEST = (
+    "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256"
 )
 CONTRACT_0012_EXTERNAL_AUDIT_USERS = {
     "nexpoly_dev": "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER",
@@ -2556,6 +2583,85 @@ def validate_byteff2_source(
     return {"source": source, "revision": revision}
 
 
+def validate_schema_v2_asset_provenance(
+    document: dict[str, Any],
+    *,
+    expected_trees: set[str],
+) -> None:
+    """Validate build/source evidence that is itself covered by the manifest digest."""
+    byteff2_tree = document.get("byteff2_tree")
+    submodules = document.get("byteff2_submodules")
+    submodule_trees = document.get("byteff2_submodule_trees")
+    asset_tree_digests = document.get("asset_tree_digests")
+    build_provenance = document.get("build_provenance")
+    if (
+        not isinstance(byteff2_tree, str)
+        or SHA_RE.fullmatch(byteff2_tree) is None
+        or (
+            document.get("byteff2_commit") == BYTEFF2_GIT_REVISION
+            and byteff2_tree != BYTEFF2_GIT_TREE
+        )
+        or not isinstance(submodules, dict)
+        or not isinstance(submodule_trees, dict)
+        or set(submodule_trees) != set(submodules)
+        or any(
+            not isinstance(tree, str) or SHA_RE.fullmatch(tree) is None
+            for tree in submodule_trees.values()
+        )
+        or not isinstance(asset_tree_digests, dict)
+        or set(asset_tree_digests) != expected_trees
+        or any(
+            not isinstance(digest, str) or DIGEST_RE.fullmatch(digest) is None
+            for digest in asset_tree_digests.values()
+        )
+    ):
+        raise ReleaseError("pinned schema-v2 asset manifest has invalid source provenance")
+
+    if (
+        not isinstance(build_provenance, dict)
+        or set(build_provenance) != {"schema_version", "builder_source", "evidence"}
+        or build_provenance.get("schema_version") != 1
+    ):
+        raise ReleaseError("pinned schema-v2 asset manifest has invalid build provenance")
+    builder_source = build_provenance.get("builder_source")
+    if (
+        not isinstance(builder_source, dict)
+        or set(builder_source)
+        != {"repository", "commit", "tree", "script_path", "script_blob"}
+        or builder_source.get("repository") != ASSET_BUILD_SOURCE_REPOSITORY
+        or builder_source.get("script_path") != ASSET_BUILD_SOURCE_SCRIPT
+        or any(
+            not isinstance(builder_source.get(field), str)
+            or SHA_RE.fullmatch(builder_source[field]) is None
+            for field in ("commit", "tree", "script_blob")
+        )
+    ):
+        raise ReleaseError("pinned schema-v2 asset manifest has invalid builder identity")
+    evidence = build_provenance.get("evidence")
+    expected_evidence = {
+        "predecessor_manifest_digest": document.get("predecessor_asset_digest"),
+        "predecessor_all_trees_rehashed": [
+            "model",
+            "database",
+            "backend-data",
+            "byteff2",
+        ],
+        "unchanged_trees_byte_identical": [
+            "model",
+            "database",
+            "backend-data",
+        ],
+        "asset_tree_digest_algorithm": "canonical-manifest-inventory-v1",
+        "byteff2_source_verification": "clean-recursive-commit-and-tree",
+        "staging_directory_mode": "0700",
+        "file_and_directory_fsync": True,
+        "publication": "atomic-rename",
+        "existing_target": "full-content-revalidation",
+    }
+    if evidence != expected_evidence:
+        raise ReleaseError("pinned schema-v2 asset manifest has invalid build evidence")
+
+
 def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
     asset_root = path.resolve()
     if not asset_root.is_dir():
@@ -2578,6 +2684,21 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
         "byteff2_submodules",
         "assets",
     }
+    legacy_schema_v2_fields = base_fields | {
+        "byteff2_source",
+        "byteff2_audited_overlays",
+    }
+    predecessor_schema_v2_fields = legacy_schema_v2_fields | {
+        "predecessor_asset_digest",
+        "changed_asset_trees",
+        "unchanged_asset_tree_digests",
+    }
+    provenance_schema_v2_fields = predecessor_schema_v2_fields | {
+        "asset_tree_digests",
+        "byteff2_tree",
+        "byteff2_submodule_trees",
+        "build_provenance",
+    }
     schema_version = (
         document.get("schema_version") if isinstance(document, dict) else None
     )
@@ -2587,8 +2708,12 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
             (schema_version == 1 and set(document) == base_fields)
             or (
                 schema_version == 2
-                and set(document)
-                == base_fields | {"byteff2_source", "byteff2_audited_overlays"}
+                and frozenset(document)
+                in {
+                    frozenset(legacy_schema_v2_fields),
+                    frozenset(predecessor_schema_v2_fields),
+                    frozenset(provenance_schema_v2_fields),
+                }
             )
         )
     )
@@ -2625,6 +2750,25 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
             document["byteff2_audited_overlays"],
             require_exact_identity=False,
         )
+        if frozenset(document) in {
+            frozenset(predecessor_schema_v2_fields),
+            frozenset(provenance_schema_v2_fields),
+        }:
+            if (
+                document["predecessor_asset_digest"]
+                != SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST
+                or document["changed_asset_trees"] != ["byteff2"]
+                or document["unchanged_asset_tree_digests"]
+                != SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS
+            ):
+                raise ReleaseError(
+                    "pinned schema-v2 asset manifest has invalid predecessor evidence"
+                )
+        if set(document) == provenance_schema_v2_fields:
+            validate_schema_v2_asset_provenance(
+                document,
+                expected_trees=expected_trees,
+            )
     root_entries = {entry.name for entry in asset_root.iterdir()}
     if root_entries != expected_trees | {"ASSET-MANIFEST.json"}:
         raise ReleaseError("pinned asset release contains unmanifested root entries")
@@ -2720,7 +2864,62 @@ def inspect_asset_release(path: Path) -> tuple[Path, str, str]:
                 raise ReleaseError(
                     f"pinned asset file digest differs from manifest: {tree_name}/{relative}"
                 )
+        if (
+            schema_version == 2
+            and frozenset(document)
+            in {
+                frozenset(predecessor_schema_v2_fields),
+                frozenset(provenance_schema_v2_fields),
+            }
+            and tree_name in SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS
+        ):
+            inventory_payload = (
+                json.dumps(
+                    {"files": records},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            inventory_digest = sha256_bytes(inventory_payload)
+            if (
+                inventory_digest
+                != document["unchanged_asset_tree_digests"][tree_name]
+            ):
+                raise ReleaseError(
+                    "pinned schema-v2 unchanged asset tree evidence differs "
+                    f"from its inventory: {tree_name}"
+                )
+        if (
+            schema_version == 2
+            and set(document) == provenance_schema_v2_fields
+        ):
+            inventory_payload = (
+                json.dumps(
+                    {"files": records},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            if sha256_bytes(inventory_payload) != document["asset_tree_digests"][tree_name]:
+                raise ReleaseError(
+                    "pinned schema-v2 asset tree digest differs "
+                    f"from its inventory: {tree_name}"
+                )
     digest = sha256_file(asset_manifest)
+    if (
+        schema_version == 2
+        and frozenset(document)
+        in {
+            frozenset(predecessor_schema_v2_fields),
+            frozenset(provenance_schema_v2_fields),
+        }
+        and digest != SCHEMA_V2_ASSET_MANIFEST_DIGEST
+    ):
+        raise ReleaseError(
+            "pinned schema-v2 asset manifest differs from the frozen manifest digest"
+        )
     byteff2_commit_file = asset_root / "byteff2" / "BYTEFF2-COMMIT"
     if not byteff2_commit_file.is_file() or byteff2_commit_file.is_symlink():
         raise ReleaseError(
@@ -3151,16 +3350,18 @@ def load_release_input(path: Path) -> dict[str, Any]:
     """Load the small, reviewed asset/data input committed with a release."""
 
     document = load_manifest(path)
-    if (
-        set(document)
-        != {
-            "schema_version",
-            "asset_manifest_digest",
-            "datasets_on_asset_change",
-        }
-        or document.get("schema_version") != 1
-    ):
-        raise ReleaseError("release input must use the supported three-field schema")
+    schema_version = document.get("schema_version")
+    v2_fields = {
+        "schema_version",
+        "asset_manifest_digest",
+        "datasets_on_asset_change",
+        "predecessor_asset_manifest_digest",
+        "changed_asset_trees",
+    }
+    if schema_version != 2 or set(document) != v2_fields:
+        raise ReleaseError(
+            "release input must use the non-rebuilding schema-v2 contract"
+        )
     asset_digest = require_digest(
         str(document.get("asset_manifest_digest", "")),
         "release input asset manifest digest",
@@ -3168,7 +3369,6 @@ def load_release_input(path: Path) -> dict[str, Any]:
     datasets = document.get("datasets_on_asset_change")
     if (
         not isinstance(datasets, list)
-        or not datasets
         or any(
             not isinstance(dataset, str)
             or not SAFE_DATASET_RE.fullmatch(dataset)
@@ -3178,11 +3378,28 @@ def load_release_input(path: Path) -> dict[str, Any]:
         or len(set(datasets)) != len(datasets)
     ):
         raise ReleaseError(
-            "datasets_on_asset_change must be a non-empty duplicate-free list of explicit datasets"
+            "datasets_on_asset_change must be a duplicate-free list of explicit datasets"
+        )
+    predecessor_digest = require_digest(
+        str(document.get("predecessor_asset_manifest_digest", "")),
+        "release input predecessor asset manifest digest",
+    )
+    changed_asset_trees = document.get("changed_asset_trees")
+    if (
+        changed_asset_trees != ["byteff2"]
+        or datasets
+        or predecessor_digest == asset_digest
+    ):
+        raise ReleaseError(
+            "schema-v2 ByteFF2-only release input must change only byteff2 "
+            "and must not rebuild PostgreSQL datasets"
         )
     return {
+        "schema_version": schema_version,
         "asset_manifest_digest": asset_digest,
         "datasets_on_asset_change": datasets,
+        "predecessor_asset_manifest_digest": predecessor_digest,
+        "changed_asset_trees": changed_asset_trees,
     }
 
 
@@ -3311,20 +3528,10 @@ def validate_manifest(
     datasets = document.get("datasets_on_asset_change", [])
     if (
         not isinstance(datasets, list)
-        or any(
-            not isinstance(dataset, str)
-            or not SAFE_DATASET_RE.fullmatch(dataset)
-            or dataset in {"all", "none"}
-            for dataset in datasets
-        )
-        or len(set(datasets)) != len(datasets)
+        or datasets
     ):
         raise ReleaseError(
-            "datasets_on_asset_change must contain explicit safe dataset names"
-        )
-    if not datasets:
-        raise ReleaseError(
-            "single-bundle releases require explicit datasets_on_asset_change"
+            "release manifests must not request asset-triggered database rebuilds"
         )
     migrations = release_migration_records(document)
     for migration in migrations:
@@ -6518,6 +6725,7 @@ class ReleaseController:
         environment: dict[str, str],
         *,
         release: Path | None = None,
+        operation_id: str | None = None,
     ) -> None:
         timeout = int(
             environment.get("NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS", "300")
@@ -6527,6 +6735,17 @@ class ReleaseController:
                 "NEXPOLY_MONOMER_MD_SMOKE_TIMEOUT_SECONDS must be between 30 and 3600"
             )
         smoke_release = release or self.release_dir
+        source_sha = require_sha(
+            smoke_release.name,
+            "monomer MD smoke source SHA",
+        )
+        smoke_operation_id = (
+            operation_id or f"release-smoke-{source_sha}"
+        )
+        if OPERATION_ID_RE.fullmatch(smoke_operation_id) is None:
+            raise ReleaseError(
+                "monomer MD smoke operation ID must be 8-128 lowercase safe characters"
+            )
         script = smoke_release / "scripts" / "monomer_md_smoke.py"
         if not script.is_file():
             raise ReleaseError("release does not contain the monomer MD smoke script")
@@ -6556,6 +6775,10 @@ class ReleaseController:
                     str(timeout),
                     "--expected-byteff2-commit",
                     expected_byteff2_commit,
+                    "--operation-id",
+                    smoke_operation_id,
+                    "--source-sha",
+                    source_sha,
                 ),
                 env=environment,
                 stdin=source,
@@ -6566,6 +6789,7 @@ class ReleaseController:
         environment: dict[str, str],
         *,
         release: Path | None = None,
+        operation_id: str | None = None,
     ) -> None:
         """Temporarily admit a Worker smoke only while public nginx is stopped."""
 
@@ -6573,7 +6797,11 @@ class ReleaseController:
         self.run(self.compose(smoke_release, "stop", "nginx"), env=environment)
         try:
             self.drain(environment, False)
-            self.run_monomer_md_smoke(environment, release=smoke_release)
+            self.run_monomer_md_smoke(
+                environment,
+                release=smoke_release,
+                operation_id=operation_id,
+            )
         finally:
             self.drain(environment, True)
 
@@ -6644,26 +6872,16 @@ class ReleaseController:
         return candidate
 
     def rebuild_datasets(self, environment: dict[str, str]) -> None:
+        """Reject the retired asset-triggered database rebuild path."""
+
+        del environment
         datasets = self.document.get("datasets_on_asset_change", [])
         if not datasets:
-            raise ReleaseError(
-                "asset changes require explicit datasets_on_asset_change"
-            )
-        command = self.compose(
-            self.candidate_dir,
-            "run",
-            "--rm",
-            "--no-deps",
-            "postgres-init",
-            "python",
-            "-m",
-            "app.import_postgres",
-            "--rebuild",
-            "--skip-migrations",
+            return
+        raise ReleaseError(
+            "asset-triggered database rebuilds are retired; publish the "
+            "content-addressed asset pointer without importing datasets"
         )
-        for dataset in datasets:
-            command.extend(["--dataset", dataset])
-        self.run(command, env=environment)
 
     def restore_database(
         self,
@@ -7167,7 +7385,7 @@ class ReleaseController:
                 "--wait",
                 "--wait-timeout",
                 "300",
-                "lab-postgres",
+                "--no-deps",
                 "backend",
             ),
             env=rollback_env,
@@ -7209,7 +7427,11 @@ class ReleaseController:
                 env=rollback_env,
             )
         if release_uses_worker(previous_manifest):
-            self.run_ingress_isolated_monomer_smoke(rollback_env, release=previous)
+            self.run_ingress_isolated_monomer_smoke(
+                rollback_env,
+                release=previous,
+                operation_id=f"rollback-smoke-{self.sha}-{previous_sha}",
+            )
         self.run(
             self.compose(
                 previous,
@@ -7219,6 +7441,7 @@ class ReleaseController:
                 "--wait",
                 "--wait-timeout",
                 "120",
+                "--no-deps",
                 "nginx",
             ),
             env=rollback_env,
@@ -7389,8 +7612,8 @@ class ReleaseController:
         if not previous_release.is_dir() or previous_release.is_symlink():
             raise ReleaseError("interrupted deployment previous release is unavailable")
         data_change_started = marker.get("data_change_started") is True
-        if data_change_started:
-            self.backup_path = self.marker_backup(marker)
+        asset_change_started = marker.get("asset_switch_started") is True
+        if asset_change_started or data_change_started:
             previous_asset_root = Path(str(marker.get("previous_asset_root", "")))
             resolved_previous, previous_digest, previous_byteff2_commit = (
                 inspect_asset_release(previous_asset_root)
@@ -7408,6 +7631,10 @@ class ReleaseController:
             self.document["current_asset_manifest_digest"] = previous_digest
             self.document["current_byteff2_commit"] = previous_byteff2_commit
             environment["NEXPOLY_ASSET_MANIFEST_DIGEST"] = previous_digest
+        if data_change_started:
+            # Compatibility recovery for markers emitted by the retired
+            # asset-triggered database rebuild implementation.
+            self.backup_path = self.marker_backup(marker)
             self.run(
                 self.compose(self.release_dir, "stop", "nginx", "backend"),
                 env=environment,
@@ -7723,6 +7950,25 @@ class ReleaseController:
                     "unfinished release provisioning exists; rerun provision-release first"
                 )
             environment = self.environment()
+            runtime_root = Path(
+                environment.get("NEXPOLY_RUNTIME_ROOT", str(self.ops))
+            )
+            if not runtime_root.is_absolute():
+                raise ReleaseError("NEXPOLY_RUNTIME_ROOT must be absolute")
+            canary_state_directory = (
+                runtime_root / "state" / "monomer-md-canaries"
+            )
+            ensure_durable_directory(canary_state_directory)
+            canary_metadata = canary_state_directory.lstat()
+            if (
+                canary_state_directory.is_symlink()
+                or not stat.S_ISDIR(canary_metadata.st_mode)
+                or canary_metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(canary_metadata.st_mode) != 0o700
+            ):
+                raise ReleaseError(
+                    "monomer MD canary state directory must be deploy-user-owned mode 0700"
+                )
             code_migration_mode = "expand"
             if self.state_path.exists():
                 if self.mode == "bootstrap":
@@ -7930,12 +8176,8 @@ class ReleaseController:
                     )
                 candidate_environment = self.candidate_asset_environment(environment)
                 if asset_changed:
-                    # From this point a crash requires restoring the verified
-                    # dump before the old runtime can accept writes again.
-                    state["data_change_started"] = True
-                    self.write_attempt(state)
-                    self.rebuild_datasets(candidate_environment)
-                    state["datasets_rebuilt"] = True
+                    # Asset publication is a pointer-only operation.  Database
+                    # imports are never coupled to an asset digest change.
                     state["asset_switch_started"] = True
                     self.write_attempt(state)
                     self.switch_asset_pointer(
@@ -7977,7 +8219,7 @@ class ReleaseController:
                         "--wait",
                         "--wait-timeout",
                         "300",
-                        "lab-postgres",
+                        "--no-deps",
                         "backend",
                     ),
                     env=environment,
@@ -8008,7 +8250,10 @@ class ReleaseController:
                     release_uses_worker(self.document)
                     and not self.worker_restart_deferred
                 ):
-                    self.run_ingress_isolated_monomer_smoke(environment)
+                    self.run_ingress_isolated_monomer_smoke(
+                        environment,
+                        operation_id=f"deploy-smoke-{self.sha}",
+                    )
                 self.run_isolated_web_smoke(environment)
                 # Real GPU/Worker smokes can take several minutes.  Recheck
                 # main before nginx is started, while drain is still active.
@@ -8022,6 +8267,7 @@ class ReleaseController:
                         "--wait",
                         "--wait-timeout",
                         "120",
+                        "--no-deps",
                         "nginx",
                     ),
                     env=environment,
@@ -8056,11 +8302,7 @@ class ReleaseController:
                         "migrations": migration_history,
                         "applied_migrations": actual_migrations,
                         "migration_manifest": self.document["migrations"],
-                        "datasets_rebuilt": (
-                            self.document["datasets_on_asset_change"]
-                            if asset_changed
-                            else []
-                        ),
+                        "datasets_rebuilt": [],
                         "worker_restart": "deferred"
                         if self.worker_restart_deferred
                         else "completed",
@@ -8286,8 +8528,10 @@ class ReleaseController:
 class PolytaoContractMaintenance:
     """Execute the one reviewed destructive migration as a recoverable operation."""
 
-    EXPECTED_ROWS = 9
-    EXPECTED_STATUS_COUNTS = {"completed": 7, "failed": 2}
+    BUSINESS_RELATION = "generation.polytao_jobs"
+    BUSINESS_STATUSES = frozenset(
+        {"pending", "submitted", "running", "completed", "failed", "cancelled"}
+    )
 
     def __init__(
         self,
@@ -8357,9 +8601,11 @@ class PolytaoContractMaintenance:
                 "checksum": self.contract_record["checksum"],
                 "epoch": self.contract_record["epoch"],
             },
-            "expected_archive": {
-                "rows": self.EXPECTED_ROWS,
-                "status_counts": self.EXPECTED_STATUS_COUNTS,
+            "archive_policy": {
+                "relation": self.BUSINESS_RELATION,
+                "rows": "all-at-maintenance-window",
+                "status_counts": "dynamic",
+                "seal_after": "admission-drained-and-active-jobs-zero",
             },
             "audit_dir": str(self.audit_dir),
         }
@@ -8445,10 +8691,269 @@ class PolytaoContractMaintenance:
     def _write_marker(self, marker: dict[str, Any]) -> None:
         atomic_json(self.marker_path, marker)
 
-    def _write_current_state(self, state: dict[str, Any]) -> None:
-        """Persist contract state through an overridable storage boundary."""
+    def _project_current_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Project maintenance state into the exact durable state schema."""
+
+        return json.loads(json.dumps(state))
+
+    def _prepare_current_state_candidate(
+        self,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build the exact post-contract document before sealing commit intent."""
+
+        return self._project_current_state(state)
+
+    @staticmethod
+    def _sealed_state(
+        marker: dict[str, Any],
+        *,
+        field: str,
+        digest_field: str,
+        label: str,
+        required: bool,
+    ) -> dict[str, Any] | None:
+        state = marker.get(field)
+        digest = marker.get(digest_field)
+        if state is None and digest is None and not required:
+            return None
+        if (
+            not isinstance(state, dict)
+            or not isinstance(digest, str)
+            or DIGEST_RE.fullmatch(digest) is None
+            or canonical_json_digest(state) != digest
+        ):
+            raise ReleaseError(f"0012 marker {label} seal is invalid")
+        return state
+
+    def _state_transition_from_marker(
+        self,
+        marker: dict[str, Any],
+        *,
+        require_postcondition: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        previous_state = marker.get("previous_state")
+        if not isinstance(previous_state, dict):
+            raise ReleaseError("0012 marker is missing previous release state")
+        precondition = self._sealed_state(
+            marker,
+            field="current_state_precondition",
+            digest_field="current_state_precondition_sha256",
+            label="current-state precondition",
+            required=True,
+        )
+        assert precondition is not None
+        if precondition != self._project_current_state(previous_state):
+            raise ReleaseError(
+                "0012 marker current-state precondition differs from previous state"
+            )
+        postcondition = self._sealed_state(
+            marker,
+            field="current_state_postcondition",
+            digest_field="current_state_postcondition_sha256",
+            label="current-state postcondition",
+            required=require_postcondition,
+        )
+        return precondition, postcondition
+
+    def _seal_current_state_precondition(
+        self,
+        marker: dict[str, Any],
+        previous_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        precondition = self._project_current_state(previous_state)
+        marker["current_state_precondition"] = precondition
+        marker["current_state_precondition_sha256"] = canonical_json_digest(
+            precondition
+        )
+        return precondition
+
+    def _seal_current_state_postcondition(
+        self,
+        marker: dict[str, Any],
+        next_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        candidate = self._prepare_current_state_candidate(next_state)
+        return self._seal_prepared_current_state_postcondition(
+            marker,
+            candidate,
+        )
+
+    def _seal_prepared_current_state_postcondition(
+        self,
+        marker: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Seal a deployment-specific candidate already validated in memory."""
+
+        if (
+            "current_state_postcondition" in marker
+            or "current_state_postcondition_sha256" in marker
+        ):
+            existing = self._sealed_state(
+                marker,
+                field="current_state_postcondition",
+                digest_field="current_state_postcondition_sha256",
+                label="current-state postcondition",
+                required=True,
+            )
+            if existing != candidate:
+                raise ReleaseError(
+                    "0012 marker current-state postcondition changed"
+                )
+            return existing
+        marker["current_state_postcondition"] = candidate
+        marker["current_state_postcondition_sha256"] = canonical_json_digest(
+            candidate
+        )
+        return candidate
+
+    def _load_persisted_current_state(self) -> dict[str, Any]:
+        if not self.state_path.is_file() or self.state_path.is_symlink():
+            raise ReleaseError("0012 current deployment state is unavailable")
+        state = self._load_operation_document(
+            self.state_path,
+            "current deployment state",
+        )
+        if not isinstance(state, dict):
+            raise ReleaseError("0012 current deployment state is invalid")
+        return state
+
+    def _current_state_transition_status(
+        self,
+        marker: dict[str, Any],
+        *,
+        require_postcondition: bool,
+    ) -> str:
+        precondition, postcondition = self._state_transition_from_marker(
+            marker,
+            require_postcondition=require_postcondition,
+        )
+        current = self._load_persisted_current_state()
+        if current == precondition:
+            return "precondition"
+        if postcondition is not None and current == postcondition:
+            return "postcondition"
+        raise ReleaseError(
+            "0012 current deployment state is neither exact precondition nor "
+            "exact postcondition"
+        )
+
+    def _revalidate_current_state_authority(
+        self,
+        marker: dict[str, Any],
+        *,
+        require_postcondition: bool,
+    ) -> str:
+        """Freshly re-open state through the maintenance authority boundary."""
+
+        status = self._current_state_transition_status(
+            marker,
+            require_postcondition=require_postcondition,
+        )
+        precondition, postcondition = self._state_transition_from_marker(
+            marker,
+            require_postcondition=require_postcondition,
+        )
+        expected = (
+            precondition if status == "precondition" else postcondition
+        )
+        if expected is None:
+            raise ReleaseError("0012 current-state authority has no sealed identity")
+        current = self._load_current_state(allow_completed_contract=True)
+        if (
+            self._project_current_state(current) != expected
+            or self._load_persisted_current_state() != expected
+        ):
+            raise ReleaseError(
+                "0012 current deployment authority changed during the operation"
+            )
+        return status
+
+    def _persist_current_state(self, state: dict[str, Any]) -> None:
+        """Persist one validated state using the deployment format's writer."""
 
         atomic_json(self.state_path, state)
+
+    def _validate_current_state_commit_candidate(
+        self,
+        marker: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> None:
+        """Run deployment-specific live checks immediately before the CAS."""
+
+    def _write_current_state(self, state: dict[str, Any]) -> None:
+        """Commit only the exact marker-sealed post-state from the exact pre-state."""
+
+        marker = self._load_operation_document(
+            self.marker_path,
+            "recovery marker",
+        )
+        precondition, postcondition = self._state_transition_from_marker(
+            marker,
+            require_postcondition=True,
+        )
+        candidate = self._prepare_current_state_candidate(state)
+        if candidate != postcondition:
+            raise ReleaseError(
+                "0012 state commit differs from its sealed postcondition"
+            )
+        self._validate_current_state_commit_candidate(marker, candidate)
+        status = self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=True,
+        )
+        if status == "postcondition":
+            return
+        if status != "precondition":
+            raise ReleaseError("0012 state commit precondition is invalid")
+        self._persist_current_state(candidate)
+        if (
+            self._load_persisted_current_state() != postcondition
+            or self._revalidate_current_state_authority(
+                marker,
+                require_postcondition=True,
+            )
+            != "postcondition"
+        ):
+            raise ReleaseError("0012 current deployment state did not commit exactly")
+
+    def _restore_current_state(
+        self,
+        previous_state: dict[str, Any],
+    ) -> None:
+        """Restore only from the exact sealed post-state; accept exact pre on retry."""
+
+        marker = self._load_operation_document(
+            self.marker_path,
+            "recovery marker",
+        )
+        precondition, _postcondition = self._state_transition_from_marker(
+            marker,
+            require_postcondition=False,
+        )
+        if self._project_current_state(previous_state) != precondition:
+            raise ReleaseError(
+                "0012 rollback state differs from its sealed precondition"
+            )
+        status = self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
+        if status == "precondition":
+            return
+        if status != "postcondition":
+            raise ReleaseError("0012 rollback current-state authority is invalid")
+        self._persist_current_state(precondition)
+        if (
+            self._load_persisted_current_state() != precondition
+            or self._revalidate_current_state_authority(
+                marker,
+                require_postcondition=False,
+            )
+            != "precondition"
+        ):
+            raise ReleaseError("0012 previous deployment state did not restore exactly")
 
     def _load_operation_document(
         self,
@@ -8878,61 +9383,10 @@ class PolytaoContractMaintenance:
         payload: object,
         environment: dict[str, str],
     ) -> dict[str, Any]:
-        """Validate mandatory, read-only evidence from independent DB stacks."""
+        """Validate complete online and offline PostgreSQL media evidence."""
 
-        if not isinstance(payload, dict) or set(payload) != {
-            "schema_version",
-            "inventory_complete",
-            "writable_target",
-            "databases",
-        }:
-            raise ReleaseError("external database inventory has an invalid shape")
-        if (
-            payload.get("schema_version") != 1
-            or payload.get("inventory_complete") is not True
-        ):
-            raise ReleaseError("external database inventory is incomplete")
-        if payload.get("writable_target") != {
-            "stack": "production",
-            "database": "nexpoly",
-        }:
-            raise ReleaseError(
-                "external database registry must identify production/nexpoly as its only writable target"
-            )
-        raw_databases = payload.get("databases")
-        if not isinstance(raw_databases, list):
-            raise ReleaseError("external database inventory has no database list")
-
-        expected_databases = set(CONTRACT_0012_EXTERNAL_AUDIT_USERS)
-        records: dict[str, dict[str, Any]] = {}
-        expected_fields = {
-            "stack",
-            "database",
-            "current_user",
-            "transaction_read_only",
-            "role_superuser",
-            "role_create_db",
-            "role_create_role",
-            "ledger",
-            "legacy_relation_present",
-        }
-        for record in raw_databases:
-            if not isinstance(record, dict) or set(record) != expected_fields:
-                raise ReleaseError(
-                    "external database inventory contains an invalid record"
-                )
-            stack = record.get("stack")
-            database = record.get("database")
-            if (
-                not isinstance(stack, str)
-                or stack not in expected_databases
-                or stack in records
-                or database != stack
-            ):
-                raise ReleaseError(
-                    "external database inventory contains an unknown, duplicate, or mismatched stack"
-                )
-            user_key = CONTRACT_0012_EXTERNAL_AUDIT_USERS[stack]
+        expected_users: dict[str, str] = {}
+        for stack, user_key in CONTRACT_0012_EXTERNAL_AUDIT_USERS.items():
             expected_user = environment.get(user_key)
             if (
                 not isinstance(expected_user, str)
@@ -8941,18 +9395,29 @@ class PolytaoContractMaintenance:
                 raise ReleaseError(
                     f"0012 maintenance requires a pinned read-only audit user in {user_key}"
                 )
-            if (
-                record.get("transaction_read_only") is not True
-                or record.get("role_superuser") is not False
-                or record.get("role_create_db") is not False
-                or record.get("role_create_role") is not False
-            ):
-                raise ReleaseError(
-                    f"external database audit for {stack} is not provably read-only"
-                )
+            expected_users[stack] = expected_user
+        registry_digest = environment.get(CONTRACT_0012_MEDIA_REGISTRY_DIGEST)
+        if (
+            not isinstance(registry_digest, str)
+            or DIGEST_RE.fullmatch(registry_digest) is None
+        ):
+            raise ReleaseError(
+                "0012 maintenance requires the pinned external media registry digest"
+            )
+        try:
+            normalized_inventory = validate_external_database_audit(
+                payload,
+                expected_users=expected_users,
+                expected_media_registry_digest=registry_digest,
+            )
+        except SiteHelperContractError as exc:
+            raise ReleaseError(f"external database inventory is unsafe: {exc}") from exc
+
+        for record in normalized_inventory["databases"]:
+            stack = record["stack"]
             normalized = {
                 "schema_version": 1,
-                "database": database,
+                "database": record["database"],
                 "current_user": record.get("current_user"),
                 "transaction_read_only": record.get("transaction_read_only"),
                 "ledger": record.get("ledger"),
@@ -8962,25 +9427,9 @@ class PolytaoContractMaintenance:
                 normalized,
                 environment,
                 stack,
-                expected_user=expected_user,
+                expected_user=expected_users[stack],
             )
-            records[stack] = dict(record)
-
-        if set(records) != expected_databases:
-            missing = sorted(expected_databases.difference(records))
-            raise ReleaseError(
-                "external database inventory is missing required stacks: "
-                + ", ".join(missing)
-            )
-        return {
-            "schema_version": 1,
-            "inventory_complete": True,
-            "writable_target": {
-                "stack": "production",
-                "database": "nexpoly",
-            },
-            "databases": [records[name] for name in sorted(records)],
-        }
+        return normalized_inventory
 
     def _capture_external_database_inventory(
         self,
@@ -9078,13 +9527,26 @@ class PolytaoContractMaintenance:
             "structure_counts",
         }:
             raise ReleaseError("0012 archive evidence has an invalid shape")
+        row_count = payload.get("row_count")
+        status_counts = payload.get("status_counts")
         if (
             payload.get("schema_version") != 2
-            or payload.get("row_count") != self.EXPECTED_ROWS
-            or payload.get("status_counts") != self.EXPECTED_STATUS_COUNTS
+            or isinstance(row_count, bool)
+            or not isinstance(row_count, int)
+            or row_count < 0
+            or not isinstance(status_counts, dict)
+            or any(
+                not isinstance(status, str)
+                or status not in self.BUSINESS_STATUSES
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count <= 0
+                for status, count in status_counts.items()
+            )
+            or sum(status_counts.values()) != row_count
         ):
             raise ReleaseError(
-                "0012 archive evidence differs from the reviewed 9-row history"
+                "0012 archive evidence does not seal the complete dynamic business-row set"
             )
         for key in ("rows_sha256", "schema_sha256"):
             value = payload.get(key)
@@ -9643,6 +10105,18 @@ class PolytaoContractMaintenance:
         *,
         recorded_database_inventory: object | None = None,
     ) -> None:
+        marker = self._load_operation_document(
+            self.marker_path,
+            "recovery marker",
+        )
+        # Refuse a foreign but structurally valid state before any destructive
+        # database restore.  Exact pre-state means a prior restore committed
+        # and is a valid idempotent retry; exact post-state is the only state
+        # this rollback is authorised to replace.
+        self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
         recorded_external_inventory = None
         if isinstance(recorded_database_inventory, dict):
             recorded_external_inventory = recorded_database_inventory.get(
@@ -9664,8 +10138,14 @@ class PolytaoContractMaintenance:
                 ["systemctl", "--user", "stop", "nexpoly-monomer-md-worker.service"],
                 env=environment,
             )
+        # Re-open the authority after the potentially long drain/stop phase so
+        # a competing state transition cannot silently authorise this restore.
+        self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
         self.controller.restore_database(environment, release=release)
-        self._write_current_state(previous_state)
+        self._restore_current_state(previous_state)
         self.controller.run(
             self.controller.compose(
                 release,
@@ -9675,7 +10155,7 @@ class PolytaoContractMaintenance:
                 "--wait",
                 "--wait-timeout",
                 "300",
-                "lab-postgres",
+                "--no-deps",
                 "backend",
             ),
             env=environment,
@@ -9702,6 +10182,7 @@ class PolytaoContractMaintenance:
                 "--wait",
                 "--wait-timeout",
                 "120",
+                "--no-deps",
                 "nginx",
             ),
             env=environment,
@@ -9727,6 +10208,10 @@ class PolytaoContractMaintenance:
         previous_state = marker.get("previous_state")
         if not isinstance(previous_state, dict):
             raise ReleaseError("0012 recovery marker is missing previous release state")
+        transition_status = self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
         environment = self.controller.environment()
         current_release = self._bind_current_release(previous_state)
         self.controller.candidate_dir = current_release
@@ -9754,8 +10239,17 @@ class PolytaoContractMaintenance:
             initial_inventory=inventory,
         )
         approved = self._approved_record(current_state)
-        if (
+        if transition_status == "postcondition" and not (
             approved is not None
+            and approved.get("checksum") == POLYTAO_CONTRACT_CHECKSUM
+            and approved.get("operation_id") == self.operation_id
+        ):
+            raise ReleaseError(
+                "0012 sealed postcondition lacks its exact contract approval"
+            )
+        if (
+            transition_status == "postcondition"
+            and approved is not None
             and approved.get("checksum") == POLYTAO_CONTRACT_CHECKSUM
             and approved.get("operation_id") == self.operation_id
         ):
@@ -9797,6 +10291,7 @@ class PolytaoContractMaintenance:
                     "--wait",
                     "--wait-timeout",
                     "120",
+                    "--no-deps",
                     "nginx",
                 ),
                 env=environment,
@@ -9929,6 +10424,7 @@ class PolytaoContractMaintenance:
                 "database_change_started": False,
                 "database_inventory": database_inventory,
             }
+            self._seal_current_state_precondition(marker, previous_state)
             self._write_marker(marker)
             worker_drained = False
             state_committed = False
@@ -10046,6 +10542,9 @@ class PolytaoContractMaintenance:
                     "approved_at": approved_at,
                 }
                 next_state["last_contract_operation"] = self.operation_id
+                self._seal_current_state_postcondition(marker, next_state)
+                marker["phase"] = "state-commit-started"
+                self._write_marker(marker)
                 journal = self._success_journal(
                     marker,
                     approval,
@@ -10066,6 +10565,7 @@ class PolytaoContractMaintenance:
                         "--wait",
                         "--wait-timeout",
                         "120",
+                        "--no-deps",
                         "nginx",
                     ),
                     env=environment,
@@ -10077,6 +10577,26 @@ class PolytaoContractMaintenance:
                 durable_unlink(self.marker_path)
                 return next_state
             except Exception as exc:
+                if (
+                    not state_committed
+                    and marker.get("current_state_postcondition") is not None
+                ):
+                    # The atomic replace may have committed even when its
+                    # caller observed an exception.  Never restore the
+                    # database over an exact durable post-state.
+                    try:
+                        state_committed = (
+                            self._revalidate_current_state_authority(
+                                marker,
+                                require_postcondition=True,
+                            )
+                            == "postcondition"
+                        )
+                    except Exception:
+                        # The rollback path below performs the same exact-state
+                        # gate before any destructive restore and will retain
+                        # the marker/drain on a foreign state.
+                        pass
                 marker.update(
                     {
                         "status": "failed" if not state_committed else "resume-pending",
@@ -10146,6 +10666,7 @@ class PolytaoContractMaintenance:
                                 "--wait",
                                 "--wait-timeout",
                                 "120",
+                                "--no-deps",
                                 "nginx",
                             ),
                             env=environment,

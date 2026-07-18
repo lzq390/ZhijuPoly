@@ -433,6 +433,56 @@ class ReconcileTests(unittest.TestCase):
             )
         )
         operation._image_identity = mock.Mock(return_value=FIXTURE_RESTORE_IMAGE)
+        operation._bridge_authority = mock.Mock(
+            return_value=(
+                {"schema_version": 1, "fixture": "bridge"},
+                {"schema_version": 1, "fixture": "takeover-runtime"},
+            )
+        )
+        transition_path = (
+            operation.audit_dir
+            / "external-database-alias-transition.json"
+        )
+        transition_document = {"schema_version": 1, "fixture": True}
+        transition_reference = {
+            "path": str(transition_path),
+            "sha256": "sha256:"
+            + MODULE.sha256_bytes(
+                MODULE.canonical_json_bytes(transition_document) + b"\n"
+            ),
+            "identity_sha256": "sha256:" + "1" * 64,
+            "before_state_sha256": "sha256:" + "2" * 64,
+            "after_state_sha256": "sha256:" + "3" * 64,
+            "descriptor_sha256": "sha256:" + "4" * 64,
+            "operation_id": operation.operation_id,
+            "kind": "alias-0005-reconciliation",
+        }
+
+        def ensure_transition(_marker: object) -> dict[str, object]:
+            transition_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=0o700,
+            )
+            os.chmod(transition_path.parent, 0o700)
+            if not transition_path.exists():
+                MODULE.atomic_json(
+                    transition_path,
+                    transition_document,
+                )
+            transition_reference["sha256"] = (
+                "sha256:" + MODULE.sha256_file(transition_path)
+            )
+            return dict(transition_reference)
+
+        operation._ensure_external_database_alias_transition = mock.Mock(
+            side_effect=ensure_transition
+        )
+        operation._external_database_alias_transition_pair = mock.Mock(
+            return_value={"schema_version": 1, "fixture": True}
+        )
+        operation._fixture_external_transition = transition_reference
+        operation._require_takeover_runtime_match = mock.Mock()
         operation._runtime_stop_fence = mock.Mock(return_value={"fixture": True})
         operation._validate_mandatory_evidence = mock.Mock(
             return_value=({"dump_sha256": "dump"}, {"dump_sha256": "dump"})
@@ -498,7 +548,23 @@ class ReconcileTests(unittest.TestCase):
             marker, "mutation-intent", mutation_intent={"fixture": True}
         )
         phase = "mutation-committed" if committed else "mutation-commit-started"
-        operation._write_marker(marker, phase, after=after)  # type: ignore[attr-defined]
+        extra = (
+            {
+                "external_database_alias_transition": (
+                    operation._ensure_external_database_alias_transition(  # type: ignore[attr-defined]
+                        marker
+                    )
+                )
+            }
+            if committed
+            else {}
+        )
+        operation._write_marker(  # type: ignore[attr-defined]
+            marker,
+            phase,
+            after=after,
+            **extra,
+        )
 
     @staticmethod
     def _write_finalization_evidence(
@@ -540,6 +606,13 @@ class ReconcileTests(unittest.TestCase):
             "database_after": after,
             "database_backup": marker["database_backup"],
             "isolated_restore": marker["isolated_restore"],
+            "runtime_stop_fence": marker["runtime_stop_fence"],
+            "runtime_stop_fence_sha256": MODULE.sha256_bytes(
+                MODULE.canonical_json_bytes(marker["runtime_stop_fence"])
+            ),
+            "external_database_alias_transition": marker[
+                "external_database_alias_transition"
+            ],
             "binaries": binaries,
             "files": operation._evidence_file_inventory(),  # type: ignore[attr-defined]
             "completed_at": completed_at,
@@ -588,6 +661,7 @@ class ReconcileTests(unittest.TestCase):
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
             restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -596,6 +670,7 @@ class ReconcileTests(unittest.TestCase):
         operation._begin_recovery_locked = mock.Mock(
             return_value=("post", recovered)
         )
+        operation._begin_post_locked = mock.Mock(return_value=recovered)
         result = operation.apply()
         self.assertEqual(result["status"], "completed")
         self.assertFalse(any("WITH deleted AS" in sql for sql in session.json_sql))
@@ -611,6 +686,7 @@ class ReconcileTests(unittest.TestCase):
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
             restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -619,11 +695,12 @@ class ReconcileTests(unittest.TestCase):
         operation._begin_recovery_locked = mock.Mock(
             return_value=("post", recovered)
         )
+        operation._begin_post_locked = mock.Mock(return_value=recovered)
         result = operation.apply()
         self.assertEqual(result["status"], "completed")
         self.assertEqual(session.json_sql, [])
 
-    def test_runtime_restart_with_pre_state_rebuilds_evidence_before_cas(self) -> None:
+    def test_runtime_restart_with_pre_state_cannot_adopt_replacement_fence(self) -> None:
         session = FakeSession()
         operation = self._operation(session)
         control, source, binaries = operation.identities()
@@ -634,34 +711,83 @@ class ReconcileTests(unittest.TestCase):
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
             restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
         self._advance_marker(operation, marker, committed=False)
         restarted_fence = {"fixture": "restarted-and-stopped"}
         operation._runtime_stop_fence = mock.Mock(return_value=restarted_fence)
-        operation._begin_recovery_locked = mock.Mock(
-            return_value=(
-                "pre",
-                operation_inventory(phase="pre"),
-            )
+        marker_before = operation.marker_path.read_bytes()
+
+        with self.assertRaisesRegex(
+            MODULE.ReconcileError,
+            "cannot adopt replacement readers or PostgreSQL",
+        ):
+            operation.apply()
+
+        self.assertEqual(operation.marker_path.read_bytes(), marker_before)
+        operation._archive.assert_not_called()
+
+    def test_takeover_runtime_match_binds_readers_worker_and_postgres(self) -> None:
+        operation = self._operation(FakeSession())
+        backend_id = "1" * 64
+        web_id = "2" * 64
+        postgres_id = "3" * 64
+        backend_image = "sha256:" + "4" * 64
+        web_image = "sha256:" + "5" * 64
+        postgres_image = "sha256:" + "6" * 64
+        current = {
+            "database_system_identifier": MODULE.SYSTEM_IDENTIFIER,
+            "containers": [
+                {
+                    "service": "backend",
+                    "id": backend_id,
+                    "image": backend_image,
+                },
+                {
+                    "service": "nginx",
+                    "id": web_id,
+                    "image": web_image,
+                },
+                {
+                    "service": "lab-postgres",
+                    "id": postgres_id,
+                    "image": postgres_image,
+                    "data_volume": {"name": "nexpoly_postgres_data"},
+                },
+            ],
+            "monomer_md_unit": {
+                "FragmentSHA256": "7" * 64,
+            },
+        }
+        takeover = {
+            "readers_stopped": True,
+            "postgres_running_untouched": True,
+            "backend_container_id": backend_id,
+            "backend_image_id": backend_image,
+            "web_container_id": web_id,
+            "web_image_id": web_image,
+            "worker_unit_name": "nexpoly-monomer-md-worker.service",
+            "worker_unit_sha256": "7" * 64,
+            "postgres_container_id": postgres_id,
+            "postgres_image_id": postgres_image,
+            "postgres_data_volume": "nexpoly_postgres_data",
+            "postgres_system_identifier": MODULE.SYSTEM_IDENTIFIER,
+        }
+        validator = (
+            MODULE.Reconciliation._require_takeover_runtime_match
         )
-        original_reset = operation._reset_precommit_evidence
-        operation._reset_precommit_evidence = mock.Mock(wraps=original_reset)
+        validator(operation, takeover, current)
+        changed = dict(takeover)
+        changed["postgres_container_id"] = "8" * 64
+        with self.assertRaisesRegex(
+            MODULE.ReconcileError,
+            "differ from legacy takeover",
+        ):
+            validator(operation, changed, current)
 
-        result = operation.apply()
-
-        self.assertEqual(result["status"], "completed")
-        operation._reset_precommit_evidence.assert_called_once()
-        operation._archive.assert_called_once()
-        refreshed = MODULE.load_private_json(operation.marker_path)
-        self.assertEqual(refreshed["runtime_stop_fence"], restarted_fence)
-        self.assertEqual(
-            refreshed["runtime_stop_fence_history"][0]["reason"],
-            "precommit_evidence_rebuilt_after_runtime_change",
-        )
-
-    def test_runtime_restart_with_post_state_adopts_fence_without_second_cas(self) -> None:
+    def test_runtime_restart_with_post_state_cannot_adopt_replacement_fence(self) -> None:
         session = FakeSession()
         operation = self._operation(session)
         control, source, binaries = operation.identities()
@@ -672,27 +798,23 @@ class ReconcileTests(unittest.TestCase):
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
             restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
         self._advance_marker(operation, marker, committed=False)
         restarted_fence = {"fixture": "restarted-and-stopped"}
         operation._runtime_stop_fence = mock.Mock(return_value=restarted_fence)
-        recovered = operation_inventory(phase="post")
-        operation._begin_recovery_locked = mock.Mock(
-            return_value=("post", recovered)
-        )
+        marker_before = operation.marker_path.read_bytes()
 
-        result = operation.apply()
+        with self.assertRaisesRegex(
+            MODULE.ReconcileError,
+            "cannot adopt replacement readers or PostgreSQL",
+        ):
+            operation.apply()
 
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(operation.marker_path.read_bytes(), marker_before)
         self.assertFalse(any("WITH deleted AS" in sql for sql in session.json_sql))
-        refreshed = MODULE.load_private_json(operation.marker_path)
-        self.assertEqual(refreshed["runtime_stop_fence"], restarted_fence)
-        self.assertEqual(
-            refreshed["runtime_stop_fence_history"][0]["reason"],
-            "post_commit_recovery",
-        )
 
     def test_completed_replay_with_changed_runtime_fence_is_byte_immutable(self) -> None:
         session = FakeSession()
@@ -705,6 +827,7 @@ class ReconcileTests(unittest.TestCase):
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
             restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -727,17 +850,18 @@ class ReconcileTests(unittest.TestCase):
         audit_before = audit_path.read_bytes()
         restarted_fence = {"fixture": "new-stopped-runtime"}
         operation._runtime_stop_fence = mock.Mock(return_value=restarted_fence)
-        operation._begin_recovery_locked = mock.Mock(return_value=("post", after))
+        with self.assertRaisesRegex(
+            MODULE.ReconcileError,
+            "cannot adopt replacement readers or PostgreSQL",
+        ):
+            operation.apply()
 
-        result = operation.apply()
-
-        self.assertTrue(result["idempotent_replay"])
         self.assertEqual(operation.marker_path.read_bytes(), marker_before)
         self.assertEqual(audit_path.read_bytes(), audit_before)
         self.assertFalse(any("WITH deleted AS" in sql for sql in session.json_sql))
         operation._finalize.assert_not_called()
 
-    def test_existing_audit_finalizes_changed_runtime_fence_without_second_cas(
+    def test_existing_audit_rejects_changed_runtime_fence_without_second_cas(
         self,
     ) -> None:
         session = FakeSession()
@@ -750,6 +874,7 @@ class ReconcileTests(unittest.TestCase):
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
             restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -765,23 +890,20 @@ class ReconcileTests(unittest.TestCase):
         audit_before = audit_path.read_bytes()
         restarted_fence = {"fixture": "new-stopped-runtime"}
         operation._runtime_stop_fence = mock.Mock(return_value=restarted_fence)
-        operation._begin_recovery_locked = mock.Mock(return_value=("post", after))
         operation._finalize = MODULE.Reconciliation._finalize.__get__(
             operation, MODULE.Reconciliation
         )
 
-        result = operation.apply()
+        marker_before = operation.marker_path.read_bytes()
+        with self.assertRaisesRegex(
+            MODULE.ReconcileError,
+            "cannot adopt replacement readers or PostgreSQL",
+        ):
+            operation.apply()
 
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(operation.marker_path.read_bytes(), marker_before)
         self.assertEqual(audit_path.read_bytes(), audit_before)
         self.assertFalse(any("WITH deleted AS" in sql for sql in session.json_sql))
-        refreshed = MODULE.load_private_json(operation.marker_path)
-        self.assertEqual(refreshed["phase"], "completed")
-        self.assertEqual(refreshed["runtime_stop_fence"], restarted_fence)
-        self.assertEqual(
-            refreshed["runtime_stop_fence_history"][0]["reason"],
-            "post_commit_recovery",
-        )
 
     def test_directory_intent_recovers_after_only_audit_directory_was_created(
         self,
@@ -796,6 +918,7 @@ class ReconcileTests(unittest.TestCase):
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
             restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
         )
         operation._prepare_roots()
         marker = {
@@ -833,6 +956,7 @@ class ReconcileTests(unittest.TestCase):
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
             restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -877,6 +1001,7 @@ class ReconcileTests(unittest.TestCase):
             binaries=binaries,
             database_endpoint=operation.database_endpoint,
             restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
         )
         operation._prepare_roots()
         marker = operation._new_marker(identity)
@@ -920,6 +1045,7 @@ class ReconcileTests(unittest.TestCase):
                 "identity": {
                     "operation_id": "another-operation",
                     "restore_image": FIXTURE_RESTORE_IMAGE,
+                    "bridge_authority": {"fixture": "another-bridge"},
                 },
                 "operation_directories": {
                     "audit": str(operation.audit_dir),
@@ -940,7 +1066,9 @@ class ReconcileTests(unittest.TestCase):
             self.assertTrue(path.exists())
         operation.identities = mock.Mock(return_value=({"release_id": "r"}, {}, {}))
         operation._database_inventory = mock.Mock(return_value={"ledger": [], "archive": {}})
-        operation._image_identity = mock.Mock(return_value={"image_id": "i"})
+        operation._image_identity = mock.Mock(
+            return_value=FIXTURE_RESTORE_IMAGE
+        )
         before = sorted(str(path) for path in operation.state_root.rglob("*"))
         result = operation.plan()
         after = sorted(str(path) for path in operation.state_root.rglob("*"))

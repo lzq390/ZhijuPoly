@@ -31,6 +31,7 @@ BACKEND_URL="http://127.0.0.1:${NEXPOLY_DEV_BACKEND_PORT:-18000}"
 WORKER_ENABLED="${MONOMER_MD_DEV_WORKER_ENABLED:-true}"
 WORKER_SOCKET_DIR="${MONOMER_MD_DEV_WORKER_SOCKET_DIR:-$ROOT_DIR/.runtime/monomer-md-worker-socket}"
 WORKER_JOB_ROOT="${MONOMER_MD_DEV_WORKER_JOB_ROOT:-$ROOT_DIR/.runtime/monomer-md-worker-runs}"
+CANARY_STATE_DIR="${MONOMER_MD_DEV_CANARY_STATE_DIR:-$ROOT_DIR/.runtime/monomer-md-canaries}"
 WORKER_PYTHON="${MONOMER_MD_DEV_WORKER_PYTHON:-$ROOT_DIR/.venv-monomer-md-worker/bin/python}"
 WORKER_VENV_ROOT="$ROOT_DIR/.venv-monomer-md-worker"
 WORKER_LOCK="$ROOT_DIR/workers/monomer_md_worker/requirements.lock"
@@ -39,11 +40,31 @@ WORKER_BASE_IDENTITY="${MONOMER_MD_DEV_WORKER_BASE_PYTHON_IDENTITY_SHA256:-}"
 WORKER_WHEELHOUSE="${MONOMER_MD_DEV_WORKER_WHEELHOUSE:-}"
 [[ "$WORKER_SOCKET_DIR" == /* ]] || WORKER_SOCKET_DIR="$ROOT_DIR/${WORKER_SOCKET_DIR#./}"
 [[ "$WORKER_JOB_ROOT" == /* ]] || WORKER_JOB_ROOT="$ROOT_DIR/${WORKER_JOB_ROOT#./}"
+[[ "$CANARY_STATE_DIR" == /* ]] || CANARY_STATE_DIR="$ROOT_DIR/${CANARY_STATE_DIR#./}"
 [[ "$WORKER_PYTHON" == /* ]] || WORKER_PYTHON="$ROOT_DIR/${WORKER_PYTHON#./}"
 WORKER_SOCKET="$WORKER_SOCKET_DIR/worker.sock"
 WORKER_PID_FILE="$WORKER_JOB_ROOT/worker.pid"
 WORKER_LOG_FILE="$WORKER_JOB_ROOT/worker.log"
 : "${BYTEFF2_ROOT:?Set BYTEFF2_ROOT to the byteff2 tree in the pinned asset release}"
+
+prepare_canary_state_directory() {
+  case "$CANARY_STATE_DIR/" in
+    /data/lzq/gith/nexpoly-runtime/*)
+      echo "Development canary state must not use the production runtime root." >&2
+      return 1
+      ;;
+  esac
+  [[ ! -L "$CANARY_STATE_DIR" ]] || {
+    echo "Development canary state directory must not be a symlink." >&2
+    return 1
+  }
+  mkdir -p "$CANARY_STATE_DIR"
+  [[ -d "$CANARY_STATE_DIR" && ! -L "$CANARY_STATE_DIR" ]] || {
+    echo "Development canary state path is not a directory." >&2
+    return 1
+  }
+  chmod 700 "$CANARY_STATE_DIR"
+}
 
 validate_asset_release() {
   [[ "${ASSET_RELEASE_VALIDATED:-false}" == "true" ]] && return 0
@@ -884,6 +905,7 @@ export NEXPOLY_DEV_CONFIG_HASH
 case "${1:-up}" in
   up)
     validate_asset_release
+    prepare_canary_state_directory
     build_backend_image
     "${COMPOSE[@]}" up -d lab-postgres
     run_dev_migrations
@@ -948,6 +970,7 @@ case "${1:-up}" in
       tests/test_gpu_runtime_registry.py \
       tests/test_gpu_preflight.py \
       tests/test_deployment_control.py \
+      tests/test_deployment_monomer_md_canary.py \
       tests/test_job_manager_reliability.py \
       tests/test_in_memory_jobs.py \
       tests/test_migration_policy.py

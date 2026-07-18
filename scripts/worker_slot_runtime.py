@@ -12,13 +12,37 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 from typing import Any, Mapping, NoReturn
+
+
+def _load_git_source_trust() -> Any:
+    module_name = "nexpoly_worker_git_source_trust"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = Path(__file__).with_name("git_source_trust.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Git source trust policy cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+GIT_SOURCE_TRUST = _load_git_source_trust()
 
 
 PRODUCTION_SOURCE_ROOT = Path("/data/lzq/gith/nexpoly")
@@ -124,6 +148,7 @@ class GitCheckoutIdentity:
     source_root: Path
     source_sha: str
     source_tree: str
+    trust_evidence: dict[str, Any]
 
 
 WORKER_BASE_IDENTITY_FIELDS = frozenset(
@@ -659,25 +684,15 @@ def load_runtime_selection(
 
 
 def _run_git(source_root: Path, *arguments: str) -> str:
-    environment = {
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_TERMINAL_PROMPT": "0",
-        "HOME": "/nonexistent",
-        "LANG": "C",
-        "LC_ALL": "C",
-        "PATH": "/usr/bin:/bin",
-    }
     try:
-        completed = subprocess.run(
-            ["/usr/bin/git", "-C", str(source_root), *arguments],
-            cwd="/",
-            env=environment,
+        completed = GIT_SOURCE_TRUST.run_git(
+            source_root,
+            *arguments,
+            ambient=os.environ,
             check=True,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except Exception as exc:
         raise WorkerSlotError("production source Git identity cannot be verified") from exc
     return completed.stdout.strip()
 
@@ -714,6 +729,13 @@ def inspect_git_checkout(
     ):
         raise WorkerSlotError("production source .git directory is unsafe")
 
+    try:
+        preflight = GIT_SOURCE_TRUST.repository_preflight_evidence(
+            source_root,
+            ambient=os.environ,
+        )
+    except Exception as exc:
+        raise WorkerSlotError("production source Git trust preflight failed") from exc
     if _run_git(source_root, "rev-parse", "--show-toplevel") != str(source_root):
         raise WorkerSlotError("production source Git top-level differs from the fixed root")
     source_sha = _run_git(source_root, "rev-parse", "--verify", "HEAD")
@@ -734,7 +756,19 @@ def inspect_git_checkout(
         or _run_git(source_root, "rev-parse", "--verify", "HEAD^{tree}") != source_tree
     ):
         raise WorkerSlotError("production source changed while its identity was verified")
-    return GitCheckoutIdentity(source_root, source_sha, source_tree)
+    try:
+        evidence = GIT_SOURCE_TRUST.repository_trust_evidence(
+            source_root,
+            source_sha=source_sha,
+            source_tree=source_tree,
+            branch="refs/heads/main",
+            origin=None,
+            ambient=os.environ,
+        )
+        GIT_SOURCE_TRUST.require_stable_trust_surface(preflight, evidence)
+    except Exception as exc:
+        raise WorkerSlotError("production source Git trust evidence changed") from exc
+    return GitCheckoutIdentity(source_root, source_sha, source_tree, evidence)
 
 
 def _inventory_failure(message: str) -> NoReturn:

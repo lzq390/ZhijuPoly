@@ -35,6 +35,7 @@ x-dev-backend-env: &dev-backend-env
   MONOMER_MD_SUBMIT_ENABLED: "${MONOMER_MD_SUBMIT_ENABLED:-true}"
   MONOMER_MD_WORKER_BASE_URL: "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock"
   MONOMER_MD_WORKER_TIMEOUT_SECONDS: "30"
+  MONOMER_MD_CANARY_STATE_DIR: "/app/monomer-md-canaries"
   POLYTAO_RATE_LIMIT_PER_IP_PER_MINUTE: "5"
   POLYTAO_RATE_LIMIT_WINDOW_SECONDS: "60"
 
@@ -71,6 +72,7 @@ services:
       - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/database:/app/database:ro
       - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/model:/app/model:ro
       - ${MONOMER_MD_DEV_WORKER_SOCKET_DIR:-./.runtime/monomer-md-worker-socket}:/app/monomer-md-worker
+      - ${MONOMER_MD_DEV_CANARY_STATE_DIR:-./.runtime/monomer-md-canaries}:/app/monomer-md-canaries
     # Uvicorn 0.32 always adds its current working directory to WatchFiles.
     # Start it from the application directory so tests, locks, and other
     # repository inputs are structurally outside the watched tree.

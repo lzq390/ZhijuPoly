@@ -1,0 +1,961 @@
+#!/usr/bin/env bash
+# Install as runtime/config/deployment-mutable-data-audit, owned by the deploy
+# user and mode 0700. Provision the referenced pg_service/pgpass files outside
+# Git as mode 0600; never place a password in this script or its argv.
+set -euo pipefail
+umask 077
+
+readonly runtime_root="/data/lzq/gith/nexpoly-runtime"
+readonly audit_root="${runtime_root}/audit/mutable-data"
+readonly pg_service_file="${runtime_root}/config/mutable-data-audit.pg_service.conf"
+readonly pg_pass_file="${runtime_root}/config/mutable-data-audit.pgpass"
+readonly runtime_identity_json="${NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON:?sealed PostgreSQL runtime identity is required}"
+readonly operation_id="${NEXPOLY_MUTABLE_AUDIT_OPERATION_ID:?deployment operation identity is required}"
+
+test -d "${audit_root}"
+test ! -L "${audit_root}"
+test "$(stat -c '%a:%u' "${audit_root}")" = "700:$(id -u)"
+test ! -L "${pg_service_file}"
+test ! -L "${pg_pass_file}"
+test "$(stat -c '%a:%u' "${pg_service_file}")" = "600:$(id -u)"
+test "$(stat -c '%a:%u' "${pg_pass_file}")" = "600:$(id -u)"
+
+capture="$(mktemp -d "${audit_root}/.capture.XXXXXXXX")"
+cleanup() {
+  rm -rf -- "${capture}"
+}
+trap cleanup EXIT HUP INT TERM
+
+# Generate a fixed psql program without consulting the database. Every COPY
+# then executes inside one read-only repeatable-read snapshot. Optional
+# relations are permitted only at their exact governed migration boundaries.
+/usr/bin/env -i \
+  HOME="/nonexistent" \
+  PATH="/usr/bin:/bin" \
+  /usr/bin/python3 -I -B - "${capture}" <<'PY'
+from pathlib import Path
+import sys
+
+
+root = Path(sys.argv[1])
+tables = (
+    (
+        "governance",
+        "deployment_control",
+        "control_key",
+        "deployment_control_present",
+    ),
+    (
+        "governance",
+        "database_analytics_snapshots",
+        "snapshot_key",
+        "database_analytics_snapshots_present",
+    ),
+    ("governance", "source_files", "source_file_id", None),
+    ("governance", "import_batches", "import_batch_id", None),
+    ("core", "polymers", "polymer_id", None),
+    ("core", "polymer_properties", "property_id", None),
+    ("core", "polymer_property_filter_records", "filter_record_id", None),
+    ("knowledge", "documents", "knowledge_id", None),
+    ("knowledge", "formulation_records", "formulation_id", None),
+    ("online_knowledge", "history", "history_id", None),
+    ("online_knowledge", "jobs", "job_id", None),
+    ("pi", "polymers", "id", None),
+    ("pi", "tg_predictions", "id", None),
+    ("pi", "monomer_iupac", "smiles", None),
+    ("dft", "molecule_final", "mol_id", None),
+    ("dft", "energy_trace", "mol_id, step", None),
+    ("lab", "test_projects", "id", None),
+    ("lab", "sample_measurements", "id", None),
+    ("experimental", "process_records", "record_id", None),
+    ("experimental", "property_records", "record_id", None),
+    ("model_registry", "assets", "asset_id", None),
+    ("md", "monomer_md_jobs", "job_id", None),
+    ("generation", "polytao_jobs", "job_id", "polytao_present"),
+    ("monomer_dft", "jobs", "job_id", "dft_jobs_present"),
+    (
+        "monomer_dft",
+        "job_attempts",
+        "job_id, attempt",
+        "dft_job_attempts_present",
+    ),
+    (
+        "monomer_dft",
+        "artifacts",
+        "job_id, artifact_id",
+        "dft_artifacts_present",
+    ),
+)
+sequences = (
+    (
+        "governance",
+        "source_files_source_file_id_seq",
+        None,
+    ),
+    (
+        "governance",
+        "import_batches_import_batch_id_seq",
+        None,
+    ),
+    (
+        "knowledge",
+        "formulation_records_formulation_id_seq",
+        None,
+    ),
+    (
+        "online_knowledge",
+        "history_history_id_seq",
+        None,
+    ),
+    (
+        "lab",
+        "test_projects_id_seq",
+        None,
+    ),
+    (
+        "lab",
+        "sample_measurements_id_seq",
+        None,
+    ),
+    (
+        "experimental",
+        "process_records_record_id_seq",
+        None,
+    ),
+    (
+        "experimental",
+        "property_records_record_id_seq",
+        None,
+    ),
+    (
+        "model_registry",
+        "assets_asset_id_seq",
+        None,
+    ),
+    (
+        "monomer_dft",
+        "jobs_enqueue_sequence_seq",
+        "dft_jobs_enqueue_sequence_present",
+    ),
+)
+
+
+def literal(path: Path) -> str:
+    return str(path).replace("'", "''")
+
+
+schema_query = (
+    "SELECT jsonb_build_object("
+    "'kind','column','position',a.attnum,'name',a.attname,"
+    "'type',pg_catalog.format_type(a.atttypid,a.atttypmod),"
+    "'not_null',a.attnotnull,'identity',a.attidentity,"
+    "'generated',a.attgenerated,"
+    "'default',pg_catalog.pg_get_expr(d.adbin,d.adrelid))::text "
+    "FROM pg_catalog.pg_attribute AS a "
+    "LEFT JOIN pg_catalog.pg_attrdef AS d "
+    "ON d.adrelid=a.attrelid AND d.adnum=a.attnum "
+    "WHERE a.attrelid='{relation}'::regclass "
+    "AND a.attnum>0 AND NOT a.attisdropped "
+    "UNION ALL SELECT jsonb_build_object("
+    "'kind','constraint','name',c.conname,"
+    "'definition',pg_catalog.pg_get_constraintdef(c.oid,true))::text "
+    "FROM pg_catalog.pg_constraint AS c "
+    "WHERE c.conrelid='{relation}'::regclass "
+    "UNION ALL SELECT jsonb_build_object("
+    "'kind','index','name',i.indexrelid::regclass::text,"
+    "'definition',pg_catalog.pg_get_indexdef(i.indexrelid))::text "
+    "FROM pg_catalog.pg_index AS i "
+    "WHERE i.indrelid='{relation}'::regclass ORDER BY 1"
+)
+role_security_query = """
+WITH target AS (
+    SELECT *
+    FROM pg_catalog.pg_roles
+    WHERE rolname = current_user
+),
+direct_memberships AS (
+    SELECT coalesce(
+        jsonb_agg(
+            jsonb_build_object(
+                'role', parent.rolname,
+                'admin_option', member.admin_option,
+                'inherit_option', member.inherit_option,
+                'set_option', member.set_option
+            )
+            ORDER BY parent.rolname
+        ),
+        '[]'::jsonb
+    ) AS value
+    FROM target
+    JOIN pg_catalog.pg_auth_members AS member
+      ON member.member = target.oid
+    JOIN pg_catalog.pg_roles AS parent
+      ON parent.oid = member.roleid
+),
+effective_memberships AS (
+    SELECT coalesce(
+        jsonb_agg(candidate.rolname ORDER BY candidate.rolname),
+        '[]'::jsonb
+    ) AS value
+    FROM target
+    JOIN pg_catalog.pg_roles AS candidate
+      ON candidate.oid <> target.oid
+     AND pg_catalog.pg_has_role(target.oid, candidate.oid, 'MEMBER')
+),
+role_settings AS (
+    SELECT coalesce(
+        jsonb_agg(
+            jsonb_build_object(
+                'database',
+                CASE
+                    WHEN setting.setdatabase = 0 THEN '*'
+                    ELSE database.datname
+                END,
+                'settings',
+                to_jsonb(setting.setconfig)
+            )
+            ORDER BY setting.setdatabase
+        ),
+        '[]'::jsonb
+    ) AS value
+    FROM target
+    JOIN pg_catalog.pg_db_role_setting AS setting
+      ON setting.setrole = target.oid
+    LEFT JOIN pg_catalog.pg_database AS database
+      ON database.oid = setting.setdatabase
+),
+owned_objects AS (
+    SELECT coalesce(jsonb_agg(identity ORDER BY identity), '[]'::jsonb) AS value
+    FROM target
+    CROSS JOIN LATERAL (
+        SELECT 'dependency:' || dependency.dbid::text || ':'
+               || dependency.classid::regclass::text || ':'
+               || dependency.objid::text || ':'
+               || dependency.objsubid::text AS identity
+        FROM pg_catalog.pg_shdepend AS dependency
+        WHERE dependency.refclassid = 'pg_authid'::pg_catalog.regclass
+          AND dependency.refobjid = target.oid
+          AND dependency.deptype = 'o'
+          AND (
+              dependency.dbid = 0
+              OR dependency.dbid = (
+                  SELECT oid
+                  FROM pg_catalog.pg_database
+                  WHERE datname = current_database()
+              )
+          )
+        UNION ALL
+        SELECT 'database:' || database.datname AS identity
+        FROM pg_catalog.pg_database AS database
+        WHERE database.datdba = target.oid
+        UNION ALL
+        SELECT 'schema:' || namespace.nspname
+        FROM pg_catalog.pg_namespace AS namespace
+        WHERE namespace.nspowner = target.oid
+        UNION ALL
+        SELECT 'relation:' || namespace.nspname || '.' || relation.relname
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE relation.relowner = target.oid
+        UNION ALL
+        SELECT 'routine:' || routine.oid::regprocedure::text
+        FROM pg_catalog.pg_proc AS routine
+        WHERE routine.proowner = target.oid
+        UNION ALL
+        SELECT 'type:' || type.oid::regtype::text
+        FROM pg_catalog.pg_type AS type
+        WHERE type.typowner = target.oid
+        UNION ALL
+        SELECT 'large-object:' || object.oid::text
+        FROM pg_catalog.pg_largeobject_metadata AS object
+        WHERE object.lomowner = target.oid
+        UNION ALL
+        SELECT 'foreign-data-wrapper:' || wrapper.fdwname
+        FROM pg_catalog.pg_foreign_data_wrapper AS wrapper
+        WHERE wrapper.fdwowner = target.oid
+        UNION ALL
+        SELECT 'foreign-server:' || server.srvname
+        FROM pg_catalog.pg_foreign_server AS server
+        WHERE server.srvowner = target.oid
+        UNION ALL
+        SELECT 'tablespace:' || tablespace.spcname
+        FROM pg_catalog.pg_tablespace AS tablespace
+        WHERE tablespace.spcowner = target.oid
+    ) AS owned
+),
+direct_write_grants AS (
+    SELECT coalesce(jsonb_agg(identity ORDER BY identity), '[]'::jsonb) AS value
+    FROM target
+    CROSS JOIN LATERAL (
+        SELECT 'database:' || database.datname || ':' || acl.privilege_type
+            AS identity
+        FROM pg_catalog.pg_database AS database
+        CROSS JOIN LATERAL pg_catalog.aclexplode(database.datacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND acl.privilege_type = 'CREATE'
+        UNION ALL
+        SELECT 'schema:' || namespace.nspname || ':' || acl.privilege_type
+        FROM pg_catalog.pg_namespace AS namespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(namespace.nspacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND acl.privilege_type = 'CREATE'
+        UNION ALL
+        SELECT 'relation:' || namespace.nspname || '.' || relation.relname
+               || ':' || acl.privilege_type
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(relation.relacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND (
+              relation.relkind = 'S'
+              AND acl.privilege_type IN ('USAGE', 'UPDATE')
+              OR relation.relkind <> 'S'
+              AND acl.privilege_type IN (
+                  'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE',
+                  'REFERENCES', 'TRIGGER'
+              )
+          )
+        UNION ALL
+        SELECT 'column:' || namespace.nspname || '.' || relation.relname
+               || '.' || attribute.attname || ':' || acl.privilege_type
+        FROM pg_catalog.pg_attribute AS attribute
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = attribute.attrelid
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND acl.privilege_type IN ('INSERT', 'UPDATE', 'REFERENCES')
+        UNION ALL
+        SELECT 'large-object:' || object.oid::text || ':'
+               || acl.privilege_type
+        FROM pg_catalog.pg_largeobject_metadata AS object
+        CROSS JOIN LATERAL pg_catalog.aclexplode(object.lomacl) AS acl
+        WHERE acl.grantee = target.oid
+          AND acl.privilege_type = 'UPDATE'
+    ) AS grant_record
+),
+effective_write_privileges AS (
+    SELECT coalesce(jsonb_agg(identity ORDER BY identity), '[]'::jsonb) AS value
+    FROM target
+    CROSS JOIN LATERAL (
+        SELECT 'database:' || current_database() || ':CREATE' AS identity
+        WHERE pg_catalog.has_database_privilege(
+            target.oid, current_database(), 'CREATE'
+        )
+        UNION ALL
+        SELECT 'schema:' || namespace.nspname || ':CREATE'
+        FROM pg_catalog.pg_namespace AS namespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND pg_catalog.has_schema_privilege(
+              target.oid, namespace.oid, 'CREATE'
+          )
+        UNION ALL
+        SELECT 'relation:' || namespace.nspname || '.' || relation.relname
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND (
+              pg_catalog.has_table_privilege(target.oid, relation.oid, 'INSERT')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'UPDATE')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'DELETE')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'TRUNCATE')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'REFERENCES')
+              OR pg_catalog.has_table_privilege(target.oid, relation.oid, 'TRIGGER')
+          )
+        UNION ALL
+        SELECT 'column:' || namespace.nspname || '.' || relation.relname
+               || '.' || attribute.attname
+        FROM pg_catalog.pg_attribute AS attribute
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = attribute.attrelid
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+          AND (
+              pg_catalog.has_column_privilege(
+                  target.oid, relation.oid, attribute.attnum, 'INSERT'
+              )
+              OR pg_catalog.has_column_privilege(
+                  target.oid, relation.oid, attribute.attnum, 'UPDATE'
+              )
+              OR pg_catalog.has_column_privilege(
+                  target.oid, relation.oid, attribute.attnum, 'REFERENCES'
+              )
+          )
+        UNION ALL
+        SELECT 'sequence:' || namespace.nspname || '.' || sequence.relname
+        FROM pg_catalog.pg_class AS sequence
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = sequence.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND CASE
+              WHEN sequence.relkind = 'S' THEN (
+                  pg_catalog.has_sequence_privilege(
+                      target.oid, sequence.oid, 'USAGE'
+                  )
+                  OR pg_catalog.has_sequence_privilege(
+                      target.oid, sequence.oid, 'UPDATE'
+                  )
+              )
+              ELSE false
+          END
+        UNION ALL
+        SELECT 'security-definer:' || routine.oid::regprocedure::text
+        FROM pg_catalog.pg_proc AS routine
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = routine.pronamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND routine.prosecdef
+          AND pg_catalog.has_function_privilege(
+              target.oid, routine.oid, 'EXECUTE'
+          )
+        UNION ALL
+        SELECT 'catalog-write-routine:' || routine.oid::regprocedure::text
+        FROM unnest(
+            ARRAY[
+                'pg_catalog.lo_creat(integer)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_create(oid)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_from_bytea(oid,bytea)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_put(oid,bigint,bytea)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_unlink(oid)'::pg_catalog.regprocedure,
+                'pg_catalog.lowrite(integer,bytea)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_truncate(integer,integer)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_truncate64(integer,bigint)'::pg_catalog.regprocedure
+            ]
+        ) AS routine(oid)
+        WHERE pg_catalog.has_function_privilege(
+            target.oid, routine.oid, 'EXECUTE'
+        )
+        UNION ALL
+        SELECT 'large-object:' || object.oid::text || ':UPDATE'
+        FROM pg_catalog.pg_largeobject_metadata AS object
+        CROSS JOIN LATERAL pg_catalog.aclexplode(object.lomacl) AS acl
+        WHERE acl.privilege_type = 'UPDATE'
+          AND CASE
+              WHEN acl.grantee = 0 THEN true
+              ELSE pg_catalog.pg_has_role(
+                  target.oid, acl.grantee, 'USAGE'
+              )
+          END
+        UNION ALL
+        SELECT 'tablespace:' || tablespace.spcname || ':CREATE'
+        FROM pg_catalog.pg_tablespace AS tablespace
+        WHERE pg_catalog.has_tablespace_privilege(
+            target.oid, tablespace.oid, 'CREATE'
+        )
+    ) AS privilege
+)
+SELECT jsonb_build_object(
+    'role', target.rolname,
+    'can_login', target.rolcanlogin,
+    'superuser', target.rolsuper,
+    'create_db', target.rolcreatedb,
+    'create_role', target.rolcreaterole,
+    'inherit', target.rolinherit,
+    'replication', target.rolreplication,
+    'bypass_rls', target.rolbypassrls,
+    'role_settings', role_settings.value,
+    'direct_memberships', direct_memberships.value,
+    'effective_memberships', effective_memberships.value,
+    'has_pg_read_all_data',
+        pg_catalog.pg_has_role(
+            target.oid, 'pg_read_all_data'::pg_catalog.regrole, 'MEMBER'
+        ),
+    'has_pg_write_all_data',
+        pg_catalog.pg_has_role(
+            target.oid, 'pg_write_all_data'::pg_catalog.regrole, 'MEMBER'
+        ),
+    'owned_objects', owned_objects.value,
+    'direct_write_grants', direct_write_grants.value,
+    'effective_write_privileges', effective_write_privileges.value
+)::text
+FROM target
+CROSS JOIN direct_memberships
+CROSS JOIN effective_memberships
+CROSS JOIN role_settings
+CROSS JOIN owned_objects
+CROSS JOIN direct_write_grants
+CROSS JOIN effective_write_privileges
+"""
+commands = [
+    "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE;",
+    (
+        "\\copy (SELECT json_build_object("
+        "'database',current_database(),'audit_user',current_user,"
+        "'server_port',inet_server_port(),"
+        "'database_system_identifier',system_identifier::text,"
+        "'transaction_isolation',current_setting('transaction_isolation'),"
+        "'transaction_read_only',current_setting('transaction_read_only')::boolean,"
+        "'transaction_deferrable',current_setting('transaction_deferrable')::boolean"
+        ")::text FROM pg_control_system()) TO "
+        f"'{literal(root / 'metadata.json')}'"
+    ),
+    (
+        f"\\copy ({role_security_query}) TO "
+        f"'{literal(root / 'role_security.json')}'"
+    ),
+    (
+        "SELECT (to_regclass('generation.polytao_jobs') IS NOT NULL) "
+        "AS polytao_present \\gset"
+    ),
+    (
+        "SELECT (to_regclass('governance.deployment_control') IS NOT NULL) "
+        "AS deployment_control_present \\gset"
+    ),
+    (
+        "SELECT (to_regclass('governance.database_analytics_snapshots') "
+        "IS NOT NULL) AS database_analytics_snapshots_present \\gset"
+    ),
+    (
+        "\\copy (SELECT jsonb_build_object('version',version,"
+        "'checksum',checksum)::text FROM governance.schema_migrations "
+        f"ORDER BY version) TO '{literal(root / 'migration_ledger.rows')}'"
+    ),
+]
+for variable, relation in (
+    ("dft_jobs_present", "monomer_dft.jobs"),
+    ("dft_job_attempts_present", "monomer_dft.job_attempts"),
+    ("dft_artifacts_present", "monomer_dft.artifacts"),
+    (
+        "dft_jobs_enqueue_sequence_present",
+        "monomer_dft.jobs_enqueue_sequence_seq",
+    ),
+):
+    commands.append(
+        f"SELECT (to_regclass('{relation}') IS NOT NULL) "
+        f"AS {variable} \\gset"
+    )
+for schema, table, order, condition in tables:
+    relation = f"{schema}.{table}"
+    stem = f"{schema}__{table}"
+    if condition is not None:
+        commands.append(f"\\if :{condition}")
+    commands.append(
+        "\\copy (SELECT to_jsonb(value)::text "
+        f"FROM {relation} AS value ORDER BY {order}) "
+        f"TO '{literal(root / (stem + '.rows'))}'"
+    )
+    commands.append(
+        f"\\copy ({schema_query.format(relation=relation)}) "
+        f"TO '{literal(root / (stem + '.schema'))}'"
+    )
+    if condition is not None:
+        commands.append("\\endif")
+commands.append(
+    "\\copy (SELECT (to_jsonb(value) - "
+    "ARRAY['worker_instance_id','heartbeat_at','lease_expires_at']::text[])::text "
+    "FROM md.monomer_md_jobs AS value ORDER BY job_id) "
+    f"TO '{literal(root / 'md__monomer_md_jobs.pre-0009-row-json-v1.rows')}'"
+)
+commands.append(
+    "\\copy (SELECT jsonb_build_object("
+    "'columns_present', (SELECT count(*) = 3 FROM pg_catalog.pg_attribute "
+    "WHERE attrelid='md.monomer_md_jobs'::regclass AND attnum > 0 "
+    "AND NOT attisdropped AND attname IN "
+    "('worker_instance_id','heartbeat_at','lease_expires_at')),"
+    "'worker_instance_id_non_null', count(*) FILTER "
+    "(WHERE to_jsonb(value)->'worker_instance_id' <> 'null'::jsonb),"
+    "'heartbeat_at_non_null', count(*) FILTER "
+    "(WHERE to_jsonb(value)->'heartbeat_at' <> 'null'::jsonb),"
+    "'lease_expires_at_non_null', count(*) FILTER "
+    "(WHERE to_jsonb(value)->'lease_expires_at' <> 'null'::jsonb)"
+    ")::text FROM md.monomer_md_jobs AS value) "
+    f"TO '{literal(root / 'md__monomer_md_jobs.lease-columns.json')}'"
+)
+for schema, sequence, condition in sequences:
+    relation = f"{schema}.{sequence}"
+    stem = f"{schema}__{sequence}.sequence"
+    if condition is not None:
+        commands.append(f"\\if :{condition}")
+    commands.append(
+        "\\copy (SELECT jsonb_build_object("
+        "'schema',sequence_namespace.nspname,"
+        "'sequence',sequence_relation.relname,"
+        "'ownership',jsonb_build_object("
+        "'schema',owner_namespace.nspname,"
+        "'table',owner_relation.relname,"
+        "'column',owner_attribute.attname,"
+        "'ordinal',owner_attribute.attnum,"
+        "'deptype',dependency.deptype),"
+        "'data_type',pg_catalog.format_type(s.seqtypid,NULL),"
+        "'start_value',s.seqstart,'min_value',s.seqmin,"
+        "'max_value',s.seqmax,'increment_by',s.seqincrement,"
+        "'cache_size',s.seqcache,'cycle',s.seqcycle,"
+        "'last_value',q.last_value,'is_called',q.is_called)::text "
+        "FROM pg_catalog.pg_sequence AS s "
+        "JOIN pg_catalog.pg_class AS sequence_relation "
+        "ON sequence_relation.oid=s.seqrelid "
+        "JOIN pg_catalog.pg_namespace AS sequence_namespace "
+        "ON sequence_namespace.oid=sequence_relation.relnamespace "
+        "JOIN pg_catalog.pg_depend AS dependency "
+        "ON dependency.classid='pg_catalog.pg_class'::regclass "
+        "AND dependency.objid=s.seqrelid "
+        "AND dependency.objsubid=0 "
+        "AND dependency.refclassid='pg_catalog.pg_class'::regclass "
+        "AND dependency.refobjsubid>0 "
+        "AND dependency.deptype IN ('a','i') "
+        "JOIN pg_catalog.pg_class AS owner_relation "
+        "ON owner_relation.oid=dependency.refobjid "
+        "JOIN pg_catalog.pg_namespace AS owner_namespace "
+        "ON owner_namespace.oid=owner_relation.relnamespace "
+        "JOIN pg_catalog.pg_attribute AS owner_attribute "
+        "ON owner_attribute.attrelid=dependency.refobjid "
+        "AND owner_attribute.attnum=dependency.refobjsubid "
+        "AND owner_attribute.attnum>0 "
+        "AND NOT owner_attribute.attisdropped "
+        f"CROSS JOIN {relation} AS q "
+        f"WHERE s.seqrelid='{relation}'::regclass) "
+        f"TO '{literal(root / (stem + '.json'))}'"
+    )
+    if condition is not None:
+        commands.append("\\endif")
+commands.extend(("COMMIT;", ""))
+(root / "capture.sql").write_text("\n".join(commands), encoding="utf-8")
+PY
+
+/usr/bin/env -i \
+  HOME="/nonexistent" \
+  PATH="/usr/bin:/bin" \
+  PGSERVICE="nexpoly-mutable-audit" \
+  PGSERVICEFILE="${pg_service_file}" \
+  PGPASSFILE="${pg_pass_file}" \
+  PGAPPNAME="nexpoly-mutable-data-audit" \
+  /usr/bin/psql \
+  --no-psqlrc \
+  --set=ON_ERROR_STOP=1 \
+  --quiet \
+  --dbname=service=nexpoly-mutable-audit \
+  --file="${capture}/capture.sql"
+
+# Convert private row files into count/digest evidence. Business rows never
+# leave the 0700 temporary directory and are removed by the trap.
+/usr/bin/env -i \
+  HOME="/nonexistent" \
+  PATH="/usr/bin:/bin" \
+  TZ="UTC" \
+  NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON="${runtime_identity_json}" \
+  NEXPOLY_MUTABLE_AUDIT_OPERATION_ID="${operation_id}" \
+  /usr/bin/python3 -I -B - "${capture}" <<'PY'
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+
+root = Path(sys.argv[1])
+business = (
+    ("online_knowledge", "history"),
+    ("online_knowledge", "jobs"),
+    ("lab", "test_projects"),
+    ("lab", "sample_measurements"),
+    ("md", "monomer_md_jobs"),
+    ("monomer_dft", "jobs"),
+    ("monomer_dft", "job_attempts"),
+    ("monomer_dft", "artifacts"),
+)
+static = (
+    ("governance", "source_files"),
+    ("governance", "import_batches"),
+    ("core", "polymers"),
+    ("core", "polymer_properties"),
+    ("core", "polymer_property_filter_records"),
+    ("knowledge", "documents"),
+    ("knowledge", "formulation_records"),
+    ("pi", "polymers"),
+    ("pi", "tg_predictions"),
+    ("pi", "monomer_iupac"),
+    ("dft", "molecule_final"),
+    ("dft", "energy_trace"),
+    ("experimental", "process_records"),
+    ("experimental", "property_records"),
+    ("model_registry", "assets"),
+)
+sequence_specs = (
+    (
+        "governance",
+        "source_files_source_file_id_seq",
+    ),
+    (
+        "governance",
+        "import_batches_import_batch_id_seq",
+    ),
+    (
+        "knowledge",
+        "formulation_records_formulation_id_seq",
+    ),
+    (
+        "online_knowledge",
+        "history_history_id_seq",
+    ),
+    ("lab", "test_projects_id_seq"),
+    (
+        "lab",
+        "sample_measurements_id_seq",
+    ),
+    (
+        "experimental",
+        "process_records_record_id_seq",
+    ),
+    (
+        "experimental",
+        "property_records_record_id_seq",
+    ),
+    (
+        "model_registry",
+        "assets_asset_id_seq",
+    ),
+    (
+        "monomer_dft",
+        "jobs_enqueue_sequence_seq",
+    ),
+)
+
+
+def canonical(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+
+
+def digest(value: object) -> str:
+    return "sha256:" + hashlib.sha256(canonical(value)).hexdigest()
+
+
+def file_digest(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def json_lines(path: Path) -> list[object]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def table_record(schema: str, table: str) -> dict[str, object]:
+    stem = f"{schema}__{table}"
+    rows = root / f"{stem}.rows"
+    schema_file = root / f"{stem}.schema"
+    if not rows.exists() and not schema_file.exists():
+        return {
+            "schema": schema,
+            "table": table,
+            "state": "absent",
+            "row_count": None,
+            "schema_sha256": None,
+            "content_sha256": None,
+        }
+    if not rows.is_file() or not schema_file.is_file():
+        raise SystemExit(f"incomplete relation capture: {schema}.{table}")
+    payload = rows.read_bytes()
+    return {
+        "schema": schema,
+        "table": table,
+        "state": "present",
+        "row_count": sum(1 for line in payload.splitlines() if line),
+        "schema_sha256": file_digest(schema_file),
+        "content_sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+    }
+
+
+metadata_rows = json_lines(root / "metadata.json")
+if len(metadata_rows) != 1 or not isinstance(metadata_rows[0], dict):
+    raise SystemExit("mutable audit metadata is invalid")
+metadata = metadata_rows[0]
+if (
+    metadata.get("database") != "nexpoly"
+    or metadata.get("audit_user") != "nexpoly_mutable_audit"
+    or metadata.get("server_port") != 5432
+):
+    raise SystemExit("mutable audit connected to an unexpected database identity")
+operation_id = os.environ.get("NEXPOLY_MUTABLE_AUDIT_OPERATION_ID", "")
+if re.fullmatch(r"[a-z0-9][a-z0-9._-]{7,127}", operation_id) is None:
+    raise SystemExit("mutable audit operation identity is invalid")
+try:
+    postgres_runtime = json.loads(
+        os.environ["NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON"]
+    )
+except (KeyError, json.JSONDecodeError) as exc:
+    raise SystemExit("sealed PostgreSQL runtime identity is unavailable") from exc
+connection = {
+    "service": "nexpoly-mutable-audit",
+    "host": "127.0.0.1",
+    "port": 55432,
+    "database": "nexpoly",
+    "user": "nexpoly_mutable_audit",
+}
+
+deployment_table = table_record("governance", "deployment_control")
+deployment_rows_path = root / "governance__deployment_control.rows"
+deployment_rows = (
+    json_lines(deployment_rows_path)
+    if deployment_rows_path.exists()
+    else []
+)
+if deployment_table["state"] == "present":
+    if len(deployment_rows) != 1 or not isinstance(deployment_rows[0], dict):
+        raise SystemExit("deployment-control inventory is incomplete")
+    deployment_row = deployment_rows[0]
+else:
+    if deployment_rows:
+        raise SystemExit("absent deployment-control contains rows")
+    deployment_row = None
+analytics_table = table_record(
+    "governance", "database_analytics_snapshots"
+)
+analytics_path = root / "governance__database_analytics_snapshots.rows"
+analytics_payload = analytics_path.read_bytes() if analytics_path.exists() else b""
+analytics_entries = []
+for line in analytics_payload.splitlines(keepends=True):
+    if not line.strip():
+        continue
+    row = json.loads(line)
+    if not isinstance(row, dict):
+        raise SystemExit("analytics snapshot row is invalid")
+    analytics_entries.append(
+        {
+            "snapshot_key": row.get("snapshot_key"),
+            "source_sha": row.get("source_sha"),
+            "row_sha256": (
+                "sha256:" + hashlib.sha256(line).hexdigest()
+            ),
+        }
+    )
+analytics_entries.sort(key=lambda value: str(value["snapshot_key"]))
+
+sequences = []
+sequence_value_fields = (
+    "data_type",
+    "start_value",
+    "min_value",
+    "max_value",
+    "increment_by",
+    "cache_size",
+    "cycle",
+    "last_value",
+    "is_called",
+)
+for schema, sequence in sequence_specs:
+    path = root / f"{schema}__{sequence}.sequence.json"
+    if not path.exists():
+        sequences.append(
+            {
+                "schema": schema,
+                "sequence": sequence,
+                "ownership": None,
+                "state": "absent",
+                **{name: None for name in sequence_value_fields},
+            }
+        )
+        continue
+    values = json_lines(path)
+    if len(values) != 1 or not isinstance(values[0], dict):
+        raise SystemExit(f"sequence capture is invalid: {schema}.{sequence}")
+    sequences.append({"state": "present", **values[0]})
+
+ledger = json_lines(root / "migration_ledger.rows")
+bridge_projection_payload = (
+    root / "md__monomer_md_jobs.pre-0009-row-json-v1.rows"
+).read_bytes()
+lease_projection_rows = json_lines(
+    root / "md__monomer_md_jobs.lease-columns.json"
+)
+if (
+    len(lease_projection_rows) != 1
+    or not isinstance(lease_projection_rows[0], dict)
+):
+    raise SystemExit("mutable audit lease-column projection is invalid")
+lease_projection = lease_projection_rows[0]
+lease_columns_present = lease_projection.get("columns_present") is True
+role_security_rows = json_lines(root / "role_security.json")
+if len(role_security_rows) != 1 or not isinstance(role_security_rows[0], dict):
+    raise SystemExit("mutable audit role-security evidence is invalid")
+identity = {
+    "operation_id": operation_id,
+    "database": metadata["database"],
+    "database_system_identifier": metadata["database_system_identifier"],
+    "connection": connection,
+    "postgres_runtime": postgres_runtime,
+    "digest_algorithm": "sha256-postgres-jsonb-copy-v4",
+    "role_security": role_security_rows[0],
+    "migration_ledger": ledger,
+    "business_tables": [
+        table_record(schema, table) for schema, table in business
+    ],
+    "governed_controls": {
+        "deployment_control": {
+            "table": deployment_table,
+            "row": deployment_row,
+        },
+        "database_analytics_snapshots": {
+            "table": analytics_table,
+            "entries": analytics_entries,
+        },
+    },
+    "static_tables": [
+        table_record(schema, table) for schema, table in static
+    ],
+    "migration_exception": table_record("generation", "polytao_jobs"),
+    "sequences": sequences,
+    "bridge_projection": {
+        "schema": "md",
+        "table": "monomer_md_jobs",
+        "projection": "pre-0009-row-json-v1",
+        "state": "present",
+        "row_count": sum(
+            1 for line in bridge_projection_payload.splitlines() if line
+        ),
+        "content_sha256": (
+            "sha256:" + hashlib.sha256(bridge_projection_payload).hexdigest()
+        ),
+        "lease_columns": {
+            "state": "present" if lease_columns_present else "absent",
+            "non_null_counts": {
+                name: (
+                    lease_projection.get(f"{name}_non_null")
+                    if lease_columns_present
+                    else None
+                )
+                for name in (
+                    "worker_instance_id",
+                    "heartbeat_at",
+                    "lease_expires_at",
+                )
+            },
+        },
+    },
+}
+document = {
+    "schema_version": 5,
+    **identity,
+    "transaction_isolation": metadata["transaction_isolation"],
+    "transaction_read_only": metadata["transaction_read_only"],
+    "transaction_deferrable": metadata["transaction_deferrable"],
+    "snapshot_sha256": digest(identity),
+    "captured_at": (
+        dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    ),
+}
+print(json.dumps(document, sort_keys=True, separators=(",", ":")))
+PY

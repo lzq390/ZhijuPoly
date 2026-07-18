@@ -166,14 +166,70 @@ class SelectorTests(unittest.TestCase):
         )
         authority = self.runtime / "state/bootstrap-control.json"
         if not authority.exists():
+            source_readiness = {
+                "schema_version": 2,
+                "ready": True,
+                "source_root": str(
+                    self.runtime.parent / "bootstrap-source"
+                ),
+                "source_sha": candidate["source_sha"],
+                "source_tree": candidate["source_tree"],
+                "branch": "main",
+                "origin": "git@github.com:lzq390/ZhijuPoly.git",
+                "remote_names": ["origin"],
+                "origin_fetch_urls": [
+                    "git@github.com:lzq390/ZhijuPoly.git"
+                ],
+                "origin_push_urls": [
+                    "git@github.com:lzq390/ZhijuPoly.git"
+                ],
+                "origin_main_sha": candidate["source_sha"],
+                "standalone_object_database": True,
+                "shallow": False,
+                "dirty_entries": 0,
+                "ignored_entries": 0,
+                "unreachable_objects": 0,
+                "replace_refs": 0,
+                "special_index_entries": 0,
+                "sparse_index": False,
+                "owner_private": True,
+                "group_or_world_writable": False,
+            }
+            takeover = {
+                "schema_version": 1,
+                "operation_id": "takeover-selector-fixture",
+                "authority_sha": candidate["source_sha"],
+                "authority_tree": candidate["source_tree"],
+                "install_manifest_sha256": "sha256:" + "3" * 64,
+                "classification_sha256": "sha256:" + "4" * 64,
+                "runtime_identity_sha256": "sha256:" + "5" * 64,
+                "git_identity": {
+                    "branch": "refs/heads/main",
+                    "head_sha": "0" * 40,
+                    "head_tree": "0" * 40,
+                    "local_main_sha": "0" * 40,
+                },
+                "pre_stopped_fence_sha256": "sha256:" + "6" * 64,
+                "control_layout_sha256": "sha256:" + "7" * 64,
+                "checkout_permissions_sha256": "sha256:" + "9" * 64,
+                "applied_record_sha256": "sha256:" + "8" * 64,
+            }
+            takeover["binding_sha256"] = SELECTOR.canonical_json_digest(
+                takeover
+            )
             self._write(
                 authority,
                 SELECTOR.canonical_json_bytes(
                     {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "status": "completed",
                         "source_sha": candidate["source_sha"],
                         "source_tree": candidate["source_tree"],
+                        "source_readiness": source_readiness,
+                        "source_readiness_sha256": (
+                            SELECTOR.canonical_json_digest(source_readiness)
+                        ),
+                        "legacy_takeover": takeover,
                         "delivery_gate": {"fixture": True},
                         "production_repository": {"fixture": True},
                         "immutable_files": self.immutable,
@@ -345,8 +401,30 @@ class SelectorTests(unittest.TestCase):
             SELECTOR.canonical_json_bytes(after) + b"\n",
             0o600,
         )
+        external_transition_path = (
+            audit_dir / "external-database-alias-transition.json"
+        )
+        self._write(
+            external_transition_path,
+            SELECTOR.canonical_json_bytes(
+                {"schema_version": 1, "fixture": True}
+            )
+            + b"\n",
+            0o600,
+        )
+        external_transition = {
+            "path": str(external_transition_path),
+            "sha256": SELECTOR.sha256_file(external_transition_path),
+            "identity_sha256": "sha256:" + "1" * 64,
+            "before_state_sha256": "sha256:" + "2" * 64,
+            "after_state_sha256": "sha256:" + "3" * 64,
+            "descriptor_sha256": "sha256:" + "4" * 64,
+            "operation_id": operation_id,
+            "kind": "alias-0005-reconciliation",
+        }
         files = SELECTOR._alias_evidence_files(audit_dir, backup_dir)
         completed_at = "2026-07-17T00:00:01Z"
+        runtime_stop_fence = {"fixture": True}
         audit = {
             "schema_version": 1,
             "operation_id": operation_id,
@@ -356,6 +434,11 @@ class SelectorTests(unittest.TestCase):
             "database_after": after,
             "database_backup": backup,
             "isolated_restore": restore,
+            "runtime_stop_fence": runtime_stop_fence,
+            "runtime_stop_fence_sha256": SELECTOR.canonical_json_digest(
+                runtime_stop_fence
+            ).removeprefix("sha256:"),
+            "external_database_alias_transition": external_transition,
             "binaries": {"/fixture/bin": {"sha256": "b" * 64}},
             "files": files,
             "completed_at": completed_at,
@@ -375,7 +458,7 @@ class SelectorTests(unittest.TestCase):
             },
             "started_at": "2026-07-17T00:00:00Z",
             "updated_at": completed_at,
-            "runtime_stop_fence": {"fixture": True},
+            "runtime_stop_fence": runtime_stop_fence,
             "before": before,
             "database_backup": backup,
             "restore_container": {"name": "fixture"},
@@ -389,6 +472,7 @@ class SelectorTests(unittest.TestCase):
                 "restore_dump_sha256": dump_sha,
             },
             "after": after,
+            "external_database_alias_transition": external_transition,
             "audit_manifest_sha256": SELECTOR.sha256_file(
                 audit_path
             ).removeprefix("sha256:"),

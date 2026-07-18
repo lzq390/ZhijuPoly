@@ -28,6 +28,16 @@ sys.modules[SPEC.name] = probe
 SPEC.loader.exec_module(probe)
 
 
+def transport_health(**overrides: object) -> dict[str, object]:
+    health: dict[str, object] = {
+        "supported": True,
+        "runtime_ready": True,
+        "runtime_error": None,
+    }
+    health.update(overrides)
+    return health
+
+
 def status_payload(**overrides: object) -> bytes:
     payload: dict[str, object] = {
         "enabled": True,
@@ -38,13 +48,20 @@ def status_payload(**overrides: object) -> bytes:
         "byteff2_root_exists": True,
         "runtime_ready": True,
         "active_jobs": 0,
+        "protocols": {"Transport": transport_health()},
     }
     payload.update(overrides)
     return json.dumps(payload).encode("utf-8")
 
 
 class ProbeStatusTests(unittest.TestCase):
-    def run_probe(self, fetch, *, retries: int = 3):
+    def run_probe(
+        self,
+        fetch,
+        *,
+        retries: int = 3,
+        require_transport_ready: bool = False,
+    ):
         stdout = io.StringIO()
         stderr = io.StringIO()
         sleeps: list[float] = []
@@ -57,6 +74,7 @@ class ProbeStatusTests(unittest.TestCase):
             sleep=sleeps.append,
             stdout=stdout,
             stderr=stderr,
+            require_transport_ready=require_transport_ready,
         )
         return result, stdout.getvalue(), stderr.getvalue(), sleeps
 
@@ -66,7 +84,7 @@ class ProbeStatusTests(unittest.TestCase):
         )
         self.assertEqual(args.timeout_seconds, 40)
         self.assertEqual(args.retries, 3)
-
+        self.assertFalse(args.require_transport_ready)
 
     def test_first_attempt_succeeds_and_uses_configured_timeout(self):
         calls: list[tuple[str, int]] = []
@@ -83,6 +101,112 @@ class ProbeStatusTests(unittest.TestCase):
         self.assertEqual(sleeps, [])
         self.assertEqual(stderr, "")
         self.assertTrue(json.loads(stdout)["available"])
+
+    def test_transport_readiness_is_strictly_opt_in(self):
+        result, stdout, stderr, sleeps = self.run_probe(
+            lambda _url, _timeout: status_payload(protocols=None),
+            retries=0,
+            require_transport_ready=False,
+        )
+
+        self.assertTrue(result)
+        self.assertTrue(json.loads(stdout)["available"])
+        self.assertEqual(stderr, "")
+        self.assertEqual(sleeps, [])
+
+    def test_transport_ready_exact_shape_succeeds(self):
+        result, stdout, stderr, sleeps = self.run_probe(
+            lambda _url, _timeout: status_payload(),
+            retries=0,
+            require_transport_ready=True,
+        )
+
+        self.assertTrue(result)
+        self.assertTrue(json.loads(stdout)["available"])
+        self.assertEqual(stderr, "")
+        self.assertEqual(sleeps, [])
+
+    def test_transport_missing_or_degraded_shapes_all_fail_closed(self):
+        missing_error = transport_health()
+        missing_error.pop("runtime_error")
+        invalid_protocols = (
+            None,
+            [],
+            {},
+            {"Transport": None},
+            {"Transport": []},
+            {"Transport": transport_health(supported=False)},
+            {"Transport": transport_health(runtime_ready=False)},
+            {"Transport": missing_error},
+            {
+                "Transport": transport_health(
+                    runtime_error="private native runtime detail"
+                )
+            },
+        )
+
+        for protocols in invalid_protocols:
+            with self.subTest(protocols=protocols):
+                result, stdout, stderr, sleeps = self.run_probe(
+                    lambda _url, _timeout, value=protocols: status_payload(
+                        protocols=value
+                    ),
+                    retries=0,
+                    require_transport_ready=True,
+                )
+                self.assertFalse(result)
+                self.assertEqual(stdout, "")
+                self.assertEqual(sleeps, [])
+                self.assertIn(
+                    "Transport runtime reported unavailable",
+                    stderr,
+                )
+
+    def test_transport_retry_does_not_leak_runtime_error(self):
+        sentinel = "DO_NOT_LOG_PRIVATE_TRANSPORT_ERROR"
+        payloads = iter(
+            (
+                status_payload(
+                    protocols={
+                        "Transport": transport_health(
+                            runtime_ready=False,
+                            runtime_error=sentinel,
+                        )
+                    }
+                ),
+                status_payload(),
+            )
+        )
+
+        result, stdout, stderr, sleeps = self.run_probe(
+            lambda _url, _timeout: next(payloads),
+            require_transport_ready=True,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(sleeps, [2.0])
+        self.assertNotIn(sentinel, stdout)
+        self.assertNotIn(sentinel, stderr)
+
+    def test_cli_forwards_transport_ready_flag(self):
+        captured: dict[str, object] = {}
+
+        def fake_probe(url: str, **kwargs: object) -> bool:
+            captured["url"] = url
+            captured.update(kwargs)
+            return True
+
+        with mock.patch.object(probe, "probe_status", side_effect=fake_probe):
+            result = probe.main(
+                [
+                    "--url",
+                    "http://127.0.0.1:9000/api/v1/monomer-md/status",
+                    "--require-transport-ready",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIs(captured["require_transport_ready"], True)
 
     def test_timeout_then_success_retries_without_real_sleep(self):
         calls = 0

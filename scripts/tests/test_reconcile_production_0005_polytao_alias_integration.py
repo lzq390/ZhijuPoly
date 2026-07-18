@@ -15,6 +15,8 @@ import time
 import unittest
 from unittest import mock
 
+from scripts.tests import test_pull_deploy_controller as PULL_FIXTURES
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/reconcile_production_0005_polytao_alias.py"
@@ -557,16 +559,285 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
                     }
                 },
             )
-            runtime_fence = {
-                "integration_test": True,
-                "source_container": self.container_name,
-                "source_port": self.port,
+            bridge_operation_id = "bridge-fixture-operation"
+            bridge_operation = (
+                self.runtime
+                / "state"
+                / "prepared"
+                / bridge_operation_id
+            )
+            bridge_operation.mkdir(
+                parents=True,
+                mode=0o700,
+            )
+            os.chmod(bridge_operation.parent, 0o700)
+            os.chmod(bridge_operation, 0o700)
+            descriptor_path = bridge_operation / "descriptor.json"
+            ready_path = bridge_operation / "ready.json"
+            canonical_ledger = [
+                {"version": version, "checksum": checksum}
+                for version, checksum in (
+                    PULL_FIXTURES.CONTROLLER._site_helper_contracts
+                    .CANONICAL_MIGRATION_LEDGER
+                )
+            ]
+            through_0008 = [
+                row
+                for row in canonical_ledger
+                if row["version"] <= "0008_polytao_backend_runtime"
+            ]
+            alias_row = {
+                "version": (
+                    PULL_FIXTURES.CONTROLLER._site_helper_contracts
+                    .LEGACY_0005_ALIAS_VERSION
+                ),
+                "checksum": (
+                    PULL_FIXTURES.CONTROLLER._site_helper_contracts
+                    .LEGACY_0005_ALIAS_CHECKSUM
+                ),
             }
+            external_seed = (
+                PULL_FIXTURES.external_database_audit_binding(
+                    self.runtime
+                )
+            )
+            external_database_audit = (
+                PULL_FIXTURES.external_database_binding_state(
+                    external_seed,
+                    production_ledger=sorted(
+                        [*through_0008, alias_row],
+                        key=lambda row: row["version"],
+                    ),
+                    legacy_relation_present=True,
+                    captured_at="2026-07-17T00:01:00Z",
+                )
+            )
+            post_alias_external_database_audit = (
+                PULL_FIXTURES.external_database_binding_state(
+                    external_database_audit,
+                    production_ledger=through_0008,
+                    legacy_relation_present=True,
+                    captured_at="2026-07-17T00:02:00Z",
+                )
+            )
+            descriptor_document = {
+                "schema_version": 3,
+                "external_database_audit": external_database_audit,
+            }
+            MODULE.atomic_json(
+                descriptor_path,
+                descriptor_document,
+            )
+            MODULE.atomic_json(
+                ready_path,
+                {
+                    "schema_version": 1,
+                    "status": "ready",
+                    "operation_id": bridge_operation_id,
+                },
+            )
+            descriptor_sha256 = (
+                "sha256:" + MODULE.sha256_file(descriptor_path)
+            )
+            bridge_authority = {
+                "schema_version": 1,
+                "operation_id": bridge_operation_id,
+                "descriptor": {
+                    "path": str(descriptor_path),
+                    "sha256": descriptor_sha256,
+                },
+                "ready": {
+                    "path": str(ready_path),
+                    "sha256": "sha256:" + MODULE.sha256_file(ready_path),
+                },
+                "authority": {
+                    "sha": identities[0]["source_sha"],
+                    "tree": identities[0]["source_tree"],
+                    "control_release_id": identities[0]["release_id"],
+                },
+                "target": {
+                    "sha": "7" * 40,
+                    "tree": "8" * 40,
+                    "control_release_id": "9" * 64,
+                },
+                "repository_previous": dict(identities[1]),
+                "policy": {
+                    "id": "integration-fixture-policy",
+                    "sha256": "sha256:" + "a" * 64,
+                },
+                "token": {
+                    "token_id": "integration-fixture-token",
+                    "token_sha256": "sha256:" + "b" * 64,
+                },
+                "takeover": {
+                    "operation_id": "takeover-fixture-operation",
+                    "runtime_identity_sha256": "sha256:" + "c" * 64,
+                    "pre_stopped_fence_sha256": "sha256:" + "d" * 64,
+                    "applied_record_sha256": "sha256:" + "e" * 64,
+                    "binding_sha256": "sha256:" + "f" * 64,
+                },
+                "prefetch": {
+                    "operation_id": "prefetch-fixture-operation",
+                    "ready_sha256": "sha256:" + "1" * 64,
+                    "identity_sha256": "sha256:" + "2" * 64,
+                    "binding_sha256": "sha256:" + "3" * 64,
+                },
+                "external_database_audit_sha256": (
+                    external_database_audit["identity_sha256"]
+                ),
+            }
+            bridge_authority["identity_sha256"] = (
+                "sha256:"
+                + MODULE.sha256_bytes(
+                    MODULE.canonical_json_bytes(bridge_authority)
+                )
+            )
+            runtime_fence = {
+                "database_system_identifier": str(
+                    raw_before["system_identifier"]
+                ),
+                "containers": [
+                    {
+                        "service": "backend",
+                        "id": "1" * 64,
+                        "image": "sha256:" + "2" * 64,
+                    },
+                    {
+                        "service": "nginx",
+                        "id": "3" * 64,
+                        "image": "sha256:" + "4" * 64,
+                    },
+                    {
+                        "service": "lab-postgres",
+                        "id": "5" * 64,
+                        "image": "sha256:" + "6" * 64,
+                        "data_volume": {
+                            "name": "ephemeral-alias-pg16-volume"
+                        },
+                    },
+                ],
+                "monomer_md_unit": {
+                    "FragmentSHA256": "7" * 64,
+                },
+            }
+            takeover_runtime = {
+                "readers_stopped": True,
+                "postgres_running_untouched": True,
+                "backend_container_id": "1" * 64,
+                "backend_image_id": "sha256:" + "2" * 64,
+                "web_container_id": "3" * 64,
+                "web_image_id": "sha256:" + "4" * 64,
+                "postgres_container_id": "5" * 64,
+                "postgres_image_id": "sha256:" + "6" * 64,
+                "postgres_data_volume": "ephemeral-alias-pg16-volume",
+                "postgres_system_identifier": str(
+                    raw_before["system_identifier"]
+                ),
+                "worker_unit_name": (
+                    "nexpoly-monomer-md-worker.service"
+                ),
+                "worker_unit_sha256": "7" * 64,
+            }
+            external_transition = (
+                PULL_FIXTURES.CONTROLLER
+                .build_external_database_alias_pair(
+                    external_database_audit,
+                    post_alias_external_database_audit,
+                    operation_id=self.operation_id,
+                    descriptor_sha256=descriptor_sha256,
+                )
+            )
+            self.assertEqual(
+                PULL_FIXTURES.CONTROLLER
+                .validate_external_database_alias_pair(
+                    external_transition,
+                    before_binding=external_database_audit,
+                ),
+                external_transition,
+            )
+
+            # This test owns the disposable PostgreSQL transaction, not a
+            # complete production bootstrap.  Supply its exact, immutable
+            # bridge prerequisite through the same loader seam used by the
+            # controller; bridge-v3 preparation itself has separate tests.
+            bridge_controller = mock.Mock()
+
+            def prepared_authority(**kwargs):  # type: ignore[no-untyped-def]
+                self.assertEqual(kwargs["control"], identities[0])
+                self.assertEqual(kwargs["legacy_source"], identities[1])
+                if kwargs["external_database_transition"] is not None:
+                    self.assertEqual(
+                        kwargs["external_database_transition"],
+                        external_transition,
+                    )
+                return bridge_authority, takeover_runtime
+
+            def capture_transition(**kwargs):  # type: ignore[no-untyped-def]
+                self.assertEqual(
+                    kwargs["bridge_authority"],
+                    bridge_authority,
+                )
+                self.assertEqual(
+                    kwargs["alias_operation_id"],
+                    self.operation_id,
+                )
+                live_post = MODULE.validate_inventory(
+                    MODULE._psql_json(
+                        runner,
+                        parsed_environment,
+                        MODULE.INVENTORY_SQL,
+                    ),
+                    expected_phase="post",
+                )
+                self.assertEqual(
+                    [row["version"] for row in live_post["ledger"]],
+                    [pair[0] for pair in MODULE.POST_LEDGER],
+                )
+                return external_transition
+
+            bridge_controller.prepared_alias_bridge_authority.side_effect = (
+                prepared_authority
+            )
+            bridge_controller.capture_alias_external_database_transition.side_effect = (
+                capture_transition
+            )
+            bridge_module = mock.Mock()
+            bridge_module.PullDeployController.return_value = (
+                bridge_controller
+            )
+            bridge_module.load_private_json.side_effect = (
+                MODULE.load_private_json
+            )
+
+            def validate_descriptor(document):  # type: ignore[no-untyped-def]
+                self.assertEqual(document, descriptor_document)
+                return document
+
+            def validate_transition(  # type: ignore[no-untyped-def]
+                document,
+                *,
+                before_binding,
+            ):
+                return (
+                    PULL_FIXTURES.CONTROLLER
+                    .validate_external_database_alias_pair(
+                        document,
+                        before_binding=before_binding,
+                    )
+                )
+
+            bridge_module.validate_descriptor.side_effect = (
+                validate_descriptor
+            )
+            bridge_module.validate_external_database_alias_pair.side_effect = (
+                validate_transition
+            )
             operation = MODULE.Reconciliation(
                 operation_id=self.operation_id,
                 environment=environment,
                 runner=runner,
                 session_factory=MODULE.PsqlSession,
+                bridge_controller_loader=lambda: bridge_module,
             )
             operation.identities = mock.Mock(return_value=identities)
             operation._runtime_stop_fence = mock.Mock(return_value=runtime_fence)
@@ -625,6 +896,7 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
                     "audit/pg-restore.list",
                     "audit/isolated-postgres16-restore.json",
                     "audit/database-after.json",
+                    "audit/external-database-alias-transition.json",
                     "backup/nexpoly-before.dump",
                     "backup/nexpoly-before.dump.sha256",
                 },
@@ -675,6 +947,10 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 [pair[0] for pair in MODULE.POST_LEDGER],
                 [row["version"] for row in public_after["ledger"]],
+            )
+            self.assertEqual(
+                bridge_controller.capture_alias_external_database_transition.call_count,
+                1,
             )
 
 

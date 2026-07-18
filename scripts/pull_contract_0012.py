@@ -90,6 +90,36 @@ legacy = _load_governance_core()
 
 CONTRACT_VERSION = "0012_drop_polytao_jobs"
 CONTRACT_CHECKSUM = "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+SUCCESS_JOURNAL_SCHEMA_VERSION = 2
+SUCCESS_JOURNAL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "operation_id",
+        "source_sha",
+        "approval",
+        "completed_at",
+        "database_backup",
+        "database_backup_sha256",
+        "audit_manifest",
+        "audit_manifest_sha256",
+        "verification",
+        "ingress_isolated_canary",
+        "ingress_isolated_canary_sha256",
+        "deployment_operation_id",
+        "pull_descriptor_sha256",
+        "pre_state_sha256",
+        "post_state_sha256",
+        "contract_mutable_data_audit",
+        "contract_mutable_data_audit_sha256",
+    }
+)
+SUCCESS_JOURNAL_EXTERNAL_FIELDS = frozenset(
+    {
+        "contract_external_database_audit",
+        "contract_external_database_audit_sha256",
+    }
+)
 REQUIRED_STATE_DIRECTORIES = (
     Path("config/docker"),
     Path("state/contract-operations"),
@@ -97,6 +127,12 @@ REQUIRED_STATE_DIRECTORIES = (
     Path("audit/contracts/0012"),
     Path("backups/contracts/0012"),
 )
+
+
+def _current_state_sha256(document: object) -> str:
+    """Digest one current-deployment.json payload exactly as Pull writes it."""
+
+    return pull.sha256_bytes(pull.canonical_json_bytes(document) + b"\n")
 
 
 class PullContractError(RuntimeError):
@@ -121,6 +157,7 @@ class PullBinding:
     control_manifest_sha256: str
     live_production_config: dict[str, str]
     external_database_audit_helper: dict[str, str]
+    external_database_audit: dict[str, Any] | None
 
 
 def _require_private_file(path: Path, *, executable: bool = False) -> None:
@@ -157,13 +194,81 @@ def _external_database_audit_helper_evidence(
     }
 
 
-def _validate_current_state_shape(state: dict[str, Any]) -> None:
+def _validate_current_state_shape(
+    state: dict[str, Any],
+) -> dict[str, Any]:
     try:
-        pull.validate_current_deployment_state(state)
+        return pull.validate_current_deployment_state(state)
     except (pull.PullDeployError, OSError, ValueError, TypeError) as exc:
         raise PullContractError(
             "current pull-deployment state has an invalid exact schema"
         ) from exc
+
+
+def _external_database_authority_for_binding(
+    binding: PullBinding,
+) -> dict[str, str] | None:
+    baseline = binding.external_database_audit
+    if baseline is None:
+        return None
+    return {
+        "identity_sha256": baseline["identity_sha256"],
+        "state_sha256": baseline["state_sha256"],
+        "helper_sha256": baseline["helper"]["sha256"],
+        "registry_sha256": baseline["registry"]["sha256"],
+    }
+
+
+def _maintenance_authority_for_binding(
+    binding: PullBinding,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 3,
+        "source_sha": binding.repository["sha"],
+        "source_tree": binding.repository["tree"],
+        "pull_descriptor_sha256": binding.descriptor_sha256,
+        "maintenance_adapter_sha256": binding.adapter_sha256,
+        "governance_core_sha256": binding.governance_core_sha256,
+        "governance_helper_sha256": binding.governance_helper_sha256,
+        "active_control": binding.active_control,
+        "active_control_sha256": binding.active_control_sha256,
+        "control_manifest_sha256": binding.control_manifest_sha256,
+        "production_config": binding.live_production_config,
+        "external_database_audit_helper": (
+            binding.external_database_audit_helper
+        ),
+        "external_database_bridge_baseline": (
+            _external_database_authority_for_binding(binding)
+        ),
+    }
+
+
+def _validate_recovery_marker_authority(
+    binding: PullBinding,
+    marker: dict[str, Any],
+    recovery_operation: str,
+) -> None:
+    authority = _maintenance_authority_for_binding(binding)
+    if (
+        type(marker.get("schema_version")) is not int
+        or marker.get("schema_version") != 1
+        or marker.get("status")
+        not in {"running", "failed", "resume-pending"}
+        or marker.get("operation_id") != recovery_operation
+        or marker.get("deployment_operation_id")
+        != binding.current_state["operation_id"]
+        or marker.get("source_sha") != binding.repository["sha"]
+        or marker.get("source_tree") != binding.repository["tree"]
+        or marker.get("pull_descriptor_sha256")
+        != binding.descriptor_sha256
+        or marker.get("pull_maintenance_authority") != authority
+        or marker.get("pull_maintenance_authority_sha256")
+        != pull.canonical_json_digest(authority)
+    ):
+        raise PullContractError(
+            "0012 recovery marker does not authorize the exact installed "
+            "maintenance authority"
+        )
 
 
 def _validate_contract_policy(records: list[dict[str, Any]]) -> None:
@@ -185,6 +290,7 @@ def load_binding(
     runtime_root: Path,
     *,
     apply: bool,
+    contract_recovery_operation_id: str | None = None,
 ) -> PullBinding:
     controller = pull.PullDeployController(
         production_root,
@@ -193,9 +299,50 @@ def load_binding(
     )
     controller.ensure_roots(mutating=apply)
     state = pull.load_private_json(controller.current_state_path)
-    _validate_current_state_shape(state)
+    recovery_marker: dict[str, Any] | None = None
+    recovery_operation: str | None = None
+    marker_path = (
+        runtime_root / "state/contract-0012-in-progress.json"
+    )
+    marker_present = marker_path.exists() or marker_path.is_symlink()
+    if marker_present:
+        if contract_recovery_operation_id is None:
+            raise PullContractError(
+                "0012 recovery marker exists without explicit recovery authority"
+            )
+        try:
+            recovery_operation = pull.require_operation_id(
+                contract_recovery_operation_id
+            )
+            recovery_marker = pull.load_private_json(marker_path)
+        except (pull.PullDeployError, OSError, ValueError, TypeError) as exc:
+            raise PullContractError(
+                "0012 recovery marker is unsafe or invalid"
+            ) from exc
+        if (
+            recovery_marker.get("operation_id") != recovery_operation
+            or recovery_marker.get("source_sha") != state.get("source_sha")
+        ):
+            raise PullContractError(
+                "0012 recovery marker belongs to another operation or release"
+            )
+        _validate_current_state_shape(state)
+    else:
+        try:
+            state = controller._validate_steady_deployment_state(
+                state,
+                revalidate_live=True,
+            )
+        except (pull.PullDeployError, OSError, ValueError, TypeError) as exc:
+            raise PullContractError(
+                "current Pull state lacks live steady deployment provenance"
+            ) from exc
     deployment_operation = pull.require_operation_id(state["operation_id"])
-    descriptor, descriptor_sha256 = controller._load_prepared(deployment_operation)
+    descriptor, descriptor_sha256 = controller._load_prepared(
+        deployment_operation,
+        bridge_token_statuses=frozenset({"consumed"}),
+        contract_recovery_operation_id=contract_recovery_operation_id,
+    )
     descriptor_path = (
         controller.prepared_root / deployment_operation / "descriptor.json"
     )
@@ -234,6 +381,97 @@ def load_binding(
         or state["production_config"] != descriptor["production_config"]
     ):
         raise PullContractError("current state differs from its sealed pull descriptor")
+    external_database_audit: dict[str, Any] | None = None
+    raw_external = state.get("external_database_audit")
+    descriptor_external = descriptor.get("external_database_audit")
+    if descriptor_external is None:
+        previous = descriptor.get("previous_deployment")
+        if isinstance(previous, dict):
+            descriptor_external = previous.get("external_database_audit")
+    if raw_external is not None:
+        try:
+            external_database_audit = (
+                pull.validate_external_database_audit_binding(raw_external)
+            )
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "current external database audit binding is invalid"
+            ) from exc
+        raw_chain = state.get("external_database_transition_chain")
+        if (
+            descriptor.get("schema_version")
+            == pull.BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+        ):
+            try:
+                chain = pull.validate_external_database_transition_chain(
+                    raw_chain,
+                    active_binding=external_database_audit,
+                )
+                bridge_pair, _alias_pair, alias_reference = (
+                    controller._load_bridge_external_database_transition(
+                        descriptor,
+                        chain["bridge"],
+                    )
+                )
+            except pull.PullDeployError as exc:
+                raise PullContractError(
+                    "current external database bridge chain is invalid"
+                ) from exc
+            if (
+                chain["alias"] != alias_reference
+                or bridge_pair["after_binding"]
+                != external_database_audit
+            ):
+                raise PullContractError(
+                    "current external database bridge endpoint differs"
+                )
+        elif descriptor_external != external_database_audit:
+            raise PullContractError(
+                "current external database audit differs from its descriptor"
+            )
+        helper = external_database_audit["helper"]
+        registry = external_database_audit["registry"]
+        expected_helper = controller.config_dir / pull.EXTERNAL_DATABASE_AUDIT_HELPER
+        expected_registry = (
+            controller.config_dir
+            / pull.EXTERNAL_DATABASE_MEDIA_REGISTRY
+        )
+        if (
+            helper["path"] != str(expected_helper)
+            or registry["path"] != str(expected_registry)
+        ):
+            raise PullContractError(
+                "external database audit uses another private authority"
+            )
+        try:
+            _helper_payload, helper_sha256 = pull.private_regular_file(
+                expected_helper,
+                mode=0o700,
+                maximum_bytes=4 * 1024 * 1024,
+            )
+            _registry_payload, registry_sha256 = pull.private_regular_file(
+                expected_registry,
+                mode=0o600,
+                maximum_bytes=4 * 1024 * 1024,
+            )
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "external database audit private authority is unsafe"
+            ) from exc
+        if (
+            helper_sha256 != helper["sha256"]
+            or registry_sha256 != registry["sha256"]
+        ):
+            raise PullContractError(
+                "external database audit private authority changed"
+            )
+    elif (
+        descriptor.get("schema_version")
+        == pull.BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+    ):
+        raise PullContractError(
+            "bridge deployment lacks external database audit authority"
+        )
     active_control = controller.active_control_evidence()
     if active_control != state[
         "active_control"
@@ -329,7 +567,7 @@ def load_binding(
         if len(approvals) != 1 or approvals[0].get("checksum") != CONTRACT_CHECKSUM:
             raise PullContractError("0012 is recorded without one canonical approval")
     legacy.approved_contract_migrations(_legacy_state_projection(state))
-    return PullBinding(
+    binding = PullBinding(
         controller=controller,
         current_state=state,
         descriptor=descriptor,
@@ -352,7 +590,19 @@ def load_binding(
         external_database_audit_helper=(
             _external_database_audit_helper_evidence(controller)
         ),
+        external_database_audit=external_database_audit,
     )
+    if recovery_marker is not None:
+        if recovery_operation is None:
+            raise PullContractError(
+                "0012 recovery marker lacks validated operation authority"
+            )
+        _validate_recovery_marker_authority(
+            binding,
+            recovery_marker,
+            recovery_operation,
+        )
+    return binding
 
 
 def _pull_document(binding: PullBinding) -> dict[str, Any]:
@@ -424,6 +674,15 @@ def _pull_state_projection(
     projected["migrations"] = [
         dict(canonical_by_version[version]) for version in versions
     ]
+    compatibility = projected.get("migration_compatibility")
+    if isinstance(compatibility, dict):
+        projected["migration_compatibility"] = (
+            pull.build_migration_compatibility_state(
+                compatibility,
+                code_manifest_sha256=binding.descriptor["migrations"]["sha256"],
+                migrations=projected["migrations"],
+            )
+        )
     projected.pop("applied_migrations", None)
     return projected
 
@@ -577,26 +836,31 @@ class PullContractLifecycle(pull.SystemLifecycle):
         self.cleanup_contract_restore_container(controller, operation_id)
 
         failure: BaseException | None = None
+        container_id: str | None = None
 
         def run(*arguments: str, **kwargs: Any) -> Any:
             return controller.runner.run(list(arguments), env=clean, **kwargs)
 
         def psql_json(sql: str) -> Any:
+            if container_id is None:
+                raise PullContractError(
+                    "isolated PostgreSQL container identity is unavailable"
+                )
             result = run(
-                "docker",
-                "exec",
-                name,
-                "psql",
-                "--set",
-                "ON_ERROR_STOP=1",
-                "--tuples-only",
-                "--no-align",
-                "--username",
-                "postgres",
-                "--dbname",
-                "nexpoly_restore",
-                "--command",
-                sql,
+                *pull.SystemLifecycle._docker_exec(
+                    container_id,
+                    "psql",
+                    "--set",
+                    "ON_ERROR_STOP=1",
+                    "--tuples-only",
+                    "--no-align",
+                    "--username",
+                    "postgres",
+                    "--dbname",
+                    "nexpoly_restore",
+                    "--command",
+                    sql,
+                ),
             )
             raw = str(result.stdout).strip()
             if not raw or len(raw.encode("utf-8")) > 8 * 1024 * 1024:
@@ -645,7 +909,7 @@ class PullContractLifecycle(pull.SystemLifecycle):
                     "started contract restore inspection is malformed"
                 ) from exc
             try:
-                pull.SystemLifecycle._validate_isolated_container(
+                container_id = pull.SystemLifecycle._validate_isolated_container(
                     committed_record,
                     name=name,
                     image=pull.POSTGRES16_IMAGE,
@@ -660,12 +924,12 @@ class PullContractLifecycle(pull.SystemLifecycle):
             deadline = time.monotonic() + 120
             while True:
                 ready = run(
-                    "docker",
-                    "exec",
-                    name,
-                    "pg_isready",
-                    "--username",
-                    "postgres",
+                    *pull.SystemLifecycle._docker_exec(
+                        str(container_id),
+                        "pg_isready",
+                        "--username",
+                        "postgres",
+                    ),
                     check=False,
                 )
                 if ready.returncode == 0:
@@ -676,46 +940,46 @@ class PullContractLifecycle(pull.SystemLifecycle):
                     )
                 time.sleep(1)
             run(
-                "docker",
-                "exec",
-                name,
-                "createdb",
-                "--username",
-                "postgres",
-                "nexpoly_restore",
+                *pull.SystemLifecycle._docker_exec(
+                    str(container_id),
+                    "createdb",
+                    "--username",
+                    "postgres",
+                    "nexpoly_restore",
+                ),
             )
             with dump.open("rb") as source:
                 run(
-                    "docker",
-                    "exec",
-                    "--interactive",
-                    name,
-                    "pg_restore",
-                    "--exit-on-error",
-                    "--no-owner",
-                    "--no-acl",
-                    "--username",
-                    "postgres",
-                    "--dbname",
-                    "nexpoly_restore",
+                    *pull.SystemLifecycle._docker_exec(
+                        str(container_id),
+                        "pg_restore",
+                        "--exit-on-error",
+                        "--no-owner",
+                        "--no-acl",
+                        "--username",
+                        "postgres",
+                        "--dbname",
+                        "nexpoly_restore",
+                        interactive=True,
+                    ),
                     text=False,
                     stdin=source,
                     timeout=1800,
                 )
             version = str(
                 run(
-                    "docker",
-                    "exec",
-                    name,
-                    "psql",
-                    "--tuples-only",
-                    "--no-align",
-                    "--username",
-                    "postgres",
-                    "--dbname",
-                    "nexpoly_restore",
-                    "--command",
-                    "SHOW server_version_num",
+                    *pull.SystemLifecycle._docker_exec(
+                        str(container_id),
+                        "psql",
+                        "--tuples-only",
+                        "--no-align",
+                        "--username",
+                        "postgres",
+                        "--dbname",
+                        "nexpoly_restore",
+                        "--command",
+                        "SHOW server_version_num",
+                    ),
                 ).stdout
             ).strip()
             if not version.isdigit() or not version.startswith("16"):
@@ -931,6 +1195,13 @@ class PullRuntimeController(legacy.ReleaseController):
         self.env_file = self.config_dir / "deploy.env"
         self.document = _pull_document(binding)
         self.runtime_descriptor = json.loads(json.dumps(binding.descriptor))
+        current_mutable = pull.validate_mutable_data_pair(
+            binding.current_state.get("mutable_data_audit")
+        )
+        self.runtime_descriptor["_expected_postgres_runtime_identity"] = {
+            "schema_version": 1,
+            **current_mutable["after"]["postgres_runtime"],
+        }
         if self.runtime_descriptor.get("previous_deployment") is None:
             # The sealed first-takeover descriptor correctly records that no
             # *previous governed deployment* existed.  Once that takeover is
@@ -971,7 +1242,20 @@ class PullRuntimeController(legacy.ReleaseController):
         )
         self._contract_marker_loader: Callable[[], dict[str, Any]] | None = None
         self._contract_marker_writer: Callable[[dict[str, Any]], None] | None = None
+        self._post_contract_external_audit: (
+            Callable[[dict[str, str]], None] | None
+        ) = None
         self.backup_root = self.runtime_root / "backups/contracts/0012" / operation_id
+
+    def bind_post_contract_external_audit(
+        self,
+        callback: Callable[[dict[str, str]], None],
+    ) -> None:
+        if self._post_contract_external_audit is not None:
+            raise PullContractError(
+                "post-contract external audit callback is already bound"
+            )
+        self._post_contract_external_audit = callback
 
     def ensure_root(self) -> None:
         self.pull_controller.ensure_roots(mutating=self.apply)
@@ -1073,6 +1357,132 @@ class PullRuntimeController(legacy.ReleaseController):
         )
         return environment
 
+    def _sealed_contract_postgres_runtime(self) -> dict[str, Any]:
+        marker = self._contract_marker()
+        evidence = pull.validate_mutable_data_evidence(
+            marker.get("mutable_data_before")
+        )
+        if evidence["operation_id"] != self.operation_id:
+            raise PullContractError(
+                "0012 PostgreSQL fence belongs to another operation"
+            )
+        return {
+            "schema_version": 1,
+            **evidence["postgres_runtime"],
+        }
+
+    def _assert_contract_postgres_runtime(
+        self,
+        *,
+        expected: dict[str, Any] | None = None,
+        phase: str,
+    ) -> dict[str, Any]:
+        sealed = (
+            self._sealed_contract_postgres_runtime()
+            if expected is None
+            else dict(expected)
+        )
+        observed = pull.postgres_runtime_fence_identity(
+            pull.validate_postgres_runtime_fence(
+                self.lifecycle.postgres_runtime_identity(
+                    self.pull_controller,
+                    self.runtime_descriptor,
+                )
+            )
+        )
+        if observed != sealed:
+            raise PullContractError(f"PostgreSQL identity changed {phase}")
+        return sealed
+
+    def restore_database(
+        self,
+        environment: dict[str, str],
+        *,
+        release: Path,
+    ) -> None:
+        del release
+        expected = self._assert_contract_postgres_runtime(
+            phase="before 0012 rollback restore"
+        )
+        if self.backup_path is None or not self.backup_path.is_file():
+            raise PullContractError(
+                "database restore requires the verified pre-0012 dump"
+            )
+        expected_digest = legacy.sha256_file(self.backup_path)
+        try:
+            sidecar = pull.load_private_json(
+                self.backup_path.with_suffix(".dump.json")
+            )
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "0012 database backup sidecar is unsafe"
+            ) from exc
+        if sidecar.get("sha256") != expected_digest:
+            raise PullContractError(
+                "0012 database dump digest differs from its sidecar"
+            )
+        user = environment["NEXPOLY_POSTGRES_USER"]
+        database = environment["NEXPOLY_POSTGRES_DB"]
+        with self.backup_path.open("rb") as source:
+            self.run(
+                pull.SystemLifecycle._docker_exec(
+                    expected["container_id"],
+                    "pg_restore",
+                    "--exit-on-error",
+                    "--single-transaction",
+                    "--clean",
+                    "--if-exists",
+                    "--no-owner",
+                    "--no-privileges",
+                    "-U",
+                    user,
+                    "-d",
+                    database,
+                    interactive=True,
+                ),
+                env=self.pull_controller.control_environment(),
+                stdin=source,
+            )
+        self._assert_contract_postgres_runtime(
+            expected=expected,
+            phase="during 0012 rollback restore",
+        )
+
+    def run_migrations(
+        self,
+        environment: dict[str, str],
+        *,
+        mode: str = "expand",
+    ) -> list[str]:
+        expected = self._assert_contract_postgres_runtime(
+            phase="before 0012 migration"
+        )
+        try:
+            applied = super().run_migrations(environment, mode=mode)
+        except BaseException as migration_error:
+            try:
+                self._assert_contract_postgres_runtime(
+                    expected=expected,
+                    phase="during failed 0012 migration",
+                )
+            except BaseException as fence_error:
+                raise fence_error from migration_error
+            raise
+        self._assert_contract_postgres_runtime(
+            expected=expected,
+            phase="during 0012 migration",
+        )
+        if (
+            mode == "contract-0012"
+            and self.binding.external_database_audit is not None
+        ):
+            if self._post_contract_external_audit is None:
+                raise PullContractError(
+                    "0012 lacks its post-contract external database audit"
+                )
+            self._post_contract_external_audit(environment)
+        return applied
+
     def validate_external_database_audit_helper(self) -> dict[str, str]:
         """Re-hash the fixed audit helper against the sealed pull binding."""
 
@@ -1131,11 +1541,18 @@ class PullRuntimeController(legacy.ReleaseController):
         super().run(command, env=env, stdin=stdin, stdout=stdout)
 
     def validate_current_runtime(self, _environment: dict[str, str]) -> None:
-        fresh = load_binding(self.root, self.runtime_root, apply=self.apply)
+        fresh = load_binding(
+            self.root,
+            self.runtime_root,
+            apply=self.apply,
+            contract_recovery_operation_id=self.operation_id,
+        )
         if (
             fresh.descriptor_sha256 != self.binding.descriptor_sha256
             or fresh.current_state != self.binding.current_state
             or fresh.repository != self.binding.repository
+            or fresh.external_database_audit
+            != self.binding.external_database_audit
         ):
             raise PullContractError("pull deployment identity changed before 0012")
         active = self.pull_controller._active_slot()
@@ -1167,6 +1584,77 @@ class PullRuntimeController(legacy.ReleaseController):
             raise PullContractError(
                 "live runtime identity evidence is not serializable"
             ) from exc
+
+    def capture_mutable_data(
+        self,
+        *,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Capture the contract window through the descriptor-pinned helper."""
+
+        if (
+            self.pull_controller.production_config_evidence(
+                check_free_space=False
+            )
+            != self.binding.live_production_config
+        ):
+            raise PullContractError(
+                "0012 mutable-data production configuration changed"
+            )
+        contract = self.pull_controller.mutable_data_contract()
+        if contract != self.binding.descriptor.get("mutable_data"):
+            raise PullContractError(
+                "0012 mutable-data helper differs from the sealed descriptor"
+            )
+        before_fence = pull.validate_postgres_runtime_fence(
+            self.lifecycle.postgres_runtime_identity(
+                self.pull_controller,
+                self.runtime_descriptor,
+            )
+        )
+        runtime_identity = pull.postgres_runtime_fence_identity(before_fence)
+        if runtime_identity["host_endpoint"] != {
+            "host": contract["connection"]["host"],
+            "port": contract["connection"]["port"],
+            "container_port": 5432,
+            "protocol": "tcp",
+        }:
+            raise PullContractError(
+                "0012 mutable-data endpoint differs from PostgreSQL"
+            )
+        environment = self.pull_controller.control_environment()
+        environment["NEXPOLY_MUTABLE_AUDIT_RUNTIME_JSON"] = json.dumps(
+            runtime_identity,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        environment["NEXPOLY_MUTABLE_AUDIT_OPERATION_ID"] = operation_id
+        result = self.pull_controller.runner.run(
+            [contract["helper_path"]],
+            cwd=self.root,
+            env=environment,
+            text=True,
+        )
+        evidence = pull.validate_mutable_data_evidence(
+            pull.parse_command_json(result.stdout, "0012 mutable-data audit")
+        )
+        after_fence = pull.validate_postgres_runtime_fence(
+            self.lifecycle.postgres_runtime_identity(
+                self.pull_controller,
+                self.runtime_descriptor,
+            )
+        )
+        if (
+            pull.postgres_runtime_fence_identity(after_fence)
+            != runtime_identity
+            or evidence["postgres_runtime"] != runtime_identity
+            or evidence["connection"] != contract["connection"]
+            or evidence["operation_id"] != operation_id
+        ):
+            raise PullContractError(
+                "0012 mutable-data audit did not bind the exact PostgreSQL runtime"
+            )
+        return evidence
 
     def bind_contract_marker_persistence(
         self,
@@ -1536,6 +2024,10 @@ class PullRuntimeController(legacy.ReleaseController):
                     "600",
                     "--expected-byteff2-commit",
                     self.binding.descriptor["release_input"]["asset"]["byteff2_commit"],
+                    "--operation-id",
+                    self.operation_id,
+                    "--source-sha",
+                    self.binding.repository["sha"],
                 ),
                 cwd=self.root,
                 env=environment,
@@ -1564,6 +2056,9 @@ class PullRuntimeController(legacy.ReleaseController):
         return evidence
 
     def backup_database(self, environment: dict[str, str], from_sha: str) -> None:
+        expected_postgres = self._assert_contract_postgres_runtime(
+            phase="before 0012 backup"
+        )
         if self.backup_root.exists() or self.backup_root.is_symlink():
             raise PullContractError("0012 backup directory already exists")
         legacy.ensure_durable_directory(self.backup_root)
@@ -1573,11 +2068,8 @@ class PullRuntimeController(legacy.ReleaseController):
         with self.backup_path.open("xb") as output:
             os.chmod(self.backup_path, 0o600)
             self.run(
-                self.compose(
-                    self.candidate_dir,
-                    "exec",
-                    "-T",
-                    "lab-postgres",
+                pull.SystemLifecycle._docker_exec(
+                    expected_postgres["container_id"],
                     "pg_dump",
                     "-U",
                     user,
@@ -1585,21 +2077,19 @@ class PullRuntimeController(legacy.ReleaseController):
                     database,
                     "-Fc",
                 ),
-                env=environment,
+                env=self.pull_controller.control_environment(),
                 stdout=output,
             )
         legacy.fsync_regular_file(self.backup_path)
         with self.backup_path.open("rb") as source:
             self.run(
-                self.compose(
-                    self.candidate_dir,
-                    "exec",
-                    "-T",
-                    "lab-postgres",
+                pull.SystemLifecycle._docker_exec(
+                    expected_postgres["container_id"],
                     "pg_restore",
                     "--list",
+                    interactive=True,
                 ),
-                env=environment,
+                env=self.pull_controller.control_environment(),
                 stdin=source,
                 stdout=subprocess.DEVNULL,
             )
@@ -1616,6 +2106,10 @@ class PullRuntimeController(legacy.ReleaseController):
         legacy.atomic_text(
             self.backup_path.with_suffix(".dump.sha256"),
             f"{digest.removeprefix('sha256:')}  {self.backup_path.name}\n",
+        )
+        self._assert_contract_postgres_runtime(
+            expected=expected_postgres,
+            phase="during 0012 backup",
         )
 
     def marker_backup(self, marker: dict[str, Any]) -> Path:
@@ -1725,7 +2219,14 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             raise PullContractError(
                 "contract operation ID must be 8-128 lowercase safe characters"
             )
-        self.binding = load_binding(production_root, runtime_root, apply=apply)
+        self.binding = load_binding(
+            production_root,
+            runtime_root,
+            apply=apply,
+            contract_recovery_operation_id=(
+                operation_id if apply else None
+            ),
+        )
         self.controller = PullRuntimeController(
             self.binding,
             operation_id,
@@ -1749,9 +2250,18 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         )
         self.contract_record = self._contract_record()
         self._database_recovery_drain_gate: dict[str, Any] | None = None
+        self._contract_mutable_data_before: dict[str, Any] | None = None
+        self._contract_mutable_data_pair: dict[str, Any] | None = None
+        self._contract_external_database_pair: dict[str, Any] | None = None
+        self._pending_success_journal: dict[str, Any] | None = None
+        self._capturing_post_contract_external_audit = False
+        self._capturing_restored_external_audit = False
         self.controller.bind_contract_marker_persistence(
             loader=self._load_runtime_recovery_marker,
             writer=self._write_marker,
+        )
+        self.controller.bind_post_contract_external_audit(
+            self._capture_post_contract_external_database_audit
         )
 
     def plan(self) -> dict[str, Any]:
@@ -1772,6 +2282,9 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             "external_database_audit_helper": (
                 self.binding.external_database_audit_helper
             ),
+            "external_database_bridge_baseline": (
+                self._external_database_authority()
+            ),
             "legacy_release_bundle": False,
         }
         if self.controller._runtime_identity_evidence is not None:
@@ -1783,10 +2296,20 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         *,
         allow_completed_contract: bool = False,
     ) -> dict[str, Any]:
-        fresh = load_binding(self.root, self.runtime_root, apply=self.apply)
-        if fresh.live_production_config != self.binding.live_production_config:
+        fresh = load_binding(
+            self.root,
+            self.runtime_root,
+            apply=self.apply,
+            contract_recovery_operation_id=self.operation_id,
+        )
+        if (
+            fresh.live_production_config != self.binding.live_production_config
+            or fresh.external_database_audit
+            != self.binding.external_database_audit
+        ):
             raise PullContractError(
-                "live production configuration changed during 0012 maintenance"
+                "live production or external database authority changed during "
+                "0012 maintenance"
             )
         state = _legacy_state_projection(fresh.current_state)
         history = state["migrations"]
@@ -1816,37 +2339,497 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
 
     def _load_runtime_recovery_marker(self) -> dict[str, Any]:
         self._validate_installed_authority()
-        return self._load_operation_document(
+        marker = self._load_operation_document(
             self.marker_path,
             "runtime recovery marker",
         )
+        raw_pair = marker.get("contract_external_database_audit")
+        if raw_pair is not None:
+            baseline = self.binding.external_database_audit
+            if baseline is None:
+                raise PullContractError(
+                    "0012 marker has an external database transition without "
+                    "its bridge baseline"
+                )
+            try:
+                pair = pull.validate_external_database_contract_pair(
+                    raw_pair,
+                    before_binding=baseline,
+                )
+            except pull.PullDeployError as exc:
+                raise PullContractError(
+                    "0012 marker external database transition is invalid"
+                ) from exc
+            if pair["operation_id"] != self.operation_id:
+                raise PullContractError(
+                    "0012 marker external database transition belongs to "
+                    "another operation"
+                )
+        return marker
 
-    def _write_current_state(self, state: dict[str, Any]) -> None:
-        legacy.atomic_json(
-            self.state_path,
-            _pull_state_projection(self.binding, state),
+    def _project_current_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        return _pull_state_projection(self.binding, state)
+
+    def _prepare_current_state_candidate(
+        self,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        projected = _pull_state_projection(self.binding, state)
+        pair = self._contract_mutable_data_pair
+        if pair is None:
+            marker = self._load_runtime_recovery_marker()
+            raw_pair = marker.get("contract_mutable_data_audit")
+            if raw_pair is not None:
+                pair = pull.validate_mutable_data_pair(raw_pair)
+        if pair is None:
+            raise PullContractError(
+                "0012 state commit lacks mutable-data transition evidence"
+            )
+        if (
+            pair["transition"]["kind"] != "contract-0012"
+            or pair["transition"]["operation_id"] != self.operation_id
+        ):
+            raise PullContractError(
+                "0012 mutable-data transition belongs to another operation"
+            )
+        projected["contract_mutable_data_audit"] = pair
+        baseline = self.binding.external_database_audit
+        if baseline is not None:
+            external_pair = self._contract_external_database_pair
+            if external_pair is None:
+                marker = self._load_runtime_recovery_marker()
+                raw_external_pair = marker.get(
+                    "contract_external_database_audit"
+                )
+                if raw_external_pair is not None:
+                    try:
+                        external_pair = (
+                            pull.validate_external_database_contract_pair(
+                                raw_external_pair,
+                                before_binding=baseline,
+                            )
+                        )
+                    except pull.PullDeployError as exc:
+                        raise PullContractError(
+                            "0012 state commit has invalid external database "
+                            "transition evidence"
+                        ) from exc
+            if external_pair is None:
+                raise PullContractError(
+                    "0012 state commit lacks external database transition evidence"
+                )
+            if external_pair["operation_id"] != self.operation_id:
+                raise PullContractError(
+                    "0012 external database transition belongs to another operation"
+                )
+            projected["contract_external_database_audit"] = external_pair
+        pull.validate_current_deployment_state(projected)
+        return projected
+
+    def _seal_current_state_postcondition(
+        self,
+        marker: dict[str, Any],
+        next_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Defer the exact post-state until post-migration audits exist."""
+
+        if self._contract_mutable_data_pair is None:
+            raw_pair = marker.get("contract_mutable_data_audit")
+            if raw_pair is not None:
+                self._contract_mutable_data_pair = (
+                    pull.validate_mutable_data_pair(raw_pair)
+                )
+        if self._contract_mutable_data_pair is None:
+            return {}
+        return super()._seal_current_state_postcondition(
+            marker,
+            next_state,
         )
 
-    def _maintenance_authority(self) -> dict[str, Any]:
-        return {
-            "schema_version": 2,
-            "source_sha": self.binding.repository["sha"],
-            "source_tree": self.binding.repository["tree"],
-            "pull_descriptor_sha256": self.binding.descriptor_sha256,
-            "maintenance_adapter_sha256": self.binding.adapter_sha256,
-            "governance_core_sha256": self.binding.governance_core_sha256,
-            "governance_helper_sha256": self.binding.governance_helper_sha256,
-            "active_control": self.binding.active_control,
-            "active_control_sha256": self.binding.active_control_sha256,
-            "control_manifest_sha256": self.binding.control_manifest_sha256,
-            "production_config": self.binding.live_production_config,
-            "external_database_audit_helper": (
-                self.binding.external_database_audit_helper
-            ),
+    def _contract_state_transition(
+        self,
+        previous_state: object,
+        approval: object,
+        mutable_pair: object,
+        external_pair: object | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not isinstance(previous_state, dict):
+            raise PullContractError(
+                "0012 state transition lacks its exact previous state"
+            )
+        if (
+            not isinstance(approval, dict)
+            or set(approval)
+            != {"version", "checksum", "operation_id", "approved_at"}
+            or approval.get("version") != CONTRACT_VERSION
+            or approval.get("checksum") != CONTRACT_CHECKSUM
+            or approval.get("operation_id") != self.operation_id
+            or not isinstance(approval.get("approved_at"), str)
+            or not approval["approved_at"]
+        ):
+            raise PullContractError(
+                "0012 state transition has an invalid approval"
+            )
+        try:
+            pair = pull.validate_mutable_data_pair(mutable_pair)
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "0012 state transition has invalid mutable-data evidence"
+            ) from exc
+        if (
+            pair["transition"]["kind"] != "contract-0012"
+            or pair["transition"]["operation_id"] != self.operation_id
+        ):
+            raise PullContractError(
+                "0012 state transition mutable evidence belongs elsewhere"
+            )
+        pre_state = _pull_state_projection(self.binding, previous_state)
+        try:
+            pre_state = pull.validate_current_deployment_state(pre_state)
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "0012 previous Pull state is invalid"
+            ) from exc
+        pre_versions = [
+            record["version"] for record in pre_state["migrations"]
+        ]
+        if (
+            CONTRACT_VERSION in pre_versions
+            or pre_state["operation_id"]
+            != self.binding.current_state["operation_id"]
+            or pre_state["descriptor_sha256"]
+            != self.binding.descriptor_sha256
+            or pre_state["source_sha"] != self.binding.repository["sha"]
+            or pre_state["source_tree"] != self.binding.repository["tree"]
+        ):
+            raise PullContractError(
+                "0012 previous state is not the bound pre-contract deployment"
+            )
+
+        next_state = json.loads(json.dumps(previous_state))
+        versions = next_state.get("migrations")
+        approvals = next_state.get("approved_contracts")
+        if (
+            not isinstance(versions, list)
+            or CONTRACT_VERSION in versions
+            or not isinstance(approvals, list)
+            or any(
+                isinstance(record, dict)
+                and record.get("version") == CONTRACT_VERSION
+                for record in approvals
+            )
+        ):
+            raise PullContractError(
+                "0012 previous state already contains contract authority"
+            )
+        next_state["migrations"] = [*versions, CONTRACT_VERSION]
+        next_state["applied_migrations"] = [CONTRACT_VERSION]
+        next_state["approved_contracts"] = [*approvals, dict(approval)]
+        next_state["schema_compatibility_floor"] = {
+            "version": CONTRACT_VERSION,
+            "checksum": CONTRACT_CHECKSUM,
         }
+        next_state["migration_epoch_barrier"] = {
+            "epoch": 1,
+            "contract": {
+                "version": CONTRACT_VERSION,
+                "checksum": CONTRACT_CHECKSUM,
+            },
+            "operation_id": self.operation_id,
+            "approved_at": approval["approved_at"],
+        }
+        next_state["last_contract_operation"] = self.operation_id
+        post_state = _pull_state_projection(self.binding, next_state)
+        post_state["contract_mutable_data_audit"] = pair
+
+        baseline = self.binding.external_database_audit
+        if baseline is None:
+            if external_pair is not None:
+                raise PullContractError(
+                    "0012 state transition fabricated external database evidence"
+                )
+        else:
+            if external_pair is None:
+                raise PullContractError(
+                    "0012 state transition lacks external database evidence"
+                )
+            try:
+                validated_external = (
+                    pull.validate_external_database_contract_pair(
+                        external_pair,
+                        before_binding=baseline,
+                    )
+                )
+            except pull.PullDeployError as exc:
+                raise PullContractError(
+                    "0012 state transition external evidence is invalid"
+                ) from exc
+            if validated_external["operation_id"] != self.operation_id:
+                raise PullContractError(
+                    "0012 external transition belongs to another operation"
+                )
+            post_state["contract_external_database_audit"] = (
+                validated_external
+            )
+        try:
+            post_state = pull.validate_current_deployment_state(post_state)
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "0012 reconstructed post-state is invalid"
+            ) from exc
+        return pre_state, post_state
+
+    def _pending_journal_from_marker(
+        self,
+        marker: dict[str, Any],
+    ) -> dict[str, Any]:
+        raw = marker.get("pending_success_journal")
+        digest = marker.get("pending_success_journal_sha256")
+        expected_fields = set(SUCCESS_JOURNAL_FIELDS)
+        if self.binding.external_database_audit is not None:
+            expected_fields.update(SUCCESS_JOURNAL_EXTERNAL_FIELDS)
+        if (
+            not isinstance(raw, dict)
+            or set(raw) != expected_fields
+            or not isinstance(digest, str)
+            or legacy.DIGEST_RE.fullmatch(digest) is None
+            or pull.canonical_json_digest(raw) != digest
+            or raw.get("schema_version")
+            != SUCCESS_JOURNAL_SCHEMA_VERSION
+            or raw.get("status") != "success"
+            or raw.get("operation_id") != self.operation_id
+            or raw.get("source_sha") != self.document["source_sha"]
+        ):
+            raise PullContractError(
+                "0012 state commit lacks its sealed pending journal"
+            )
+        if (
+            self._pending_success_journal is not None
+            and raw != self._pending_success_journal
+        ):
+            raise PullContractError(
+                "0012 pending journal changed before state commit"
+            )
+        return dict(raw)
+
+    def _persist_current_state(self, state: dict[str, Any]) -> None:
+        """Keep Pull's canonical bytes while the base class owns the CAS."""
+
+        pull.atomic_json(self.state_path, state)
+
+    def _validate_current_state_commit_candidate(
+        self,
+        marker: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> None:
+        """Bind the exact CAS candidate to live data and the pending journal."""
+
+        pending_journal = self._pending_journal_from_marker(marker)
+        pair = self._contract_mutable_data_pair
+        if pair is None:
+            raw_pair = marker.get("contract_mutable_data_audit")
+            if raw_pair is not None:
+                pair = pull.validate_mutable_data_pair(raw_pair)
+        if pair is None:
+            raise PullContractError(
+                "0012 state commit lacks mutable-data transition evidence"
+            )
+        if (
+            pair["transition"]["kind"] != "contract-0012"
+            or pair["transition"]["operation_id"] != self.operation_id
+            or pending_journal.get("contract_mutable_data_audit") != pair
+            or pending_journal.get("contract_mutable_data_audit_sha256")
+            != pull.canonical_json_digest(pair)
+        ):
+            raise PullContractError(
+                "0012 mutable-data transition belongs to another operation"
+            )
+        baseline = self.binding.external_database_audit
+        if baseline is not None:
+            external_pair = self._contract_external_database_pair
+            if external_pair is None:
+                marker = self._load_runtime_recovery_marker()
+                raw_external_pair = marker.get(
+                    "contract_external_database_audit"
+                )
+                if raw_external_pair is not None:
+                    try:
+                        external_pair = (
+                            pull.validate_external_database_contract_pair(
+                                raw_external_pair,
+                                before_binding=baseline,
+                            )
+                        )
+                    except pull.PullDeployError as exc:
+                        raise PullContractError(
+                            "0012 state commit has invalid external database "
+                            "transition evidence"
+                        ) from exc
+            if external_pair is None:
+                raise PullContractError(
+                    "0012 state commit lacks external database transition evidence"
+                )
+            if external_pair["operation_id"] != self.operation_id:
+                raise PullContractError(
+                    "0012 external database transition belongs to another operation"
+                )
+            if (
+                pending_journal.get(
+                    "contract_external_database_audit"
+                )
+                != external_pair
+                or pending_journal.get(
+                    "contract_external_database_audit_sha256"
+                )
+                != pull.canonical_json_digest(external_pair)
+            ):
+                raise PullContractError(
+                    "0012 pending journal external evidence differs"
+                )
+            expected_external = (
+                pull.external_database_contract_after_binding(
+                    baseline,
+                    external_pair,
+                )
+            )
+            try:
+                self.binding.controller._revalidate_external_database_binding(
+                    expected_external,
+                    policy=self.binding.descriptor["bridge"]["policy"][
+                        "external_database_audit"
+                    ],
+                )
+            except pull.PullDeployError as exc:
+                raise PullContractError(
+                    "0012 external database changed before state commit"
+                ) from exc
+        fresh_mutable = self.controller.capture_mutable_data(
+            operation_id=self.operation_id
+        )
+        if (
+            pull.mutable_data_identity(fresh_mutable)
+            != pull.mutable_data_identity(pair["after"])
+        ):
+            raise PullContractError(
+                "0012 mutable data changed before state commit"
+            )
+        pre_state, expected_post_state = self._contract_state_transition(
+            marker.get("previous_state"),
+            pending_journal.get("approval"),
+            pair,
+            external_pair if baseline is not None else None,
+        )
+        candidate = pull.validate_current_deployment_state(candidate)
+        pre_digest = _current_state_sha256(pre_state)
+        post_digest = _current_state_sha256(expected_post_state)
+        try:
+            precondition, postcondition = self._state_transition_from_marker(
+                marker,
+                require_postcondition=True,
+            )
+        except legacy.ReleaseError as exc:
+            raise PullContractError(
+                "0012 state commit lacks its exact CAS seals"
+            ) from exc
+        if (
+            candidate != expected_post_state
+            or precondition != pre_state
+            or postcondition != expected_post_state
+            or marker.get("pre_state_sha256") != pre_digest
+            or marker.get("post_state_sha256") != post_digest
+            or pending_journal.get("pre_state_sha256") != pre_digest
+            or pending_journal.get("post_state_sha256") != post_digest
+            or pending_journal.get("deployment_operation_id")
+            != pre_state["operation_id"]
+            or pending_journal.get("pull_descriptor_sha256")
+            != pre_state["descriptor_sha256"]
+        ):
+            raise PullContractError(
+                "0012 state commit differs from its sealed journal transition"
+            )
+        current = pull.load_private_json(self.state_path)
+        current_digest = pull.sha256_file(self.state_path)
+        if current == pre_state:
+            expected_current_digest = pre_digest
+        elif current == expected_post_state:
+            expected_current_digest = post_digest
+        else:
+            raise PullContractError(
+                "0012 current state is outside its sealed journal transition"
+            )
+        if current_digest != expected_current_digest:
+            raise PullContractError(
+                "0012 current state bytes differ from its sealed journal digest"
+            )
+
+    def _write_current_state(self, state: dict[str, Any]) -> None:
+        try:
+            super()._write_current_state(state)
+        except legacy.ReleaseError as exc:
+            raise PullContractError(
+                "0012 current-state commit authority changed"
+            ) from exc
+        marker = self._load_runtime_recovery_marker()
+        journal = self._pending_journal_from_marker(marker)
+        if pull.sha256_file(self.state_path) != journal["post_state_sha256"]:
+            raise PullContractError(
+                "0012 current state write differs from its canonical digest"
+            )
+
+    def _restore_current_state(
+        self,
+        previous_state: dict[str, Any],
+    ) -> None:
+        marker = self._load_runtime_recovery_marker()
+        if (
+            marker.get("phase") != "database-restore-started"
+            or marker.get("database_restore_started") is not True
+            or marker.get("database_restored") is True
+            or marker.get("previous_state") != previous_state
+        ):
+            raise PullContractError(
+                "0012 previous-state restore lacks exact durable intent"
+            )
+        try:
+            super()._restore_current_state(previous_state)
+        except legacy.ReleaseError as exc:
+            raise PullContractError(
+                "0012 previous-state restore changed current-state authority"
+            ) from exc
+
+    def _external_database_authority(self) -> dict[str, str] | None:
+        return _external_database_authority_for_binding(self.binding)
+
+    def _maintenance_authority(self) -> dict[str, Any]:
+        return _maintenance_authority_for_binding(self.binding)
 
     def _validate_installed_authority(self) -> None:
-        fresh = load_binding(self.root, self.runtime_root, apply=self.apply)
+        fresh = load_binding(
+            self.root,
+            self.runtime_root,
+            apply=self.apply,
+            contract_recovery_operation_id=self.operation_id,
+        )
+        allowed_states = [self.binding.current_state]
+        if self.marker_path.exists() or self.marker_path.is_symlink():
+            marker = self._load_operation_document(
+                self.marker_path,
+                "runtime recovery marker",
+            )
+            transition_fields = {
+                "current_state_precondition",
+                "current_state_precondition_sha256",
+                "current_state_postcondition",
+                "current_state_postcondition_sha256",
+            }
+            if transition_fields.intersection(marker):
+                precondition, postcondition = self._state_transition_from_marker(
+                    marker,
+                    require_postcondition=False,
+                )
+                allowed_states = [precondition]
+                if postcondition is not None:
+                    allowed_states.append(postcondition)
         if (
             fresh.repository != self.binding.repository
             or fresh.descriptor_sha256 != self.binding.descriptor_sha256
@@ -1859,13 +2842,73 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             or fresh.live_production_config != self.binding.live_production_config
             or fresh.external_database_audit_helper
             != self.binding.external_database_audit_helper
+            or fresh.external_database_audit
+            != self.binding.external_database_audit
+            or fresh.current_state not in allowed_states
         ):
             raise PullContractError(
                 "installed 0012 maintenance authority changed during the operation"
             )
 
+    def _revalidate_current_state_authority(
+        self,
+        marker: dict[str, Any],
+        *,
+        require_postcondition: bool,
+    ) -> str:
+        self._validate_installed_authority()
+        try:
+            status = super()._revalidate_current_state_authority(
+                marker,
+                require_postcondition=require_postcondition,
+            )
+            precondition, postcondition = self._state_transition_from_marker(
+                marker,
+                require_postcondition=require_postcondition,
+            )
+            expected = (
+                precondition
+                if status == "precondition"
+                else postcondition
+            )
+            if (
+                expected is None
+                or pull.sha256_file(self.state_path)
+                != _current_state_sha256(expected)
+            ):
+                raise legacy.ReleaseError(
+                    "0012 current-state file bytes changed"
+                )
+            return status
+        except (legacy.ReleaseError, OSError) as exc:
+            raise PullContractError(
+                "installed 0012 current-state authority changed"
+            ) from exc
+
     def _write_marker(self, marker: dict[str, Any]) -> None:
         self._validate_installed_authority()
+        if self._contract_mutable_data_before is not None:
+            marker["mutable_data_before"] = (
+                self._contract_mutable_data_before
+            )
+            marker["mutable_data_before_sha256"] = (
+                pull.canonical_json_digest(
+                    pull.mutable_data_identity(
+                        self._contract_mutable_data_before
+                    )
+                )
+            )
+        if self._contract_mutable_data_pair is not None:
+            marker["mutable_data_after"] = self._contract_mutable_data_pair[
+                "after"
+            ]
+            marker["contract_mutable_data_audit"] = (
+                self._contract_mutable_data_pair
+            )
+        if self._contract_external_database_pair is not None:
+            marker["contract_external_database_audit"] = (
+                self._contract_external_database_pair
+            )
         authority = self._maintenance_authority()
         marker["pull_maintenance_authority"] = authority
         marker["pull_maintenance_authority_sha256"] = pull.canonical_json_digest(
@@ -1879,6 +2922,43 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             )
         legacy.atomic_json(self.marker_path, marker)
 
+    def _sealed_mutable_data_before(
+        self,
+        marker: dict[str, Any],
+    ) -> dict[str, Any]:
+        before = pull.validate_mutable_data_evidence(
+            marker.get("mutable_data_before")
+        )
+        if marker.get("mutable_data_before_sha256") != (
+            pull.canonical_json_digest(pull.mutable_data_identity(before))
+        ):
+            raise PullContractError(
+                "0012 pre-mutation mutable-data seal differs"
+            )
+        return before
+
+    def _write_mutable_audit_document(
+        self,
+        name: str,
+        document: dict[str, Any],
+    ) -> None:
+        path = self.audit_dir / name
+        if path.exists() or path.is_symlink():
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or self._load_operation_document(
+                    path,
+                    "mutable-data audit evidence",
+                )
+                != document
+            ):
+                raise PullContractError(
+                    "existing 0012 mutable-data audit evidence differs"
+                )
+            return
+        legacy.atomic_json(path, document)
+
     def _audit_manifest(self) -> dict[str, Any]:
         self._validate_installed_authority()
         legacy.atomic_json(
@@ -1889,6 +2969,21 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             self.audit_dir / "external-database-audit-helper.json",
             self.binding.external_database_audit_helper,
         )
+        baseline = self.binding.external_database_audit
+        if baseline is not None:
+            self._write_mutable_audit_document(
+                "external-database-bridge-baseline.json",
+                baseline,
+            )
+        if self._contract_external_database_pair is not None:
+            self._write_mutable_audit_document(
+                "external-database.transition.json",
+                self._contract_external_database_pair,
+            )
+            self._write_mutable_audit_document(
+                "external-database.after.json",
+                self._contract_external_database_pair["after_snapshot"],
+            )
         return super()._audit_manifest()
 
     def _validate_audit_manifest(self, manifest: object) -> dict[str, Any]:
@@ -1921,10 +3016,84 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             raise PullContractError(
                 "0012 audit is not bound to its external database audit helper"
             )
+        baseline = self.binding.external_database_audit
+        baseline_path = self.audit_dir / "external-database-bridge-baseline.json"
+        if baseline is not None:
+            if (
+                not baseline_path.is_file()
+                or baseline_path.is_symlink()
+                or stat.S_IMODE(baseline_path.stat().st_mode) != 0o600
+                or self._load_operation_document(
+                    baseline_path,
+                    "external database bridge baseline",
+                )
+                != baseline
+            ):
+                raise PullContractError(
+                    "0012 audit is not bound to its bridge-time external "
+                    "database baseline"
+                )
+            pair_path = self.audit_dir / "external-database.transition.json"
+            after_path = self.audit_dir / "external-database.after.json"
+            pair_expected = (
+                self._contract_external_database_pair is not None
+                or self.binding.current_state.get(
+                    "contract_external_database_audit"
+                )
+                is not None
+            )
+            if pair_expected:
+                if (
+                    not pair_path.is_file()
+                    or pair_path.is_symlink()
+                    or stat.S_IMODE(pair_path.stat().st_mode) != 0o600
+                    or not after_path.is_file()
+                    or after_path.is_symlink()
+                    or stat.S_IMODE(after_path.stat().st_mode) != 0o600
+                ):
+                    raise PullContractError(
+                        "0012 audit lacks its external database transition"
+                    )
+                try:
+                    pair = pull.validate_external_database_contract_pair(
+                        self._load_operation_document(
+                            pair_path,
+                            "external database transition",
+                        ),
+                        before_binding=baseline,
+                    )
+                except pull.PullDeployError as exc:
+                    raise PullContractError(
+                        "0012 external database transition audit is invalid"
+                    ) from exc
+                if (
+                    pair["operation_id"] != self.operation_id
+                    or self._load_operation_document(
+                        after_path,
+                        "post-0012 external database snapshot",
+                    )
+                    != pair["after_snapshot"]
+                ):
+                    raise PullContractError(
+                        "0012 external database transition audit differs"
+                    )
+                if (
+                    self._contract_external_database_pair is not None
+                    and pair != self._contract_external_database_pair
+                ):
+                    raise PullContractError(
+                        "0012 external database transition changed during audit"
+                    )
+                self._contract_external_database_pair = pair
         return validated
 
     def _bind_current_release(self, state: dict[str, Any]) -> Path:
-        fresh = load_binding(self.root, self.runtime_root, apply=self.apply)
+        fresh = load_binding(
+            self.root,
+            self.runtime_root,
+            apply=self.apply,
+            contract_recovery_operation_id=self.operation_id,
+        )
         supplied_identity = {
             key: state.get(key)
             for key in (
@@ -1956,6 +3125,8 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             or fresh.live_production_config != self.binding.live_production_config
             or fresh.external_database_audit_helper
             != self.binding.external_database_audit_helper
+            or fresh.external_database_audit
+            != self.binding.external_database_audit
         ):
             raise PullContractError(
                 "live pull identity changed before 0012 maintenance"
@@ -1977,7 +3148,200 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             raise PullContractError(
                 "0012 external database audit helper changed while executing"
             )
+        baseline = self.binding.external_database_audit
+        if baseline is not None and not self._capturing_post_contract_external_audit:
+            expected = baseline
+            pair = self._contract_external_database_pair
+            if self._capturing_restored_external_audit:
+                pair = None
+            if pair is None:
+                raw_pair = self.binding.current_state.get(
+                    "contract_external_database_audit"
+                )
+                if (
+                    raw_pair is not None
+                    and not self._capturing_restored_external_audit
+                ):
+                    try:
+                        pair = pull.validate_external_database_contract_pair(
+                            raw_pair,
+                            before_binding=baseline,
+                        )
+                    except pull.PullDeployError as exc:
+                        raise PullContractError(
+                            "committed 0012 external database transition is invalid"
+                        ) from exc
+            if (
+                pair is None
+                and not self._capturing_restored_external_audit
+                and (
+                self.marker_path.exists() or self.marker_path.is_symlink()
+                )
+            ):
+                marker = self._load_operation_document(
+                    self.marker_path,
+                    "runtime recovery marker",
+                )
+                raw_pair = marker.get(
+                    "contract_external_database_audit"
+                )
+                if raw_pair is not None:
+                    try:
+                        pair = pull.validate_external_database_contract_pair(
+                            raw_pair,
+                            before_binding=baseline,
+                        )
+                    except pull.PullDeployError as exc:
+                        raise PullContractError(
+                            "0012 marker external database transition is invalid"
+                        ) from exc
+            if pair is not None:
+                if pair["operation_id"] != self.operation_id:
+                    raise PullContractError(
+                        "0012 external database transition belongs to "
+                        "another operation"
+                    )
+                expected = pull.external_database_contract_after_binding(
+                    baseline,
+                    pair,
+                )
+                self._contract_external_database_pair = pair
+            observed_state = pull.canonical_json_digest(
+                pull.external_database_audit_state(inventory)
+            )
+            if observed_state != expected["state_sha256"]:
+                # In the sole SQL-commit-unknown window the durable marker is
+                # still pre-transition.  Classify only the exact canonical
+                # 0012 endpoint; arbitrary drift never becomes recovery
+                # authority.
+                marker = (
+                    self._load_operation_document(
+                        self.marker_path,
+                        "runtime recovery marker",
+                    )
+                    if self.marker_path.exists()
+                    or self.marker_path.is_symlink()
+                    else None
+                )
+                if (
+                    pair is None
+                    and isinstance(marker, dict)
+                    and marker.get("operation_id") == self.operation_id
+                    and marker.get("database_change_started") is True
+                    and marker.get("phase") == "database-change-started"
+                ):
+                    try:
+                        pair = pull.build_external_database_contract_pair(
+                            baseline,
+                            inventory,
+                            operation_id=self.operation_id,
+                        )
+                    except pull.PullDeployError as exc:
+                        raise PullContractError(
+                            "external database media changed since bridge "
+                            "preparation"
+                        ) from exc
+                    self._contract_external_database_pair = pair
+                    expected = (
+                        pull.external_database_contract_after_binding(
+                            baseline,
+                            pair,
+                        )
+                    )
+                if observed_state != expected["state_sha256"]:
+                    raise PullContractError(
+                        "external database media changed since bridge preparation"
+                    )
         return inventory
+
+    def _capture_post_contract_external_database_audit(
+        self,
+        environment: dict[str, str],
+    ) -> None:
+        baseline = self.binding.external_database_audit
+        if baseline is None:
+            return
+        if self._contract_external_database_pair is not None:
+            return
+        transition_path = (
+            self.audit_dir / "external-database.transition.json"
+        )
+        after_path = self.audit_dir / "external-database.after.json"
+        durable_pair: dict[str, Any] | None = None
+        if transition_path.exists() or transition_path.is_symlink():
+            try:
+                durable_pair = pull.validate_external_database_contract_pair(
+                    self._load_operation_document(
+                        transition_path,
+                        "external database transition",
+                    ),
+                    before_binding=baseline,
+                )
+            except pull.PullDeployError as exc:
+                raise PullContractError(
+                    "durable 0012 external database transition is invalid"
+                ) from exc
+            if durable_pair["operation_id"] != self.operation_id:
+                raise PullContractError(
+                    "durable 0012 external database transition belongs to "
+                    "another operation"
+                )
+        elif after_path.exists() or after_path.is_symlink():
+            orphan_after = self._load_operation_document(
+                after_path,
+                "orphan external database after audit",
+            )
+            try:
+                durable_pair = pull.build_external_database_contract_pair(
+                    baseline,
+                    orphan_after,
+                    operation_id=self.operation_id,
+                )
+            except pull.PullDeployError as exc:
+                raise PullContractError(
+                    "orphan 0012 external database after audit is invalid"
+                ) from exc
+        self._capturing_post_contract_external_audit = True
+        try:
+            after = self._capture_external_database_inventory(environment)
+        finally:
+            self._capturing_post_contract_external_audit = False
+        try:
+            pair = pull.build_external_database_contract_pair(
+                baseline,
+                after,
+                operation_id=self.operation_id,
+            )
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "post-0012 external database transition is unsafe"
+            ) from exc
+        if durable_pair is not None:
+            if (
+                durable_pair["before_state_sha256"]
+                != pair["before_state_sha256"]
+                or durable_pair["after_state_sha256"]
+                != pair["after_state_sha256"]
+                or durable_pair["transition"] != pair["transition"]
+            ):
+                raise PullContractError(
+                    "durable 0012 external database endpoint changed"
+                )
+            pair = durable_pair
+        # The pair is the first durable authority and embeds the exact
+        # after-snapshot.  A crash before marker publication can therefore
+        # adopt it despite fresh audit timestamps on the retry.
+        self._write_mutable_audit_document(
+            "external-database.transition.json",
+            pair,
+        )
+        self._write_mutable_audit_document(
+            "external-database.after.json",
+            pair["after_snapshot"],
+        )
+        self._contract_external_database_pair = pair
+        marker = self._load_runtime_recovery_marker()
+        self._write_marker(marker)
 
     @staticmethod
     def _database_recovery_gate_identity(
@@ -2044,20 +3408,6 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             environment,
             recorded_database_inventory=recorded_database_inventory,
             initial_inventory=initial_inventory,
-        )
-
-    def _restore_previous_database(
-        self,
-        environment: dict[str, str],
-        previous_state: dict[str, Any],
-        *,
-        recorded_database_inventory: object | None = None,
-    ) -> None:
-        self._ensure_database_recovery_drain()
-        super()._restore_previous_database(
-            environment,
-            previous_state,
-            recorded_database_inventory=recorded_database_inventory,
         )
 
     def _reestablish_recovery_drain(self, marker: dict[str, Any]) -> None:
@@ -2156,7 +3506,183 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             self.binding.controller,
             self.operation_id,
         )
+        if marker.get("phase") in {
+            "database-restore-started",
+            "database-restored",
+        }:
+            previous_state = marker.get("previous_state")
+            if not isinstance(previous_state, dict):
+                raise PullContractError(
+                    "0012 database recovery lacks previous state"
+                )
+            environment = self.controller.environment()
+            current_release = self._bind_current_release(previous_state)
+            self.controller.candidate_dir = current_release
+            self.controller.previous_state = previous_state
+            backup_path = marker.get("database_backup")
+            if isinstance(backup_path, str):
+                self.controller.backup_path = (
+                    self.controller.marker_backup(marker)
+                )
+            if marker.get("phase") == "database-restore-started":
+                self._restore_previous_database(
+                    environment,
+                    previous_state,
+                    recorded_database_inventory=marker.get(
+                        "database_inventory"
+                    ),
+                )
+                marker = self._load_runtime_recovery_marker()
+            self._validate_completed_database_restore(
+                marker,
+                previous_state,
+                environment,
+            )
+            self._finish_recovered_database_restore(
+                marker,
+                environment,
+            )
         return super()._recover(marker)
+
+    def _validate_completed_database_restore(
+        self,
+        marker: dict[str, Any],
+        previous_state: dict[str, Any],
+        environment: dict[str, str],
+    ) -> None:
+        if (
+            marker.get("phase") != "database-restored"
+            or marker.get("database_restore_started") is not True
+            or marker.get("database_restored") is not True
+            or marker.get("previous_state") != previous_state
+        ):
+            raise PullContractError(
+                "0012 completed database restore marker is inconsistent"
+            )
+        if self._load_current_state(
+            allow_completed_contract=True
+        ) != previous_state:
+            raise PullContractError(
+                "0012 restored current state differs from sealed previous state"
+            )
+        before = self._sealed_mutable_data_before(marker)
+        recorded = pull.validate_mutable_data_evidence(
+            marker.get("mutable_data_restored")
+        )
+        if marker.get("mutable_data_restored_sha256") != (
+            pull.canonical_json_digest(
+                pull.mutable_data_identity(recorded)
+            )
+        ):
+            raise PullContractError(
+                "0012 restored mutable-data marker digest differs"
+            )
+        fresh = self.controller.capture_mutable_data(
+            operation_id=self.operation_id
+        )
+        for field in (
+            "database",
+            "database_system_identifier",
+            "connection",
+            "postgres_runtime",
+            "migration_ledger",
+            "business_tables",
+            "static_tables",
+            "migration_exception",
+            "sequences",
+        ):
+            if before[field] != recorded[field] or before[field] != fresh[field]:
+                raise PullContractError(
+                    f"0012 durable restore changed mutable-data field: {field}"
+                )
+        baseline = self.binding.external_database_audit
+        if baseline is not None:
+            recorded_external = marker.get(
+                "external_database_restored"
+            )
+            recorded_state = pull.canonical_json_digest(
+                pull.external_database_audit_state(recorded_external)
+            )
+            if (
+                recorded_state != baseline["state_sha256"]
+                or marker.get(
+                    "external_database_restored_state_sha256"
+                )
+                != recorded_state
+            ):
+                raise PullContractError(
+                    "0012 durable restore external database differs"
+                )
+            self._capturing_restored_external_audit = True
+            try:
+                fresh_external = (
+                    self._capture_external_database_inventory(
+                        environment
+                    )
+                )
+            finally:
+                self._capturing_restored_external_audit = False
+            if (
+                pull.canonical_json_digest(
+                    pull.external_database_audit_state(
+                        fresh_external
+                    )
+                )
+                != baseline["state_sha256"]
+            ):
+                raise PullContractError(
+                    "0012 restored external database changed before resume"
+                )
+
+    def _finish_recovered_database_restore(
+        self,
+        marker: dict[str, Any],
+        environment: dict[str, str],
+    ) -> None:
+        self._resume_admission(
+            environment,
+            worker_was_drained=False,
+        )
+        recovered_journal: dict[str, Any] = {
+            "schema_version": 1,
+            "status": "recovered",
+            "operation_id": self.operation_id,
+            "source_sha": self.document["source_sha"],
+            "recovered_at": legacy.utc_now(),
+            "database_restored": True,
+            "retry_requires_new_operation_id": True,
+        }
+        if self.journal_path.exists() or self.journal_path.is_symlink():
+            existing = self._load_operation_document(
+                self.journal_path,
+                "operation journal",
+            )
+            if (
+                existing.get("operation_id") != self.operation_id
+                or existing.get("source_sha")
+                != self.document["source_sha"]
+                or existing.get("status")
+                not in {"failed", "recovered"}
+            ):
+                raise PullContractError(
+                    "0012 recovery journal conflicts with restored operation"
+                )
+            if existing.get("status") == "failed":
+                recovered_journal["previous_failure"] = existing
+                legacy.atomic_json(
+                    self.journal_path,
+                    recovered_journal,
+                )
+        else:
+            legacy.atomic_json(
+                self.journal_path,
+                recovered_journal,
+            )
+        legacy.durable_unlink(self.marker_path)
+        raise legacy.ReleaseError(
+            "recovered an interrupted 0012 operation; retry with a new "
+            "operation ID"
+        )
 
     def _archive_legacy_table(
         self,
@@ -2164,10 +3690,50 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         previous_state: dict[str, Any],
         database_inventory: dict[str, Any],
     ) -> dict[str, Any]:
+        marker = self._load_runtime_recovery_marker()
+        raw_before = marker.get("mutable_data_before")
+        before = (
+            self._sealed_mutable_data_before(marker)
+            if raw_before is not None
+            else self.controller.capture_mutable_data(
+                operation_id=self.operation_id
+            )
+        )
+        if (
+            before["operation_id"] != self.operation_id
+            or before["migration_ledger"][-1]["version"]
+            != "0011_monomer_md_demo_steps"
+            or before["migration_exception"]["state"] != "present"
+        ):
+            raise PullContractError(
+                "0012 pre-mutation mutable-data evidence is not pre-0012"
+            )
+        if raw_before is None:
+            self._contract_mutable_data_before = before
+            marker["mutable_data_before"] = before
+            marker["mutable_data_before_sha256"] = (
+                pull.canonical_json_digest(
+                    pull.mutable_data_identity(before)
+                )
+            )
+            self._write_marker(marker)
+        else:
+            self._contract_mutable_data_before = before
         evidence = super()._archive_legacy_table(
             environment,
             previous_state,
             database_inventory,
+        )
+        if (
+            evidence.get("row_count")
+            != before["migration_exception"]["row_count"]
+        ):
+            raise PullContractError(
+                "0012 dynamic archive and mutable-data seal count differ"
+            )
+        self._write_mutable_audit_document(
+            "mutable-data.before.json",
+            before,
         )
         backup = self.controller.backup_path
         if backup is None:
@@ -2214,6 +3780,157 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         )
         return evidence
 
+    def _restore_previous_database(
+        self,
+        environment: dict[str, str],
+        previous_state: dict[str, Any],
+        *,
+        recorded_database_inventory: object | None = None,
+    ) -> None:
+        """Prove a failed 0012 rollback restored every non-exception row."""
+
+        self._ensure_database_recovery_drain()
+        expected_postgres = self.controller._assert_contract_postgres_runtime(
+            phase="before 0012 recovery"
+        )
+        marker = self._load_runtime_recovery_marker()
+        restore_already_started = (
+            marker.get("phase") == "database-restore-started"
+            and marker.get("database_restore_started") is True
+            and marker.get("database_restored") is not True
+        )
+        self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
+        if not restore_already_started:
+            recorded_external_inventory = None
+            if isinstance(recorded_database_inventory, dict):
+                recorded_external_inventory = recorded_database_inventory.get(
+                    "external_registered_database_inventory"
+                )
+            self._pre_destructive_database_gate(
+                environment,
+                allow_contract=True,
+                allow_owned_verification=True,
+                recorded_external_inventory=recorded_external_inventory,
+            )
+            marker = self._load_runtime_recovery_marker()
+            marker["status"] = "failed"
+            marker["phase"] = "database-restore-started"
+            marker["database_restore_started"] = True
+            marker["database_restored"] = False
+            marker["database_restore_started_at"] = legacy.utc_now()
+            self._write_marker(marker)
+        release = self.controller.candidate_dir
+        if release is None:
+            raise PullContractError(
+                "0012 database restore lacks its bound release"
+            )
+        self.controller.run(
+            self.controller.compose(release, "stop", "nginx", "backend"),
+            env=environment,
+        )
+        if legacy.release_uses_worker(self.document):
+            self.controller.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "stop",
+                    "nexpoly-monomer-md-worker.service",
+                ],
+                env=environment,
+            )
+        marker = self._load_runtime_recovery_marker()
+        self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
+        self.controller.restore_database(environment, release=release)
+        self._restore_current_state(previous_state)
+        self.controller.run(
+            self.controller.compose(
+                release,
+                "up",
+                "-d",
+                "--no-build",
+                "--wait",
+                "--wait-timeout",
+                "300",
+                "--no-deps",
+                "backend",
+            ),
+            env=environment,
+        )
+        self.controller._assert_contract_postgres_runtime(
+            expected=expected_postgres,
+            phase="during 0012 recovery",
+        )
+        marker = self._load_runtime_recovery_marker()
+        before = self._sealed_mutable_data_before(marker)
+        restored = self.controller.capture_mutable_data(
+            operation_id=self.operation_id
+        )
+        for name in (
+            "database",
+            "database_system_identifier",
+            "connection",
+            "postgres_runtime",
+            "migration_ledger",
+            "business_tables",
+            "static_tables",
+            "migration_exception",
+            "sequences",
+        ):
+            if before[name] != restored[name]:
+                raise PullContractError(
+                    f"0012 rollback did not restore mutable-data field: {name}"
+                )
+        if (
+            before["governed_controls"][
+                "database_analytics_snapshots"
+            ]
+            != restored["governed_controls"][
+                "database_analytics_snapshots"
+            ]
+        ):
+            raise PullContractError(
+                "0012 rollback changed database analytics snapshots"
+            )
+        marker["mutable_data_restored"] = restored
+        marker["mutable_data_restored_sha256"] = (
+            pull.canonical_json_digest(
+                pull.mutable_data_identity(restored)
+            )
+        )
+        if self.binding.external_database_audit is not None:
+            self._capturing_restored_external_audit = True
+            try:
+                external_restored = (
+                    self._capture_external_database_inventory(
+                        environment
+                    )
+                )
+            finally:
+                self._capturing_restored_external_audit = False
+            marker["external_database_restored"] = external_restored
+            marker["external_database_restored_state_sha256"] = (
+                pull.canonical_json_digest(
+                    pull.external_database_audit_state(external_restored)
+                )
+            )
+            if (
+                marker["external_database_restored_state_sha256"]
+                != self.binding.external_database_audit["state_sha256"]
+            ):
+                raise PullContractError(
+                    "0012 rollback restored another external database state"
+                )
+        marker["phase"] = "database-restored"
+        marker["database_restored"] = True
+        marker["database_restored_at"] = legacy.utc_now()
+        self._write_marker(marker)
+
     def _success_journal(
         self,
         marker: dict[str, Any],
@@ -2221,6 +3938,172 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         audit_manifest: dict[str, Any],
         verification: dict[str, Any],
     ) -> dict[str, Any]:
+        del audit_manifest
+        before = self._sealed_mutable_data_before(marker)
+        raw_pair = marker.get("contract_mutable_data_audit")
+        if raw_pair is not None:
+            pair = pull.validate_mutable_data_pair(raw_pair)
+            if pair["before"] != before:
+                raise PullContractError(
+                    "0012 mutable-data transition changed its before seal"
+                )
+        else:
+            transition_path = (
+                self.audit_dir / "mutable-data.transition.json"
+            )
+            after_path = self.audit_dir / "mutable-data.after.json"
+            if transition_path.exists() or transition_path.is_symlink():
+                pair = pull.validate_mutable_data_pair(
+                    self._load_operation_document(
+                        transition_path,
+                        "mutable-data transition",
+                    )
+                )
+            elif after_path.exists() or after_path.is_symlink():
+                pair = pull.build_mutable_data_pair(
+                    before,
+                    self._load_operation_document(
+                        after_path,
+                        "orphan mutable-data after audit",
+                    ),
+                )
+            else:
+                pair = pull.build_mutable_data_pair(
+                    before,
+                    self.controller.capture_mutable_data(
+                        operation_id=self.operation_id
+                    ),
+                )
+            if pair["before"] != before:
+                raise PullContractError(
+                    "durable 0012 mutable-data transition changed its before seal"
+                )
+        fresh_pair = pull.build_mutable_data_pair(
+            before,
+            self.controller.capture_mutable_data(
+                operation_id=self.operation_id
+            ),
+        )
+        if (
+            pull.mutable_data_identity(pair["after"])
+            != pull.mutable_data_identity(fresh_pair["after"])
+            or pair["transition"] != fresh_pair["transition"]
+        ):
+            raise PullContractError(
+                "durable 0012 mutable-data endpoint changed"
+            )
+        transition = pair["transition"]
+        archive = marker.get("archive_evidence")
+        if (
+            transition.get("kind") != "contract-0012"
+            or transition.get("operation_id") != self.operation_id
+            or not isinstance(transition.get("polytao_exception"), dict)
+            or not isinstance(archive, dict)
+            or transition["polytao_exception"].get("row_count")
+            != archive.get("row_count")
+        ):
+            raise PullContractError(
+                "0012 success lacks its exact PolyTAO mutable-data transition"
+            )
+        evidence_files = {
+            "mutable-data.transition.json": pair,
+            "mutable-data.before.json": pair["before"],
+            "mutable-data.after.json": pair["after"],
+        }
+        for name, document in evidence_files.items():
+            self._write_mutable_audit_document(name, document)
+        external_pair = self._contract_external_database_pair
+        if self.binding.external_database_audit is not None:
+            if external_pair is None:
+                raw_external_pair = marker.get(
+                    "contract_external_database_audit"
+                )
+                if raw_external_pair is not None:
+                    try:
+                        external_pair = (
+                            pull.validate_external_database_contract_pair(
+                                raw_external_pair,
+                                before_binding=self.binding.external_database_audit,
+                            )
+                        )
+                    except pull.PullDeployError as exc:
+                        raise PullContractError(
+                            "0012 success has invalid external database "
+                            "transition evidence"
+                        ) from exc
+            if (
+                external_pair is None
+                or external_pair["operation_id"] != self.operation_id
+            ):
+                raise PullContractError(
+                    "0012 success lacks its exact external database transition"
+                )
+            self._contract_external_database_pair = external_pair
+            marker["contract_external_database_audit"] = external_pair
+            self._write_mutable_audit_document(
+                "external-database.transition.json",
+                external_pair,
+            )
+            self._write_mutable_audit_document(
+                "external-database.after.json",
+                external_pair["after_snapshot"],
+            )
+        pre_state, post_state = self._contract_state_transition(
+            marker.get("previous_state"),
+            approval,
+            pair,
+            external_pair,
+        )
+        try:
+            sealed_pre, _sealed_post = self._state_transition_from_marker(
+                marker,
+                require_postcondition=False,
+            )
+        except legacy.ReleaseError as exc:
+            raise PullContractError(
+                "0012 success lacks its exact current-state precondition"
+            ) from exc
+        if _sealed_post is not None and _sealed_post != post_state:
+            raise PullContractError(
+                "0012 success differs from its existing postcondition seal"
+            )
+        try:
+            self._seal_prepared_current_state_postcondition(
+                marker,
+                post_state,
+            )
+        except legacy.ReleaseError as exc:
+            raise PullContractError(
+                "0012 success could not preserve its postcondition seal"
+            ) from exc
+        try:
+            sealed_pre, sealed_post = self._state_transition_from_marker(
+                marker,
+                require_postcondition=True,
+            )
+        except legacy.ReleaseError as exc:
+            raise PullContractError(
+                "0012 success could not seal its exact state transition"
+            ) from exc
+        if sealed_pre != pre_state or sealed_post != post_state:
+            raise PullContractError(
+                "0012 success state transition differs from its CAS seals"
+            )
+        self._write_mutable_audit_document(
+            "pull-state.before.json",
+            pre_state,
+        )
+        self._write_mutable_audit_document(
+            "pull-state.after.json",
+            post_state,
+        )
+        audit_manifest = self._audit_manifest()
+        marker["mutable_data_after"] = pair["after"]
+        marker["contract_mutable_data_audit"] = pair
+        marker["audit_manifest_sha256"] = legacy.sha256_file(
+            self.audit_dir / "AUDIT-MANIFEST.json"
+        )
+        self._contract_mutable_data_pair = pair
         journal = super()._success_journal(
             marker, approval, audit_manifest, verification
         )
@@ -2235,39 +4118,113 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             raise PullContractError(
                 "0012 success requires sealed ingress-isolated canary evidence"
             )
+        pre_state_digest = _current_state_sha256(pre_state)
+        post_state_digest = _current_state_sha256(post_state)
+        mutable_pair_digest = pull.canonical_json_digest(pair)
+        journal["schema_version"] = SUCCESS_JOURNAL_SCHEMA_VERSION
+        journal["deployment_operation_id"] = pre_state["operation_id"]
+        journal["pull_descriptor_sha256"] = pre_state[
+            "descriptor_sha256"
+        ]
+        journal["pre_state_sha256"] = pre_state_digest
+        journal["post_state_sha256"] = post_state_digest
         journal["ingress_isolated_canary"] = canary
         journal["ingress_isolated_canary_sha256"] = canary_digest
+        journal["contract_mutable_data_audit"] = pair
+        journal["contract_mutable_data_audit_sha256"] = (
+            mutable_pair_digest
+        )
+        if external_pair is not None:
+            journal["contract_external_database_audit"] = external_pair
+            journal["contract_external_database_audit_sha256"] = (
+                pull.canonical_json_digest(external_pair)
+            )
+        journal_seals: dict[str, Any] = {
+            "pre_state_sha256": pre_state_digest,
+            "post_state_sha256": post_state_digest,
+            "contract_mutable_data_audit_sha256": mutable_pair_digest,
+        }
+        if external_pair is not None:
+            journal_seals[
+                "contract_external_database_audit_sha256"
+            ] = journal["contract_external_database_audit_sha256"]
+        journal_seals["pending_success_journal"] = journal
+        journal_seals["pending_success_journal_sha256"] = (
+            pull.canonical_json_digest(journal)
+        )
+        all_journal_seal_fields = {
+            "pre_state_sha256",
+            "post_state_sha256",
+            "contract_mutable_data_audit_sha256",
+            "contract_external_database_audit_sha256",
+            "pending_success_journal",
+            "pending_success_journal_sha256",
+        }
+        present_seal_fields = all_journal_seal_fields.intersection(marker)
+        if present_seal_fields:
+            if (
+                present_seal_fields != set(journal_seals)
+                or any(
+                    marker.get(field) != value
+                    for field, value in journal_seals.items()
+                )
+            ):
+                raise PullContractError(
+                    "0012 pending journal seals changed during recovery"
+                )
+            if self._pending_journal_from_marker(marker) != journal:
+                raise PullContractError(
+                    "0012 pending journal changed during recovery"
+                )
+        else:
+            current_state = pull.load_private_json(self.state_path)
+            current_state_digest = pull.sha256_file(self.state_path)
+            if (
+                current_state != pre_state
+                or current_state_digest != pre_state_digest
+            ):
+                raise PullContractError(
+                    "0012 pending journal is missing after state commit"
+                )
+            marker.update(journal_seals)
+        self._pending_success_journal = dict(journal)
+        self._write_marker(marker)
         return journal
+
+    def _write_success_journal(self, journal: dict[str, Any]) -> None:
+        if (
+            self._pending_success_journal is None
+            or journal != self._pending_success_journal
+            or pull.sha256_file(self.state_path)
+            != journal.get("post_state_sha256")
+        ):
+            raise PullContractError(
+                "0012 success journal differs from its committed post-state"
+            )
+        super()._write_success_journal(journal)
 
     def _validate_success_journal(
         self,
         journal: object,
         approval: dict[str, Any],
     ) -> dict[str, Any]:
-        expected_fields = {
-            "schema_version",
-            "status",
-            "operation_id",
-            "source_sha",
-            "approval",
-            "completed_at",
-            "database_backup",
-            "database_backup_sha256",
-            "audit_manifest",
-            "audit_manifest_sha256",
-            "verification",
-            "ingress_isolated_canary",
-            "ingress_isolated_canary_sha256",
-        }
+        expected_fields = set(SUCCESS_JOURNAL_FIELDS)
+        if self.binding.external_database_audit is not None:
+            expected_fields.update(SUCCESS_JOURNAL_EXTERNAL_FIELDS)
         if not isinstance(journal, dict) or set(journal) != expected_fields:
             raise PullContractError(
                 "existing 0012 success journal has an invalid shape"
             )
         if (
-            journal.get("schema_version") != 1
+            journal.get("schema_version")
+            != SUCCESS_JOURNAL_SCHEMA_VERSION
             or journal.get("status") != "success"
             or journal.get("operation_id") != self.operation_id
             or journal.get("source_sha") != self.document["source_sha"]
+            or journal.get("deployment_operation_id")
+            != self.binding.current_state["operation_id"]
+            or journal.get("pull_descriptor_sha256")
+            != self.binding.descriptor_sha256
             or journal.get("approval") != approval
             or journal.get("completed_at") != approval.get("approved_at")
             or journal.get("verification") != {"schema_version": 1, "verified": True}
@@ -2279,6 +4236,95 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         ):
             raise PullContractError(
                 "existing 0012 success journal has an invalid identity"
+            )
+        pair = pull.validate_mutable_data_pair(
+            journal.get("contract_mutable_data_audit")
+        )
+        if (
+            pair["transition"]["kind"] != "contract-0012"
+            or pair["transition"]["operation_id"] != self.operation_id
+            or journal.get("contract_mutable_data_audit_sha256")
+            != pull.canonical_json_digest(pair)
+        ):
+            raise PullContractError(
+                "existing 0012 mutable-data journal belongs to another operation"
+            )
+        if self.binding.external_database_audit is not None:
+            try:
+                external_pair = pull.validate_external_database_contract_pair(
+                    journal.get("contract_external_database_audit"),
+                    before_binding=self.binding.external_database_audit,
+                )
+            except pull.PullDeployError as exc:
+                raise PullContractError(
+                    "existing 0012 external database journal is invalid"
+                ) from exc
+            if external_pair["operation_id"] != self.operation_id:
+                raise PullContractError(
+                    "existing 0012 external database journal belongs to "
+                    "another operation"
+                )
+            if journal.get(
+                "contract_external_database_audit_sha256"
+            ) != pull.canonical_json_digest(external_pair):
+                raise PullContractError(
+                    "existing 0012 external database journal digest differs"
+                )
+            self._contract_external_database_pair = external_pair
+        else:
+            external_pair = None
+        current_state = pull.load_private_json(self.state_path)
+        try:
+            current_state = pull.validate_current_deployment_state(
+                current_state
+            )
+        except pull.PullDeployError as exc:
+            raise PullContractError(
+                "existing 0012 journal current state is invalid"
+            ) from exc
+        post_state_digest = _current_state_sha256(current_state)
+        if (
+            current_state != self.binding.current_state
+            or journal.get("post_state_sha256") != post_state_digest
+            or pull.sha256_file(self.state_path) != post_state_digest
+        ):
+            raise PullContractError(
+                "existing 0012 journal differs from the current Pull state"
+            )
+        try:
+            terminal = (
+                self.binding.controller._deployment_terminal_audit_binding(
+                    operation_id=journal["deployment_operation_id"],
+                    descriptor_sha256=journal[
+                        "pull_descriptor_sha256"
+                    ],
+                    state_sha256=journal["pre_state_sha256"],
+                    source_sha=current_state["source_sha"],
+                    source_tree=current_state["source_tree"],
+                )
+            )
+        except (pull.PullDeployError, KeyError, TypeError) as exc:
+            raise PullContractError(
+                "existing 0012 journal cannot open its exact pre-state audit"
+            ) from exc
+        pre_state = terminal.get("state")
+        if (
+            not isinstance(pre_state, dict)
+            or _current_state_sha256(pre_state)
+            != journal.get("pre_state_sha256")
+        ):
+            raise PullContractError(
+                "existing 0012 journal pre-state digest differs"
+            )
+        expected_pre, expected_post = self._contract_state_transition(
+            _legacy_state_projection(pre_state),
+            approval,
+            pair,
+            external_pair,
+        )
+        if expected_pre != pre_state or expected_post != current_state:
+            raise PullContractError(
+                "existing 0012 journal replays from another pre-state"
             )
         backup = journal.get("database_backup")
         backup_digest = journal.get("database_backup_sha256")
@@ -2315,6 +4361,42 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             != audit_manifest
         ):
             raise PullContractError("existing 0012 audit evidence differs from disk")
+        transition_evidence = {
+            "mutable-data.transition.json": pair,
+            "mutable-data.before.json": pair["before"],
+            "mutable-data.after.json": pair["after"],
+            "pull-state.before.json": pre_state,
+            "pull-state.after.json": current_state,
+        }
+        if external_pair is not None:
+            transition_evidence.update(
+                {
+                    "external-database.transition.json": external_pair,
+                    "external-database.after.json": external_pair[
+                        "after_snapshot"
+                    ],
+                }
+            )
+        manifest_names = {
+            record.get("name")
+            for record in audit_manifest["files"]
+            if isinstance(record, dict)
+        }
+        if not set(transition_evidence).issubset(manifest_names):
+            raise PullContractError(
+                "existing 0012 audit manifest omits transition evidence"
+            )
+        for name, expected in transition_evidence.items():
+            path = self.audit_dir / name
+            if self._load_operation_document(
+                path,
+                f"0012 {name} evidence",
+            ) != expected:
+                raise PullContractError(
+                    "existing 0012 transition evidence differs from journal"
+                )
+        self._contract_mutable_data_pair = pair
+        self._pending_success_journal = dict(journal)
         return dict(journal)
 
     def run(self) -> dict[str, Any]:

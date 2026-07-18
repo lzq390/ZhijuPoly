@@ -32,6 +32,7 @@ x-production-environment: &production-environment
   POLYTAO_DEVICE: "cuda"
   MONOMER_MD_WORKER_BASE_URL: "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock"
   MONOMER_MD_WORKER_TIMEOUT_SECONDS: "30"
+  MONOMER_MD_CANARY_STATE_DIR: "/app/monomer-md-canaries"
 
 x-production-volumes: &production-volumes
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
@@ -41,6 +42,7 @@ x-production-volumes: &production-volumes
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
   - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
+  - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-canaries:/app/monomer-md-canaries:rw
 
 services:
   postgres-init:
@@ -74,6 +76,7 @@ services:
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
       - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
+      - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-canaries:/app/monomer-md-canaries:rw
     depends_on: !override
       lab-postgres:
         condition: service_healthy

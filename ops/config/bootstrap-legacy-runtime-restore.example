@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# SITE_IMPLEMENTATION_REQUIRED
+# Replace this body with an idempotent schema-v2 restore. It may run only after
+# legacy-takeover restore has returned the exact old Git/layout/unit authority;
+# start exact preserved container IDs and the exact user unit, then prove
+# PostgreSQL identity, all health checks, and ingress.
+echo "site-specific legacy runtime restore is not implemented" >&2
+exit 2

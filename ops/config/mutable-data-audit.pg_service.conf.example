@@ -1,0 +1,7 @@
+[nexpoly-mutable-audit]
+host=127.0.0.1
+port=55432
+dbname=nexpoly
+user=nexpoly_mutable_audit
+sslmode=disable
+passfile=/data/lzq/gith/nexpoly-runtime/config/mutable-data-audit.pgpass

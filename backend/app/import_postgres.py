@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from app.config import PROJECT_ROOT, Settings
@@ -126,18 +127,6 @@ def _execute_many(connection: Any, sql: str, rows: Iterable[tuple[Any, ...]], ba
     return total
 
 
-def _table_exists(connection: Any, schema: str, table: str) -> bool:
-    row = connection.execute(
-        """
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = %s AND table_name = %s
-        """,
-        (schema, table),
-    ).fetchone()
-    return row is not None
-
-
 def _record_source_file(
     connection: Any,
     *,
@@ -195,28 +184,18 @@ def _finish_batch(connection: Any, import_batch_id: int, row_count: int, status:
 
 
 def truncate_governed_tables(connection: Any) -> None:
-    connection.execute(
-        """
-        TRUNCATE
-          core.polymer_properties,
-          core.polymers,
-          knowledge.formulation_records,
-          knowledge.documents,
-          online_knowledge.jobs,
-          online_knowledge.history,
-          pi.tg_predictions,
-          pi.polymers,
-          pi.monomer_iupac,
-          dft.energy_trace,
-          dft.molecule_final,
-          lab.sample_measurements,
-          lab.test_projects,
-          experimental.process_records,
-          experimental.property_records,
-          core.polymer_property_filter_records,
-          model_registry.assets
-        RESTART IDENTITY CASCADE
-        """
+    """Reject the retired broad rebuild entrypoint.
+
+    This name used to truncate both imported reference data and live business
+    data with ``CASCADE``.  Keep an explicit rejection instead of silently
+    changing its meaning so stale callers cannot unknowingly cross the data
+    boundary.
+    """
+
+    del connection
+    raise ValueError(
+        "the broad governed-table rebuild is retired; use an explicit static "
+        "dataset selection"
     )
 
 
@@ -313,26 +292,118 @@ IMPORT_BATCH_SOURCE_LOGICAL_NAMES = {
     "property_filter": "property_filter_csv",
 }
 
-FULL_IMPORT_DATASETS = {
-    "sources",
-    "assets",
-    "core",
-    "knowledge",
-    "online",
-    "pi",
-    "dft",
-    "experimental",
-    "lab",
-    "property_filter",
-    "batch_backfill",
-}
+BUSINESS_MUTABLE_IMPORT_DATASETS = frozenset({"online", "lab"})
+BUSINESS_MUTABLE_TABLES = frozenset(
+    {
+        ("online_knowledge", "history"),
+        ("online_knowledge", "jobs"),
+        ("lab", "test_projects"),
+        ("lab", "sample_measurements"),
+        ("md", "monomer_md_jobs"),
+        ("monomer_dft", "jobs"),
+        ("monomer_dft", "job_attempts"),
+        ("monomer_dft", "artifacts"),
+    }
+)
+STATIC_IMPORT_DATASETS = frozenset(
+    {
+        "sources",
+        "assets",
+        "core",
+        "knowledge",
+        "pi",
+        "dft",
+        "experimental",
+        "property_filter",
+        "batch_backfill",
+    }
+)
+# ``all`` intentionally means every static import dataset.  Live online
+# knowledge, laboratory and Worker-owned rows are never part of an import or
+# rebuild expansion.
+FULL_IMPORT_DATASETS = set(STATIC_IMPORT_DATASETS)
 GOVERNANCE_IMPORT_DATASETS = {"sources", "assets", "batch_backfill"}
+
+# Tables are named structurally and rendered as SQL identifiers below.  The
+# lists deliberately exclude every BUSINESS_MUTABLE_TABLES relation.  Running
+# TRUNCATE without CASCADE adds a second database-enforced fence: an
+# unclassified external foreign-key dependency aborts the transaction instead
+# of recursively deleting live rows.
+STATIC_REBUILD_TABLES_BY_DATASET: dict[
+    str, tuple[tuple[str, str], ...]
+] = {
+    "sources": (
+        ("governance", "import_batches"),
+        ("governance", "source_files"),
+    ),
+    "assets": (("model_registry", "assets"),),
+    "core": (
+        ("core", "polymer_properties"),
+        ("core", "polymers"),
+    ),
+    "knowledge": (
+        ("knowledge", "formulation_records"),
+        ("knowledge", "documents"),
+    ),
+    "pi": (
+        ("pi", "tg_predictions"),
+        ("pi", "polymers"),
+        ("pi", "monomer_iupac"),
+    ),
+    "dft": (
+        ("dft", "energy_trace"),
+        ("dft", "molecule_final"),
+    ),
+    "experimental": (
+        ("experimental", "process_records"),
+        ("experimental", "property_records"),
+    ),
+    "property_filter": (("core", "polymer_property_filter_records"),),
+}
+
+
+def truncate_static_import_tables(
+    connection: Any,
+    requested: set[str],
+) -> None:
+    """Truncate only the selected static-import relations, never by cascade."""
+
+    tables = tuple(
+        dict.fromkeys(
+            table
+            for dataset in sorted(requested)
+            for table in STATIC_REBUILD_TABLES_BY_DATASET.get(dataset, ())
+        )
+    )
+    if not tables:
+        selected = ", ".join(sorted(requested)) or "none"
+        raise ValueError(
+            "static rebuild requires at least one data-bearing static dataset; "
+            f"requested datasets: {selected}"
+        )
+    forbidden = set(tables) & BUSINESS_MUTABLE_TABLES
+    if forbidden:
+        names = ", ".join(f"{schema}.{table}" for schema, table in sorted(forbidden))
+        raise ValueError(
+            "static rebuild table classification crossed the business-mutable "
+            f"boundary: {names}"
+        )
+    identifiers = [
+        sql.SQL(".").join((sql.Identifier(schema), sql.Identifier(table)))
+        for schema, table in tables
+    ]
+    connection.execute(
+        sql.SQL("TRUNCATE {} RESTART IDENTITY").format(
+            sql.SQL(", ").join(identifiers)
+        )
+    )
 
 
 def resolve_requested_datasets(datasets: set[str] | None) -> set[str]:
     requested = set(datasets or {"all"})
     if "all" in requested:
-        requested = set(FULL_IMPORT_DATASETS)
+        requested.discard("all")
+        requested.update(FULL_IMPORT_DATASETS)
     if "governance" in requested:
         requested.discard("governance")
         requested.update(GOVERNANCE_IMPORT_DATASETS)
@@ -792,106 +863,16 @@ def import_knowledge_from_sqlite(connection: Any, sqlite_db_path: Path, batch_si
     )
 
 
-def _json_value(value: str | None) -> Jsonb:
-    if not value:
-        return Jsonb({})
-    try:
-        return Jsonb(json.loads(value))
-    except json.JSONDecodeError:
-        return Jsonb({"raw": value})
+def import_online_knowledge_from_sqlite(
+    connection: Any,
+    sqlite_db_path: Path,
+    batch_size: int,
+) -> DatasetImportStats:
+    """Reject the retired live-history overwrite path."""
 
-
-def reset_online_history_sequence(connection: Any) -> None:
-    connection.execute(
-        """
-        SELECT setval(
-          'online_knowledge.history_history_id_seq',
-          COALESCE((SELECT max(history_id) FROM online_knowledge.history), 1),
-          EXISTS (SELECT 1 FROM online_knowledge.history)
-        )
-        """
-    )
-
-
-def import_online_knowledge_from_sqlite(connection: Any, sqlite_db_path: Path, batch_size: int) -> DatasetImportStats:
-    history_rows = [
-        (
-            row["history_id"],
-            row["material"],
-            row["mode"],
-            row["created_at"],
-            row["papers_found"],
-            row["reactions_extracted"],
-            row["max_papers"],
-            _json_value(row["result_json"]),
-        )
-        for row in _sqlite_rows(sqlite_db_path, "online_knowledge_history")
-    ]
-    job_rows = [
-        (
-            row["job_id"],
-            row["status"],
-            row["material"],
-            row["mode"],
-            row["max_papers"],
-            row["progress_stage"],
-            row["progress_message"],
-            row["processed_papers"],
-            row["total_papers"],
-            row["created_at"],
-            row["updated_at"],
-            row["error_message"],
-            _json_value(row["result_json"]),
-        )
-        for row in _sqlite_rows(sqlite_db_path, "online_knowledge_jobs")
-    ]
-    _execute_many(
-        connection,
-        """
-        INSERT INTO online_knowledge.history (
-          history_id, material, mode, created_at, papers_found, reactions_extracted, max_papers, result_data
-        ) VALUES (%s, %s, %s, COALESCE(%s::timestamptz, now()), %s, %s, %s, %s)
-        ON CONFLICT (history_id) DO UPDATE SET
-          material = excluded.material,
-          mode = excluded.mode,
-          created_at = excluded.created_at,
-          papers_found = excluded.papers_found,
-          reactions_extracted = excluded.reactions_extracted,
-          max_papers = excluded.max_papers,
-          result_data = excluded.result_data
-        """,
-        history_rows,
-        batch_size,
-    )
-    reset_online_history_sequence(connection)
-    _execute_many(
-        connection,
-        """
-        INSERT INTO online_knowledge.jobs (
-          job_id, status, material, mode, max_papers, progress_stage, progress_message,
-          processed_papers, total_papers, created_at, updated_at, error_message, result_data
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s::timestamptz, now()), COALESCE(%s::timestamptz, now()), %s, %s)
-        ON CONFLICT (job_id) DO UPDATE SET
-          status = excluded.status,
-          material = excluded.material,
-          mode = excluded.mode,
-          max_papers = excluded.max_papers,
-          progress_stage = excluded.progress_stage,
-          progress_message = excluded.progress_message,
-          processed_papers = excluded.processed_papers,
-          total_papers = excluded.total_papers,
-          created_at = excluded.created_at,
-          updated_at = excluded.updated_at,
-          error_message = excluded.error_message,
-          result_data = excluded.result_data
-        """,
-        job_rows,
-        batch_size,
-    )
-    return DatasetImportStats(
-        dataset_key="online_knowledge",
-        row_count=len(history_rows) + len(job_rows),
-        details={"history": len(history_rows), "jobs": len(job_rows)},
+    del connection, sqlite_db_path, batch_size
+    raise ValueError(
+        "online_knowledge.jobs/history are business-mutable and cannot be imported"
     )
 
 
@@ -1048,48 +1029,12 @@ def import_dft_from_sqlite(connection: Any, sqlite_db_path: Path, batch_size: in
 
 
 def import_lab_from_legacy_schema(connection: Any) -> DatasetImportStats:
-    if not _table_exists(connection, "data_collection_demo", "test_projects"):
-        return DatasetImportStats(dataset_key="lab", row_count=0)
-    connection.execute(
-        """
-        INSERT INTO lab.test_projects (id, project_name, result_unit)
-        SELECT id, project_name, result_unit FROM data_collection_demo.test_projects
-        ON CONFLICT (id) DO UPDATE SET
-          project_name = excluded.project_name,
-          result_unit = excluded.result_unit
-        """
-    )
-    project_count = int(connection.execute("SELECT COUNT(*) AS count FROM lab.test_projects").fetchone()["count"])
-    measurement_count = 0
-    if _table_exists(connection, "data_collection_demo", "sample_measurements"):
-        connection.execute(
-            """
-            INSERT INTO lab.sample_measurements (
-              id, sample_id, experiment_project, instrument_id, "operator", collection_time,
-              temperature, concentration, result_value, result_unit, remarks
-            )
-            SELECT
-              id, sample_id, experiment_project, instrument_id, "operator", collection_time,
-              temperature, concentration, result_value, result_unit, remarks
-            FROM data_collection_demo.sample_measurements
-            ON CONFLICT (id) DO UPDATE SET
-              sample_id = excluded.sample_id,
-              experiment_project = excluded.experiment_project,
-              instrument_id = excluded.instrument_id,
-              "operator" = excluded."operator",
-              collection_time = excluded.collection_time,
-              temperature = excluded.temperature,
-              concentration = excluded.concentration,
-              result_value = excluded.result_value,
-              result_unit = excluded.result_unit,
-              remarks = excluded.remarks
-            """
-        )
-        measurement_count = int(connection.execute("SELECT COUNT(*) AS count FROM lab.sample_measurements").fetchone()["count"])
-    return DatasetImportStats(
-        dataset_key="lab",
-        row_count=project_count + measurement_count,
-        details={"test_projects": project_count, "sample_measurements": measurement_count},
+    """Reject the retired laboratory business-data overwrite path."""
+
+    del connection
+    raise ValueError(
+        "lab.test_projects/sample_measurements are business-mutable and cannot "
+        "be imported"
     )
 
 
@@ -1105,11 +1050,17 @@ def import_all_to_postgres(
 ) -> PostgresImportStats:
     target_dsn = dsn or settings.app_postgres_dsn
     requested = resolve_requested_datasets(datasets)
-    if rebuild and requested != FULL_IMPORT_DATASETS:
-        selected = ", ".join(sorted(requested))
+    mutable = requested & BUSINESS_MUTABLE_IMPORT_DATASETS
+    if mutable:
+        selected = ", ".join(sorted(mutable))
         raise ValueError(
-            "--rebuild is only supported with a full import (`--dataset all` or no --dataset); "
-            f"requested datasets: {selected}"
+            "business-mutable datasets cannot be imported or rebuilt: "
+            f"{selected}"
+        )
+    unknown = requested - STATIC_IMPORT_DATASETS
+    if unknown:
+        raise ValueError(
+            "unknown import datasets: " + ", ".join(sorted(unknown))
         )
 
     if apply_migrations:
@@ -1129,8 +1080,17 @@ def import_all_to_postgres(
     with postgres_connection(target_dsn) as connection:
         with connection.transaction():
             if rebuild:
-                truncate_governed_tables(connection)
-            if requested & {"sources", "batch_backfill", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "property_filter"}:
+                truncate_static_import_tables(connection, requested)
+            if requested & {
+                "sources",
+                "batch_backfill",
+                "core",
+                "knowledge",
+                "pi",
+                "dft",
+                "experimental",
+                "property_filter",
+            }:
                 ensure_source_ids(connection)
             if "sources" in requested:
                 stats.datasets.append(DatasetImportStats(dataset_key="governance.source_files", row_count=len(source_ids)))
@@ -1168,11 +1128,6 @@ def import_all_to_postgres(
                 dataset_stats = import_knowledge_from_sqlite(connection, settings.legacy_main_sqlite_source_file, batch_size)
                 _finish_batch(connection, batch_id, dataset_stats.row_count)
                 stats.datasets.append(dataset_stats)
-            if "online" in requested:
-                batch_id = _start_batch(connection, "online_knowledge", ensure_source_ids(connection)["main_sqlite"])
-                dataset_stats = import_online_knowledge_from_sqlite(connection, settings.legacy_main_sqlite_source_file, batch_size)
-                _finish_batch(connection, batch_id, dataset_stats.row_count)
-                stats.datasets.append(dataset_stats)
             if "pi" in requested:
                 batch_id = _start_batch(connection, "pi", ensure_source_ids(connection)["pi_sqlite"])
                 dataset_stats = import_pi_from_sqlite(connection, settings.legacy_pi_sqlite_source_file, batch_size)
@@ -1193,11 +1148,6 @@ def import_all_to_postgres(
                 dataset_stats = import_experimental_property_from_csv(connection, settings.experimental_property_csv_file, batch_size)
                 _finish_batch(connection, batch_id, dataset_stats.row_count, "completed" if dataset_stats.row_count else "missing")
                 stats.datasets.append(dataset_stats)
-            if "lab" in requested:
-                batch_id = _start_batch(connection, "lab", ensure_source_ids(connection)["lab_legacy_demo_postgres"])
-                dataset_stats = import_lab_from_legacy_schema(connection)
-                _finish_batch(connection, batch_id, dataset_stats.row_count)
-                stats.datasets.append(dataset_stats)
             if "batch_backfill" in requested:
                 updated_count = backfill_import_batch_sources(connection, ensure_source_ids(connection))
                 stats.datasets.append(DatasetImportStats(dataset_key="governance.import_batches", row_count=updated_count))
@@ -1211,9 +1161,39 @@ def import_all_to_postgres(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import PolyProp governed data into PostgreSQL.")
     parser.add_argument("--dsn", default=None, help="Target Postgres DSN. Defaults to APP_POSTGRES_DSN.")
-    parser.add_argument("--dataset", action="append", required=True, choices=["all", "governance", "sources", "assets", "core", "knowledge", "online", "pi", "dft", "experimental", "lab", "property_filter"], help="Dataset to import. Repeatable and required; use --dataset all explicitly for a full import. governance updates source/model registries and backfills batch lineage only.")
+    parser.add_argument(
+        "--dataset",
+        action="append",
+        required=True,
+        choices=[
+            "all",
+            "governance",
+            "sources",
+            "assets",
+            "core",
+            "knowledge",
+            "online",
+            "pi",
+            "dft",
+            "experimental",
+            "lab",
+            "property_filter",
+        ],
+        help=(
+            "Static dataset to import. Repeatable and required; --dataset all "
+            "expands only to static datasets. The retired online/lab names are "
+            "accepted solely to return an explicit fail-closed error."
+        ),
+    )
     parser.add_argument("--refresh-analytics-snapshot", action="store_true", help="Store a refreshed database analytics snapshot in PostgreSQL after the import commits.")
-    parser.add_argument("--rebuild", action="store_true", help="Truncate governed target tables before importing.")
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help=(
+            "Truncate only the explicitly selected static import tables, "
+            "without CASCADE, before importing."
+        ),
+    )
     parser.add_argument("--skip-migrations", action="store_true", help="Do not apply Postgres migrations before importing.")
     parser.add_argument("--batch-size", type=int, default=5000)
     args = parser.parse_args()

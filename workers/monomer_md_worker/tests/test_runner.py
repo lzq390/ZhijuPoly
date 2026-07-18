@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from workers.monomer_md_worker.app import process_control
+from workers.monomer_md_worker.app.byteff2_env import REQUIRED_OPENMM_FILES
 from workers.monomer_md_worker.app.config import WorkerSettings
 from workers.monomer_md_worker.app.models import JobRequest
 from workers.monomer_md_worker.app.runner import MonomerMdRunner
@@ -50,6 +52,58 @@ def _settings(tmp_path: Path) -> WorkerSettings:
     )
 
 
+def _install_short_process_group_grace(monkeypatch) -> None:
+    monkeypatch.setattr(
+        process_control,
+        "MAX_TERMINATION_GRACE_SECONDS",
+        0.1,
+    )
+    monkeypatch.setattr(
+        process_control,
+        "PROCESS_GROUP_KILL_OBSERVE_SECONDS",
+        0.2,
+    )
+
+
+def _write_stubborn_process_tree(
+    script: Path, leader_pid_path: Path, grandchild_pid_path: Path
+) -> None:
+    grandchild_source = "\n".join(
+        [
+            "import os, pathlib, signal, time",
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+            (
+                f"pathlib.Path({str(grandchild_pid_path)!r})"
+                ".write_text(str(os.getpid()))"
+            ),
+            "time.sleep(60)",
+        ]
+    )
+    script.write_text(
+        "\n".join(
+            [
+                "import os, pathlib, subprocess, sys, time",
+                (
+                    f"pathlib.Path({str(leader_pid_path)!r})"
+                    ".write_text(str(os.getpid()))"
+                ),
+                f"subprocess.Popen([sys.executable, '-c', {grandchild_source!r}])",
+                "time.sleep(60)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _assert_process_stopped(pid: int) -> None:
+    process_state = Path(f"/proc/{pid}/stat")
+    try:
+        state = process_state.read_text(encoding="utf-8").split()[2]
+    except FileNotFoundError:
+        return
+    assert state == "Z"
+
+
 def test_dry_run_result_has_frontend_shape(tmp_path: Path):
     runner = MonomerMdRunner(_settings(tmp_path))
     request = JobRequest(job_id="job-1", smiles="CCO", canonical_smiles="CCO", steps=300)
@@ -70,6 +124,124 @@ def test_dry_run_result_has_frontend_shape(tmp_path: Path):
     assert (run_result.output_dir / "density_demo_results.json").exists()
     assert (run_result.output_dir / "npt_state.csv").exists()
     assert (run_result.output_dir / "npt.dcd").exists()
+
+
+def test_real_density_runner_receives_openmm_environment(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path)
+    object.__setattr__(settings, "mode", "real")
+    settings.byteff2_root.mkdir()
+    openmm_dir = tmp_path / "openmm"
+    for relative_path in REQUIRED_OPENMM_FILES:
+        path = openmm_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    object.__setattr__(settings, "byteff2_openmm_dir", openmm_dir)
+    captured_env = {}
+
+    class CompletedProcess:
+        pid = 12345
+        returncode = 0
+
+        async def wait(self):
+            return 0
+
+        def kill(self):
+            raise AssertionError("successful density demo should not be killed")
+
+    async def fake_create_subprocess_exec(*command, **kwargs):
+        captured_env.update(kwargs["env"])
+        output_dir = Path(command[command.index("--output-dir") + 1])
+        (output_dir / "density_demo_results.json").write_text(
+            '{"density_g_cm3": 1.0}', encoding="utf-8"
+        )
+        (output_dir / "npt_state.csv").write_text(
+            "step,density_g_cm3,temperature_k\n1000,1.0,298.15\n",
+            encoding="utf-8",
+        )
+        (output_dir / "npt.dcd").write_bytes(b"test")
+        return CompletedProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    runner = MonomerMdRunner(settings)
+    request = JobRequest(job_id="job-1", smiles="CCO", canonical_smiles="CCO", steps=1000)
+
+    asyncio.run(runner.run(request, 1000))
+
+    assert captured_env["OPENMM_DIR"] == str(openmm_dir)
+    assert captured_env["OPENMM_PLUGIN_DIR"] == str(openmm_dir / "lib/plugins")
+    assert captured_env["LD_LIBRARY_PATH"].split(":")[:2] == [
+        str(openmm_dir / "lib"),
+        str(openmm_dir / "lib/plugins"),
+    ]
+
+
+def test_real_demo_cancellation_terminates_stubborn_process_group(
+    tmp_path: Path, monkeypatch
+):
+    settings = _settings(tmp_path)
+    object.__setattr__(settings, "mode", "real")
+    settings.byteff2_root.mkdir()
+    _install_short_process_group_grace(monkeypatch)
+    pid_path = tmp_path / "demo-child.pid"
+    grandchild_pid_path = tmp_path / "demo-grandchild.pid"
+    script = tmp_path / "slow_demo.py"
+    _write_stubborn_process_tree(script, pid_path, grandchild_pid_path)
+    object.__setattr__(
+        settings, "byteff2_demo_command", f"{sys.executable} {script}"
+    )
+    runner = MonomerMdRunner(settings)
+    request = JobRequest(
+        job_id="cancel-demo", smiles="CCO", canonical_smiles="CCO", steps=1000
+    )
+
+    async def scenario() -> tuple[int, int]:
+        task = asyncio.create_task(runner.run(request, 1000))
+        for _ in range(100):
+            if pid_path.exists() and grandchild_pid_path.exists():
+                break
+            await asyncio.sleep(0.02)
+        assert pid_path.exists()
+        assert grandchild_pid_path.exists()
+        child_pid = int(pid_path.read_text(encoding="utf-8"))
+        grandchild_pid = int(grandchild_pid_path.read_text(encoding="utf-8"))
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return child_pid, grandchild_pid
+
+    child_pid, grandchild_pid = asyncio.run(scenario())
+    for pid in (child_pid, grandchild_pid):
+        _assert_process_stopped(pid)
+
+
+def test_real_demo_timeout_terminates_stubborn_process_group(
+    tmp_path: Path, monkeypatch
+):
+    settings = _settings(tmp_path)
+    object.__setattr__(settings, "mode", "real")
+    object.__setattr__(settings, "timeout_seconds", 1)
+    settings.byteff2_root.mkdir()
+    _install_short_process_group_grace(monkeypatch)
+    pid_path = tmp_path / "timeout-demo-child.pid"
+    grandchild_pid_path = tmp_path / "timeout-demo-grandchild.pid"
+    script = tmp_path / "timeout_demo.py"
+    _write_stubborn_process_tree(script, pid_path, grandchild_pid_path)
+    object.__setattr__(
+        settings, "byteff2_demo_command", f"{sys.executable} {script}"
+    )
+    runner = MonomerMdRunner(settings)
+    request = JobRequest(
+        job_id="timeout-demo", smiles="CCO", canonical_smiles="CCO", steps=1000
+    )
+
+    with pytest.raises(RuntimeError, match="density demo timed out after 1s"):
+        asyncio.run(runner.run(request, 1000))
+
+    assert pid_path.exists()
+    assert grandchild_pid_path.exists()
+    for pid_path_to_check in (pid_path, grandchild_pid_path):
+        _assert_process_stopped(int(pid_path_to_check.read_text(encoding="utf-8")))
+
 
 def test_byteff2_adapter_does_not_use_formal_run_md_as_demo_entry(tmp_path: Path):
     from workers.monomer_md_worker.app.byteff2_density_demo import _find_demo_entry

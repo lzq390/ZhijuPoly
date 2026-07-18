@@ -1,0 +1,340 @@
+\set ON_ERROR_STOP on
+
+-- Run this reviewed template as the cluster role administrator, connected to
+-- nexpoly during the maintenance window.  It deliberately contains no
+-- password.  Provision or rotate the LOGIN password out of band, then install
+-- it only in the deploy-user-owned mode-0600 pgpass file.
+--
+-- Existing object ownership and relation/column/sequence/routine/large-object
+-- write ACLs are not removed here: the final assertions fail and roll this
+-- transaction back so an operator can review and remediate that unexpected
+-- authority explicitly.
+BEGIN;
+
+DO $provision$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_roles
+        WHERE rolname = 'nexpoly_mutable_audit'
+    ) THEN
+        CREATE ROLE nexpoly_mutable_audit
+            LOGIN
+            NOSUPERUSER
+            NOCREATEDB
+            NOCREATEROLE
+            INHERIT
+            NOREPLICATION
+            NOBYPASSRLS;
+    END IF;
+END
+$provision$;
+
+ALTER ROLE nexpoly_mutable_audit
+    LOGIN
+    NOSUPERUSER
+    NOCREATEDB
+    NOCREATEROLE
+    INHERIT
+    NOREPLICATION
+    NOBYPASSRLS;
+ALTER ROLE nexpoly_mutable_audit RESET ALL;
+ALTER ROLE nexpoly_mutable_audit IN DATABASE nexpoly RESET ALL;
+ALTER ROLE nexpoly_mutable_audit
+    SET default_transaction_read_only = on;
+
+-- Membership is exact.  Remove every pre-existing direct membership before
+-- granting the one read-only predefined role.  This also removes
+-- pg_write_all_data and every other predefined or site-defined authority.
+DO $memberships$
+DECLARE
+    membership record;
+BEGIN
+    FOR membership IN
+        SELECT parent.rolname
+        FROM pg_catalog.pg_auth_members AS member
+        JOIN pg_catalog.pg_roles AS child
+          ON child.oid = member.member
+        JOIN pg_catalog.pg_roles AS parent
+          ON parent.oid = member.roleid
+        WHERE child.rolname = 'nexpoly_mutable_audit'
+    LOOP
+        EXECUTE format(
+            'REVOKE %I FROM nexpoly_mutable_audit',
+            membership.rolname
+        );
+    END LOOP;
+END
+$memberships$;
+
+REVOKE ALL PRIVILEGES ON DATABASE nexpoly
+    FROM nexpoly_mutable_audit;
+GRANT CONNECT ON DATABASE nexpoly
+    TO nexpoly_mutable_audit;
+GRANT pg_read_all_data
+    TO nexpoly_mutable_audit
+    WITH INHERIT TRUE, SET TRUE;
+
+-- PostgreSQL grants these large-object mutators to PUBLIC by default.  A role
+-- with no table ACL could otherwise turn transaction_read_only off and create
+-- persistent large objects.  Preserve the current database owner's existing
+-- ability through pg_database_owner, but remove the implicit PUBLIC path for
+-- this database.
+REVOKE EXECUTE ON FUNCTION
+    pg_catalog.lo_creat(integer),
+    pg_catalog.lo_create(oid),
+    pg_catalog.lo_from_bytea(oid, bytea),
+    pg_catalog.lo_put(oid, bigint, bytea),
+    pg_catalog.lo_unlink(oid),
+    pg_catalog.lowrite(integer, bytea),
+    pg_catalog.lo_truncate(integer, integer),
+    pg_catalog.lo_truncate64(integer, bigint)
+FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION
+    pg_catalog.lo_creat(integer),
+    pg_catalog.lo_create(oid),
+    pg_catalog.lo_from_bytea(oid, bytea),
+    pg_catalog.lo_put(oid, bigint, bytea),
+    pg_catalog.lo_unlink(oid),
+    pg_catalog.lowrite(integer, bytea),
+    pg_catalog.lo_truncate(integer, integer),
+    pg_catalog.lo_truncate64(integer, bigint)
+TO pg_database_owner;
+
+DO $assert_safe$
+DECLARE
+    role_oid oid;
+BEGIN
+    IF current_database() <> 'nexpoly'
+       OR NOT EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_roles
+           WHERE rolname = current_user
+             AND rolsuper
+       )
+    THEN
+        RAISE EXCEPTION
+            'mutable-audit role must be provisioned by the cluster administrator in nexpoly';
+    END IF;
+
+    SELECT oid
+    INTO STRICT role_oid
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'nexpoly_mutable_audit'
+      AND rolcanlogin
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND rolinherit
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+      AND rolconfig = ARRAY['default_transaction_read_only=on']::text[];
+
+    IF (
+        SELECT count(*) <> 1
+            OR bool_or(parent.rolname <> 'pg_read_all_data')
+            OR bool_or(member.admin_option)
+            OR bool_or(NOT member.inherit_option)
+            OR bool_or(NOT member.set_option)
+        FROM pg_catalog.pg_auth_members AS member
+        JOIN pg_catalog.pg_roles AS parent
+          ON parent.oid = member.roleid
+        WHERE member.member = role_oid
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit direct membership is not exact';
+    END IF;
+
+    IF NOT pg_catalog.pg_has_role(
+        'nexpoly_mutable_audit',
+        'pg_read_all_data',
+        'MEMBER'
+    ) OR pg_catalog.pg_has_role(
+        'nexpoly_mutable_audit',
+        'pg_write_all_data',
+        'MEMBER'
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit predefined role authority is unsafe';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_roles AS candidate
+        WHERE candidate.oid <> role_oid
+          AND candidate.rolname <> 'pg_read_all_data'
+          AND pg_catalog.pg_has_role(
+              'nexpoly_mutable_audit',
+              candidate.oid,
+              'MEMBER'
+          )
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit inherited membership is unsafe';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_db_role_setting AS setting
+        WHERE setting.setrole = role_oid
+          AND (
+              setting.setdatabase <> 0
+              OR setting.setconfig
+                 <> ARRAY['default_transaction_read_only=on']::text[]
+          )
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit role settings are unsafe';
+    END IF;
+
+    IF pg_catalog.has_database_privilege(
+        'nexpoly_mutable_audit',
+        current_database(),
+        'CREATE'
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_namespace AS namespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND pg_catalog.has_schema_privilege(
+              'nexpoly_mutable_audit',
+              namespace.oid,
+              'CREATE'
+          )
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND pg_catalog.has_table_privilege(
+              'nexpoly_mutable_audit',
+              relation.oid,
+              'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+          )
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_attribute AS attribute
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = attribute.attrelid
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+          AND pg_catalog.has_column_privilege(
+              'nexpoly_mutable_audit',
+              relation.oid,
+              attribute.attnum,
+              'INSERT,UPDATE,REFERENCES'
+          )
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS sequence
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = sequence.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND CASE
+              WHEN sequence.relkind = 'S' THEN
+                  pg_catalog.has_sequence_privilege(
+                      'nexpoly_mutable_audit',
+                      sequence.oid,
+                      'USAGE,UPDATE'
+                  )
+              ELSE false
+          END
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_proc AS routine
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = routine.pronamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND routine.prosecdef
+          AND pg_catalog.has_function_privilege(
+              'nexpoly_mutable_audit',
+              routine.oid,
+              'EXECUTE'
+          )
+    ) OR EXISTS (
+        SELECT 1
+        FROM unnest(
+            ARRAY[
+                'pg_catalog.lo_creat(integer)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_create(oid)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_from_bytea(oid,bytea)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_put(oid,bigint,bytea)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_unlink(oid)'::pg_catalog.regprocedure,
+                'pg_catalog.lowrite(integer,bytea)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_truncate(integer,integer)'::pg_catalog.regprocedure,
+                'pg_catalog.lo_truncate64(integer,bigint)'::pg_catalog.regprocedure
+            ]
+        ) AS routine(oid)
+        WHERE pg_catalog.has_function_privilege(
+            'nexpoly_mutable_audit',
+            routine.oid,
+            'EXECUTE'
+        )
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_largeobject_metadata AS object
+        CROSS JOIN LATERAL pg_catalog.aclexplode(object.lomacl) AS acl
+        WHERE acl.privilege_type = 'UPDATE'
+          AND CASE
+              WHEN acl.grantee = 0 THEN true
+              ELSE pg_catalog.pg_has_role(
+                  role_oid,
+                  acl.grantee,
+                  'USAGE'
+              )
+          END
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit role has effective persistent write authority';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_shdepend AS dependency
+        WHERE dependency.refclassid = 'pg_authid'::pg_catalog.regclass
+          AND dependency.refobjid = role_oid
+          AND dependency.deptype = 'o'
+          AND (
+              dependency.dbid = 0
+              OR dependency.dbid = (
+                  SELECT oid
+                  FROM pg_catalog.pg_database
+                  WHERE datname = current_database()
+              )
+          )
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_database WHERE datdba = role_oid
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner = role_oid
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_class WHERE relowner = role_oid
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_proc WHERE proowner = role_oid
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_type WHERE typowner = role_oid
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_largeobject_metadata
+          WHERE lomowner = role_oid
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_foreign_data_wrapper
+          WHERE fdwowner = role_oid
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_foreign_server
+          WHERE srvowner = role_oid
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_tablespace WHERE spcowner = role_oid
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit role owns database objects';
+    END IF;
+END
+$assert_safe$;
+
+COMMIT;
+
+-- No password is emitted or accepted by this template.  Set/rotate it using a
+-- secret channel after this transaction, then execute the deployment mutable
+-- data helper; its schema-v4 evidence rechecks the complete role contract.

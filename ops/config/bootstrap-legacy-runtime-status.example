@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# SITE_IMPLEMENTATION_REQUIRED
+# Replace this body with a read-only schema-v2 probe. It must inspect exact
+# Backend/Web/PostgreSQL container IDs and image IDs, hash Docker
+# Entrypoint+Cmd, inspect the exact user-systemd unit/manager, and report Web
+# PID/start/restart fields as null while ingress is isolated and Web is stopped.
+echo "site-specific legacy runtime status is not implemented" >&2
+exit 2

@@ -94,6 +94,26 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
             self.assertEqual(backend["environment"]["GEN_JOB_WORKERS"], "1")
             self.assertEqual(backend["environment"]["POLYTAO_JOB_THREADS"], "1")
             self.assertEqual(backend["environment"]["POLYTAO_MAX_ACTIVE_JOBS"], "1")
+            self.assertEqual(
+                backend["environment"]["MONOMER_MD_CANARY_STATE_DIR"],
+                "/app/monomer-md-canaries",
+            )
+            backend_volumes = {
+                volume["target"]: volume for volume in backend["volumes"]
+            }
+            canary_volume = backend_volumes["/app/monomer-md-canaries"]
+            self.assertEqual(
+                canary_volume["source"],
+                "/data/lzq/gith/nexpoly-runtime/state/monomer-md-canaries",
+            )
+            self.assertFalse(canary_volume.get("read_only", False))
+            self.assertNotIn(
+                "/app/monomer-md-canaries",
+                {
+                    volume["target"]
+                    for volume in document["services"]["postgres-init"]["volumes"]
+                },
+            )
             self.assertIn(backend["stop_grace_period"], ("45s", 45000000000))
 
 

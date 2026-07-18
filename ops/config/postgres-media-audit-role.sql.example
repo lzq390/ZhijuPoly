@@ -1,0 +1,61 @@
+\set ON_ERROR_STOP on
+
+-- Run once in every connectable, non-template database declared by the
+-- media-registry v3 inventory, with both variables supplied. This includes
+-- adjacent databases such as "postgres"; the auditor proves those databases
+-- do not contain an undeclared Nexpoly migration ledger.
+-- Do not start or connect to retained-private-isolated media such as the
+-- side-dev health volume. Its disposable copy is audited as local postgres.
+--   psql -X -v audit_role=nexpoly_dev_auditor \
+--     -v audit_database=nexpoly_dev -f postgres-media-audit-role.sql
+-- Provision the role's login secret separately; never put it in this file.
+\if :{?audit_role}
+\else
+  \echo 'audit_role is required'
+  \quit 2
+\endif
+\if :{?audit_database}
+\else
+  \echo 'audit_database is required'
+  \quit 2
+\endif
+
+SELECT current_database() = :'audit_database' AS expected_database \gset
+\if :expected_database
+\else
+  \echo 'connected database differs from audit_database'
+  \quit 2
+\endif
+
+BEGIN;
+ALTER ROLE :"audit_role"
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE :"audit_role" SET default_transaction_read_only = on;
+ALTER ROLE :"audit_role" SET statement_timeout = '5min';
+ALTER ROLE :"audit_role" SET lock_timeout = '5s';
+
+GRANT CONNECT ON DATABASE :"audit_database" TO :"audit_role";
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO :"audit_role";
+
+SELECT to_regclass('governance.schema_migrations') IS NOT NULL AS ledger_present \gset
+\if :ledger_present
+  GRANT USAGE ON SCHEMA governance TO :"audit_role";
+  GRANT SELECT ON governance.schema_migrations TO :"audit_role";
+\endif
+
+SELECT to_regclass('generation.polytao_jobs') IS NOT NULL AS legacy_present \gset
+\if :legacy_present
+  GRANT USAGE ON SCHEMA generation TO :"audit_role";
+  GRANT SELECT ON generation.polytao_jobs TO :"audit_role";
+\endif
+COMMIT;
+
+SET ROLE :"audit_role";
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE;
+SELECT
+  current_database() AS database,
+  current_user AS audit_user,
+  current_setting('transaction_read_only')::boolean AS read_only,
+  (pg_control_system()).system_identifier::text AS system_identifier;
+ROLLBACK;
+RESET ROLE;

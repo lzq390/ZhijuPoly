@@ -12,6 +12,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_ROOT = REPOSITORY_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOW_ROOT / "ci.yml"
 RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
+DEPLOYMENT_DOC_PATH = REPOSITORY_ROOT / "docs" / "deployment.md"
 LEGACY_REMOTE_RELEASE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "remote_release.sh"
 
 PINNED_ACTION = re.compile(
@@ -20,17 +21,20 @@ PINNED_ACTION = re.compile(
 ANY_ACTION = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SAFE_DATASET = re.compile(r"^[A-Za-z0-9_.-]+$")
-EXPECTED_DATASETS = [
-    "governance",
-    "core",
-    "knowledge",
-    "online",
-    "pi",
-    "dft",
-    "experimental",
-    "lab",
-    "property_filter",
-]
+FROZEN_ASSET_DOC = re.compile(
+    r"The frozen schema-v2 asset manifest is\s+"
+    r"`(sha256:[0-9a-f]{64})`"
+)
+EXPECTED_ASSET_DIGEST = (
+    "sha256:e5088b7954f7ee8f6cc4e45af36761fdc44d2fc374643441fe07283475de06c8"
+)
+EXPECTED_PREDECESSOR_ASSET_DIGEST = (
+    "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
+)
+EXPECTED_POSTGRES_IMAGE = (
+    "postgres:16-alpine@sha256:"
+    "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+)
 
 
 def require_markers(text: str, markers: tuple[str, ...], failures: list[str]) -> None:
@@ -48,19 +52,28 @@ def validate_release_input(failures: list[str]) -> None:
     if not isinstance(document, dict) or set(document) != {
         "schema_version",
         "asset_manifest_digest",
+        "predecessor_asset_manifest_digest",
+        "changed_asset_trees",
         "datasets_on_asset_change",
     }:
         failures.append("release-input.json must contain exactly the reviewed schema fields")
         return
-    if document["schema_version"] != 1:
-        failures.append("release-input.json schema_version must be 1")
+    if document["schema_version"] != 2:
+        failures.append("release-input.json schema_version must be 2")
     digest = document["asset_manifest_digest"]
-    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
-        failures.append("release-input.json asset_manifest_digest must be an immutable sha256 digest")
-    datasets = document["datasets_on_asset_change"]
-    if datasets != EXPECTED_DATASETS:
+    if digest != EXPECTED_ASSET_DIGEST:
+        failures.append("release-input.json asset_manifest_digest must equal frozen schema-v2")
+    predecessor = document["predecessor_asset_manifest_digest"]
+    if predecessor != EXPECTED_PREDECESSOR_ASSET_DIGEST:
         failures.append(
-            "release-input.json datasets_on_asset_change must equal the reviewed explicit dataset order"
+            "release-input.json predecessor_asset_manifest_digest must equal frozen schema-v1"
+        )
+    if document["changed_asset_trees"] != ["byteff2"]:
+        failures.append("release-input.json must declare byteff2 as the only changed tree")
+    datasets = document["datasets_on_asset_change"]
+    if datasets != []:
+        failures.append(
+            "release-input.json must not rebuild PostgreSQL datasets for a ByteFF2-only asset change"
         )
     if not isinstance(datasets, list):
         return
@@ -73,6 +86,20 @@ def validate_release_input(failures: list[str]) -> None:
         for dataset in datasets
     ):
         failures.append("release-input.json contains an unsafe or implicit dataset name")
+
+
+def validate_deployment_asset_pin(failures: list[str]) -> None:
+    try:
+        text = DEPLOYMENT_DOC_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        failures.append(f"deployment asset documentation is unavailable: {exc}")
+        return
+    matches = FROZEN_ASSET_DOC.findall(text)
+    if matches != [EXPECTED_ASSET_DIGEST]:
+        failures.append(
+            "docs/deployment.md frozen schema-v2 digest must exactly match "
+            "the reviewed release input"
+        )
 
 
 def main() -> int:
@@ -107,6 +134,11 @@ def main() -> int:
             "push:",
             "branches: [main]",
             "[[ \"$EVENT_REF\" == refs/pull/*/merge ]]",
+            "  bridge-validation:\n"
+            "    name: bridge-validation\n"
+            "    needs: resolve-sha\n"
+            "    runs-on: ubuntu-24.04",
+            "Validate exact bridge policy and schema compatibility states",
             "name: ci-gate",
             "  release:\n"
             "    name: Publish and smoke immutable main images\n"
@@ -132,9 +164,15 @@ def main() -> int:
             'NEXPOLY_ALIAS_DOCKER_INTEGRATION: "1"',
             "NEXPOLY_ALIAS_DOCKER_TEST_ACK: ephemeral-localhost-only",
             "NEXPOLY_ALIAS_TEST_PG_BIN: /usr/lib/postgresql/16/bin",
+            'NEXPOLY_RUN_POSTGRES_MEDIA_INTEGRATION: "1"',
+            "NEXPOLY_POSTGRES_MEDIA_TEST_ACK: ephemeral-localhost-only",
+            f"NEXPOLY_TEST_POSTGRES_IMAGE: {EXPECTED_POSTGRES_IMAGE}",
             "docker pull \"$POSTGRES_IMAGE\"",
             "test_reconcile_production_0005_polytao_alias_integration.py",
+            "Run real all-media PostgreSQL 16 audit integration",
+            "scripts/tests/test_postgres_media_evidence.py",
             "      - production-alias-integration",
+            "      - bridge-validation",
             "python3 scripts/ci/validate_dependency_locks.py",
             "python3 -m app.migration_policy",
             "docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet",
@@ -205,11 +243,21 @@ def main() -> int:
         failures.append("every checkout must disable persisted GitHub credentials")
     if ci_text.count("runs-on:") != ci_text.count("timeout-minutes:"):
         failures.append("every job must define a timeout")
+    if ci_text.count(f"POSTGRES_IMAGE: {EXPECTED_POSTGRES_IMAGE}") != 2:
+        failures.append(
+            "global and all-media integration PostgreSQL images must use "
+            "the same exact pinned Alpine digest"
+        )
+    if ci_text.count("Run real all-media PostgreSQL 16 audit integration") != 1:
+        failures.append(
+            "ci.yml must run the real all-media PostgreSQL integration once"
+        )
     if ci_text.count("git ls-files -z -- '*.sh'") < 2:
         failures.append("ci.yml must syntax-check and ShellCheck every tracked shell script")
     if "workers/polytao_worker" in ci_text or "POLYTAO_WORKER_BASE_URL" in ci_text:
         failures.append("ci.yml must not build or test the removed standalone PolyTAO Worker")
     validate_release_input(failures)
+    validate_deployment_asset_pin(failures)
 
     if failures:
         for failure in failures:
