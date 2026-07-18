@@ -137,6 +137,144 @@ def image(role: str, revision: str, character: str) -> dict[str, str]:
     }
 
 
+def gpu_acceptance(
+    authority_images: dict[str, dict[str, str]],
+) -> dict[str, object]:
+    runtime = READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT
+    snapshot = {
+        "index": 2,
+        "uuid": READINESS.monomer_dft_gpu_acceptance.GPU_UUIDS["2"],
+        "memory_used_mib": 256,
+        "compute_processes": [
+            {
+                "pid": 1234,
+                "process_start_ticks": 5678,
+                "process_name": "nvidia-cuda-mps-server",
+                "used_memory_mib": 128,
+            }
+        ],
+    }
+    return READINESS.monomer_dft_gpu_acceptance.seal_report(
+        {
+            "schema_version": 1,
+            "status": "passed",
+            "captured_at": "2026-07-17T01:02:03Z",
+            "authority": {"sha": AUTHORITY_SHA, "tree": AUTHORITY_TREE},
+            "bridge": {"sha": BRIDGE_SHA, "tree": BRIDGE_TREE},
+            "images": authority_images,
+            "runtime": {
+                "contract_sha256": (
+                    READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT_SHA256
+                ),
+                "python_version": "3.12.3",
+                "uv_version": runtime["uv_version"],
+                "build_lock_sha256": runtime["build_lock_sha256"],
+                "source": {
+                    "commit": runtime["source"]["commit"],
+                    "tree": runtime["source"]["tree"],
+                    "archive_sha256": runtime["source"][
+                        "archive_inventory_sha256"
+                    ],
+                },
+                "wheel": {
+                    key: runtime["wheel"][key]
+                    for key in (
+                        "filename",
+                        "sha256",
+                        "inventory_sha256",
+                        "record_sha256",
+                    )
+                },
+                "model_registry_sha256": runtime["registry_sha256"],
+                "models_sha256": runtime["models_sha256"],
+            },
+            "coverage": {
+                "direct_science": {
+                    "status": "passed",
+                    "gpu_index": 1,
+                    "gpu_uuid": (
+                        READINESS.monomer_dft_gpu_acceptance.GPU_UUIDS["1"]
+                    ),
+                    "properties": ["energy", "forces", "hessian"],
+                    "energy_eV": -76.0,
+                    "max_force_eV_per_A": 0.1,
+                    "hessian_symmetry_max_abs_eV_per_A2": 0.0001,
+                    "report_sha256": digest("1"),
+                },
+                "broker_uds_backend_e2e": {
+                    "status": "passed",
+                    "transport": "broker+uds+backend",
+                    "gpu_indices": [1],
+                    "overflow_test_status": "externally_fenced",
+                    "completed_job_id": "11111111-1111-4111-8111-111111111111",
+                    "cancelled_job_id": "22222222-2222-4222-8222-222222222222",
+                    "submit": True,
+                    "poll": True,
+                    "cancel": True,
+                    "journal": True,
+                    "artifact": True,
+                    "bundle": True,
+                    "fencing": True,
+                    "completed_journal_sha256": digest("2"),
+                    "cancelled_journal_sha256": digest("3"),
+                    "artifact_sha256": digest("4"),
+                    "bundle_sha256": digest("5"),
+                    "provenance_sha256": digest("6"),
+                },
+            },
+            "gpus": {
+                "1": {
+                    "index": 1,
+                    "uuid": READINESS.monomer_dft_gpu_acceptance.GPU_UUIDS["1"],
+                    "mode": "actual",
+                    "cuda_started": True,
+                    "fencing_verified": True,
+                    "evidence_sha256": digest("7"),
+                },
+                "2": {
+                    "index": 2,
+                    "uuid": READINESS.monomer_dft_gpu_acceptance.GPU_UUIDS["2"],
+                    "mode": "unchanged",
+                    "cuda_started": False,
+                    "before": snapshot,
+                    "after": dict(snapshot),
+                    "processes_unchanged": True,
+                    "memory_unchanged": True,
+                },
+                "3": {
+                    "index": 3,
+                    "uuid": READINESS.monomer_dft_gpu_acceptance.GPU_UUIDS["3"],
+                    "mode": "externally_fenced",
+                    "cuda_started": False,
+                    "fencing_verified": True,
+                    "evidence_sha256": digest("8"),
+                    "reservations_sha256": (
+                        READINESS.monomer_dft_gpu_acceptance.EXTERNAL_RESERVATIONS_SHA256
+                    ),
+                    "blocked_reason": (
+                        READINESS.monomer_dft_gpu_acceptance.GPU3_BLOCKED_REASON
+                    ),
+                    "claim": {
+                        "kind": "docker",
+                        "container_id": "a" * 64,
+                        "container_name": "foreign-gpu3",
+                        "device_request_sha256": digest("9"),
+                    },
+                    "rejection": {
+                        "code": "gpu_capacity_unavailable",
+                        "gpu_index": 3,
+                        "gpu_uuid": (
+                            READINESS.monomer_dft_gpu_acceptance.GPU_UUIDS["3"]
+                        ),
+                        "placement": "overflow",
+                        "broker_report_sha256": digest("a"),
+                    },
+                },
+            },
+        }
+    )
+
+
 def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
     bridge_policy = policy()
     target_records, registry = migration_contract()
@@ -488,7 +626,9 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
                     "tree": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
                         "source"
                     ]["tree"],
-                    "archive_sha256": digest("8"),
+                    "archive_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                        "source"
+                    ]["archive_inventory_sha256"],
                 },
                 "model_registry_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
                     "registry_sha256"
@@ -497,17 +637,7 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
                     "models_sha256"
                 ],
                 "prefetch_wheel_caches_sha256": PREFETCH_WHEELS_SHA256,
-                "gpu_acceptance": {
-                    "status": "passed",
-                    "authority_tree": AUTHORITY_TREE,
-                    "image_digest": authority_images["backend"]["index_digest"],
-                    "model_registry_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
-                        "registry_sha256"
-                    ],
-                    "gpus": [1, 3],
-                    "production_gpu_2_touched": False,
-                    "report_sha256": digest("b"),
-                },
+                "gpu_acceptance": gpu_acceptance(authority_images),
             }
         ),
         "capacity": seal(
@@ -785,7 +915,10 @@ class ProductionReadinessTests(unittest.TestCase):
     def test_gpu2_contact_is_rejected(self) -> None:
         document = fixture()
         acceptance = document["native_runtime"]["gpu_acceptance"]  # type: ignore[index]
-        acceptance["production_gpu_2_touched"] = True
+        acceptance["gpus"]["2"]["after"]["memory_used_mib"] += 1
+        document["native_runtime"]["gpu_acceptance"] = (
+            READINESS.monomer_dft_gpu_acceptance.seal_report(acceptance)
+        )
         reseal_section(document, "native_runtime")
         with self.assertRaisesRegex(
             READINESS.ProductionReadinessError, "GPU acceptance"
@@ -808,8 +941,6 @@ class ProductionReadinessTests(unittest.TestCase):
             document = fixture()
             native = document["native_runtime"]  # type: ignore[assignment]
             native[field] = value  # type: ignore[index]
-            if field == "model_registry_sha256":
-                native["gpu_acceptance"]["model_registry_sha256"] = value  # type: ignore[index]
             reseal_section(document, "native_runtime")
             with self.subTest(field=field), self.assertRaisesRegex(
                 READINESS.ProductionReadinessError,
@@ -817,7 +948,11 @@ class ProductionReadinessTests(unittest.TestCase):
             ):
                 self.validate(document)
 
-        for field, value in (("commit", "a" * 40), ("tree", "b" * 40)):
+        for field, value in (
+            ("commit", "a" * 40),
+            ("tree", "b" * 40),
+            ("archive_sha256", digest("0")),
+        ):
             document = fixture()
             document["native_runtime"]["aimnet_source"][field] = value  # type: ignore[index]
             reseal_section(document, "native_runtime")

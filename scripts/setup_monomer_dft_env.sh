@@ -240,6 +240,7 @@ required = (
     source["repository_url"],
     source["commit"],
     source["tree"],
+    source["archive_inventory_sha256"],
     source["package_name"],
     source["package_version"],
     source["wheel_install_mode"],
@@ -261,25 +262,26 @@ if any("\n" in str(value) for value in required):
 print(*required, sep="\n")
 PY
 )
-[[ "${#SOURCE_META[@]}" -eq 18 ]] || fail "invalid AIMNet source metadata"
+[[ "${#SOURCE_META[@]}" -eq 19 ]] || fail "invalid AIMNet source metadata"
 readonly AIMNET_REPOSITORY_URL="${SOURCE_META[0]}"
 readonly AIMNET_COMMIT="${SOURCE_META[1]}"
 readonly AIMNET_TREE="${SOURCE_META[2]}"
-readonly AIMNET_PACKAGE_NAME="${SOURCE_META[3]}"
-readonly AIMNET_PACKAGE_VERSION="${SOURCE_META[4]}"
-readonly AIMNET_WHEEL_MODE="${SOURCE_META[5]}"
-readonly AIMNET_PYTHON_MINOR="${SOURCE_META[6]}"
-readonly AIMNET_UV_VERSION="${SOURCE_META[7]}"
-readonly AIMNET_SOURCE_DATE_EPOCH="${SOURCE_META[8]}"
-readonly AIMNET_BUILD_REQUIREMENTS_SHA="${SOURCE_META[9]}"
-readonly AIMNET_WHEEL_FILENAME="${SOURCE_META[10]}"
-readonly AIMNET_EXPECTED_WHEEL_SHA="${SOURCE_META[11]}"
-readonly AIMNET_WHEEL_FILE_COUNT="${SOURCE_META[12]}"
-readonly AIMNET_WHEEL_INVENTORY_SHA="${SOURCE_META[13]}"
-readonly AIMNET_WHEEL_RECORD_PATH="${SOURCE_META[14]}"
-readonly AIMNET_WHEEL_RECORD_SHA="${SOURCE_META[15]}"
-readonly AIMNET_REGISTRY_REL="${SOURCE_META[16]}"
-readonly AIMNET_REGISTRY_SHA="${SOURCE_META[17]}"
+readonly AIMNET_ARCHIVE_INVENTORY_SHA="${SOURCE_META[3]}"
+readonly AIMNET_PACKAGE_NAME="${SOURCE_META[4]}"
+readonly AIMNET_PACKAGE_VERSION="${SOURCE_META[5]}"
+readonly AIMNET_WHEEL_MODE="${SOURCE_META[6]}"
+readonly AIMNET_PYTHON_MINOR="${SOURCE_META[7]}"
+readonly AIMNET_UV_VERSION="${SOURCE_META[8]}"
+readonly AIMNET_SOURCE_DATE_EPOCH="${SOURCE_META[9]}"
+readonly AIMNET_BUILD_REQUIREMENTS_SHA="${SOURCE_META[10]}"
+readonly AIMNET_WHEEL_FILENAME="${SOURCE_META[11]}"
+readonly AIMNET_EXPECTED_WHEEL_SHA="${SOURCE_META[12]}"
+readonly AIMNET_WHEEL_FILE_COUNT="${SOURCE_META[13]}"
+readonly AIMNET_WHEEL_INVENTORY_SHA="${SOURCE_META[14]}"
+readonly AIMNET_WHEEL_RECORD_PATH="${SOURCE_META[15]}"
+readonly AIMNET_WHEEL_RECORD_SHA="${SOURCE_META[16]}"
+readonly AIMNET_REGISTRY_REL="${SOURCE_META[17]}"
+readonly AIMNET_REGISTRY_SHA="${SOURCE_META[18]}"
 [[ "$AIMNET_PACKAGE_NAME" == "aimnet" ]] || fail "unexpected AIMNet package name: $AIMNET_PACKAGE_NAME"
 [[ "$AIMNET_WHEEL_MODE" == "non-editable" ]] || fail "AIMNet lock must require a non-editable wheel"
 [[ "$AIMNET_PYTHON_MINOR" == "$EXPECTED_PYTHON_MINOR" ]] || fail "AIMNet Python lock does not match setup"
@@ -438,6 +440,8 @@ readonly UNSAFE_ARCHIVE_ENTRY
   || fail "AIMNet clean archive contains an unsafe entry: $UNSAFE_ARCHIVE_ENTRY"
 AIMNET_ARCHIVE_DIGEST_BEFORE="$(directory_digest "$AIMNET_ARCHIVE_ROOT")"
 readonly AIMNET_ARCHIVE_DIGEST_BEFORE
+[[ "$AIMNET_ARCHIVE_DIGEST_BEFORE" == "$AIMNET_ARCHIVE_INVENTORY_SHA" ]] \
+  || fail "AIMNet clean archive inventory does not match the source lock"
 readonly AIMNET_REGISTRY="$AIMNET_ARCHIVE_ROOT/$AIMNET_REGISTRY_REL"
 [[ -f "$AIMNET_REGISTRY" && ! -L "$AIMNET_REGISTRY" ]] \
   || fail "AIMNet registry is missing from the clean archive: $AIMNET_REGISTRY"

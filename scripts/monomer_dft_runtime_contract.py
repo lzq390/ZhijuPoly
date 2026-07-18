@@ -47,6 +47,10 @@ RUNTIME_CONTRACT: dict[str, Any] = {
         "repository_url": "https://github.com/isayevlab/aimnetcentral.git",
         "commit": "9a6c56440349bccbb7ac0630a0622f9c584f894e",
         "tree": "fd28c0f8bf2d0e513aad24032228927140d6783c",
+        "archive_inventory_sha256": (
+            "sha256:"
+            "abf724d01f2dabab12ee29381d53e4646f0b4a04c8f435c03f21b3d3ab19936d"
+        ),
         "package_name": "aimnet",
         "package_version": "0.2.0.post1.dev41+g9a6c56440",
         "source_date_epoch": 1782945961,

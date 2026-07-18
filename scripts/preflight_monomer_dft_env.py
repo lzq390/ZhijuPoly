@@ -633,6 +633,10 @@ def validate_source_lock(repo_root: pathlib.Path, resolved: dict[str, str]) -> t
         evidence.get("archive_inventory_sha256") == inventory_digest,
         "AIMNet clean archive changed after extraction",
     )
+    require(
+        source.get("archive_inventory_sha256") == inventory_digest,
+        "AIMNet clean archive differs from the fixed source lock",
+    )
     registry_source = (source_dir / str(registry.get("path", ""))).resolve()
     require(
         registry_source.is_relative_to(source_dir),

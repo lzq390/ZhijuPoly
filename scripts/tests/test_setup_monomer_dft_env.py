@@ -241,6 +241,9 @@ class MonomerDftEnvironmentSetupTests(unittest.TestCase):
             lock["source"]["repository_url"] = repository_url
             lock["source"]["commit"] = aimnet_commit
             lock["source"]["tree"] = aimnet_tree
+            # --check-aimnet-source proves Git identity and cleanliness; the
+            # full setup path separately recomputes this archive inventory.
+            lock["source"]["archive_inventory_sha256"] = "0" * 64
             lock["source"]["source_date_epoch"] = source_date_epoch
             lock_path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
             subprocess.run(

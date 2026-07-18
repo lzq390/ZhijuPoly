@@ -96,6 +96,11 @@
       "mode": 448
     },
     {
+      "name": "monomer_dft_gpu_acceptance.py",
+      "source": "scripts/monomer_dft_gpu_acceptance.py",
+      "mode": 448
+    },
+    {
       "name": "monomer_dft_runtime_contract.py",
       "source": "scripts/monomer_dft_runtime_contract.py",
       "mode": 448

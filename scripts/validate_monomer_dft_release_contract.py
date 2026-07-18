@@ -46,9 +46,12 @@ REQUIRED_PATHS = (
     "docker-compose.monomer-dft-dev.yml",
     "docker-compose.prod.yml",
     "scripts/ci/validate_workflows.py",
+    "scripts/monomer_dft_gpu_acceptance.py",
+    "scripts/monomer_dft_runtime_contract.py",
     "scripts/monomer_dft_dev_stack.sh",
     "scripts/monomer_dft_worker_ctl.sh",
     "scripts/preflight_monomer_dft_env.py",
+    "scripts/run_monomer_dft_gpu_acceptance.py",
     "scripts/release_controller.py",
     "scripts/setup_monomer_dft_env.sh",
     "scripts/smoke_monomer_dft_env.py",
@@ -260,6 +263,7 @@ def validate_development_delivery(root: Path, failures: list[str]) -> None:
         "scripts/monomer_dft_dev_stack.sh",
         "scripts/monomer_dft_worker_ctl.sh",
         "scripts/preflight_monomer_dft_env.py",
+        "scripts/run_monomer_dft_gpu_acceptance.py",
         "scripts/setup_monomer_dft_env.sh",
         "scripts/smoke_monomer_dft_env.py",
     )
@@ -319,6 +323,52 @@ def validate_development_delivery(root: Path, failures: list[str]) -> None:
             failures.append(f"AIMNet clean source fence is missing: {marker}")
     if "/data/lzq/gith/aimnetcentral" in setup:
         failures.append("AIMNet setup must not use the adjacent dirty source clone")
+
+    acceptance = texts["scripts/run_monomer_dft_gpu_acceptance.py"]
+    for marker in (
+        "def snapshot_gpu2(",
+        "def run_leased_direct(",
+        "def run_backend_e2e(",
+        "smoke_runtime.prepare_runtime(REPO_ROOT)",
+        "smoke_runtime.run_calculations(",
+        "transient_scope_command(",
+        "wait_for_scope_membership(",
+        "NEXPOLY_GPU_EXEC_GATE_FD",
+        '"gpu_capacity_unavailable"',
+        '"externally_fenced"',
+        '"energy", "forces", "hessian"',
+        "completed_journal_sha256",
+        "cancelled_journal_sha256",
+        "artifact_sha256",
+        "bundle_sha256",
+    ):
+        if marker not in acceptance:
+            failures.append(f"real GPU acceptance control is missing: {marker}")
+
+    acceptance_contract_path = root / "scripts/monomer_dft_gpu_acceptance.py"
+    reservations_path = root / "ops/config/gpu-external-reservations.json"
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "nexpoly_release_gpu_acceptance_contract",
+            acceptance_contract_path,
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("module specification is unavailable")
+        acceptance_contract_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(acceptance_contract_module)
+        reservations_sha256 = (
+            "sha256:" + hashlib.sha256(reservations_path.read_bytes()).hexdigest()
+        )
+    except (OSError, RuntimeError, AttributeError) as exc:
+        failures.append(f"cannot load fixed GPU acceptance contract: {exc}")
+    else:
+        if (
+            acceptance_contract_module.EXTERNAL_RESERVATIONS_SHA256
+            != reservations_sha256
+        ):
+            failures.append(
+                "GPU3 external-fence contract differs from the governed reservations"
+            )
 
     download_proxy = _read_text(
         root,
@@ -461,6 +511,9 @@ def validate_aimnet_build_contract(root: Path, failures: list[str]) -> None:
     expected = {
         "commit": EXPECTED_AIMNET_COMMIT,
         "tree": EXPECTED_AIMNET_TREE,
+        "archive_inventory_sha256": (
+            "abf724d01f2dabab12ee29381d53e4646f0b4a04c8f435c03f21b3d3ab19936d"
+        ),
         "package_name": "aimnet",
         "wheel_install_mode": "non-editable",
         "python_minor": "3.12",
@@ -518,11 +571,16 @@ def validate_aimnet_build_contract(root: Path, failures: list[str]) -> None:
                 f"sha256:{source.get('build_requirements_sha256')}"
             ),
             "source": {
-                key: source.get(key)
+                key: (
+                    f"sha256:{source.get(key)}"
+                    if key == "archive_inventory_sha256"
+                    else source.get(key)
+                )
                 for key in (
                     "repository_url",
                     "commit",
                     "tree",
+                    "archive_inventory_sha256",
                     "package_name",
                     "package_version",
                     "source_date_epoch",
