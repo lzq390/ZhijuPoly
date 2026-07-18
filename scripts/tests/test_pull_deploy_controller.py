@@ -584,6 +584,7 @@ def seed_completed_alias_gate(
     CONTROLLER.atomic_json(audit_dir / "database-after.json", after)
     files = selector._alias_evidence_files(audit_dir, backup_dir)
     completed_at = "2026-07-17T00:00:01Z"
+    runtime_stop_fence = {"fixture": True}
     audit = {
         "schema_version": 1,
         "operation_id": operation_id,
@@ -593,6 +594,10 @@ def seed_completed_alias_gate(
         "database_after": after,
         "database_backup": backup,
         "isolated_restore": restore,
+        "runtime_stop_fence": runtime_stop_fence,
+        "runtime_stop_fence_sha256": selector.canonical_json_digest(
+            runtime_stop_fence
+        ).removeprefix("sha256:"),
         "binaries": {"/fixture/bin": {"sha256": "b" * 64}},
         "files": files,
         "completed_at": completed_at,
@@ -610,7 +615,7 @@ def seed_completed_alias_gate(
         },
         "started_at": "2026-07-17T00:00:00Z",
         "updated_at": completed_at,
-        "runtime_stop_fence": {"fixture": True},
+        "runtime_stop_fence": runtime_stop_fence,
         "before": before,
         "database_backup": backup,
         "restore_container": {"name": "fixture"},
@@ -2457,6 +2462,171 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 mutate(changed)
                 with self.assertRaises(CONTROLLER.PullDeployError):
                     CONTROLLER.validate_descriptor(changed)
+
+    def test_alias_bridge_projection_is_content_addressed_and_tamper_evident(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        _operation, descriptor_path, ready_path = (
+            controller._operation_paths(OPERATION_ID)
+        )
+        CONTROLLER.atomic_json(descriptor_path, descriptor)
+        ready = CONTROLLER.load_private_json(ready_path)
+        ready["descriptor_sha256"] = CONTROLLER.sha256_file(
+            descriptor_path
+        )
+        CONTROLLER.atomic_json(ready_path, ready)
+
+        authority = CONTROLLER.alias_bridge_authority_projection(
+            descriptor,
+            descriptor_path=descriptor_path,
+            ready_path=ready_path,
+        )
+        self.assertEqual(
+            CONTROLLER.validate_alias_bridge_authority(
+                authority,
+                descriptor=descriptor,
+                descriptor_path=descriptor_path,
+                ready_path=ready_path,
+            ),
+            authority,
+        )
+        changed = json.loads(json.dumps(authority))
+        changed["target"]["sha"] = "f" * 40
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "another bridge",
+        ):
+            CONTROLLER.validate_alias_bridge_authority(
+                changed,
+                descriptor=descriptor,
+                descriptor_path=descriptor_path,
+                ready_path=ready_path,
+            )
+
+    def test_alias_bridge_projection_accepts_only_proven_restored_successor(
+        self,
+    ) -> None:
+        controller = self.controller()
+        original = self.bridge_descriptor(controller)
+        original_digest = self.bind_bridge_token(controller, original)
+        _operation, original_path, original_ready_path = (
+            controller._operation_paths(OPERATION_ID)
+        )
+        CONTROLLER.atomic_json(original_path, original)
+        self.assertEqual(
+            CONTROLLER.sha256_file(original_path),
+            original_digest,
+        )
+        original_ready = CONTROLLER.load_private_json(
+            original_ready_path
+        )
+        original_ready["descriptor_sha256"] = original_digest
+        CONTROLLER.atomic_json(original_ready_path, original_ready)
+        alias_authority = (
+            CONTROLLER.alias_bridge_authority_projection(
+                original,
+                descriptor_path=original_path,
+                ready_path=original_ready_path,
+            )
+        )
+
+        retired = CONTROLLER._bridge_core.retire_precommit_token(
+            controller.state_dir,
+            operation_id=OPERATION_ID,
+            descriptor_sha256=original_digest,
+            operation_state_sha256="sha256:" + "1" * 64,
+            terminal_audit_sha256="sha256:" + "2" * 64,
+            restored_terminal_sha256="sha256:" + "3" * 64,
+            recovery_capsule_sha256="sha256:" + "4" * 64,
+        )
+        successor_operation = "bridge-20260717-successor"
+        successor_token = CONTROLLER._bridge_core.reserve_token(
+            controller.state_dir,
+            operation_id=successor_operation,
+            policy_id=original["bridge"]["policy"]["policy_id"],
+            token=b"successor-token-fixture-entropy-01",
+            predecessor_retirement=(
+                CONTROLLER._bridge_core.retirement_reuse_authority(
+                    retired
+                )
+            ),
+        )
+        successor = json.loads(json.dumps(original))
+        successor["operation_id"] = successor_operation
+        successor["prepared_at"] = successor_token["prepared_at"]
+        executor = successor["controller"]["executor_control"]
+        executor["operation_id"] = successor_operation
+        successor["controller"][
+            "executor_control_sha256"
+        ] = CONTROLLER.canonical_json_digest(executor)
+        slot = successor["monomer_md"]["slot_record"]
+        slot["prepared_operation_id"] = successor_operation
+        successor["monomer_md"][
+            "slot_record_sha256"
+        ] = CONTROLLER.worker_record_digest(slot)
+        bridge = original["bridge"]
+        successor["bridge"] = (
+            CONTROLLER._bridge_core.build_bridge_descriptor(
+                operation_id=successor_operation,
+                authority_sha=bridge["authority"]["sha"],
+                authority_tree=bridge["authority"]["tree"],
+                authority_control_release_id=bridge["authority"][
+                    "control_release_id"
+                ],
+                ci_evidence=successor["ci"],
+                target_control_release_id=bridge["target"][
+                    "control_release_id"
+                ],
+                policy=bridge["policy"],
+                token_id=successor_token["token_id"],
+                token_sha256=successor_token["token_sha256"],
+            )
+        )
+        CONTROLLER.validate_descriptor(successor)
+        successor_root, successor_path, successor_ready_path = (
+            controller._operation_paths(successor_operation)
+        )
+        successor_root.mkdir(mode=0o700)
+        CONTROLLER.atomic_json(successor_path, successor)
+        successor_digest = CONTROLLER.sha256_file(successor_path)
+        CONTROLLER._bridge_core.bind_token_descriptor(
+            controller.state_dir,
+            operation_id=successor_operation,
+            policy_id=bridge["policy"]["policy_id"],
+            descriptor_sha256=successor_digest,
+        )
+        successor_ready = {
+            "schema_version": 1,
+            "status": "ready",
+            "operation_id": successor_operation,
+            "source_sha": successor["repository"]["target_sha"],
+            "descriptor_sha256": successor_digest,
+            "executor_control": executor,
+            "executor_control_sha256": successor["controller"][
+                "executor_control_sha256"
+            ],
+            "slot_record_sha256": successor["monomer_md"][
+                "slot_record_sha256"
+            ],
+            "prepared_at": "2026-07-17T00:00:01Z",
+        }
+        CONTROLLER.atomic_json(successor_ready_path, successor_ready)
+        current_token = CONTROLLER._bridge_core.load_token_authority(
+            controller.state_dir
+        )
+        self.assertEqual(
+            CONTROLLER.validate_alias_bridge_authority(
+                alias_authority,
+                descriptor=successor,
+                descriptor_path=successor_path,
+                ready_path=successor_ready_path,
+                state_root=controller.state_dir,
+                current_token=current_token,
+            ),
+            alias_authority,
+        )
 
     def test_external_database_cas_allows_only_fresh_timestamp_changes(
         self,

@@ -752,6 +752,43 @@ def load_token_authority(state_root: Path) -> dict[str, Any]:
     return document
 
 
+def token_lineage_contains(
+    state_root: Path,
+    current: object,
+    *,
+    operation_id: str,
+    policy_id: str,
+    descriptor_sha256: str,
+    token_id: str,
+    token_sha256: str,
+) -> bool:
+    """Prove that an exact prior token is in the validated retirement chain."""
+
+    observed = validate_token(current)
+    _validate_retirement_chain(state_root, observed)
+    operation_id = _require_operation_id(operation_id)
+    policy_id = _require_digest(policy_id, "bridge token lineage policy")
+    descriptor_sha256 = _require_digest(
+        descriptor_sha256,
+        "bridge token lineage descriptor",
+    )
+    token_id = _require_digest(token_id, "bridge token lineage identity")
+    token_sha256 = _require_digest(token_sha256, "bridge token lineage digest")
+    digest = observed["previous_retirement_sha256"]
+    while digest is not None:
+        archived = _load_retirement_archive(state_root, digest)
+        if (
+            archived["operation_id"] == operation_id
+            and archived["policy_id"] == policy_id
+            and archived["descriptor_sha256"] == descriptor_sha256
+            and archived["token_id"] == token_id
+            and archived["token_sha256"] == token_sha256
+        ):
+            return True
+        digest = archived["previous_retirement_sha256"]
+    return False
+
+
 def token_identity(token: bytes) -> dict[str, str]:
     """Return the public identity of an in-memory one-time token."""
 

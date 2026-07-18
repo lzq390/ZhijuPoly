@@ -524,6 +524,28 @@ class BridgeTokenTests(unittest.TestCase):
         )
         self.assertEqual(BRIDGE._load_token(archive), retired)
         self.assertEqual(BRIDGE.load_token_authority(self.state), successor)
+        self.assertTrue(
+            BRIDGE.token_lineage_contains(
+                self.state,
+                successor,
+                operation_id=retired["operation_id"],
+                policy_id=retired["policy_id"],
+                descriptor_sha256=retired["descriptor_sha256"],
+                token_id=retired["token_id"],
+                token_sha256=retired["token_sha256"],
+            )
+        )
+        self.assertFalse(
+            BRIDGE.token_lineage_contains(
+                self.state,
+                successor,
+                operation_id=retired["operation_id"],
+                policy_id=retired["policy_id"],
+                descriptor_sha256=retired["descriptor_sha256"],
+                token_id="sha256:" + "f" * 64,
+                token_sha256=retired["token_sha256"],
+            )
+        )
 
         second_descriptor = "sha256:" + "2" * 64
         BRIDGE.bind_token_descriptor(
@@ -552,6 +574,17 @@ class BridgeTokenTests(unittest.TestCase):
         )
         self.assertEqual(third["generation"], 3)
         self.assertEqual(BRIDGE.load_token_authority(self.state), third)
+        self.assertTrue(
+            BRIDGE.token_lineage_contains(
+                self.state,
+                third,
+                operation_id=retired["operation_id"],
+                policy_id=retired["policy_id"],
+                descriptor_sha256=retired["descriptor_sha256"],
+                token_id=retired["token_id"],
+                token_sha256=retired["token_sha256"],
+            )
+        )
 
     def test_retirement_and_successor_publish_are_crash_idempotent(self) -> None:
         self.prepare()

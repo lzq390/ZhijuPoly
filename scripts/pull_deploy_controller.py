@@ -37,7 +37,7 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Any, BinaryIO, Callable, Iterable, Protocol
+from typing import Any, BinaryIO, Callable, Iterable, Mapping, Protocol
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -469,6 +469,21 @@ BRIDGE_DESCRIPTOR_FIELDS = DESCRIPTOR_FIELDS | {
     "legacy_takeover",
     "prefetch",
     "external_database_audit",
+}
+ALIAS_BRIDGE_AUTHORITY_FIELDS = {
+    "schema_version",
+    "operation_id",
+    "descriptor",
+    "ready",
+    "authority",
+    "target",
+    "repository_previous",
+    "policy",
+    "token",
+    "takeover",
+    "prefetch",
+    "external_database_audit_sha256",
+    "identity_sha256",
 }
 READY_FIELDS = {
     "schema_version",
@@ -4074,6 +4089,220 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             "bootstrap takeover controls must already be the target release"
         )
     return document
+
+
+def alias_bridge_authority_projection(
+    descriptor: object,
+    *,
+    descriptor_path: Path,
+    ready_path: Path,
+) -> dict[str, Any]:
+    """Project the immutable part of one prepared F -> exact-B authority.
+
+    Alias maintenance separately requires the live token to be ``prepared``.
+    Excluding that mutable status lets the same recorded projection remain
+    verifiable after B atomically consumes the token.
+    """
+
+    if not isinstance(descriptor, dict):
+        raise PullDeployError("alias bridge descriptor is malformed")
+    descriptor = validate_descriptor(descriptor)
+    if descriptor["schema_version"] != BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
+        raise PullDeployError(
+            "production alias maintenance requires bridge descriptor v3"
+        )
+    if (
+        not descriptor_path.is_absolute()
+        or not ready_path.is_absolute()
+        or descriptor_path.name != "descriptor.json"
+        or ready_path.name != "ready.json"
+        or descriptor_path.parent != ready_path.parent
+    ):
+        raise PullDeployError("alias bridge evidence paths are invalid")
+    ready = load_private_json(ready_path)
+    descriptor_sha256 = sha256_file(descriptor_path)
+    ready_sha256 = sha256_file(ready_path)
+    if (
+        set(ready) != READY_FIELDS
+        or ready.get("schema_version") != 1
+        or ready.get("status") != "ready"
+        or ready.get("operation_id") != descriptor["operation_id"]
+        or ready.get("source_sha")
+        != descriptor["repository"]["target_sha"]
+        or ready.get("descriptor_sha256") != descriptor_sha256
+        or ready.get("slot_record_sha256")
+        != descriptor["monomer_md"]["slot_record_sha256"]
+        or ready.get("executor_control")
+        != descriptor["controller"]["executor_control"]
+        or ready.get("executor_control_sha256")
+        != descriptor["controller"]["executor_control_sha256"]
+    ):
+        raise PullDeployError(
+            "alias bridge READY evidence differs from descriptor"
+        )
+    bridge = descriptor["bridge"]
+    takeover = descriptor["legacy_takeover"]
+    prefetch = descriptor["prefetch"]
+    body: dict[str, Any] = {
+        "schema_version": 1,
+        "operation_id": descriptor["operation_id"],
+        "descriptor": {
+            "path": str(descriptor_path),
+            "sha256": descriptor_sha256,
+        },
+        "ready": {
+            "path": str(ready_path),
+            "sha256": ready_sha256,
+        },
+        "authority": {
+            "sha": bridge["authority"]["sha"],
+            "tree": bridge["authority"]["tree"],
+            "control_release_id": bridge["authority"][
+                "control_release_id"
+            ],
+        },
+        "target": {
+            "sha": bridge["target"]["sha"],
+            "tree": bridge["target"]["tree"],
+            "control_release_id": bridge["target"]["control_release_id"],
+        },
+        "repository_previous": {
+            "sha": descriptor["repository"]["previous_sha"],
+            "tree": descriptor["repository"]["previous_tree"],
+        },
+        "policy": {
+            "id": bridge["policy"]["policy_id"],
+            "sha256": bridge["policy_sha256"],
+        },
+        "token": dict(bridge["token"]),
+        "takeover": {
+            key: takeover[key]
+            for key in (
+                "operation_id",
+                "runtime_identity_sha256",
+                "pre_stopped_fence_sha256",
+                "applied_record_sha256",
+                "binding_sha256",
+            )
+        },
+        "prefetch": {
+            key: prefetch[key]
+            for key in (
+                "operation_id",
+                "ready_sha256",
+                "identity_sha256",
+                "binding_sha256",
+            )
+        },
+        "external_database_audit_sha256": descriptor[
+            "external_database_audit"
+        ]["identity_sha256"],
+    }
+    body["identity_sha256"] = canonical_json_digest(body)
+    return body
+
+
+def validate_alias_bridge_authority(
+    document: object,
+    *,
+    descriptor: object,
+    descriptor_path: Path,
+    ready_path: Path,
+    state_root: Path | None = None,
+    current_token: object = None,
+) -> dict[str, Any]:
+    if (
+        not isinstance(document, dict)
+        or set(document) != ALIAS_BRIDGE_AUTHORITY_FIELDS
+    ):
+        raise PullDeployError("production alias bridge authority is malformed")
+    expected = alias_bridge_authority_projection(
+        descriptor,
+        descriptor_path=descriptor_path,
+        ready_path=ready_path,
+    )
+    if document == expected:
+        return dict(document)
+    if state_root is None or current_token is None:
+        raise PullDeployError(
+            "production alias belongs to another bridge authority"
+        )
+    recorded_descriptor = document.get("descriptor")
+    recorded_ready = document.get("ready")
+    recorded_operation = document.get("operation_id")
+    recorded_token = document.get("token")
+    recorded_policy = document.get("policy")
+    if (
+        not isinstance(recorded_descriptor, dict)
+        or set(recorded_descriptor) != {"path", "sha256"}
+        or not isinstance(recorded_ready, dict)
+        or set(recorded_ready) != {"path", "sha256"}
+        or not isinstance(recorded_operation, str)
+        or not isinstance(recorded_token, dict)
+        or set(recorded_token) != {"token_id", "token_sha256"}
+        or not isinstance(recorded_policy, dict)
+        or set(recorded_policy) != {"id", "sha256"}
+    ):
+        raise PullDeployError(
+            "production alias bridge lineage authority is malformed"
+        )
+    original_root = (
+        state_root / "prepared" / require_operation_id(recorded_operation)
+    )
+    original_descriptor_path = Path(
+        str(recorded_descriptor.get("path"))
+    )
+    original_ready_path = Path(str(recorded_ready.get("path")))
+    if (
+        original_descriptor_path
+        != original_root / "descriptor.json"
+        or original_ready_path != original_root / "ready.json"
+    ):
+        raise PullDeployError(
+            "production alias original bridge paths are invalid"
+        )
+    original_descriptor = load_private_json(original_descriptor_path)
+    original = alias_bridge_authority_projection(
+        original_descriptor,
+        descriptor_path=original_descriptor_path,
+        ready_path=original_ready_path,
+    )
+    immutable_fields = {
+        "schema_version",
+        "authority",
+        "target",
+        "repository_previous",
+        "policy",
+        "takeover",
+        "prefetch",
+        "external_database_audit_sha256",
+    }
+    if (
+        document != original
+        or any(document[field] != expected[field] for field in immutable_fields)
+    ):
+        raise PullDeployError(
+            "production alias bridge successor changed immutable authority"
+        )
+    try:
+        in_lineage = _bridge_core.token_lineage_contains(
+            state_root,
+            current_token,
+            operation_id=recorded_operation,
+            policy_id=recorded_policy["id"],
+            descriptor_sha256=recorded_descriptor["sha256"],
+            token_id=recorded_token["token_id"],
+            token_sha256=recorded_token["token_sha256"],
+        )
+    except Exception as exc:
+        raise PullDeployError(
+            "production alias bridge retirement lineage is invalid"
+        ) from exc
+    if not in_lineage:
+        raise PullDeployError(
+            "production alias is not an ancestor of this bridge token"
+        )
+    return dict(document)
 
 
 def validate_recovery_marker(
@@ -10459,6 +10688,121 @@ class PullDeployController:
         operation = self.prepared_root / require_operation_id(operation_id)
         return operation, operation / "descriptor.json", operation / "ready.json"
 
+    def prepared_alias_bridge_authority(
+        self,
+        *,
+        control: Mapping[str, Any],
+        legacy_source: Mapping[str, str],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Re-prove the single READY F -> exact-B bridge before alias CAS."""
+
+        ensure_private_directory(self.state_dir)
+        ensure_private_directory(self.prepared_root)
+        candidates: list[
+            tuple[dict[str, Any], Path, Path]
+        ] = []
+        for operation in self.prepared_root.iterdir():
+            ensure_private_directory(operation)
+            ready_path = operation / "ready.json"
+            if not (ready_path.exists() or ready_path.is_symlink()):
+                continue
+            descriptor_path = operation / "descriptor.json"
+            descriptor = validate_descriptor(
+                load_private_json(descriptor_path)
+            )
+            ready = load_private_json(ready_path)
+            self._validate_ready(ready, descriptor, descriptor_path)
+            if (
+                descriptor["schema_version"]
+                == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+            ):
+                candidates.append(
+                    (descriptor, descriptor_path, ready_path)
+                )
+        if len(candidates) != 1:
+            raise PullDeployError(
+                "exactly one READY bridge descriptor is required for alias "
+                "maintenance"
+            )
+        descriptor, descriptor_path, ready_path = candidates[0]
+        bridge = descriptor["bridge"]
+        previous_control = descriptor["controller"][
+            "previous_active_control"
+        ]
+        if (
+            previous_control["release_id"] != control.get("release_id")
+            or previous_control["source_sha"] != control.get("source_sha")
+            or previous_control["source_tree"] != control.get("source_tree")
+            or previous_control["manifest_sha256"]
+            != "sha256:" + str(control.get("manifest_sha256"))
+            or bridge["authority"]["control_release_id"]
+            != control.get("release_id")
+            or bridge["authority"]["sha"] != control.get("source_sha")
+            or bridge["authority"]["tree"] != control.get("source_tree")
+            or descriptor["repository"]["previous_sha"]
+            != legacy_source.get("sha")
+            or descriptor["repository"]["previous_tree"]
+            != legacy_source.get("tree")
+        ):
+            raise PullDeployError(
+                "alias execution does not match prepared F/legacy authority"
+            )
+        try:
+            token = _bridge_core.load_token_authority(self.state_dir)
+        except Exception as exc:
+            raise PullDeployError(
+                "prepared bridge token authority is unavailable"
+            ) from exc
+        descriptor_sha256 = sha256_file(descriptor_path)
+        if (
+            token["status"] != "prepared"
+            or token["operation_id"] != descriptor["operation_id"]
+            or token["policy_id"] != bridge["policy"]["policy_id"]
+            or token["descriptor_sha256"] != descriptor_sha256
+            or token["token_id"] != bridge["token"]["token_id"]
+            or token["token_sha256"] != bridge["token"]["token_sha256"]
+        ):
+            raise PullDeployError(
+                "alias maintenance requires the exact prepared bridge token"
+            )
+        self._revalidate_bridge_external_authorities(descriptor)
+        self._revalidate_external_database_audit(descriptor)
+        takeover = descriptor["legacy_takeover"]
+        try:
+            status = _legacy_takeover_evidence.load_status(
+                self.runtime_root,
+                takeover["operation_id"],
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "legacy takeover stopped-runtime evidence is unavailable"
+            ) from exc
+        fence = status.get("pre_stopped_fence")
+        runtime_fence = (
+            fence.get("runtime_fence")
+            if isinstance(fence, dict)
+            else None
+        )
+        if (
+            status.get("apply_phase") != "complete"
+            or status.get("restore_phase") is not None
+            or status.get("active") is not False
+            or status.get("pre_stopped_fence_sha256")
+            != takeover["pre_stopped_fence_sha256"]
+            or not isinstance(runtime_fence, dict)
+            or runtime_fence.get("readers_stopped") is not True
+            or runtime_fence.get("postgres_running_untouched") is not True
+        ):
+            raise PullDeployError(
+                "legacy takeover is not at its exact stopped-reader fence"
+            )
+        authority = alias_bridge_authority_projection(
+            descriptor,
+            descriptor_path=descriptor_path,
+            ready_path=ready_path,
+        )
+        return authority, dict(runtime_fence)
+
     def _validate_database_backup(
         self,
         descriptor: dict[str, Any],
@@ -11852,6 +12196,32 @@ class PullDeployController:
                 raise PullDeployError(
                     "prepared bridge token differs from descriptor authority"
                 )
+            try:
+                alias_marker = (
+                    _control_runtime.load_production_0005_alias_gate(
+                        self.runtime_root,
+                        require_completed=True,
+                    )
+                )
+                alias_identity = alias_marker.get("identity")
+                alias_authority = (
+                    alias_identity.get("bridge_authority")
+                    if isinstance(alias_identity, dict)
+                    else None
+                )
+                if not self.test_root_mode or alias_authority is not None:
+                    validate_alias_bridge_authority(
+                        alias_authority,
+                        descriptor=descriptor,
+                        descriptor_path=descriptor_path,
+                        ready_path=ready_path,
+                        state_root=self.state_dir,
+                        current_token=token,
+                    )
+            except Exception as exc:
+                raise PullDeployError(
+                    "completed production alias is not bound to this bridge"
+                ) from exc
         if (
             target_sha is not None
             and descriptor["repository"]["target_sha"] != target_sha

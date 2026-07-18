@@ -392,6 +392,292 @@ def _alias_restore_inventory_matches(before: object, restored: object) -> bool:
     )
 
 
+def _alias_bridge_authority_is_valid(
+    runtime_root: Path,
+    identity: object,
+) -> bool:
+    if not isinstance(identity, dict):
+        return False
+    authority = identity.get("bridge_authority")
+    fields = {
+        "schema_version",
+        "operation_id",
+        "descriptor",
+        "ready",
+        "authority",
+        "target",
+        "repository_previous",
+        "policy",
+        "token",
+        "takeover",
+        "prefetch",
+        "external_database_audit_sha256",
+        "identity_sha256",
+    }
+    if not isinstance(authority, dict) or set(authority) != fields:
+        return False
+    operation_id = authority.get("operation_id")
+    if (
+        authority.get("schema_version") != 1
+        or not isinstance(operation_id, str)
+        or OPERATION_ID_RE.fullmatch(operation_id) is None
+    ):
+        return False
+    operation_root = runtime_root / "state" / "prepared" / operation_id
+    descriptor_path = operation_root / "descriptor.json"
+    ready_path = operation_root / "ready.json"
+    try:
+        _require_private_directory(runtime_root / "state")
+        _require_private_directory(runtime_root / "state" / "prepared")
+        _require_private_directory(operation_root)
+        descriptor = _load_private_json(descriptor_path)
+        ready = _load_private_json(ready_path)
+        bridge = descriptor["bridge"]
+        takeover = descriptor["legacy_takeover"]
+        prefetch = descriptor["prefetch"]
+        previous_control = descriptor["controller"][
+            "previous_active_control"
+        ]
+        expected: dict[str, Any] = {
+            "schema_version": 1,
+            "operation_id": descriptor["operation_id"],
+            "descriptor": {
+                "path": str(descriptor_path),
+                "sha256": sha256_file(descriptor_path),
+            },
+            "ready": {
+                "path": str(ready_path),
+                "sha256": sha256_file(ready_path),
+            },
+            "authority": {
+                "sha": bridge["authority"]["sha"],
+                "tree": bridge["authority"]["tree"],
+                "control_release_id": bridge["authority"][
+                    "control_release_id"
+                ],
+            },
+            "target": {
+                "sha": bridge["target"]["sha"],
+                "tree": bridge["target"]["tree"],
+                "control_release_id": bridge["target"][
+                    "control_release_id"
+                ],
+            },
+            "repository_previous": {
+                "sha": descriptor["repository"]["previous_sha"],
+                "tree": descriptor["repository"]["previous_tree"],
+            },
+            "policy": {
+                "id": bridge["policy"]["policy_id"],
+                "sha256": bridge["policy_sha256"],
+            },
+            "token": dict(bridge["token"]),
+            "takeover": {
+                key: takeover[key]
+                for key in (
+                    "operation_id",
+                    "runtime_identity_sha256",
+                    "pre_stopped_fence_sha256",
+                    "applied_record_sha256",
+                    "binding_sha256",
+                )
+            },
+            "prefetch": {
+                key: prefetch[key]
+                for key in (
+                    "operation_id",
+                    "ready_sha256",
+                    "identity_sha256",
+                    "binding_sha256",
+                )
+            },
+            "external_database_audit_sha256": descriptor[
+                "external_database_audit"
+            ]["identity_sha256"],
+        }
+        expected["identity_sha256"] = canonical_json_digest(expected)
+    except (ControlRuntimeError, KeyError, OSError, TypeError, ValueError):
+        return False
+    control = identity.get("control")
+    legacy_source = identity.get("legacy_source")
+    ready_fields = {
+        "schema_version",
+        "status",
+        "operation_id",
+        "source_sha",
+        "descriptor_sha256",
+        "executor_control",
+        "executor_control_sha256",
+        "slot_record_sha256",
+        "prepared_at",
+    }
+    return bool(
+        authority == expected
+        and descriptor.get("schema_version") == 3
+        and descriptor.get("operation_id") == operation_id
+        and set(ready) == ready_fields
+        and ready.get("schema_version") == 1
+        and ready.get("status") == "ready"
+        and ready.get("operation_id") == operation_id
+        and ready.get("source_sha")
+        == descriptor["repository"].get("target_sha")
+        and ready.get("descriptor_sha256")
+        == sha256_file(descriptor_path)
+        and isinstance(control, dict)
+        and previous_control.get("release_id") == control.get("release_id")
+        and previous_control.get("source_sha") == control.get("source_sha")
+        and previous_control.get("source_tree") == control.get("source_tree")
+        and previous_control.get("manifest_sha256")
+        == "sha256:" + str(control.get("manifest_sha256"))
+        and expected["authority"]["control_release_id"]
+        == control.get("release_id")
+        and expected["authority"]["sha"] == control.get("source_sha")
+        and expected["authority"]["tree"] == control.get("source_tree")
+        and expected["repository_previous"] == legacy_source
+        and all(
+            isinstance(value, str) and DIGEST_RE.fullmatch(value) is not None
+            for value in (
+                expected["descriptor"]["sha256"],
+                expected["ready"]["sha256"],
+                expected["policy"]["id"],
+                expected["policy"]["sha256"],
+                expected["token"]["token_id"],
+                expected["token"]["token_sha256"],
+                expected["external_database_audit_sha256"],
+                expected["identity_sha256"],
+            )
+        )
+    )
+
+
+def _alias_runtime_stop_fence_is_valid(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "database_system_identifier",
+        "containers",
+        "monomer_md_unit",
+        "monomer_dft_unit",
+    }:
+        return False
+    containers = value.get("containers")
+    if not isinstance(containers, list) or len(containers) not in {3, 4}:
+        return False
+    by_service = {
+        record.get("service"): record
+        for record in containers
+        if isinstance(record, dict)
+        and isinstance(record.get("service"), str)
+    }
+    postgres = by_service.get("lab-postgres")
+    if (
+        len(by_service) != len(containers)
+        or not {"backend", "nginx", "lab-postgres"}.issubset(by_service)
+        or not set(by_service).issubset(
+            {"backend", "nginx", "postgres-init", "lab-postgres"}
+        )
+        or value.get("database_system_identifier") != ALIAS_SYSTEM_IDENTIFIER
+        or not isinstance(postgres, dict)
+        or postgres.get("running") is not True
+        or not isinstance(postgres.get("data_volume"), dict)
+        or postgres["data_volume"].get("type") != "volume"
+        or postgres["data_volume"].get("read_write") is not True
+    ):
+        return False
+    container_fields = {
+        "id",
+        "name",
+        "service",
+        "image",
+        "config_image",
+        "config_env_sha256",
+        "labels_sha256",
+        "data_volume",
+        "status",
+        "running",
+        "finished_at",
+        "restart_count",
+        "restart_policy",
+    }
+    for service, record in by_service.items():
+        if (
+            set(record) != container_fields
+            or not isinstance(record.get("id"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", record["id"]) is None
+            or not isinstance(record.get("name"), str)
+            or not record["name"]
+            or not isinstance(record.get("image"), str)
+            or DIGEST_RE.fullmatch(record["image"]) is None
+            or not isinstance(record.get("config_image"), str)
+            or not record["config_image"]
+            or not isinstance(record.get("config_env_sha256"), str)
+            or HEX_DIGEST_RE.fullmatch(record["config_env_sha256"]) is None
+            or not isinstance(record.get("labels_sha256"), str)
+            or HEX_DIGEST_RE.fullmatch(record["labels_sha256"]) is None
+            or (
+                service != "lab-postgres"
+                and record.get("running") is not False
+            )
+            or (
+                service != "lab-postgres"
+                and record.get("data_volume") is not None
+            )
+        ):
+            return False
+    unit_fields = {
+        "LoadState",
+        "ActiveState",
+        "SubState",
+        "MainPID",
+        "InvocationID",
+        "FragmentPath",
+        "DropInPaths",
+        "UnitFileState",
+        "FragmentSHA256",
+    }
+    for name, required in (
+        ("monomer_md_unit", True),
+        ("monomer_dft_unit", False),
+    ):
+        unit = value.get(name)
+        if (
+            not isinstance(unit, dict)
+            or set(unit) != unit_fields
+            or unit.get("MainPID") != "0"
+            or unit.get("ActiveState") not in {"inactive", "failed"}
+            or unit.get("SubState") not in {"dead", "failed"}
+            or (
+                required
+                and (
+                    unit.get("LoadState") != "loaded"
+                    or not isinstance(unit.get("FragmentSHA256"), str)
+                    or HEX_DIGEST_RE.fullmatch(unit["FragmentSHA256"]) is None
+                )
+            )
+            or (
+                not required
+                and unit.get("LoadState") not in {"loaded", "not-found"}
+            )
+            or (
+                unit.get("LoadState") == "loaded"
+                and (
+                    not isinstance(unit.get("FragmentPath"), str)
+                    or not unit["FragmentPath"]
+                    or not isinstance(unit.get("FragmentSHA256"), str)
+                    or HEX_DIGEST_RE.fullmatch(unit["FragmentSHA256"])
+                    is None
+                )
+            )
+            or (
+                unit.get("LoadState") == "not-found"
+                and (
+                    unit.get("FragmentPath") != ""
+                    or unit.get("FragmentSHA256") is not None
+                )
+            )
+        ):
+            return False
+    return True
+
+
 def load_production_0005_alias_gate(
     runtime_root: Path, *, require_completed: bool
 ) -> dict[str, Any] | None:
@@ -463,6 +749,7 @@ def load_production_0005_alias_gate(
     backup = marker.get("database_backup")
     before = marker.get("before")
     mutation_intent = marker.get("mutation_intent")
+    runtime_stop_fence = marker.get("runtime_stop_fence")
     dump_path = backup_dir / "nexpoly-before.dump"
     sidecar_path = backup_dir / "nexpoly-before.dump.sha256"
     _private_file_identity(dump_path)
@@ -480,6 +767,15 @@ def load_production_0005_alias_gate(
         not isinstance(backup, dict)
         or not isinstance(before, dict)
         or not isinstance(mutation_intent, dict)
+        or not isinstance(runtime_stop_fence, dict)
+        or (
+            runtime_root == PRODUCTION_RUNTIME_ROOT
+            and not _alias_bridge_authority_is_valid(runtime_root, identity)
+        )
+        or (
+            runtime_root == PRODUCTION_RUNTIME_ROOT
+            and not _alias_runtime_stop_fence_is_valid(runtime_stop_fence)
+        )
         or identity.get("database_endpoint") != ALIAS_DATABASE_ENDPOINT
         or identity.get("database_system_identifier") != ALIAS_SYSTEM_IDENTIFIER
         or not _alias_live_inventory_is_valid(before, ledger=ALIAS_PRE_LEDGER)
@@ -536,6 +832,9 @@ def load_production_0005_alias_gate(
         or manifest.get("database_after") != after
         or manifest.get("database_backup") != backup
         or manifest.get("isolated_restore") != restore
+        or manifest.get("runtime_stop_fence") != runtime_stop_fence
+        or manifest.get("runtime_stop_fence_sha256")
+        != canonical_json_digest(runtime_stop_fence).removeprefix("sha256:")
         or manifest.get("files") != files
         or manifest.get("completed_at") != marker.get("completed_at")
         or set(manifest)
@@ -548,6 +847,8 @@ def load_production_0005_alias_gate(
             "database_after",
             "database_backup",
             "isolated_restore",
+            "runtime_stop_fence",
+            "runtime_stop_fence_sha256",
             "binaries",
             "files",
             "completed_at",

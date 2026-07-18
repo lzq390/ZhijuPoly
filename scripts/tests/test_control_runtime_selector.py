@@ -403,6 +403,7 @@ class SelectorTests(unittest.TestCase):
         )
         files = SELECTOR._alias_evidence_files(audit_dir, backup_dir)
         completed_at = "2026-07-17T00:00:01Z"
+        runtime_stop_fence = {"fixture": True}
         audit = {
             "schema_version": 1,
             "operation_id": operation_id,
@@ -412,6 +413,10 @@ class SelectorTests(unittest.TestCase):
             "database_after": after,
             "database_backup": backup,
             "isolated_restore": restore,
+            "runtime_stop_fence": runtime_stop_fence,
+            "runtime_stop_fence_sha256": SELECTOR.canonical_json_digest(
+                runtime_stop_fence
+            ).removeprefix("sha256:"),
             "binaries": {"/fixture/bin": {"sha256": "b" * 64}},
             "files": files,
             "completed_at": completed_at,
@@ -431,7 +436,7 @@ class SelectorTests(unittest.TestCase):
             },
             "started_at": "2026-07-17T00:00:00Z",
             "updated_at": completed_at,
-            "runtime_stop_fence": {"fixture": True},
+            "runtime_stop_fence": runtime_stop_fence,
             "before": before,
             "database_backup": backup,
             "restore_container": {"name": "fixture"},

@@ -584,6 +584,7 @@ def _seed_completed_alias_gate(
     _write_private_json(audit_dir / "database-after.json", after)
     files = selector._alias_evidence_files(audit_dir, backup_dir)
     completed_at = "2026-07-17T00:00:01Z"
+    runtime_stop_fence = {"fixture": True}
     audit = {
         "schema_version": 1,
         "operation_id": operation_id,
@@ -593,6 +594,10 @@ def _seed_completed_alias_gate(
         "database_after": after,
         "database_backup": backup,
         "isolated_restore": restore,
+        "runtime_stop_fence": runtime_stop_fence,
+        "runtime_stop_fence_sha256": selector.canonical_json_digest(
+            runtime_stop_fence
+        ).removeprefix("sha256:"),
         "binaries": {"/fixture/bin": {"sha256": "b" * 64}},
         "files": files,
         "completed_at": completed_at,
@@ -610,7 +615,7 @@ def _seed_completed_alias_gate(
         },
         "started_at": "2026-07-17T00:00:00Z",
         "updated_at": completed_at,
-        "runtime_stop_fence": {"fixture": True},
+        "runtime_stop_fence": runtime_stop_fence,
         "before": before,
         "database_backup": backup,
         "restore_container": {"name": "fixture"},

@@ -15,6 +15,7 @@ import contextlib
 import datetime as dt
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -185,6 +186,54 @@ BACKUP_EVIDENCE_NAMES = {
     "nexpoly-before.dump",
     "nexpoly-before.dump.sha256",
 }
+
+
+def _load_pull_deploy_controller() -> Any:
+    """Load the exact manifest-sealed sibling without ambient import paths."""
+
+    module_name = "nexpoly_alias_pull_deploy_controller"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    current = Path(__file__).absolute()
+    parent = current.parent
+    path = parent / "pull_deploy_controller.py"
+    try:
+        current_metadata = current.lstat()
+        parent_metadata = parent.lstat()
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ReconcileError(
+            "prepared bridge controller sibling is unavailable"
+        ) from exc
+    if (
+        not stat.S_ISREG(current_metadata.st_mode)
+        or current.is_symlink()
+        or current_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(current_metadata.st_mode) != 0o700
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent.is_symlink()
+        or parent_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+        or not stat.S_ISREG(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise ReconcileError(
+            "prepared bridge controller sibling is unsafe"
+        )
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ReconcileError("cannot load prepared bridge controller")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
 
 
 class ReconcileError(RuntimeError):
@@ -1186,6 +1235,7 @@ def _marker_identity(
     binaries: Mapping[str, Any],
     database_endpoint: Mapping[str, Any],
     restore_image: Mapping[str, str],
+    bridge_authority: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
         "operation_id": operation_id,
@@ -1197,6 +1247,7 @@ def _marker_identity(
         "database_endpoint": dict(database_endpoint),
         "database_system_identifier": SYSTEM_IDENTIFIER,
         "restore_image": _validate_restore_image_identity(restore_image),
+        "bridge_authority": dict(bridge_authority),
         "alias": {
             "version": ALIAS_VERSION,
             "checksum": ALIAS_CHECKSUM,
@@ -1228,11 +1279,15 @@ class Reconciliation:
         environment: Mapping[str, str],
         runner: CommandRunner | None = None,
         session_factory: Callable[[Mapping[str, str]], Any] = PsqlSession,
+        bridge_controller_loader: Callable[[], Any] | None = None,
     ) -> None:
         self.operation_id = safe_operation_id(operation_id)
         self.environment = dict(environment)
         self.runner = runner or SystemRunner()
         self.session_factory = session_factory
+        self.bridge_controller_loader = (
+            bridge_controller_loader or _load_pull_deploy_controller
+        )
         self.state_root = RUNTIME_ROOT / STATE_ROOT_RELATIVE
         self.audit_root = RUNTIME_ROOT / AUDIT_ROOT_RELATIVE
         self.backup_root = RUNTIME_ROOT / BACKUP_ROOT_RELATIVE
@@ -1253,6 +1308,36 @@ class Reconciliation:
         binaries = binary_inventory(self.runner)
         return control, source, binaries
 
+    def _bridge_authority(
+        self,
+        control: Mapping[str, Any],
+        source: Mapping[str, str],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        try:
+            module = self.bridge_controller_loader()
+            controller = module.PullDeployController(
+                PRODUCTION_ROOT,
+                RUNTIME_ROOT,
+                apply=False,
+            )
+            authority, takeover_runtime = (
+                controller.prepared_alias_bridge_authority(
+                    control=control,
+                    legacy_source=source,
+                )
+            )
+        except Exception as exc:
+            raise ReconcileError(
+                "exact prepared F-to-B bridge authority is unavailable"
+            ) from exc
+        if not isinstance(authority, dict) or not isinstance(
+            takeover_runtime, dict
+        ):
+            raise ReconcileError(
+                "prepared bridge authority returned malformed evidence"
+            )
+        return dict(authority), dict(takeover_runtime)
+
     def _database_inventory(self, *, phase: str) -> dict[str, Any]:
         document = _psql_json(self.runner, self._pg_environment, INVENTORY_SQL)
         return validate_inventory(document, expected_phase=phase)
@@ -1261,15 +1346,40 @@ class Reconciliation:
         self._conflicting_markers()
         self._prepare_roots()
         marker_phase: str | None = None
+        existing_marker: dict[str, Any] | None = None
         if self.marker_path.exists() or self.marker_path.is_symlink():
-            marker = load_private_json(self.marker_path)
-            phase = self._validate_marker_shape(marker)
-            if marker["identity"]["operation_id"] != self.operation_id:
+            existing_marker = load_private_json(self.marker_path)
+            phase = self._validate_marker_shape(existing_marker)
+            if existing_marker["identity"]["operation_id"] != self.operation_id:
                 raise ReconcileError("ledger-alias marker belongs to another operation")
             marker_phase = phase
         control, source, binaries = self.identities()
+        bridge_authority, takeover_runtime = self._bridge_authority(
+            control, source
+        )
+        runtime_stop_fence = self._runtime_stop_fence()
+        self._require_takeover_runtime_match(
+            takeover_runtime,
+            runtime_stop_fence,
+        )
         inventory = self._database_inventory(phase="pre")
         image = self._image_identity()
+        expected_identity = _marker_identity(
+            operation_id=self.operation_id,
+            control=control,
+            source=source,
+            binaries=binaries,
+            database_endpoint=self.database_endpoint,
+            restore_image=image,
+            bridge_authority=bridge_authority,
+        )
+        if (
+            existing_marker is not None
+            and existing_marker.get("identity") != expected_identity
+        ):
+            raise ReconcileError(
+                "ledger-alias marker belongs to another execution identity"
+            )
         return {
             "schema_version": 1,
             "action": "reconcile-production-0005-polytao-alias",
@@ -1277,6 +1387,8 @@ class Reconciliation:
             "operation_id": self.operation_id,
             "control": control,
             "legacy_source": source,
+            "bridge_authority": bridge_authority,
+            "runtime_stop_fence": runtime_stop_fence,
             "database_endpoint": self.database_endpoint,
             "database": inventory,
             "binaries": binaries,
@@ -1367,6 +1479,7 @@ class Reconciliation:
             or not isinstance(identity, dict)
             or not isinstance(identity.get("operation_id"), str)
             or OPERATION_ID_RE.fullmatch(identity["operation_id"]) is None
+            or not isinstance(identity.get("bridge_authority"), dict)
             or directories
             != {"audit": str(self.audit_dir), "backup": str(self.backup_dir)}
             or not isinstance(marker.get("started_at"), str)
@@ -1403,11 +1516,10 @@ class Reconciliation:
         ):
             if field in marker and not isinstance(marker[field], dict):
                 raise ReconcileError(f"ledger-alias marker {field} evidence is malformed")
-        history = marker.get("runtime_stop_fence_history", [])
-        if not isinstance(history, list) or any(
-            not isinstance(record, dict) for record in history
-        ):
-            raise ReconcileError("ledger-alias runtime fence history is malformed")
+        if marker.get("runtime_stop_fence_history") not in (None, []):
+            raise ReconcileError(
+                "ledger-alias runtime fence adoption history is forbidden"
+            )
         return phase
 
     def _new_marker(self, identity: Mapping[str, Any]) -> dict[str, Any]:
@@ -1455,24 +1567,6 @@ class Reconciliation:
 
     def _write_marker(self, marker: dict[str, Any], phase: str, **values: Any) -> None:
         candidate = {**marker, **values, "phase": phase, "updated_at": utc_now()}
-        self._validate_marker_shape(candidate)
-        atomic_json(self.marker_path, candidate)
-        marker.clear()
-        marker.update(candidate)
-
-    def _replace_marker(
-        self, marker: dict[str, Any], phase: str, **values: Any
-    ) -> None:
-        candidate = {
-            "schema_version": 1,
-            "action": "reconcile-production-0005-polytao-alias",
-            "phase": phase,
-            "identity": marker["identity"],
-            "operation_directories": marker["operation_directories"],
-            "started_at": marker["started_at"],
-            "updated_at": utc_now(),
-            **values,
-        }
         self._validate_marker_shape(candidate)
         atomic_json(self.marker_path, candidate)
         marker.clear()
@@ -1992,11 +2086,13 @@ class Reconciliation:
             config = record.get("Config")
             state = record.get("State")
             host = record.get("HostConfig")
+            mounts = record.get("Mounts")
             labels = config.get("Labels") if isinstance(config, dict) else None
             if (
                 not isinstance(config, dict)
                 or not isinstance(state, dict)
                 or not isinstance(host, dict)
+                or not isinstance(mounts, list)
                 or not isinstance(labels, dict)
                 or labels.get("com.docker.compose.project") != "nexpoly"
             ):
@@ -2014,8 +2110,33 @@ class Reconciliation:
                 raise ReconcileError("production container service inventory differs")
             seen.add(service)
             running = state.get("Running") is True
+            image_id = record.get("Image")
+            configured_image = config.get("Image")
+            config_environment = config.get("Env")
+            if (
+                not isinstance(image_id, str)
+                or DIGEST_RE.fullmatch(image_id) is None
+                or not isinstance(configured_image, str)
+                or not configured_image
+                or not isinstance(config_environment, list)
+                or any(
+                    not isinstance(value, str)
+                    for value in config_environment
+                )
+            ):
+                raise ReconcileError(
+                    "production container image identity is malformed"
+                )
+            data_volume: dict[str, Any] | None = None
             if service == "lab-postgres":
                 bindings = host.get("PortBindings")
+                data_mounts = [
+                    mount
+                    for mount in mounts
+                    if isinstance(mount, dict)
+                    and mount.get("Destination")
+                    == "/var/lib/postgresql/data"
+                ]
                 if (
                     not running
                     or state.get("Paused") is not False
@@ -2025,8 +2146,33 @@ class Reconciliation:
                     or not isinstance(bindings, dict)
                     or bindings.get("5432/tcp")
                     != [{"HostIp": "", "HostPort": str(DATABASE_PORT)}]
+                    or len(data_mounts) != 1
                 ):
                     raise ReconcileError("production PostgreSQL runtime identity differs")
+                mount = data_mounts[0]
+                if (
+                    mount.get("Type") != "volume"
+                    or not isinstance(mount.get("Name"), str)
+                    or not mount["Name"]
+                    or not isinstance(mount.get("Source"), str)
+                    or not Path(mount["Source"]).is_absolute()
+                    or mount.get("Destination")
+                    != "/var/lib/postgresql/data"
+                    or not isinstance(mount.get("Driver"), str)
+                    or not mount["Driver"]
+                    or mount.get("RW") is not True
+                ):
+                    raise ReconcileError(
+                        "production PostgreSQL data-volume identity differs"
+                    )
+                data_volume = {
+                    "type": "volume",
+                    "name": mount["Name"],
+                    "source": mount["Source"],
+                    "destination": mount["Destination"],
+                    "driver": mount["Driver"],
+                    "read_write": True,
+                }
             elif running or state.get("Status") not in {"created", "exited", "dead"}:
                 raise ReconcileError(
                     "production Backend/Web/init containers must remain stopped"
@@ -2036,8 +2182,15 @@ class Reconciliation:
                     "id": identifier,
                     "name": name,
                     "service": service,
-                    "image": record.get("Image"),
-                    "config_image": config.get("Image"),
+                    "image": image_id,
+                    "config_image": configured_image,
+                    "config_env_sha256": sha256_bytes(
+                        canonical_json_bytes(config_environment)
+                    ),
+                    "labels_sha256": sha256_bytes(
+                        canonical_json_bytes(labels)
+                    ),
+                    "data_volume": data_volume,
                     "status": state.get("Status"),
                     "running": running,
                     "finished_at": (
@@ -2088,10 +2241,36 @@ class Reconciliation:
             or values["MainPID"] != "0"
         ):
             raise ReconcileError(f"{unit} must remain stopped during maintenance")
+        fragment_sha256: str | None = None
+        if values["LoadState"] == "loaded":
+            fragment = Path(values["FragmentPath"])
+            try:
+                metadata = fragment.lstat()
+            except OSError as exc:
+                raise ReconcileError(
+                    f"{unit} installed fragment is unavailable"
+                ) from exc
+            if (
+                not fragment.is_absolute()
+                or fragment.is_symlink()
+                or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o022
+            ):
+                raise ReconcileError(
+                    f"{unit} installed fragment is unsafe"
+                )
+            fragment_sha256 = sha256_file(fragment)
+        elif values["FragmentPath"]:
+            raise ReconcileError(
+                f"{unit} absent fragment path is inconsistent"
+            )
+        values["FragmentSHA256"] = fragment_sha256
         return values
 
     def _runtime_stop_fence(self) -> dict[str, Any]:
         return {
+            "database_system_identifier": SYSTEM_IDENTIFIER,
             "containers": self._production_container_fence(),
             "monomer_md_unit": self._worker_unit_fence(
                 "nexpoly-monomer-md-worker.service", required=True
@@ -2101,75 +2280,80 @@ class Reconciliation:
             ),
         }
 
+    def _require_takeover_runtime_match(
+        self,
+        takeover: Mapping[str, Any],
+        current: Mapping[str, Any],
+    ) -> None:
+        containers = current.get("containers")
+        if not isinstance(containers, list):
+            raise ReconcileError(
+                "production stopped-runtime container fence is malformed"
+            )
+        by_service = {
+            record.get("service"): record
+            for record in containers
+            if isinstance(record, dict)
+            and isinstance(record.get("service"), str)
+        }
+        postgres = by_service.get("lab-postgres")
+        backend = by_service.get("backend")
+        web = by_service.get("nginx")
+        md_unit = current.get("monomer_md_unit")
+        if (
+            len(by_service) != len(containers)
+            or not isinstance(postgres, dict)
+            or not isinstance(backend, dict)
+            or not isinstance(web, dict)
+            or not isinstance(md_unit, dict)
+            or current.get("database_system_identifier")
+            != SYSTEM_IDENTIFIER
+            or takeover.get("readers_stopped") is not True
+            or takeover.get("postgres_running_untouched") is not True
+            or takeover.get("postgres_system_identifier")
+            != SYSTEM_IDENTIFIER
+            or takeover.get("postgres_container_id")
+            != postgres.get("id")
+            or takeover.get("postgres_image_id")
+            != postgres.get("image")
+            or not isinstance(postgres.get("data_volume"), dict)
+            or takeover.get("postgres_data_volume")
+            != postgres["data_volume"].get("name")
+            or takeover.get("backend_container_id")
+            != backend.get("id")
+            or takeover.get("backend_image_id")
+            != backend.get("image")
+            or takeover.get("web_container_id") != web.get("id")
+            or takeover.get("web_image_id") != web.get("image")
+            or takeover.get("worker_unit_name")
+            != "nexpoly-monomer-md-worker.service"
+            or takeover.get("worker_unit_sha256")
+            != md_unit.get("FragmentSHA256")
+        ):
+            raise ReconcileError(
+                "current stopped readers or PostgreSQL differ from legacy "
+                "takeover fence"
+            )
+
     def _establish_runtime_stop_fence(
-        self, marker: dict[str, Any]
-    ) -> tuple[dict[str, Any], bool]:
+        self,
+        marker: dict[str, Any],
+        takeover_runtime: Mapping[str, Any],
+    ) -> dict[str, Any]:
         current = self._runtime_stop_fence()
+        self._require_takeover_runtime_match(
+            takeover_runtime,
+            current,
+        )
         existing = marker.get("runtime_stop_fence")
         if existing is None:
             self._write_marker(marker, "runtime-fenced", runtime_stop_fence=current)
-            return current, False
+            return current
         if existing == current:
-            return current, False
-        phase = self._validate_marker_shape(marker)
-        if MARKER_PHASE_INDEX[phase] < MARKER_PHASE_INDEX["backup-started"]:
-            self._adopt_runtime_stop_fence(
-                marker, current, reason="pre_backup_recovery"
-            )
-            return current, False
-        return current, True
-
-    def _adopt_runtime_stop_fence(
-        self,
-        marker: dict[str, Any],
-        current: Mapping[str, Any],
-        *,
-        reason: str,
-    ) -> None:
-        previous = marker.get("runtime_stop_fence")
-        history = list(marker.get("runtime_stop_fence_history", []))
-        if previous is not None and previous != current:
-            history.append(
-                {
-                    "reason": reason,
-                    "replaced_at": utc_now(),
-                    "previous": previous,
-                }
-            )
-        phase = self._validate_marker_shape(marker)
-        self._write_marker(
-            marker,
-            phase,
-            runtime_stop_fence=dict(current),
-            runtime_stop_fence_history=history,
-        )
-
-    def _reset_precommit_evidence(
-        self, marker: dict[str, Any], current: Mapping[str, Any]
-    ) -> None:
-        backup = marker.get("database_backup")
-        if isinstance(backup, dict):
-            self._remove_owned_container(self._container_name(), backup)
-        for root in (self.audit_dir, self.backup_dir):
-            for path in list(root.iterdir()):
-                require_private_file(path)
-                path.unlink()
-            fsync_directory(root)
-        history = list(marker.get("runtime_stop_fence_history", []))
-        previous = marker.get("runtime_stop_fence")
-        if previous != current:
-            history.append(
-                {
-                    "reason": "precommit_evidence_rebuilt_after_runtime_change",
-                    "replaced_at": utc_now(),
-                    "previous": previous,
-                }
-            )
-        self._replace_marker(
-            marker,
-            "runtime-fenced",
-            runtime_stop_fence=dict(current),
-            runtime_stop_fence_history=history,
+            return current
+        raise ReconcileError(
+            "production stopped-runtime fence changed; the operation cannot "
+            "adopt replacement readers or PostgreSQL"
         )
 
     def _revalidate_runtime_stop_fence(self, marker: Mapping[str, Any]) -> None:
@@ -2250,6 +2434,9 @@ class Reconciliation:
         self, marker: Mapping[str, Any], binaries: Mapping[str, Any]
     ) -> None:
         control, source, current_binaries = self.identities()
+        bridge_authority, takeover_runtime = self._bridge_authority(
+            control, source
+        )
         expected = _marker_identity(
             operation_id=self.operation_id,
             control=control,
@@ -2257,10 +2444,21 @@ class Reconciliation:
             binaries=current_binaries,
             database_endpoint=self.database_endpoint,
             restore_image=self._image_identity(),
+            bridge_authority=bridge_authority,
         )
         self._bind_restore_image(expected["restore_image"])
         if marker.get("identity") != expected or current_binaries != binaries:
             raise ReconcileError("maintenance execution identity changed")
+        runtime_stop_fence = marker.get("runtime_stop_fence")
+        if runtime_stop_fence is not None:
+            if not isinstance(runtime_stop_fence, dict):
+                raise ReconcileError(
+                    "maintenance stopped-runtime identity is malformed"
+                )
+            self._require_takeover_runtime_match(
+                takeover_runtime,
+                runtime_stop_fence,
+            )
 
     def _evidence_file_inventory(self) -> dict[str, dict[str, object]]:
         paths = {
@@ -2322,6 +2520,10 @@ class Reconciliation:
             "database_after": fresh,
             "database_backup": marker["database_backup"],
             "isolated_restore": marker["isolated_restore"],
+            "runtime_stop_fence": marker["runtime_stop_fence"],
+            "runtime_stop_fence_sha256": sha256_bytes(
+                canonical_json_bytes(marker["runtime_stop_fence"])
+            ),
             "binaries": dict(binaries),
             "files": files,
             "completed_at": completed_at,
@@ -2378,6 +2580,12 @@ class Reconciliation:
             or audit.get("database_before") != marker.get("before")
             or audit.get("database_backup") != marker.get("database_backup")
             or audit.get("isolated_restore") != marker.get("isolated_restore")
+            or audit.get("runtime_stop_fence")
+            != marker.get("runtime_stop_fence")
+            or audit.get("runtime_stop_fence_sha256")
+            != sha256_bytes(
+                canonical_json_bytes(marker.get("runtime_stop_fence"))
+            )
             or audit.get("binaries") != binaries
             or marker.get("audit_manifest_sha256") != sha256_file(audit_path)
         ):
@@ -2413,6 +2621,9 @@ class Reconciliation:
             self._conflicting_markers()
             self._prepare_roots()
             control, source, binaries = self.identities()
+            bridge_authority, takeover_runtime = self._bridge_authority(
+                control, source
+            )
             image = self._image_identity()
             identity = _marker_identity(
                 operation_id=self.operation_id,
@@ -2421,17 +2632,15 @@ class Reconciliation:
                 binaries=binaries,
                 database_endpoint=self.database_endpoint,
                 restore_image=image,
+                bridge_authority=bridge_authority,
             )
             marker = self._new_marker(identity)
-            current_runtime_fence, runtime_fence_changed = (
-                self._establish_runtime_stop_fence(marker)
+            current_runtime_fence = self._establish_runtime_stop_fence(
+                marker,
+                takeover_runtime,
             )
             phase = self._validate_marker_shape(marker)
-            if (
-                runtime_fence_changed
-                or MARKER_PHASE_INDEX[phase]
-                >= MARKER_PHASE_INDEX["mutation-intent"]
-            ):
+            if MARKER_PHASE_INDEX[phase] >= MARKER_PHASE_INDEX["mutation-intent"]:
                 with self.session_factory(self._pg_environment) as session:
                     try:
                         database_phase, locked = self._begin_recovery_locked(session)
@@ -2452,12 +2661,6 @@ class Reconciliation:
                                 )
                                 session.command("COMMIT")
                                 return result
-                            if runtime_fence_changed:
-                                self._adopt_runtime_stop_fence(
-                                    marker,
-                                    current_runtime_fence,
-                                    reason="post_commit_recovery",
-                                )
                             self._revalidate_runtime_stop_fence(marker)
                             _require_post_matches_before(marker.get("before"), locked)
                             archive = marker.get("database_backup")
@@ -2494,11 +2697,6 @@ class Reconciliation:
                             raise ReconcileError(
                                 "committed ledger-alias marker has pre-mutation database"
                             )
-                        if runtime_fence_changed:
-                            self._reset_precommit_evidence(
-                                marker, current_runtime_fence
-                            )
-                            phase = self._validate_marker_shape(marker)
                         session.command("ROLLBACK")
                     except BaseException:
                         with contextlib.suppress(BaseException):
