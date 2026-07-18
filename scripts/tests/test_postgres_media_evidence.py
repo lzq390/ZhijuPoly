@@ -5312,9 +5312,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 service_file_sha256="sha256:" + "7" * 64,
                 descriptors=(descriptor_value,),
                 required_online_databases=(),
-                boundary=MEDIA.seal_discovery_boundary(
-                    MEDIA.DiscoveryPolicy(backup_roots=(backups,))
-                ),
+                boundary={},
             )
             with tempfile.TemporaryDirectory(
                 prefix="postgres-media-real-volume-"
@@ -5552,7 +5550,9 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 service_file_sha256="sha256:" + "7" * 64,
                 descriptors=(descriptor_value,),
                 required_online_databases=(),
-                boundary={},
+                boundary=MEDIA.seal_discovery_boundary(
+                    MEDIA.DiscoveryPolicy(backup_roots=(backups,))
+                ),
             )
             operation = MEDIA.ScratchOperation.begin(
                 evidence,
