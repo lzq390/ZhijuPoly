@@ -8691,10 +8691,228 @@ class PolytaoContractMaintenance:
     def _write_marker(self, marker: dict[str, Any]) -> None:
         atomic_json(self.marker_path, marker)
 
-    def _write_current_state(self, state: dict[str, Any]) -> None:
-        """Persist contract state through an overridable storage boundary."""
+    def _project_current_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Project maintenance state into the exact durable state schema."""
 
-        atomic_json(self.state_path, state)
+        return json.loads(json.dumps(state))
+
+    def _prepare_current_state_candidate(
+        self,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build the exact post-contract document before sealing commit intent."""
+
+        return self._project_current_state(state)
+
+    @staticmethod
+    def _sealed_state(
+        marker: dict[str, Any],
+        *,
+        field: str,
+        digest_field: str,
+        label: str,
+        required: bool,
+    ) -> dict[str, Any] | None:
+        state = marker.get(field)
+        digest = marker.get(digest_field)
+        if state is None and digest is None and not required:
+            return None
+        if (
+            not isinstance(state, dict)
+            or not isinstance(digest, str)
+            or DIGEST_RE.fullmatch(digest) is None
+            or canonical_json_digest(state) != digest
+        ):
+            raise ReleaseError(f"0012 marker {label} seal is invalid")
+        return state
+
+    def _state_transition_from_marker(
+        self,
+        marker: dict[str, Any],
+        *,
+        require_postcondition: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        previous_state = marker.get("previous_state")
+        if not isinstance(previous_state, dict):
+            raise ReleaseError("0012 marker is missing previous release state")
+        precondition = self._sealed_state(
+            marker,
+            field="current_state_precondition",
+            digest_field="current_state_precondition_sha256",
+            label="current-state precondition",
+            required=True,
+        )
+        assert precondition is not None
+        if precondition != self._project_current_state(previous_state):
+            raise ReleaseError(
+                "0012 marker current-state precondition differs from previous state"
+            )
+        postcondition = self._sealed_state(
+            marker,
+            field="current_state_postcondition",
+            digest_field="current_state_postcondition_sha256",
+            label="current-state postcondition",
+            required=require_postcondition,
+        )
+        return precondition, postcondition
+
+    def _seal_current_state_precondition(
+        self,
+        marker: dict[str, Any],
+        previous_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        precondition = self._project_current_state(previous_state)
+        marker["current_state_precondition"] = precondition
+        marker["current_state_precondition_sha256"] = canonical_json_digest(
+            precondition
+        )
+        return precondition
+
+    def _seal_current_state_postcondition(
+        self,
+        marker: dict[str, Any],
+        next_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        candidate = self._prepare_current_state_candidate(next_state)
+        marker["current_state_postcondition"] = candidate
+        marker["current_state_postcondition_sha256"] = canonical_json_digest(
+            candidate
+        )
+        return candidate
+
+    def _load_persisted_current_state(self) -> dict[str, Any]:
+        if not self.state_path.is_file() or self.state_path.is_symlink():
+            raise ReleaseError("0012 current deployment state is unavailable")
+        state = self._load_operation_document(
+            self.state_path,
+            "current deployment state",
+        )
+        if not isinstance(state, dict):
+            raise ReleaseError("0012 current deployment state is invalid")
+        return state
+
+    def _current_state_transition_status(
+        self,
+        marker: dict[str, Any],
+        *,
+        require_postcondition: bool,
+    ) -> str:
+        precondition, postcondition = self._state_transition_from_marker(
+            marker,
+            require_postcondition=require_postcondition,
+        )
+        current = self._load_persisted_current_state()
+        if current == precondition:
+            return "precondition"
+        if postcondition is not None and current == postcondition:
+            return "postcondition"
+        raise ReleaseError(
+            "0012 current deployment state is neither exact precondition nor "
+            "exact postcondition"
+        )
+
+    def _revalidate_current_state_authority(
+        self,
+        marker: dict[str, Any],
+        *,
+        require_postcondition: bool,
+    ) -> str:
+        """Freshly re-open state through the maintenance authority boundary."""
+
+        status = self._current_state_transition_status(
+            marker,
+            require_postcondition=require_postcondition,
+        )
+        precondition, postcondition = self._state_transition_from_marker(
+            marker,
+            require_postcondition=require_postcondition,
+        )
+        expected = (
+            precondition if status == "precondition" else postcondition
+        )
+        if expected is None:
+            raise ReleaseError("0012 current-state authority has no sealed identity")
+        current = self._load_current_state(allow_completed_contract=True)
+        if (
+            self._project_current_state(current) != expected
+            or self._load_persisted_current_state() != expected
+        ):
+            raise ReleaseError(
+                "0012 current deployment authority changed during the operation"
+            )
+        return status
+
+    def _write_current_state(self, state: dict[str, Any]) -> None:
+        """Commit only the exact marker-sealed post-state from the exact pre-state."""
+
+        marker = self._load_operation_document(
+            self.marker_path,
+            "recovery marker",
+        )
+        precondition, postcondition = self._state_transition_from_marker(
+            marker,
+            require_postcondition=True,
+        )
+        candidate = self._prepare_current_state_candidate(state)
+        if candidate != postcondition:
+            raise ReleaseError(
+                "0012 state commit differs from its sealed postcondition"
+            )
+        status = self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=True,
+        )
+        if status == "postcondition":
+            return
+        if status != "precondition":
+            raise ReleaseError("0012 state commit precondition is invalid")
+        atomic_json(self.state_path, candidate)
+        if (
+            self._load_persisted_current_state() != postcondition
+            or self._revalidate_current_state_authority(
+                marker,
+                require_postcondition=True,
+            )
+            != "postcondition"
+        ):
+            raise ReleaseError("0012 current deployment state did not commit exactly")
+
+    def _restore_current_state(
+        self,
+        previous_state: dict[str, Any],
+    ) -> None:
+        """Restore only from the exact sealed post-state; accept exact pre on retry."""
+
+        marker = self._load_operation_document(
+            self.marker_path,
+            "recovery marker",
+        )
+        precondition, _postcondition = self._state_transition_from_marker(
+            marker,
+            require_postcondition=False,
+        )
+        if self._project_current_state(previous_state) != precondition:
+            raise ReleaseError(
+                "0012 rollback state differs from its sealed precondition"
+            )
+        status = self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
+        if status == "precondition":
+            return
+        if status != "postcondition":
+            raise ReleaseError("0012 rollback current-state authority is invalid")
+        atomic_json(self.state_path, precondition)
+        if (
+            self._load_persisted_current_state() != precondition
+            or self._revalidate_current_state_authority(
+                marker,
+                require_postcondition=False,
+            )
+            != "precondition"
+        ):
+            raise ReleaseError("0012 previous deployment state did not restore exactly")
 
     def _load_operation_document(
         self,
@@ -9846,6 +10064,18 @@ class PolytaoContractMaintenance:
         *,
         recorded_database_inventory: object | None = None,
     ) -> None:
+        marker = self._load_operation_document(
+            self.marker_path,
+            "recovery marker",
+        )
+        # Refuse a foreign but structurally valid state before any destructive
+        # database restore.  Exact pre-state means a prior restore committed
+        # and is a valid idempotent retry; exact post-state is the only state
+        # this rollback is authorised to replace.
+        self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
         recorded_external_inventory = None
         if isinstance(recorded_database_inventory, dict):
             recorded_external_inventory = recorded_database_inventory.get(
@@ -9867,8 +10097,14 @@ class PolytaoContractMaintenance:
                 ["systemctl", "--user", "stop", "nexpoly-monomer-md-worker.service"],
                 env=environment,
             )
+        # Re-open the authority after the potentially long drain/stop phase so
+        # a competing state transition cannot silently authorise this restore.
+        self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
         self.controller.restore_database(environment, release=release)
-        self._write_current_state(previous_state)
+        self._restore_current_state(previous_state)
         self.controller.run(
             self.controller.compose(
                 release,
@@ -9931,6 +10167,10 @@ class PolytaoContractMaintenance:
         previous_state = marker.get("previous_state")
         if not isinstance(previous_state, dict):
             raise ReleaseError("0012 recovery marker is missing previous release state")
+        transition_status = self._revalidate_current_state_authority(
+            marker,
+            require_postcondition=False,
+        )
         environment = self.controller.environment()
         current_release = self._bind_current_release(previous_state)
         self.controller.candidate_dir = current_release
@@ -9958,8 +10198,17 @@ class PolytaoContractMaintenance:
             initial_inventory=inventory,
         )
         approved = self._approved_record(current_state)
-        if (
+        if transition_status == "postcondition" and not (
             approved is not None
+            and approved.get("checksum") == POLYTAO_CONTRACT_CHECKSUM
+            and approved.get("operation_id") == self.operation_id
+        ):
+            raise ReleaseError(
+                "0012 sealed postcondition lacks its exact contract approval"
+            )
+        if (
+            transition_status == "postcondition"
+            and approved is not None
             and approved.get("checksum") == POLYTAO_CONTRACT_CHECKSUM
             and approved.get("operation_id") == self.operation_id
         ):
@@ -10134,6 +10383,7 @@ class PolytaoContractMaintenance:
                 "database_change_started": False,
                 "database_inventory": database_inventory,
             }
+            self._seal_current_state_precondition(marker, previous_state)
             self._write_marker(marker)
             worker_drained = False
             state_committed = False
@@ -10251,6 +10501,9 @@ class PolytaoContractMaintenance:
                     "approved_at": approved_at,
                 }
                 next_state["last_contract_operation"] = self.operation_id
+                self._seal_current_state_postcondition(marker, next_state)
+                marker["phase"] = "state-commit-started"
+                self._write_marker(marker)
                 journal = self._success_journal(
                     marker,
                     approval,
@@ -10283,6 +10536,26 @@ class PolytaoContractMaintenance:
                 durable_unlink(self.marker_path)
                 return next_state
             except Exception as exc:
+                if (
+                    not state_committed
+                    and marker.get("current_state_postcondition") is not None
+                ):
+                    # The atomic replace may have committed even when its
+                    # caller observed an exception.  Never restore the
+                    # database over an exact durable post-state.
+                    try:
+                        state_committed = (
+                            self._revalidate_current_state_authority(
+                                marker,
+                                require_postcondition=True,
+                            )
+                            == "postcondition"
+                        )
+                    except Exception:
+                        # The rollback path below performs the same exact-state
+                        # gate before any destructive restore and will retain
+                        # the marker/drain on a foreign state.
+                        pass
                 marker.update(
                     {
                         "status": "failed" if not state_committed else "resume-pending",

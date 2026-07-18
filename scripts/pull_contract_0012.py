@@ -2163,7 +2163,13 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
                 )
         return marker
 
-    def _write_current_state(self, state: dict[str, Any]) -> None:
+    def _project_current_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        return _pull_state_projection(self.binding, state)
+
+    def _prepare_current_state_candidate(
+        self,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
         projected = _pull_state_projection(self.binding, state)
         pair = self._contract_mutable_data_pair
         if pair is None:
@@ -2214,10 +2220,7 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
                 )
             projected["contract_external_database_audit"] = external_pair
         pull.validate_current_deployment_state(projected)
-        legacy.atomic_json(
-            self.state_path,
-            projected,
-        )
+        return projected
 
     def _external_database_authority(self) -> dict[str, str] | None:
         baseline = self.binding.external_database_audit
@@ -2253,6 +2256,26 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
 
     def _validate_installed_authority(self) -> None:
         fresh = load_binding(self.root, self.runtime_root, apply=self.apply)
+        allowed_states = [self.binding.current_state]
+        if self.marker_path.exists() or self.marker_path.is_symlink():
+            marker = self._load_operation_document(
+                self.marker_path,
+                "runtime recovery marker",
+            )
+            transition_fields = {
+                "current_state_precondition",
+                "current_state_precondition_sha256",
+                "current_state_postcondition",
+                "current_state_postcondition_sha256",
+            }
+            if transition_fields.intersection(marker):
+                precondition, postcondition = self._state_transition_from_marker(
+                    marker,
+                    require_postcondition=False,
+                )
+                allowed_states = [precondition]
+                if postcondition is not None:
+                    allowed_states.append(postcondition)
         if (
             fresh.repository != self.binding.repository
             or fresh.descriptor_sha256 != self.binding.descriptor_sha256
@@ -2267,10 +2290,28 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             != self.binding.external_database_audit_helper
             or fresh.external_database_audit
             != self.binding.external_database_audit
+            or fresh.current_state not in allowed_states
         ):
             raise PullContractError(
                 "installed 0012 maintenance authority changed during the operation"
             )
+
+    def _revalidate_current_state_authority(
+        self,
+        marker: dict[str, Any],
+        *,
+        require_postcondition: bool,
+    ) -> str:
+        self._validate_installed_authority()
+        try:
+            return super()._revalidate_current_state_authority(
+                marker,
+                require_postcondition=require_postcondition,
+            )
+        except legacy.ReleaseError as exc:
+            raise PullContractError(
+                "installed 0012 current-state authority changed"
+            ) from exc
 
     def _write_marker(self, marker: dict[str, Any]) -> None:
         self._validate_installed_authority()

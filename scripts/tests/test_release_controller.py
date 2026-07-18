@@ -2682,6 +2682,7 @@ class ReleaseControllerTests(unittest.TestCase):
             "database_change_started": False,
             "worker_drain_attempted": False,
         }
+        maintenance._seal_current_state_precondition(marker, previous_state)
         release_controller.atomic_json(maintenance.marker_path, marker)
         current_release = production / "ops" / "releases" / SHA
         inventory_with_verify = {
@@ -2792,6 +2793,11 @@ class ReleaseControllerTests(unittest.TestCase):
             "database_change_started": True,
             "worker_drain_attempted": True,
         }
+        maintenance._seal_current_state_precondition(marker, previous_state)
+        marker["current_state_postcondition"] = committed_state
+        marker["current_state_postcondition_sha256"] = (
+            release_controller.canonical_json_digest(committed_state)
+        )
         release_controller.atomic_json(maintenance.marker_path, marker)
         current_release = production / "ops" / "releases" / SHA
 
@@ -2864,6 +2870,7 @@ class ReleaseControllerTests(unittest.TestCase):
             "database_change_started": False,
             "worker_drain_attempted": False,
         }
+        maintenance._seal_current_state_precondition(marker, previous_state)
         release_controller.atomic_json(maintenance.marker_path, marker)
         current_release = production / "ops" / "releases" / SHA
 
@@ -2892,6 +2899,196 @@ class ReleaseControllerTests(unittest.TestCase):
         self.assertEqual(journal["status"], "recovered")
         self.assertTrue(journal["retry_requires_new_operation_id"])
         resume.assert_called_once_with({}, worker_was_drained=False)
+
+    def test_0012_state_commit_response_loss_accepts_only_sealed_postcondition(
+        self,
+    ) -> None:
+        operation_id = "contract-0012-fixture"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        approval = {
+            "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            "operation_id": operation_id,
+            "approved_at": "2026-07-18T00:00:00+00:00",
+        }
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+        }
+        postcondition = {
+            **previous_state,
+            "migrations": [
+                release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION,
+                release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            ],
+            "approved_contracts": [approval],
+            "schema_compatibility_floor": {
+                "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            },
+            "migration_epoch_barrier": {
+                "epoch": 1,
+                "contract": {
+                    "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                    "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                },
+                "operation_id": operation_id,
+                "approved_at": approval["approved_at"],
+            },
+            "last_contract_operation": operation_id,
+        }
+        release_controller.atomic_json(maintenance.state_path, previous_state)
+        marker = {
+            "operation_id": operation_id,
+            "source_sha": SHA,
+            "previous_state": previous_state,
+            "phase": "state-commit-started",
+        }
+        maintenance._seal_current_state_precondition(marker, previous_state)
+        maintenance._seal_current_state_postcondition(marker, postcondition)
+        release_controller.atomic_json(maintenance.marker_path, marker)
+
+        real_atomic_json = release_controller.atomic_json
+        response_lost = False
+
+        def write_then_lose_response(path, document, mode=0o600):  # type: ignore[no-untyped-def]
+            nonlocal response_lost
+            real_atomic_json(path, document, mode)
+            if path == maintenance.state_path and not response_lost:
+                response_lost = True
+                raise OSError("injected response loss after state replace")
+
+        with (
+            mock.patch.object(
+                release_controller,
+                "atomic_json",
+                side_effect=write_then_lose_response,
+            ),
+            self.assertRaisesRegex(OSError, "response loss"),
+        ):
+            maintenance._write_current_state(postcondition)
+
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.state_path),
+            postcondition,
+        )
+        # Recovery/retry treats only the exact sealed candidate as a lost
+        # successful response and does not replace it again.
+        with mock.patch.object(release_controller, "atomic_json") as rewrite:
+            maintenance._write_current_state(postcondition)
+        rewrite.assert_not_called()
+
+    def test_0012_restore_rejects_foreign_valid_state_before_database_restore(
+        self,
+    ) -> None:
+        operation_id = "contract-0012-fixture"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+            "deployed_at": "2026-07-18T00:00:00+00:00",
+        }
+        postcondition = {
+            **previous_state,
+            "deployed_at": "2026-07-18T00:01:00+00:00",
+        }
+        foreign_state = {
+            **previous_state,
+            "deployed_at": "2026-07-18T00:02:00+00:00",
+        }
+        release_controller.atomic_json(maintenance.state_path, foreign_state)
+        marker = {
+            "operation_id": operation_id,
+            "source_sha": SHA,
+            "previous_state": previous_state,
+        }
+        maintenance._seal_current_state_precondition(marker, previous_state)
+        marker["current_state_postcondition"] = postcondition
+        marker["current_state_postcondition_sha256"] = (
+            release_controller.canonical_json_digest(postcondition)
+        )
+        release_controller.atomic_json(maintenance.marker_path, marker)
+
+        with (
+            mock.patch.object(
+                maintenance,
+                "_pre_destructive_database_gate",
+            ) as database_gate,
+            mock.patch.object(
+                maintenance.controller,
+                "restore_database",
+            ) as restore_database,
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "neither exact precondition nor exact postcondition",
+            ),
+        ):
+            maintenance._restore_previous_database({}, previous_state)
+
+        database_gate.assert_not_called()
+        restore_database.assert_not_called()
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.state_path),
+            foreign_state,
+        )
+
+    def test_0012_state_restore_retry_accepts_exact_precondition_without_rewrite(
+        self,
+    ) -> None:
+        operation_id = "contract-0012-fixture"
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "production",
+            self.build_v2(),
+            operation_id,
+            False,
+        )
+        previous_state = {
+            "status": "success",
+            "source_sha": SHA,
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+        }
+        postcondition = {
+            **previous_state,
+            "migrations": [
+                release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION,
+                release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            ],
+        }
+        release_controller.atomic_json(maintenance.state_path, previous_state)
+        marker = {
+            "operation_id": operation_id,
+            "source_sha": SHA,
+            "previous_state": previous_state,
+        }
+        maintenance._seal_current_state_precondition(marker, previous_state)
+        marker["current_state_postcondition"] = postcondition
+        marker["current_state_postcondition_sha256"] = (
+            release_controller.canonical_json_digest(postcondition)
+        )
+        release_controller.atomic_json(maintenance.marker_path, marker)
+
+        with mock.patch.object(release_controller, "atomic_json") as rewrite:
+            maintenance._restore_current_state(previous_state)
+        rewrite.assert_not_called()
+        self.assertEqual(
+            release_controller.load_manifest(maintenance.state_path),
+            previous_state,
+        )
 
 
 

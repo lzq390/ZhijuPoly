@@ -1840,6 +1840,11 @@ class PullContract0012Tests(unittest.TestCase):
                 "approved_at": "2026-07-17T00:10:00+00:00",
             }
             committed["last_contract_operation"] = CONTRACT_OPERATION
+            previous = contract._legacy_state_projection(self.state)
+            marker["previous_state"] = previous
+            maintenance._seal_current_state_precondition(marker, previous)
+            maintenance._seal_current_state_postcondition(marker, committed)
+            maintenance._write_marker(marker)
             maintenance._write_current_state(committed)
             written_state = contract.pull.load_private_json(
                 maintenance.state_path
@@ -3305,7 +3310,26 @@ class PullContract0012Tests(unittest.TestCase):
         committed["last_contract_operation"] = CONTRACT_OPERATION
         mutable_pair = _contract_mutable_data_pair()
         maintenance._contract_mutable_data_pair = mutable_pair
-        maintenance._write_current_state(committed)
+        transition_marker = {
+            "operation_id": CONTRACT_OPERATION,
+            "source_sha": SHA,
+            "previous_state": previous,
+        }
+        maintenance._seal_current_state_precondition(
+            transition_marker,
+            previous,
+        )
+        maintenance._seal_current_state_postcondition(
+            transition_marker,
+            committed,
+        )
+        with mock.patch.object(
+            contract.pull,
+            "PullDeployController",
+            return_value=fake,
+        ):
+            maintenance._write_marker(transition_marker)
+            maintenance._write_current_state(committed)
 
         archive_evidence = {
             "schema_version": 2,
@@ -3334,9 +3358,7 @@ class PullContract0012Tests(unittest.TestCase):
         backup.write_bytes(b"verified dump")
         os.chmod(backup, 0o600)
         marker = {
-            "operation_id": CONTRACT_OPERATION,
-            "source_sha": SHA,
-            "previous_state": previous,
+            **contract.pull.load_private_json(maintenance.marker_path),
             "database_backup": str(backup),
             "database_backup_sha256": contract.legacy.sha256_file(backup),
             "audit_manifest_sha256": contract.legacy.sha256_file(audit_path),
@@ -3431,6 +3453,74 @@ class PullContract0012Tests(unittest.TestCase):
             mutable_pair,
         )
         resume.assert_called_once_with({}, worker_was_drained=True)
+
+    def test_fresh_pull_authority_rejects_valid_state_outside_sealed_transition(
+        self,
+    ) -> None:
+        fake = self._fake_controller()
+        with mock.patch.object(
+            contract.pull,
+            "PullDeployController",
+            return_value=fake,
+        ):
+            maintenance = contract.PullContractMaintenance(
+                self.production,
+                self.runtime,
+                CONTRACT_OPERATION,
+                apply=False,
+            )
+        previous = contract._legacy_state_projection(self.state)
+        committed = json.loads(json.dumps(previous))
+        committed["migrations"].append(contract.CONTRACT_VERSION)
+        approval = {
+            "version": contract.CONTRACT_VERSION,
+            "checksum": contract.CONTRACT_CHECKSUM,
+            "operation_id": CONTRACT_OPERATION,
+            "approved_at": "2026-07-18T00:00:00+00:00",
+        }
+        committed["approved_contracts"] = [approval]
+        committed["schema_compatibility_floor"] = {
+            "version": contract.CONTRACT_VERSION,
+            "checksum": contract.CONTRACT_CHECKSUM,
+        }
+        committed["migration_epoch_barrier"] = {
+            "epoch": 1,
+            "contract": {
+                "version": contract.CONTRACT_VERSION,
+                "checksum": contract.CONTRACT_CHECKSUM,
+            },
+            "operation_id": CONTRACT_OPERATION,
+            "approved_at": approval["approved_at"],
+        }
+        committed["last_contract_operation"] = CONTRACT_OPERATION
+        maintenance._contract_mutable_data_pair = _contract_mutable_data_pair()
+        marker = {
+            "operation_id": CONTRACT_OPERATION,
+            "source_sha": SHA,
+            "previous_state": previous,
+        }
+        maintenance._seal_current_state_precondition(marker, previous)
+        maintenance._seal_current_state_postcondition(marker, committed)
+        contract.legacy.atomic_json(maintenance.marker_path, marker)
+
+        foreign = json.loads(json.dumps(self.state))
+        foreign["deployed_at"] = "2026-07-18T00:01:00Z"
+        _write_private_json(fake.current_state_path, foreign)
+        with (
+            mock.patch.object(
+                contract.pull,
+                "PullDeployController",
+                return_value=fake,
+            ),
+            self.assertRaisesRegex(
+                contract.PullContractError,
+                "authority changed",
+            ),
+        ):
+            maintenance._revalidate_current_state_authority(
+                marker,
+                require_postcondition=True,
+            )
 
     def test_recovery_rejects_wrong_operation_before_cleanup(self) -> None:
         maintenance = object.__new__(contract.PullContractMaintenance)
