@@ -50,7 +50,7 @@ REQUIRED_LEDGER_NAMES = set(REQUIRED_LEDGER_ORDER)
 EXTERNAL_DATABASE_AUDIT_POLICY = {
     "schema_version": 1,
     "evidence_schema_version": 2,
-    "registry_schema_version": 1,
+    "registry_schema_version": 2,
     "require_exact_registry_digest": True,
     "require_fresh_snapshot": True,
 }

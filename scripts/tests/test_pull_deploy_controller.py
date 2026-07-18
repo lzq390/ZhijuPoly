@@ -285,6 +285,7 @@ def external_database_audit_binding(
     *,
     captured_at: str = "2026-07-17T00:00:00Z",
 ) -> dict[str, object]:
+    contracts = CONTROLLER._site_helper_contracts
     helper_path = (
         runtime / "config" / CONTROLLER.EXTERNAL_DATABASE_AUDIT_HELPER
     )
@@ -320,17 +321,205 @@ def external_database_audit_binding(
         for row in ledger
         if row["version"] <= "0008_polytao_backend_runtime"
     ]
-    media_id = "docker-volume:nexpoly_postgres_data"
-    source = {
-        "name": "nexpoly_postgres_data",
-        "driver": "local",
-        "mountpoint": (
-            "/var/lib/docker/volumes/nexpoly_postgres_data/_data"
-        ),
-        "labels_sha256": "sha256:" + "1" * 64,
-        "inspect_sha256": "sha256:" + "2" * 64,
-        "attached_container_ids": ["3" * 64],
-    }
+    postgres_image = "docker.io/library/postgres@sha256:" + "a" * 64
+    postgres_image_id = "sha256:" + "b" * 64
+    auditor_sha256 = "sha256:" + "7" * 64
+    service_file_sha256 = "sha256:" + "9" * 64
+
+    def attachment(container_id: str) -> dict[str, object]:
+        return {
+            "container_id": container_id,
+            "container_name": f"/fixture-{container_id[:12]}",
+            "container_image_id": "sha256:" + "c" * 64,
+            "container_config_sha256": "sha256:" + "d" * 64,
+            "container_created_at": "2026-07-17T00:00:00.000000000Z",
+            "container_started_at": "2026-07-17T00:00:01.000000000Z",
+            "container_finished_at": "0001-01-01T00:00:00Z",
+            "container_restart_count": 0,
+            "state": "running",
+            "destination": "/var/lib/postgresql/data",
+            "read_only": False,
+        }
+
+    def media_record(
+        *,
+        name: str,
+        database: str,
+        user: str,
+        migration_ledger: list[dict[str, str]],
+        disposition: str,
+        legacy_relation_present: bool,
+        container_id: str,
+        system_identifier: str,
+    ) -> dict[str, object]:
+        media_id = f"docker-volume:{name}"
+        source_identity = {
+            "name": name,
+            "driver": "local",
+            "mountpoint": f"/var/lib/docker/volumes/{name}/_data",
+            "labels_sha256": "sha256:" + "1" * 64,
+            "inspect_sha256": "sha256:" + "2" * 64,
+            "data_subpath": ".",
+            "attached": [attachment(container_id)],
+        }
+        database_identity = {
+            "database": database,
+            "system_identifier": system_identifier,
+            "system_identifier_scope": "source-cluster",
+            "database_oid": "16384",
+            "database_owner": user,
+            "encoding": "UTF8",
+            "collate": "C",
+            "ctype": "C",
+            "server_version_num": 160004,
+        }
+        ledger_sha256 = CONTROLLER.canonical_json_digest(migration_ledger)
+        ledger_relation = {
+            "state": "present",
+            "row_count": len(migration_ledger),
+            "schema_sha256": "sha256:" + "3" * 64,
+            "content_sha256": ledger_sha256,
+        }
+        legacy_relation = {
+            "state": (
+                "present" if legacy_relation_present else "absent"
+            ),
+            "row_count": 9 if legacy_relation_present else None,
+            "schema_sha256": (
+                "sha256:" + "4" * 64
+                if legacy_relation_present
+                else None
+            ),
+            "content_sha256": (
+                "sha256:" + "5" * 64
+                if legacy_relation_present
+                else None
+            ),
+        }
+        ledger_analysis, migration_0013, requires_0014 = (
+            contracts._external_media_ledger_v2(
+                migration_ledger,
+                legacy_relation_present=legacy_relation_present,
+                isolated=False,
+            )
+        )
+        assert requires_0014 is False
+        source_content_sha256 = CONTROLLER.canonical_json_digest(
+            {
+                "database_identity": database_identity,
+                "ledger": migration_ledger,
+                "ledger_relation": ledger_relation,
+                "legacy_relation": legacy_relation,
+            }
+        )
+        audit = {
+            "method": "live-read-only",
+            "complete": True,
+            "auditor_sha256": auditor_sha256,
+            "postgres_major": 16,
+            "postgres_image": postgres_image,
+            "postgres_image_id": postgres_image_id,
+            "pg_service_file_sha256": service_file_sha256,
+            "audited_at": captured_at,
+            "isolation": {
+                "source_mounted_by_auditor": False,
+                "source_started_by_auditor": False,
+                "transaction_read_only": True,
+            },
+        }
+        record: dict[str, object] = {
+            "media_id": media_id,
+            "kind": "docker_volume",
+            "database": database,
+            "disposition": disposition,
+            "source_identity_before": source_identity,
+            "source_identity_after": source_identity,
+            "source_system_identifier": system_identifier,
+            "source_content_sha256": source_content_sha256,
+            "content_identity_algorithm": "logical-database-identity-v2",
+            "database_identity": database_identity,
+            "database_identity_sha256": (
+                CONTROLLER.canonical_json_digest(database_identity)
+            ),
+            "current_user": user,
+            "transaction_read_only": True,
+            "role_superuser": False,
+            "role_create_db": False,
+            "role_create_role": False,
+            "ledger": migration_ledger,
+            "ledger_sha256": ledger_sha256,
+            "ledger_relation": ledger_relation,
+            "ledger_analysis": ledger_analysis,
+            "legacy_relation_present": legacy_relation_present,
+            "legacy_relation": legacy_relation,
+            "migration_0013": migration_0013,
+            "audit": audit,
+        }
+        audit["evidence_sha256"] = CONTROLLER.canonical_json_digest(record)
+        return record
+
+    production = media_record(
+        name="nexpoly_postgres_data",
+        database="nexpoly",
+        user="nexpoly_production_auditor",
+        migration_ledger=through_0011,
+        disposition="writable-target",
+        legacy_relation_present=True,
+        container_id="1" * 64,
+        system_identifier="7312345678901234561",
+    )
+    development = media_record(
+        name="nexpoly_dev_postgres_data",
+        database="nexpoly_dev",
+        user="nexpoly_dev_auditor",
+        migration_ledger=through_0012,
+        disposition="read-only-online",
+        legacy_relation_present=False,
+        container_id="2" * 64,
+        system_identifier="7312345678901234562",
+    )
+    health = media_record(
+        name="nexpoly_md_health_opt_postgres_data",
+        database="nexpoly_md_health_opt",
+        user="nexpoly_health_auditor",
+        migration_ledger=through_0008,
+        disposition="read-only-online",
+        legacy_relation_present=True,
+        container_id="3" * 64,
+        system_identifier="7312345678901234563",
+    )
+    media = sorted(
+        [production, development, health],
+        key=lambda record: record["media_id"],
+    )
+
+    def database_record(
+        stack: str,
+        record: dict[str, object],
+    ) -> dict[str, object]:
+        identity = record["database_identity"]
+        assert isinstance(identity, dict)
+        return {
+            "stack": stack,
+            "media_id": record["media_id"],
+            "database": record["database"],
+            "current_user": record["current_user"],
+            "transaction_read_only": record["transaction_read_only"],
+            "role_superuser": record["role_superuser"],
+            "role_create_db": record["role_create_db"],
+            "role_create_role": record["role_create_role"],
+            "system_identifier": identity["system_identifier"],
+            "database_identity_sha256": record[
+                "database_identity_sha256"
+            ],
+            "ledger": record["ledger"],
+            "ledger_sha256": record["ledger_sha256"],
+            "legacy_relation_present": record[
+                "legacy_relation_present"
+            ],
+        }
+
+    media_ids = [record["media_id"] for record in media]
     snapshot = {
         "schema_version": 2,
         "inventory_complete": True,
@@ -339,62 +528,30 @@ def external_database_audit_binding(
             "database": "nexpoly",
         },
         "media_registry": {
-            "schema_version": 1,
+            "schema_version": 2,
             "sha256": registry_sha256,
+            "discovery_boundary_sha256": "sha256:" + "e" * 64,
+            "discovery_state_sha256_before": "sha256:" + "f" * 64,
+            "discovery_state_sha256_after": "sha256:" + "f" * 64,
             "captured_at": captured_at,
-            "expected_media_ids": [media_id],
-            "discovered_media_ids": [media_id],
+            "expected_media_ids": media_ids,
+            "discovered_media_ids": media_ids,
+            "docker_inventory_sha256": "sha256:" + "6" * 64,
+            "backup_inventory_sha256": "sha256:" + "8" * 64,
+            "scanned_volume_names": sorted(
+                [
+                    "nexpoly_postgres_data",
+                    "nexpoly_dev_postgres_data",
+                    "nexpoly_md_health_opt_postgres_data",
+                ]
+            ),
+            "scanned_container_ids": ["1" * 64, "2" * 64, "3" * 64],
         },
         "databases": [
-            {
-                "stack": "nexpoly_dev",
-                "database": "nexpoly_dev",
-                "current_user": "nexpoly_dev_auditor",
-                "transaction_read_only": True,
-                "role_superuser": False,
-                "role_create_db": False,
-                "role_create_role": False,
-                "ledger": through_0012,
-                "legacy_relation_present": False,
-            },
-            {
-                "stack": "nexpoly_md_health_opt",
-                "database": "nexpoly_md_health_opt",
-                "current_user": "nexpoly_health_auditor",
-                "transaction_read_only": True,
-                "role_superuser": False,
-                "role_create_db": False,
-                "role_create_role": False,
-                "ledger": through_0008,
-                "legacy_relation_present": True,
-            },
+            database_record("nexpoly_dev", development),
+            database_record("nexpoly_md_health_opt", health),
         ],
-        "media": [
-            {
-                "media_id": media_id,
-                "kind": "docker_volume",
-                "database": "nexpoly",
-                "source_identity_before": source,
-                "source_identity_after": source,
-                "source_content_sha256": "sha256:" + "4" * 64,
-                "audit": {
-                    "method": "live-read-only",
-                    "complete": True,
-                    "evidence_sha256": "sha256:" + "6" * 64,
-                    "auditor_sha256": "sha256:" + "7" * 64,
-                    "postgres_major": 16,
-                    "audited_at": captured_at,
-                },
-                "ledger": through_0011,
-                "ledger_analysis": {
-                    "status": "canonical",
-                    "checksum_mismatches": [],
-                },
-                "legacy_relation_present": True,
-                "migration_0013": {"state": "absent", "checksum": None},
-                "disposition": "writable-target",
-            }
-        ],
+        "media": media,
         "requires_0014": False,
     }
     binding: dict[str, object] = {

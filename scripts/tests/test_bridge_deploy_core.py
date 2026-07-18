@@ -70,6 +70,17 @@ def policy() -> dict[str, object]:
 class BridgePolicyTests(unittest.TestCase):
     def test_policy_requires_one_exact_schema_bound_media_registry(self) -> None:
         document = policy()
+        self.assertEqual(
+            document["external_database_audit"],
+            {
+                "schema_version": 1,
+                "evidence_schema_version": 2,
+                "registry_schema_version": 2,
+                "require_exact_registry_digest": True,
+                "require_fresh_snapshot": True,
+                "media_registry_sha256": "sha256:" + "5" * 64,
+            },
+        )
         for label, mutate in (
             (
                 "floating digest",
