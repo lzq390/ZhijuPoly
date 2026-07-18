@@ -233,6 +233,7 @@ class HostGpuBroker:
         parented_execution_safe_to_release: (
             Callable[[Lease, Lease, tuple[Lease, ...]], bool] | None
         ) = None,
+        validate_workload: Callable[[Lease], None] | None = None,
         freeze_workload: Callable[[Lease], str] | None = None,
         kill_workload: Callable[[Lease], None] | None = None,
         workload_empty: Callable[[Lease], bool] | None = None,
@@ -258,6 +259,7 @@ class HostGpuBroker:
         self._mps_clients_alive = mps_clients_alive
         self._resolve_workload_identity = resolve_workload_identity
         self._parented_execution_safe_to_release = parented_execution_safe_to_release
+        self._validate_workload = validate_workload
         self._freeze_workload = freeze_workload
         self._kill_workload = kill_workload
         self._workload_empty = workload_empty
@@ -780,7 +782,8 @@ class HostGpuBroker:
                 )
             try:
                 if (
-                    self._freeze_workload is None
+                    self._validate_workload is None
+                    or self._freeze_workload is None
                     or self._kill_workload is None
                     or self._workload_empty is None
                 ):
@@ -788,17 +791,23 @@ class HostGpuBroker:
                         "workload_control_unavailable",
                         "dedicated cgroup freeze/kill control is unavailable",
                     )
-                freeze_token = self._freeze_workload(lease)
-                if not isinstance(freeze_token, str) or not freeze_token:
-                    raise BrokerError(
-                        "workload_control_unavailable",
-                        "dedicated cgroup freeze evidence is invalid",
-                    )
                 if self._terminate_mps_clients is None:
                     raise BrokerError(
                         "mps_control_unavailable",
                         "host MPS termination control is unavailable",
                     )
+                if self._mps_clients_alive is None:
+                    raise BrokerError(
+                        "mps_control_unavailable",
+                        "host MPS post-termination audit is unavailable",
+                    )
+                # NVIDIA's terminate_client request must run while the client
+                # can still service the MPS protocol.  First re-bind the exact
+                # lease scope, then terminate all currently reported contexts.
+                # Holding the Broker lock prevents a new lease, while the
+                # later freeze and second MPS query close the in-process
+                # reconnect race.
+                self._validate_workload(lease)
                 client_pids = self._terminate_mps_clients(lease)
                 if (
                     not isinstance(client_pids, tuple)
@@ -811,6 +820,17 @@ class HostGpuBroker:
                     raise BrokerError(
                         "mps_termination_failed",
                         "MPS termination evidence is invalid",
+                    )
+                freeze_token = self._freeze_workload(lease)
+                if not isinstance(freeze_token, str) or not freeze_token:
+                    raise BrokerError(
+                        "workload_control_unavailable",
+                        "dedicated cgroup freeze evidence is invalid",
+                    )
+                if self._mps_clients_alive(lease):
+                    raise BrokerError(
+                        "mps_termination_failed",
+                        "an MPS client appeared or survived after workload freeze",
                     )
                 self._kill_workload(lease)
                 if not self._workload_empty(lease):

@@ -37,8 +37,16 @@ def _settings(tmp_path: Path) -> WorkerSettings:
 
 
 class FakeCuda:
-    def __init__(self, count: int = 1):
+    def __init__(
+        self,
+        count: int = 1,
+        *,
+        device_uuid: object = bytes.fromhex(
+            "0818ca6bd9b6af6a71bfafe3777ee3a5"
+        ),
+    ):
         self.count = count
+        self.device_uuid = device_uuid
         self.set_devices: list[int] = []
         self.synchronized: list[int] = []
         self.empty_cache_calls = 0
@@ -61,12 +69,9 @@ class FakeCuda:
         assert device == 0
         return "Fake RTX 4090"
 
-    @staticmethod
-    def get_device_properties(device: int) -> Any:
+    def get_device_properties(self, device: int) -> Any:
         assert device == 0
-        return SimpleNamespace(
-            uuid=bytes.fromhex("0818ca6bd9b6af6a71bfafe3777ee3a5")
-        )
+        return SimpleNamespace(uuid=self.device_uuid)
 
     def empty_cache(self) -> None:
         self.empty_cache_calls += 1
@@ -78,6 +83,48 @@ def _fake_torch(count: int = 1) -> Any:
         version=SimpleNamespace(cuda="12.8"),
         cuda=FakeCuda(count),
     )
+
+
+@pytest.mark.parametrize(
+    "raw_uuid",
+    (
+        "0818ca6b-d9b6-af6a-71bf-afe3777ee3a5",
+        "GPU-0818CA6B-D9B6-AF6A-71BF-AFE3777EE3A5",
+        bytes.fromhex("0818ca6bd9b6af6a71bfafe3777ee3a5"),
+        bytearray.fromhex("0818ca6bd9b6af6a71bfafe3777ee3a5"),
+        SimpleNamespace(
+            # torch._C._CUuuid.bytes is vector<uint8_t> and pybind11 exposes
+            # it as a Python list in PyTorch 2.9.
+            bytes=list(
+                bytes.fromhex("0818ca6bd9b6af6a71bfafe3777ee3a5")
+            )
+        ),
+    ),
+)
+def test_cuda_uuid_accepts_str_bytes_and_torch_cuuid_forms(
+    raw_uuid: object,
+) -> None:
+    torch = SimpleNamespace(cuda=FakeCuda(device_uuid=raw_uuid))
+    assert AimnetRuntime._cuda_device_uuid(torch) == GPU_UUID_BY_INDEX["3"]
+
+
+@pytest.mark.parametrize(
+    "raw_uuid",
+    (
+        "0818ca6bd9b6af6a71bfafe3777ee3a5",
+        "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3",
+        b"too-short",
+        SimpleNamespace(bytes=[0] * 15),
+        SimpleNamespace(bytes=[0] * 15 + [256]),
+        SimpleNamespace(bytes=[0] * 15 + [True]),
+        object(),
+        None,
+    ),
+)
+def test_cuda_uuid_rejects_partial_or_ambiguous_forms(raw_uuid: object) -> None:
+    torch = SimpleNamespace(cuda=FakeCuda(device_uuid=raw_uuid))
+    with pytest.raises(RuntimeError, match="valid device UUID"):
+        AimnetRuntime._cuda_device_uuid(torch)
 
 
 def test_missing_model_fails_before_importing_torch(

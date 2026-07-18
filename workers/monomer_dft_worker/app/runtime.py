@@ -316,14 +316,41 @@ class AimnetRuntime:
             normalized = raw_uuid.strip()
             if normalized.lower().startswith("gpu-"):
                 normalized = normalized[4:]
+            if re.fullmatch(
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+                r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                normalized,
+            ) is None:
+                raise RuntimeError("CUDA reported an invalid device UUID")
             try:
                 return f"GPU-{uuid.UUID(normalized)}"
             except ValueError as exc:
                 raise RuntimeError("CUDA reported an invalid device UUID") from exc
         try:
-            raw_bytes = bytes(raw_uuid)
+            # PyTorch 2.9 exposes cudaDeviceProp.uuid as torch._C._CUuuid.
+            # Its public ``bytes`` property is a vector<uint8_t>, represented
+            # in Python as a 16-item list; the object itself has no buffer
+            # protocol and therefore cannot be passed to bytes().
+            byte_source = getattr(raw_uuid, "bytes", raw_uuid)
+            if isinstance(byte_source, (bytes, bytearray, memoryview)):
+                raw_bytes = bytes(byte_source)
+            elif (
+                isinstance(byte_source, (list, tuple))
+                and len(byte_source) == 16
+                and all(
+                    not isinstance(value, bool)
+                    and isinstance(value, int)
+                    and 0 <= value <= 255
+                    for value in byte_source
+                )
+            ):
+                raw_bytes = bytes(byte_source)
+            else:
+                raise TypeError
+            if len(raw_bytes) != 16:
+                raise ValueError
             return f"GPU-{uuid.UUID(bytes=raw_bytes)}"
-        except (TypeError, ValueError) as exc:
+        except (AttributeError, TypeError, ValueError) as exc:
             raise RuntimeError("CUDA did not expose a valid device UUID") from exc
 
     def _import_aimnet_calculator(self) -> tuple[Path, Any]:

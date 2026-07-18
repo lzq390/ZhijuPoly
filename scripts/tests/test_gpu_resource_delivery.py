@@ -44,7 +44,7 @@ class GpuResourceDeliveryTests(unittest.TestCase):
             "if [ \"${1:-}\" = '-d' ]; then exit 0; fi\n"
             "request=$(cat)\n"
             "if [ \"$request\" = 'ps' ]; then\n"
-            "  printf '%s\\n' 'PID ID SERVER DEVICE NAMESPACE COMMAND'\n"
+            "  exit 0\n"
             "fi\n",
             encoding="utf-8",
         )
@@ -277,6 +277,90 @@ class GpuResourceDeliveryTests(unittest.TestCase):
             completed = self._run_mps("start", environment)
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    @unittest.skipUnless(
+        os.getuid() == 1001 and os.getgid() == 1001,
+        "MPS helper intentionally requires the production 1001:1001 identity",
+    )
+    def test_mps_start_existing_control_accepts_exact_idle_states(self) -> None:
+        for response in ("", "Server not found"):
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as temporary:
+                temporary_root = Path(temporary)
+                environment = self._mps_environment(temporary_root)
+                inventory = Path(environment["NEXPOLY_GPU_EXTERNAL_RESERVATIONS"])
+                inventory.write_text(self._inventory_text(), encoding="utf-8")
+                inventory.chmod(0o600)
+                control = (
+                    Path(environment["NEXPOLY_GPU_STATE_ROOT"])
+                    / "mps-1"
+                    / "pipe"
+                    / "control"
+                )
+                control.parent.mkdir(parents=True)
+                os.mkfifo(control, 0o600)
+                mps_control = (
+                    Path(environment["PATH"].split(":", 1)[0])
+                    / "nvidia-cuda-mps-control"
+                )
+                mps_control.write_text(
+                    "#!/bin/sh\n"
+                    "if [ \"${1:-}\" = '-d' ]; then exit 0; fi\n"
+                    "request=$(cat)\n"
+                    "if [ \"$request\" = 'ps' ]; then\n"
+                    f"  printf '%s' '{response}'\n"
+                    "fi\n",
+                    encoding="utf-8",
+                )
+                mps_control.chmod(0o755)
+
+                completed = self._run_mps("start", environment)
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    @unittest.skipUnless(
+        os.getuid() == 1001 and os.getgid() == 1001,
+        "MPS helper intentionally requires the production 1001:1001 identity",
+    )
+    def test_mps_start_existing_control_rejects_noncanonical_idle_states(
+        self,
+    ) -> None:
+        for response in (
+            " ",
+            "Server not found extra",
+            "PID ID SERVER DEVICE NAMESPACE COMMAND",
+        ):
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as temporary:
+                temporary_root = Path(temporary)
+                environment = self._mps_environment(temporary_root)
+                inventory = Path(environment["NEXPOLY_GPU_EXTERNAL_RESERVATIONS"])
+                inventory.write_text(self._inventory_text(), encoding="utf-8")
+                inventory.chmod(0o600)
+                control = (
+                    Path(environment["NEXPOLY_GPU_STATE_ROOT"])
+                    / "mps-1"
+                    / "pipe"
+                    / "control"
+                )
+                control.parent.mkdir(parents=True)
+                os.mkfifo(control, 0o600)
+                mps_control = (
+                    Path(environment["PATH"].split(":", 1)[0])
+                    / "nvidia-cuda-mps-control"
+                )
+                mps_control.write_text(
+                    "#!/bin/sh\n"
+                    "if [ \"${1:-}\" = '-d' ]; then exit 0; fi\n"
+                    "request=$(cat)\n"
+                    "if [ \"$request\" = 'ps' ]; then\n"
+                    f"  printf '%s' '{response}'\n"
+                    "fi\n",
+                    encoding="utf-8",
+                )
+                mps_control.chmod(0o755)
+
+                completed = self._run_mps("start", environment)
+
+                self.assertNotEqual(completed.returncode, 0)
 
     @unittest.skipUnless(
         os.getuid() == 1001 and os.getgid() == 1001,
@@ -543,6 +627,92 @@ class GpuResourceDeliveryTests(unittest.TestCase):
                     / "mps-break-glass-audit.jsonl"
                 ).exists()
             )
+
+    @unittest.skipUnless(
+        os.getuid() == 1001 and os.getgid() == 1001,
+        "MPS helper intentionally requires the production 1001:1001 identity",
+    )
+    def test_mps_stop_accepts_exact_empty_and_server_not_found_idle_states(
+        self,
+    ) -> None:
+        for response in ("", "Server not found"):
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as temporary:
+                temporary_root = Path(temporary)
+                environment = self._mps_environment(temporary_root)
+                environment["NEXPOLY_GPU_MPS_BREAK_GLASS_REASON"] = "INC-idle-test"
+                control = (
+                    Path(environment["NEXPOLY_GPU_STATE_ROOT"])
+                    / "mps-1"
+                    / "pipe"
+                    / "control"
+                )
+                control.parent.mkdir(parents=True)
+                os.mkfifo(control, 0o600)
+                mps_control = (
+                    Path(environment["PATH"].split(":", 1)[0])
+                    / "nvidia-cuda-mps-control"
+                )
+                mps_control.write_text(
+                    "#!/bin/sh\n"
+                    "request=$(cat)\n"
+                    "if [ \"$request\" = 'ps' ]; then\n"
+                    f"  printf '%s' '{response}'\n"
+                    "fi\n",
+                    encoding="utf-8",
+                )
+                mps_control.chmod(0o755)
+
+                completed = self._run_mps(
+                    "stop",
+                    environment,
+                    extra_arguments=("--break-glass-without-broker",),
+                )
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    @unittest.skipUnless(
+        os.getuid() == 1001 and os.getgid() == 1001,
+        "MPS helper intentionally requires the production 1001:1001 identity",
+    )
+    def test_mps_stop_rejects_noncanonical_idle_responses(self) -> None:
+        for response in (
+            " ",
+            "Server not found extra",
+            "PID ID SERVER DEVICE NAMESPACE COMMAND",
+        ):
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as temporary:
+                temporary_root = Path(temporary)
+                environment = self._mps_environment(temporary_root)
+                environment["NEXPOLY_GPU_MPS_BREAK_GLASS_REASON"] = "INC-idle-test"
+                control = (
+                    Path(environment["NEXPOLY_GPU_STATE_ROOT"])
+                    / "mps-1"
+                    / "pipe"
+                    / "control"
+                )
+                control.parent.mkdir(parents=True)
+                os.mkfifo(control, 0o600)
+                mps_control = (
+                    Path(environment["PATH"].split(":", 1)[0])
+                    / "nvidia-cuda-mps-control"
+                )
+                mps_control.write_text(
+                    "#!/bin/sh\n"
+                    "request=$(cat)\n"
+                    "if [ \"$request\" = 'ps' ]; then\n"
+                    f"  printf '%s' '{response}'\n"
+                    "fi\n",
+                    encoding="utf-8",
+                )
+                mps_control.chmod(0o755)
+
+                completed = self._run_mps(
+                    "stop",
+                    environment,
+                    extra_arguments=("--break-glass-without-broker",),
+                )
+
+                self.assertNotEqual(completed.returncode, 0)
 
     @unittest.skipUnless(
         os.getuid() == 1001 and os.getgid() == 1001,

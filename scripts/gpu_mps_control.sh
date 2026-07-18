@@ -34,6 +34,48 @@ CUDA_VISIBLE_DEVICES="$expected_uuid"
 CUDA_MPS_PIPE_DIRECTORY="$state_root/mps-$index/pipe"
 CUDA_MPS_LOG_DIRECTORY="$state_root/mps-$index/log"
 
+require_exact_idle_mps_inventory() {
+  /usr/bin/python3 - <<'PY'
+import os
+import subprocess
+
+try:
+    completed = subprocess.run(
+        ["nvidia-cuda-mps-control"],
+        input=b"ps\n",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=5,
+        env=os.environ,
+    )
+except (OSError, subprocess.SubprocessError) as exc:
+    raise SystemExit("MPS client inventory query failed") from exc
+if completed.returncode != 0 or completed.stderr:
+    raise SystemExit("MPS client inventory query failed")
+output = completed.stdout
+if len(output) > 1024 * 1024:
+    raise SystemExit("MPS client inventory is oversized")
+if output in {b"", b"Server not found", b"Server not found\n"}:
+    raise SystemExit(0)
+try:
+    text = output.decode("ascii")
+except UnicodeDecodeError:
+    raise SystemExit("MPS client inventory is invalid") from None
+lines = text.splitlines()
+header = ["PID", "ID", "SERVER", "DEVICE", "NAMESPACE", "COMMAND"]
+if (
+    not lines
+    or any(not line.strip() for line in lines)
+    or lines[0].split() != header
+):
+    raise SystemExit("MPS client inventory is invalid")
+if len(lines) == 1:
+    raise SystemExit("MPS client inventory idle response is noncanonical")
+raise SystemExit("MPS still has active clients")
+PY
+}
+
 if [[ "$action" == "start" ]]; then
   gpu_record="$(nvidia-smi --query-gpu=uuid,compute_mode --format=csv,noheader,nounits -i "$index")"
   if [[ "$gpu_record" == *$'\n'* ]]; then
@@ -102,19 +144,7 @@ PY
       echo "existing MPS control channel is unsafe" >&2
       exit 1
     fi
-    if ! mps_clients="$(printf 'ps\n' | timeout 5 nvidia-cuda-mps-control)"; then
-      echo "existing MPS client inventory query failed" >&2
-      exit 1
-    fi
-    /usr/bin/python3 - "$mps_clients" <<'PY'
-import sys
-
-lines = [line.strip() for line in sys.argv[1].splitlines() if line.strip()]
-if not lines or lines[0].split() != ["PID", "ID", "SERVER", "DEVICE", "NAMESPACE", "COMMAND"]:
-    raise SystemExit("existing MPS client inventory is invalid")
-if len(lines) != 1:
-    raise SystemExit("GPU still has an active MPS client")
-PY
+    require_exact_idle_mps_inventory
   fi
 fi
 
@@ -154,20 +184,7 @@ if [[ "$(stat -c '%u:%g' "$CUDA_MPS_PIPE_DIRECTORY/control")" != "1001:1001" ]];
   echo "MPS control channel has an unexpected owner" >&2
   exit 1
 fi
-if ! mps_clients="$(printf 'ps\n' | timeout 5 nvidia-cuda-mps-control)"; then
-  echo "MPS client inventory query failed; refusing quit" >&2
-  exit 1
-fi
-/usr/bin/python3 - "$mps_clients" <<'PY'
-import sys
-
-lines = [line.strip() for line in sys.argv[1].splitlines() if line.strip()]
-header = ["PID", "ID", "SERVER", "DEVICE", "NAMESPACE", "COMMAND"]
-if not lines or lines[0].split() != header:
-    raise SystemExit("MPS client inventory is invalid; refusing quit")
-if len(lines) != 1:
-    raise SystemExit("MPS still has active clients; refusing quit")
-PY
+require_exact_idle_mps_inventory
 broker_socket="${NEXPOLY_GPU_BROKER_SOCKET:-$state_root/broker.sock}"
 if [[ -L "$broker_socket" ]]; then
   echo "GPU Broker socket path is unsafe; refusing MPS quit" >&2

@@ -665,16 +665,36 @@ def test_termination_evidence_is_fresh_for_every_cleanup_attempt(
 ) -> None:
     callbacks: list[str] = []
 
+    def validate(lease):
+        callbacks.append(f"validate:{lease.lease_id}")
+
     def terminate(lease):
-        callbacks.append(lease.lease_id)
+        callbacks.append(f"terminate:{lease.lease_id}")
         return (12_345,)
+
+    def freeze(lease):
+        callbacks.append(f"freeze:{lease.lease_id}")
+        return f"freeze-{len(callbacks)}-{lease.lease_id}"
+
+    def audit(lease):
+        callbacks.append(f"audit:{lease.lease_id}")
+        return False
+
+    def kill(lease):
+        callbacks.append(f"kill:{lease.lease_id}")
+
+    def empty(lease):
+        callbacks.append(f"empty:{lease.lease_id}")
+        return True
 
     broker = HostGpuBroker(
         tmp_path / "state.json",
+        validate_workload=validate,
         terminate_mps_clients=terminate,
-        freeze_workload=lambda lease: f"freeze-{len(callbacks)}-{lease.lease_id}",
-        kill_workload=lambda _lease: None,
-        workload_empty=lambda _lease: True,
+        freeze_workload=freeze,
+        mps_clients_alive=audit,
+        kill_workload=kill,
+        workload_empty=empty,
     )
     lease = _acquire(broker, component="md", environment="dev", kind="execution")
     broker.activate(lease.lease_id, lease.fencing_token, owner=_owner())
@@ -694,7 +714,15 @@ def test_termination_evidence_is_fresh_for_every_cleanup_attempt(
     assert first["freeze_token"] != repeated["freeze_token"]
     assert first["safe_to_signal"] is True
     assert first["client_pids"] == [12_345]
-    assert callbacks == [lease.lease_id, lease.lease_id]
+    expected_attempt = [
+        f"validate:{lease.lease_id}",
+        f"terminate:{lease.lease_id}",
+        f"freeze:{lease.lease_id}",
+        f"audit:{lease.lease_id}",
+        f"kill:{lease.lease_id}",
+        f"empty:{lease.lease_id}",
+    ]
+    assert callbacks == expected_attempt * 2
     assert broker.status()["leases"][0]["status"] == "terminating"
     with pytest.raises(BrokerError) as error:
         broker.activate(lease.lease_id, lease.fencing_token, owner=_owner())
@@ -709,8 +737,10 @@ def test_mps_termination_failure_quarantines_and_retains_suspect_lease(
 
     broker = HostGpuBroker(
         tmp_path / "state.json",
+        validate_workload=lambda _lease: None,
         terminate_mps_clients=terminate,
         freeze_workload=lambda lease: f"freeze-{lease.lease_id}",
+        mps_clients_alive=lambda _lease: False,
         kill_workload=lambda _lease: None,
         workload_empty=lambda _lease: True,
     )
@@ -735,6 +765,130 @@ def test_mps_termination_failure_quarantines_and_retains_suspect_lease(
     with pytest.raises(BrokerError) as unavailable:
         _acquire(broker, component="backend", environment="dev", kind="residency")
     assert unavailable.value.code == "gpu_capacity_unavailable"
+
+
+def test_mps_client_reconnect_after_termination_quarantines_before_kill(
+    tmp_path: Path,
+) -> None:
+    callbacks: list[str] = []
+
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        validate_workload=lambda lease: callbacks.append(
+            f"validate:{lease.lease_id}"
+        ),
+        terminate_mps_clients=lambda lease: (
+            callbacks.append(f"terminate:{lease.lease_id}") or ()
+        ),
+        freeze_workload=lambda lease: (
+            callbacks.append(f"freeze:{lease.lease_id}")
+            or f"freeze:{lease.lease_id}"
+        ),
+        mps_clients_alive=lambda lease: (
+            callbacks.append(f"audit:{lease.lease_id}") or True
+        ),
+        kill_workload=lambda lease: callbacks.append(f"kill:{lease.lease_id}"),
+        workload_empty=lambda lease: (
+            callbacks.append(f"empty:{lease.lease_id}") or True
+        ),
+    )
+    lease = _acquire(broker, component="md", environment="dev", kind="execution")
+    broker.activate(lease.lease_id, lease.fencing_token, owner=_owner())
+    _bind_test_workload(lease)
+
+    with pytest.raises(BrokerError) as error:
+        broker.prepare_process_termination(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=_owner(),
+        )
+
+    assert error.value.code == "gpu_runtime_unhealthy"
+    assert callbacks == [
+        f"validate:{lease.lease_id}",
+        f"terminate:{lease.lease_id}",
+        f"freeze:{lease.lease_id}",
+        f"audit:{lease.lease_id}",
+    ]
+    status = broker.status()
+    assert status["leases"][0]["status"] == "suspect"
+    assert status["leases"][0]["mps_termination_status"] == "failed"
+    assert lease.gpu_uuid in status["quarantined_gpus"]
+
+
+def test_mps_post_freeze_query_failure_quarantines_before_kill(
+    tmp_path: Path,
+) -> None:
+    killed = False
+
+    def fail_query(_lease):
+        raise BrokerError("mps_control_unavailable", "offline")
+
+    def kill(_lease):
+        nonlocal killed
+        killed = True
+
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        validate_workload=lambda _lease: None,
+        terminate_mps_clients=lambda _lease: (),
+        freeze_workload=lambda lease: f"freeze:{lease.lease_id}",
+        mps_clients_alive=fail_query,
+        kill_workload=kill,
+        workload_empty=lambda _lease: True,
+    )
+    lease = _acquire(broker, component="md", environment="dev", kind="execution")
+    broker.activate(lease.lease_id, lease.fencing_token, owner=_owner())
+    _bind_test_workload(lease)
+
+    with pytest.raises(BrokerError) as error:
+        broker.prepare_process_termination(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=_owner(),
+        )
+
+    assert error.value.code == "gpu_runtime_unhealthy"
+    assert killed is False
+    assert lease.gpu_uuid in broker.status()["quarantined_gpus"]
+
+
+def test_scope_revalidation_failure_prevents_mps_termination(
+    tmp_path: Path,
+) -> None:
+    terminated = False
+
+    def reject_scope(_lease):
+        raise BrokerError("workload_identity_mismatch", "scope drift")
+
+    def terminate(_lease):
+        nonlocal terminated
+        terminated = True
+        return ()
+
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        validate_workload=reject_scope,
+        terminate_mps_clients=terminate,
+        freeze_workload=lambda lease: f"freeze:{lease.lease_id}",
+        mps_clients_alive=lambda _lease: False,
+        kill_workload=lambda _lease: None,
+        workload_empty=lambda _lease: True,
+    )
+    lease = _acquire(broker, component="md", environment="dev", kind="execution")
+    broker.activate(lease.lease_id, lease.fencing_token, owner=_owner())
+    _bind_test_workload(lease)
+
+    with pytest.raises(BrokerError) as error:
+        broker.prepare_process_termination(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=_owner(),
+        )
+
+    assert error.value.code == "gpu_runtime_unhealthy"
+    assert terminated is False
+    assert lease.gpu_uuid in broker.status()["quarantined_gpus"]
 
 
 def test_mps_guard_uses_host_ps_pid_and_waits_for_cuda_success(tmp_path: Path) -> None:
@@ -787,6 +941,92 @@ def test_mps_guard_rejects_non_successful_termination(tmp_path: Path) -> None:
     with pytest.raises(BrokerError) as error:
         guard.terminate_lease_clients(lease)
     assert error.value.code == "mps_termination_failed"
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    ("", "Server not found", "Server not found\n"),
+)
+def test_mps_guard_accepts_only_exact_observed_idle_responses(
+    tmp_path: Path,
+    stdout: str,
+) -> None:
+    guard = MpsRuntimeGuard(
+        tmp_path,
+        run=lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=stdout,
+            stderr="",
+        ),
+    )
+
+    assert guard._query_clients(1) == ()
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    (
+        "\n",
+        " \n",
+        "Server not found\n\n",
+        " server not found\n",
+        "PID ID SERVER DEVICE NAMESPACE COMMAND\n",
+    ),
+)
+def test_mps_guard_rejects_noncanonical_idle_responses(
+    tmp_path: Path,
+    stdout: str,
+) -> None:
+    guard = MpsRuntimeGuard(
+        tmp_path,
+        run=lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=stdout,
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(BrokerError) as error:
+        guard._query_clients(1)
+    assert error.value.code == "mps_control_unavailable"
+
+
+def test_mps_guard_never_treats_unreadable_client_cgroup_as_absent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    guard = MpsRuntimeGuard(tmp_path)
+    monkeypatch.setattr(MpsRuntimeGuard, "__call__", lambda *_args: True)
+    monkeypatch.setattr(
+        guard,
+        "_query_clients",
+        lambda _index: (
+            MpsClient(
+                987_654,
+                1,
+                9001,
+                EXPECTED_GPU_UUIDS[1],
+                1,
+                "unknown",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_cgroup",
+        lambda _pid: (_ for _ in ()).throw(OSError("gone")),
+    )
+    broker = HostGpuBroker(tmp_path / "state.json")
+    lease = _acquire(broker, component="md", environment="dev", kind="execution")
+    lease.workload_pid = 123_456
+    lease.workload_process_start_ticks = 111
+    lease.workload_process_group_id = 123_456
+    lease.workload_cgroup = "0::/nexpoly/worker"
+
+    with pytest.raises(BrokerError) as error:
+        guard.lease_client_alive(lease)
+    assert error.value.code == "mps_control_unavailable"
 
 
 def test_register_workload_fences_live_descendant_pid_start_group_and_cgroup(
@@ -1183,6 +1423,8 @@ def test_job_cgroup_controller_registers_freezes_kills_and_collects_exact_scope(
     lease.workload_process_group_id = group_id
     lease.workload_cgroup = resolved[3]
 
+    controller.validate_active(lease)
+    assert (scope_path / "cgroup.freeze").read_text(encoding="ascii") == "0"
     assert controller.freeze(lease) == f"{lease.lease_id}:88888"
     assert (scope_path / "cgroup.freeze").read_text(encoding="ascii") == "1"
     controller.kill(lease)

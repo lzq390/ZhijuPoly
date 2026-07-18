@@ -103,16 +103,26 @@ automatic clear path. If the Broker cannot prove that an orphaned MPS client
 is gone, it retains the reservation.
 
 Cancellation, timeout, lease loss, and residual-child cleanup use NVIDIA's
-safe early-termination sequence plus cgroup-v2 containment. The Broker first
-freezes the dedicated lease cgroup, queries the selected card's MPS
-`ps` view, uses the host-namespace client PID reported there, and issues
-`terminate_client <server-pid> <host-client-pid>` for every client descended
-from the fenced lease owner. Only a `0`/`CUDA_SUCCESS` response permits
-`cgroup.kill`; the Broker then proves `cgroup.procs` empty before returning
-termination evidence. Evidence is regenerated for every cleanup attempt and
-is never reusable. Any freeze, query, termination, kill, or emptiness failure
-marks the lease suspect, keeps its capacity reserved, and persistently
-quarantines the GPU as runtime-corrupt.
+safe [client early-termination
+sequence](https://docs.nvidia.com/deploy/mps/latest/when-to-use-mps.html#client-early-termination)
+plus cgroup-v2 containment. The Broker first revalidates the dedicated
+lease-named scope while holding its allocation lock, queries the selected
+card's MPS `ps` view, uses the host-namespace client PID reported there, and
+issues `terminate_client <server-pid> <host-client-pid>` for every client
+owned by that scope. The client remains schedulable while MPS completes this
+request; freezing it first can block the control protocol. Only a
+`0`/`CUDA_SUCCESS` response permits the Broker to freeze the exact scope. It
+then queries MPS again while the workload is frozen, rejecting any surviving
+or newly connected client, before issuing `cgroup.kill` and proving
+`cgroup.procs` empty. Evidence is regenerated for every cleanup attempt and
+is never reusable. Any identity, query, termination, freeze, re-query, kill,
+or emptiness failure marks the lease suspect, keeps its capacity reserved,
+and persistently quarantines the GPU as runtime-corrupt.
+
+An MPS `ps` query has only two accepted idle responses: rc=0 with exactly
+empty stdout for a live server with no clients, or rc=0 with the single line
+`Server not found` before a server exists. A header-only response, whitespace,
+extra lines, nonzero exit, or any unparsable client row fails closed.
 
 Normal process exit is also fail-closed: release queries MPS again and refuses
 to delete a process-owning execution lease while any client remains in its

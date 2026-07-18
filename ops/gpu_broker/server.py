@@ -1150,6 +1150,11 @@ class JobCgroupController:
             )
         return host_pid, start_ticks, group_id, workload_cgroup
 
+    def validate_active(self, lease: Lease) -> None:
+        """Re-bind the exact live scope before asking MPS to terminate it."""
+
+        self._active_scope_path(lease)
+
     def freeze(self, lease: Lease) -> str:
         target = self._active_scope_path(lease)
         try:
@@ -1661,10 +1666,11 @@ class MpsRuntimeGuard:
                 "mps_control_unavailable",
                 "leased GPU MPS control channel is unavailable",
             )
-        return any(
-            self._device_matches(client.device_uuid, lease.gpu_uuid)
-            and self._client_belongs_to_lease(client, lease)
-            for client in self._query_clients(lease.gpu_index)
+        return bool(
+            self._strict_lease_clients(
+                lease,
+                self._query_clients(lease.gpu_index),
+            )
         )
 
     def unmanaged_client_alive(
@@ -1777,9 +1783,10 @@ class MpsRuntimeGuard:
             )
         clients = {
             (client.server_pid, client.client_pid): client
-            for client in self._query_clients(lease.gpu_index)
-            if self._device_matches(client.device_uuid, lease.gpu_uuid)
-            and self._client_belongs_to_lease(client, lease)
+            for client in self._strict_lease_clients(
+                lease,
+                self._query_clients(lease.gpu_index),
+            )
         }
         terminated: list[int] = []
         for server_pid, client_pid in sorted(clients):
@@ -1796,6 +1803,42 @@ class MpsRuntimeGuard:
                 )
             terminated.append(client_pid)
         return tuple(terminated)
+
+    def _strict_lease_clients(
+        self,
+        lease: Lease,
+        clients: tuple["MpsClient", ...],
+    ) -> tuple["MpsClient", ...]:
+        """Classify exact-scope clients without treating unknown as absent."""
+
+        if (
+            not isinstance(lease.workload_cgroup, str)
+            or not _cgroup_has_scoped_path(lease.workload_cgroup)
+        ):
+            raise BrokerError(
+                "workload_identity_unavailable",
+                "lease lacks an exact scoped cgroup for MPS client audit",
+            )
+        owned: list[MpsClient] = []
+        for client in clients:
+            if not self._device_matches(client.device_uuid, lease.gpu_uuid):
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "per-GPU MPS server reported a client on an unexpected device",
+                )
+            try:
+                client_cgroup = _read_cgroup(client.client_pid)
+            except (OSError, BrokerError) as exc:
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "cannot bind an MPS client to its host cgroup",
+                ) from exc
+            if _cgroup_is_same_or_descendant(
+                client_cgroup,
+                lease.workload_cgroup,
+            ):
+                owned.append(client)
+        return tuple(owned)
 
     def _client_belongs_to_lease(self, client: "MpsClient", lease: Lease) -> bool:
         if lease.workload_pid is None:
@@ -1819,12 +1862,24 @@ class MpsRuntimeGuard:
 
     def _query_clients(self, index: int) -> tuple["MpsClient", ...]:
         output = self._run_control(index, "ps")
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
-        if not lines:
-            raise BrokerError("mps_control_unavailable", "MPS ps response is empty")
+        # NVIDIA MPS has two observed, exact no-client responses: an empty
+        # stdout while a server is alive with zero clients, and a single
+        # ``Server not found`` line when no server has been created yet.
+        # Do not normalize arbitrary whitespace or extra lines into either
+        # trusted state.
+        if output == "" or output in {"Server not found", "Server not found\n"}:
+            return ()
+        lines = output.splitlines()
+        if not lines or any(not line.strip() for line in lines):
+            raise BrokerError("mps_control_unavailable", "MPS ps response is invalid")
         header = lines[0].split()
         if header != ["PID", "ID", "SERVER", "DEVICE", "NAMESPACE", "COMMAND"]:
             raise BrokerError("mps_control_unavailable", "MPS ps header is invalid")
+        if len(lines) == 1:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS ps header-only response is not a canonical idle state",
+            )
         clients: list[MpsClient] = []
         for line in lines[1:]:
             fields = line.split(maxsplit=5)
@@ -1882,7 +1937,11 @@ class MpsRuntimeGuard:
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise BrokerError("mps_control_unavailable", "MPS control query failed") from exc
-        if completed.returncode != 0:
+        if (
+            completed.returncode != 0
+            or completed.stderr
+            or len(completed.stdout) > 1024 * 1024
+        ):
             raise BrokerError("mps_control_unavailable", "MPS control query failed")
         return completed.stdout
 
@@ -2122,6 +2181,7 @@ def main() -> int:
         parented_execution_safe_to_release=(
             mps_guard.parented_execution_safe_to_release
         ),
+        validate_workload=cgroup_controller.validate_active,
         freeze_workload=cgroup_controller.freeze,
         kill_workload=cgroup_controller.kill,
         workload_empty=cgroup_controller.empty,
