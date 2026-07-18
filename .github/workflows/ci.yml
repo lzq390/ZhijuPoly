@@ -114,8 +114,6 @@ jobs:
           GPU_BROKER_ENVIRONMENT=dev docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.gpu-governed.yml config --quiet
           GPU_BROKER_ENVIRONMENT=prod docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.gpu-governed.yml config --quiet
           docker compose -f docker-compose.monomer-md-worker.yml config --quiet
-          docker compose -f docker-compose.monomer-md-worker.yml -f docker-compose.monomer-md-worker.gpu-governed.prod.yml config --quiet
-          docker compose -f docker-compose.monomer-md-worker.yml -f docker-compose.monomer-md-worker.gpu-governed.dev.yml config --quiet
           docker compose --project-name nexpoly_dft_dev \
             --env-file .env.monomer-dft.dev.example \
             -f docker-compose.monomer-dft-dev.yml config --quiet

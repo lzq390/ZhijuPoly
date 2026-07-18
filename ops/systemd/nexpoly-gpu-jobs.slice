@@ -1,0 +1,8 @@
+[Unit]
+Description=NexPoly transient GPU job scopes
+Documentation=man:systemd.slice(5)
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes

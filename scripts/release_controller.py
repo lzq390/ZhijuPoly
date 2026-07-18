@@ -4188,6 +4188,7 @@ class ReleaseController:
                 self.ops / "state" / "monomer-md-worker-socket" / "worker.sock"
             ),
             "MONOMER_MD_WORKER_MODE": "real",
+            "MONOMER_MD_GPU_SCOPE_LAUNCHER": "systemd-user-scope",
             "MONOMER_MD_GPU_BROKER_ENVIRONMENT": "prod",
             "MONOMER_MD_GPU_BROKER_SOCKET_PATH": str(
                 self.ops / "state" / "gpu-resource" / "broker.sock"

@@ -13136,6 +13136,7 @@ class PullDeployController:
             "MONOMER_MD_TRANSPORT_CUDA_SMOKE_ENABLED": "true",
             "NEXPOLY_GPU_DEVICE": "2",
             "MONOMER_MD_GPU_BROKER_ENABLED": "false",
+            "MONOMER_MD_GPU_SCOPE_LAUNCHER": "systemd-user-scope",
             "MONOMER_MD_GPU_BROKER_ENVIRONMENT": "prod",
             "MONOMER_MD_GPU_BROKER_SOCKET_PATH": str(
                 self.state_dir / "gpu-resource/broker.sock"

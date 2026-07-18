@@ -116,34 +116,40 @@ class GpuResourceDeliveryTests(unittest.TestCase):
         self.assertIn("MONOMER_MD_GPU_BROKER_ENABLED=false", worker)
         self.assertNotIn("gpu-broker/broker.sock:/app/gpu-broker", production)
 
-    def test_opt_in_gpu_compose_exposes_only_governed_devices_and_control_paths(self) -> None:
+    def test_compose_governance_is_backend_only_and_md_fails_closed(self) -> None:
         backend = (ROOT / "docker-compose.gpu-governed.yml").read_text(
             encoding="utf-8"
         )
-        md_prod = (
-            ROOT / "docker-compose.monomer-md-worker.gpu-governed.prod.yml"
+        md = (ROOT / "docker-compose.monomer-md-worker.yml").read_text(
+            encoding="utf-8"
+        )
+        md_unit = (
+            ROOT / "ops/systemd/nexpoly-monomer-md-worker.service"
         ).read_text(encoding="utf-8")
-        md_dev = (
-            ROOT / "docker-compose.monomer-md-worker.gpu-governed.dev.yml"
+        md_config = (
+            ROOT / "workers/monomer_md_worker/app/config.py"
         ).read_text(encoding="utf-8")
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
-        for source in (backend, md_prod, md_dev):
-            self.assertIn('user: "1001:1001"', source)
-            self.assertIn("/app/gpu-mps/broker.sock", source)
-            self.assertIn("com.nexpoly.gpu.registration", source)
-        self.assertIn('device_ids: ["1", "2", "3"]', md_prod)
-        self.assertIn('device_ids: ["1", "3"]', md_dev)
-        self.assertNotIn('"0"', md_prod + md_dev)
+        self.assertIn('user: "1001:1001"', backend)
+        self.assertIn("/app/gpu-mps/broker.sock", backend)
+        self.assertIn("com.nexpoly.gpu.registration", backend)
         self.assertIn("docker-compose.gpu-governed.yml config --quiet", workflow)
-        self.assertIn(
-            "docker-compose.monomer-md-worker.gpu-governed.prod.yml config --quiet",
-            workflow,
+        self.assertNotIn("monomer-md-worker.gpu-governed", workflow)
+        self.assertFalse(
+            (ROOT / "docker-compose.monomer-md-worker.gpu-governed.prod.yml").exists()
         )
-        self.assertIn(
-            "docker-compose.monomer-md-worker.gpu-governed.dev.yml config --quiet",
-            workflow,
+        self.assertFalse(
+            (ROOT / "docker-compose.monomer-md-worker.gpu-governed.dev.yml").exists()
         )
+        self.assertIn('MONOMER_MD_GPU_BROKER_ENABLED: "false"', md)
+        self.assertNotIn("/run/user/1001/bus", md)
+        self.assertNotIn("/sys/fs/cgroup", md)
+        self.assertIn(
+            'Environment="MONOMER_MD_GPU_SCOPE_LAUNCHER=systemd-user-scope"',
+            md_unit,
+        )
+        self.assertIn("Docker/OCI Workers are unsupported", md_config)
         self.assertIn(
             "/data/lzq/gith/nexpoly-runtime/state/gpu-resource",
             backend,
@@ -156,6 +162,15 @@ class GpuResourceDeliveryTests(unittest.TestCase):
         broker_unit = (ROOT / "ops/systemd/nexpoly-gpu-broker.service").read_text(
             encoding="utf-8"
         )
+        scope_slice = (
+            ROOT / "ops/systemd/nexpoly-gpu-jobs.slice"
+        ).read_text(encoding="utf-8")
+        scope_contract = (
+            ROOT / "gpu_resource/transient_scope.py"
+        ).read_text(encoding="utf-8")
+        dft_control = (
+            ROOT / "scripts/monomer_dft_worker_ctl.sh"
+        ).read_text(encoding="utf-8")
         self.assertIn("NoNewPrivileges=true", unit)
         self.assertIn("NoNewPrivileges=true", broker_unit)
         self.assertIn("User=1001", unit)
@@ -168,6 +183,34 @@ class GpuResourceDeliveryTests(unittest.TestCase):
         self.assertNotIn("nvidia-smi -c", helper)
         self.assertIn("GPU0 is excluded", helper)
         self.assertIn("--mps-state-root", broker_unit)
+        self.assertNotIn("--job-cgroup-root", broker_unit)
+        self.assertIn("Requires=user@1001.service", broker_unit)
+        self.assertIn('Environment="XDG_RUNTIME_DIR=/run/user/1001"', broker_unit)
+        self.assertIn(
+            'Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus"',
+            broker_unit,
+        )
+        self.assertIn("CPUAccounting=yes", scope_slice)
+        self.assertIn("MemoryAccounting=yes", scope_slice)
+        self.assertIn("TasksAccounting=yes", scope_slice)
+        self.assertNotIn("[Install]", scope_slice)
+        self.assertIn('LEASE_ID_RE = re.compile(r"^[0-9a-f]{32}$")', scope_contract)
+        self.assertIn('SCOPE_SLICE = "nexpoly-gpu-jobs.slice"', scope_contract)
+        self.assertIn('"--user"', scope_contract)
+        self.assertIn('"--scope"', scope_contract)
+        self.assertIn('"--quiet"', scope_contract)
+        self.assertIn(
+            'GPU_SCOPE_XDG_RUNTIME_DIR="/run/user/$(id -u)"',
+            dft_control,
+        )
+        self.assertIn(
+            'GPU_SCOPE_DBUS_ADDRESS="unix:path=$GPU_SCOPE_XDG_RUNTIME_DIR/bus"',
+            dft_control,
+        )
+        self.assertIn(
+            'DBUS_SESSION_BUS_ADDRESS="$GPU_SCOPE_DBUS_ADDRESS"',
+            dft_control,
+        )
         self.assertIn("WorkingDirectory=/data/lzq/gith/nexpoly", unit)
         self.assertIn("WorkingDirectory=/data/lzq/gith/nexpoly", broker_unit)
         self.assertIn(

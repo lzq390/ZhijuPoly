@@ -10,6 +10,9 @@ WorkingDirectory=/data/lzq/gith/nexpoly
 # owner-only helper accepts one strict literal syntax shared with candidate
 # preflight and never evaluates configuration as shell code.
 UnsetEnvironment=BASH_ENV BASHOPTS BASH_XTRACEFD CUDA_DEVICE_ORDER CUDA_VISIBLE_DEVICES ENV LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD NVIDIA_VISIBLE_DEVICES OPENMM_DIR OPENMM_PLUGIN_DIR PS4 PYTHONHOME PYTHONINSPECT PYTHONSTARTUP PYTHONUSERBASE SHELLOPTS VIRTUAL_ENV NEXPOLY_ALLOW_TEST_ROOT NEXPOLY_RUNTIME_ROOT NEXPOLY_ACTIVE_CONTROL_ROOT NEXPOLY_ACTIVE_CONTROL_RELEASE_ID NEXPOLY_MONOMER_MD_ENV_SANITIZED
+Environment="XDG_RUNTIME_DIR=/run/user/1001"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus"
+Environment="MONOMER_MD_GPU_SCOPE_LAUNCHER=systemd-user-scope"
 # A marker with no controller holding deploy.lock is a crashed deployment and
 # must fail closed. During a controlled switch the controller still holds the
 # lock, so the replacement Worker may start before release verification.

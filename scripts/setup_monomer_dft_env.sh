@@ -126,7 +126,6 @@ readonly ENV_EXAMPLE="$REPO_ROOT/.env.monomer-dft.dev.example"
 readonly MIGRATION_MANIFEST="$REPO_ROOT/backend/migrations/postgres/manifest.json"
 readonly GPU_BROKER_CLIENT="$REPO_ROOT/gpu_resource/client.py"
 readonly GPU_GOVERNED_COMPOSE="$REPO_ROOT/docker-compose.gpu-governed.yml"
-readonly MD_GOVERNED_COMPOSE="$REPO_ROOT/docker-compose.monomer-md-worker.gpu-governed.dev.yml"
 [[ -f "$REQUIREMENTS_LOCK" ]] || fail "missing tracked dependency lock: $REQUIREMENTS_LOCK"
 [[ -f "$BUILD_REQUIREMENTS_LOCK" ]] || fail "missing tracked build dependency lock: $BUILD_REQUIREMENTS_LOCK"
 [[ -f "$SOURCE_LOCK" ]] || fail "missing tracked AIMNet lock: $SOURCE_LOCK"
@@ -134,7 +133,6 @@ readonly MD_GOVERNED_COMPOSE="$REPO_ROOT/docker-compose.monomer-md-worker.gpu-go
 [[ -f "$MIGRATION_MANIFEST" ]] || fail "missing governed migration manifest: $MIGRATION_MANIFEST"
 [[ -f "$GPU_BROKER_CLIENT" ]] || fail "missing governed GPU Broker client: $GPU_BROKER_CLIENT"
 [[ -f "$GPU_GOVERNED_COMPOSE" ]] || fail "missing governed GPU Compose contract: $GPU_GOVERNED_COMPOSE"
-[[ -f "$MD_GOVERNED_COMPOSE" ]] || fail "missing governed MD/GPU Compose contract: $MD_GOVERNED_COMPOSE"
 for tracked_asset in \
   "$REQUIREMENTS_LOCK" \
   "$BUILD_REQUIREMENTS_LOCK" \
@@ -142,8 +140,7 @@ for tracked_asset in \
   "$ENV_EXAMPLE" \
   "$MIGRATION_MANIFEST" \
   "$GPU_BROKER_CLIENT" \
-  "$GPU_GOVERNED_COMPOSE" \
-  "$MD_GOVERNED_COMPOSE"; do
+  "$GPU_GOVERNED_COMPOSE"; do
   git ls-files --error-unmatch -- "${tracked_asset#"$REPO_ROOT/"}" >/dev/null 2>&1 \
     || fail "required environment asset is not tracked: $tracked_asset"
 done

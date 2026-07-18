@@ -13,6 +13,9 @@ import pytest
 from pydantic import ValidationError
 
 from gpu_resource import GpuBrokerClientError
+from workers.monomer_md_worker.app import (
+    byteff2_formal_runner as byteff2_formal_runner_module,
+)
 from workers.monomer_md_worker.app.byteff2_env import REQUIRED_OPENMM_FILES
 from workers.monomer_md_worker.app.byteff2_formal_runner import ByteFF2FormalRunner
 from workers.monomer_md_worker.app.config import WorkerSettings, load_settings
@@ -86,7 +89,7 @@ class _ManagedLease:
         request_id: str = "md:dev:66c38bf892cc7dbe",
     ) -> None:
         self.lease = SimpleNamespace(
-            lease_id="lease-1",
+            lease_id="1" * 32,
             fencing_token=42,
             broker_instance_id="broker-1",
             kind="execution",
@@ -192,6 +195,22 @@ def test_broker_governed_worker_rejects_invalid_boolean_and_parallel_jobs(
     monkeypatch.setenv("MONOMER_MD_MAX_ACTIVE_JOBS", "2")
     with pytest.raises(ValueError, match="Broker-governed MD requires"):
         load_settings()
+
+    monkeypatch.setenv("MONOMER_MD_MAX_CONCURRENT_JOBS", "1")
+    monkeypatch.setenv("MONOMER_MD_MAX_ACTIVE_JOBS", "1")
+    with pytest.raises(ValueError, match="host-only"):
+        load_settings()
+
+    monkeypatch.setenv(
+        "MONOMER_MD_GPU_SCOPE_LAUNCHER", "container-host-bus-bind"
+    )
+    with pytest.raises(ValueError, match="systemd-user-scope"):
+        load_settings()
+
+    monkeypatch.setenv(
+        "MONOMER_MD_GPU_SCOPE_LAUNCHER", "systemd-user-scope"
+    )
+    assert load_settings().gpu_broker_enabled is True
 
 
 def test_md_acquires_fixed_per_job_budget_and_dev_policy(tmp_path: Path) -> None:
@@ -733,7 +752,10 @@ def test_concurrent_health_reads_do_not_serialize_on_a_slow_broker(
     asyncio.run(scenario())
 
 
-def test_formal_child_receives_leased_device_and_mps_cap(tmp_path: Path) -> None:
+def test_formal_child_receives_leased_device_and_mps_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = _settings(tmp_path)
     settings.byteff2_root.mkdir()
     openmm_dir = tmp_path / "openmm"
@@ -761,6 +783,22 @@ def test_formal_child_receives_leased_device_and_mps_cap(tmp_path: Path) -> None
         encoding="utf-8",
     )
     managed = _ManagedLease(gpu_index=3)
+    create_fenced = byteff2_formal_runner_module.create_fenced_subprocess_exec
+
+    async def create_portable_fenced(*args, **kwargs):
+        kwargs["scope_command_builder"] = (
+            lambda _lease_id, command: tuple(command)
+        )
+        kwargs["scope_membership_waiter"] = (
+            lambda _pid, _lease_id: 1
+        )
+        return await create_fenced(*args, **kwargs)
+
+    monkeypatch.setattr(
+        byteff2_formal_runner_module,
+        "create_fenced_subprocess_exec",
+        create_portable_fenced,
+    )
 
     result = asyncio.run(
         ByteFF2FormalRunner(settings).run(

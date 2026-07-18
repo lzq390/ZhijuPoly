@@ -126,11 +126,13 @@ failure has the same retained lease/quarantine result, so release can never
 create unaccounted capacity. Similarly, an expired lease is retained only by
 its own exact MPS client, never by a peer component's client.
 
-The Broker refuses to start without a host-delegated cgroup-v2 root at
-`/sys/fs/cgroup/nexpoly-gpu-jobs`, owned by `1001:1001`, with writable
-`cgroup.procs` and `cgroup.subtree_control`. Provisioning this subtree is a
-root-authorized part of the later MPS maintenance window; the shipped unit
-does not create it and therefore fails closed if delegation is absent.
+The Broker refuses to start without the deploy user's live systemd user
+manager and exact cgroup-v2 identity. A governed Worker starts each executor
+as `nexpoly-gpu-job-<complete-lease-id>.scope` below
+`nexpoly-gpu-jobs.slice`; the Broker verifies the unit and scope identity and
+never writes `cgroup.procs` or moves a child across cgroup ownership
+boundaries. Missing user-bus, scope controls, or identity evidence fails
+closed.
 
 ## Application behavior
 
@@ -172,7 +174,8 @@ change must perform, and verify rollback for, the ordered transition:
    external reservation inventory;
 3. set `EXCLUSIVE_PROCESS` during the maintenance window (the shipped helper
    only verifies this mode; it never changes it);
-4. provision and delegate `/sys/fs/cgroup/nexpoly-gpu-jobs` to `1001:1001`;
+4. verify the deploy user's systemd user manager and transient
+   `nexpoly-gpu-jobs.slice` scope controls;
 5. start the card-specific MPS unit, then the Broker;
 6. start Backend and validate required preload and its active residency lease;
 7. enable MD governance, then separately enable the resident DFT executor;
@@ -182,13 +185,15 @@ Mixed Backend CUDA 11.8 and DFT CUDA 12.8 clients must pass a real test against
 the host Driver/CUDA MPS server. Failure blocks activation; it is not a reason
 to bypass the Broker or MPS.
 
-Docker governance is opt-in and must be rendered last. Backend uses
+Docker governance is opt-in and must be rendered last for Backend, using
 `docker-compose.gpu-governed.yml` while retaining its one policy-primary GPU.
-MD uses `docker-compose.monomer-md-worker.gpu-governed.prod.yml` (GPU1/2/3) or
-the Dev override (GPU1/3 only). These files add the exact managed labels, the
-private Broker/MPS state mount, and UID/GID `1001:1001`. They are absent from
-the normal production render, so this release's production runtime remains
-unchanged and Broker-disabled.
+Broker-governed MD is deliberately host-only: its executor is launched through
+an exact lease-named `systemd-run --user --scope`, then registered by PID,
+start ticks, UID, process group, cgroup and systemd unit. OCI Workers cannot
+securely create or control that host scope and must not bind the host user bus.
+The normal MD Compose file therefore hard-codes Broker-disabled, and the old
+governed MD Compose overrides are not shipped. Production remains unchanged
+and Broker-disabled until the separately authorized maintenance.
 
 The exact registered MD Docker DeviceRequest is a visibility declaration for
 its CPU-only idle supervisor, not an execution reservation. It therefore does

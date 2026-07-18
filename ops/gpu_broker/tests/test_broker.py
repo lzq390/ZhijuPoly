@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -17,6 +18,11 @@ from gpu_resource import (
     GpuLease,
     ManagedGpuLease,
     mps_client_environment,
+    scope_control_group,
+    scope_unit_name,
+    transient_scope_command,
+    user_manager_control_group,
+    wait_for_scope_membership,
 )
 from ops.gpu_broker.broker import (
     BrokerError,
@@ -87,6 +93,175 @@ def _acquire(
         thread_percent=100 if component == "backend" else 50,
         wait_timeout_seconds=wait,
         parent_lease_id=parent_lease_id,
+    )
+
+
+def _scope_lease(lease_id: str = "a" * 32) -> Lease:
+    return Lease(
+        lease_id=lease_id,
+        fencing_token=7,
+        broker_instance_id="b" * 32,
+        kind="execution",
+        placement="preferred",
+        component="md",
+        environment="dev",
+        client_id="md-dev-test",
+        gpu_index=1,
+        gpu_uuid=EXPECTED_GPU_UUIDS[1],
+        memory_mib=8192,
+        thread_percent=50,
+        owner_pid=11_111,
+        owner_process_start_ticks=22_222,
+        owner_boot_id="c" * 32,
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        created_at=1.0,
+        heartbeat_at=1.0,
+        request_id="md:dev:test",
+    )
+
+
+class _FakeUserSystemd:
+    def __init__(
+        self,
+        *,
+        lease_id: str,
+        uid: int,
+        scope_path: Path,
+    ) -> None:
+        self.manager_control_group = user_manager_control_group(uid)
+        self.unit = scope_unit_name(lease_id)
+        self.control_group = scope_control_group(lease_id, uid=uid)
+        self.scope_path = scope_path
+        self.active = True
+        self.overrides: dict[str, str] = {}
+        self.commands: list[tuple[str, ...]] = []
+
+    def __call__(self, command, **_kwargs):
+        command = tuple(command)
+        self.commands.append(command)
+        if command == (
+            "/usr/bin/systemctl",
+            "--user",
+            "show",
+            "--property=ControlGroup",
+            "--no-pager",
+        ):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=f"ControlGroup={self.manager_control_group}\n",
+                stderr="",
+            )
+        if len(command) >= 4 and command[2:4] == ("show", self.unit):
+            status = (
+                {
+                    "Id": self.unit,
+                    "ControlGroup": self.control_group,
+                    "LoadState": "loaded",
+                    "ActiveState": "active",
+                    "Slice": "nexpoly-gpu-jobs.slice",
+                }
+                if self.active
+                else {
+                    "Id": self.unit,
+                    "ControlGroup": "",
+                    "LoadState": "not-found",
+                    "ActiveState": "inactive",
+                    "Slice": "",
+                }
+            )
+            status.update(self.overrides)
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="".join(f"{key}={value}\n" for key, value in status.items()),
+                stderr="",
+            )
+        if command == (
+            "/usr/bin/systemctl",
+            "--user",
+            "stop",
+            self.unit,
+        ):
+            self.active = False
+            if self.scope_path.exists():
+                shutil.rmtree(self.scope_path)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected systemctl command: {command!r}")
+
+
+def _scope_controller(
+    tmp_path: Path,
+    *,
+    lease_id: str = "a" * 32,
+    host_pid: int = 43_210,
+) -> tuple[
+    JobCgroupController,
+    Lease,
+    Path,
+    _FakeUserSystemd,
+    dict[int, tuple[int, int, tuple[int, int, int, int]]],
+]:
+    uid = os.geteuid()
+    root = tmp_path / "cgroup"
+    root.mkdir(mode=0o700)
+    manager = root.joinpath(
+        *user_manager_control_group(uid).split("/")[1:]
+    )
+    manager.mkdir(parents=True, mode=0o755)
+    control_group = scope_control_group(lease_id, uid=uid)
+    scope_path = root.joinpath(*control_group.split("/")[1:])
+    scope_path.mkdir(parents=True, mode=0o755)
+    for name, contents in {
+        "cgroup.events": "populated 1\nfrozen 1\n",
+        "cgroup.freeze": "0",
+        "cgroup.kill": "",
+        "cgroup.procs": f"{host_pid}\n",
+    }.items():
+        control = scope_path / name
+        control.write_text(contents, encoding="ascii")
+        control.chmod(0o600)
+    fake_systemd = _FakeUserSystemd(
+        lease_id=lease_id,
+        uid=uid,
+        scope_path=scope_path,
+    )
+    process_inventory = {
+        host_pid: (77_777, host_pid, (uid, uid, uid, uid))
+    }
+
+    def process_record(pid: int):
+        try:
+            return process_inventory[pid]
+        except KeyError as exc:
+            raise BrokerError(
+                "workload_identity_unavailable",
+                "test process disappeared",
+            ) from exc
+
+    controller = JobCgroupController(
+        cgroup_root=root,
+        uid=uid,
+        run=fake_systemd,
+        identity_resolver=lambda _lease, pid, start, group: (
+            pid,
+            start,
+            group,
+            f"0::{control_group}",
+        ),
+        process_uid_resolver=lambda pid: process_record(pid)[2],
+        process_start_ticks_reader=lambda pid: process_record(pid)[0],
+        process_group_reader=lambda pid: process_record(pid)[1],
+        now_ns=lambda: 88_888,
+    )
+    return (
+        controller,
+        _scope_lease(lease_id),
+        scope_path,
+        fake_systemd,
+        process_inventory,
     )
 
 
@@ -909,22 +1084,269 @@ def test_stable_waiter_is_persisted_and_explicitly_cancelled(tmp_path: Path) -> 
     assert errors == ["acquire_cancelled"]
 
 
-def test_job_cgroup_controller_refuses_missing_host_delegation(tmp_path: Path) -> None:
+def test_transient_scope_command_uses_only_full_lease_named_user_scope() -> None:
+    lease_id = "1a" * 16
+    command = transient_scope_command(
+        lease_id,
+        ("/usr/bin/python3", "-I", "-c", "pass"),
+    )
+
+    assert command == (
+        "/usr/bin/systemd-run",
+        "--user",
+        "--scope",
+        "--quiet",
+        "--no-ask-password",
+        f"--unit=nexpoly-gpu-job-{lease_id}.scope",
+        "--slice=nexpoly-gpu-jobs.slice",
+        "--property=KillMode=control-group",
+        "--property=CollectMode=inactive-or-failed",
+        "--expand-environment=no",
+        "--",
+        "/usr/bin/python3",
+        "-I",
+        "-c",
+        "pass",
+    )
+    for invalid in ("short", "A" * 32, "a" * 31, "a" * 33, "../" + "a" * 29):
+        with pytest.raises(ValueError, match="complete 32-hex"):
+            transient_scope_command(invalid, ("/usr/bin/true",))
+
+
+def test_scope_transition_waits_for_exact_cgroup_without_pid_reuse() -> None:
+    lease_id = "2b" * 16
+    expected = scope_control_group(lease_id, uid=os.geteuid())
+    observed = iter(
+        (
+            "0::/user.slice/user-1001.slice/session-1.scope",
+            f"0::{expected}",
+        )
+    )
+
+    assert (
+        wait_for_scope_membership(
+            54_321,
+            lease_id,
+            uid=os.geteuid(),
+            cgroup_reader=lambda _pid: next(observed),
+            start_ticks_reader=lambda _pid: 77_777,
+            monotonic=iter((0.0, 0.1)).__next__,
+            sleep=lambda _seconds: None,
+        )
+        == 77_777
+    )
+
+    starts = iter((77_777, 77_778))
+    with pytest.raises(ValueError, match="PID was reused"):
+        wait_for_scope_membership(
+            54_321,
+            lease_id,
+            uid=os.geteuid(),
+            cgroup_reader=lambda _pid: "0::/outside.scope",
+            start_ticks_reader=lambda _pid: next(starts),
+            monotonic=iter((0.0, 0.1)).__next__,
+            sleep=lambda _seconds: None,
+        )
+
+
+def test_job_cgroup_controller_refuses_missing_user_manager_cgroup(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(BrokerError) as error:
-        JobCgroupController(tmp_path / "missing")
+        JobCgroupController(cgroup_root=tmp_path / "missing")
     assert error.value.code == "workload_control_unavailable"
 
 
-def test_job_cgroup_controller_requires_freeze_kill_and_event_controls(
+def test_job_cgroup_controller_registers_freezes_kills_and_collects_exact_scope(
     tmp_path: Path,
 ) -> None:
-    root = tmp_path / "delegated"
-    root.mkdir(mode=0o700)
-    for name in ("cgroup.controllers", "cgroup.procs", "cgroup.subtree_control"):
-        (root / name).write_text("", encoding="ascii")
+    controller, lease, scope_path, systemd, processes = _scope_controller(
+        tmp_path
+    )
+    pid = next(iter(processes))
+    start_ticks, group_id, _uids = processes[pid]
 
-    with pytest.raises(BrokerError) as error:
-        JobCgroupController(root)
+    resolved = controller.resolve_and_assign(
+        lease,
+        pid,
+        start_ticks,
+        group_id,
+    )
+    assert resolved == (
+        pid,
+        start_ticks,
+        group_id,
+        f"0::{systemd.control_group}",
+    )
+    lease.workload_pid = pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = resolved[3]
+
+    assert controller.freeze(lease) == f"{lease.lease_id}:88888"
+    assert (scope_path / "cgroup.freeze").read_text(encoding="ascii") == "1"
+    controller.kill(lease)
+    assert (scope_path / "cgroup.kill").read_text(encoding="ascii") == "1"
+
+    (scope_path / "cgroup.procs").write_text("", encoding="ascii")
+    (scope_path / "cgroup.events").write_text(
+        "populated 0\nfrozen 1\n", encoding="ascii"
+    )
+    assert controller.empty(lease) is True
+    processes.clear()
+    controller.cleanup(lease)
+    assert scope_path.exists() is False
+    assert systemd.active is False
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("short_lease", "lease ID"),
+        ("wrong_cgroup", "exact lease-named"),
+        ("unit_id", "unit identity"),
+        ("unit_control_group", "unit identity"),
+        ("unit_slice", "unit identity"),
+        ("foreign_pid", "foreign or reused"),
+        ("wrong_uid", "another UID"),
+        ("wrong_start", "PID/start-time/process-group"),
+        ("wrong_group", "PID/start-time/process-group"),
+    ),
+)
+def test_job_cgroup_controller_rejects_spoofed_or_reused_scope_identity(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    controller, lease, scope_path, systemd, processes = _scope_controller(
+        tmp_path,
+        lease_id="b" * 32,
+    )
+    pid = next(iter(processes))
+    start_ticks, group_id, uids = processes[pid]
+
+    if mutation == "short_lease":
+        lease.lease_id = "bad"
+    elif mutation == "wrong_cgroup":
+        controller._identity_resolver = lambda *_args: (
+            pid,
+            start_ticks,
+            group_id,
+            "0::/arbitrary.scope",
+        )
+    elif mutation == "unit_id":
+        systemd.overrides["Id"] = "nexpoly-gpu-job-" + "c" * 32 + ".scope"
+    elif mutation == "unit_control_group":
+        systemd.overrides["ControlGroup"] = (
+            systemd.control_group.rsplit("/", 1)[0]
+            + "/nexpoly-gpu-job-"
+            + "c" * 32
+            + ".scope"
+        )
+    elif mutation == "unit_slice":
+        systemd.overrides["Slice"] = "app.slice"
+    elif mutation == "foreign_pid":
+        (scope_path / "cgroup.procs").write_text(
+            f"{pid}\n{pid + 1}\n",
+            encoding="ascii",
+        )
+        processes[pid + 1] = (99_999, pid + 1, uids)
+    elif mutation == "wrong_uid":
+        processes[pid] = (start_ticks, group_id, (uids[0] + 1,) * 4)
+    elif mutation == "wrong_start":
+        processes[pid] = (start_ticks + 1, group_id, uids)
+    elif mutation == "wrong_group":
+        processes[pid] = (start_ticks, group_id + 1, uids)
+
+    with pytest.raises(BrokerError, match=message) as error:
+        controller.resolve_and_assign(lease, pid, start_ticks, group_id)
+
+    assert error.value.code in {
+        "workload_control_unavailable",
+        "workload_identity_mismatch",
+    }
+
+
+def test_job_cgroup_controller_rejects_active_pid_replacement_after_registration(
+    tmp_path: Path,
+) -> None:
+    controller, lease, scope_path, _systemd, processes = _scope_controller(
+        tmp_path
+    )
+    pid = next(iter(processes))
+    start_ticks, group_id, uids = processes[pid]
+    resolved = controller.resolve_and_assign(
+        lease, pid, start_ticks, group_id
+    )
+    lease.workload_pid = pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = resolved[3]
+    replacement = pid + 1
+    processes[replacement] = (start_ticks + 1, replacement, uids)
+    (scope_path / "cgroup.procs").write_text(
+        f"{replacement}\n", encoding="ascii"
+    )
+
+    with pytest.raises(BrokerError, match="workload identity differs") as error:
+        controller.kill(lease)
+
+    assert error.value.code == "workload_identity_mismatch"
+    assert (scope_path / "cgroup.kill").read_text(encoding="ascii") == ""
+
+
+def test_job_cgroup_controller_restart_accepts_only_collected_dead_scope(
+    tmp_path: Path,
+) -> None:
+    controller, lease, scope_path, systemd, processes = _scope_controller(
+        tmp_path
+    )
+    pid = next(iter(processes))
+    start_ticks, group_id, _uids = processes[pid]
+    lease.workload_pid = pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = f"0::{systemd.control_group}"
+    shutil.rmtree(scope_path)
+    systemd.active = False
+
+    # A restarted Broker may finish cleanup only after proving the original
+    # PID/start identity is gone or reused.
+    monotonic_values = iter((0.0, 0.0, 3.0))
+    controller._monotonic = lambda: next(monotonic_values, 3.0)
+    controller._sleep = lambda _seconds: None
+    assert controller.empty(lease) is False
+
+    # cgroup.kill may leave the exact process as a zombie until the blocked
+    # Worker receives the Broker response and can reap it.
+    controller._process_state_reader = lambda _pid: "Z"
+    assert controller.empty(lease) is True
+    controller.cleanup(lease)
+
+
+def test_job_cgroup_controller_requires_exact_user_manager_bus_identity(
+    tmp_path: Path,
+) -> None:
+    uid = os.geteuid()
+    root = tmp_path / "cgroup"
+    root.mkdir(mode=0o700)
+    manager = root.joinpath(*user_manager_control_group(uid).split("/")[1:])
+    manager.mkdir(parents=True, mode=0o755)
+
+    def wrong_manager(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="ControlGroup=/user.slice/user-999.slice/user@999.service\n",
+            stderr="",
+        )
+
+    with pytest.raises(BrokerError, match="manager cgroup identity differs") as error:
+        JobCgroupController(
+            cgroup_root=root,
+            uid=uid,
+            run=wrong_manager,
+        )
 
     assert error.value.code == "workload_control_unavailable"
 

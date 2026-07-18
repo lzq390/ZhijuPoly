@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from gpu_resource import transient_scope_command
 from workers.monomer_dft_worker.app import executor_pool as executor_pool_module
 from workers.monomer_dft_worker.app import gpu_broker_client as gpu_broker_client_module
 from workers.monomer_dft_worker.app.artifacts import (
@@ -370,6 +371,23 @@ def test_real_subprocess_start_handshake_proves_selector_and_cuda_uuid(
     tmp_path: Path,
     shared_mps: bool,
 ) -> None:
+    systemd_run = tmp_path / "bin" / "systemd-run"
+    systemd_run.parent.mkdir()
+    scope_arguments = tmp_path / "scope-arguments"
+    systemd_run.write_text(
+        f"""#!{sys.executable}
+import os
+from pathlib import Path
+import sys
+
+Path({str(scope_arguments)!r}).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+separator = sys.argv.index("--")
+target = sys.argv[separator + 1:]
+os.execv(target[0], target)
+""",
+        encoding="utf-8",
+    )
+    systemd_run.chmod(0o700)
     executable = tmp_path / "fake-executor-python"
     executable.write_text(
         f"""#!{sys.executable}
@@ -415,7 +433,7 @@ send_frame(stream, protocol_message('stopped'))
         (("CUDA_VISIBLE_DEVICES", gpu_uuid),) if shared_mps else ()
     )
     lease = GpuLease(
-        lease_id="lease-handshake",
+        lease_id="d" * 32,
         gpu_index="1",
         gpu_uuid=gpu_uuid,
         kind="residency",
@@ -431,12 +449,44 @@ send_frame(stream, protocol_message('stopped'))
         lease=lease,
         mode="primary",
         model="aimnet2",
+        scope_command_builder=lambda lease_id, command: transient_scope_command(
+            lease_id,
+            command,
+            systemd_run=systemd_run,
+        ),
     )
 
     executor.start()
     try:
         assert executor.probe_payload["gpu_uuid"] == gpu_uuid
         assert executor.pid > 0
+        if shared_mps:
+            arguments = scope_arguments.read_text(encoding="utf-8").splitlines()
+            assert arguments == [
+                "--user",
+                "--scope",
+                "--quiet",
+                "--no-ask-password",
+                f"--unit=nexpoly-gpu-job-{lease.lease_id}.scope",
+                "--slice=nexpoly-gpu-jobs.slice",
+                "--property=KillMode=control-group",
+                "--property=CollectMode=inactive-or-failed",
+                "--expand-environment=no",
+                "--",
+                os.fspath(executable),
+                "-m",
+                "workers.monomer_dft_worker.app.executor_process",
+                "--fd",
+                arguments[14],
+                "--mode",
+                "primary",
+                "--model",
+                "aimnet2",
+                "--gpu-index",
+                "1",
+            ]
+        else:
+            assert scope_arguments.exists() is False
     finally:
         executor.close()
 

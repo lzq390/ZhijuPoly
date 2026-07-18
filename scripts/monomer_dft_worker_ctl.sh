@@ -17,6 +17,8 @@ GPU_RUNTIME_ROOT="$RUNTIME_ROOT/gpu-resource"
 PRIVATE_HOME="$RUNTIME_ROOT/home"
 PRIVATE_TMPDIR="$RUNTIME_ROOT/tmp"
 PRIVATE_XDG_CACHE="$RUNTIME_ROOT/xdg-cache"
+GPU_SCOPE_XDG_RUNTIME_DIR=""
+GPU_SCOPE_DBUS_ADDRESS=""
 
 REAL_RUNTIME_ROOT=""
 START_TIMEOUT=""
@@ -234,6 +236,24 @@ validate_start_configuration() {
   [[ "${MONOMER_DFT_MAX_CONCURRENT_JOBS:-1}" == "1" ]] || fail "MONOMER_DFT_MAX_CONCURRENT_JOBS must be 1"
   validate_dev_selection
   [[ -z "${PYTHONPATH:-}" ]] || fail "PYTHONPATH must be empty for the isolated worker"
+  if [[ "${MONOMER_DFT_GPU_BROKER_ENABLED:-1}" == "1" ]]; then
+    GPU_SCOPE_XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    GPU_SCOPE_DBUS_ADDRESS="unix:path=$GPU_SCOPE_XDG_RUNTIME_DIR/bus"
+    [[ -d "$GPU_SCOPE_XDG_RUNTIME_DIR" && ! -L "$GPU_SCOPE_XDG_RUNTIME_DIR" ]] ||
+      fail "systemd user runtime directory is unavailable"
+    [[ "$(stat -c '%u:%a' "$GPU_SCOPE_XDG_RUNTIME_DIR")" == "$(id -u):700" ]] ||
+      fail "systemd user runtime directory identity is unsafe"
+    [[ -S "$GPU_SCOPE_XDG_RUNTIME_DIR/bus" && ! -L "$GPU_SCOPE_XDG_RUNTIME_DIR/bus" ]] ||
+      fail "systemd user bus is unavailable"
+    [[ "$(stat -c '%u' "$GPU_SCOPE_XDG_RUNTIME_DIR/bus")" == "$(id -u)" ]] ||
+      fail "systemd user bus identity is unsafe"
+    [[ -x /usr/bin/systemd-run && ! -L /usr/bin/systemd-run ]] ||
+      fail "audited systemd-run launcher is unavailable"
+    [[ "$(stat -c '%u' /usr/bin/systemd-run)" == "0" ]] ||
+      fail "audited systemd-run launcher owner is unsafe"
+    [[ "$((8#$(stat -c '%a' /usr/bin/systemd-run) & 8#022))" == "0" ]] ||
+      fail "audited systemd-run launcher mode is unsafe"
+  fi
   (( ${#MONOMER_DFT_WORKER_UDS} <= 107 )) || fail "MONOMER_DFT_WORKER_UDS exceeds the Linux Unix-socket path limit"
   START_TIMEOUT="${MONOMER_DFT_START_TIMEOUT_SECONDS:-60}"
   [[ "$START_TIMEOUT" =~ ^[0-9]+$ && "$START_TIMEOUT" -ge 1 ]] || fail "MONOMER_DFT_START_TIMEOUT_SECONDS must be a positive integer"
@@ -524,6 +544,8 @@ start_worker() {
     PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     TMPDIR="$PRIVATE_TMPDIR" \
     XDG_CACHE_HOME="$PRIVATE_XDG_CACHE" \
+    XDG_RUNTIME_DIR="$GPU_SCOPE_XDG_RUNTIME_DIR" \
+    DBUS_SESSION_BUS_ADDRESS="$GPU_SCOPE_DBUS_ADDRESS" \
     MONOMER_DFT_PYTHON="$MONOMER_DFT_PYTHON" \
     MONOMER_DFT_WORKER_UDS="$MONOMER_DFT_WORKER_UDS" \
     MONOMER_DFT_JOB_ROOT="$MONOMER_DFT_JOB_ROOT" \

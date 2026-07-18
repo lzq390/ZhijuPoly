@@ -1075,6 +1075,7 @@ class ReleaseControllerTests(unittest.TestCase):
             f"MONOMER_MD_WORKER_UDS={controller.ops / 'state' / 'monomer-md-worker-socket' / 'worker.sock'}\n"
             "MONOMER_MD_WORKER_MODE=real\n"
             "MONOMER_MD_GPU_BROKER_ENABLED=false\n"
+            "MONOMER_MD_GPU_SCOPE_LAUNCHER=systemd-user-scope\n"
             "MONOMER_MD_GPU_BROKER_ENVIRONMENT=prod\n"
             f"MONOMER_MD_GPU_BROKER_SOCKET_PATH={controller.ops / 'state' / 'gpu-resource' / 'broker.sock'}\n"
             f"MONOMER_MD_GPU_MPS_PIPE_ROOT={controller.ops / 'state' / 'gpu-resource'}\n"

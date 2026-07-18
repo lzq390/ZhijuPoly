@@ -16,6 +16,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
 
+from gpu_resource import transient_scope_command
+
 from .artifacts import atomic_write_json, describe_artifact
 from .config import REPO_ROOT, WorkerSettings
 from .engine import ComputationCancelled, EngineExecution, ScientificComputationError
@@ -124,11 +126,17 @@ class SubprocessExecutor:
         lease: GpuLease,
         mode: str,
         model: str,
+        popen: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
+        scope_command_builder: Callable[
+            [object, list[str]], tuple[str, ...]
+        ] = transient_scope_command,
     ) -> None:
         self.settings = settings
         self.lease = lease
         self.mode = mode
         self.model = model
+        self._popen = popen
+        self._scope_command_builder = scope_command_builder
         self.process: subprocess.Popen[bytes] | None = None
         self.stream: socket.socket | None = None
         self.pid = 0
@@ -176,9 +184,20 @@ class SubprocessExecutor:
             "--gpu-index",
             self.lease.gpu_index,
         ]
-        try:
-            self.process = subprocess.Popen(
+        launch_command: list[str] | tuple[str, ...] = command
+        if self.lease.client_environment:
+            # systemd-run --user --scope execs the target synchronously: the
+            # Popen PID, inherited socket FD and start_new_session PGID remain
+            # stable while systemd moves that exact process into the
+            # lease-named scope. CUDA remains behind the existing IPC gate
+            # until Broker registration verifies the scope.
+            launch_command = self._scope_command_builder(
+                self.lease.lease_id,
                 command,
+            )
+        try:
+            self.process = self._popen(
+                launch_command,
                 cwd=REPO_ROOT,
                 env=env,
                 pass_fds=(child_stream.fileno(),),

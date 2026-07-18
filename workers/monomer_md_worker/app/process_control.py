@@ -8,7 +8,12 @@ from collections.abc import Awaitable, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
 
-from gpu_resource import GpuBrokerClientError, ManagedGpuLease
+from gpu_resource import (
+    GpuBrokerClientError,
+    ManagedGpuLease,
+    transient_scope_command,
+    wait_for_scope_membership,
+)
 
 
 _CleanupResult = TypeVar("_CleanupResult")
@@ -49,6 +54,8 @@ async def create_fenced_subprocess_exec(
     command: Sequence[str],
     *,
     execution_lease: ManagedGpuLease | None,
+    scope_command_builder=transient_scope_command,
+    scope_membership_waiter=wait_for_scope_membership,
     **kwargs: Any,
 ) -> asyncio.subprocess.Process:
     """Start a session child behind a pipe gate, then register its host identity."""
@@ -73,7 +80,7 @@ async def create_fenced_subprocess_exec(
     env["NEXPOLY_GPU_EXEC_GATE_FD"] = str(gate_reader)
     try:
         try:
-            process = await asyncio.create_subprocess_exec(
+            gated_command = (
                 # Isolated/no-site startup is part of the fence.  In
                 # particular, target PYTHONPATH/sitecustomize must not run
                 # before the Broker has registered this exact host PID.
@@ -83,6 +90,13 @@ async def create_fenced_subprocess_exec(
                 str(exec_gate),
                 "--",
                 *command,
+            )
+            scoped_command = scope_command_builder(
+                execution_lease.lease.lease_id,
+                gated_command,
+            )
+            process = await asyncio.create_subprocess_exec(
+                *scoped_command,
                 env=env,
                 pass_fds=(gate_reader,),
                 start_new_session=True,
@@ -93,6 +107,27 @@ async def create_fenced_subprocess_exec(
             raise
     finally:
         _close_fd(gate_reader)
+    scope_transition_task = asyncio.create_task(
+        asyncio.to_thread(
+            scope_membership_waiter,
+            process.pid,
+            execution_lease.lease.lease_id,
+        )
+    )
+    try:
+        await asyncio.shield(scope_transition_task)
+    except BaseException:
+        # create_subprocess_exec can return before systemd has moved and exec'd
+        # the same PID. Keep the CUDA gate closed until the exact transition
+        # is proven, and collect the unregistered scope on any failure.
+        _close_fd(gate_writer)
+        await await_safety_cleanup(
+            _cleanup_unregistered_scope_transition(
+                process,
+                scope_transition_task,
+            )
+        )
+        raise
     registration_task = asyncio.create_task(
         asyncio.to_thread(execution_lease.register_workload, process.pid)
     )
@@ -344,6 +379,24 @@ async def _cleanup_failed_fenced_spawn(
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+        await process.wait()
+
+
+async def _cleanup_unregistered_scope_transition(
+    process: asyncio.subprocess.Process,
+    transition_task: asyncio.Task[Any],
+) -> None:
+    try:
+        await transition_task
+    except Exception:
+        pass
+    try:
+        await asyncio.wait_for(process.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         await process.wait()
 
 

@@ -16,6 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from gpu_resource.transient_scope import (
+    SCOPE_SLICE,
+    scope_control_group,
+    scope_unit_name,
+    user_manager_control_group,
+    validate_lease_id,
+)
+
 from .broker import (
     COMPONENT_BUDGETS_MIB,
     COMPONENT_THREAD_PERCENT,
@@ -931,6 +939,8 @@ def resolve_workload_identity(
     namespace_pid: int,
     process_start_ticks: int,
     namespace_process_group_id: int,
+    *,
+    require_owner_cgroup: bool = True,
 ) -> tuple[int, int, int, str]:
     """Translate a child namespace PID into a fenced host process group."""
 
@@ -981,12 +991,13 @@ def resolve_workload_identity(
         )
     host_pid = candidates[0]
     workload_cgroup = _read_cgroup(host_pid)
-    owner_cgroup = _read_cgroup(lease.owner_pid)
-    if not _cgroup_is_same_or_descendant(workload_cgroup, owner_cgroup):
-        raise BrokerError(
-            "workload_identity_mismatch",
-            "workload cgroup is outside the lease owner cgroup",
-        )
+    if require_owner_cgroup:
+        owner_cgroup = _read_cgroup(lease.owner_pid)
+        if not _cgroup_is_same_or_descendant(workload_cgroup, owner_cgroup):
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "workload cgroup is outside the lease owner cgroup",
+            )
     return (
         host_pid,
         process_start_ticks,
@@ -996,65 +1007,106 @@ def resolve_workload_identity(
 
 
 class JobCgroupController:
-    """Host-side cgroup-v2 fencing for MD and DFT executor processes.
+    """Fail-closed control of lease-named transient user scope cgroups.
 
-    The Broker runs in the host PID/cgroup namespaces and is the only process
-    allowed to move a registered child into the delegated subtree.  Missing
-    delegation or kernel controls is a startup/admission failure; process
-    groups are never treated as an equivalent containment boundary.
+    The Worker creates a scope with ``systemd-run --user --scope`` before
+    registration.  The Broker never attempts to move a process across cgroup
+    ownership boundaries.  It verifies the exact systemd unit, cgroup-v2
+    path, live PID/start-time/UID and initially exclusive membership, then
+    uses only that already-bound scope for freeze, kill and emptiness proofs.
     """
 
     def __init__(
         self,
-        root: Path,
         *,
-        identity_resolver=resolve_workload_identity,
+        identity_resolver=None,
+        cgroup_root: Path = Path("/sys/fs/cgroup"),
+        run=subprocess.run,
+        uid: int | None = None,
+        process_uid_resolver=None,
+        process_start_ticks_reader=read_process_start_ticks,
+        process_group_reader=os.getpgid,
+        process_state_reader=None,
         now_ns=time.monotonic_ns,
+        monotonic=time.monotonic,
+        sleep=time.sleep,
     ) -> None:
+        self.uid = os.geteuid() if uid is None else uid
+        if (
+            isinstance(self.uid, bool)
+            or not isinstance(self.uid, int)
+            or self.uid <= 0
+        ):
+            raise BrokerError(
+                "workload_control_unavailable",
+                "GPU scope controller UID is invalid",
+            )
+        self._identity_resolver = identity_resolver or (
+            lambda lease, pid, start_ticks, group_id: resolve_workload_identity(
+                lease,
+                pid,
+                start_ticks,
+                group_id,
+                require_owner_cgroup=False,
+            )
+        )
+        self._run = run
+        self._process_uid_resolver = (
+            process_uid_resolver or self._read_process_uids
+        )
+        self._process_start_ticks_reader = process_start_ticks_reader
+        self._process_group_reader = process_group_reader
+        self._process_state_reader = (
+            process_state_reader or self._read_process_state
+        )
+        self._now_ns = now_ns
+        self._monotonic = monotonic
+        self._sleep = sleep
+        self._manager_control_group = user_manager_control_group(self.uid)
         try:
-            resolved_root = root.resolve(strict=True)
+            if (
+                not cgroup_root.is_absolute()
+                or cgroup_root.is_symlink()
+                or not cgroup_root.is_dir()
+            ):
+                raise OSError("cgroup root is missing or unsafe")
+            resolved_root = cgroup_root.resolve(strict=True)
+            if resolved_root != cgroup_root:
+                raise OSError("cgroup root has a non-canonical identity")
+            self._cgroup_root = resolved_root
+            manager_path = self._path_for_control_group(
+                self._manager_control_group
+            )
+            resolved_manager = manager_path.resolve(strict=True)
         except OSError as exc:
             raise BrokerError(
                 "workload_control_unavailable",
-                "dedicated GPU job cgroup root is missing or unsafe",
+                "user manager cgroup is missing or unsafe",
             ) from exc
         if (
-            not root.is_absolute()
-            or root.is_symlink()
-            or not root.is_dir()
-            or resolved_root != root
+            manager_path.is_symlink()
+            or not manager_path.is_dir()
+            or resolved_manager != manager_path
         ):
             raise BrokerError(
                 "workload_control_unavailable",
-                "dedicated GPU job cgroup root is missing or unsafe",
+                "user manager cgroup is missing or unsafe",
             )
-        root_stat = root.stat()
-        if root_stat.st_uid != os.geteuid() or stat.S_IMODE(root_stat.st_mode) & 0o022:
-            raise BrokerError(
-                "workload_control_unavailable",
-                "dedicated GPU job cgroup root has an unexpected owner",
-            )
-        required_access = {
-            "cgroup.controllers": os.R_OK,
-            "cgroup.events": os.R_OK,
-            "cgroup.freeze": os.R_OK | os.W_OK,
-            "cgroup.kill": os.W_OK,
-            "cgroup.procs": os.R_OK | os.W_OK,
-            "cgroup.subtree_control": os.R_OK | os.W_OK,
-        }
-        if any(
-            (root / name).is_symlink()
-            or not (root / name).is_file()
-            or not os.access(root / name, access)
-            for name, access in required_access.items()
+        manager_stat = manager_path.stat()
+        if (
+            manager_stat.st_uid != self.uid
+            or stat.S_IMODE(manager_stat.st_mode) & 0o022
         ):
             raise BrokerError(
                 "workload_control_unavailable",
-                "dedicated GPU job cgroup delegation is incomplete",
+                "user manager cgroup has an unexpected owner",
             )
-        self.root = root
-        self._identity_resolver = identity_resolver
-        self._now_ns = now_ns
+        manager_identity = self._user_manager_identity()
+        if manager_identity != self._manager_control_group:
+            raise BrokerError(
+                "workload_control_unavailable",
+                "systemd user manager cgroup identity differs",
+            )
 
     def resolve_and_assign(
         self,
@@ -1063,71 +1115,50 @@ class JobCgroupController:
         process_start_ticks: int,
         namespace_process_group_id: int,
     ) -> tuple[int, int, int, str]:
-        host_pid, start_ticks, group_id, _old_cgroup = self._identity_resolver(
+        host_pid, start_ticks, group_id, workload_cgroup = self._identity_resolver(
             lease,
             namespace_pid,
             process_start_ticks,
             namespace_process_group_id,
         )
-        target = self._lease_path(lease)
-        try:
-            target.mkdir(mode=0o700)
-        except FileExistsError:
-            if target.is_symlink() or not target.is_dir():
-                raise BrokerError(
-                    "workload_control_unavailable",
-                    "dedicated workload cgroup path is unsafe",
-                )
-        except OSError as exc:
-            raise BrokerError(
-                "workload_control_unavailable",
-                "cannot create dedicated workload cgroup",
-            ) from exc
-        try:
-            target_stat = target.stat()
-            if (
-                target_stat.st_uid != os.geteuid()
-                or stat.S_IMODE(target_stat.st_mode) & 0o077
-            ):
-                raise BrokerError(
-                    "workload_control_unavailable",
-                    "dedicated workload cgroup has unsafe ownership or mode",
-                )
-            existing_pids = {
-                int(raw_pid)
-                for raw_pid in (target / "cgroup.procs")
-                .read_text(encoding="ascii")
-                .split()
-            }
-            if existing_pids not in (set(), {host_pid}):
-                raise BrokerError(
-                    "workload_identity_mismatch",
-                    "dedicated workload cgroup contains another process",
-                )
-            (target / "cgroup.procs").write_text(str(host_pid), encoding="ascii")
-            workload_cgroup = _read_cgroup(host_pid)
-        except (OSError, ValueError) as exc:
-            raise BrokerError(
-                "workload_control_unavailable",
-                "cannot move workload into its dedicated cgroup",
-            ) from exc
-        unified_path = self._unified_path(workload_cgroup)
-        if not unified_path.endswith("/" + lease.lease_id):
+        expected = self._expected_control_group(lease)
+        if self._unified_path(workload_cgroup) != expected:
             raise BrokerError(
                 "workload_identity_mismatch",
-                "workload did not enter the dedicated lease cgroup",
+                "workload is not in its exact lease-named user scope",
+            )
+        self._require_process_identity(host_pid, start_ticks, group_id)
+        target = self._existing_scope_path(lease)
+        unit = self._scope_unit(lease)
+        status = self._unit_status(unit)
+        if status != {
+            "Id": unit,
+            "ControlGroup": expected,
+            "LoadState": "loaded",
+            "ActiveState": "active",
+            "Slice": SCOPE_SLICE,
+        }:
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "transient GPU scope unit identity differs",
+            )
+        pids = self._scope_pids(target)
+        if pids != {host_pid}:
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "new transient GPU scope contains a foreign or reused process",
             )
         return host_pid, start_ticks, group_id, workload_cgroup
 
     def freeze(self, lease: Lease) -> str:
-        target = self._existing_lease_path(lease)
+        target = self._active_scope_path(lease)
         try:
             (target / "cgroup.freeze").write_text("1", encoding="ascii")
         except OSError as exc:
             raise BrokerError(
                 "workload_control_unavailable", "cannot freeze workload cgroup"
             ) from exc
-        deadline = time.monotonic() + 2.0
+        deadline = self._monotonic() + 2.0
         while True:
             try:
                 events = (target / "cgroup.events").read_text(encoding="ascii")
@@ -1138,16 +1169,16 @@ class JobCgroupController:
                 ) from exc
             if any(line.strip() == "frozen 1" for line in events.splitlines()):
                 return f"{lease.lease_id}:{self._now_ns()}"
-            if time.monotonic() >= deadline:
+            if self._monotonic() >= deadline:
                 raise BrokerError(
                     "workload_control_unavailable",
                     "workload cgroup did not enter frozen state",
                 )
-            time.sleep(0.02)
+            self._sleep(0.02)
 
     def kill(self, lease: Lease) -> None:
         try:
-            (self._existing_lease_path(lease) / "cgroup.kill").write_text(
+            (self._active_scope_path(lease) / "cgroup.kill").write_text(
                 "1", encoding="ascii"
             )
         except OSError as exc:
@@ -1156,49 +1187,395 @@ class JobCgroupController:
             ) from exc
 
     def empty(self, lease: Lease) -> bool:
-        target = self._existing_lease_path(lease)
-        deadline = time.monotonic() + 2.0
+        self._require_bound_scope(lease)
+        target = self._path_for_control_group(
+            self._expected_control_group(lease)
+        )
+        deadline = self._monotonic() + 2.0
         while True:
-            try:
-                if not (target / "cgroup.procs").read_text(encoding="ascii").strip():
+            if target.exists():
+                try:
+                    self._validate_scope_path(target)
+                    pids = self._scope_pids(target)
+                    events = (target / "cgroup.events").read_text(
+                        encoding="ascii"
+                    )
+                except OSError as exc:
+                    raise BrokerError(
+                        "workload_control_unavailable",
+                        "cannot verify workload scope emptiness",
+                    ) from exc
+                status = self._unit_status(self._scope_unit(lease))
+                if (
+                    status["Id"] != self._scope_unit(lease)
+                    or status["ControlGroup"]
+                    != self._expected_control_group(lease)
+                    or status["LoadState"] != "loaded"
+                    or status["ActiveState"]
+                    not in {"active", "deactivating", "inactive", "failed"}
+                    or status["Slice"] != SCOPE_SLICE
+                ):
+                    raise BrokerError(
+                        "workload_identity_mismatch",
+                        "remaining transient GPU scope unit identity differs",
+                    )
+                populated = {
+                    line.strip()
+                    for line in events.splitlines()
+                    if line.startswith("populated ")
+                }
+                if not pids and populated == {"populated 0"}:
                     return True
-            except OSError as exc:
-                raise BrokerError(
-                    "workload_control_unavailable",
-                    "cannot verify workload cgroup emptiness",
-                ) from exc
-            if time.monotonic() >= deadline:
+            elif self._scope_disappeared_safely(lease):
+                return True
+            if self._monotonic() >= deadline:
                 return False
-            time.sleep(0.02)
+            self._sleep(0.02)
 
     def cleanup(self, lease: Lease) -> None:
-        target = self._existing_lease_path(lease)
         if not self.empty(lease):
             raise BrokerError(
-                "workload_termination_failed", "workload cgroup is not empty"
+                "workload_termination_failed", "workload scope is not empty"
             )
+        target = self._path_for_control_group(
+            self._expected_control_group(lease)
+        )
+        unit = self._scope_unit(lease)
+        if target.exists():
+            completed = self._systemctl("stop", unit)
+            if completed.returncode != 0:
+                raise BrokerError(
+                    "workload_control_unavailable",
+                    "cannot stop empty transient GPU scope",
+                )
+        deadline = self._monotonic() + 2.0
+        while target.exists() or not self._scope_disappeared_safely(lease):
+            if self._monotonic() >= deadline:
+                raise BrokerError(
+                    "workload_control_unavailable",
+                    "transient GPU scope was not collected",
+                )
+            self._sleep(0.02)
+
+    def _scope_unit(self, lease: Lease) -> str:
         try:
-            target.rmdir()
-        except OSError as exc:
-            raise BrokerError(
-                "workload_control_unavailable", "cannot remove workload cgroup"
-            ) from exc
-
-    def _lease_path(self, lease: Lease) -> Path:
-        if not lease.lease_id or any(
-            character not in "0123456789abcdef" for character in lease.lease_id
-        ):
-            raise BrokerError("workload_control_unavailable", "lease ID is unsafe")
-        return self.root / lease.lease_id
-
-    def _existing_lease_path(self, lease: Lease) -> Path:
-        path = self._lease_path(lease)
-        if path.is_symlink() or not path.is_dir():
+            validate_lease_id(lease.lease_id)
+            return scope_unit_name(lease.lease_id)
+        except ValueError as exc:
             raise BrokerError(
                 "workload_control_unavailable",
-                "dedicated workload cgroup is missing or unsafe",
+                "lease ID cannot name an exact transient GPU scope",
+            ) from exc
+
+    def _expected_control_group(self, lease: Lease) -> str:
+        self._scope_unit(lease)
+        return scope_control_group(lease.lease_id, uid=self.uid)
+
+    def _path_for_control_group(self, control_group: str) -> Path:
+        if (
+            not isinstance(control_group, str)
+            or not control_group.startswith("/")
+            or "\x00" in control_group
+            or any(part in {"", ".", ".."} for part in control_group.split("/")[1:])
+        ):
+            raise BrokerError(
+                "workload_control_unavailable",
+                "transient GPU scope cgroup path is unsafe",
             )
+        path = self._cgroup_root.joinpath(*control_group.split("/")[1:])
+        try:
+            if not path.resolve(strict=False).is_relative_to(
+                self._cgroup_root.resolve(strict=True)
+            ):
+                raise ValueError("path escaped cgroup root")
+        except (OSError, ValueError) as exc:
+            raise BrokerError(
+                "workload_control_unavailable",
+                "transient GPU scope cgroup path is unsafe",
+            ) from exc
         return path
+
+    def _validate_scope_path(self, path: Path) -> None:
+        try:
+            resolved = path.resolve(strict=True)
+            metadata = path.stat()
+        except OSError as exc:
+            raise BrokerError(
+                "workload_control_unavailable",
+                "transient GPU scope cgroup is missing or unsafe",
+            ) from exc
+        if (
+            path.is_symlink()
+            or not path.is_dir()
+            or resolved != path
+            or metadata.st_uid != self.uid
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+        ):
+            raise BrokerError(
+                "workload_control_unavailable",
+                "transient GPU scope cgroup is missing or unsafe",
+            )
+        required_access = {
+            "cgroup.events": os.R_OK,
+            "cgroup.freeze": os.R_OK | os.W_OK,
+            "cgroup.kill": os.W_OK,
+            "cgroup.procs": os.R_OK,
+        }
+        if any(
+            (path / name).is_symlink()
+            or not (path / name).is_file()
+            or not os.access(path / name, access)
+            for name, access in required_access.items()
+        ):
+            raise BrokerError(
+                "workload_control_unavailable",
+                "transient GPU scope controls are incomplete",
+            )
+
+    def _existing_scope_path(self, lease: Lease) -> Path:
+        target = self._path_for_control_group(
+            self._expected_control_group(lease)
+        )
+        self._validate_scope_path(target)
+        return target
+
+    def _active_scope_path(self, lease: Lease) -> Path:
+        self._require_bound_scope(lease)
+        target = self._existing_scope_path(lease)
+        unit = self._scope_unit(lease)
+        expected = {
+            "Id": unit,
+            "ControlGroup": self._expected_control_group(lease),
+            "LoadState": "loaded",
+            "ActiveState": "active",
+            "Slice": SCOPE_SLICE,
+        }
+        pids = self._scope_pids(target)
+        if self._unit_status(unit) != expected or not pids:
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "transient GPU scope is not active with a live workload",
+            )
+        if (
+            lease.workload_pid is None
+            or lease.workload_process_start_ticks is None
+            or lease.workload_process_group_id is None
+            or pids != {lease.workload_pid}
+        ):
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "active transient GPU scope workload identity differs",
+            )
+        self._require_process_identity(
+            lease.workload_pid,
+            lease.workload_process_start_ticks,
+            lease.workload_process_group_id,
+        )
+        return target
+
+    def _require_bound_scope(self, lease: Lease) -> None:
+        expected = self._expected_control_group(lease)
+        if (
+            not isinstance(lease.workload_cgroup, str)
+            or self._unified_path(lease.workload_cgroup) != expected
+        ):
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "lease is not bound to its exact transient GPU scope",
+            )
+
+    def _scope_pids(self, target: Path) -> set[int]:
+        try:
+            pids = {
+                int(raw)
+                for raw in (target / "cgroup.procs")
+                .read_text(encoding="ascii")
+                .split()
+            }
+        except (OSError, ValueError) as exc:
+            raise BrokerError(
+                "workload_control_unavailable",
+                "cannot read transient GPU scope process inventory",
+            ) from exc
+        if any(pid <= 0 for pid in pids):
+            raise BrokerError(
+                "workload_control_unavailable",
+                "transient GPU scope process inventory is invalid",
+            )
+        for pid in pids:
+            self._require_process_uid(pid)
+        return pids
+
+    def _require_process_uid(self, pid: int) -> None:
+        try:
+            uids = tuple(self._process_uid_resolver(pid))
+        except (OSError, TypeError, ValueError) as exc:
+            raise BrokerError(
+                "workload_identity_unavailable",
+                "cannot establish transient GPU scope process UID",
+            ) from exc
+        if len(uids) != 4 or set(uids) != {self.uid}:
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "transient GPU scope contains a process with another UID",
+            )
+
+    def _require_process_identity(
+        self,
+        pid: int,
+        start_ticks: int,
+        group_id: int,
+    ) -> None:
+        self._require_process_uid(pid)
+        try:
+            actual_start = self._process_start_ticks_reader(pid)
+            actual_group = self._process_group_reader(pid)
+        except (BrokerError, OSError) as exc:
+            raise BrokerError(
+                "workload_identity_unavailable",
+                "transient GPU scope process identity disappeared",
+            ) from exc
+        if (
+            actual_start != start_ticks
+            or group_id != pid
+            or actual_group != pid
+        ):
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "transient GPU scope PID/start-time/process-group differs",
+            )
+
+    def _scope_disappeared_safely(self, lease: Lease) -> bool:
+        status = self._unit_status(self._scope_unit(lease))
+        if status != {
+            "Id": self._scope_unit(lease),
+            "ControlGroup": "",
+            "LoadState": "not-found",
+            "ActiveState": "inactive",
+            "Slice": "",
+        }:
+            return False
+        if (
+            lease.workload_pid is None
+            or lease.workload_process_start_ticks is None
+        ):
+            return False
+        try:
+            current_start = self._process_start_ticks_reader(lease.workload_pid)
+        except (BrokerError, OSError):
+            return True
+        if current_start != lease.workload_process_start_ticks:
+            return True
+        try:
+            # cgroup.kill can make the target a zombie while its Worker parent
+            # is synchronously waiting for this Broker call.  A zombie cannot
+            # execute or hold a cgroup membership; requiring the parent to
+            # reap it here would deadlock the termination handshake.
+            return self._process_state_reader(lease.workload_pid) in {"Z", "X"}
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _read_process_uids(pid: int) -> tuple[int, int, int, int]:
+        try:
+            status = Path(f"/proc/{pid}/status").read_text(encoding="ascii")
+            uid_line = next(
+                line for line in status.splitlines() if line.startswith("Uid:")
+            )
+            uids = tuple(
+                int(value) for value in uid_line.split(":", 1)[1].split()
+            )
+        except (OSError, StopIteration, ValueError) as exc:
+            raise OSError("process UID inventory is unavailable") from exc
+        if len(uids) != 4:
+            raise ValueError("process UID inventory is invalid")
+        return uids  # type: ignore[return-value]
+
+    @staticmethod
+    def _read_process_state(pid: int) -> str:
+        try:
+            raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+            final_parenthesis = raw.rfind(")")
+            fields_after_comm = raw[final_parenthesis + 2 :].split()
+            state = fields_after_comm[0]
+        except (OSError, IndexError) as exc:
+            raise OSError("process state is unavailable") from exc
+        if final_parenthesis < 1 or len(state) != 1:
+            raise ValueError("process state is invalid")
+        return state
+
+    def _user_manager_identity(self) -> str:
+        completed = self._systemctl(
+            "show",
+            "--property=ControlGroup",
+            "--no-pager",
+        )
+        if completed.returncode != 0:
+            raise BrokerError(
+                "workload_control_unavailable",
+                "cannot query systemd user manager",
+            )
+        rows = completed.stdout.splitlines()
+        if len(rows) != 1 or not rows[0].startswith("ControlGroup="):
+            raise BrokerError(
+                "workload_control_unavailable",
+                "systemd user manager identity is invalid",
+            )
+        return rows[0].split("=", 1)[1]
+
+    def _unit_status(self, unit: str) -> dict[str, str]:
+        completed = self._systemctl(
+            "show",
+            unit,
+            "--property=Id,ControlGroup,LoadState,ActiveState,Slice",
+            "--no-pager",
+        )
+        if completed.returncode != 0:
+            raise BrokerError(
+                "workload_control_unavailable",
+                "cannot query transient GPU scope",
+            )
+        result: dict[str, str] = {}
+        for line in completed.stdout.splitlines():
+            if "=" not in line:
+                raise BrokerError(
+                    "workload_control_unavailable",
+                    "transient GPU scope status is invalid",
+                )
+            key, value = line.split("=", 1)
+            if key in result:
+                raise BrokerError(
+                    "workload_control_unavailable",
+                    "transient GPU scope status is duplicated",
+                )
+            result[key] = value
+        if set(result) != {
+            "Id",
+            "ControlGroup",
+            "LoadState",
+            "ActiveState",
+            "Slice",
+        }:
+            raise BrokerError(
+                "workload_control_unavailable",
+                "transient GPU scope status is incomplete",
+            )
+        return result
+
+    def _systemctl(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return self._run(
+                ("/usr/bin/systemctl", "--user", *arguments),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise BrokerError(
+                "workload_control_unavailable",
+                "systemd user manager command failed",
+            ) from exc
 
     @staticmethod
     def _unified_path(cgroup: str) -> str:
@@ -1712,7 +2089,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--external-reservations", type=Path, required=True)
     parser.add_argument("--mps-state-root", type=Path, required=True)
-    parser.add_argument("--job-cgroup-root", type=Path, required=True)
     parser.add_argument("--heartbeat-timeout-seconds", type=float, default=30.0)
     return parser.parse_args()
 
@@ -1728,7 +2104,7 @@ def main() -> int:
     validate_policy_document(args.policy)
     validate_gpu_inventory(query_gpu_inventory())
     mps_guard = MpsRuntimeGuard(args.mps_state_root)
-    cgroup_controller = JobCgroupController(args.job_cgroup_root)
+    cgroup_controller = JobCgroupController()
     external_policy = load_external_reservations(args.external_reservations)
     external_guard = ExternalGpuGuard(
         external_policy,

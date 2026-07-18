@@ -205,6 +205,40 @@ class WorkerEnvironmentTests(unittest.TestCase):
         ):
             self.assertNotIn(key, environment)
 
+    def test_systemd_user_bus_is_only_preserved_with_exact_runtime_identity(
+        self,
+    ) -> None:
+        runtime = f"/run/user/{os.geteuid()}"
+        environment = helper.build_worker_process_environment(
+            {},
+            inherited={
+                "XDG_RUNTIME_DIR": runtime,
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus",
+            },
+        )
+        self.assertEqual(environment["XDG_RUNTIME_DIR"], runtime)
+        self.assertEqual(
+            environment["DBUS_SESSION_BUS_ADDRESS"],
+            f"unix:path={runtime}/bus",
+        )
+
+        for inherited in (
+            {
+                "XDG_RUNTIME_DIR": runtime,
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/attacker-bus",
+            },
+            {"XDG_RUNTIME_DIR": runtime},
+            {"DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus"},
+        ):
+            with self.assertRaisesRegex(
+                helper.WorkerEnvError,
+                "manager environment identity is invalid",
+            ):
+                helper.build_worker_process_environment(
+                    {},
+                    inherited=inherited,
+                )
+
     def test_cli_exec_sets_only_safe_summary_fields(self) -> None:
         self.write(
             "BYTEFF2_PYTHON=/opt/byteff2/bin/python\n"

@@ -59,6 +59,7 @@ ALLOWED_KEYS = frozenset(
         "MONOMER_MD_GPU_BROKER_WAIT_TIMEOUT_SECONDS",
         "MONOMER_MD_GPU_DEVICE_COLUMN",
         "MONOMER_MD_GPU_MPS_PIPE_ROOT",
+        "MONOMER_MD_GPU_SCOPE_LAUNCHER",
         "MONOMER_MD_HEARTBEAT_AT_COLUMN",
         "MONOMER_MD_HEARTBEAT_INTERVAL_SECONDS",
         "MONOMER_MD_HEALTH_PROBE_TIMEOUT_SECONDS",
@@ -238,6 +239,19 @@ def build_worker_process_environment(
         for key in SAFE_INHERITED_KEYS
         if key in inherited_values
     }
+    expected_runtime = f"/run/user/{os.geteuid()}"
+    inherited_runtime = inherited_values.get("XDG_RUNTIME_DIR")
+    inherited_bus = inherited_values.get("DBUS_SESSION_BUS_ADDRESS")
+    if inherited_runtime is not None or inherited_bus is not None:
+        if (
+            inherited_runtime != expected_runtime
+            or inherited_bus != f"unix:path={expected_runtime}/bus"
+        ):
+            raise WorkerEnvError(
+                "systemd user manager environment identity is invalid"
+            )
+        environment["XDG_RUNTIME_DIR"] = inherited_runtime
+        environment["DBUS_SESSION_BUS_ADDRESS"] = inherited_bus
     environment.update(values)
     environment.update(override_values)
 
