@@ -396,6 +396,9 @@ def test_safe_child_environment_does_not_inherit_loader_or_user_config(
     assert child["GIT_SSH_COMMAND"] == "/bin/false"
     with pytest.raises(trust.GitSourceTrustError, match="subcommand"):
         trust.safe_git_command(root, "-c", "include.path=/tmp/evil", "status")
+    with pytest.raises(trust.GitSourceTrustError, match="executable"):
+        trust.safe_git_command(root, "status", executable="git")
+    assert trust.safe_git_command(root, "status")[0] == "/usr/bin/git"
 
 
 def test_object_store_symlink_is_rejected(tmp_path: Path) -> None:

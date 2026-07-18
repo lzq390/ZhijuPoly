@@ -1725,6 +1725,37 @@ class PullDeployTestCase(unittest.TestCase):
 
 
 class RepositoryAndEvidenceTests(PullDeployTestCase):
+    def test_trusted_git_uses_fixed_binary_despite_shadowed_path(self) -> None:
+        controller = self.controller()
+
+        class RecordingRunner:
+            def __init__(self) -> None:
+                self.commands: list[list[str]] = []
+
+            def run(
+                self, command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                self.commands.append(command)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = RecordingRunner()
+        controller.runner = runner
+        with (
+            mock.patch.object(
+                controller,
+                "_git_trust_preflight",
+                return_value={"trusted": True},
+            ),
+            mock.patch.object(
+                controller,
+                "_clean_environment",
+                return_value={"PATH": "/tmp/fake-git:/usr/local/bin:/usr/bin"},
+            ),
+        ):
+            controller._git("status", "--porcelain=v1")
+        self.assertEqual(len(runner.commands), 1)
+        self.assertEqual(runner.commands[0][0], "/usr/bin/git")
+
     def test_stopped_bridge_guard_rejects_every_network_fetch_path(
         self,
     ) -> None:

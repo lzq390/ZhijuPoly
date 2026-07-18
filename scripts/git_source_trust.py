@@ -2015,7 +2015,7 @@ def safe_git_command(
         or arguments[0].startswith("-")
     ):
         raise GitSourceTrustError("trusted Git command requires an explicit subcommand")
-    if executable not in {"/usr/bin/git", "git"}:
+    if executable != "/usr/bin/git":
         raise GitSourceTrustError("trusted Git command uses an unexpected executable")
     forbidden = (
         "-c",

@@ -8510,7 +8510,6 @@ class PullDeployController:
             _git_source_trust.safe_git_command(
                 self.production_root,
                 *arguments,
-                executable="git",
             )
             if preflight is not None
             else [
