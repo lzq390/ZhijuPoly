@@ -1,0 +1,39 @@
+#!/usr/bin/python3 -I
+"""Isolated launcher for source-pinned PostgreSQL media evidence."""
+
+import os
+from pathlib import Path
+import stat
+import sys
+
+
+if not sys.flags.isolated:
+    raise SystemExit("nexpoly-postgres-media-evidence requires isolated Python")
+
+target = Path(__file__).absolute().with_name("postgres_media_evidence.py")
+parent = target.parent
+parent_metadata = parent.lstat()
+target_metadata = target.lstat()
+if (
+    not stat.S_ISDIR(parent_metadata.st_mode)
+    or parent.is_symlink()
+    or parent_metadata.st_uid != os.geteuid()
+    or parent_metadata.st_mode & 0o022
+    or not stat.S_ISREG(target_metadata.st_mode)
+    or target.is_symlink()
+    or target_metadata.st_uid != os.geteuid()
+    or target_metadata.st_mode & 0o022
+):
+    raise SystemExit("PostgreSQL media evidence implementation is unsafe")
+
+os.execve(
+    "/usr/bin/python3",
+    ["/usr/bin/python3", "-I", "-B", str(target), *sys.argv[1:]],
+    {
+        "HOME": "/nonexistent",
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    },
+)

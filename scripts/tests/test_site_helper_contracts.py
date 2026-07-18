@@ -116,23 +116,21 @@ class SiteHelperContractTests(unittest.TestCase):
                 ROOT / "ops/config/postgres-media-registry.json.example"
             ).read_text(encoding="utf-8")
         )
-        self.assertEqual(registry["schema_version"], 1)
+        self.assertEqual(registry["schema_version"], 2)
         self.assertIn(
-            "/data/lzq/gith/nexpoly/backups",
-            registry["legacy_backup_roots"],
+            (
+                "/data/lzq/gith/nexpoly-runtime/legacy-takeover/"
+                "preserved-postgres-backups"
+            ),
+            registry["discovery_boundary"]["backup_roots"],
         )
         helper = (
             ROOT / "ops/config/contract-0012-external-database-audit.example"
         ).read_text(encoding="utf-8")
         for required in (
-            'docker("volume", "ls"',
-            "expected_media_ids",
-            "discovered_media_ids",
-            "source_identity_before",
-            "source_identity_after",
-            "requires_0014",
-            "FORBIDDEN_OPERATION_BACKUP_ROOT",
-            "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+            "nexpoly-postgres-media-evidence",
+            "--expected-registry-sha256",
+            "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256",
         ):
             self.assertIn(required, helper)
         self.assertNotIn("docker volume rm", helper)
@@ -499,7 +497,16 @@ class SiteHelperContractTests(unittest.TestCase):
             "nexpoly_dev": "dev_auditor",
             "nexpoly_md_health_opt": "health_auditor",
         }
-        validated = CONTRACTS.validate_external_database_audit(
+        with self.assertRaisesRegex(
+            CONTRACTS.SiteHelperContractError,
+            "registry v2",
+        ):
+            CONTRACTS.validate_external_database_audit(
+                document,
+                expected_users=expected_users,
+                expected_media_registry_digest="sha256:" + "c" * 64,
+            )
+        validated = CONTRACTS._validate_external_database_audit_schema_v1(
             document,
             expected_users=expected_users,
             expected_media_registry_digest="sha256:" + "c" * 64,
@@ -532,7 +539,7 @@ class SiteHelperContractTests(unittest.TestCase):
             ],
         }
         self.assertEqual(
-            CONTRACTS.validate_external_database_audit(
+            CONTRACTS._validate_external_database_audit_schema_v1(
                 dirty,
                 expected_users=expected_users,
                 expected_media_registry_digest="sha256:" + "c" * 64,
@@ -546,7 +553,7 @@ class SiteHelperContractTests(unittest.TestCase):
             CONTRACTS.SiteHelperContractError,
             "one production writable volume",
         ):
-            CONTRACTS.validate_external_database_audit(
+            CONTRACTS._validate_external_database_audit_schema_v1(
                 no_writable,
                 expected_users=expected_users,
                 expected_media_registry_digest="sha256:" + "c" * 64,
@@ -557,7 +564,7 @@ class SiteHelperContractTests(unittest.TestCase):
             CONTRACTS.SiteHelperContractError,
             "transaction_read_only",
         ):
-            CONTRACTS.validate_external_database_audit(
+            CONTRACTS._validate_external_database_audit_schema_v1(
                 document,
                 expected_users=expected_users,
                 expected_media_registry_digest="sha256:" + "c" * 64,
@@ -569,7 +576,7 @@ class SiteHelperContractTests(unittest.TestCase):
             CONTRACTS.SiteHelperContractError,
             "discovery differs",
         ):
-            CONTRACTS.validate_external_database_audit(
+            CONTRACTS._validate_external_database_audit_schema_v1(
                 document,
                 expected_users=expected_users,
                 expected_media_registry_digest="sha256:" + "c" * 64,
@@ -599,7 +606,7 @@ class SiteHelperContractTests(unittest.TestCase):
         }
         document["requires_0014"] = True
         self.assertTrue(
-            CONTRACTS.validate_external_database_audit(
+            CONTRACTS._validate_external_database_audit_schema_v1(
                 document,
                 expected_users=expected_users,
                 expected_media_registry_digest="sha256:" + "c" * 64,
@@ -611,7 +618,7 @@ class SiteHelperContractTests(unittest.TestCase):
             CONTRACTS.SiteHelperContractError,
             "unknown checksum",
         ):
-            CONTRACTS.validate_external_database_audit(
+            CONTRACTS._validate_external_database_audit_schema_v1(
                 document,
                 expected_users=expected_users,
                 expected_media_registry_digest="sha256:" + "c" * 64,

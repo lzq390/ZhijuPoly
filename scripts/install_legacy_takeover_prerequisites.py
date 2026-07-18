@@ -41,11 +41,15 @@ RECOVERY_FILES = {
     "legacy_takeover.py": "scripts/legacy_takeover.py",
     "legacy_takeover_evidence.py": "scripts/legacy_takeover_evidence.py",
     "maintenance_prefetch.py": "scripts/maintenance_prefetch.py",
+    "postgres_media_evidence.py": "scripts/postgres_media_evidence.py",
     "worker_slot_runtime.py": "scripts/worker_slot_runtime.py",
     "site_helper_contracts.py": "scripts/site_helper_contracts.py",
     "nexpoly-legacy-takeover": "scripts/nexpoly-legacy-takeover",
     "nexpoly-bridge-recover": "scripts/nexpoly-bridge-recover",
     "nexpoly-maintenance-prefetch": "scripts/nexpoly-maintenance-prefetch",
+    "nexpoly-postgres-media-evidence": (
+        "scripts/nexpoly-postgres-media-evidence"
+    ),
 }
 ATTESTATION_FILES = {
     "bridge_recovery_capsule.py": "scripts/bridge_recovery_capsule.py",
@@ -66,6 +70,12 @@ ATTESTATION_FILES = {
     ),
     "contract-0012-external-database-audit.example": (
         "ops/config/contract-0012-external-database-audit.example"
+    ),
+    "postgres-media-registry.json.example": (
+        "ops/config/postgres-media-registry.json.example"
+    ),
+    "postgres-media-audit-role.sql.example": (
+        "ops/config/postgres-media-audit-role.sql.example"
     ),
     "legacy-takeover-classification.json.example": (
         "ops/config/legacy-takeover-classification.json.example"

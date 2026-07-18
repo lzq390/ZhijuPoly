@@ -213,17 +213,24 @@ deploy-user-owned mode-0700 command configured by
 `NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND`. Its two online sessions
 use non-superuser/non-CREATEDB/non-CREATEROLE audit users and prove
 `transaction_read_only=true`. It also consumes the deploy-user-owned mode-0600
-`postgres-media-registry.json`, discovers every Nexpoly Docker volume and every
-custom PostgreSQL dump below the declared frozen legacy roots, and requires
+schema-v2 `postgres-media-registry.json`. Discovery enumerates every local
+Docker container and volume without using a Nexpoly name prefix, derives
+arbitrary PGDATA volume and bind mounts from the complete container inventory,
+recursively read-only probes every volume, and scans both compiled
+private backup roots for the fixed PostgreSQL custom and tar formats. It requires
 `expected_media_ids == discovered_media_ids`. Missing, additional, unreachable
 or duplicate media blocks maintenance.
 
 The generic `/data/lzq/gith/nexpoly-runtime/backups` operation root is
 deliberately forbidden as a legacy discovery root. Pull's newly created
 rollback dump is bound separately by the prepared descriptor and must not make
-the external-media set drift after preparation. A takeover instead registers
-the exact preserved legacy backup directory (and any reviewed recovery
-snapshot directory) that existed before the current operation.
+the external-media set drift after preparation. A takeover first copies
+reviewed legacy dumps into the exact mode-0700
+`legacy-takeover/preserved-postgres-backups` root and reviewed recovery dumps
+into `/data/lzq/recovery/nexpoly-postgres-media`. Every parent below those
+anchors and every dump must be deploy-user-owned and private. The roots and
+accepted suffix/magic pairs are compiled into the builder and repeated
+byte-for-byte in registry v2; callers cannot select fewer roots or formats.
 
 The raw SHA-256 of that private registry is configured as
 `NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256`. Preparation seals the same digest
@@ -232,14 +239,36 @@ Preflight, the gate immediately before 0012, completion, rollback and B→F resu
 all compare-and-swap the same value. Changing only `deploy.env` never authorizes
 a different registry.
 
-Every volume record binds its name, driver, mountpoint, labels, complete Docker
-inspect output, attached container IDs and content digest before and after the
-audit. Every backup record binds its absolute path, device, inode, size,
-nanosecond mtime, mode, owner and complete file digest. Per-medium evidence also
-binds the auditor digest, PostgreSQL major, audit time and isolated-restore or
-isolated-copy method. Dumps and evidence are private; the registry contains no
-credentials or dump contents. Dormant volumes and backups are never attached to
-the production database and are never migrated.
+Registry v2 pins the complete discovery boundary, PG16 image, exact
+source-pinned builder digest and private `pg_service.conf` digest. The service
+file is checked before and after the audit, so its endpoint cannot drift while
+credentials remain undisclosed. Every volume record binds its arbitrary name,
+driver, mountpoint, labels, complete Docker inspect identity, PGDATA subpath,
+all attached container IDs, image IDs, immutable config digests, restart
+identity, states and destinations, plus a content digest before and after the
+audit. Online SQL system identifiers must equal an independent
+`pg_controldata` read from that exact active container and PGDATA. Every bind is
+copied through an `openat`/`O_NOFOLLOW` private
+traversal; Docker never receives the source bind path. Every backup uses the
+same private parent-chain discipline and binds path, device, inode, size,
+nanosecond mtime, mode, owner, format and complete file digest.
+
+Dormant volumes are mounted read-only only by a copy helper; PostgreSQL starts
+against a disposable copied volume with `network=none`, never against the
+source. Dumps are copied to private staging and restored with fixed flags into
+a new disposable PG16 volume. Exact scratch container/volume deletion is
+verified even on failure. Source identity and content digest are captured again
+after audit and must compare equal. The complete Docker/backup discovery
+boundary is rescanned after all media audits and its before/after state digests
+must match. Online sources are never mounted or started by the auditor and are
+observed only through fixed read-only services plus the exact container's
+read-only `pg_controldata`.
+Per-medium evidence recomputes system-identifier scope, database identity,
+complete raw ledger, ledger relation, legacy relation schema/content identity,
+auditor digest and a self-sealed evidence digest. Logical dumps cannot preserve
+their source cluster system identifier, so they explicitly record
+`isolated-restore-cluster`; copied physical media records
+`copied-source-cluster`.
 
 The online database list contains exactly `nexpoly_dev` and
 `nexpoly_md_health_opt`. If either is also visible in the production cluster,
@@ -256,7 +285,9 @@ outage cannot prevent restoration of the production database.
 The command emits schema v2. The repository templates
 `ops/config/contract-0012-external-database-audit.example` and
 `ops/config/postgres-media-registry.json.example` define the complete envelope.
-Its top-level identity is:
+`ops/config/postgres-media-audit-role.sql.example` grants only the online
+read-only tables and `pg_control_system()` execution needed by the builder;
+login secrets remain out of band. Its top-level identity is:
 
 ```json
 {
@@ -264,11 +295,16 @@ Its top-level identity is:
   "inventory_complete": true,
   "writable_target": {"stack": "production", "database": "nexpoly"},
   "media_registry": {
-    "schema_version": 1,
+    "schema_version": 2,
     "sha256": "sha256:<private registry digest>",
+    "discovery_boundary_sha256": "sha256:<compiled boundary>",
+    "discovery_state_sha256_before": "sha256:<complete pre-audit state>",
+    "discovery_state_sha256_after": "sha256:<same post-audit state>",
     "captured_at": "<UTC timestamp>",
     "expected_media_ids": ["<sorted complete IDs>"],
-    "discovered_media_ids": ["<same sorted complete IDs>"]
+    "discovered_media_ids": ["<same sorted complete IDs>"],
+    "docker_inventory_sha256": "sha256:<all inspected Docker objects>",
+    "backup_inventory_sha256": "sha256:<all files in both fixed roots>"
   },
   "databases": ["<two complete read-only online records>"],
   "media": ["<one complete identity/audit/ledger record per discovered medium>"],
@@ -276,9 +312,12 @@ Its top-level identity is:
 }
 ```
 
-Raw media ledgers must contain unique known migration names. The historical
+Raw media ledgers must be the exact contiguous canonical prefix; only isolated
+media may use the empty prefix. The historical
 `0005_polytao_jobs` alias and the quarantined dirty 0009 checksum are explicit
-known identities; the dirty 0009 medium must remain isolated. A canonical
+known identities. The alias is accepted only alongside canonical 0007 and
+before 0012, and relation presence must equal “0007 applied and 0012 absent.”
+The dirty 0009 medium must remain isolated. A canonical
 `ab633a62…` 0013 is accepted. The superseded `a60cbf66…` checksum sets
 `requires_0014=true`; any other or multiple 0013 rows fail closed. The registry
 and evidence must be regenerated in the actual maintenance window, not reused

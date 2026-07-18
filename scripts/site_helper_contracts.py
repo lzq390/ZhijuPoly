@@ -23,6 +23,7 @@ from typing import Any, Callable
 PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 MAX_EVIDENCE_BYTES = 256 * 1024
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+OCI_IMAGE_DIGEST_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 CONTAINER_RE = re.compile(r"^[0-9a-f]{64}$")
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
@@ -31,7 +32,7 @@ ROLE_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,62}$")
 SYSTEMD_UNIT_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,128}\.service$")
 VOLUME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 PG_SYSTEM_ID_RE = re.compile(r"^[0-9]{1,20}$")
-MEDIA_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:/-]{0,511}$")
+MEDIA_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:/-]{0,1023}$")
 RFC3339_UTC_RE = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
     r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
@@ -965,7 +966,7 @@ def validate_legacy_restore(
     return dict(document)
 
 
-def validate_external_database_audit(
+def _validate_external_database_audit_schema_v1(
     document: object,
     *,
     expected_users: dict[str, str] | None,
@@ -1422,6 +1423,1047 @@ def validate_external_database_audit(
         },
         "databases": [records[name] for name in sorted(records)],
         "media": [media_records[name] for name in sorted(media_records)],
+        "requires_0014": requires_0014,
+    }
+
+
+def _external_media_ledger_v2(
+    ledger: object,
+    *,
+    legacy_relation_present: bool,
+    isolated: bool,
+) -> tuple[dict[str, Any], dict[str, str | None], bool]:
+    if not isinstance(ledger, list):
+        raise SiteHelperContractError("external media ledger is invalid")
+    raw: list[tuple[str, str]] = []
+    for row in ledger:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"version", "checksum"}
+            or not isinstance(row.get("version"), str)
+            or MIGRATION_RE.fullmatch(row["version"]) is None
+            or not isinstance(row.get("checksum"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", row["checksum"]) is None
+        ):
+            raise SiteHelperContractError("external media ledger row is invalid")
+        raw.append((row["version"], row["checksum"]))
+    if (
+        raw != sorted(raw)
+        or len({version for version, _checksum in raw}) != len(raw)
+    ):
+        raise SiteHelperContractError(
+            "external media ledger is not unique canonical order"
+        )
+    alias = [
+        value for value in raw if value[0] == LEGACY_0005_ALIAS_VERSION
+    ]
+    if alias and alias != [
+        (LEGACY_0005_ALIAS_VERSION, LEGACY_0005_ALIAS_CHECKSUM)
+    ]:
+        raise SiteHelperContractError("external media 0005 alias differs")
+    stripped = [
+        value for value in raw if value[0] != LEGACY_0005_ALIAS_VERSION
+    ]
+    if len(stripped) > len(CANONICAL_MIGRATION_LEDGER):
+        raise SiteHelperContractError("external media ledger extends past authority")
+    mismatches: list[dict[str, str]] = []
+    for index, observed in enumerate(stripped):
+        expected = CANONICAL_MIGRATION_LEDGER[index]
+        if observed[0] != expected[0]:
+            raise SiteHelperContractError(
+                "external media ledger is not a contiguous canonical prefix"
+            )
+        if observed[1] == expected[1]:
+            continue
+        if (
+            observed[0] == "0009_monomer_md_job_leases"
+            and observed[1] == KNOWN_DIRTY_0009_CHECKSUM
+        ):
+            status = "known-isolated-dirty"
+        elif (
+            observed[0] == "0013_monomer_dft_jobs"
+            and observed[1] == SUPERSEDED_0013_CHECKSUM
+        ):
+            status = "superseded-requires-0014"
+        else:
+            raise SiteHelperContractError(
+                "external media ledger contains an unknown checksum"
+            )
+        mismatches.append(
+            {
+                "version": observed[0],
+                "expected_checksum": expected[1],
+                "observed_checksum": observed[1],
+                "status": status,
+            }
+        )
+    versions = {version for version, _checksum in stripped}
+    if alias and (
+        "0007_polytao_jobs" not in versions
+        or "0012_drop_polytao_jobs" in versions
+    ):
+        raise SiteHelperContractError(
+            "external media 0005 alias is outside its pre-0012 epoch"
+        )
+    relation_expected = (
+        "0007_polytao_jobs" in versions
+        and "0012_drop_polytao_jobs" not in versions
+    )
+    if legacy_relation_present is not relation_expected:
+        raise SiteHelperContractError(
+            "external media relation conflicts with its migration prefix"
+        )
+    if any(
+        mismatch["status"] == "known-isolated-dirty"
+        for mismatch in mismatches
+    ):
+        if not isolated:
+            raise SiteHelperContractError(
+                "known dirty 0009 external medium is not isolated"
+            )
+        ledger_status = "known-isolated-dirty"
+    elif any(
+        mismatch["status"] == "superseded-requires-0014"
+        for mismatch in mismatches
+    ):
+        ledger_status = "superseded-requires-0014"
+    elif not stripped:
+        if not isolated:
+            raise SiteHelperContractError(
+                "empty external migration ledger is not isolated"
+            )
+        ledger_status = "empty-isolated"
+    elif alias:
+        ledger_status = "canonical-with-historical-0005-alias"
+    else:
+        ledger_status = "canonical-prefix"
+    observed_0013 = next(
+        (
+            checksum
+            for version, checksum in stripped
+            if version == "0013_monomer_dft_jobs"
+        ),
+        None,
+    )
+    if observed_0013 is None:
+        migration_0013: dict[str, str | None] = {
+            "state": "absent",
+            "checksum": None,
+        }
+    elif observed_0013 == CANONICAL_0013_CHECKSUM:
+        migration_0013 = {
+            "state": "canonical",
+            "checksum": observed_0013,
+        }
+    else:
+        migration_0013 = {
+            "state": "superseded-requires-0014",
+            "checksum": observed_0013,
+        }
+    return (
+        {
+            "status": ledger_status,
+            "canonical_prefix_length": len(stripped),
+            "historical_0005_alias_present": bool(alias),
+            "checksum_mismatches": mismatches,
+        },
+        migration_0013,
+        observed_0013 == SUPERSEDED_0013_CHECKSUM,
+    )
+
+
+def _external_attachment_v2(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "container_id",
+        "container_name",
+        "container_image_id",
+        "container_config_sha256",
+        "container_created_at",
+        "container_started_at",
+        "container_finished_at",
+        "container_restart_count",
+        "state",
+        "destination",
+        "read_only",
+    }:
+        raise SiteHelperContractError(
+            "external media Docker attachment is invalid"
+        )
+    container_id = value.get("container_id")
+    container_name = value.get("container_name")
+    destination = value.get("destination")
+    state = value.get("state")
+    restart_count = value.get("container_restart_count")
+    if (
+        not isinstance(container_id, str)
+        or CONTAINER_RE.fullmatch(container_id) is None
+        or not isinstance(container_name, str)
+        or not container_name.startswith("/")
+        or len(container_name) < 2
+        or _require_digest(
+            value.get("container_image_id"),
+            "attached container image ID",
+        )
+        != value.get("container_image_id")
+        or _require_digest(
+            value.get("container_config_sha256"),
+            "attached container config digest",
+        )
+        != value.get("container_config_sha256")
+        or any(
+            not isinstance(value.get(name), str)
+            or not value[name]
+            for name in (
+                "container_created_at",
+                "container_started_at",
+                "container_finished_at",
+            )
+        )
+        or isinstance(restart_count, bool)
+        or not isinstance(restart_count, int)
+        or restart_count < 0
+        or not isinstance(destination, str)
+        or not Path(destination).is_absolute()
+        or not isinstance(state, str)
+        or not state
+        or not isinstance(value.get("read_only"), bool)
+    ):
+        raise SiteHelperContractError(
+            "external media Docker attachment identity differs"
+        )
+    return dict(value)
+
+
+def _external_source_identity_v2(
+    value: object,
+    *,
+    kind: str,
+    media_id: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise SiteHelperContractError("external media source identity is invalid")
+    if kind == "docker_volume":
+        if set(value) != {
+            "name",
+            "driver",
+            "mountpoint",
+            "labels_sha256",
+            "inspect_sha256",
+            "data_subpath",
+            "attached",
+        }:
+            raise SiteHelperContractError(
+                "external Docker volume identity is invalid"
+            )
+        name = value.get("name")
+        attached = value.get("attached")
+        if (
+            not isinstance(name, str)
+            or VOLUME_RE.fullmatch(name) is None
+            or media_id != f"docker-volume:{name}"
+            or not isinstance(value.get("driver"), str)
+            or not value["driver"]
+            or not isinstance(value.get("mountpoint"), str)
+            or not Path(value["mountpoint"]).is_absolute()
+            or not isinstance(value.get("data_subpath"), str)
+            or not isinstance(attached, list)
+        ):
+            raise SiteHelperContractError(
+                "external Docker volume identity differs"
+            )
+        normalized_attached = [
+            _external_attachment_v2(record) for record in attached
+        ]
+        if normalized_attached != sorted(
+            normalized_attached,
+            key=canonical_json_bytes,
+        ):
+            raise SiteHelperContractError(
+                "external Docker volume attachments are not canonical"
+            )
+        _require_digest(value.get("labels_sha256"), "volume labels digest")
+        _require_digest(value.get("inspect_sha256"), "volume inspect digest")
+    elif kind == "container_bind":
+        if set(value) != {
+            "path",
+            "device",
+            "inode",
+            "mtime_ns",
+            "mode",
+            "uid",
+            "data_subpath",
+            "attached",
+        }:
+            raise SiteHelperContractError(
+                "external PostgreSQL bind identity is invalid"
+            )
+        path = value.get("path")
+        attached = value.get("attached")
+        if (
+            not isinstance(path, str)
+            or not Path(path).is_absolute()
+            or ".." in Path(path).parts
+            or media_id != f"container-bind:{path}"
+            or not isinstance(attached, list)
+            or not isinstance(value.get("data_subpath"), str)
+        ):
+            raise SiteHelperContractError(
+                "external PostgreSQL bind identity differs"
+            )
+        for name in ("device", "inode", "mtime_ns", "mode", "uid"):
+            field = value.get(name)
+            if isinstance(field, bool) or not isinstance(field, int) or field < 0:
+                raise SiteHelperContractError(
+                    "external PostgreSQL bind metadata is invalid"
+                )
+        if value["mode"] & 0o077:
+            raise SiteHelperContractError(
+                "external PostgreSQL bind is not private"
+            )
+        normalized_attached = [
+            _external_attachment_v2(record) for record in attached
+        ]
+        if normalized_attached != sorted(
+            normalized_attached,
+            key=canonical_json_bytes,
+        ):
+            raise SiteHelperContractError(
+                "external PostgreSQL bind attachments are not canonical"
+            )
+    elif kind == "postgres_backup":
+        if set(value) != {
+            "path",
+            "device",
+            "inode",
+            "size_bytes",
+            "mtime_ns",
+            "mode",
+            "uid",
+            "sha256",
+            "format",
+        }:
+            raise SiteHelperContractError(
+                "external PostgreSQL backup identity is invalid"
+            )
+        path = value.get("path")
+        if (
+            not isinstance(path, str)
+            or not Path(path).is_absolute()
+            or ".." in Path(path).parts
+            or media_id != f"postgres-backup:{path}"
+            or value.get("format")
+            not in {"postgres-custom-v1", "postgres-tar-v1"}
+        ):
+            raise SiteHelperContractError(
+                "external PostgreSQL backup identity differs"
+            )
+        for name in (
+            "device",
+            "inode",
+            "size_bytes",
+            "mtime_ns",
+            "mode",
+            "uid",
+        ):
+            field = value.get(name)
+            if isinstance(field, bool) or not isinstance(field, int) or field < 0:
+                raise SiteHelperContractError(
+                    "external PostgreSQL backup metadata is invalid"
+                )
+        if value["mode"] != 0o600:
+            raise SiteHelperContractError(
+                "external PostgreSQL backup is not private"
+            )
+        _require_digest(value.get("sha256"), "PostgreSQL backup digest")
+    else:
+        raise SiteHelperContractError("external media kind is unsupported")
+    return dict(value)
+
+
+def _external_relation_v2(
+    value: object,
+    *,
+    present: bool | None,
+    ledger: bool,
+) -> dict[str, Any]:
+    expected_fields = (
+        {"state", "row_count", "schema_sha256", "content_sha256"}
+        if not ledger
+        else {"state", "row_count", "schema_sha256", "content_sha256"}
+    )
+    if not isinstance(value, dict) or set(value) != expected_fields:
+        raise SiteHelperContractError("external media relation evidence is invalid")
+    if value.get("state") not in {"present", "absent"}:
+        raise SiteHelperContractError("external media relation state differs")
+    observed_present = value["state"] == "present"
+    if present is not None and observed_present is not present:
+        raise SiteHelperContractError("external media relation state differs")
+    row_count = value.get("row_count")
+    if observed_present or ledger:
+        if (
+            isinstance(row_count, bool)
+            or not isinstance(row_count, int)
+            or row_count < 0
+        ):
+            raise SiteHelperContractError(
+                "external media relation row count is invalid"
+            )
+    elif row_count is not None:
+        raise SiteHelperContractError(
+            "absent external relation has a row count"
+        )
+    if observed_present:
+        _require_digest(value.get("schema_sha256"), "relation schema digest")
+        _require_digest(value.get("content_sha256"), "relation content digest")
+    elif (
+        value.get("schema_sha256") is not None
+        or not ledger
+        and value.get("content_sha256") is not None
+    ):
+        raise SiteHelperContractError(
+            "absent external relation has fabricated evidence"
+        )
+    elif ledger:
+        _require_digest(value.get("content_sha256"), "empty ledger digest")
+    return dict(value)
+
+
+def validate_external_database_audit(
+    document: object,
+    *,
+    expected_users: dict[str, str] | None,
+    expected_media_registry_digest: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(document, dict) or set(document) != {
+        "schema_version",
+        "inventory_complete",
+        "writable_target",
+        "media_registry",
+        "databases",
+        "media",
+        "requires_0014",
+    }:
+        raise SiteHelperContractError(
+            "external-database evidence v2 has an invalid shape"
+        )
+    if (
+        document.get("schema_version") != 2
+        or document.get("inventory_complete") is not True
+        or document.get("writable_target")
+        != {"stack": "production", "database": "nexpoly"}
+    ):
+        raise SiteHelperContractError(
+            "external-database evidence is not complete"
+        )
+    registry = document.get("media_registry")
+    registry_fields = {
+        "schema_version",
+        "sha256",
+        "discovery_boundary_sha256",
+        "discovery_state_sha256_before",
+        "discovery_state_sha256_after",
+        "captured_at",
+        "expected_media_ids",
+        "discovered_media_ids",
+        "docker_inventory_sha256",
+        "backup_inventory_sha256",
+        "scanned_volume_names",
+        "scanned_container_ids",
+    }
+    if (
+        not isinstance(registry, dict)
+        or set(registry) != registry_fields
+        or registry.get("schema_version") != 2
+        or not isinstance(registry.get("captured_at"), str)
+        or RFC3339_UTC_RE.fullmatch(registry["captured_at"]) is None
+    ):
+        raise SiteHelperContractError(
+            "external media registry v2 identity is invalid"
+        )
+    registry_digest = _require_digest(
+        registry.get("sha256"),
+        "external media registry digest",
+    )
+    if (
+        expected_media_registry_digest is not None
+        and registry_digest
+        != _require_digest(
+            expected_media_registry_digest,
+            "expected external media registry digest",
+        )
+    ):
+        raise SiteHelperContractError("external media registry digest differs")
+    for name in (
+        "discovery_boundary_sha256",
+        "discovery_state_sha256_before",
+        "discovery_state_sha256_after",
+        "docker_inventory_sha256",
+        "backup_inventory_sha256",
+    ):
+        _require_digest(registry.get(name), name)
+    if (
+        registry["discovery_state_sha256_before"]
+        != registry["discovery_state_sha256_after"]
+    ):
+        raise SiteHelperContractError(
+            "external media discovery boundary changed during audit"
+        )
+    expected_ids = registry.get("expected_media_ids")
+    discovered_ids = registry.get("discovered_media_ids")
+    if (
+        not isinstance(expected_ids, list)
+        or not expected_ids
+        or any(
+            not isinstance(media_id, str)
+            or MEDIA_ID_RE.fullmatch(media_id) is None
+            for media_id in expected_ids
+        )
+        or expected_ids != sorted(set(expected_ids))
+        or discovered_ids != expected_ids
+    ):
+        raise SiteHelperContractError(
+            "external media complete discovery differs from registry v2"
+        )
+    volume_names = registry.get("scanned_volume_names")
+    container_ids = registry.get("scanned_container_ids")
+    if (
+        not isinstance(volume_names, list)
+        or volume_names != sorted(set(volume_names))
+        or any(
+            not isinstance(name, str) or VOLUME_RE.fullmatch(name) is None
+            for name in volume_names
+        )
+        or not isinstance(container_ids, list)
+        or container_ids != sorted(set(container_ids))
+        or any(
+            not isinstance(container, str)
+            or CONTAINER_RE.fullmatch(container) is None
+            for container in container_ids
+        )
+    ):
+        raise SiteHelperContractError(
+            "external media scanned Docker boundary is invalid"
+        )
+
+    media_fields = {
+        "media_id",
+        "kind",
+        "database",
+        "disposition",
+        "source_identity_before",
+        "source_identity_after",
+        "source_system_identifier",
+        "source_content_sha256",
+        "content_identity_algorithm",
+        "database_identity",
+        "database_identity_sha256",
+        "current_user",
+        "transaction_read_only",
+        "role_superuser",
+        "role_create_db",
+        "role_create_role",
+        "ledger",
+        "ledger_sha256",
+        "ledger_relation",
+        "ledger_analysis",
+        "legacy_relation_present",
+        "legacy_relation",
+        "migration_0013",
+        "audit",
+    }
+    raw_media = document.get("media")
+    if not isinstance(raw_media, list):
+        raise SiteHelperContractError("external media evidence list is invalid")
+    media: dict[str, dict[str, Any]] = {}
+    requires_0014 = False
+    allowed_methods = {
+        "docker_volume": {
+            "live-read-only",
+            "isolated-volume-copy-read-only",
+        },
+        "container_bind": {
+            "live-read-only",
+            "isolated-bind-copy-read-only",
+        },
+        "postgres_backup": {
+            "isolated-backup-restore-read-only",
+        },
+    }
+    algorithms = {
+        "live-read-only": "logical-database-identity-v2",
+        "isolated-volume-copy-read-only": (
+            "postgres-data-directory-tar-sha256-v1"
+        ),
+        "isolated-bind-copy-read-only": "postgres-private-tree-sha256-v1",
+        "isolated-backup-restore-read-only": "sha256-file-v1",
+    }
+    audit_runtime_identity: tuple[str, str, str, str] | None = None
+    for record in raw_media:
+        if not isinstance(record, dict) or set(record) != media_fields:
+            raise SiteHelperContractError(
+                "external media evidence record is invalid"
+            )
+        media_id = record.get("media_id")
+        kind = record.get("kind")
+        database_name = record.get("database")
+        disposition = record.get("disposition")
+        if (
+            not isinstance(media_id, str)
+            or MEDIA_ID_RE.fullmatch(media_id) is None
+            or media_id in media
+            or kind not in allowed_methods
+            or not isinstance(database_name, str)
+            or ROLE_RE.fullmatch(database_name) is None
+            or disposition
+            not in {
+                "writable-target",
+                "read-only-online",
+                "retained-private-isolated",
+            }
+        ):
+            raise SiteHelperContractError(
+                "external media evidence identity is invalid"
+            )
+        before = _external_source_identity_v2(
+            record.get("source_identity_before"),
+            kind=kind,
+            media_id=media_id,
+        )
+        after = _external_source_identity_v2(
+            record.get("source_identity_after"),
+            kind=kind,
+            media_id=media_id,
+        )
+        if before != after:
+            raise SiteHelperContractError(
+                "external media source identity changed during audit"
+            )
+        source_digest = _require_digest(
+            record.get("source_content_sha256"),
+            "external media source content digest",
+        )
+        audit = record.get("audit")
+        if not isinstance(audit, dict) or set(audit) != {
+            "method",
+            "complete",
+            "auditor_sha256",
+            "postgres_major",
+            "postgres_image",
+            "postgres_image_id",
+            "pg_service_file_sha256",
+            "audited_at",
+            "isolation",
+            "evidence_sha256",
+        }:
+            raise SiteHelperContractError(
+                "external media fresh audit identity is invalid"
+            )
+        method = audit.get("method")
+        if (
+            method not in allowed_methods[kind]
+            or audit.get("complete") is not True
+            or audit.get("postgres_major") != 16
+            or not isinstance(audit.get("postgres_image"), str)
+            or OCI_IMAGE_DIGEST_RE.fullmatch(audit["postgres_image"]) is None
+            or not isinstance(audit.get("audited_at"), str)
+            or RFC3339_UTC_RE.fullmatch(audit["audited_at"]) is None
+            or record.get("content_identity_algorithm") != algorithms[method]
+        ):
+            raise SiteHelperContractError(
+                "external media audit method or PG16 runtime differs"
+            )
+        auditor_digest = _require_digest(
+            audit.get("auditor_sha256"),
+            "media auditor digest",
+        )
+        postgres_image_id = _require_digest(
+            audit.get("postgres_image_id"),
+            "PG16 image ID",
+        )
+        service_file_digest = _require_digest(
+            audit.get("pg_service_file_sha256"),
+            "PostgreSQL service-file digest",
+        )
+        observed_runtime = (
+            auditor_digest,
+            audit["postgres_image"],
+            postgres_image_id,
+            service_file_digest,
+        )
+        if audit_runtime_identity is None:
+            audit_runtime_identity = observed_runtime
+        elif audit_runtime_identity != observed_runtime:
+            raise SiteHelperContractError(
+                "external media evidence mixes audit runtimes"
+            )
+        evidence_digest = _require_digest(
+            audit.get("evidence_sha256"),
+            "media evidence digest",
+        )
+        isolation = audit.get("isolation")
+        expected_isolation: dict[str, object]
+        if method == "live-read-only":
+            expected_isolation = {
+                "source_mounted_by_auditor": False,
+                "source_started_by_auditor": False,
+                "transaction_read_only": True,
+            }
+        elif method == "isolated-volume-copy-read-only":
+            expected_isolation = {
+                "source_mounted_read_only": True,
+                "source_started_as_postgres": False,
+                "scratch_network": "none",
+                "scratch_destroyed": True,
+                "copy_method": (
+                    "readonly-tar-copy-to-disposable-volume-v1"
+                ),
+            }
+        elif method == "isolated-bind-copy-read-only":
+            expected_isolation = {
+                "source_mounted_read_only": False,
+                "source_opened_with_openat_no_follow": True,
+                "source_started_as_postgres": False,
+                "scratch_network": "none",
+                "scratch_destroyed": True,
+                "copy_method": (
+                    "private-openat-copy-to-disposable-volume-v1"
+                ),
+            }
+        else:
+            expected_isolation = {
+                "source_opened_with_openat_no_follow": True,
+                "source_passed_to_docker": False,
+                "staged_snapshot_mounted_read_only": True,
+                "source_started_as_postgres": False,
+                "scratch_network": "none",
+                "scratch_destroyed": True,
+                "restore_method": (
+                    "pg_restore-no-owner-no-privileges-v1"
+                ),
+            }
+        if isolation != expected_isolation:
+            raise SiteHelperContractError(
+                "external media isolation proof is incomplete"
+            )
+        if (
+            method == "live-read-only"
+            and disposition == "retained-private-isolated"
+            or method != "live-read-only"
+            and disposition != "retained-private-isolated"
+        ):
+            raise SiteHelperContractError(
+                "external media method conflicts with disposition"
+            )
+        attachments = (
+            before.get("attached")
+            if kind in {"docker_volume", "container_bind"}
+            else []
+        )
+        if not isinstance(attachments, list):
+            raise SiteHelperContractError(
+                "external media attachment evidence is invalid"
+            )
+        active_attachments = [
+            value
+            for value in attachments
+            if value["state"]
+            in {
+                "created",
+                "running",
+                "paused",
+                "restarting",
+                "removing",
+            }
+        ]
+        if (
+            method == "live-read-only"
+            and len(active_attachments) != 1
+            or method != "live-read-only"
+            and active_attachments
+        ):
+            raise SiteHelperContractError(
+                "external media active-reader state conflicts with audit method"
+            )
+        if (
+            kind == "docker_volume"
+            and before["name"] not in volume_names
+            or any(
+                value["container_id"] not in container_ids
+                for value in attachments
+            )
+        ):
+            raise SiteHelperContractError(
+                "external media source was outside the scanned Docker boundary"
+            )
+        database_identity = record.get("database_identity")
+        if not isinstance(database_identity, dict) or set(database_identity) != {
+            "database",
+            "system_identifier",
+            "system_identifier_scope",
+            "database_oid",
+            "database_owner",
+            "encoding",
+            "collate",
+            "ctype",
+            "server_version_num",
+        }:
+            raise SiteHelperContractError(
+                "external media database identity is invalid"
+            )
+        server_version_num = database_identity.get("server_version_num")
+        expected_system_scope = (
+            "source-cluster"
+            if method == "live-read-only"
+            else "isolated-restore-cluster"
+            if method == "isolated-backup-restore-read-only"
+            else "copied-source-cluster"
+        )
+        if (
+            database_identity.get("database") != database_name
+            or not isinstance(database_identity.get("system_identifier"), str)
+            or PG_SYSTEM_ID_RE.fullmatch(
+                database_identity["system_identifier"]
+            )
+            is None
+            or database_identity.get("system_identifier_scope")
+            != expected_system_scope
+            or isinstance(server_version_num, bool)
+            or not isinstance(server_version_num, int)
+            or server_version_num // 10000 != 16
+        ):
+            raise SiteHelperContractError(
+                "external media PostgreSQL identity differs"
+            )
+        source_system_identifier = record.get("source_system_identifier")
+        if method == "isolated-backup-restore-read-only":
+            if source_system_identifier is not None:
+                raise SiteHelperContractError(
+                    "logical backup fabricated a source system identifier"
+                )
+        elif (
+            not isinstance(source_system_identifier, str)
+            or PG_SYSTEM_ID_RE.fullmatch(source_system_identifier) is None
+            or source_system_identifier
+            != database_identity["system_identifier"]
+        ):
+            raise SiteHelperContractError(
+                "external media source system identifier is not bound"
+            )
+        database_identity_digest = _require_digest(
+            record.get("database_identity_sha256"),
+            "database identity digest",
+        )
+        if database_identity_digest != sha256_bytes(
+            canonical_json_bytes(database_identity)
+        ):
+            raise SiteHelperContractError(
+                "external media database identity digest differs"
+            )
+        user = record.get("current_user")
+        if (
+            not isinstance(user, str)
+            or ROLE_RE.fullmatch(user) is None
+            or record.get("transaction_read_only") is not True
+            or not isinstance(record.get("role_superuser"), bool)
+            or not isinstance(record.get("role_create_db"), bool)
+            or not isinstance(record.get("role_create_role"), bool)
+            or method == "live-read-only"
+            and (
+                record["role_superuser"]
+                or record["role_create_db"]
+                or record["role_create_role"]
+            )
+            or method != "live-read-only"
+            and record["role_superuser"] is not True
+        ):
+            raise SiteHelperContractError(
+                "external media database audit role is unsafe"
+            )
+        ledger = record.get("ledger")
+        if _require_digest(
+            record.get("ledger_sha256"),
+            "external media ledger digest",
+        ) != sha256_bytes(canonical_json_bytes(ledger)):
+            raise SiteHelperContractError(
+                "external media ledger digest differs"
+            )
+        legacy_present = record.get("legacy_relation_present")
+        if not isinstance(legacy_present, bool):
+            raise SiteHelperContractError(
+                "external media legacy relation state is invalid"
+            )
+        isolated = disposition == "retained-private-isolated"
+        expected_analysis, expected_0013, needs_0014 = (
+            _external_media_ledger_v2(
+                ledger,
+                legacy_relation_present=legacy_present,
+                isolated=isolated,
+            )
+        )
+        if (
+            record.get("ledger_analysis") != expected_analysis
+            or record.get("migration_0013") != expected_0013
+        ):
+            raise SiteHelperContractError(
+                "external media ledger analysis differs"
+            )
+        ledger_relation = _external_relation_v2(
+            record.get("ledger_relation"),
+            present=None,
+            ledger=True,
+        )
+        if (
+            ledger_relation["row_count"] != len(ledger)
+            or not ledger
+            and ledger_relation["state"] == "present"
+            and ledger_relation["schema_sha256"] is None
+            or ledger
+            and ledger_relation["state"] != "present"
+            or ledger_relation["content_sha256"]
+            != sha256_bytes(canonical_json_bytes(ledger))
+        ):
+            raise SiteHelperContractError(
+                "external media ledger relation content differs"
+            )
+        _external_relation_v2(
+            record.get("legacy_relation"),
+            present=legacy_present,
+            ledger=False,
+        )
+        if (
+            kind == "postgres_backup"
+            and source_digest != before.get("sha256")
+        ):
+            raise SiteHelperContractError(
+                "external backup source content digest differs"
+            )
+        if method == "live-read-only":
+            logical_digest = sha256_bytes(
+                canonical_json_bytes(
+                    {
+                        "database_identity": database_identity,
+                        "ledger": ledger,
+                        "ledger_relation": record["ledger_relation"],
+                        "legacy_relation": record["legacy_relation"],
+                    }
+                )
+            )
+            if source_digest != logical_digest:
+                raise SiteHelperContractError(
+                    "online database logical content digest differs"
+                )
+        unsealed = {
+            **record,
+            "audit": {
+                key: value
+                for key, value in audit.items()
+                if key != "evidence_sha256"
+            },
+        }
+        if evidence_digest != sha256_bytes(canonical_json_bytes(unsealed)):
+            raise SiteHelperContractError(
+                "external media self-sealed evidence digest differs"
+            )
+        requires_0014 = requires_0014 or needs_0014
+        media[media_id] = dict(record)
+    if sorted(media) != expected_ids:
+        raise SiteHelperContractError(
+            "external media evidence differs from complete registry v2"
+        )
+    writable = [
+        record
+        for record in media.values()
+        if record["disposition"] == "writable-target"
+    ]
+    if (
+        len(writable) != 1
+        or writable[0]["database"] != "nexpoly"
+        or writable[0]["kind"] not in {"docker_volume", "container_bind"}
+    ):
+        raise SiteHelperContractError(
+            "external media evidence lacks one production writable target"
+        )
+
+    databases = document.get("databases")
+    if not isinstance(databases, list) or len(databases) != 2:
+        raise SiteHelperContractError(
+            "external online database evidence is incomplete"
+        )
+    database_fields = {
+        "stack",
+        "media_id",
+        "database",
+        "current_user",
+        "transaction_read_only",
+        "role_superuser",
+        "role_create_db",
+        "role_create_role",
+        "system_identifier",
+        "database_identity_sha256",
+        "ledger",
+        "ledger_sha256",
+        "legacy_relation_present",
+    }
+    expected_stacks = ["nexpoly_dev", "nexpoly_md_health_opt"]
+    normalized_databases: list[dict[str, Any]] = []
+    for index, database in enumerate(databases):
+        if (
+            not isinstance(database, dict)
+            or set(database) != database_fields
+            or database.get("stack") != expected_stacks[index]
+            or database.get("database") != expected_stacks[index]
+            or not isinstance(database.get("media_id"), str)
+            or database["media_id"] not in media
+        ):
+            raise SiteHelperContractError(
+                "external online database identity differs"
+            )
+        source_record = media[database["media_id"]]
+        expected_database = {
+            "stack": expected_stacks[index],
+            "media_id": database["media_id"],
+            "database": source_record["database"],
+            "current_user": source_record["current_user"],
+            "transaction_read_only": source_record["transaction_read_only"],
+            "role_superuser": source_record["role_superuser"],
+            "role_create_db": source_record["role_create_db"],
+            "role_create_role": source_record["role_create_role"],
+            "system_identifier": source_record["database_identity"][
+                "system_identifier"
+            ],
+            "database_identity_sha256": source_record[
+                "database_identity_sha256"
+            ],
+            "ledger": source_record["ledger"],
+            "ledger_sha256": source_record["ledger_sha256"],
+            "legacy_relation_present": source_record[
+                "legacy_relation_present"
+            ],
+        }
+        if database != expected_database:
+            raise SiteHelperContractError(
+                "external online database evidence was spliced"
+            )
+        if (
+            expected_users is not None
+            and database["current_user"]
+            != expected_users.get(expected_stacks[index])
+        ):
+            raise SiteHelperContractError(
+                "external online database audit user differs"
+            )
+        normalized_databases.append(dict(database))
+    if document.get("requires_0014") is not requires_0014:
+        raise SiteHelperContractError(
+            "external media 0014 requirement differs from complete ledgers"
+        )
+    return {
+        "schema_version": 2,
+        "inventory_complete": True,
+        "writable_target": {"stack": "production", "database": "nexpoly"},
+        "media_registry": dict(registry),
+        "databases": normalized_databases,
+        "media": [media[name] for name in sorted(media)],
         "requires_0014": requires_0014,
     }
 

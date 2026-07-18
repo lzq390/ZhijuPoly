@@ -118,8 +118,17 @@ bootstrap executables are mode `0700`:
   `config/bootstrap-legacy-runtime-status`,
   `config/bootstrap-legacy-runtime-resume-unchanged`, and
   `config/bootstrap-legacy-runtime-restore`.
-- the read-only `config/contract-0012-external-database-audit` helper used to
-  enumerate the independent dev/health database stacks.
+- the source-read-only
+  `config/contract-0012-external-database-audit` helper, its source-pinned
+  `nexpoly-postgres-media-evidence` builder, private schema-v2 registry and
+  registry-pinned private `pg_service.conf` digest and PG16 image. It
+  enumerates arbitrary-named PostgreSQL volumes, PGDATA
+  bind mounts, both fixed private backup roots and the independent dev/health
+  stacks. Dormant media are copied before PostgreSQL starts; logical backups
+  restore only into network-none disposable clusters.
+- the reviewed, non-secret
+  `ops/config/postgres-media-audit-role.sql.example` contract for the online
+  audit users. Provision their login secrets separately.
 - a reviewed, non-secret
   `ops/config/mutable-data-audit-role.sql.example` provisioning/check
   contract. Run it as the cluster role administrator, connected to `nexpoly`
@@ -131,7 +140,7 @@ bootstrap executables are mode `0700`:
   the production checkout's ignored paths exactly with `runtime`, `secret` or
   `asset` classifications. The reviewed file must contain no secret value.
 
-All nine executables are fixed-name, deploy-user-owned mode `0700` files. The
+All executables are fixed-name, deploy-user-owned mode `0700` files. The
 deployment descriptor seals every bootstrap hash and the 0012 adapter
 independently seals its audit-helper hash. The status and database-audit helpers
 are read-only; the unchanged-resume helper may restore ingress only and must
@@ -463,8 +472,8 @@ must never infer or execute a pending contract. See
 `docs/postgres-migration-governance.md`.
 
 The first governed deployment must additionally prove the legacy runtime
-identity and install and seal all eight bootstrap executables plus the
-read-only external-database audit helper listed above. If the production
+identity and install and seal every bootstrap/recovery executable plus the
+source-read-only external-database audit helper and builder listed above. If the production
 ledger, registered database inventory, asset identity or rollback evidence
 differs from the reviewed plan, the operation stops before mutation.
 

@@ -21,6 +21,10 @@ import time
 import unittest
 from unittest import mock
 
+from scripts.tests.test_postgres_media_evidence import (
+    external_inventory_fixture,
+)
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CONTROLLER_PATH = REPOSITORY_ROOT / "scripts" / "release_controller.py"
@@ -711,7 +715,10 @@ class ReleaseControllerTests(unittest.TestCase):
         os.chmod(model / "unlisted.bin", 0o444)
         os.chmod(model, 0o555)
 
-        with self.assertRaisesRegex(release_controller.ReleaseError, "inventory differs"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "inventory differs",
+        ):
             release_controller.inspect_asset_release(release)
 
     def test_candidate_byteff2_runtime_assets_accept_exact_fixed_contract(self) -> None:
@@ -2183,6 +2190,15 @@ class ReleaseControllerTests(unittest.TestCase):
             ],
             "requires_0014": False,
         }
+        external_inventory = external_inventory_fixture(
+            dev_ledger=after_contract,
+            health_ledger=through_0008,
+            registry_digest=external_environment[
+                "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256"
+            ],
+            dev_user="nexpoly_dev_auditor",
+            health_user="nexpoly_health_auditor",
+        )
         self.assertEqual(
             maintenance._validate_external_database_inventory(
                 external_inventory,
@@ -2192,14 +2208,20 @@ class ReleaseControllerTests(unittest.TestCase):
         )
         missing_stack = json.loads(json.dumps(external_inventory))
         missing_stack["databases"].pop()
-        with self.assertRaisesRegex(release_controller.ReleaseError, "inventory differs"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "external database inventory is unsafe",
+        ):
             maintenance._validate_external_database_inventory(
                 missing_stack,
                 external_environment,
             )
         writable_stack = json.loads(json.dumps(external_inventory))
         writable_stack["databases"][0]["transaction_read_only"] = False
-        with self.assertRaisesRegex(release_controller.ReleaseError, "transaction_read_only"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "external database inventory is unsafe",
+        ):
             maintenance._validate_external_database_inventory(
                 writable_stack,
                 external_environment,
@@ -2209,7 +2231,10 @@ class ReleaseControllerTests(unittest.TestCase):
             "stack": "nexpoly_dev",
             "database": "nexpoly_dev",
         }
-        with self.assertRaisesRegex(release_controller.ReleaseError, "inventory is incomplete"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "external database inventory is unsafe",
+        ):
             maintenance._validate_external_database_inventory(
                 wrong_writable_target,
                 external_environment,
@@ -2222,7 +2247,10 @@ class ReleaseControllerTests(unittest.TestCase):
                 "database": "nexpoly_shadow",
             }
         )
-        with self.assertRaisesRegex(release_controller.ReleaseError, "inventory differs"):
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "external database inventory is unsafe",
+        ):
             maintenance._validate_external_database_inventory(
                 unknown_stack,
                 external_environment,

@@ -61,11 +61,13 @@ RECOVERY_FILES = {
     "legacy_takeover.py",
     "legacy_takeover_evidence.py",
     "maintenance_prefetch.py",
+    "postgres_media_evidence.py",
     "worker_slot_runtime.py",
     "site_helper_contracts.py",
     "nexpoly-legacy-takeover",
     "nexpoly-bridge-recover",
     "nexpoly-maintenance-prefetch",
+    "nexpoly-postgres-media-evidence",
 }
 PRIVATE_CONFIG_FILES = {
     "legacy-takeover-classification.json",
@@ -89,6 +91,8 @@ REQUIRED_SOURCE_HASH_NAMES = (
         "bootstrap-legacy-runtime-resume-unchanged.example",
         "bootstrap-legacy-runtime-restore.example",
         "contract-0012-external-database-audit.example",
+        "postgres-media-registry.json.example",
+        "postgres-media-audit-role.sql.example",
         "legacy-takeover-classification.json.example",
         "mutable-data-audit.pg_service.conf.example",
         "mutable-data-audit.pgpass.example",
