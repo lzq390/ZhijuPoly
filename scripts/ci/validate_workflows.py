@@ -14,6 +14,7 @@ CI_PATH = WORKFLOW_ROOT / "ci.yml"
 RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
 DEPLOYMENT_DOC_PATH = REPOSITORY_ROOT / "docs" / "deployment.md"
 LEGACY_REMOTE_RELEASE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "remote_release.sh"
+EXACT_B_BRIDGE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "test_exact_b_bridge.sh"
 
 PINNED_ACTION = re.compile(
     r"^\s*-?\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s*#.*)?$"
@@ -44,6 +45,16 @@ EXPECTED_POSTGRES_AUDIT_IMAGES = (
     "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
     "docker.io/library/postgres@sha256:"
     "9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+)
+EXPECTED_B_SHA = "7df4ebf123982da8392ba00d2ce26205e74734b2"
+EXPECTED_B_TREE = "94d3176fc42ad4753a7a18b68d8a767be53a697d"
+EXPECTED_B_BACKEND_IMAGE = (
+    "ghcr.io/lzq390/nexpoly-backend@sha256:"
+    "9a82b06c4411570699a332df3e54c5cf6f34ca08ecedd49c18f1c62a79fe0c45"
+)
+EXPECTED_B_WEB_IMAGE = (
+    "ghcr.io/lzq390/nexpoly-web@sha256:"
+    "2bac8c62ffc42a50a03ac15c6b04568c47d39685fdbac23ffb9a2b1e2abac2ac"
 )
 
 
@@ -112,6 +123,30 @@ def validate_deployment_asset_pin(failures: list[str]) -> None:
         )
 
 
+def validate_exact_b_bridge(failures: list[str]) -> None:
+    try:
+        text = EXACT_B_BRIDGE_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        failures.append(f"exact-B bridge validation is unavailable: {exc}")
+        return
+    for marker in (
+        f'readonly B_SHA="{EXPECTED_B_SHA}"',
+        f'readonly B_TREE="{EXPECTED_B_TREE}"',
+        f'readonly B_BACKEND_IMAGE="{EXPECTED_B_BACKEND_IMAGE}"',
+        f'readonly B_WEB_IMAGE="{EXPECTED_B_WEB_IMAGE}"',
+        'git merge-base --is-ancestor "$B_SHA" "$candidate_sha"',
+        'python -m app.postgres_migrations --mode bootstrap',
+        "schema_not_ready",
+        '[[ "$(business_digest "$F_DATABASE")" == "$before_digest" ]]',
+    ):
+        if marker not in text:
+            failures.append(f"exact-B bridge validation is missing: {marker}")
+    if "/data/lzq/gith/nexpoly" in text or "GPU 2" in text:
+        failures.append(
+            "exact-B bridge validation must not reference production paths or GPU 2"
+        )
+
+
 def main() -> int:
     failures: list[str] = []
     workflow_files = sorted((*WORKFLOW_ROOT.glob("*.yml"), *WORKFLOW_ROOT.glob("*.yaml")))
@@ -149,6 +184,12 @@ def main() -> int:
             "    needs: resolve-sha\n"
             "    runs-on: ubuntu-24.04",
             "Validate exact bridge policy and schema compatibility states",
+            "  exact-b-bridge:\n"
+            "    name: exact-B bridge compatibility\n"
+            "    needs: resolve-sha\n"
+            "    runs-on: ubuntu-24.04",
+            "Run real B-schema and F/0013-schema transition smoke",
+            "scripts/ci/test_exact_b_bridge.sh",
             "name: ci-gate",
             "  release:\n"
             "    name: Publish and smoke immutable main images\n"
@@ -159,6 +200,10 @@ def main() -> int:
             "    needs: [resolve-sha, ci-gate]",
             "python3 scripts/ci/backend_test_shards.py --shards 3 --shard",
             "python -m pytest workers/monomer_md_worker/tests",
+            "name: Monomer-DFT Worker tests",
+            "python-version: \"3.12\"",
+            "workers/monomer_dft_worker/requirements-ci.lock",
+            "env -u PYTHONPATH python -m pytest workers/monomer_dft_worker/tests",
             "scripts/tests/test_monomer_md_worker_launcher.py",
             "scripts/tests/test_worker_slot_runtime.py",
             "Rebuild the production Worker runtime lock from empty",
@@ -169,6 +214,7 @@ def main() -> int:
             '"$runtime_venv/bin/python" -m pip check',
             "working-directory: frontend",
             "run: npm test",
+            "scripts/ci/test_frontend_image_permissions.sh",
             "python3 -m unittest -v \"${unittest_files[@]}\"",
             "name: Production 0005 alias PostgreSQL 16 isolation integration",
             'NEXPOLY_ALIAS_DOCKER_INTEGRATION: "1"',
@@ -201,6 +247,8 @@ def main() -> int:
             "      - bridge-validation",
             "python3 scripts/ci/validate_dependency_locks.py",
             "python3 -m app.migration_policy",
+            "python3 scripts/validate_monomer_dft_release_contract.py --require-committed",
+            "docker-compose.monomer-dft-dev.yml config --quiet",
             "docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet",
             "if: github.event_name == 'pull_request'",
             "push: false",
@@ -328,6 +376,7 @@ def main() -> int:
         failures.append("ci.yml must not build or test the removed standalone PolyTAO Worker")
     validate_release_input(failures)
     validate_deployment_asset_pin(failures)
+    validate_exact_b_bridge(failures)
 
     if failures:
         for failure in failures:

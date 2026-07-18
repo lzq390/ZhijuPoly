@@ -36,7 +36,6 @@ x-production-environment: &production-environment
   # Code delivery does not authorize production DFT execution. History and
   # results remain readable, while no DFT Worker socket is mounted or dialed.
   MONOMER_DFT_SUBMIT_ENABLED: "false"
-  MONOMER_DFT_WORKER_BASE_URL: ""
   MONOMER_DFT_WORKER_UDS: ""
 
 x-production-volumes: &production-volumes
