@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fd", required=True, type=int)
     parser.add_argument("--mode", required=True, choices=("primary", "overflow"))
     parser.add_argument("--model", required=True)
-    parser.add_argument("--gpu-index", required=True, choices=("1", "2", "3"))
+    parser.add_argument("--gpu-index", required=True, choices=("1", "3"))
     args = parser.parse_args(argv)
 
     expected_gpu = os.getenv("NEXPOLY_DFT_EXECUTOR_GPU_DEVICE")

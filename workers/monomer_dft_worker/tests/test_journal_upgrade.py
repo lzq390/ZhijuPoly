@@ -232,6 +232,13 @@ def test_offline_upgrade_lock_refuses_a_concurrent_worker(tmp_path: Path) -> Non
                 pass
 
 
+def test_offline_upgrade_rejects_production_job_root_before_access() -> None:
+    with pytest.raises(JournalUpgradeError, match="production repository"):
+        JobRootLock(
+            Path("/data/lzq/gith/nexpoly/ops/state/monomer-dft-worker-runs")
+        )
+
+
 def test_apply_refuses_a_journal_changed_after_planning(tmp_path: Path) -> None:
     root = tmp_path / "runs"
     journal = _legacy_journal(root, "changed-after-plan")

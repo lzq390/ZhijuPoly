@@ -16,6 +16,11 @@ from .artifacts import (
     describe_artifact,
     ensure_private_directory,
 )
+from .config import (
+    PRODUCTION_REPO_ROOT,
+    validate_dev_runtime_path,
+    validate_private_dev_runtime_root,
+)
 from .schemas import (
     MAX_ENQUEUE_SEQUENCE,
     JobJournalV2,
@@ -42,11 +47,64 @@ class PlannedUpgrade:
     journal: JobJournalV2
 
 
+def _dev_root_for_job(
+    job_root: Path,
+    dev_runtime_root: Path | None = None,
+) -> Path:
+    configured = os.getenv("MONOMER_DFT_DEV_RUNTIME_ROOT", "").strip()
+    absolute_job_root = Path(os.path.abspath(os.path.normpath(job_root)))
+    production_root = Path(os.path.abspath(PRODUCTION_REPO_ROOT))
+    if (
+        absolute_job_root == production_root
+        or production_root in absolute_job_root.parents
+    ):
+        raise JournalUpgradeError(
+            "MONOMER_DFT_JOB_ROOT must not reference the production repository"
+        )
+    if configured:
+        selected = Path(configured)
+    elif dev_runtime_root is not None:
+        selected = Path(dev_runtime_root)
+    else:
+        selected = absolute_job_root.parent
+        while not selected.exists() and selected != selected.parent:
+            selected = selected.parent
+    try:
+        return validate_private_dev_runtime_root(selected)
+    except ValueError as exc:
+        raise JournalUpgradeError(str(exc)) from exc
+
+
+def _validated_job_root(
+    job_root: Path,
+    dev_runtime_root: Path | None = None,
+) -> tuple[Path, Path]:
+    runtime_root = _dev_root_for_job(job_root, dev_runtime_root)
+    try:
+        root = validate_dev_runtime_path(
+            "MONOMER_DFT_JOB_ROOT",
+            Path(job_root),
+            runtime_root=runtime_root,
+            leaf_kind="directory",
+        )
+    except ValueError as exc:
+        raise JournalUpgradeError(str(exc)) from exc
+    return root, runtime_root
+
+
 class JobRootLock:
     """Non-blocking process lock shared by the Worker and offline upgrader."""
 
-    def __init__(self, job_root: Path) -> None:
-        self.job_root = Path(job_root)
+    def __init__(
+        self,
+        job_root: Path,
+        *,
+        dev_runtime_root: Path | None = None,
+    ) -> None:
+        self.job_root, self.dev_runtime_root = _validated_job_root(
+            job_root,
+            dev_runtime_root,
+        )
         self._descriptor: int | None = None
 
     def acquire(self) -> None:
@@ -84,7 +142,7 @@ class JobRootLock:
 
 
 def discover_journal_paths(job_root: Path) -> list[Path]:
-    root = Path(job_root)
+    root, _ = _validated_job_root(job_root)
     if root.is_symlink() or not root.is_dir():
         raise JournalUpgradeError("job root must be a real directory")
     journals: list[Path] = []
@@ -439,8 +497,16 @@ def apply_upgrades(
     *,
     backup_directory: Path,
 ) -> dict[str, Any]:
-    root = Path(job_root)
-    backup_root = Path(backup_directory)
+    root, dev_runtime_root = _validated_job_root(job_root)
+    try:
+        backup_root = validate_dev_runtime_path(
+            "journal backup directory",
+            Path(backup_directory),
+            runtime_root=dev_runtime_root,
+            leaf_kind="directory",
+        )
+    except ValueError as exc:
+        raise JournalUpgradeError(str(exc)) from exc
     if backup_root.resolve().is_relative_to(root.resolve()):
         raise JournalUpgradeError("backup directory must be outside the job root")
     if backup_root.is_symlink() or backup_root.exists():
@@ -545,8 +611,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("--apply requires --backup-dir", file=sys.stderr)
         return 2
     try:
+        _, dev_runtime_root = _validated_job_root(arguments.job_root)
+        if arguments.sequence_map is not None:
+            try:
+                validate_dev_runtime_path(
+                    "journal sequence map",
+                    arguments.sequence_map,
+                    runtime_root=dev_runtime_root,
+                    leaf_kind="file",
+                )
+            except ValueError as exc:
+                raise JournalUpgradeError(str(exc)) from exc
         sequence_map = _load_sequence_map(arguments.sequence_map)
-        with JobRootLock(arguments.job_root):
+        with JobRootLock(
+            arguments.job_root,
+            dev_runtime_root=dev_runtime_root,
+        ):
             upgrades, report = plan_upgrades(
                 arguments.job_root,
                 sequence_map=sequence_map,

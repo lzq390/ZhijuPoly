@@ -55,23 +55,23 @@ from workers.monomer_dft_worker.app.schemas import (
 )
 
 
-def _settings(tmp_path: Path, *, deployment: str = "dev") -> WorkerSettings:
-    prod = deployment == "prod"
+def _settings(tmp_path: Path) -> WorkerSettings:
     return WorkerSettings(
         python=Path(sys.executable),
         uds=tmp_path / "socket/worker.sock",
         job_root=tmp_path / "runs",
         max_concurrent_jobs=1,
-        physical_gpu="2" if prod else "1",
+        physical_gpu="1",
         logical_device="cuda:0",
         aimnet_cache_dir=tmp_path / "models",
         warp_cache_path=tmp_path / "warp",
         model_name="aimnet2",
         worker_version="test",
-        deployment="prod" if prod else "dev",  # type: ignore[arg-type]
-        overflow_gpu_devices=("3", "1") if prod else ("3",),
+        deployment="dev",
+        overflow_gpu_devices=("3",),
         preload_all_models=True,
         warmup_models=True,
+        dev_runtime_root=tmp_path,
     )
 
 
@@ -839,6 +839,7 @@ def test_worker_uses_repository_shared_broker_client_contract(
         environment="dev",
         client_id="dft-test",
         mps_pipe_root=mps_root,
+        dev_runtime_root=tmp_path,
     )
     lease = adapter.acquire(
         kind="residency",
@@ -889,6 +890,30 @@ def test_worker_uses_repository_shared_broker_client_contract(
     assert ("quarantine", "gpu_fatal") in calls
     assert ("fail_closed", None) in calls
     assert ("close", None) in calls
+
+
+def test_shared_broker_adapter_rejects_prod_and_external_runtime_paths(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(GpuRuntimeUnhealthy, match="production is hard-off"):
+        SharedGpuBrokerAdapter(
+            tmp_path / "broker.sock",
+            environment="prod",
+            client_id="dft-test",
+            mps_pipe_root=tmp_path / "mps-state",
+            dev_runtime_root=tmp_path,
+        )
+    with pytest.raises(
+        GpuRuntimeUnhealthy,
+        match="must be located below|production repository",
+    ):
+        SharedGpuBrokerAdapter(
+            Path("/data/lzq/gith/nexpoly/ops/state/gpu-resource/broker.sock"),
+            environment="dev",
+            client_id="dft-test",
+            mps_pipe_root=tmp_path / "mps-state",
+            dev_runtime_root=tmp_path,
+        )
 
 
 @pytest.mark.parametrize("loss_code", ("unknown_lease", "stale_fencing_token"))
@@ -1865,30 +1890,6 @@ def test_dev_falls_back_only_to_gpu3_and_loads_requested_model(tmp_path: Path) -
     pool.close()
 
 
-def test_prod_overflow_order_is_gpu3_then_gpu1(tmp_path: Path) -> None:
-    broker = ScriptedBroker(blocked_execution={"2", "3"})
-    factory = HandleFactory()
-    pool = ExecutorPool(
-        _settings(tmp_path, deployment="prod"),
-        broker=broker,
-        process_factory=factory,
-    )
-    pool.start()
-    result = pool.execute(
-        _request(),
-        tmp_path / "output",
-        progress=lambda *_args: None,
-        cancelled=lambda: False,
-        provenance={},
-        queue_wait_ms=0,
-    )
-    execution_acquires = [item[1] for item in broker.acquires if item[0] == "execution"]
-    assert execution_acquires == ["2", "3", "1"]
-    assert result.result["provenance"]["execution_path"] == "overflow"
-    assert result.result["provenance"]["gpu_physical_device"] == "1"
-    pool.close()
-
-
 def test_shared_broker_owns_overflow_order_with_one_stable_waiter(
     tmp_path: Path,
 ) -> None:
@@ -1896,20 +1897,19 @@ def test_shared_broker_owns_overflow_order_with_one_stable_waiter(
         managed_placement = True
 
         def __init__(self):
-            super().__init__(blocked_execution={"2"})
+            super().__init__(blocked_execution={"1"})
             self.managed_placement = True
             self.overflow_requests: list[dict[str, Any]] = []
 
         def acquire(self, **kwargs):
             if kwargs["placement"] == "overflow":
                 self.overflow_requests.append(dict(kwargs))
-                kwargs["gpu_index"] = "1"
             return super().acquire(**kwargs)
 
     broker = ManagedPlacementBroker()
     factory = HandleFactory()
     pool = ExecutorPool(
-        _settings(tmp_path, deployment="prod"),
+        _settings(tmp_path),
         broker=broker,
         process_factory=factory,
     )
@@ -1929,7 +1929,7 @@ def test_shared_broker_owns_overflow_order_with_one_stable_waiter(
     assert request["gpu_index"] == "3"
     assert request["wait_timeout_seconds"] == 600.0
     assert request["owner"]["request_id"].startswith("dft-")
-    assert result.result["provenance"]["gpu_physical_device"] == "1"
+    assert result.result["provenance"]["gpu_physical_device"] == "3"
     pool.close()
 
 

@@ -17,8 +17,9 @@ from typing import Any
 from .config import (
     FORBIDDEN_SOURCE_ROOTS,
     GPU_UUID_BY_INDEX,
-    RUNTIME_ROOT,
     WorkerSettings,
+    validate_dev_runtime_path,
+    validate_private_dev_runtime_root,
 )
 
 
@@ -251,7 +252,11 @@ class AimnetRuntime:
         source = _load_source_lock(SOURCE_LOCK_PATH).get("source", {})
         self._aimnet_version = str(source.get("package_version") or "") or None
         self._aimnet_commit = str(source.get("commit") or "") or None
-        wheel_record = RUNTIME_ROOT / "wheelhouse" / "aimnet-wheel.sha256"
+        wheel_record = (
+            self.settings.dev_runtime_root
+            / "wheelhouse"
+            / "aimnet-wheel.sha256"
+        )
         if wheel_record.is_file() and not wheel_record.is_symlink():
             fields = wheel_record.read_text(encoding="utf-8").strip().split()
             if fields and re.fullmatch(r"[0-9a-f]{64}", fields[0]):
@@ -344,9 +349,12 @@ class AimnetRuntime:
         return origin, calculators.AIMNet2Calculator
 
     def _validate_isolated_runtime(self) -> None:
-        if RUNTIME_ROOT.is_symlink() or not RUNTIME_ROOT.is_dir():
-            raise RuntimeError(f"isolated runtime root must be a real directory: {RUNTIME_ROOT}")
-        runtime_root = RUNTIME_ROOT.resolve(strict=True)
+        try:
+            runtime_root = validate_private_dev_runtime_root(
+                self.settings.dev_runtime_root
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
 
         expected_python = Path(os.path.abspath(self.settings.python))
         running_python = Path(os.path.abspath(sys.executable))
@@ -364,15 +372,43 @@ class AimnetRuntime:
             "MONOMER_DFT_JOB_ROOT": self.settings.job_root,
             "AIMNET_CACHE_DIR": self.settings.aimnet_cache_dir,
             "WARP_CACHE_PATH": self.settings.warp_cache_path,
+            "MONOMER_DFT_GPU_MPS_PIPE_ROOT": self.settings.mps_pipe_root,
+            "MONOMER_DFT_DOWNLOAD_SPOOL_ROOT": self.settings.download_spool_root,
         }
         for name, path in paths.items():
+            if path is None:
+                raise RuntimeError(f"{name} is not configured")
             if path.is_symlink() or not path.is_dir():
                 raise RuntimeError(f"{name} must be a real directory: {path}")
-            resolved = path.resolve(strict=True)
             try:
-                resolved.relative_to(runtime_root)
+                validate_dev_runtime_path(
+                    name,
+                    path,
+                    runtime_root=runtime_root,
+                    leaf_kind="directory",
+                )
             except ValueError as exc:
-                raise RuntimeError(f"{name} escapes the isolated runtime: {resolved}") from exc
+                raise RuntimeError(str(exc)) from exc
+        if self.settings.broker_uds is not None:
+            try:
+                validate_dev_runtime_path(
+                    "MONOMER_DFT_GPU_BROKER_UDS",
+                    self.settings.broker_uds,
+                    runtime_root=runtime_root,
+                    leaf_kind="socket",
+                )
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from exc
+        if self.settings.gpu_external_reservations is not None:
+            try:
+                validate_dev_runtime_path(
+                    "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS",
+                    self.settings.gpu_external_reservations,
+                    runtime_root=runtime_root,
+                    leaf_kind="file",
+                )
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from exc
 
     def close(self) -> None:
         with self._lock:

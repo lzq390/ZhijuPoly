@@ -102,8 +102,8 @@ def create_app(
         runtime = worker_runtime
         engine = scientific_engine
         if runtime is None and engine is None:
-            # Production path: this object owns GPU child processes but imports
-            # no Torch/Warp/AIMNet into the ASGI supervisor.
+            # Dev-only release path: this object owns GPU child processes but
+            # imports no Torch/Warp/AIMNet into the ASGI supervisor.
             runtime = executor_pool_from_settings(settings)
             engine = runtime
         elif runtime is None or engine is None:

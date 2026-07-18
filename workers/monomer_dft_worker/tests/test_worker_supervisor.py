@@ -120,6 +120,7 @@ def _make_sandbox(root: Path) -> SupervisorSandbox:
     python_wrapper = runtime / "venvs/monomer-dft-worker/bin/python"
     socket_path = runtime / "monomer-dft-worker-socket/worker.sock"
     socket_path.parent.mkdir(parents=True)
+    runtime.chmod(0o700)
 
     behavior_file = root / "behavior.txt"
     attempts_file = root / "attempts.log"

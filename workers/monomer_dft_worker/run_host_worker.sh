@@ -4,7 +4,10 @@ umask 077
 
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -P "$SCRIPT_DIR/../.." && pwd -P)"
-RUNTIME_ROOT="$REPO_ROOT/.runtime"
+PRODUCTION_REPO_ROOT="/data/lzq/gith/nexpoly"
+DEFAULT_RUNTIME_ROOT="$REPO_ROOT/.runtime"
+RUNTIME_ROOT=""
+RUNTIME_ROOT_IS_DEFAULT=false
 
 fail() {
   printf '[monomer-dft-worker] %s\n' "$*" >&2
@@ -29,14 +32,50 @@ assert_runtime_path() {
   [[ "$value" == "$RUNTIME_ROOT" || "$value" == "$RUNTIME_ROOT"/* ]] || fail "$name must be below $RUNTIME_ROOT"
 }
 
+assert_not_production_path() {
+  local name="$1"
+  local value="$2"
+  [[ "$value" != "$PRODUCTION_REPO_ROOT" && "$value" != "$PRODUCTION_REPO_ROOT"/* ]] || \
+    fail "$name must not reference the production repository"
+}
+
+configure_runtime_root() {
+  local configured=""
+  if [[ "${MONOMER_DFT_DEV_RUNTIME_ROOT+x}" == "x" ]]; then
+    configured="$MONOMER_DFT_DEV_RUNTIME_ROOT"
+  else
+    configured="$DEFAULT_RUNTIME_ROOT"
+    RUNTIME_ROOT_IS_DEFAULT=true
+  fi
+  [[ -n "$configured" ]] || fail "MONOMER_DFT_DEV_RUNTIME_ROOT must not be empty"
+  if [[ "$configured" != /* ]]; then
+    configured="$REPO_ROOT/$configured"
+  fi
+  RUNTIME_ROOT="$(realpath -ms -- "$configured")"
+  assert_not_production_path MONOMER_DFT_DEV_RUNTIME_ROOT "$RUNTIME_ROOT"
+  export MONOMER_DFT_DEV_RUNTIME_ROOT="$RUNTIME_ROOT"
+}
+
 initialize_runtime_root() {
   [[ ! -L "$RUNTIME_ROOT" ]] || fail "runtime root must not be a symlink: $RUNTIME_ROOT"
   if [[ ! -e "$RUNTIME_ROOT" ]]; then
-    mkdir -- "$RUNTIME_ROOT"
+    [[ "$RUNTIME_ROOT_IS_DEFAULT" == "true" ]] || \
+      fail "caller-provided development runtime root must already exist: $RUNTIME_ROOT"
+    [[ "$(dirname -- "$RUNTIME_ROOT")" == "$REPO_ROOT" ]] || \
+      fail "default runtime root must be a direct child of the development worktree"
+    [[ "$(realpath -e -- "$(dirname -- "$RUNTIME_ROOT")")" == "$REPO_ROOT" ]] || \
+      fail "default runtime root parent resolves unexpectedly"
+    mkdir --mode=0700 -- "$RUNTIME_ROOT"
   fi
   [[ -d "$RUNTIME_ROOT" && ! -L "$RUNTIME_ROOT" ]] || fail "runtime root must be a real directory: $RUNTIME_ROOT"
   REAL_RUNTIME_ROOT="$(realpath -e -- "$RUNTIME_ROOT")"
   [[ "$REAL_RUNTIME_ROOT" == "$RUNTIME_ROOT" ]] || fail "runtime root resolves unexpectedly: $REAL_RUNTIME_ROOT"
+  assert_not_production_path MONOMER_DFT_DEV_RUNTIME_ROOT "$REAL_RUNTIME_ROOT"
+  local owner mode
+  owner="$(stat -Lc '%u' -- "$RUNTIME_ROOT")" || fail "runtime root owner could not be read: $RUNTIME_ROOT"
+  mode="$(stat -Lc '%a' -- "$RUNTIME_ROOT")" || fail "runtime root mode could not be read: $RUNTIME_ROOT"
+  [[ "$owner" == "$(id -u)" ]] || fail "runtime root must be owned by the current uid: $RUNTIME_ROOT"
+  [[ "$mode" == "700" ]] || fail "runtime root must have mode 0700: $RUNTIME_ROOT"
 }
 
 ensure_runtime_directory() {
@@ -67,6 +106,14 @@ ensure_runtime_directory() {
     [[ "$resolved" == "$REAL_RUNTIME_ROOT"/* ]] || fail "$name escapes $REAL_RUNTIME_ROOT: $resolved"
     current="$candidate"
   done
+}
+
+assert_runtime_file_slot() {
+  local name="$1"
+  local value="$2"
+  assert_runtime_path "$name" "$value"
+  [[ ! -L "$value" ]] || fail "$name must not be a symlink: $value"
+  [[ ! -e "$value" || -f "$value" ]] || fail "$name must be a regular file slot: $value"
 }
 
 process_is_running() {
@@ -360,6 +407,9 @@ if [[ -n "${PYTHONPATH:-}" ]]; then
 fi
 unset PYTHONPATH
 
+assert_not_production_path "Worker code root" "$REPO_ROOT"
+configure_runtime_root
+
 # The worker is intentionally database-blind.  The controller launches it
 # through an environment allowlist; keep this fail-closed check for direct or
 # manually scripted runner invocations as well.
@@ -375,12 +425,33 @@ for forbidden_database_variable in \
     fail "$forbidden_database_variable must not be present in the monomer DFT worker environment"
 done
 
-export MONOMER_DFT_PYTHON="$(absolute_runtime_path "${MONOMER_DFT_PYTHON:-.runtime/venvs/monomer-dft-worker/bin/python}")"
-export MONOMER_DFT_WORKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_WORKER_UDS:-.runtime/monomer-dft-worker-socket/worker.sock}")"
-export MONOMER_DFT_JOB_ROOT="$(absolute_runtime_path "${MONOMER_DFT_JOB_ROOT:-.runtime/monomer-dft-worker-runs}")"
-export AIMNET_CACHE_DIR="$(absolute_runtime_path "${AIMNET_CACHE_DIR:-.runtime/aimnet-cache}")"
-export WARP_CACHE_PATH="$(absolute_runtime_path "${WARP_CACHE_PATH:-.runtime/warp-cache}")"
-export UV_CACHE_DIR="$(absolute_runtime_path "${UV_CACHE_DIR:-.runtime/uv-cache}")"
+MONOMER_DFT_DEPLOYMENT="${MONOMER_DFT_DEPLOYMENT:-dev}"
+[[ "$MONOMER_DFT_DEPLOYMENT" == "dev" ]] || \
+  fail "MONOMER_DFT_DEPLOYMENT must be dev; production is hard-off"
+[[ "${NEXPOLY_DFT_GPU_DEVICE:-1}" == "1" ]] || \
+  fail "dev primary DFT executor must use physical GPU 1; GPU 0 and GPU 2 are forbidden"
+[[ "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}" == "3" ]] || \
+  fail "dev overflow order must be physical GPU 3 only; GPU 0 and GPU 2 are forbidden"
+
+MONOMER_DFT_PYTHON="$(absolute_runtime_path "${MONOMER_DFT_PYTHON:-$RUNTIME_ROOT/venvs/monomer-dft-worker/bin/python}")"
+MONOMER_DFT_WORKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_WORKER_UDS:-$RUNTIME_ROOT/monomer-dft-worker-socket/worker.sock}")"
+MONOMER_DFT_JOB_ROOT="$(absolute_runtime_path "${MONOMER_DFT_JOB_ROOT:-$RUNTIME_ROOT/monomer-dft-worker-runs}")"
+AIMNET_CACHE_DIR="$(absolute_runtime_path "${AIMNET_CACHE_DIR:-$RUNTIME_ROOT/aimnet-cache}")"
+WARP_CACHE_PATH="$(absolute_runtime_path "${WARP_CACHE_PATH:-$RUNTIME_ROOT/warp-cache}")"
+export UV_CACHE_DIR="$RUNTIME_ROOT/uv-cache"
+MONOMER_DFT_GPU_BROKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_GPU_BROKER_UDS:-$RUNTIME_ROOT/gpu-resource/broker.sock}")"
+MONOMER_DFT_GPU_MPS_PIPE_ROOT="$(absolute_runtime_path "${MONOMER_DFT_GPU_MPS_PIPE_ROOT:-$RUNTIME_ROOT/gpu-resource}")"
+MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$(absolute_runtime_path "${MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS:-$RUNTIME_ROOT/gpu-resource/external-reservations.json}")"
+MONOMER_DFT_DOWNLOAD_SPOOL_ROOT="$(absolute_runtime_path "${MONOMER_DFT_DOWNLOAD_SPOOL_ROOT:-$RUNTIME_ROOT/monomer-dft-downloads}")"
+export MONOMER_DFT_PYTHON MONOMER_DFT_WORKER_UDS MONOMER_DFT_JOB_ROOT
+export AIMNET_CACHE_DIR WARP_CACHE_PATH
+export MONOMER_DFT_GPU_BROKER_UDS MONOMER_DFT_GPU_MPS_PIPE_ROOT
+export MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS MONOMER_DFT_DOWNLOAD_SPOOL_ROOT
+export XDG_CACHE_HOME="$RUNTIME_ROOT/xdg-cache"
+export TORCH_HOME="$RUNTIME_ROOT/torch-cache"
+export HF_HOME="$RUNTIME_ROOT/hf-cache"
+export TMPDIR="$RUNTIME_ROOT/tmp"
+export HOME="$RUNTIME_ROOT/home"
 
 assert_runtime_path MONOMER_DFT_PYTHON "$MONOMER_DFT_PYTHON"
 assert_runtime_path MONOMER_DFT_WORKER_UDS "$MONOMER_DFT_WORKER_UDS"
@@ -388,39 +459,35 @@ assert_runtime_path MONOMER_DFT_JOB_ROOT "$MONOMER_DFT_JOB_ROOT"
 assert_runtime_path AIMNET_CACHE_DIR "$AIMNET_CACHE_DIR"
 assert_runtime_path WARP_CACHE_PATH "$WARP_CACHE_PATH"
 assert_runtime_path UV_CACHE_DIR "$UV_CACHE_DIR"
+assert_runtime_path MONOMER_DFT_GPU_BROKER_UDS "$MONOMER_DFT_GPU_BROKER_UDS"
+assert_runtime_path MONOMER_DFT_GPU_MPS_PIPE_ROOT "$MONOMER_DFT_GPU_MPS_PIPE_ROOT"
+assert_runtime_path MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS"
+assert_runtime_path MONOMER_DFT_DOWNLOAD_SPOOL_ROOT "$MONOMER_DFT_DOWNLOAD_SPOOL_ROOT"
+assert_runtime_path XDG_CACHE_HOME "$XDG_CACHE_HOME"
+assert_runtime_path TORCH_HOME "$TORCH_HOME"
+assert_runtime_path HF_HOME "$HF_HOME"
+assert_runtime_path TMPDIR "$TMPDIR"
+assert_runtime_path HOME "$HOME"
 
 [[ "${MONOMER_DFT_MAX_CONCURRENT_JOBS:-1}" == "1" ]] || fail "MONOMER_DFT_MAX_CONCURRENT_JOBS must be 1"
-MONOMER_DFT_DEPLOYMENT="${MONOMER_DFT_DEPLOYMENT:-dev}"
-[[ "$MONOMER_DFT_DEPLOYMENT" == "dev" || "$MONOMER_DFT_DEPLOYMENT" == "prod" ]] || \
-  fail "MONOMER_DFT_DEPLOYMENT must be dev or prod"
-if [[ "$MONOMER_DFT_DEPLOYMENT" == "dev" ]]; then
-  [[ "${NEXPOLY_DFT_GPU_DEVICE:-1}" == "1" ]] || fail "dev primary DFT executor must use physical GPU 1"
-  [[ "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}" == "3" ]] || fail "dev overflow order must be GPU 3 only"
-else
-  [[ "${NEXPOLY_DFT_GPU_DEVICE:-2}" == "2" ]] || fail "prod primary DFT executor must use physical GPU 2"
-  [[ "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3,1}" == "3,1" ]] || fail "prod overflow order must be GPU 3 then GPU 1"
-  [[ "${MONOMER_DFT_GPU_BROKER_ENABLED:-1}" == "1" ]] || fail "prod DFT Worker requires the Host GPU Broker"
-fi
 [[ "${MONOMER_DFT_GPU_BROKER_ENABLED:-1}" == "0" || "${MONOMER_DFT_GPU_BROKER_ENABLED:-1}" == "1" ]] || \
   fail "MONOMER_DFT_GPU_BROKER_ENABLED must be 0 or 1"
 validate_supervisor_configuration
 
 export MONOMER_DFT_MAX_CONCURRENT_JOBS=1
 export MONOMER_DFT_DEPLOYMENT
-if [[ "$MONOMER_DFT_DEPLOYMENT" == "dev" ]]; then
-  export NEXPOLY_DFT_GPU_DEVICE="${NEXPOLY_DFT_GPU_DEVICE:-1}"
-  export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}"
-else
-  export NEXPOLY_DFT_GPU_DEVICE="${NEXPOLY_DFT_GPU_DEVICE:-2}"
-  export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3,1}"
-fi
+export NEXPOLY_DFT_GPU_DEVICE="${NEXPOLY_DFT_GPU_DEVICE:-1}"
+export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}"
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 # The supervisor must remain CUDA-blind. Each leased executor child receives
 # exactly one CUDA_VISIBLE_DEVICES value before importing any CUDA library.
 unset CUDA_VISIBLE_DEVICES
 export PYTHONNOUSERSITE=1
 export PYTHONDONTWRITEBYTECODE=1
-export MONOMER_DFT_WORKER_INSTANCE="${MONOMER_DFT_WORKER_INSTANCE:-$REPO_ROOT}"
+MONOMER_DFT_WORKER_INSTANCE="${MONOMER_DFT_WORKER_INSTANCE:-$REPO_ROOT}"
+[[ "$MONOMER_DFT_WORKER_INSTANCE" == "$REPO_ROOT" ]] || \
+  fail "MONOMER_DFT_WORKER_INSTANCE must identify this development worktree"
+export MONOMER_DFT_WORKER_INSTANCE
 
 initialize_runtime_root
 ensure_runtime_directory "MONOMER_DFT_PYTHON parent" "$(dirname "$MONOMER_DFT_PYTHON")" false
@@ -429,6 +496,16 @@ ensure_runtime_directory MONOMER_DFT_JOB_ROOT "$MONOMER_DFT_JOB_ROOT" true
 ensure_runtime_directory AIMNET_CACHE_DIR "$AIMNET_CACHE_DIR" true
 ensure_runtime_directory WARP_CACHE_PATH "$WARP_CACHE_PATH" true
 ensure_runtime_directory UV_CACHE_DIR "$UV_CACHE_DIR" true
+ensure_runtime_directory "MONOMER_DFT_GPU_BROKER_UDS parent" "$(dirname "$MONOMER_DFT_GPU_BROKER_UDS")" true
+ensure_runtime_directory MONOMER_DFT_GPU_MPS_PIPE_ROOT "$MONOMER_DFT_GPU_MPS_PIPE_ROOT" true
+ensure_runtime_directory "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS parent" "$(dirname "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS")" true
+assert_runtime_file_slot MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS"
+ensure_runtime_directory MONOMER_DFT_DOWNLOAD_SPOOL_ROOT "$MONOMER_DFT_DOWNLOAD_SPOOL_ROOT" true
+ensure_runtime_directory XDG_CACHE_HOME "$XDG_CACHE_HOME" true
+ensure_runtime_directory TORCH_HOME "$TORCH_HOME" true
+ensure_runtime_directory HF_HOME "$HF_HOME" true
+ensure_runtime_directory TMPDIR "$TMPDIR" true
+ensure_runtime_directory HOME "$HOME" true
 [[ -x "$MONOMER_DFT_PYTHON" ]] || fail "MONOMER_DFT_PYTHON is not executable: $MONOMER_DFT_PYTHON"
 [[ ! -e "$MONOMER_DFT_WORKER_UDS" && ! -L "$MONOMER_DFT_WORKER_UDS" ]] || fail "worker socket already exists or is a symlink: $MONOMER_DFT_WORKER_UDS"
 

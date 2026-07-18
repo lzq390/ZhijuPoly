@@ -18,7 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from .config import GPU_UUID_BY_INDEX
+from .config import (
+    GPU_UUID_BY_INDEX,
+    validate_dev_runtime_path,
+    validate_private_dev_runtime_root,
+)
 
 
 STABLE_ACQUIRE_COLLECTION_GRACE_SECONDS = 1.0
@@ -239,10 +243,29 @@ class SharedGpuBrokerAdapter:
         *,
         environment: str,
         client_id: str,
-        mps_pipe_root: Path = Path(
-            "/data/lzq/gith/nexpoly/ops/state/gpu-resource"
-        ),
+        mps_pipe_root: Path,
+        dev_runtime_root: Path,
     ) -> None:
+        if environment != "dev":
+            raise GpuRuntimeUnhealthy(
+                "DFT Worker Broker environment must be dev; production is hard-off"
+            )
+        try:
+            runtime_root = validate_private_dev_runtime_root(dev_runtime_root)
+            uds = validate_dev_runtime_path(
+                "MONOMER_DFT_GPU_BROKER_UDS",
+                uds,
+                runtime_root=runtime_root,
+                leaf_kind="socket",
+            )
+            mps_pipe_root = validate_dev_runtime_path(
+                "MONOMER_DFT_GPU_MPS_PIPE_ROOT",
+                mps_pipe_root,
+                runtime_root=runtime_root,
+                leaf_kind="directory",
+            )
+        except ValueError as exc:
+            raise GpuRuntimeUnhealthy(str(exc)) from exc
         try:
             from gpu_resource import GpuBrokerClient as SharedClient
             from gpu_resource import GpuBrokerClientError
@@ -384,7 +407,7 @@ class SharedGpuBrokerAdapter:
             parent_lease_id=shared.parent_lease_id,
             client_environment=tuple(sorted(client_environment.items())),
         )
-        policy = ("1", "3") if self.environment == "dev" else ("2", "3", "1")
+        policy = ("1", "3")
         allowed_indices = policy[:1] if placement == "preferred" else policy[1:]
         if lease.gpu_index not in allowed_indices or lease.preferred != preferred:
             with contextlib.suppress(Exception):

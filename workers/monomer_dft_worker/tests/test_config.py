@@ -23,6 +23,7 @@ ENV_NAMES = (
     "MONOMER_DFT_PYTHON",
     "MONOMER_DFT_WORKER_UDS",
     "MONOMER_DFT_JOB_ROOT",
+    "MONOMER_DFT_DEV_RUNTIME_ROOT",
     "MONOMER_DFT_MAX_CONCURRENT_JOBS",
     "MONOMER_DFT_MAX_QUEUED_JOBS",
     "MONOMER_DFT_SINGLE_POINT_TIMEOUT_SECONDS",
@@ -34,6 +35,8 @@ ENV_NAMES = (
     "MONOMER_DFT_STANDALONE_GPU_SMOKE",
     "MONOMER_DFT_GPU_BROKER_UDS",
     "MONOMER_DFT_GPU_MPS_PIPE_ROOT",
+    "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS",
+    "MONOMER_DFT_DOWNLOAD_SPOOL_ROOT",
     "MONOMER_DFT_GPU_BUDGET_MIB",
     "MONOMER_DFT_GPU_ACTIVE_THREAD_PERCENTAGE",
     "MONOMER_DFT_EXECUTOR_PROCESS",
@@ -43,6 +46,20 @@ ENV_NAMES = (
     "WARP_CACHE_PATH",
     "CUDA_VISIBLE_DEVICES",
 )
+
+
+@pytest.fixture(autouse=True)
+def _private_dev_runtime_root(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory(prefix="dftcfg-", dir="/tmp") as temp_dir:
+        repo_root = Path(temp_dir)
+        runtime_root = repo_root / ".runtime"
+        runtime_root.mkdir(mode=0o700)
+        runtime_root.chmod(0o700)
+        monkeypatch.setattr(config, "REPO_ROOT", repo_root)
+        monkeypatch.setattr(config, "RUNTIME_ROOT", runtime_root)
+        yield
 
 
 def _clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,6 +81,13 @@ def test_load_settings_uses_isolated_runtime_defaults(monkeypatch: pytest.Monkey
     assert settings.overflow_gpu_devices == ("3",)
     assert settings.mps_pipe_root == config.REPO_ROOT / ".runtime/gpu-resource"
     assert settings.broker_uds == config.REPO_ROOT / ".runtime/gpu-resource/broker.sock"
+    assert settings.gpu_external_reservations == (
+        config.REPO_ROOT / ".runtime/gpu-resource/external-reservations.json"
+    )
+    assert settings.download_spool_root == (
+        config.REPO_ROOT / ".runtime/monomer-dft-downloads"
+    )
+    assert settings.dev_runtime_root == config.RUNTIME_ROOT
     assert "2" not in (settings.physical_gpu, *settings.overflow_gpu_devices)
     assert settings.deployment == "dev"
     assert settings.logical_device == "cuda:0"
@@ -188,11 +212,15 @@ def test_load_settings_rejects_more_than_one_visible_gpu(monkeypatch: pytest.Mon
         config.load_settings()
 
 
-def test_load_settings_rejects_a_different_physical_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("gpu", ("0", "2", "3"))
+def test_load_settings_rejects_a_different_physical_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+    gpu: str,
+) -> None:
     _clean_environment(monkeypatch)
-    monkeypatch.setenv("NEXPOLY_DFT_GPU_DEVICE", "2")
+    monkeypatch.setenv("NEXPOLY_DFT_GPU_DEVICE", gpu)
 
-    with pytest.raises(ValueError, match="physical GPU 1"):
+    with pytest.raises(ValueError, match="must be physical GPU 1"):
         config.load_settings()
 
 
@@ -212,12 +240,36 @@ def test_dev_load_settings_requires_gpu3_as_the_only_overflow(
     ("name", "value"),
     (
         (
+            "MONOMER_DFT_WORKER_UDS",
+            "/data/lzq/gith/nexpoly/ops/state/worker.sock",
+        ),
+        (
+            "MONOMER_DFT_JOB_ROOT",
+            "/data/lzq/gith/nexpoly/ops/state/monomer-dft-runs",
+        ),
+        (
+            "AIMNET_CACHE_DIR",
+            "/data/lzq/gith/nexpoly/ops/state/aimnet-cache",
+        ),
+        (
+            "WARP_CACHE_PATH",
+            "/data/lzq/gith/nexpoly/ops/state/warp-cache",
+        ),
+        (
             "MONOMER_DFT_GPU_BROKER_UDS",
             "/data/lzq/gith/nexpoly/ops/state/gpu-resource/broker.sock",
         ),
         (
             "MONOMER_DFT_GPU_MPS_PIPE_ROOT",
             "/data/lzq/gith/nexpoly/ops/state/gpu-resource",
+        ),
+        (
+            "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS",
+            "/data/lzq/gith/nexpoly/ops/state/gpu-resource/external-reservations.json",
+        ),
+        (
+            "MONOMER_DFT_DOWNLOAD_SPOOL_ROOT",
+            "/data/lzq/gith/nexpoly/ops/state/monomer-dft-downloads",
         ),
     ),
 )
@@ -229,7 +281,7 @@ def test_dev_load_settings_rejects_production_gpu_resource_paths(
     _clean_environment(monkeypatch)
     monkeypatch.setenv(name, value)
 
-    with pytest.raises(ValueError, match="must stay inside this worktree"):
+    with pytest.raises(ValueError, match="must be located below"):
         config.load_settings()
 
 
@@ -245,6 +297,7 @@ def test_dev_load_settings_rejects_symlinked_gpu_resource_namespace(
         runtime_root = repo_root / ".runtime"
         external_gpu_root = temp_root / "shared-gpu-resource"
         runtime_root.mkdir(parents=True)
+        runtime_root.chmod(0o700)
         external_gpu_root.mkdir()
         (runtime_root / "gpu-resource").symlink_to(
             external_gpu_root,
@@ -253,21 +306,19 @@ def test_dev_load_settings_rejects_symlinked_gpu_resource_namespace(
         monkeypatch.setattr(config, "REPO_ROOT", repo_root)
         monkeypatch.setattr(config, "RUNTIME_ROOT", runtime_root)
 
-        with pytest.raises(ValueError, match="real, non-symlinked worktree namespace"):
+        with pytest.raises(ValueError, match="symlink component"):
             config.load_settings()
 
 
-def test_load_settings_uses_production_primary_and_overflow_order(
+def test_load_settings_rejects_production_even_with_broker_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clean_environment(monkeypatch)
     monkeypatch.setenv("MONOMER_DFT_DEPLOYMENT", "prod")
     monkeypatch.setenv("MONOMER_DFT_GPU_BROKER_ENABLED", "1")
 
-    settings = config.load_settings()
-
-    assert settings.physical_gpu == "2"
-    assert settings.overflow_gpu_devices == ("3", "1")
+    with pytest.raises(ValueError, match="production is hard-off"):
+        config.load_settings()
 
 
 def test_broker_disabled_requires_explicit_standalone_smoke_authorization(
@@ -295,6 +346,7 @@ def test_executor_process_may_see_only_its_preselected_overflow_gpu(
     settings = config.load_settings()
 
     assert settings.physical_gpu == "1"
+    assert settings.executor_process is True
 
 
 def test_executor_process_accepts_the_leased_gpu_uuid_from_mps(
@@ -321,6 +373,20 @@ def test_executor_process_rejects_gpu_selection_mismatch(
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
 
     with pytest.raises(ValueError, match="leased GPU"):
+        config.load_settings()
+
+
+@pytest.mark.parametrize("gpu", ("0", "2"))
+def test_executor_process_explicitly_rejects_gpu0_and_gpu2(
+    monkeypatch: pytest.MonkeyPatch,
+    gpu: str,
+) -> None:
+    _clean_environment(monkeypatch)
+    monkeypatch.setenv("MONOMER_DFT_EXECUTOR_PROCESS", "1")
+    monkeypatch.setenv("NEXPOLY_DFT_EXECUTOR_GPU_DEVICE", gpu)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", gpu)
+
+    with pytest.raises(ValueError, match="GPU 0 and GPU 2 are forbidden"):
         config.load_settings()
 
 
@@ -353,3 +419,46 @@ def test_runtime_path_keeps_venv_python_symlink_lexically_isolated(
     monkeypatch.setenv("MONOMER_DFT_PYTHON", str(python_path))
 
     assert config._runtime_path("MONOMER_DFT_PYTHON", "unused") == python_path
+
+
+def test_load_settings_rejects_non_private_runtime_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clean_environment(monkeypatch)
+    runtime_root = tmp_path / "world-readable-runtime"
+    runtime_root.mkdir(mode=0o755)
+    runtime_root.chmod(0o755)
+    monkeypatch.setenv("MONOMER_DFT_DEV_RUNTIME_ROOT", str(runtime_root))
+
+    with pytest.raises(ValueError, match="mode 0700"):
+        config.load_settings()
+
+
+def test_direct_worker_settings_reject_prod_gpu2_and_external_paths(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "direct-runtime"
+    runtime_root.mkdir(mode=0o700)
+    runtime_root.chmod(0o700)
+    common = {
+        "python": Path("/usr/bin/python3.12"),
+        "uds": runtime_root / "socket/worker.sock",
+        "job_root": runtime_root / "runs",
+        "max_concurrent_jobs": 1,
+        "physical_gpu": "1",
+        "logical_device": "cuda:0",
+        "aimnet_cache_dir": runtime_root / "models",
+        "warp_cache_path": runtime_root / "warp",
+        "model_name": "aimnet2",
+        "worker_version": "test",
+        "dev_runtime_root": runtime_root,
+    }
+    with pytest.raises(ValueError, match="production is hard-off"):
+        config.WorkerSettings(**common, deployment="prod")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="GPU 0 and GPU 2 are forbidden"):
+        config.WorkerSettings(**{**common, "physical_gpu": "2"})
+    with pytest.raises(ValueError, match="must be located below|production repository"):
+        config.WorkerSettings(
+            **{**common, "job_root": Path("/data/lzq/gith/nexpoly/ops/state/runs")}
+        )

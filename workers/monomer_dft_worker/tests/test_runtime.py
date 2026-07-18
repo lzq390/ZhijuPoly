@@ -31,6 +31,8 @@ def _settings(tmp_path: Path) -> WorkerSettings:
         warp_cache_path=tmp_path / "warp",
         model_name="aimnet2",
         worker_version="test",
+        dev_runtime_root=tmp_path,
+        executor_process=True,
     )
 
 
@@ -168,7 +170,7 @@ def test_load_uses_local_checkpoint_and_logical_cuda_zero(
     assert runtime.probe().model_loaded is False
 
 
-def test_production_mode_preloads_all_six_pinned_models(
+def test_resident_dev_executor_preloads_all_six_pinned_models(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -241,6 +243,8 @@ def test_runtime_path_validation_rejects_intermediate_symlink_escape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_root = tmp_path / ".runtime"
+    runtime_root.mkdir(mode=0o700)
+    runtime_root.chmod(0o700)
     settings = _settings(runtime_root)
     settings.python.parent.mkdir(parents=True)
     settings.python.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -249,7 +253,10 @@ def test_runtime_path_validation_rejects_intermediate_symlink_escape(
     settings.job_root.mkdir()
     settings.aimnet_cache_dir.mkdir()
     settings.warp_cache_path.mkdir()
-    monkeypatch.setattr(runtime_module, "RUNTIME_ROOT", runtime_root)
+    assert settings.mps_pipe_root is not None
+    settings.mps_pipe_root.mkdir()
+    assert settings.download_spool_root is not None
+    settings.download_spool_root.mkdir()
     monkeypatch.setattr(runtime_module.sys, "executable", str(settings.python))
     runtime = AimnetRuntime(settings)
 

@@ -161,8 +161,7 @@ class SubprocessExecutor:
         if self.lease.client_environment:
             env.update(dict(self.lease.client_environment))
         else:
-            # Broker-disabled development smoke has no MPS server. Production
-            # leases always carry a validated per-card MPS environment.
+            # Broker-disabled development smoke has no MPS server.
             env["CUDA_VISIBLE_DEVICES"] = self.lease.gpu_index
         command = [
             os.fspath(self.settings.python),
@@ -1301,6 +1300,7 @@ class ExecutorPool:
                 environment=self.settings.deployment,
                 client_id=self.client_id,
                 mps_pipe_root=self.settings.mps_pipe_root,
+                dev_runtime_root=self.settings.dev_runtime_root,
             )
         else:
             if not self.settings.standalone_gpu_smoke:

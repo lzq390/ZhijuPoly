@@ -119,12 +119,13 @@ def _settings(tmp_path: Path) -> WorkerSettings:
         uds=tmp_path / "socket/worker.sock",
         job_root=tmp_path / "runs",
         max_concurrent_jobs=1,
-        physical_gpu="3",
+        physical_gpu="1",
         logical_device="cuda:0",
         aimnet_cache_dir=tmp_path / "models",
         warp_cache_path=tmp_path / "warp",
         model_name="aimnet2",
         worker_version="test",
+        dev_runtime_root=tmp_path,
     )
 
 
@@ -419,6 +420,161 @@ def test_runner_rejects_original_aimnet_pythonpath(tmp_path: Path) -> None:
     assert "PYTHONPATH must not reference" in completed.stderr
 
 
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    (
+        (
+            "MONOMER_DFT_DEPLOYMENT",
+            "prod",
+            "production is hard-off",
+        ),
+        (
+            "NEXPOLY_DFT_GPU_DEVICE",
+            "2",
+            "GPU 0 and GPU 2 are forbidden",
+        ),
+        (
+            "NEXPOLY_DFT_GPU_DEVICE",
+            "0",
+            "GPU 0 and GPU 2 are forbidden",
+        ),
+        (
+            "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES",
+            "2",
+            "GPU 0 and GPU 2 are forbidden",
+        ),
+    ),
+)
+def test_runner_is_dev_only_and_rejects_forbidden_gpu_selection(
+    tmp_path: Path,
+    name: str,
+    value: str,
+    message: str,
+) -> None:
+    runner = REPO_ROOT / "workers/monomer_dft_worker/run_host_worker.sh"
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir(mode=0o700)
+    runtime_root.chmod(0o700)
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "MONOMER_DFT_DEV_RUNTIME_ROOT": str(runtime_root),
+        name: value,
+    }
+
+    completed = subprocess.run(
+        [str(runner)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert message in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "MONOMER_DFT_WORKER_UDS",
+        "MONOMER_DFT_JOB_ROOT",
+        "AIMNET_CACHE_DIR",
+        "WARP_CACHE_PATH",
+        "MONOMER_DFT_GPU_BROKER_UDS",
+        "MONOMER_DFT_GPU_MPS_PIPE_ROOT",
+        "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS",
+        "MONOMER_DFT_DOWNLOAD_SPOOL_ROOT",
+    ),
+)
+def test_runner_rejects_every_production_runtime_path(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    runner = REPO_ROOT / "workers/monomer_dft_worker/run_host_worker.sh"
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir(mode=0o700)
+    runtime_root.chmod(0o700)
+    completed = subprocess.run(
+        [str(runner)],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "MONOMER_DFT_DEV_RUNTIME_ROOT": str(runtime_root),
+            name: "/data/lzq/gith/nexpoly/ops/state/forbidden",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert f"{name} must be below" in completed.stderr
+
+
+def test_runner_rejects_non_private_caller_runtime_root(tmp_path: Path) -> None:
+    runner = REPO_ROOT / "workers/monomer_dft_worker/run_host_worker.sh"
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir(mode=0o755)
+    runtime_root.chmod(0o755)
+
+    completed = subprocess.run(
+        [str(runner)],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "MONOMER_DFT_DEV_RUNTIME_ROOT": str(runtime_root),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "runtime root must have mode 0700" in completed.stderr
+
+
+def test_runner_rejects_empty_caller_runtime_root() -> None:
+    runner = REPO_ROOT / "workers/monomer_dft_worker/run_host_worker.sh"
+
+    completed = subprocess.run(
+        [str(runner)],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "MONOMER_DFT_DEV_RUNTIME_ROOT": "",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "MONOMER_DFT_DEV_RUNTIME_ROOT must not be empty" in completed.stderr
+
+
+def test_runner_does_not_create_a_missing_caller_runtime_through_symlink(
+    tmp_path: Path,
+) -> None:
+    runner = REPO_ROOT / "workers/monomer_dft_worker/run_host_worker.sh"
+    target_parent = tmp_path / "target"
+    target_parent.mkdir(mode=0o700)
+    linked_parent = tmp_path / "linked"
+    linked_parent.symlink_to(target_parent, target_is_directory=True)
+    runtime_root = linked_parent / "runtime"
+
+    completed = subprocess.run(
+        [str(runner)],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "MONOMER_DFT_DEV_RUNTIME_ROOT": str(runtime_root),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "caller-provided development runtime root must already exist" in completed.stderr
+    assert not (target_parent / "runtime").exists()
+
+
 def test_pid_controller_requires_process_identity_checks() -> None:
     controller = (REPO_ROOT / "scripts/monomer_dft_worker_ctl.sh").read_text()
 
@@ -483,6 +639,7 @@ def test_runner_rejects_intermediate_socket_parent_symlink(tmp_path: Path) -> No
         REPO_ROOT / "workers/monomer_dft_worker/run_host_worker.sh", runner
     )
     _write_executable(python, "#!/usr/bin/env bash\nexit 99\n")
+    (repo / ".runtime").chmod(0o700)
     socket_parent.symlink_to(external, target_is_directory=True)
 
     completed = subprocess.run(
