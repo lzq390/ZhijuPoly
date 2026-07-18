@@ -32,6 +32,7 @@ _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _AUTHORITATIVE_LEASE_LOSS_CODES = frozenset(
     {
+        "gpu_lease_lost",
         "unknown_lease",
         "stale_fencing_token",
         "lease_owner_mismatch",
@@ -763,8 +764,51 @@ class ManagedGpuLease:
                 "GPU lease heartbeat is temporarily unconfirmed",
             )
 
+    def confirm_current(self) -> GpuLease:
+        """Synchronously confirm the current lease and fencing token.
+
+        The background heartbeat is sufficient for liveness monitoring, but a
+        caller accepting a completed GPU result needs a linearizable Broker
+        decision *after* the device synchronization.  Reading the cached
+        ``lost``/``suspect`` flags leaves up to one heartbeat interval in which
+        an unknown or stale lease could still publish a result.
+
+        Serialize this request with the managed heartbeat loop and update the
+        same health state so an authoritative loss also fences every later
+        operation on this managed lease.
+        """
+        try:
+            with self._lease_lock:
+                if self._closed:
+                    raise GpuBrokerClientError(
+                        "gpu_lease_lost", "GPU lease is already closed"
+                    )
+                updated = self.client.heartbeat(self.lease)
+                if updated.status != "active":
+                    raise GpuBrokerClientError(
+                        "gpu_lease_lost",
+                        "GPU lease is no longer active at the result fencing boundary",
+                    )
+                self.lease = updated
+            self._suspect.clear()
+            self._lost_error = None
+            return updated
+        except GpuBrokerClientError as exc:
+            self._lost_error = exc
+            if exc.code in _AUTHORITATIVE_LEASE_LOSS_CODES:
+                self._lost.set()
+                self._suspect.clear()
+            else:
+                self._suspect.set()
+            raise
+
     def quarantine(self, *, reason: str) -> dict[str, Any]:
-        return self.client.quarantine(self.lease, reason=reason)
+        with self._lease_lock:
+            if self._closed:
+                raise GpuBrokerClientError(
+                    "gpu_lease_lost", "GPU lease is already closed"
+                )
+            return self.client.quarantine(self.lease, reason=reason)
 
     def register_workload(self, workload_pid: int) -> GpuLease:
         """Fence this lease to a start_new_session child before CUDA import."""
@@ -786,6 +830,10 @@ class ManagedGpuLease:
             )
         try:
             with self._lease_lock:
+                if self._closed:
+                    raise GpuBrokerClientError(
+                        "gpu_lease_lost", "GPU lease is already closed"
+                    )
                 registered = self.client.register_workload(
                     self.lease,
                     workload_pid=workload_pid,
@@ -806,6 +854,10 @@ class ManagedGpuLease:
             )
         try:
             with self._lease_lock:
+                if self._closed:
+                    raise GpuBrokerClientError(
+                        "gpu_lease_lost", "GPU lease is already closed"
+                    )
                 result = self.client.prepare_process_termination(self.lease)
         except GpuBrokerClientError:
             self.fail_closed()
@@ -819,36 +871,45 @@ class ManagedGpuLease:
         self.abandon()
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._stop.set()
+        error: GpuBrokerClientError | None = None
+        with self._lease_lock:
+            if self._closed:
+                return
+            # Linearize close against result fencing before sending release.
+            # A confirmation that wins this lock is current before close; one
+            # that loses observes _closed and cannot publish a result after the
+            # release decision.
+            self._closed = True
+            self._stop.set()
+            try:
+                self.client.release(self.lease)
+            except GpuBrokerClientError as exc:
+                if exc.code in {
+                    "unknown_lease",
+                    "stale_fencing_token",
+                    "lease_owner_mismatch",
+                }:
+                    # Capacity is already gone or fenced away; there is nothing
+                    # this owner may safely release.
+                    pass
+                elif exc.code == "gpu_runtime_unhealthy":
+                    # The Broker observed an MPS client or could not prove the
+                    # inventory empty. Never retry a release that may overbook.
+                    self._termination_unsafe = True
+                    error = exc
+                else:
+                    self._release_thread = threading.Thread(
+                        target=self._release_retry_loop,
+                        name=f"gpu-release-{self.lease.lease_id[:8]}",
+                        daemon=True,
+                    )
+                    self._release_thread.start()
+                    if not self.lost:
+                        error = exc
         if self._thread is not None:
             self._thread.join(timeout=self.heartbeat_interval_seconds + 1.0)
-        try:
-            self.client.release(self.lease)
-        except GpuBrokerClientError as exc:
-            if exc.code in {
-                "unknown_lease",
-                "stale_fencing_token",
-                "lease_owner_mismatch",
-            }:
-                # Capacity is already gone or fenced away; there is nothing
-                # this owner may safely release.
-                return
-            if exc.code == "gpu_runtime_unhealthy":
-                # The Broker observed an MPS client or could not prove the
-                # inventory empty. Never retry a release that may overbook.
-                self._termination_unsafe = True
-                raise
-            self._release_thread = threading.Thread(
-                target=self._release_retry_loop,
-                name=f"gpu-release-{self.lease.lease_id[:8]}",
-                daemon=True,
-            )
-            self._release_thread.start()
-            if not self.lost:
-                raise exc
+        if error is not None:
+            raise error
 
     def abandon(self) -> None:
         """Stop heartbeats without releasing capacity.
@@ -857,10 +918,11 @@ class ManagedGpuLease:
         keeps the reservation until the exact PID/start-time identity is dead,
         avoiding a window where CUDA memory is still resident but unaccounted.
         """
-        if self._closed:
-            return
-        self._closed = True
-        self._stop.set()
+        with self._lease_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=self.heartbeat_interval_seconds + 1.0)
 
@@ -874,6 +936,8 @@ class ManagedGpuLease:
         while not self._stop.wait(self.heartbeat_interval_seconds):
             try:
                 with self._lease_lock:
+                    if self._closed:
+                        return
                     self.lease = self.client.heartbeat(self.lease)
                 self._suspect.clear()
                 self._lost_error = None

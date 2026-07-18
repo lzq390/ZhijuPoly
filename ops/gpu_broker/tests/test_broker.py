@@ -1771,6 +1771,242 @@ def test_managed_heartbeat_treats_transport_failure_as_suspect_until_recovery() 
     managed.abandon()
 
 
+@pytest.mark.parametrize(
+    "loss_code",
+    ("unknown_lease", "stale_fencing_token", "lease_owner_mismatch"),
+)
+def test_managed_synchronous_confirmation_records_authoritative_fence_loss(
+    loss_code: str,
+) -> None:
+    class Client:
+        def heartbeat(self, _lease):
+            raise GpuBrokerClientError(loss_code, "lease is no longer current")
+
+    lease = GpuLease(
+        lease_id="lease-1",
+        fencing_token=1,
+        broker_instance_id="broker-1",
+        kind="execution",
+        placement="any",
+        component="md",
+        environment="dev",
+        client_id="md-dev",
+        gpu_index=1,
+        gpu_uuid="GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+        memory_mib=8192,
+        thread_percent=50,
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        request_id="md:dev:test",
+    )
+    managed = ManagedGpuLease(
+        client=Client(),  # type: ignore[arg-type]
+        lease=lease,
+        heartbeat_interval_seconds=1.0,
+    )
+
+    with pytest.raises(GpuBrokerClientError) as error:
+        managed.confirm_current()
+
+    assert error.value.code == loss_code
+    assert managed.connectivity_status == "lost"
+    with pytest.raises(GpuBrokerClientError) as cached_error:
+        managed.assert_healthy()
+    assert cached_error.value.code == "gpu_lease_lost"
+
+
+def test_managed_synchronous_confirmation_marks_transport_uncertain() -> None:
+    class Client:
+        def heartbeat(self, _lease):
+            raise GpuBrokerClientError("gpu_broker_unavailable", "offline")
+
+    lease = GpuLease(
+        lease_id="lease-1",
+        fencing_token=1,
+        broker_instance_id="broker-1",
+        kind="execution",
+        placement="any",
+        component="md",
+        environment="dev",
+        client_id="md-dev",
+        gpu_index=1,
+        gpu_uuid="GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+        memory_mib=8192,
+        thread_percent=50,
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        request_id="md:dev:test",
+    )
+    managed = ManagedGpuLease(
+        client=Client(),  # type: ignore[arg-type]
+        lease=lease,
+        heartbeat_interval_seconds=1.0,
+    )
+
+    with pytest.raises(GpuBrokerClientError) as error:
+        managed.confirm_current()
+
+    assert error.value.code == "gpu_broker_unavailable"
+    assert managed.connectivity_status == "suspect"
+    assert managed.lost is False
+
+
+def test_managed_synchronous_confirmation_rejects_terminating_lease() -> None:
+    lease = GpuLease(
+        lease_id="lease-1",
+        fencing_token=1,
+        broker_instance_id="broker-1",
+        kind="execution",
+        placement="any",
+        component="md",
+        environment="dev",
+        client_id="md-dev",
+        gpu_index=1,
+        gpu_uuid="GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+        memory_mib=8192,
+        thread_percent=50,
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        request_id="md:dev:test",
+    )
+
+    class Client:
+        def heartbeat(self, _lease):
+            return replace(lease, status="terminating")
+
+    managed = ManagedGpuLease(
+        client=Client(),  # type: ignore[arg-type]
+        lease=lease,
+        heartbeat_interval_seconds=1.0,
+    )
+
+    with pytest.raises(GpuBrokerClientError) as error:
+        managed.confirm_current()
+
+    assert error.value.code == "gpu_lease_lost"
+    assert managed.connectivity_status == "lost"
+
+
+def test_managed_confirmation_and_close_are_linearized_when_confirmation_wins() -> None:
+    confirmation_entered = threading.Event()
+    allow_confirmation = threading.Event()
+    release_called = threading.Event()
+    outcomes: list[str] = []
+    lease = GpuLease(
+        lease_id="lease-1",
+        fencing_token=1,
+        broker_instance_id="broker-1",
+        kind="execution",
+        placement="any",
+        component="md",
+        environment="dev",
+        client_id="md-dev",
+        gpu_index=1,
+        gpu_uuid="GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+        memory_mib=8192,
+        thread_percent=50,
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        request_id="md:dev:test",
+    )
+
+    class Client:
+        def heartbeat(self, _lease):
+            confirmation_entered.set()
+            assert allow_confirmation.wait(2.0)
+            outcomes.append("confirmed")
+            return lease
+
+        def release(self, _lease):
+            outcomes.append("released")
+            release_called.set()
+
+    managed = ManagedGpuLease(
+        client=Client(),  # type: ignore[arg-type]
+        lease=lease,
+        heartbeat_interval_seconds=1.0,
+    )
+    confirm_thread = threading.Thread(target=managed.confirm_current)
+    close_thread = threading.Thread(target=managed.close)
+    confirm_thread.start()
+    assert confirmation_entered.wait(2.0)
+    close_thread.start()
+    assert not release_called.wait(0.05)
+    allow_confirmation.set()
+    confirm_thread.join(2.0)
+    close_thread.join(2.0)
+
+    assert not confirm_thread.is_alive()
+    assert not close_thread.is_alive()
+    assert outcomes == ["confirmed", "released"]
+
+
+def test_managed_confirmation_and_close_are_linearized_when_close_wins() -> None:
+    release_entered = threading.Event()
+    allow_release = threading.Event()
+    heartbeat_calls = 0
+    confirmation_error: list[GpuBrokerClientError] = []
+    lease = GpuLease(
+        lease_id="lease-1",
+        fencing_token=1,
+        broker_instance_id="broker-1",
+        kind="execution",
+        placement="any",
+        component="md",
+        environment="dev",
+        client_id="md-dev",
+        gpu_index=1,
+        gpu_uuid="GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+        memory_mib=8192,
+        thread_percent=50,
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        request_id="md:dev:test",
+    )
+
+    class Client:
+        def heartbeat(self, _lease):
+            nonlocal heartbeat_calls
+            heartbeat_calls += 1
+            return lease
+
+        def release(self, _lease):
+            release_entered.set()
+            assert allow_release.wait(2.0)
+
+    managed = ManagedGpuLease(
+        client=Client(),  # type: ignore[arg-type]
+        lease=lease,
+        heartbeat_interval_seconds=1.0,
+    )
+
+    def confirm() -> None:
+        try:
+            managed.confirm_current()
+        except GpuBrokerClientError as exc:
+            confirmation_error.append(exc)
+
+    close_thread = threading.Thread(target=managed.close)
+    confirm_thread = threading.Thread(target=confirm)
+    close_thread.start()
+    assert release_entered.wait(2.0)
+    confirm_thread.start()
+    assert heartbeat_calls == 0
+    allow_release.set()
+    close_thread.join(2.0)
+    confirm_thread.join(2.0)
+
+    assert not close_thread.is_alive()
+    assert not confirm_thread.is_alive()
+    assert heartbeat_calls == 0
+    assert [error.code for error in confirmation_error] == ["gpu_lease_lost"]
+
+
 def test_managed_lease_abandons_without_release_when_mps_prepare_fails() -> None:
     class Client:
         released = False
