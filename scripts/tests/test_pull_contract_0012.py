@@ -358,6 +358,11 @@ def _external_database_audit_binding(
     helper_path = (
         runtime / "config" / contract.pull.EXTERNAL_DATABASE_AUDIT_HELPER
     )
+    authority_rules_path = (
+        runtime
+        / "config"
+        / contract.pull.EXTERNAL_DATABASE_MEDIA_AUTHORITY_RULES
+    )
     registry_path = (
         runtime
         / "config"
@@ -367,6 +372,11 @@ def _external_database_audit_binding(
         contract.pull.sha256_file(helper_path)
         if helper_path.exists()
         else "sha256:" + "8" * 64
+    )
+    authority_rules_sha256 = (
+        contract.pull.sha256_file(authority_rules_path)
+        if authority_rules_path.exists()
+        else "sha256:" + "4" * 64
     )
     registry_sha256 = (
         contract.pull.sha256_file(registry_path)
@@ -668,15 +678,18 @@ def _external_database_audit_binding(
 
     media_ids = [record["media_id"] for record in media]
     snapshot = {
-        "schema_version": 3,
+        "schema_version": 4,
         "inventory_complete": True,
         "writable_target": {
             "stack": "production",
             "database": "nexpoly",
         },
         "media_registry": {
-            "schema_version": 3,
-            "sha256": registry_sha256,
+            "schema_version": 4,
+            "media_authority_rules_sha256": (
+                authority_rules_sha256
+            ),
+            "runtime_registry_sha256": registry_sha256,
             "discovery_boundary_sha256": "sha256:" + "e" * 64,
             "discovery_state_sha256_before": "sha256:" + "f" * 64,
             "discovery_state_sha256_after": "sha256:" + "f" * 64,
@@ -702,16 +715,22 @@ def _external_database_audit_binding(
         "requires_0014": False,
     }
     binding: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "helper": {
             "path": str(helper_path),
             "sha256": helper_sha256,
             "mode": "0700",
         },
+        "authority_rules": {
+            "path": str(authority_rules_path),
+            "sha256": authority_rules_sha256,
+            "mode": "0600",
+        },
         "registry": {
             "path": str(registry_path),
             "sha256": registry_sha256,
             "mode": "0600",
+            "authority_rules_sha256": authority_rules_sha256,
         },
         "expected_users": {
             "nexpoly_dev": "nexpoly_dev_auditor",
@@ -1750,6 +1769,18 @@ class PullContract0012Tests(unittest.TestCase):
         )
 
     def _enable_external_database_binding(self) -> dict[str, object]:
+        authority_rules = (
+            self.runtime
+            / "config"
+            / contract.pull.EXTERNAL_DATABASE_MEDIA_AUTHORITY_RULES
+        )
+        _write_private_json(
+            authority_rules,
+            {
+                "schema_version": 1,
+                "fixture": "immutable-media-authority-rules",
+            },
+        )
         registry = (
             self.runtime
             / "config"
@@ -1758,7 +1789,10 @@ class PullContract0012Tests(unittest.TestCase):
         _write_private_json(
             registry,
             {
-                "schema_version": 3,
+                "schema_version": 4,
+                "media_authority_rules_sha256": (
+                    contract.pull.sha256_file(authority_rules)
+                ),
                 "discovery_boundary": {"fixture": "complete-local-scan"},
                 "audit_runtime": {"fixture": "pinned-pg16"},
                 "expected_media": [
@@ -1778,7 +1812,9 @@ class PullContract0012Tests(unittest.TestCase):
             "policy": {
                 "external_database_audit": {
                     **contract.pull._bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
-                    "media_registry_sha256": binding["registry"]["sha256"],
+                    "media_authority_rules_sha256": binding[
+                        "authority_rules"
+                    ]["sha256"],
                 }
             }
         }
@@ -2644,6 +2680,9 @@ class PullContract0012Tests(unittest.TestCase):
                 "identity_sha256": baseline["identity_sha256"],
                 "state_sha256": baseline["state_sha256"],
                 "helper_sha256": baseline["helper"]["sha256"],
+                "authority_rules_sha256": baseline[
+                    "authority_rules"
+                ]["sha256"],
                 "registry_sha256": baseline["registry"]["sha256"],
             }
             self.assertEqual(

@@ -341,12 +341,15 @@ MUTABLE_DATA_SERVICE = "nexpoly-mutable-audit"
 MUTABLE_DATA_HOST = "127.0.0.1"
 MUTABLE_DATA_PORT = 55432
 EXTERNAL_DATABASE_AUDIT_HELPER = "contract-0012-external-database-audit"
+EXTERNAL_DATABASE_MEDIA_AUTHORITY_RULES = (
+    "postgres-media-authority-rules.json"
+)
 EXTERNAL_DATABASE_MEDIA_REGISTRY = "postgres-media-registry.json"
 CONTRACT_0012_EXTERNAL_AUDIT_COMMAND = (
     "NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND"
 )
-CONTRACT_0012_MEDIA_REGISTRY_DIGEST = (
-    "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256"
+CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST = (
+    "NEXPOLY_CONTRACT_0012_MEDIA_AUTHORITY_RULES_SHA256"
 )
 CONTRACT_0012_EXTERNAL_AUDIT_USERS = {
     "nexpoly_dev": "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER",
@@ -1175,6 +1178,7 @@ PREFETCH_BINDING_FIELDS = {
 EXTERNAL_DATABASE_AUDIT_BINDING_FIELDS = {
     "schema_version",
     "helper",
+    "authority_rules",
     "registry",
     "expected_users",
     "snapshot",
@@ -1405,30 +1409,40 @@ def validate_external_database_audit_binding(
     if (
         not isinstance(document, dict)
         or set(document) != EXTERNAL_DATABASE_AUDIT_BINDING_FIELDS
-        or document.get("schema_version") != 1
+        or document.get("schema_version") != 2
     ):
         raise PullDeployError(
             "external database audit binding has an invalid shape"
         )
     helper = document.get("helper")
+    authority_rules = document.get("authority_rules")
     registry = document.get("registry")
-    for record, filename, mode, label in (
+    for record, filename, mode, fields, label in (
         (
             helper,
             EXTERNAL_DATABASE_AUDIT_HELPER,
             "0700",
+            {"path", "sha256", "mode"},
             "external database audit helper",
+        ),
+        (
+            authority_rules,
+            EXTERNAL_DATABASE_MEDIA_AUTHORITY_RULES,
+            "0600",
+            {"path", "sha256", "mode"},
+            "external database media authority rules",
         ),
         (
             registry,
             EXTERNAL_DATABASE_MEDIA_REGISTRY,
             "0600",
+            {"path", "sha256", "mode", "authority_rules_sha256"},
             "external database media registry",
         ),
     ):
         if (
             not isinstance(record, dict)
-            or set(record) != {"path", "sha256", "mode"}
+            or set(record) != fields
             or not isinstance(record.get("path"), str)
             or not Path(record["path"]).is_absolute()
             or Path(record["path"]).name != filename
@@ -1436,6 +1450,13 @@ def validate_external_database_audit_binding(
         ):
             raise PullDeployError(f"{label} binding is invalid")
         require_digest(record.get("sha256"), f"{label} digest")
+    if (
+        registry.get("authority_rules_sha256")
+        != authority_rules.get("sha256")
+    ):
+        raise PullDeployError(
+            "external database media registry belongs to other authority rules"
+        )
     expected_users = document.get("expected_users")
     if (
         not isinstance(expected_users, dict)
@@ -1451,7 +1472,8 @@ def validate_external_database_audit_binding(
         snapshot = _site_helper_contracts.validate_external_database_audit(
             document.get("snapshot"),
             expected_users=expected_users,
-            expected_media_registry_digest=registry["sha256"],
+            expected_media_authority_rules_digest=authority_rules["sha256"],
+            expected_runtime_registry_digest=registry["sha256"],
         )
     except Exception as exc:
         raise PullDeployError(
@@ -1474,7 +1496,7 @@ def validate_external_database_audit_binding(
     if expected_policy is not None:
         required = {
             **_bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
-            "media_registry_sha256": registry["sha256"],
+            "media_authority_rules_sha256": authority_rules["sha256"],
         }
         if expected_policy != required:
             raise PullDeployError(
@@ -1484,7 +1506,15 @@ def validate_external_database_audit_binding(
             snapshot.get("schema_version")
             != expected_policy["evidence_schema_version"]
             or snapshot["media_registry"].get("schema_version")
-            != expected_policy["registry_schema_version"]
+            != expected_policy["runtime_registry_schema_version"]
+            or snapshot["media_registry"].get(
+                "media_authority_rules_sha256"
+            )
+            != authority_rules["sha256"]
+            or snapshot["media_registry"].get(
+                "runtime_registry_sha256"
+            )
+            != registry["sha256"]
         ):
             raise PullDeployError(
                 "external database audit schema differs from F policy"
@@ -2128,12 +2158,16 @@ def build_external_database_contract_pair(
     before = validate_external_database_audit_binding(before_binding)
     operation_id = require_operation_id(operation_id)
     expected_users = before["expected_users"]
-    registry_sha256 = before["registry"]["sha256"]
+    authority_rules_sha256 = before["authority_rules"]["sha256"]
+    runtime_registry_sha256 = before["registry"]["sha256"]
     try:
         after = _site_helper_contracts.validate_external_database_audit(
             after_snapshot,
             expected_users=expected_users,
-            expected_media_registry_digest=registry_sha256,
+            expected_media_authority_rules_digest=(
+                authority_rules_sha256
+            ),
+            expected_runtime_registry_digest=runtime_registry_sha256,
         )
     except Exception as exc:
         raise PullDeployError(
@@ -2349,8 +2383,9 @@ def external_database_contract_after_binding(
         before_binding=before,
     )
     binding: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "helper": before["helper"],
+        "authority_rules": before["authority_rules"],
         "registry": before["registry"],
         "expected_users": before["expected_users"],
         "snapshot": validated["after_snapshot"],
@@ -5581,9 +5616,9 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             != document["release_input"]["asset_manifest_digest"]
             or bridge["target"]["datasets_on_asset_change"]
             != document["release_input"]["datasets_on_asset_change"]
-            or external_database_audit["registry"]["sha256"]
+            or external_database_audit["authority_rules"]["sha256"]
             != bridge["policy"]["external_database_audit"][
-                "media_registry_sha256"
+                "media_authority_rules_sha256"
             ]
         ):
             raise PullDeployError(
@@ -9710,6 +9745,9 @@ class PullDeployController:
 
         values = self.production_deploy_values(check_free_space=False)
         expected_helper = self.config_dir / EXTERNAL_DATABASE_AUDIT_HELPER
+        expected_authority_rules = (
+            self.config_dir / EXTERNAL_DATABASE_MEDIA_AUTHORITY_RULES
+        )
         expected_registry = (
             self.config_dir / EXTERNAL_DATABASE_MEDIA_REGISTRY
         )
@@ -9729,18 +9767,26 @@ class PullDeployController:
             raise PullDeployError(
                 "external database audit helper is not executable source"
             )
-        _registry_payload, registry_sha256 = private_regular_file(
-            expected_registry,
+        _authority_payload, authority_rules_sha256 = private_regular_file(
+            expected_authority_rules,
             mode=0o600,
             maximum_bytes=4 * 1024 * 1024,
         )
-        configured_registry = require_digest(
-            values.get(CONTRACT_0012_MEDIA_REGISTRY_DIGEST),
-            "configured external media registry",
+        configured_authority_rules = require_digest(
+            values.get(CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST),
+            "configured external media authority rules",
         )
-        if registry_sha256 != configured_registry:
+        policy_authority_rules = require_digest(
+            policy.get("media_authority_rules_sha256"),
+            "policy external media authority rules",
+        )
+        if (
+            authority_rules_sha256 != configured_authority_rules
+            or authority_rules_sha256 != policy_authority_rules
+        ):
             raise PullDeployError(
-                "external database media registry differs from deploy.env"
+                "external database media authority rules differ from "
+                "deploy.env or F policy"
             )
         expected_users: dict[str, str] = {}
         for stack, key in CONTRACT_0012_EXTERNAL_AUDIT_USERS.items():
@@ -9756,7 +9802,9 @@ class PullDeployController:
         environment = self.control_environment()
         environment.update(
             {
-                CONTRACT_0012_MEDIA_REGISTRY_DIGEST: registry_sha256,
+                CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST: (
+                    authority_rules_sha256
+                ),
                 **{
                     key: expected_users[stack]
                     for stack, key in CONTRACT_0012_EXTERNAL_AUDIT_USERS.items()
@@ -9776,6 +9824,13 @@ class PullDeployController:
             mode=0o700,
             maximum_bytes=4 * 1024 * 1024,
         )
+        _authority_after, authority_rules_after_sha256 = (
+            private_regular_file(
+                expected_authority_rules,
+                mode=0o600,
+                maximum_bytes=4 * 1024 * 1024,
+            )
+        )
         _registry_after, registry_after_sha256 = private_regular_file(
             expected_registry,
             mode=0o600,
@@ -9783,7 +9838,7 @@ class PullDeployController:
         )
         if (
             helper_after_sha256 != helper_sha256
-            or registry_after_sha256 != registry_sha256
+            or authority_rules_after_sha256 != authority_rules_sha256
         ):
             raise PullDeployError(
                 "external database audit authority changed while executing"
@@ -9796,7 +9851,10 @@ class PullDeployController:
             snapshot = _site_helper_contracts.validate_external_database_audit(
                 snapshot,
                 expected_users=expected_users,
-                expected_media_registry_digest=registry_sha256,
+                expected_media_authority_rules_digest=(
+                    authority_rules_sha256
+                ),
+                expected_runtime_registry_digest=registry_after_sha256,
             )
         except Exception as exc:
             raise PullDeployError(
@@ -9808,16 +9866,22 @@ class PullDeployController:
             completed_at=completed_at,
         )
         binding: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "helper": {
                 "path": str(expected_helper),
                 "sha256": helper_sha256,
                 "mode": "0700",
             },
+            "authority_rules": {
+                "path": str(expected_authority_rules),
+                "sha256": authority_rules_sha256,
+                "mode": "0600",
+            },
             "registry": {
                 "path": str(expected_registry),
-                "sha256": registry_sha256,
+                "sha256": registry_after_sha256,
                 "mode": "0600",
+                "authority_rules_sha256": authority_rules_sha256,
             },
             "expected_users": expected_users,
             "snapshot": snapshot,
@@ -9873,7 +9937,13 @@ class PullDeployController:
             expected_policy=policy,
         )
         observed = self.external_database_audit_evidence(policy)
-        for field in ("helper", "registry", "expected_users", "state_sha256"):
+        for field in (
+            "helper",
+            "authority_rules",
+            "registry",
+            "expected_users",
+            "state_sha256",
+        ):
             if observed[field] != expected[field]:
                 raise PullDeployError(
                     "external database media changed after its sealed transition"
@@ -10208,7 +10278,9 @@ class PullDeployController:
         )
         policy = {
             **_bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
-            "media_registry_sha256": base["registry"]["sha256"],
+            "media_authority_rules_sha256": base[
+                "authority_rules"
+            ]["sha256"],
         }
         observed = self.external_database_audit_evidence(policy)
         pair = build_external_database_final_pair(
@@ -11488,6 +11560,7 @@ class PullDeployController:
             )
         except Exception as exc:
             raise PullDeployError("bridge authority policy is invalid") from exc
+        self._verify_bridge_media_authority_rules(authority_sha, policy)
         target_sha = policy["target_sha"]
         if str(self._git("cat-file", "-t", target_sha).stdout).strip() != "commit":
             raise PullDeployError("bridge target object is not a commit")
@@ -11686,6 +11759,10 @@ class PullDeployController:
             raise PullDeployError(
                 "prefetched F policy is invalid"
             ) from exc
+        self._verify_bridge_media_authority_rules(
+            authority["sha"],
+            policy,
+        )
         if (
             policy != ready["policy"]
             or canonical_json_digest(policy) != ready["policy_sha256"]
@@ -11779,6 +11856,46 @@ class PullDeployController:
     def _git_show(self, target_sha: str, relative: str) -> bytes:
         result = self._git("show", f"{target_sha}:{relative}")
         return str(result.stdout).encode("utf-8")
+
+    def _verify_bridge_media_authority_rules(
+        self,
+        authority_sha: str,
+        policy: Mapping[str, Any],
+    ) -> str:
+        """Bind runtime authority to the immutable rules in exact F."""
+
+        authority_sha = require_sha(
+            authority_sha,
+            "bridge media authority rules source",
+        )
+        external_policy = policy.get("external_database_audit")
+        if not isinstance(external_policy, dict):
+            raise PullDeployError(
+                "bridge media authority rules policy is unavailable"
+            )
+        expected = require_digest(
+            external_policy.get("media_authority_rules_sha256"),
+            "bridge media authority rules",
+        )
+        try:
+            payload = self._git_show(
+                authority_sha,
+                _bridge_core.MEDIA_AUTHORITY_RULES_RELATIVE_PATH,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "bridge media authority rules are unavailable from exact F"
+            ) from exc
+        if not payload or len(payload) > 4 * 1024 * 1024:
+            raise PullDeployError(
+                "bridge media authority rules payload is invalid"
+            )
+        observed = sha256_bytes(payload)
+        if observed != expected:
+            raise PullDeployError(
+                "bridge media authority rules differ from F policy"
+            )
+        return observed
 
     def _github_token(self) -> str:
         path = self.config_dir / "github-api-token"
@@ -15731,6 +15848,9 @@ class PullDeployController:
             "identity_sha256": bridge_baseline["identity_sha256"],
             "state_sha256": bridge_baseline["state_sha256"],
             "helper_sha256": bridge_baseline["helper"]["sha256"],
+            "authority_rules_sha256": bridge_baseline[
+                "authority_rules"
+            ]["sha256"],
             "registry_sha256": bridge_baseline["registry"]["sha256"],
         }
         expected_previous = self._legacy_contract_state_projection(
@@ -15839,7 +15959,10 @@ class PullDeployController:
                     _site_helper_contracts.validate_external_database_audit(
                         snapshot,
                         expected_users=bridge_baseline["expected_users"],
-                        expected_media_registry_digest=bridge_baseline[
+                        expected_media_authority_rules_digest=bridge_baseline[
+                            "authority_rules"
+                        ]["sha256"],
+                        expected_runtime_registry_digest=bridge_baseline[
                             "registry"
                         ]["sha256"],
                     )
@@ -17422,7 +17545,9 @@ class PullDeployController:
                 expected,
                 policy={
                     **_bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
-                    "media_registry_sha256": active["registry"]["sha256"],
+                    "media_authority_rules_sha256": active[
+                        "authority_rules"
+                    ]["sha256"],
                 },
             )
         if include_mutable:
@@ -19986,9 +20111,9 @@ class PullDeployController:
                     expected,
                     policy={
                         **_bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
-                        "media_registry_sha256": active["registry"][
-                            "sha256"
-                        ],
+                        "media_authority_rules_sha256": active[
+                            "authority_rules"
+                        ]["sha256"],
                     },
                 )
         return validated

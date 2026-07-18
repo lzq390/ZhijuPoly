@@ -215,6 +215,7 @@ def _external_database_authority_for_binding(
         "identity_sha256": baseline["identity_sha256"],
         "state_sha256": baseline["state_sha256"],
         "helper_sha256": baseline["helper"]["sha256"],
+        "authority_rules_sha256": baseline["authority_rules"]["sha256"],
         "registry_sha256": baseline["registry"]["sha256"],
     }
 

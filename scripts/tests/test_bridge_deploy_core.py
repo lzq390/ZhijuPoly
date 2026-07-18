@@ -36,7 +36,7 @@ AUTHORITY_RECORDS = [*TARGET_RECORDS, BRIDGE.FINAL_MIGRATION_RECORD]
 
 def policy() -> dict[str, object]:
     document: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": BRIDGE.POLICY_SCHEMA_VERSION,
         "mode": BRIDGE.BRIDGE_MODE,
         "authority_ref": BRIDGE.AUTHORITY_REF,
         "target_sha": TARGET_SHA,
@@ -57,7 +57,7 @@ def policy() -> dict[str, object]:
         ),
         "external_database_audit": {
             **BRIDGE.EXTERNAL_DATABASE_AUDIT_POLICY,
-            "media_registry_sha256": "sha256:" + "5" * 64,
+            "media_authority_rules_sha256": "sha256:" + "5" * 64,
         },
         "required_ci_jobs": sorted(BRIDGE.REQUIRED_CI_JOBS),
         "policy_id": None,
@@ -68,30 +68,42 @@ def policy() -> dict[str, object]:
 
 
 class BridgePolicyTests(unittest.TestCase):
-    def test_policy_requires_one_exact_schema_bound_media_registry(self) -> None:
+    def test_policy_pins_authority_but_not_runtime_registry(self) -> None:
         document = policy()
         self.assertEqual(
             document["external_database_audit"],
             {
-                "schema_version": 1,
-                "evidence_schema_version": 3,
-                "registry_schema_version": 3,
-                "require_exact_registry_digest": True,
+                "schema_version": 2,
+                "evidence_schema_version": 4,
+                "authority_rules_schema_version": 1,
+                "runtime_registry_schema_version": 4,
+                "require_exact_authority_digest": True,
+                "require_complete_discovery": True,
                 "require_fresh_snapshot": True,
-                "media_registry_sha256": "sha256:" + "5" * 64,
+                "media_authority_rules_sha256": "sha256:" + "5" * 64,
             },
+        )
+        self.assertNotIn(
+            "runtime_registry_sha256",
+            document["external_database_audit"],
         )
         for label, mutate in (
             (
                 "floating digest",
                 lambda value: value["external_database_audit"].__setitem__(
-                    "media_registry_sha256", "latest"
+                    "media_authority_rules_sha256", "latest"
                 ),
             ),
             (
                 "optional audit",
                 lambda value: value["external_database_audit"].__setitem__(
                     "require_fresh_snapshot", False
+                ),
+            ),
+            (
+                "caller-selected runtime registry",
+                lambda value: value["external_database_audit"].__setitem__(
+                    "runtime_registry_sha256", "sha256:" + "6" * 64
                 ),
             ),
         ):

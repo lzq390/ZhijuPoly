@@ -480,6 +480,11 @@ def external_database_audit_binding(
     helper_path = (
         runtime / "config" / CONTROLLER.EXTERNAL_DATABASE_AUDIT_HELPER
     )
+    authority_rules_path = (
+        runtime
+        / "config"
+        / CONTROLLER.EXTERNAL_DATABASE_MEDIA_AUTHORITY_RULES
+    )
     registry_path = (
         runtime
         / "config"
@@ -489,6 +494,11 @@ def external_database_audit_binding(
         CONTROLLER.sha256_file(helper_path)
         if helper_path.exists()
         else "sha256:" + "8" * 64
+    )
+    authority_rules_sha256 = (
+        CONTROLLER.sha256_file(authority_rules_path)
+        if authority_rules_path.exists()
+        else "sha256:" + "4" * 64
     )
     registry_sha256 = (
         CONTROLLER.sha256_file(registry_path)
@@ -525,6 +535,15 @@ def external_database_audit_binding(
         dev_user="nexpoly_dev_auditor",
         health_user="nexpoly_health_auditor",
     )
+    snapshot["schema_version"] = 4
+    snapshot["media_registry"]["schema_version"] = 4
+    snapshot["media_registry"].pop("sha256", None)
+    snapshot["media_registry"]["media_authority_rules_sha256"] = (
+        authority_rules_sha256
+    )
+    snapshot["media_registry"]["runtime_registry_sha256"] = (
+        registry_sha256
+    )
     _rewrite_v3_media_ledger(
         snapshot,
         database="nexpoly_md_health_opt",
@@ -533,16 +552,22 @@ def external_database_audit_binding(
     )
     _reseal_v3_media_runtime(snapshot, captured_at=captured_at)
     binding: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "helper": {
             "path": str(helper_path),
             "sha256": helper_sha256,
             "mode": "0700",
         },
+        "authority_rules": {
+            "path": str(authority_rules_path),
+            "sha256": authority_rules_sha256,
+            "mode": "0600",
+        },
         "registry": {
             "path": str(registry_path),
             "sha256": registry_sha256,
             "mode": "0600",
+            "authority_rules_sha256": authority_rules_sha256,
         },
         "expected_users": {
             "nexpoly_dev": "nexpoly_dev_auditor",
@@ -1617,6 +1642,12 @@ class PullDeployTestCase(unittest.TestCase):
         registry_fixture_sha256 = CONTROLLER.sha256_bytes(
             registry_fixture_payload.encode("utf-8")
         )
+        authority_rules_fixture_payload = (
+            '{"schema_version":1,"fixture":"immutable-authority-rules"}\n'
+        )
+        authority_rules_fixture_sha256 = CONTROLLER.sha256_bytes(
+            authority_rules_fixture_payload.encode("utf-8")
+        )
         for name, content in (
             ("git-deploy-key", "fixture-key\n"),
             ("known_hosts", "github.com ssh-ed25519 fixture\n"),
@@ -1651,8 +1682,8 @@ class PullDeployTestCase(unittest.TestCase):
                         "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER=nexpoly_dev_auditor",
                         "NEXPOLY_CONTRACT_0012_MD_HEALTH_AUDIT_USER=nexpoly_health_auditor",
                         (
-                            "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256="
-                            + registry_fixture_sha256
+                            "NEXPOLY_CONTRACT_0012_MEDIA_AUTHORITY_RULES_SHA256="
+                            + authority_rules_fixture_sha256
                         ),
                         f"NEXPOLY_WORKER_BASE_PYTHON={sys.executable}",
                         "",
@@ -1681,6 +1712,12 @@ class PullDeployTestCase(unittest.TestCase):
             hook = self.runtime / "config" / name
             hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             os.chmod(hook, 0o700)
+        write_private(
+            self.runtime
+            / "config"
+            / CONTROLLER.EXTERNAL_DATABASE_MEDIA_AUTHORITY_RULES,
+            authority_rules_fixture_payload,
+        )
         write_private(
             self.runtime
             / "config"
@@ -1744,6 +1781,52 @@ class PullDeployTestCase(unittest.TestCase):
 
 
 class RepositoryAndEvidenceTests(PullDeployTestCase):
+    def test_bridge_media_authority_rules_are_exact_f_object_bytes(
+        self,
+    ) -> None:
+        controller = self.controller()
+        payload = b'{"schema_version":1,"rules":"fixture"}\n'
+        policy = {
+            "external_database_audit": {
+                **CONTROLLER._bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
+                "media_authority_rules_sha256": (
+                    CONTROLLER.sha256_bytes(payload)
+                ),
+            }
+        }
+        with mock.patch.object(
+            controller,
+            "_git_show",
+            return_value=payload,
+        ) as git_show:
+            self.assertEqual(
+                controller._verify_bridge_media_authority_rules(
+                    TARGET_SHA,
+                    policy,
+                ),
+                CONTROLLER.sha256_bytes(payload),
+            )
+        git_show.assert_called_once_with(
+            TARGET_SHA,
+            CONTROLLER._bridge_core.MEDIA_AUTHORITY_RULES_RELATIVE_PATH,
+        )
+
+        with (
+            mock.patch.object(
+                controller,
+                "_git_show",
+                return_value=b'{"schema_version":1,"rules":"drift"}\n',
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "differ from F policy",
+            ),
+        ):
+            controller._verify_bridge_media_authority_rules(
+                TARGET_SHA,
+                policy,
+            )
+
     def test_trusted_git_uses_fixed_binary_despite_shadowed_path(self) -> None:
         controller = self.controller()
 
@@ -2427,7 +2510,9 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             controller.runtime_root
         )
         policy = {
-            "schema_version": 1,
+            "schema_version": (
+                CONTROLLER._bridge_core.POLICY_SCHEMA_VERSION
+            ),
             "mode": CONTROLLER._bridge_core.BRIDGE_MODE,
             "authority_ref": CONTROLLER._bridge_core.AUTHORITY_REF,
             "target_sha": TARGET_SHA,
@@ -2455,8 +2540,8 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             ),
             "external_database_audit": {
                 **CONTROLLER._bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
-                "media_registry_sha256": external_database_audit[
-                    "registry"
+                "media_authority_rules_sha256": external_database_audit[
+                    "authority_rules"
                 ]["sha256"],
             },
             "required_ci_jobs": required_jobs,
@@ -3255,7 +3340,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 descriptor_sha256=descriptor_sha256,
             )
 
-    def test_bridge_prepare_captures_exact_private_registry_and_fresh_audit(
+    def test_bridge_prepare_binds_static_rules_dynamic_registry_and_fresh_audit(
         self,
     ) -> None:
         controller = self.controller()
@@ -3275,8 +3360,8 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             CONTROLLER.CONTRACT_0012_EXTERNAL_AUDIT_COMMAND: expected[
                 "helper"
             ]["path"],
-            CONTROLLER.CONTRACT_0012_MEDIA_REGISTRY_DIGEST: expected[
-                "registry"
+            CONTROLLER.CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST: expected[
+                "authority_rules"
             ]["sha256"],
             CONTROLLER.CONTRACT_0012_EXTERNAL_AUDIT_USERS[
                 "nexpoly_dev"
@@ -3287,7 +3372,9 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         }
         policy = {
             **CONTROLLER._bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
-            "media_registry_sha256": expected["registry"]["sha256"],
+            "media_authority_rules_sha256": expected[
+                "authority_rules"
+            ]["sha256"],
         }
         with mock.patch.object(
             controller,
@@ -3302,6 +3389,20 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             )
         self.assertEqual(observed, expected)
         runner.run.assert_called_once()
+        self.assertEqual(
+            observed["registry"]["authority_rules_sha256"],
+            observed["authority_rules"]["sha256"],
+        )
+        self.assertEqual(
+            observed["snapshot"]["media_registry"][
+                "runtime_registry_sha256"
+            ],
+            observed["registry"]["sha256"],
+        )
+        self.assertNotIn(
+            "runtime_registry_sha256",
+            policy,
+        )
 
         stale = external_database_audit_binding(
             controller.runtime_root,
@@ -3357,22 +3458,90 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 "production_deploy_values",
                 return_value={
                     **values,
-                    CONTROLLER.CONTRACT_0012_MEDIA_REGISTRY_DIGEST: (
+                    CONTROLLER.CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST: (
                         "sha256:" + "f" * 64
                     ),
                 },
             ),
             self.assertRaisesRegex(
                 CONTROLLER.PullDeployError,
-                "differs from deploy.env",
+                "differ from deploy.env or F policy",
             ),
         ):
             CONTROLLER.PullDeployController.external_database_audit_evidence(
                 controller,
                 {
                     **policy,
-                    "media_registry_sha256": "sha256:" + "f" * 64,
+                    "media_authority_rules_sha256": (
+                        "sha256:" + "f" * 64
+                    ),
                 },
+            )
+
+    def test_external_database_dual_digests_are_policy_and_cas_bound(
+        self,
+    ) -> None:
+        controller = self.controller()
+        expected = external_database_audit_binding(
+            controller.runtime_root
+        )
+        policy = {
+            **CONTROLLER._bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
+            "media_authority_rules_sha256": expected[
+                "authority_rules"
+            ]["sha256"],
+        }
+        CONTROLLER.validate_external_database_audit_binding(
+            expected,
+            expected_policy=policy,
+        )
+
+        changed_authority = json.loads(json.dumps(expected))
+        replacement_authority = "sha256:" + "e" * 64
+        changed_authority["authority_rules"]["sha256"] = (
+            replacement_authority
+        )
+        changed_authority["registry"]["authority_rules_sha256"] = (
+            replacement_authority
+        )
+        changed_authority["snapshot"]["media_registry"][
+            "media_authority_rules_sha256"
+        ] = replacement_authority
+        reseal_external_database_audit_binding(changed_authority)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "differs from F policy",
+        ):
+            CONTROLLER.validate_external_database_audit_binding(
+                changed_authority,
+                expected_policy=policy,
+            )
+
+        changed_registry = json.loads(json.dumps(expected))
+        replacement_registry = "sha256:" + "d" * 64
+        changed_registry["registry"]["sha256"] = replacement_registry
+        changed_registry["snapshot"]["media_registry"][
+            "runtime_registry_sha256"
+        ] = replacement_registry
+        reseal_external_database_audit_binding(changed_registry)
+        CONTROLLER.validate_external_database_audit_binding(
+            changed_registry,
+            expected_policy=policy,
+        )
+        with (
+            mock.patch.object(
+                controller,
+                "external_database_audit_evidence",
+                return_value=changed_registry,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "media changed",
+            ),
+        ):
+            controller._revalidate_external_database_binding(
+                expected,
+                policy=policy,
             )
 
     def test_bridge_ledger_registry_is_consumed_by_runtime_validation(self) -> None:

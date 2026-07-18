@@ -20,12 +20,15 @@ import stat
 from typing import Any
 
 
-POLICY_SCHEMA_VERSION = 1
-BRIDGE_DESCRIPTOR_SCHEMA_VERSION = 1
+POLICY_SCHEMA_VERSION = 2
+BRIDGE_DESCRIPTOR_SCHEMA_VERSION = 3
 TOKEN_SCHEMA_VERSION = 2
 BRIDGE_MODE = "first-governed-takeover"
 AUTHORITY_REF = "refs/heads/main"
 POLICY_RELATIVE_PATH = "ops/config/production-bridge-policy.json"
+MEDIA_AUTHORITY_RULES_RELATIVE_PATH = (
+    "ops/config/postgres-media-authority-rules.json"
+)
 TOKEN_RELATIVE_PATH = Path("state/bridge-takeover.json")
 TOKEN_RETIREMENT_DIRECTORY = Path("bridge-token-retirements")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -48,10 +51,12 @@ REQUIRED_CI_JOBS = {
 REQUIRED_LEDGER_ORDER = ("pre-0012", "post-0012", "post-0013")
 REQUIRED_LEDGER_NAMES = set(REQUIRED_LEDGER_ORDER)
 EXTERNAL_DATABASE_AUDIT_POLICY = {
-    "schema_version": 1,
-    "evidence_schema_version": 3,
-    "registry_schema_version": 3,
-    "require_exact_registry_digest": True,
+    "schema_version": 2,
+    "evidence_schema_version": 4,
+    "authority_rules_schema_version": 1,
+    "runtime_registry_schema_version": 4,
+    "require_exact_authority_digest": True,
+    "require_complete_discovery": True,
     "require_fresh_snapshot": True,
 }
 CONTRACT_MIGRATION = {
@@ -411,7 +416,10 @@ def validate_policy(document: object) -> dict[str, Any]:
     if (
         not isinstance(external_database_audit, dict)
         or set(external_database_audit)
-        != {*EXTERNAL_DATABASE_AUDIT_POLICY, "media_registry_sha256"}
+        != {
+            *EXTERNAL_DATABASE_AUDIT_POLICY,
+            "media_authority_rules_sha256",
+        }
         or any(
             external_database_audit.get(key) != value
             for key, value in EXTERNAL_DATABASE_AUDIT_POLICY.items()
@@ -420,9 +428,9 @@ def validate_policy(document: object) -> dict[str, Any]:
         raise BridgeDeployError(
             "bridge external database audit policy is invalid"
         )
-    media_registry_sha256 = _require_digest(
-        external_database_audit.get("media_registry_sha256"),
-        "bridge external database media registry",
+    media_authority_rules_sha256 = _require_digest(
+        external_database_audit.get("media_authority_rules_sha256"),
+        "bridge external database media authority rules",
     )
     jobs = document.get("required_ci_jobs")
     if (
@@ -446,7 +454,9 @@ def validate_policy(document: object) -> dict[str, Any]:
         "accepted_migration_ledgers": normalized_ledgers,
         "external_database_audit": {
             **EXTERNAL_DATABASE_AUDIT_POLICY,
-            "media_registry_sha256": media_registry_sha256,
+            "media_authority_rules_sha256": (
+                media_authority_rules_sha256
+            ),
         },
         "required_ci_jobs": list(jobs),
         "policy_id": document.get("policy_id"),
