@@ -10,6 +10,7 @@ __pycache__/
 .env
 .env.ai
 .env.monomer-md-worker
+.env.monomer-dft.dev
 backend/.env
 /.env.dev
 /.env.dev.ai
@@ -84,6 +85,10 @@ nexpoly-release-*.tar.gz
 !/backend/tests/test_md_demo.py
 !/backend/tests/test_migration_policy.py
 !/backend/tests/test_monomer_md.py
+!/backend/tests/test_monomer_dft_backend.py
+!/backend/tests/test_monomer_dft_repository_postgres.py
+!/backend/tests/fixtures/
+!/backend/tests/fixtures/monomer_dft_scientific_result_v1_legacy.json
 !/backend/tests/test_monomer_polymerization.py
 !/backend/tests/test_polytao.py
 !/backend/tests/test_smiles_standardization.py

@@ -1,0 +1,103 @@
+x-dft-backend-environment: &dft-backend-environment
+  STRUCTURED_DATA_BACKEND: postgres
+  APP_POSTGRES_DSN: postgresql://nexpoly_dft_dev:${NEXPOLY_DFT_POSTGRES_PASSWORD:-nexpoly_dft_dev}@postgres:5432/nexpoly_dft_dev
+  PI_REVERSE_BACKEND: postgres
+  PI_POSTGRES_DSN: postgresql://nexpoly_dft_dev:${NEXPOLY_DFT_POSTGRES_PASSWORD:-nexpoly_dft_dev}@postgres:5432/nexpoly_dft_dev
+  LAB_DATA_POSTGRES_DSN: postgresql://nexpoly_dft_dev:${NEXPOLY_DFT_POSTGRES_PASSWORD:-nexpoly_dft_dev}@postgres:5432/nexpoly_dft_dev
+  MODEL_ENABLED: "false"
+  OCSR_ENABLED: "false"
+  GEN_MODEL_ENABLED: "false"
+  POLYTAO_ENABLED: "false"
+  RETRO_MODEL_ENABLED: "false"
+  SMIPOLY_ENABLED: "false"
+  MONOMER_MD_SUBMIT_ENABLED: "false"
+  MONOMER_DFT_WORKER_BASE_URL: http://monomer-dft-worker
+  MONOMER_DFT_WORKER_UDS: /app/monomer-dft-worker/worker.sock
+  MONOMER_DFT_WORKER_TIMEOUT_SECONDS: "${MONOMER_DFT_WORKER_TIMEOUT_SECONDS:-15}"
+  MONOMER_DFT_SUBMIT_ENABLED: "true"
+  MONOMER_DFT_MAX_ACTIVE_JOBS: "9"
+  MONOMER_DFT_RECONCILE_INTERVAL_SECONDS: "${MONOMER_DFT_RECONCILE_INTERVAL_SECONDS:-1}"
+  MONOMER_DFT_ARTIFACT_RETENTION_DAYS: "${MONOMER_DFT_ARTIFACT_RETENTION_DAYS:-30}"
+  MONOMER_DFT_VALIDATION_CONCURRENCY: "${MONOMER_DFT_VALIDATION_CONCURRENCY:-2}"
+  MONOMER_DFT_DOWNLOAD_MAX_CONCURRENT: "${MONOMER_DFT_DOWNLOAD_MAX_CONCURRENT:-2}"
+  MONOMER_DFT_DOWNLOAD_SPOOL_ROOT: /app/.runtime/monomer-dft-download-spool
+  ALLOWED_ORIGINS: http://localhost:${NEXPOLY_DFT_FRONTEND_PORT:-25173},http://127.0.0.1:${NEXPOLY_DFT_FRONTEND_PORT:-25173}
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nexpoly_dft_dev
+      POSTGRES_PASSWORD: "${NEXPOLY_DFT_POSTGRES_PASSWORD:-nexpoly_dft_dev}"
+      POSTGRES_DB: nexpoly_dft_dev
+    ports:
+      - "127.0.0.1:${NEXPOLY_DFT_POSTGRES_PORT:-25532}:5432"
+    volumes:
+      - monomer_dft_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexpoly_dft_dev -d nexpoly_dft_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  migrate:
+    image: nexpoly-dft-dev-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    environment: *dft-backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "app.postgres_migrations", "--mode", "bootstrap"]
+
+  backend:
+    image: nexpoly-dft-dev-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment: *dft-backend-environment
+    volumes:
+      - type: bind
+        source: ./.runtime/monomer-dft-worker-socket
+        target: /app/monomer-dft-worker
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.runtime/monomer-dft-download-spool
+        target: /app/.runtime/monomer-dft-download-spool
+        bind:
+          create_host_path: false
+    ports:
+      - "127.0.0.1:${NEXPOLY_DFT_BACKEND_PORT:-28000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  frontend:
+    image: nexpoly-dft-dev-frontend:latest
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${NEXPOLY_DFT_FRONTEND_PORT:-25173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  monomer_dft_postgres_data:
