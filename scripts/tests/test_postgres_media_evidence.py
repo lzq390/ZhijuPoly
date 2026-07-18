@@ -121,7 +121,7 @@ def registry_document(
 ) -> dict[str, object]:
     return {
         "schema_version": 3,
-        "discovery_boundary": policy.document(),
+        "discovery_boundary": MEDIA.seal_discovery_boundary(policy),
         "audit_runtime": {
             "auditor_sha256": MEDIA._auditor_digest(),
             "pg_service_file_sha256": "sha256:" + "7" * 64,
@@ -178,6 +178,12 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
         self.config = self.root / "config"
         for path in (self.backup_a, self.backup_b, self.config):
             private_directory(path)
+        self.backup_a_identity = MEDIA.capture_backup_root_identity(
+            self.backup_a
+        )
+        self.backup_b_identity = MEDIA.capture_backup_root_identity(
+            self.backup_b
+        )
         self.policy = MEDIA.DiscoveryPolicy(
             backup_roots=(self.backup_a, self.backup_b)
         )
@@ -249,7 +255,10 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
             policy=self.policy,
             private_root=self.config,
         )
-        self.assertEqual(loaded.boundary, self.policy.document())
+        self.assertEqual(
+            loaded.boundary,
+            value["discovery_boundary"],
+        )
         self.assertEqual(
             [record.media_id for record in loaded.descriptors],
             sorted(record["media_id"] for record in value["expected_media"]),
@@ -261,6 +270,36 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
         with self.assertRaisesRegex(
             MEDIA.MediaEvidenceError,
             "narrowed or changed",
+        ):
+            MEDIA.load_registry(
+                self.registry,
+                policy=self.policy,
+                private_root=self.config,
+            )
+
+        missing_identity = copy.deepcopy(value)
+        missing_identity["discovery_boundary"].pop(
+            "backup_root_identities"
+        )
+        self.write_registry(missing_identity)
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "narrowed or changed",
+        ):
+            MEDIA.load_registry(
+                self.registry,
+                policy=self.policy,
+                private_root=self.config,
+            )
+
+        replaced_identity = copy.deepcopy(value)
+        replaced_identity["discovery_boundary"][
+            "backup_root_identities"
+        ][0]["inode"] += 1
+        self.write_registry(replaced_identity)
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "identity differs",
         ):
             MEDIA.load_registry(
                 self.registry,
@@ -495,6 +534,107 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
                 root=link,
             )
 
+    def test_sealed_backup_root_tolerates_shared_ancestors_only_by_inode(
+        self,
+    ) -> None:
+        shared = self.root / "shared"
+        private_directory(shared)
+        os.chmod(shared, 0o770)
+        sealed = shared / "sealed"
+        private_directory(sealed)
+        backup = sealed / "postgres.dump"
+        private_file(backup, b"PGDMP fixture")
+        authority = MEDIA.capture_backup_root_identity(sealed)
+
+        descriptor_fd = MEDIA.open_sealed_backup_regular(
+            backup,
+            root=sealed,
+            root_authority=authority,
+        )
+        try:
+            self.assertEqual(os.read(descriptor_fd, 64), b"PGDMP fixture")
+        finally:
+            os.close(descriptor_fd)
+
+        old_shared = self.root / "shared-old"
+        shared.rename(old_shared)
+        private_directory(shared)
+        os.chmod(shared, 0o770)
+        replacement = shared / "sealed"
+        private_directory(replacement)
+        private_file(replacement / "postgres.dump", b"replacement")
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "identity differs",
+        ):
+            MEDIA.open_sealed_backup_regular(
+                replacement / "postgres.dump",
+                root=replacement,
+                root_authority=authority,
+            )
+
+    def test_sealed_backup_root_rejects_symlink_and_survives_inflight_rename(
+        self,
+    ) -> None:
+        shared = self.root / "rename-shared"
+        private_directory(shared)
+        os.chmod(shared, 0o770)
+        sealed = shared / "sealed"
+        private_directory(sealed)
+        backup = sealed / "postgres.dump"
+        private_file(backup, b"original")
+        authority = MEDIA.capture_backup_root_identity(sealed)
+        moved = shared / "sealed-moved"
+        original_open = MEDIA._open_directory_without_symlinks
+        renamed = False
+
+        def open_then_rename(path: Path) -> int:
+            nonlocal renamed
+            descriptor_fd = original_open(path)
+            if path == sealed and not renamed:
+                sealed.rename(moved)
+                renamed = True
+            return descriptor_fd
+
+        with mock.patch.object(
+            MEDIA,
+            "_open_directory_without_symlinks",
+            side_effect=open_then_rename,
+        ):
+            descriptor_fd = MEDIA.open_sealed_backup_regular(
+                backup,
+                root=sealed,
+                root_authority=authority,
+            )
+        try:
+            self.assertEqual(os.read(descriptor_fd, 64), b"original")
+        finally:
+            os.close(descriptor_fd)
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "missing, replaced, or symlinked",
+        ):
+            MEDIA.open_sealed_backup_regular(
+                backup,
+                root=sealed,
+                root_authority=authority,
+            )
+
+        moved.rename(sealed)
+        outside = shared / "outside"
+        private_directory(outside)
+        sealed.rename(moved)
+        sealed.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "missing, replaced, or symlinked",
+        ):
+            MEDIA.open_sealed_backup_regular(
+                backup,
+                root=sealed,
+                root_authority=authority,
+            )
+
     def test_backup_discovery_accepts_only_private_approved_formats(self) -> None:
         custom = self.backup_a / "one.dump"
         private_file(custom, b"PGDMP" + b"\0" * 700)
@@ -507,10 +647,12 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
         first, first_scan = MEDIA._walk_backup_root(
             self.backup_a,
             self.policy,
+            root_authority=self.backup_a_identity,
         )
         second, second_scan = MEDIA._walk_backup_root(
             self.backup_b,
             self.policy,
+            root_authority=self.backup_b_identity,
         )
         self.assertEqual(first[0].backup_format, "postgres-custom-v1")
         by_id = {value.media_id: value for value in second}
@@ -526,7 +668,11 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
 
         (self.backup_a / "hostile.dump").symlink_to(custom)
         with self.assertRaises(OSError):
-            MEDIA._walk_backup_root(self.backup_a, self.policy)
+            MEDIA._walk_backup_root(
+                self.backup_a,
+                self.policy,
+                root_authority=self.backup_a_identity,
+            )
 
     def test_backup_roots_must_preexist_at_exact_private_mode(self) -> None:
         os.chmod(self.backup_a, 0o775)
@@ -534,7 +680,11 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
             MEDIA.MediaEvidenceError,
             rf"mode-0700 directory: {re.escape(str(self.backup_a))}",
         ):
-            MEDIA._walk_backup_root(self.backup_a, self.policy)
+            MEDIA._walk_backup_root(
+                self.backup_a,
+                self.policy,
+                root_authority=self.backup_a_identity,
+            )
         self.assertEqual(stat.S_IMODE(self.backup_a.stat().st_mode), 0o775)
 
         missing = self.root / "missing-approved-root"
@@ -543,7 +693,17 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
             MEDIA.MediaEvidenceError,
             rf"mode-0700 directory: {re.escape(str(missing))}",
         ):
-            MEDIA._walk_backup_root(missing, missing_policy)
+            MEDIA._walk_backup_root(
+                missing,
+                missing_policy,
+                root_authority={
+                    "path": str(missing),
+                    "device": 0,
+                    "inode": 1,
+                    "uid": os.geteuid(),
+                    "mode": 0o700,
+                },
+            )
         self.assertFalse(missing.exists())
 
 
@@ -1113,13 +1273,24 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
             signature="non-postgres",
             postgres_major=None,
         )
+        policy = MEDIA.DiscoveryPolicy(backup_roots=(self.root,))
+        registry = MEDIA.Registry(
+            payload=self.registry.payload,
+            digest=self.registry.digest,
+            audit_image=self.registry.audit_image,
+            auditor_sha256=self.registry.auditor_sha256,
+            service_file_sha256=self.registry.service_file_sha256,
+            descriptors=(),
+            required_online_databases=(),
+            boundary=MEDIA.seal_discovery_boundary(policy),
+        )
         record = MEDIA._record_only_medium(
             MEDIA.CommandRunner(),
-            self.registry,
+            registry,
             current,
             source,
             self.workspace,
-            policy=MEDIA.DiscoveryPolicy(backup_roots=(self.root,)),
+            policy=policy,
             operation=self.operation,
             resource_prefix="medium-record",
             auditor_sha256="sha256:" + "6" * 64,
@@ -1233,13 +1404,24 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
             signature="postgres-backup",
             postgres_major=None,
         )
+        policy = MEDIA.DiscoveryPolicy(backup_roots=(backups,))
+        registry = MEDIA.Registry(
+            payload=self.registry.payload,
+            digest=self.registry.digest,
+            audit_image=self.registry.audit_image,
+            auditor_sha256=self.registry.auditor_sha256,
+            service_file_sha256=self.registry.service_file_sha256,
+            descriptors=(),
+            required_online_databases=(),
+            boundary=MEDIA.seal_discovery_boundary(policy),
+        )
         record = MEDIA._record_only_medium(
             MEDIA.CommandRunner(),
-            self.registry,
+            registry,
             current,
             source,
             self.workspace,
-            policy=MEDIA.DiscoveryPolicy(backup_roots=(backups,)),
+            policy=policy,
             operation=self.operation,
             resource_prefix="medium-record",
             auditor_sha256="sha256:" + "6" * 64,
@@ -1287,17 +1469,95 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
         os.chmod(path, 0o640)
         with self.assertRaisesRegex(
             MEDIA.MediaEvidenceError,
-            "private file is unsafe",
+            "private backup file is unsafe",
         ):
             MEDIA._record_only_medium(
                 MEDIA.CommandRunner(),
-                self.registry,
+                registry,
                 current,
                 source,
                 self.workspace,
-                policy=MEDIA.DiscoveryPolicy(backup_roots=(backups,)),
+                policy=policy,
                 operation=self.operation,
                 resource_prefix="medium-record-unsafe",
+                auditor_sha256="sha256:" + "6" * 64,
+                audit_image_id="sha256:" + "5" * 64,
+                service_file_sha256="sha256:" + "7" * 64,
+                audited_at="2026-07-17T12:00:00Z",
+            )
+
+    def test_adjacent_backup_file_replacement_race_fails_content_cas(
+        self,
+    ) -> None:
+        backups = self.root / "race-backups"
+        private_directory(backups)
+        path = backups / "postgres.dump"
+        private_file(path, b"PGDMP original")
+        media_id = f"postgres-backup:{path}"
+        current = MEDIA.MediaDescriptor(
+            media_id=media_id,
+            kind="postgres_backup",
+            database="none",
+            database_user="none",
+            disposition="excluded-from-nexpoly-migration",
+            audit_method="adjacent-record-only",
+            pg_service=None,
+            classification="adjacent-record-only",
+            source_postgres_major=None,
+        )
+        source = MEDIA.DiscoveredMedia(
+            media_id=media_id,
+            kind="postgres_backup",
+            locator=str(path),
+            data_subpath=".",
+            attached=(),
+            backup_format="postgres-custom-v1",
+            signature="postgres-backup",
+            postgres_major=None,
+        )
+        policy = MEDIA.DiscoveryPolicy(backup_roots=(backups,))
+        registry = MEDIA.Registry(
+            payload=self.registry.payload,
+            digest=self.registry.digest,
+            audit_image=self.registry.audit_image,
+            auditor_sha256=self.registry.auditor_sha256,
+            service_file_sha256=self.registry.service_file_sha256,
+            descriptors=(),
+            required_online_databases=(),
+            boundary=MEDIA.seal_discovery_boundary(policy),
+        )
+        original_open = MEDIA.open_sealed_backup_regular
+        calls = 0
+
+        def open_then_replace(*args, **kwargs):
+            nonlocal calls
+            descriptor_fd = original_open(*args, **kwargs)
+            calls += 1
+            if calls == 1:
+                path.rename(backups / "postgres.dump.old")
+                private_file(path, b"PGDMP replacement")
+            return descriptor_fd
+
+        with (
+            mock.patch.object(
+                MEDIA,
+                "open_sealed_backup_regular",
+                side_effect=open_then_replace,
+            ),
+            self.assertRaisesRegex(
+                MEDIA.MediaEvidenceError,
+                "changed during content audit",
+            ),
+        ):
+            MEDIA._record_only_medium(
+                MEDIA.CommandRunner(),
+                registry,
+                current,
+                source,
+                self.workspace,
+                policy=policy,
+                operation=self.operation,
+                resource_prefix="medium-record-race",
                 auditor_sha256="sha256:" + "6" * 64,
                 audit_image_id="sha256:" + "5" * 64,
                 service_file_sha256="sha256:" + "7" * 64,
@@ -1806,7 +2066,7 @@ class CompleteDockerDiscoveryTests(unittest.TestCase):
             service_file_sha256="sha256:" + "7" * 64,
             descriptors=(),
             required_online_databases=(),
-            boundary=self.policy.document(),
+            boundary=MEDIA.seal_discovery_boundary(self.policy),
         )
         with self.assertRaisesRegex(
             MEDIA.MediaEvidenceError,
@@ -1978,7 +2238,7 @@ class CompleteDockerDiscoveryTests(unittest.TestCase):
                     "media_id": f"container-bind:{bind}",
                 },
             ),
-            boundary=self.policy.document(),
+            boundary=MEDIA.seal_discovery_boundary(self.policy),
         )
 
         result = MEDIA.discover_media(
@@ -2044,7 +2304,7 @@ class CompleteDockerDiscoveryTests(unittest.TestCase):
             service_file_sha256="sha256:" + "7" * 64,
             descriptors=(MEDIA.MediaDescriptor(**reviewed),),
             required_online_databases=(),
-            boundary=self.policy.document(),
+            boundary=MEDIA.seal_discovery_boundary(self.policy),
         )
 
         runner = FakeDockerRunner(
@@ -2139,7 +2399,7 @@ class CompleteDockerDiscoveryTests(unittest.TestCase):
                 ),
             ),
             required_online_databases=(),
-            boundary=self.policy.document(),
+            boundary=MEDIA.seal_discovery_boundary(self.policy),
         )
 
         runner = FakeDockerRunner(
@@ -2210,7 +2470,7 @@ class CompleteDockerDiscoveryTests(unittest.TestCase):
             service_file_sha256="sha256:" + "7" * 64,
             descriptors=(),
             required_online_databases=(),
-            boundary=self.policy.document(),
+            boundary=MEDIA.seal_discovery_boundary(self.policy),
         )
         runner = FakeDockerRunner(
             [container],
@@ -2292,7 +2552,7 @@ class CompleteDockerDiscoveryTests(unittest.TestCase):
             service_file_sha256="sha256:" + "7" * 64,
             descriptors=(),
             required_online_databases=(),
-            boundary=self.policy.document(),
+            boundary=MEDIA.seal_discovery_boundary(self.policy),
         )
         runner = FakeDockerRunner(
             [container],
@@ -2354,7 +2614,7 @@ class CompleteDockerDiscoveryTests(unittest.TestCase):
             service_file_sha256="sha256:" + "7" * 64,
             descriptors=(),
             required_online_databases=(),
-            boundary=self.policy.document(),
+            boundary=MEDIA.seal_discovery_boundary(self.policy),
         )
         runner = FakeDockerRunner([postgres, reader], [], {})
         with self.assertRaisesRegex(
@@ -3459,6 +3719,16 @@ class IsolatedOwnedResourcePathTests(unittest.TestCase):
         workspace = self.operation.workspace / "backup-medium"
         workspace.mkdir(mode=0o700)
         policy = MEDIA.DiscoveryPolicy(backup_roots=(backups,))
+        registry = MEDIA.Registry(
+            payload=self.registry.payload,
+            digest=self.registry.digest,
+            audit_image=self.registry.audit_image,
+            auditor_sha256=self.registry.auditor_sha256,
+            service_file_sha256=self.registry.service_file_sha256,
+            descriptors=(),
+            required_online_databases=(),
+            boundary=MEDIA.seal_discovery_boundary(policy),
+        )
         with (
             mock.patch.object(MEDIA, "_wait_for_postgres"),
             mock.patch.object(
@@ -3469,7 +3739,7 @@ class IsolatedOwnedResourcePathTests(unittest.TestCase):
         ):
             MEDIA._isolated_backup_audit(
                 self.runner,
-                self.registry,
+                registry,
                 descriptor_value,
                 source,
                 workspace,
@@ -4864,7 +5134,9 @@ class IsolatedBackupOrchestrationTests(unittest.TestCase):
             service_file_sha256="sha256:" + "7" * 64,
             descriptors=(descriptor_value,),
             required_online_databases=(),
-            boundary={},
+            boundary=MEDIA.seal_discovery_boundary(
+                MEDIA.DiscoveryPolicy(backup_roots=(self.backups,))
+            ),
         )
         policy = MEDIA.DiscoveryPolicy(backup_roots=(self.backups,))
         runner = BackupAuditRunner(self.database_payload())
@@ -5040,7 +5312,9 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 service_file_sha256="sha256:" + "7" * 64,
                 descriptors=(descriptor_value,),
                 required_online_databases=(),
-                boundary={},
+                boundary=MEDIA.seal_discovery_boundary(
+                    MEDIA.DiscoveryPolicy(backup_roots=(backups,))
+                ),
             )
             with tempfile.TemporaryDirectory(
                 prefix="postgres-media-real-volume-"

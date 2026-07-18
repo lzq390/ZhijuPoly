@@ -207,6 +207,24 @@ class SiteHelperContractTests(unittest.TestCase):
                 ),
             ],
         )
+        self.assertEqual(
+            [
+                record["path"]
+                for record in registry["discovery_boundary"][
+                    "backup_root_identities"
+                ]
+            ],
+            registry["discovery_boundary"]["backup_roots"],
+        )
+        self.assertTrue(
+            all(
+                record["device"] == 0
+                and record["inode"] == 0
+                for record in registry["discovery_boundary"][
+                    "backup_root_identities"
+                ]
+            )
+        )
         blockers = [
             record["media_id"]
             for record in registry["expected_media"]

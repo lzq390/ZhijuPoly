@@ -9,6 +9,36 @@
       "/data/lzq/recovery/nexpoly-postgres-media",
       "/data/lzq/recovery/nexpoly-pre-merge-20260717T090623Z/dev-0009-quarantine"
     ],
+    "backup_root_identities": [
+      {
+        "path": "/data/lzq/gith/nexpoly/backups",
+        "device": 0,
+        "inode": 0,
+        "uid": 1001,
+        "mode": 448
+      },
+      {
+        "path": "/data/lzq/gith/nexpoly-runtime/legacy-takeover/preserved-postgres-backups",
+        "device": 0,
+        "inode": 0,
+        "uid": 1001,
+        "mode": 448
+      },
+      {
+        "path": "/data/lzq/recovery/nexpoly-postgres-media",
+        "device": 0,
+        "inode": 0,
+        "uid": 1001,
+        "mode": 448
+      },
+      {
+        "path": "/data/lzq/recovery/nexpoly-pre-merge-20260717T090623Z/dev-0009-quarantine",
+        "device": 0,
+        "inode": 0,
+        "uid": 1001,
+        "mode": 448
+      }
+    ],
     "backup_formats": [
       {
         "name": "postgres-custom-v1",

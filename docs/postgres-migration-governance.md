@@ -266,6 +266,17 @@ auditor only opens them read-only. Every parent below those anchors and every
 dump must be deploy-user-owned and private. The roots and
 accepted suffix/magic pairs are compiled into the builder and repeated
 byte-for-byte in registry v3; callers cannot select fewer roots or formats.
+Registry v3 also seals each fixed root's absolute path, device, inode, owner
+and exact mode 0700. Shared ancestors are treated as untrusted names, not as
+private storage: the auditor opens every path component with
+`O_DIRECTORY|O_NOFOLLOW`, immediately compares the resulting root descriptor
+to the sealed identity, and then performs all recursion and file opens
+relative to that descriptor. Every descendant directory must be owner mode
+0700 and every file owner mode 0600 with one link. Replacing an ancestor,
+substituting another root, or inserting a symlink cannot preserve the sealed
+device/inode tuple; a rename after the root is opened does not redirect the
+in-flight traversal, and the mandatory second root/file CAS detects the path
+change. A registry with missing or placeholder root identities is blocking.
 At this development freeze the production backup directory is still mode
 `0775`, and the two takeover staging roots may not exist. This is an explicit
 readiness blocker, not an exception: the future maintenance preflight must

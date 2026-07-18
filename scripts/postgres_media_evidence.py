@@ -2722,6 +2722,257 @@ def _open_directory_chain(
         raise
 
 
+BACKUP_ROOT_IDENTITY_FIELDS = {
+    "path",
+    "device",
+    "inode",
+    "uid",
+    "mode",
+}
+
+
+def _open_directory_without_symlinks(path: Path) -> int:
+    """Open an absolute directory path without trusting ancestor permissions."""
+
+    parts = _absolute_parts(path)
+    descriptor = os.open(
+        "/",
+        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        for component in parts:
+            child = os.open(
+                component,
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _backup_root_identity(
+    descriptor: int,
+    path: Path,
+) -> dict[str, object]:
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise MediaEvidenceError(
+            f"backup root is not deploy-user-owned mode 0700: {path}"
+        )
+    return {
+        "path": str(path),
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "uid": metadata.st_uid,
+        "mode": stat.S_IMODE(metadata.st_mode),
+    }
+
+
+def capture_backup_root_identity(path: Path) -> dict[str, object]:
+    """CAS-capture one private root while tolerating shared ancestors."""
+
+    first = _open_directory_without_symlinks(path)
+    try:
+        before = _backup_root_identity(first, path)
+    finally:
+        os.close(first)
+    second = _open_directory_without_symlinks(path)
+    try:
+        after = _backup_root_identity(second, path)
+    finally:
+        os.close(second)
+    if before != after:
+        raise MediaEvidenceError(
+            f"backup root changed while its identity was captured: {path}"
+        )
+    return before
+
+
+def _validate_backup_root_authority(
+    value: object,
+    *,
+    path: Path,
+) -> dict[str, object]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != BACKUP_ROOT_IDENTITY_FIELDS
+        or value.get("path") != str(path)
+        or isinstance(value.get("device"), bool)
+        or not isinstance(value.get("device"), int)
+        or value["device"] < 0
+        or isinstance(value.get("inode"), bool)
+        or not isinstance(value.get("inode"), int)
+        or value["inode"] <= 0
+        or value.get("uid") != os.geteuid()
+        or value.get("mode") != 0o700
+    ):
+        raise MediaEvidenceError(
+            f"backup root identity authority is invalid: {path}"
+        )
+    return dict(value)
+
+
+def _open_sealed_backup_root(
+    path: Path,
+    authority: object,
+) -> int:
+    expected = _validate_backup_root_authority(authority, path=path)
+    try:
+        descriptor = _open_directory_without_symlinks(path)
+    except OSError as exc:
+        raise MediaEvidenceError(
+            f"sealed backup root is missing, replaced, or symlinked: {path}"
+        ) from exc
+    try:
+        observed = _backup_root_identity(descriptor, path)
+        if observed != expected:
+            raise MediaEvidenceError(
+                f"sealed backup root identity differs: {path}"
+            )
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _relative_to_backup_root(path: Path, root: Path) -> tuple[str, ...]:
+    parts = _absolute_parts(path)
+    root_parts = _absolute_parts(root)
+    if len(parts) <= len(root_parts) or parts[: len(root_parts)] != root_parts:
+        raise MediaEvidenceError(f"private file escapes approved root: {path}")
+    return parts[len(root_parts) :]
+
+
+def open_sealed_backup_regular(
+    path: Path,
+    *,
+    root: Path,
+    root_authority: object,
+) -> int:
+    """Open a private backup relative to an exact sealed root descriptor."""
+
+    relative = _relative_to_backup_root(path, root)
+    descriptor = _open_sealed_backup_root(root, root_authority)
+    try:
+        for component in relative[:-1]:
+            child = os.open(
+                component,
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=descriptor,
+            )
+            metadata = os.fstat(child)
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o700
+            ):
+                os.close(child)
+                raise MediaEvidenceError(
+                    f"backup private parent chain is unsafe: {path}"
+                )
+            os.close(descriptor)
+            descriptor = child
+        file_descriptor = os.open(
+            relative[-1],
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=descriptor,
+        )
+    finally:
+        os.close(descriptor)
+    metadata = os.fstat(file_descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_nlink != 1
+    ):
+        os.close(file_descriptor)
+        raise MediaEvidenceError(f"private backup file is unsafe: {path}")
+    return file_descriptor
+
+
+def seal_discovery_boundary(
+    policy: DiscoveryPolicy,
+) -> dict[str, object]:
+    return {
+        **policy.document(),
+        "backup_root_identities": [
+            capture_backup_root_identity(root)
+            for root in policy.backup_roots
+        ],
+    }
+
+
+def _load_discovery_boundary(
+    value: object,
+    *,
+    policy: DiscoveryPolicy,
+) -> dict[str, object]:
+    static = policy.document()
+    if (
+        not isinstance(value, dict)
+        or set(value) != {*static, "backup_root_identities"}
+        or {name: value[name] for name in static} != static
+        or not isinstance(value.get("backup_root_identities"), list)
+        or len(value["backup_root_identities"]) != len(policy.backup_roots)
+    ):
+        raise MediaEvidenceError(
+            "media registry narrowed or changed the fixed discovery boundary"
+        )
+    identities: list[dict[str, object]] = []
+    for root, raw in zip(
+        policy.backup_roots,
+        value["backup_root_identities"],
+        strict=True,
+    ):
+        identity = _validate_backup_root_authority(raw, path=root)
+        descriptor = _open_sealed_backup_root(root, identity)
+        os.close(descriptor)
+        identities.append(identity)
+    return {
+        **static,
+        "backup_root_identities": identities,
+    }
+
+
+def _sealed_root_authority(
+    registry: Registry,
+    root: Path,
+) -> dict[str, object]:
+    identities = registry.boundary.get("backup_root_identities")
+    if not isinstance(identities, list):
+        raise MediaEvidenceError(
+            "media registry lacks sealed backup root identities"
+        )
+    matches = [
+        value
+        for value in identities
+        if isinstance(value, dict) and value.get("path") == str(root)
+    ]
+    if len(matches) != 1:
+        raise MediaEvidenceError(
+            f"media registry backup root identity is ambiguous: {root}"
+        )
+    return _validate_backup_root_authority(matches[0], path=root)
+
+
 def open_private_regular(path: Path, *, root: Path) -> int:
     """Open a private regular file using openat/O_NOFOLLOW for every parent."""
 
@@ -2838,12 +3089,10 @@ def load_registry(
         raise MediaEvidenceError("media registry v3 has an invalid shape")
     if value.get("schema_version") != 3:
         raise MediaEvidenceError("media registry schema is not v3")
-    boundary = value.get("discovery_boundary")
-    expected_boundary = policy.document()
-    if boundary != expected_boundary:
-        raise MediaEvidenceError(
-            "media registry narrowed or changed the fixed discovery boundary"
-        )
+    boundary = _load_discovery_boundary(
+        value.get("discovery_boundary"),
+        policy=policy,
+    )
     runtime = value.get("audit_runtime")
     if (
         not isinstance(runtime, dict)
@@ -3222,7 +3471,7 @@ def load_registry(
         service_file_sha256=runtime["pg_service_file_sha256"],
         descriptors=tuple(descriptors),
         required_online_databases=tuple(normalized_online),
-        boundary=expected_boundary,
+        boundary=boundary,
         postgres_uid=runtime["postgres_uid"],
         postgres_gid=runtime["postgres_gid"],
     )
@@ -3938,9 +4187,14 @@ def _bind_postgres_signature(
 def _walk_backup_root(
     root: Path,
     policy: DiscoveryPolicy,
+    *,
+    root_authority: object,
 ) -> tuple[list[DiscoveredMedia], list[dict[str, object]]]:
     try:
-        root_descriptor = _open_directory_chain(root, private_from=root)
+        root_descriptor = _open_sealed_backup_root(
+            root,
+            root_authority,
+        )
     except FileNotFoundError as exc:
         raise MediaEvidenceError(
             "approved backup root is missing; expected an existing "
@@ -3979,7 +4233,13 @@ def _walk_backup_root(
                 path = root.joinpath(*relative, name)
                 if (
                     metadata.st_uid != os.geteuid()
-                    or metadata.st_mode & 0o077
+                    or stat.S_ISDIR(metadata.st_mode)
+                    and stat.S_IMODE(metadata.st_mode) != 0o700
+                    or stat.S_ISREG(metadata.st_mode)
+                    and (
+                        stat.S_IMODE(metadata.st_mode) != 0o600
+                        or metadata.st_nlink != 1
+                    )
                 ):
                     raise MediaEvidenceError(
                         f"backup private parent chain is unsafe: {path}"
@@ -4264,7 +4524,11 @@ def discover_media(
     for root in policy.backup_roots:
         if root == FORBIDDEN_BACKUP_ROOT:
             raise MediaEvidenceError("operation rollback root cannot be scanned as legacy")
-        values, scanned = _walk_backup_root(root, policy)
+        values, scanned = _walk_backup_root(
+            root,
+            policy,
+            root_authority=_sealed_root_authority(registry, root),
+        )
         backup_scan.extend(scanned)
         for value in values:
             if value.media_id in discovered:
@@ -5974,9 +6238,14 @@ def _copy_backup_snapshot(
     source: Path,
     *,
     root: Path,
+    root_authority: object,
     destination: Path,
 ) -> tuple[dict[str, object], str]:
-    descriptor = open_private_regular(source, root=root)
+    descriptor = open_sealed_backup_regular(
+        source,
+        root=root,
+        root_authority=root_authority,
+    )
     try:
         before = _fd_identity(descriptor, source, include_digest=True)
         digest = before["sha256"]
@@ -6042,10 +6311,12 @@ def _isolated_backup_audit(
 ]:
     source_path = Path(source.locator)
     backup_root = _find_backup_root(source_path, policy)
+    root_authority = _sealed_root_authority(registry, backup_root)
     staged = workspace / "source.backup"
     before, source_digest = _copy_backup_snapshot(
         source_path,
         root=backup_root,
+        root_authority=root_authority,
         destination=staged,
     )
     volume_key = f"{resource_prefix}-volume"
@@ -6169,7 +6440,11 @@ def _isolated_backup_audit(
         ):
             operation.remove_resource(container_key)
         operation.remove_resource(volume_key)
-    final_descriptor = open_private_regular(source_path, root=backup_root)
+    final_descriptor = open_sealed_backup_regular(
+        source_path,
+        root=backup_root,
+        root_authority=root_authority,
+    )
     try:
         after = _fd_identity(final_descriptor, source_path, include_digest=True)
     finally:
@@ -6804,7 +7079,16 @@ def _record_only_medium(
         }
     elif source.kind == "reviewed_file":
         path = Path(source.locator)
-        descriptor_fd = open_private_regular(path, root=path.parent)
+        backup_root = _find_backup_root(path, policy)
+        root_authority = _sealed_root_authority(
+            registry,
+            backup_root,
+        )
+        descriptor_fd = open_sealed_backup_regular(
+            path,
+            root=backup_root,
+            root_authority=root_authority,
+        )
         try:
             metadata_before = os.fstat(descriptor_fd)
             payload = _read_fd(descriptor_fd)
@@ -6858,7 +7142,15 @@ def _record_only_medium(
             )
         path = Path(source.locator)
         backup_root = _find_backup_root(path, policy)
-        first_descriptor = open_private_regular(path, root=backup_root)
+        root_authority = _sealed_root_authority(
+            registry,
+            backup_root,
+        )
+        first_descriptor = open_sealed_backup_regular(
+            path,
+            root=backup_root,
+            root_authority=root_authority,
+        )
         try:
             before = _fd_identity(
                 first_descriptor,
@@ -6867,7 +7159,11 @@ def _record_only_medium(
             )
         finally:
             os.close(first_descriptor)
-        second_descriptor = open_private_regular(path, root=backup_root)
+        second_descriptor = open_sealed_backup_regular(
+            path,
+            root=backup_root,
+            root_authority=root_authority,
+        )
         try:
             after = _fd_identity(
                 second_descriptor,
