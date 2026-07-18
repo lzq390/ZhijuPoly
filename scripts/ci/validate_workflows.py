@@ -21,7 +21,7 @@ ANY_ACTION = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SAFE_DATASET = re.compile(r"^[A-Za-z0-9_.-]+$")
 EXPECTED_ASSET_DIGEST = (
-    "sha256:d2bbe277b47274f242b93923623e5221d85553965e9634b0af355e47c80f2d49"
+    "sha256:e5088b7954f7ee8f6cc4e45af36761fdc44d2fc374643441fe07283475de06c8"
 )
 EXPECTED_PREDECESSOR_ASSET_DIGEST = (
     "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
