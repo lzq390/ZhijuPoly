@@ -12,6 +12,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_ROOT = REPOSITORY_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOW_ROOT / "ci.yml"
 RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
+DEPLOYMENT_DOC_PATH = REPOSITORY_ROOT / "docs" / "deployment.md"
 LEGACY_REMOTE_RELEASE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "remote_release.sh"
 
 PINNED_ACTION = re.compile(
@@ -20,6 +21,10 @@ PINNED_ACTION = re.compile(
 ANY_ACTION = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SAFE_DATASET = re.compile(r"^[A-Za-z0-9_.-]+$")
+FROZEN_ASSET_DOC = re.compile(
+    r"The frozen schema-v2 asset manifest is\s+"
+    r"`(sha256:[0-9a-f]{64})`"
+)
 EXPECTED_ASSET_DIGEST = (
     "sha256:e5088b7954f7ee8f6cc4e45af36761fdc44d2fc374643441fe07283475de06c8"
 )
@@ -77,6 +82,20 @@ def validate_release_input(failures: list[str]) -> None:
         for dataset in datasets
     ):
         failures.append("release-input.json contains an unsafe or implicit dataset name")
+
+
+def validate_deployment_asset_pin(failures: list[str]) -> None:
+    try:
+        text = DEPLOYMENT_DOC_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        failures.append(f"deployment asset documentation is unavailable: {exc}")
+        return
+    matches = FROZEN_ASSET_DOC.findall(text)
+    if matches != [EXPECTED_ASSET_DIGEST]:
+        failures.append(
+            "docs/deployment.md frozen schema-v2 digest must exactly match "
+            "the reviewed release input"
+        )
 
 
 def main() -> int:
@@ -220,6 +239,7 @@ def main() -> int:
     if "workers/polytao_worker" in ci_text or "POLYTAO_WORKER_BASE_URL" in ci_text:
         failures.append("ci.yml must not build or test the removed standalone PolyTAO Worker")
     validate_release_input(failures)
+    validate_deployment_asset_pin(failures)
 
     if failures:
         for failure in failures:
