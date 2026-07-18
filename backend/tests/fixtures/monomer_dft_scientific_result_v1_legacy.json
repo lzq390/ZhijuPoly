@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "calculation_type": "single_point",
+  "engine": "aimnet2",
+  "model": "aimnet2",
+  "input": {
+    "input_type": "smiles",
+    "canonical_smiles": "O",
+    "net_charge": 0,
+    "input_formal_charge": 0,
+    "multiplicity": 1,
+    "electron_count": 10
+  },
+  "atoms": {
+    "count": 3,
+    "atomic_numbers": [8, 1, 1],
+    "symbols": ["O", "H", "H"]
+  },
+  "geometry": {
+    "initial_coordinates_angstrom": [
+      [0.0, 0.0, 0.0],
+      [0.0, 0.0, 1.0],
+      [1.0, 0.0, 0.0]
+    ],
+    "final_coordinates_angstrom": [
+      [0.0, 0.0, 0.0],
+      [0.0, 0.0, 1.0],
+      [1.0, 0.0, 0.0]
+    ],
+    "units": "angstrom"
+  },
+  "rdkit": {
+    "seed": 1,
+    "force_field": "MMFF94",
+    "optimization_status": 0
+  },
+  "properties": {
+    "energy": {
+      "value_eV": -1.0
+    },
+    "charges": {
+      "values_e": [0.0, 0.0, 0.0],
+      "sum_e": 0.0,
+      "conservation_error_e": 0.0,
+      "conserved": true
+    },
+    "forces": {
+      "values_eV_per_A": [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0]
+      ],
+      "fmax_eV_per_A": 0.0
+    }
+  },
+  "optimization": null,
+  "scientific_status": {
+    "calculation_completed": true,
+    "geometry_status": "not_optimized",
+    "is_stationary": true,
+    "stationary_point": "not_evaluated",
+    "minimum_assessment": "unassessed",
+    "fmax_eV_per_A": 0.0
+  },
+  "warnings": [
+    {
+      "code": "single_conformer",
+      "message": "Only one deterministic local conformer was evaluated."
+    }
+  ],
+  "timings": {
+    "queue_wait_ms": 0.0,
+    "structure_prepare_ms": 0.0,
+    "model_compute_ms": 1.0,
+    "optimization_ms": 0.0,
+    "hessian_ms": 0.0,
+    "frequency_ms": 0.0,
+    "artifact_ms": 0.0,
+    "total_ms": 1.0
+  },
+  "provenance": {
+    "worker_version": "0.1.0",
+    "worker_instance_id": "00000000000000000000000000000000",
+    "model_alias": "aimnet2",
+    "model_id": "aimnet2",
+    "model_registry_key": null,
+    "model_family": null,
+    "model_reference": null,
+    "model_sha256": null,
+    "aimnet_version": null,
+    "aimnet_commit": null,
+    "aimnet_wheel_sha256": null,
+    "warp_version": null,
+    "torch_version": null,
+    "cuda_runtime": null,
+    "cuda_version": null,
+    "gpu_name": "redacted-gpu",
+    "visible_gpu_count": 1,
+    "logical_device": "cuda:0",
+    "physical_gpu": "redacted",
+    "gpu_logical_device": "cuda:0",
+    "gpu_physical_device": "redacted",
+    "conformer_seed": 1,
+    "rdkit_force_field": "MMFF94"
+  }
+}

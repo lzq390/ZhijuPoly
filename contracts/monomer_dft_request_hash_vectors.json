@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "vectors": [
+    {
+      "name": "single_point_frequency_property_order",
+      "request": {
+        "calculation_type": "single_point",
+        "input": {
+          "smiles": "CCO",
+          "net_charge": null,
+          "multiplicity": 1,
+          "psmiles_mode": null
+        },
+        "model": "aimnet2",
+        "conformer": {
+          "seed": 1,
+          "max_iterations": 500
+        },
+        "single_point": {
+          "properties": ["frequencies", "forces", "energy"]
+        }
+      },
+      "expected_sha256": "5950928d564c1f8d8708068fa06be1bcd62ab1c902442c129cf1102e64647c61"
+    },
+    {
+      "name": "optimization_frequency_explicit_charge",
+      "request": {
+        "calculation_type": "optimization",
+        "input": {
+          "smiles": "O",
+          "net_charge": 0,
+          "multiplicity": 1,
+          "psmiles_mode": null
+        },
+        "model": "aimnet2-2025",
+        "conformer": {
+          "seed": 7,
+          "max_iterations": 123
+        },
+        "optimization": {
+          "fmax_eV_per_A": 0.025,
+          "max_steps": 20,
+          "post_optimization_properties": ["frequencies"]
+        }
+      },
+      "expected_sha256": "4db432d884e464c1c3ec7f044f118ae12261566723811e650fecc5e4252a4bc4"
+    },
+    {
+      "name": "nse_open_shell",
+      "request": {
+        "calculation_type": "single_point",
+        "input": {
+          "smiles": "[CH3]",
+          "net_charge": null,
+          "multiplicity": 2,
+          "psmiles_mode": null
+        },
+        "model": "aimnet2-nse",
+        "conformer": {
+          "seed": 42,
+          "max_iterations": 250
+        },
+        "single_point": {
+          "properties": ["charges", "energy"]
+        }
+      },
+      "expected_sha256": "ac26ba4d3a4db1e5a7b0f6a9cfe056fdb4b7e1b5761b5bb9a69c04cd9c175719"
+    }
+  ]
+}
