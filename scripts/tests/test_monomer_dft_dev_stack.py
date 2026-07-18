@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import shlex
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -18,6 +20,16 @@ DOCKERIGNORE = REPO_ROOT / ".dockerignore"
 GITIGNORE = REPO_ROOT / ".gitignore"
 NGINX_CONFIG = REPO_ROOT / "nginx.conf"
 PRODUCTION_COMPOSE = REPO_ROOT / "docker-compose.prod.yml"
+FORMAL_ENV_PARSER_PATH = (
+    REPO_ROOT / "scripts" / "monomer_dft_acceptance_env.py"
+)
+FORMAL_ENV_SPEC = importlib.util.spec_from_file_location(
+    "monomer_dft_acceptance_env",
+    FORMAL_ENV_PARSER_PATH,
+)
+assert FORMAL_ENV_SPEC is not None and FORMAL_ENV_SPEC.loader is not None
+FORMAL_ENV = importlib.util.module_from_spec(FORMAL_ENV_SPEC)
+FORMAL_ENV_SPEC.loader.exec_module(FORMAL_ENV)
 
 
 def _run_control_functions(
@@ -72,6 +84,423 @@ def _compose_config(project_name: str = "nexpoly_dft_dev") -> dict:
         text=True,
     )
     return json.loads(completed.stdout)
+
+
+class FormalAcceptanceDotenvTests(unittest.TestCase):
+    def _dotenv(self, directory: Path, payload: str) -> Path:
+        path = directory / ".env.monomer-dft.dev"
+        path.write_text(payload, encoding="utf-8")
+        path.chmod(0o600)
+        return path
+
+    def _run_formal_loader(
+        self,
+        script: Path,
+        *,
+        repository: Path,
+        env_file: Path,
+        parser: Path,
+        assertion: str = ":",
+    ) -> subprocess.CompletedProcess[str]:
+        command = f"""
+source {shlex.quote(str(script))}
+REPO_ROOT={shlex.quote(str(repository))}
+ENV_FILE={shlex.quote(str(env_file))}
+FORMAL_ENV_PARSER={shlex.quote(str(parser))}
+load_formal_env
+{assertion}
+"""
+        return subprocess.run(
+            ["/usr/bin/bash", "-c", command],
+            cwd=repository,
+            env={
+                "HOME": os.environ.get("HOME", "/tmp"),
+                "LANG": "C.UTF-8",
+                "PATH": (
+                    "/usr/local/sbin:/usr/local/bin:/usr/sbin:"
+                    "/usr/bin:/sbin:/bin"
+                ),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def _fake_parser(
+        self,
+        directory: Path,
+        payload: bytes,
+        *,
+        exit_code: int = 0,
+    ) -> Path:
+        parser = directory / "fake-formal-parser.py"
+        parser.write_text(
+            "import sys\n"
+            f"sys.stdout.buffer.write(bytes.fromhex({payload.hex()!r}))\n"
+            "sys.stdout.buffer.flush()\n"
+            f"raise SystemExit({exit_code})\n",
+            encoding="utf-8",
+        )
+        parser.chmod(0o600)
+        return parser
+
+    def test_example_is_accepted_as_data_without_shell_evaluation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self._dotenv(
+                root,
+                ENV_EXAMPLE.read_text(encoding="utf-8"),
+            )
+            values = FORMAL_ENV.parse_dotenv(path)
+        self.assertEqual(
+            values["NEXPOLY_DFT_PROJECT_NAME"],
+            "nexpoly_dft_dev",
+        )
+        self.assertEqual(set(values), FORMAL_ENV.ALLOWED_KEYS)
+
+    def test_control_plane_keys_are_rejected(self) -> None:
+        for key in (
+            "COMPOSE_FILE",
+            "WORKER_CTL",
+            "PATH",
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_CONFIG_COUNT",
+        ):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary:
+                path = self._dotenv(Path(temporary), f"{key}=/tmp/attacker\n")
+                with self.assertRaisesRegex(
+                    FORMAL_ENV.AcceptanceEnvError,
+                    "key is not allowed",
+                ):
+                    FORMAL_ENV.parse_dotenv(path)
+
+    def test_formal_dotenv_must_define_the_complete_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self._dotenv(
+                Path(temporary),
+                "NEXPOLY_DFT_PROJECT_NAME=nexpoly_dft_dev\n",
+            )
+            with self.assertRaisesRegex(
+                FORMAL_ENV.AcceptanceEnvError,
+                "dotenv is incomplete",
+            ):
+                FORMAL_ENV.parse_dotenv(path)
+
+    def test_formal_dotenv_rejects_symlink_exchange_read_race_and_oversize(
+        self,
+    ) -> None:
+        example = ENV_EXAMPLE.read_bytes()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = self._dotenv(root, example.decode("utf-8"))
+            link = root / "linked.env"
+            link.symlink_to(target.name)
+            with self.assertRaisesRegex(
+                FORMAL_ENV.AcceptanceEnvError,
+                "opened safely",
+            ):
+                FORMAL_ENV.parse_dotenv(link)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self._dotenv(root, example.decode("utf-8"))
+            replacement = root / "replacement.env"
+            replacement.write_bytes(example)
+            replacement.chmod(0o600)
+            real_open = FORMAL_ENV.os.open
+
+            def open_then_exchange(raw_path, flags):
+                descriptor = real_open(raw_path, flags)
+                os.replace(replacement, path)
+                return descriptor
+
+            with (
+                mock.patch.object(
+                    FORMAL_ENV.os,
+                    "open",
+                    side_effect=open_then_exchange,
+                ),
+                self.assertRaisesRegex(
+                    FORMAL_ENV.AcceptanceEnvError,
+                    "(changed while it was read|owner-private)",
+                ),
+            ):
+                FORMAL_ENV.parse_dotenv(path)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self._dotenv(root, example.decode("utf-8"))
+            real_read = FORMAL_ENV.os.read
+            changed = False
+
+            def change_while_reading(descriptor, amount):
+                nonlocal changed
+                if not changed:
+                    changed = True
+                    with path.open("r+b", buffering=0) as writer:
+                        writer.seek(0, os.SEEK_END)
+                        writer.write(b"!")
+                        writer.flush()
+                        os.fsync(writer.fileno())
+                return real_read(descriptor, amount)
+
+            with (
+                mock.patch.object(
+                    FORMAL_ENV.os,
+                    "read",
+                    side_effect=change_while_reading,
+                ),
+                self.assertRaisesRegex(
+                    FORMAL_ENV.AcceptanceEnvError,
+                    "changed while it was read",
+                ),
+            ):
+                FORMAL_ENV.parse_dotenv(path)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / ".env.monomer-dft.dev"
+            path.write_bytes(b"#" + b"x" * FORMAL_ENV.MAX_ENV_BYTES)
+            path.chmod(0o600)
+            with self.assertRaisesRegex(
+                FORMAL_ENV.AcceptanceEnvError,
+                "bounded input size",
+            ):
+                FORMAL_ENV.parse_dotenv(path)
+
+    def test_exported_compose_and_git_controls_are_rejected_by_both_scripts(
+        self,
+    ) -> None:
+        for script in (CONTROL_SCRIPT, WORKER_CONTROL_SCRIPT):
+            for key in ("COMPOSE_FILE", "GIT_DIR", "GIT_CONFIG_COUNT"):
+                with self.subTest(script=script.name, key=key):
+                    completed = subprocess.run(
+                        [
+                            "/usr/bin/bash",
+                            "-c",
+                            (
+                                f"source {shlex.quote(str(script))}\n"
+                                "reject_formal_control_environment"
+                            ),
+                        ],
+                        cwd=REPO_ROOT,
+                        env={
+                            "PATH": (
+                                "/usr/local/sbin:/usr/local/bin:/usr/sbin:"
+                                "/usr/bin:/sbin:/bin"
+                            ),
+                            key: "/tmp/attacker",
+                        },
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                self.assertEqual(completed.returncode, 2)
+                self.assertIn(key, completed.stderr)
+
+    def test_command_substitution_is_rejected_and_never_executed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            marker = root / "executed"
+            path = self._dotenv(
+                root,
+                "NEXPOLY_DFT_POSTGRES_PASSWORD="
+                f"$(/usr/bin/touch {marker})\n",
+            )
+            completed = subprocess.run(
+                [
+                    "/usr/bin/python3",
+                    "-I",
+                    "-S",
+                    str(FORMAL_ENV_PARSER_PATH),
+                    "--env-file",
+                    str(path),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertFalse(marker.exists())
+
+    def test_expansion_comment_and_quote_syntax_are_rejected(self) -> None:
+        unsafe_values = (
+            "$FOO",
+            "${FOO}",
+            "`/usr/bin/true`",
+            "secret # COMPOSE_FILE=/tmp/attacker",
+            '"unterminated',
+            'secret"',
+        )
+        for value in unsafe_values:
+            with (
+                self.subTest(value=value),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                path = self._dotenv(
+                    Path(temporary),
+                    f"NEXPOLY_DFT_POSTGRES_PASSWORD={value}\n",
+                )
+                with self.assertRaises(FORMAL_ENV.AcceptanceEnvError):
+                    FORMAL_ENV.parse_dotenv(path)
+
+    @unittest.skipIf(shutil.which("docker") is None, "docker CLI is not installed")
+    def test_formal_load_reaches_real_compose_config_without_sourcing_dotenv(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_repo = Path(temporary)
+            env_file = self._dotenv(
+                fake_repo,
+                ENV_EXAMPLE.read_text(encoding="utf-8"),
+            )
+            (
+                fake_repo / ".runtime" / "monomer-dft-worker-socket"
+            ).mkdir(parents=True, mode=0o700)
+            project_name = "nexpoly_dft_fresh_formal_config"
+            command = f"""
+export NEXPOLY_DFT_ACCEPTANCE_PROJECT_NAME={shlex.quote(project_name)}
+export NEXPOLY_DFT_AUTHORITY_SHA={'a' * 40}
+export NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE=candidate-tree
+export NEXPOLY_DFT_BACKEND_IMAGE_REF=nexpoly-dft-acceptance-backend:{project_name}-{'a' * 40}
+export NEXPOLY_DFT_WEB_IMAGE_REF=nexpoly-dft-acceptance-web:{project_name}-{'a' * 40}
+export DOCKER_HOST=unix:///var/run/docker.sock
+source {shlex.quote(str(CONTROL_SCRIPT))}
+# This unit isolates the non-executing dotenv-to-Compose path. Descriptor
+# authority has its own real-FD contract tests.
+configure_formal_gpu_authority() {{ :; }}
+REPO_ROOT={shlex.quote(str(fake_repo))}
+ENV_FILE={shlex.quote(str(env_file))}
+FORMAL_ENV_PARSER={shlex.quote(str(FORMAL_ENV_PARSER_PATH))}
+COMPOSE_FILE={shlex.quote(str(COMPOSE_FILE))}
+load_env
+cd "$REPO_ROOT"
+compose config --format json
+"""
+            completed = subprocess.run(
+                ["/usr/bin/bash", "-c", command],
+                cwd=fake_repo,
+                env={
+                    "HOME": os.environ.get("HOME", "/tmp"),
+                    "LANG": "C.UTF-8",
+                    "PATH": (
+                        "/usr/local/sbin:/usr/local/bin:/usr/sbin:"
+                        "/usr/bin:/sbin:/bin"
+                    ),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+        config = json.loads(completed.stdout)
+        self.assertEqual(config["name"], project_name)
+        self.assertEqual(
+            config["services"]["backend"]["image"],
+            f"nexpoly-dft-acceptance-backend:{project_name}-{'a' * 40}",
+        )
+        self.assertEqual(
+            config["volumes"]["monomer_dft_postgres_data"]["name"],
+            f"{project_name}_monomer_dft_postgres_data",
+        )
+
+    def test_shell_consumers_reject_truncated_duplicate_unsafe_and_failed_parser_output(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env_file = self._dotenv(
+                root,
+                ENV_EXAMPLE.read_text(encoding="utf-8"),
+            )
+            values = FORMAL_ENV.parse_dotenv(env_file)
+            valid = FORMAL_ENV.encode_nul_pairs(values)
+            first_key = sorted(values)[0].encode("ascii")
+            first_pair = (
+                first_key
+                + b"\0"
+                + values[first_key.decode("ascii")].encode("utf-8")
+                + b"\0"
+            )
+            tokens = valid[:-1].split(b"\0")
+            tokens[0] = b"BASH_ENV"
+            unsafe = b"\0".join(tokens) + b"\0"
+            cases = (
+                ("truncated", valid[:-1], 0),
+                ("duplicate", valid + first_pair, 0),
+                ("unsafe", unsafe, 0),
+                ("failed", valid, 7),
+            )
+            for script in (CONTROL_SCRIPT, WORKER_CONTROL_SCRIPT):
+                for name, payload, exit_code in cases:
+                    parser = self._fake_parser(
+                        root,
+                        payload,
+                        exit_code=exit_code,
+                    )
+                    with self.subTest(script=script.name, case=name):
+                        completed = self._run_formal_loader(
+                            script,
+                            repository=root,
+                            env_file=env_file,
+                            parser=parser,
+                        )
+                        self.assertEqual(completed.returncode, 2)
+                        self.assertIn(
+                            "formal acceptance",
+                            completed.stderr,
+                        )
+
+    def test_formal_shell_load_leaves_no_secret_temp_file(self) -> None:
+        patterns = (
+            "nexpoly-dft-formal-env.*",
+            "nexpoly-dft-worker-formal-env.*",
+            "nexpoly-dft-compose-env.*",
+        )
+        before = {
+            path
+            for pattern in patterns
+            for path in Path("/tmp").glob(pattern)
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            secret = "formal-secret-never-written-to-tmp"
+            payload = ENV_EXAMPLE.read_text(encoding="utf-8").replace(
+                "NEXPOLY_DFT_POSTGRES_PASSWORD=nexpoly_dft_dev",
+                f"NEXPOLY_DFT_POSTGRES_PASSWORD={secret}",
+            )
+            env_file = self._dotenv(root, payload)
+            for script in (CONTROL_SCRIPT, WORKER_CONTROL_SCRIPT):
+                completed = self._run_formal_loader(
+                    script,
+                    repository=root,
+                    env_file=env_file,
+                    parser=FORMAL_ENV_PARSER_PATH,
+                    assertion=(
+                        '[[ "$NEXPOLY_DFT_POSTGRES_PASSWORD" == '
+                        f"{shlex.quote(secret)} ]]"
+                    ),
+                )
+                self.assertEqual(
+                    completed.returncode,
+                    0,
+                    completed.stdout + completed.stderr,
+                )
+        after = {
+            path
+            for pattern in patterns
+            for path in Path("/tmp").glob(pattern)
+        }
+        self.assertEqual(after, before)
+        for script in (CONTROL_SCRIPT, WORKER_CONTROL_SCRIPT):
+            text = script.read_text(encoding="utf-8")
+            self.assertNotIn("nexpoly-dft-formal-env.", text)
+            self.assertNotIn("nexpoly-dft-worker-formal-env.", text)
+            self.assertNotIn("nexpoly-dft-compose-env.", text)
 
 
 @unittest.skipIf(shutil.which("docker") is None, "docker CLI is not installed")

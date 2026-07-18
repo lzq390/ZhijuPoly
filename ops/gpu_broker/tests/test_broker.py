@@ -45,6 +45,7 @@ from ops.gpu_broker.server import (
     MpsRuntimeGuard,
     SystemdGpuClaim,
     load_external_reservations,
+    process_stable_descriptor_path,
     query_docker_gpu_claims,
     query_systemd_gpu_claims,
     resolve_workload_identity,
@@ -66,6 +67,152 @@ def _bind_test_workload(lease) -> None:
     lease.workload_cgroup = Path(f"/proc/{os.getpid()}/cgroup").read_text(
         encoding="utf-8"
     ).strip()
+
+
+def test_process_stable_descriptor_path_survives_child_close_fds(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "authority"
+    root.mkdir()
+    sentinel = root / "sentinel"
+    sentinel.write_text("bound", encoding="utf-8")
+    descriptor = os.open(
+        root,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY,
+    )
+    try:
+        stable = process_stable_descriptor_path(
+            Path(f"/proc/self/fd/{descriptor}/sentinel")
+        )
+        assert stable == Path(
+            f"/proc/{os.getpid()}/fd/{descriptor}/sentinel"
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from pathlib import Path; import sys; "
+                    "print(Path(sys.argv[1]).read_text())"
+                ),
+                str(stable),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.stdout.strip() == "bound"
+        ordinary = tmp_path / "ordinary"
+        assert process_stable_descriptor_path(ordinary) == ordinary
+    finally:
+        os.close(descriptor)
+
+
+def test_broker_main_loads_an_inherited_reservation_descriptor(
+    tmp_path: Path,
+) -> None:
+    if os.getuid() != 1001 or os.getgid() != 1001:
+        pytest.skip("runtime Broker deliberately requires owner 1001:1001")
+    root = tmp_path / "gpu-resource"
+    root.mkdir(mode=0o700)
+    inventory = root / "external-reservations.json"
+    repository = Path(__file__).resolve().parents[3]
+    inventory.write_bytes(
+        (
+            repository
+            / "ops/config/gpu-external-reservations.json"
+        ).read_bytes()
+    )
+    inventory.chmod(0o600)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    nvidia_smi = fake_bin / "nvidia-smi"
+    nvidia_smi.write_text(
+        (
+            "#!/usr/bin/env bash\n"
+            "cat <<'EOF'\n"
+            "1, GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771\n"
+            "2, GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe\n"
+            "3, GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5\n"
+            "EOF\n"
+        ),
+        encoding="utf-8",
+    )
+    nvidia_smi.chmod(0o700)
+    root_descriptor = os.open(
+        root,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    inventory_descriptor = os.open(
+        inventory,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    socket_path = root / "broker.sock"
+    process: subprocess.Popen[str] | None = None
+    try:
+        environment = dict(os.environ)
+        environment["PATH"] = (
+            f"{fake_bin}:{environment.get('PATH', '/usr/bin:/bin')}"
+        )
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "ops.gpu_broker.server",
+                "--socket",
+                f"/proc/self/fd/{root_descriptor}/broker.sock",
+                "--state",
+                str(tmp_path / "broker-state.json"),
+                "--policy",
+                str(repository / "ops/config/gpu-broker-policy.json"),
+                "--external-reservations",
+                f"/proc/self/fd/{inventory_descriptor}",
+                "--mps-state-root",
+                f"/proc/self/fd/{root_descriptor}",
+            ],
+            cwd=repository,
+            env=environment,
+            pass_fds=(root_descriptor, inventory_descriptor),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + 5
+        while (
+            time.monotonic() < deadline
+            and process.poll() is None
+            and not socket_path.exists()
+        ):
+            time.sleep(0.02)
+        assert process.poll() is None, process.communicate(timeout=1)
+        assert socket_path.is_socket()
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            process.communicate(timeout=5)
+        os.close(inventory_descriptor)
+        os.close(root_descriptor)
+
+
+@pytest.mark.parametrize(
+    "path",
+        (
+            "/proc/self/fd/0",
+            "/proc/self/fd/1",
+            "/proc/self/fd/2",
+            "/proc/self/fd/01",
+            "/proc/self/fd/3/..",
+            "/proc/self/fd/not-a-fd",
+            f"/proc/{os.getpid()}/fd/3",
+            "/proc/999999/fd/3",
+        ),
+)
+def test_process_stable_descriptor_path_rejects_ambiguous_paths(
+    path: str,
+) -> None:
+    with pytest.raises(BrokerError) as error:
+        process_stable_descriptor_path(Path(path))
+    assert error.value.code == "invalid_runtime_authority"
 
 
 def _acquire(
@@ -648,6 +795,48 @@ def test_external_reservation_inventory_blocks_gpu3(tmp_path: Path) -> None:
     assert load_external_reservations(inventory).blocked_gpu_uuids == {
         "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
     }
+
+
+def test_external_reservations_accept_only_an_exact_local_inherited_fd(
+    tmp_path: Path,
+) -> None:
+    if os.getuid() != 1001 or os.getgid() != 1001:
+        pytest.skip("runtime inventory deliberately requires owner 1001:1001")
+    inventory = tmp_path / "external.json"
+    inventory.write_text(
+        '{"schema_version":1,"blocked_gpu_uuids":{},'
+        '"managed_docker_claims":{},"managed_systemd_claims":{}}\n',
+        encoding="utf-8",
+    )
+    inventory.chmod(0o600)
+    descriptor = os.open(
+        inventory,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        for authority in (
+            Path(f"/proc/self/fd/{descriptor}"),
+            Path(f"/proc/{os.getpid()}/fd/{descriptor}"),
+        ):
+            policy = load_external_reservations(authority)
+            assert policy.blocked_gpu_uuids == frozenset()
+        assert os.lseek(descriptor, 0, os.SEEK_CUR) == 0
+        for ambiguous in (
+            Path(f"/proc/self/fd/{descriptor}/suffix"),
+            Path(f"/proc/{os.getppid()}/fd/{descriptor}"),
+            Path("/proc/self/fd/1"),
+        ):
+            with pytest.raises(BrokerError) as error:
+                load_external_reservations(ambiguous)
+            assert error.value.code == "external_inventory_unavailable"
+    finally:
+        os.close(descriptor)
+
+    symlink = tmp_path / "external-link.json"
+    symlink.symlink_to(inventory)
+    with pytest.raises(BrokerError) as error:
+        load_external_reservations(symlink)
+    assert error.value.code == "external_inventory_unavailable"
 
 
 def test_execution_acquire_is_idempotent_for_exact_job_identity(tmp_path: Path) -> None:
@@ -2200,6 +2389,12 @@ def test_nonroot_uds_client_acquires_activates_heartbeats_and_releases(tmp_path:
         managed.assert_healthy()
         managed.close()
         assert client.status()["leases"] == []
+        drained = client.set_draining(True)
+        assert drained["draining"] is True
+        assert drained["leases"] == []
+        resumed = client.set_draining(False)
+        assert resumed["draining"] is False
+        assert resumed["leases"] == []
     finally:
         server.shutdown()
         server.server_close()

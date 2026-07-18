@@ -1102,6 +1102,7 @@ def _validate_native_runtime(
     authority: Mapping[str, str],
     bridge: Mapping[str, str],
     oci: Mapping[str, Any],
+    observed_at: dt.datetime,
 ) -> dict[str, Any]:
     fields = {
         "status",
@@ -1179,6 +1180,7 @@ def _validate_native_runtime(
             runtime_contract_sha256=(
                 monomer_dft_runtime_contract.RUNTIME_CONTRACT_SHA256
             ),
+            observed_at=observed_at,
         )
     except monomer_dft_gpu_acceptance.GpuAcceptanceError as exc:
         _fail(f"GPU acceptance is invalid: {exc}")
@@ -1376,6 +1378,7 @@ def validate_evidence(
         authority=authority,
         bridge=bridge,
         oci=oci,
+        observed_at=captured_at,
     )
     capacity = _validate_capacity(value["capacity"])
     conflicts = _validate_conflicts(value["conflicts"])

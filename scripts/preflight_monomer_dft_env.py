@@ -80,6 +80,75 @@ def require(condition: bool, message: str) -> None:
         raise PreflightError(message)
 
 
+def effective_environment(
+    repo_root: pathlib.Path,
+    values: dict[str, str],
+) -> tuple[dict[str, str], Any | None]:
+    """Overlay only descriptor-bound GPU paths for formal acceptance."""
+
+    authority_enabled = (
+        os.environ.get("NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY") == "1"
+    )
+    authority_names_present = any(
+        os.environ.get(name, "")
+        for name in (
+            "NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY",
+            "NEXPOLY_DFT_GPU_AUTHORITY_PID",
+            "NEXPOLY_DFT_GPU_AUTHORITY_START_TICKS",
+            "NEXPOLY_DFT_GPU_AUTHORITY_ROOT",
+            "NEXPOLY_DFT_GPU_AUTHORITY_ROOT_IDENTITY",
+            "NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY",
+            "NEXPOLY_DFT_GPU_RESERVATIONS_IDENTITY",
+            "NEXPOLY_DFT_GPU_RESERVATIONS_SHA256",
+            "NEXPOLY_DFT_GPU1_MPS_PIPE_AUTHORITY",
+            "NEXPOLY_DFT_GPU1_MPS_PIPE_IDENTITY",
+            "NEXPOLY_DFT_GPU3_MPS_PIPE_AUTHORITY",
+            "NEXPOLY_DFT_GPU3_MPS_PIPE_IDENTITY",
+        )
+    )
+    if not authority_enabled:
+        require(
+            not authority_names_present,
+            "partial GPU descriptor authority is forbidden",
+        )
+        return dict(values), None
+    try:
+        sys.path.insert(0, str(repo_root))
+        from gpu_resource.authority import (  # noqa: PLC0415
+            FormalGpuAuthorityError,
+            load_formal_gpu_authority,
+        )
+
+        authority = load_formal_gpu_authority(
+            expected_reservations_file=(
+                repo_root / "ops/config/gpu-external-reservations.json"
+            ),
+            expected_root=repo_root / ".runtime/gpu-resource",
+            require=True,
+        )
+    except (ImportError, FormalGpuAuthorityError, OSError) as exc:
+        raise PreflightError(
+            f"formal GPU descriptor authority is invalid: {exc}"
+        ) from exc
+    finally:
+        if sys.path and sys.path[0] == str(repo_root):
+            del sys.path[0]
+    assert authority is not None
+    effective = dict(values)
+    effective.update(
+        {
+            "MONOMER_DFT_GPU_BROKER_UDS": str(
+                authority.root / "broker.sock"
+            ),
+            "MONOMER_DFT_GPU_MPS_PIPE_ROOT": str(authority.root),
+            "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS": str(
+                authority.reservations
+            ),
+        }
+    )
+    return effective, authority
+
+
 def run(*args: str) -> str:
     completed = subprocess.run(
         args,
@@ -326,7 +395,11 @@ def validate_aimnet_wheel_record(repo_root: pathlib.Path, distribution: importli
     return {"wheel": str(wheel_path), "wheel_sha256": wheel_sha, "record_files_verified": str(checked_files)}
 
 
-def validate_environment(repo_root: pathlib.Path, values: dict[str, str]) -> dict[str, str]:
+def validate_environment(
+    repo_root: pathlib.Path,
+    values: dict[str, str],
+    formal_gpu_authority: Any | None = None,
+) -> dict[str, str]:
     repo_root = require_development_repo_root(repo_root)
     deployment = values["MONOMER_DFT_DEPLOYMENT"]
     require(
@@ -380,6 +453,10 @@ def validate_environment(repo_root: pathlib.Path, values: dict[str, str]) -> dic
     expected_broker_socket = dev_gpu_root / "broker.sock"
     expected_mps_pipe_root = dev_gpu_root
     expected_external_reservations = dev_gpu_root / "external-reservations.json"
+    if formal_gpu_authority is not None:
+        expected_broker_socket = formal_gpu_authority.root / "broker.sock"
+        expected_mps_pipe_root = formal_gpu_authority.root
+        expected_external_reservations = formal_gpu_authority.reservations
     broker_socket_lexical = lexical_path(
         repo_root, values["MONOMER_DFT_GPU_BROKER_UDS"]
     )
@@ -390,7 +467,11 @@ def validate_environment(repo_root: pathlib.Path, values: dict[str, str]) -> dic
         broker_socket_lexical == expected_broker_socket,
         f"unexpected development GPU Broker socket: {broker_socket_lexical}",
     )
-    broker_socket = broker_socket_lexical.resolve(strict=False)
+    broker_socket = (
+        broker_socket_lexical
+        if formal_gpu_authority is not None
+        else broker_socket_lexical.resolve(strict=False)
+    )
     require(broker_socket == expected_broker_socket, f"unexpected Host GPU Broker socket: {broker_socket}")
     resolved["MONOMER_DFT_GPU_BROKER_UDS"] = str(broker_socket)
     mps_pipe_root_lexical = lexical_path(
@@ -403,7 +484,11 @@ def validate_environment(repo_root: pathlib.Path, values: dict[str, str]) -> dic
         mps_pipe_root_lexical == expected_mps_pipe_root,
         f"unexpected development MPS state root: {mps_pipe_root_lexical}",
     )
-    mps_pipe_root = mps_pipe_root_lexical.resolve(strict=False)
+    mps_pipe_root = (
+        mps_pipe_root_lexical
+        if formal_gpu_authority is not None
+        else mps_pipe_root_lexical.resolve(strict=False)
+    )
     require(
         mps_pipe_root == expected_mps_pipe_root,
         f"unexpected Host MPS state root: {mps_pipe_root}",
@@ -420,7 +505,11 @@ def validate_environment(repo_root: pathlib.Path, values: dict[str, str]) -> dic
         external_reservations_lexical == expected_external_reservations,
         "GPU external reservations must use the current development worktree",
     )
-    external_reservations = external_reservations_lexical.resolve(strict=False)
+    external_reservations = (
+        external_reservations_lexical
+        if formal_gpu_authority is not None
+        else external_reservations_lexical.resolve(strict=False)
+    )
     require(
         external_reservations == expected_external_reservations,
         f"unexpected GPU external reservation manifest: {external_reservations}",
@@ -782,8 +871,15 @@ def main() -> int:
     require(not inherited_pythonpath, "inherited PYTHONPATH must be unset or empty")
 
     env_file = repo_root / ".env.monomer-dft.dev"
-    values = load_env_file(env_file)
-    resolved = validate_environment(repo_root, values)
+    values, formal_gpu_authority = effective_environment(
+        repo_root,
+        load_env_file(env_file),
+    )
+    resolved = validate_environment(
+        repo_root,
+        values,
+        formal_gpu_authority,
+    )
     git_result = validate_git(repo_root)
 
     broker_enabled = values["MONOMER_DFT_GPU_BROKER_ENABLED"] == "1"

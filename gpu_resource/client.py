@@ -208,6 +208,7 @@ def mps_client_environment(
     lease: GpuLease,
     *,
     pipe_root: str | Path,
+    pipe_directories: dict[int, str | Path] | None = None,
 ) -> dict[str, str]:
     """Build and validate the MPS environment for one fenced lease.
 
@@ -221,8 +222,33 @@ def mps_client_environment(
         raise GpuBrokerClientError(
             "gpu_runtime_unhealthy", "MPS pipe root must be an absolute path"
         )
-    pipe_directory = root / f"mps-{lease.gpu_index}" / "pipe"
-    if pipe_directory.is_symlink() or not pipe_directory.is_dir():
+    if pipe_directories is None:
+        pipe_directory = root / f"mps-{lease.gpu_index}" / "pipe"
+        descriptor_authority = False
+    else:
+        raw_pipe_directory = pipe_directories.get(lease.gpu_index)
+        if raw_pipe_directory is None:
+            raise GpuBrokerClientError(
+                "gpu_runtime_unhealthy",
+                "leased GPU lacks a descriptor-bound MPS pipe authority",
+            )
+        pipe_directory = Path(raw_pipe_directory)
+        descriptor_authority = (
+            re.fullmatch(
+                r"/proc/[1-9][0-9]*/fd/[0-9]+",
+                str(pipe_directory),
+            )
+            is not None
+        )
+        if not descriptor_authority:
+            raise GpuBrokerClientError(
+                "gpu_runtime_unhealthy",
+                "leased GPU MPS pipe authority is invalid",
+            )
+    if (
+        (not descriptor_authority and pipe_directory.is_symlink())
+        or not pipe_directory.is_dir()
+    ):
         raise GpuBrokerClientError(
             "gpu_runtime_unhealthy", "leased GPU MPS pipe directory is unavailable"
         )
@@ -233,7 +259,17 @@ def mps_client_environment(
         raise GpuBrokerClientError(
             "gpu_runtime_unhealthy", "leased GPU MPS control channel is unavailable"
         ) from exc
-    if pipe_stat.st_uid != os.geteuid() or control_stat.st_uid != os.geteuid():
+    if (
+        pipe_stat.st_uid != os.geteuid()
+        or control_stat.st_uid != os.geteuid()
+        or (
+            descriptor_authority
+            and (
+                pipe_stat.st_gid != os.getegid()
+                or stat.S_IMODE(pipe_stat.st_mode) != 0o700
+            )
+        )
+    ):
         raise GpuBrokerClientError(
             "gpu_runtime_unhealthy", "leased GPU MPS channel has an unexpected owner"
         )
@@ -266,6 +302,28 @@ class GpuBrokerClient:
         result = self._request({"action": "status"})
         if not isinstance(result, dict):
             raise GpuBrokerClientError("invalid_response", "status response must be an object")
+        return result
+
+    def set_draining(self, draining: bool) -> dict[str, Any]:
+        """Atomically change Broker admission state and return the new status.
+
+        Lifecycle controllers must not reach into ``_request`` to drain a
+        Broker before collecting MPS.  Keeping this operation on the public
+        client also makes the returned lease inventory part of the normal
+        response validation boundary.
+        """
+
+        if not isinstance(draining, bool):
+            raise TypeError("draining must be a boolean")
+        result = self._request({"action": "drain", "draining": draining})
+        if (
+            not isinstance(result, dict)
+            or result.get("draining") is not draining
+            or not isinstance(result.get("leases"), list)
+        ):
+            raise GpuBrokerClientError(
+                "invalid_response", "Broker drain response is invalid"
+            )
         return result
 
     def acquire_managed(

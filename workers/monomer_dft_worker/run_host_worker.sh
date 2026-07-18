@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -P "$SCRIPT_DIR/../.." && pwd -P)"
 PRODUCTION_REPO_ROOT="/data/lzq/gith/nexpoly"
 DEFAULT_RUNTIME_ROOT="$REPO_ROOT/.runtime"
+GPU_AUTHORITY_VALIDATOR="$REPO_ROOT/gpu_resource/authority.py"
 RUNTIME_ROOT=""
 RUNTIME_ROOT_IS_DEFAULT=false
 
@@ -439,9 +440,22 @@ MONOMER_DFT_JOB_ROOT="$(absolute_runtime_path "${MONOMER_DFT_JOB_ROOT:-$RUNTIME_
 AIMNET_CACHE_DIR="$(absolute_runtime_path "${AIMNET_CACHE_DIR:-$RUNTIME_ROOT/aimnet-cache}")"
 WARP_CACHE_PATH="$(absolute_runtime_path "${WARP_CACHE_PATH:-$RUNTIME_ROOT/warp-cache}")"
 export UV_CACHE_DIR="$RUNTIME_ROOT/uv-cache"
-MONOMER_DFT_GPU_BROKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_GPU_BROKER_UDS:-$RUNTIME_ROOT/gpu-resource/broker.sock}")"
-MONOMER_DFT_GPU_MPS_PIPE_ROOT="$(absolute_runtime_path "${MONOMER_DFT_GPU_MPS_PIPE_ROOT:-$RUNTIME_ROOT/gpu-resource}")"
-MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$(absolute_runtime_path "${MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS:-$RUNTIME_ROOT/gpu-resource/external-reservations.json}")"
+if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" == "1" ]]; then
+  [[ "${NEXPOLY_DFT_FORMAL_ACCEPTANCE:-0}" == "1" ]] || \
+    fail "GPU descriptor authority requires formal acceptance"
+  MONOMER_DFT_GPU_BROKER_UDS="${NEXPOLY_DFT_GPU_AUTHORITY_ROOT}/broker.sock"
+  MONOMER_DFT_GPU_MPS_PIPE_ROOT="$NEXPOLY_DFT_GPU_AUTHORITY_ROOT"
+  MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY"
+  "$MONOMER_DFT_PYTHON" -I -S "$GPU_AUTHORITY_VALIDATOR" \
+    --expected-reservations-file \
+    "$REPO_ROOT/ops/config/gpu-external-reservations.json" \
+    --expected-root "$RUNTIME_ROOT/gpu-resource" ||
+    fail "GPU descriptor authority validation failed"
+else
+  MONOMER_DFT_GPU_BROKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_GPU_BROKER_UDS:-$RUNTIME_ROOT/gpu-resource/broker.sock}")"
+  MONOMER_DFT_GPU_MPS_PIPE_ROOT="$(absolute_runtime_path "${MONOMER_DFT_GPU_MPS_PIPE_ROOT:-$RUNTIME_ROOT/gpu-resource}")"
+  MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$(absolute_runtime_path "${MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS:-$RUNTIME_ROOT/gpu-resource/external-reservations.json}")"
+fi
 MONOMER_DFT_DOWNLOAD_SPOOL_ROOT="$(absolute_runtime_path "${MONOMER_DFT_DOWNLOAD_SPOOL_ROOT:-$RUNTIME_ROOT/monomer-dft-downloads}")"
 export MONOMER_DFT_PYTHON MONOMER_DFT_WORKER_UDS MONOMER_DFT_JOB_ROOT
 export AIMNET_CACHE_DIR WARP_CACHE_PATH
@@ -459,9 +473,11 @@ assert_runtime_path MONOMER_DFT_JOB_ROOT "$MONOMER_DFT_JOB_ROOT"
 assert_runtime_path AIMNET_CACHE_DIR "$AIMNET_CACHE_DIR"
 assert_runtime_path WARP_CACHE_PATH "$WARP_CACHE_PATH"
 assert_runtime_path UV_CACHE_DIR "$UV_CACHE_DIR"
-assert_runtime_path MONOMER_DFT_GPU_BROKER_UDS "$MONOMER_DFT_GPU_BROKER_UDS"
-assert_runtime_path MONOMER_DFT_GPU_MPS_PIPE_ROOT "$MONOMER_DFT_GPU_MPS_PIPE_ROOT"
-assert_runtime_path MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS"
+if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
+  assert_runtime_path MONOMER_DFT_GPU_BROKER_UDS "$MONOMER_DFT_GPU_BROKER_UDS"
+  assert_runtime_path MONOMER_DFT_GPU_MPS_PIPE_ROOT "$MONOMER_DFT_GPU_MPS_PIPE_ROOT"
+  assert_runtime_path MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS"
+fi
 assert_runtime_path MONOMER_DFT_DOWNLOAD_SPOOL_ROOT "$MONOMER_DFT_DOWNLOAD_SPOOL_ROOT"
 assert_runtime_path XDG_CACHE_HOME "$XDG_CACHE_HOME"
 assert_runtime_path TORCH_HOME "$TORCH_HOME"
@@ -496,10 +512,12 @@ ensure_runtime_directory MONOMER_DFT_JOB_ROOT "$MONOMER_DFT_JOB_ROOT" true
 ensure_runtime_directory AIMNET_CACHE_DIR "$AIMNET_CACHE_DIR" true
 ensure_runtime_directory WARP_CACHE_PATH "$WARP_CACHE_PATH" true
 ensure_runtime_directory UV_CACHE_DIR "$UV_CACHE_DIR" true
-ensure_runtime_directory "MONOMER_DFT_GPU_BROKER_UDS parent" "$(dirname "$MONOMER_DFT_GPU_BROKER_UDS")" true
-ensure_runtime_directory MONOMER_DFT_GPU_MPS_PIPE_ROOT "$MONOMER_DFT_GPU_MPS_PIPE_ROOT" true
-ensure_runtime_directory "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS parent" "$(dirname "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS")" true
-assert_runtime_file_slot MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS"
+if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
+  ensure_runtime_directory "MONOMER_DFT_GPU_BROKER_UDS parent" "$(dirname "$MONOMER_DFT_GPU_BROKER_UDS")" true
+  ensure_runtime_directory MONOMER_DFT_GPU_MPS_PIPE_ROOT "$MONOMER_DFT_GPU_MPS_PIPE_ROOT" true
+  ensure_runtime_directory "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS parent" "$(dirname "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS")" true
+  assert_runtime_file_slot MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS"
+fi
 ensure_runtime_directory MONOMER_DFT_DOWNLOAD_SPOOL_ROOT "$MONOMER_DFT_DOWNLOAD_SPOOL_ROOT" true
 ensure_runtime_directory XDG_CACHE_HOME "$XDG_CACHE_HOME" true
 ensure_runtime_directory TORCH_HOME "$TORCH_HOME" true

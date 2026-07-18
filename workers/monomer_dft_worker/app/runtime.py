@@ -405,7 +405,14 @@ class AimnetRuntime:
         for name, path in paths.items():
             if path is None:
                 raise RuntimeError(f"{name} is not configured")
-            if path.is_symlink() or not path.is_dir():
+            descriptor_bound_mps = (
+                name == "MONOMER_DFT_GPU_MPS_PIPE_ROOT"
+                and bool(self.settings.mps_pipe_directories)
+            )
+            if (
+                (not descriptor_bound_mps and path.is_symlink())
+                or not path.is_dir()
+            ):
                 raise RuntimeError(f"{name} must be a real directory: {path}")
             try:
                 validate_dev_runtime_path(

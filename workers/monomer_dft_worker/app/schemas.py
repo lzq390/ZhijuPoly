@@ -149,6 +149,7 @@ class GpuExecutionProvenanceV2(BaseModel):
     gpu_budget_mib: int = Field(gt=0)
     broker_instance_id: str = Field(min_length=1)
     lease_id: str = Field(min_length=1)
+    parent_lease_id: str | None = Field(default=None, min_length=1)
     fencing_token: int = Field(gt=0)
 
 

@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shlex
 import socket
 import socketserver
@@ -42,6 +43,9 @@ from .broker import (
 
 MAX_REQUEST_BYTES = 64 * 1024
 logger = logging.getLogger("nexpoly_gpu_broker")
+_LOCAL_INHERITED_FD_RE = re.compile(
+    r"^/proc/(self|[1-9][0-9]*)/fd/([1-9][0-9]*)$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,20 +111,39 @@ def query_gpu_inventory() -> dict[int, str]:
     return inventory
 
 
-def load_external_reservations(path: Path) -> ExternalReservationPolicy:
+def _open_external_reservations(path: Path) -> int:
+    """Open an ordinary policy or duplicate one exact inherited local FD."""
+
+    raw = str(path)
+    descriptor_match = _LOCAL_INHERITED_FD_RE.fullmatch(raw)
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        if descriptor_match is None:
+            if raw.startswith("/proc/"):
+                raise OSError("descriptor authority path is ambiguous")
+            return os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        process = descriptor_match.group(1)
+        descriptor = int(descriptor_match.group(2))
+        if (
+            descriptor <= 2
+            or (process != "self" and int(process) != os.getpid())
+        ):
+            raise OSError("descriptor authority is not local")
+        return os.dup(descriptor)
     except OSError as exc:
         raise BrokerError(
             "external_inventory_unavailable",
             "external GPU reservation inventory is missing or unsafe",
         ) from exc
+
+
+def load_external_reservations(path: Path) -> ExternalReservationPolicy:
+    descriptor = _open_external_reservations(path)
     try:
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             raise BrokerError(
                 "external_inventory_unavailable",
-                "external GPU reservation inventory must be a regular file",
+                "external GPU reservation inventory must be a private regular file",
             )
         if stat.S_IMODE(metadata.st_mode) != 0o600 or (
             metadata.st_uid != 1001 or metadata.st_gid != 1001
@@ -135,9 +158,20 @@ def load_external_reservations(path: Path) -> ExternalReservationPolicy:
                 "external GPU reservation inventory is oversized",
             )
         try:
-            with os.fdopen(descriptor, encoding="utf-8") as handle:
-                descriptor = -1
-                payload = json.load(handle)
+            raw_payload = os.pread(descriptor, 64 * 1024 + 1, 0)
+            after = os.fstat(descriptor)
+            if (
+                len(raw_payload) != metadata.st_size
+                or after.st_dev != metadata.st_dev
+                or after.st_ino != metadata.st_ino
+                or after.st_size != metadata.st_size
+                or after.st_mtime_ns != metadata.st_mtime_ns
+                or after.st_ctime_ns != metadata.st_ctime_ns
+            ):
+                raise OSError(
+                    "external GPU reservation inventory changed while read"
+                )
+            payload = json.loads(raw_payload.decode("utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise BrokerError(
                 "external_inventory_unavailable",
@@ -2152,6 +2186,41 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def process_stable_descriptor_path(path: Path) -> Path:
+    """Replace /proc/self with this long-lived Broker's immutable PID."""
+
+    raw = str(path)
+    prefix = "/proc/self/fd/"
+    if not raw.startswith(prefix):
+        if raw.startswith("/proc/"):
+            raise BrokerError(
+                "invalid_runtime_authority",
+                "Broker descriptor authority must be process-local",
+            )
+        return path
+    suffix = raw.removeprefix(prefix)
+    descriptor, separator, remainder = suffix.partition("/")
+    if (
+        not descriptor.isdigit()
+        or descriptor.startswith("0")
+        or int(descriptor) <= 2
+        or (separator and not remainder)
+        or (
+            separator
+            and any(
+                part in {"", ".", ".."}
+                for part in remainder.split("/")
+            )
+        )
+    ):
+        raise BrokerError(
+            "invalid_runtime_authority",
+            "Broker descriptor authority path is invalid",
+        )
+    stable = Path(f"/proc/{os.getpid()}/fd/{descriptor}")
+    return stable / remainder if separator else stable
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO)
     args = parse_args()
@@ -2160,6 +2229,13 @@ def main() -> int:
             "invalid_service_identity",
             "GPU broker must run as the shared 1001:1001 service identity",
         )
+    args.socket = process_stable_descriptor_path(args.socket)
+    args.external_reservations = process_stable_descriptor_path(
+        args.external_reservations
+    )
+    args.mps_state_root = process_stable_descriptor_path(
+        args.mps_state_root
+    )
     validate_policy_document(args.policy)
     validate_gpu_inventory(query_gpu_inventory())
     mps_guard = MpsRuntimeGuard(args.mps_state_root)

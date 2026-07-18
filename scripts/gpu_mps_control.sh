@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd -P "$SCRIPT_DIR/.." && pwd -P)"
+expected_development_gpu_root="$REPO_ROOT/.runtime/gpu-resource"
+
 action="${1:-}"
 index="${2:-}"
 break_glass_option="${3:-}"
@@ -31,8 +35,133 @@ esac
 state_root="${NEXPOLY_GPU_STATE_ROOT:-/data/lzq/gith/nexpoly-runtime/state/gpu-resource}"
 external_reservations="${NEXPOLY_GPU_EXTERNAL_RESERVATIONS:-$state_root/external-reservations.json}"
 CUDA_VISIBLE_DEVICES="$expected_uuid"
-CUDA_MPS_PIPE_DIRECTORY="$state_root/mps-$index/pipe"
-CUDA_MPS_LOG_DIRECTORY="$state_root/mps-$index/log"
+mps_slot_directory="${NEXPOLY_GPU_MPS_SLOT_DIRECTORY:-$state_root/mps-$index}"
+CUDA_MPS_PIPE_DIRECTORY="${NEXPOLY_GPU_MPS_PIPE_DIRECTORY:-$mps_slot_directory/pipe}"
+CUDA_MPS_LOG_DIRECTORY="${NEXPOLY_GPU_MPS_LOG_DIRECTORY:-$mps_slot_directory/log}"
+descriptor_authority="${NEXPOLY_GPU_MPS_DESCRIPTOR_AUTHORITY:-0}"
+descriptor_authority_pid="${NEXPOLY_GPU_MPS_AUTHORITY_PID:-}"
+descriptor_authority_start_ticks="${NEXPOLY_GPU_MPS_AUTHORITY_START_TICKS:-}"
+descriptor_expected_root="${NEXPOLY_GPU_MPS_EXPECTED_ROOT:-}"
+broker_socket="${NEXPOLY_GPU_BROKER_SOCKET:-$state_root/broker.sock}"
+
+if [[ "$descriptor_authority" == "1" ]]; then
+  if [[ "$index" == "2" ]]; then
+    echo "formal development descriptor authority forbids production GPU2" >&2
+    exit 1
+  fi
+  if [[ "$REPO_ROOT" == "/data/lzq/gith/nexpoly" ||
+    "$REPO_ROOT" == /data/lzq/gith/nexpoly/* ]]; then
+    echo "formal development descriptor authority forbids the production repository" >&2
+    exit 1
+  fi
+  [[ "$descriptor_authority_pid" =~ ^[1-9][0-9]*$ &&
+    "$descriptor_authority_start_ticks" =~ ^[1-9][0-9]*$ &&
+    "$state_root" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ &&
+    "$mps_slot_directory" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ &&
+    "$CUDA_MPS_PIPE_DIRECTORY" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ &&
+    "$CUDA_MPS_LOG_DIRECTORY" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ &&
+    "$external_reservations" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ &&
+    "$broker_socket" == "$state_root/broker.sock" &&
+    "$descriptor_expected_root" == "$expected_development_gpu_root" ]] || {
+    echo "MPS descriptor authority paths are invalid" >&2
+    exit 1
+  }
+  /usr/bin/python3 - \
+    "$descriptor_authority_pid" "$descriptor_authority_start_ticks" \
+    "$index" "$descriptor_expected_root" "$state_root" \
+    "$mps_slot_directory" "$CUDA_MPS_PIPE_DIRECTORY" \
+    "$CUDA_MPS_LOG_DIRECTORY" "$external_reservations" <<'PY'
+import os
+import stat
+import sys
+
+authority_pid = int(sys.argv[1])
+expected_start_ticks = int(sys.argv[2])
+index = int(sys.argv[3])
+if authority_pid == os.getpid():
+    raise SystemExit("MPS descriptor authority must be held by its harness")
+try:
+    authority_metadata = os.stat(f"/proc/{authority_pid}")
+except OSError as exc:
+    raise SystemExit("MPS descriptor authority process is unavailable") from exc
+if authority_metadata.st_uid != os.geteuid():
+    raise SystemExit("MPS descriptor authority process has an unsafe owner")
+try:
+    process_stat = open(
+        f"/proc/{authority_pid}/stat", encoding="ascii"
+    ).read()
+except OSError as exc:
+    raise SystemExit("MPS descriptor authority process is unavailable") from exc
+command_end = process_stat.rfind(")")
+fields = process_stat[command_end + 2 :].split() if command_end >= 0 else []
+if len(fields) <= 19 or int(fields[19]) != expected_start_ticks:
+    raise SystemExit("MPS descriptor authority process identity changed")
+
+expected_root = sys.argv[4]
+directory_paths = sys.argv[5:9]
+identities = []
+for raw in directory_paths:
+    metadata = os.stat(raw, follow_symlinks=True)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_gid != os.getegid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise SystemExit("MPS descriptor authority directory is unsafe")
+    identities.append((metadata.st_dev, metadata.st_ino))
+if len(set(identities)) != len(identities):
+    raise SystemExit("MPS descriptor authority directories are not distinct")
+root, slot, pipe, log = directory_paths
+expected_root_metadata = os.lstat(expected_root)
+if (
+    stat.S_ISLNK(expected_root_metadata.st_mode)
+    or not stat.S_ISDIR(expected_root_metadata.st_mode)
+    or (expected_root_metadata.st_dev, expected_root_metadata.st_ino)
+    != identities[0]
+):
+    raise SystemExit("MPS descriptor authority differs from the development root")
+relations = (
+    (os.path.join(root, f"mps-{index}"), identities[1]),
+    (os.path.join(slot, "pipe"), identities[2]),
+    (os.path.join(slot, "log"), identities[3]),
+)
+for path, expected_identity in relations:
+    metadata = os.stat(path)
+    if (metadata.st_dev, metadata.st_ino) != expected_identity:
+        raise SystemExit("MPS descriptor authority hierarchy changed")
+reservations = os.stat(sys.argv[9])
+root_reservations = os.stat(os.path.join(root, "external-reservations.json"))
+if (
+    not stat.S_ISREG(reservations.st_mode)
+    or reservations.st_uid != os.geteuid()
+    or reservations.st_gid != os.getegid()
+    or reservations.st_nlink != 1
+    or stat.S_IMODE(reservations.st_mode) != 0o600
+    or (reservations.st_dev, reservations.st_ino)
+    != (root_reservations.st_dev, root_reservations.st_ino)
+):
+    raise SystemExit("MPS reservation descriptor authority escaped its root")
+PY
+  state_root="/proc/self/fd/${state_root##*/}"
+  external_reservations="/proc/self/fd/${external_reservations##*/}"
+  mps_slot_directory="/proc/self/fd/${mps_slot_directory##*/}"
+  CUDA_MPS_PIPE_DIRECTORY="/proc/self/fd/${CUDA_MPS_PIPE_DIRECTORY##*/}"
+  CUDA_MPS_LOG_DIRECTORY="/proc/self/fd/${CUDA_MPS_LOG_DIRECTORY##*/}"
+  broker_socket="$state_root/broker.sock"
+elif [[ "$descriptor_authority" == "0" ]]; then
+  for directory in \
+    "$state_root" "$mps_slot_directory" \
+    "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"; do
+    if [[ -L "$directory" || ( -e "$directory" && ! -d "$directory" ) ]]; then
+      echo "MPS runtime directory is unsafe: $directory" >&2
+      exit 1
+    fi
+  done
+else
+  echo "NEXPOLY_GPU_MPS_DESCRIPTOR_AUTHORITY must be 0 or 1" >&2
+  exit 1
+fi
 
 require_exact_idle_mps_inventory() {
   /usr/bin/python3 - <<'PY'
@@ -151,11 +280,13 @@ fi
 export CUDA_VISIBLE_DEVICES
 export CUDA_MPS_PIPE_DIRECTORY
 export CUDA_MPS_LOG_DIRECTORY
-install -d -m 0700 \
-  "$state_root" \
-  "$state_root/mps-$index" \
-  "$CUDA_MPS_PIPE_DIRECTORY" \
-  "$CUDA_MPS_LOG_DIRECTORY"
+if [[ "$descriptor_authority" == "0" ]]; then
+  install -d -m 0700 \
+    "$state_root" \
+    "$mps_slot_directory" \
+    "$CUDA_MPS_PIPE_DIRECTORY" \
+    "$CUDA_MPS_LOG_DIRECTORY"
+fi
 
 if [[ "$action" == "start" ]]; then
   # Compute mode is intentionally not changed here.  The later production
@@ -185,7 +316,6 @@ if [[ "$(stat -c '%u:%g' "$CUDA_MPS_PIPE_DIRECTORY/control")" != "1001:1001" ]];
   exit 1
 fi
 require_exact_idle_mps_inventory
-broker_socket="${NEXPOLY_GPU_BROKER_SOCKET:-$state_root/broker.sock}"
 if [[ -L "$broker_socket" ]]; then
   echo "GPU Broker socket path is unsafe; refusing MPS quit" >&2
   exit 1

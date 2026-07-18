@@ -9,6 +9,11 @@ RUNTIME_ROOT="$REPO_ROOT/.runtime"
 WORKER_DIR="$REPO_ROOT/workers/monomer_dft_worker"
 RUNNER="$WORKER_DIR/run_host_worker.sh"
 ENV_FILE="$REPO_ROOT/.env.monomer-dft.dev"
+FORMAL_ENV_PARSER="$SCRIPT_DIR/monomer_dft_acceptance_env.py"
+FORMAL_ACCEPTANCE="${NEXPOLY_DFT_FORMAL_ACCEPTANCE:-0}"
+FORMAL_PROJECT_NAME="${NEXPOLY_DFT_PROJECT_NAME:-}"
+FORMAL_AUTHORITY_SHA="${NEXPOLY_DFT_AUTHORITY_SHA:-}"
+GPU_AUTHORITY_VALIDATOR="$REPO_ROOT/gpu_resource/authority.py"
 PID_FILE="$RUNTIME_ROOT/monomer-dft-worker.pid"
 LOG_FILE="$RUNTIME_ROOT/monomer-dft-worker.log"
 LOCK_FILE="$RUNTIME_ROOT/monomer-dft-worker.ctl.lock"
@@ -19,6 +24,8 @@ PRIVATE_TMPDIR="$RUNTIME_ROOT/tmp"
 PRIVATE_XDG_CACHE="$RUNTIME_ROOT/xdg-cache"
 GPU_SCOPE_XDG_RUNTIME_DIR=""
 GPU_SCOPE_DBUS_ADDRESS=""
+FORMAL_ENV_KEY_COUNT=44
+FORMAL_ENV_KEYSET_SHA256="1e27ea88df12273bdaf31f448cc8366e500db644535a555515bf9a815a1cf90a"
 
 REAL_RUNTIME_ROOT=""
 START_TIMEOUT=""
@@ -37,8 +44,187 @@ fail() {
   exit 2
 }
 
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 [[ "$REPO_ROOT" != "$PRODUCTION_REPO_ROOT" ]] || fail \
   "development DFT worker control is forbidden in the production repository"
+[[ "$FORMAL_ACCEPTANCE" == "0" || "$FORMAL_ACCEPTANCE" == "1" ]] || fail \
+  "NEXPOLY_DFT_FORMAL_ACCEPTANCE must be 0 or 1"
+
+load_formal_env() {
+  local key=""
+  local value=""
+  local pending_key=""
+  local token=""
+  local token_count=0
+  local invalid_output=0
+  local parser_pid=""
+  local parser_fd=""
+  local coproc_read_fd=""
+  local parser_status=0
+  local keyset_digest=""
+  local -a allowed_keys=(
+    AIMNET_CACHE_DIR AIMNET_MODEL_SOURCE_DIR AIMNET_SOURCE_CLONE
+    AIMNET_SOURCE_DIR AIMNET_SOURCE_LOCK CUDA_DEVICE_ORDER
+    MONOMER_DFT_ARTIFACT_RETENTION_DAYS MONOMER_DFT_DEPLOYMENT
+    MONOMER_DFT_DOWNLOAD_MAX_CONCURRENT MONOMER_DFT_DOWNLOAD_SPOOL_ROOT
+    MONOMER_DFT_DRAIN_TIMEOUT_SECONDS
+    MONOMER_DFT_FATAL_RESTART_BACKOFF_SECONDS
+    MONOMER_DFT_FATAL_RESTART_MAX_ATTEMPTS
+    MONOMER_DFT_FATAL_RESTART_MAX_BACKOFF_SECONDS
+    MONOMER_DFT_FATAL_RESTART_RESET_SECONDS
+    MONOMER_DFT_GPU_ACTIVE_THREAD_PERCENTAGE
+    MONOMER_DFT_GPU_BROKER_ENABLED MONOMER_DFT_GPU_BROKER_UDS
+    MONOMER_DFT_GPU_BUDGET_MIB MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS
+    MONOMER_DFT_GPU_MPS_PIPE_ROOT MONOMER_DFT_JOB_ROOT
+    MONOMER_DFT_MAX_CONCURRENT_JOBS MONOMER_DFT_MAX_QUEUED_JOBS
+    MONOMER_DFT_OPTIMIZATION_TIMEOUT_SECONDS MONOMER_DFT_PYTHON
+    MONOMER_DFT_RECONCILE_INTERVAL_SECONDS
+    MONOMER_DFT_SINGLE_POINT_TIMEOUT_SECONDS
+    MONOMER_DFT_STANDALONE_GPU_SMOKE MONOMER_DFT_VALIDATION_CONCURRENCY
+    MONOMER_DFT_WORKER_TIMEOUT_SECONDS MONOMER_DFT_WORKER_UDS
+    NEXPOLY_DFT_BACKEND_PORT NEXPOLY_DFT_FRONTEND_PORT
+    NEXPOLY_DFT_GPU_DEVICE NEXPOLY_DFT_OVERFLOW_GPU_DEVICES
+    NEXPOLY_DFT_POSTGRES_PASSWORD NEXPOLY_DFT_POSTGRES_PORT
+    NEXPOLY_DFT_PROJECT_NAME PYTHONDONTWRITEBYTECODE PYTHONNOUSERSITE
+    PYTHONPATH UV_CACHE_DIR WARP_CACHE_PATH
+  )
+  local -A allowed=()
+  local -A seen=()
+  local -A parsed=()
+  PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  export PATH
+  [[ -f "$FORMAL_ENV_PARSER" && ! -L "$FORMAL_ENV_PARSER" ]] || fail \
+    "formal acceptance dotenv parser is missing or unsafe"
+  for key in "${allowed_keys[@]}"; do
+    allowed["$key"]=1
+  done
+  coproc FORMAL_ENV_COPROC {
+    exec /usr/bin/python3 -I -S "$FORMAL_ENV_PARSER" \
+      --env-file "$ENV_FILE"
+  }
+  parser_pid="$FORMAL_ENV_COPROC_PID"
+  coproc_read_fd="${FORMAL_ENV_COPROC[0]}"
+  exec {parser_fd}<&"$coproc_read_fd"
+  while IFS= read -r -d '' token <&"$parser_fd"; do
+    ((token_count += 1))
+    if (( token_count % 2 == 1 )); then
+      pending_key="$token"
+      if [[ ! "$pending_key" =~ ^[A-Z][A-Z0-9_]*$ ]] ||
+        [[ -z "${allowed[$pending_key]:-}" ]] ||
+        [[ -n "${seen[$pending_key]:-}" ]]; then
+        invalid_output=1
+      else
+        seen["$pending_key"]=1
+      fi
+    else
+      if [[ "$invalid_output" == "0" && -n "$pending_key" ]]; then
+        parsed["$pending_key"]="$token"
+      elif [[ -n "$pending_key" && -n "${seen[$pending_key]:-}" ]]; then
+        parsed["$pending_key"]="$token"
+      fi
+      pending_key=""
+    fi
+  done
+  exec {parser_fd}<&-
+  if wait "$parser_pid"; then
+    parser_status=0
+  else
+    parser_status=$?
+  fi
+  [[ "$parser_status" == "0" ]] || fail \
+    "formal acceptance dotenv validation failed"
+  [[ "$invalid_output" == "0" && $((token_count % 2)) == 0 &&
+    "$token_count" == "$((FORMAL_ENV_KEY_COUNT * 2))" &&
+    "${#seen[@]}" == "$FORMAL_ENV_KEY_COUNT" &&
+    "${#parsed[@]}" == "$FORMAL_ENV_KEY_COUNT" ]] || fail \
+    "formal acceptance parser emitted an invalid token inventory"
+  keyset_digest="$(
+    printf '%s\0' "${!seen[@]}" |
+      /usr/bin/sort -z |
+      /usr/bin/sha256sum |
+      /usr/bin/cut -d ' ' -f1
+  )"
+  [[ "$keyset_digest" == "$FORMAL_ENV_KEYSET_SHA256" ]] || fail \
+    "formal acceptance parser emitted the wrong key set"
+  for key in "${allowed_keys[@]}"; do
+    value="${parsed[$key]}"
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  done
+}
+
+reject_formal_control_environment() {
+  local unsafe_name=""
+  local exported_name=""
+  local -a unsafe_environment_names=(
+    BASH_ENV ENV CDPATH GLOBIGNORE
+    LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_PROFILE
+    PYTHONHOME PYTHONSTARTUP PYTHONINSPECT PYTHONWARNINGS
+    HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
+    http_proxy https_proxy all_proxy no_proxy
+    DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+  )
+  for unsafe_name in "${unsafe_environment_names[@]}"; do
+    [[ -z "${!unsafe_name:-}" ]] || fail \
+      "formal Worker environment contains forbidden $unsafe_name"
+  done
+  while IFS= read -r exported_name; do
+    case "$exported_name" in
+      COMPOSE_*|GIT_*)
+        [[ -z "${!exported_name:-}" ]] || fail \
+          "formal Worker environment contains forbidden $exported_name"
+        ;;
+    esac
+  done < <(compgen -e)
+}
+
+configure_formal_gpu_authority() {
+  local -a authority_names=(
+    NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY
+    NEXPOLY_DFT_GPU_AUTHORITY_PID
+    NEXPOLY_DFT_GPU_AUTHORITY_START_TICKS
+    NEXPOLY_DFT_GPU_AUTHORITY_ROOT
+    NEXPOLY_DFT_GPU_AUTHORITY_ROOT_IDENTITY
+    NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY
+    NEXPOLY_DFT_GPU_RESERVATIONS_IDENTITY
+    NEXPOLY_DFT_GPU_RESERVATIONS_SHA256
+    NEXPOLY_DFT_GPU1_MPS_PIPE_AUTHORITY
+    NEXPOLY_DFT_GPU1_MPS_PIPE_IDENTITY
+    NEXPOLY_DFT_GPU3_MPS_PIPE_AUTHORITY
+    NEXPOLY_DFT_GPU3_MPS_PIPE_IDENTITY
+  )
+  local name=""
+  if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
+    for name in "${authority_names[@]}"; do
+      [[ -z "${!name:-}" ]] || fail \
+        "partial GPU descriptor authority is forbidden"
+    done
+    return 0
+  fi
+  [[ "$FORMAL_ACCEPTANCE" == "1" &&
+    "$FORMAL_PROJECT_NAME" == nexpoly_dft_fresh_* &&
+    "$FORMAL_AUTHORITY_SHA" =~ ^[0-9a-f]{40}$ ]] || fail \
+    "GPU descriptor authority lacks fresh acceptance identity"
+  NEXPOLY_DFT_PROJECT_NAME="$FORMAL_PROJECT_NAME"
+  NEXPOLY_DFT_AUTHORITY_SHA="$FORMAL_AUTHORITY_SHA"
+  export NEXPOLY_DFT_PROJECT_NAME NEXPOLY_DFT_AUTHORITY_SHA
+  for name in "${authority_names[@]}"; do
+    export "$name"
+  done
+  MONOMER_DFT_GPU_BROKER_UDS="${NEXPOLY_DFT_GPU_AUTHORITY_ROOT}/broker.sock"
+  MONOMER_DFT_GPU_MPS_PIPE_ROOT="$NEXPOLY_DFT_GPU_AUTHORITY_ROOT"
+  MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY"
+  export MONOMER_DFT_GPU_BROKER_UDS MONOMER_DFT_GPU_MPS_PIPE_ROOT
+  export MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS
+  /usr/bin/python3 -I -S "$GPU_AUTHORITY_VALIDATOR" \
+    --expected-reservations-file \
+    "$REPO_ROOT/ops/config/gpu-external-reservations.json" \
+    --expected-root "$GPU_RUNTIME_ROOT" ||
+    fail "GPU descriptor authority validation failed"
+}
 
 absolute_runtime_path() {
   local value="$1"
@@ -150,10 +336,15 @@ load_env() {
   [[ "$(realpath -e -- "$(dirname "$ENV_FILE")")" == "$REPO_ROOT" ]] || fail "environment file parent resolves outside the worktree"
   [[ "$(stat -c '%u' "$ENV_FILE")" == "$(id -u)" ]] || fail "environment file must be owned by uid $(id -u): $ENV_FILE"
   [[ "$(stat -c '%a' "$ENV_FILE")" == "600" ]] || fail "environment file permissions must be 0600: $ENV_FILE"
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  if [[ "$FORMAL_ACCEPTANCE" == "1" ]]; then
+    load_formal_env
+    reject_formal_control_environment
+  else
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+  fi
 }
 
 validate_dev_selection() {
@@ -181,12 +372,15 @@ validate_dev_selection() {
 
 configure_paths() {
   validate_dev_selection
+  configure_formal_gpu_authority
   MONOMER_DFT_PYTHON="$(absolute_runtime_path "${MONOMER_DFT_PYTHON:-.runtime/venvs/monomer-dft-worker/bin/python}")"
   MONOMER_DFT_WORKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_WORKER_UDS:-.runtime/monomer-dft-worker-socket/worker.sock}")"
   MONOMER_DFT_JOB_ROOT="$(absolute_runtime_path "${MONOMER_DFT_JOB_ROOT:-.runtime/monomer-dft-worker-runs}")"
-  MONOMER_DFT_GPU_BROKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_GPU_BROKER_UDS:-.runtime/gpu-resource/broker.sock}")"
-  MONOMER_DFT_GPU_MPS_PIPE_ROOT="$(absolute_runtime_path "${MONOMER_DFT_GPU_MPS_PIPE_ROOT:-.runtime/gpu-resource}")"
-  MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$(absolute_runtime_path "${MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS:-.runtime/gpu-resource/external-reservations.json}")"
+  if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
+    MONOMER_DFT_GPU_BROKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_GPU_BROKER_UDS:-.runtime/gpu-resource/broker.sock}")"
+    MONOMER_DFT_GPU_MPS_PIPE_ROOT="$(absolute_runtime_path "${MONOMER_DFT_GPU_MPS_PIPE_ROOT:-.runtime/gpu-resource}")"
+    MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$(absolute_runtime_path "${MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS:-.runtime/gpu-resource/external-reservations.json}")"
+  fi
   AIMNET_CACHE_DIR="$(absolute_runtime_path "${AIMNET_CACHE_DIR:-.runtime/aimnet-cache}")"
   WARP_CACHE_PATH="$(absolute_runtime_path "${WARP_CACHE_PATH:-.runtime/warp-cache}")"
   UV_CACHE_DIR="$(absolute_runtime_path "${UV_CACHE_DIR:-.runtime/uv-cache}")"
@@ -194,21 +388,25 @@ configure_paths() {
   assert_runtime_path MONOMER_DFT_PYTHON "$MONOMER_DFT_PYTHON"
   assert_runtime_path MONOMER_DFT_WORKER_UDS "$MONOMER_DFT_WORKER_UDS"
   assert_runtime_path MONOMER_DFT_JOB_ROOT "$MONOMER_DFT_JOB_ROOT"
-  assert_runtime_path MONOMER_DFT_GPU_BROKER_UDS "$MONOMER_DFT_GPU_BROKER_UDS"
-  assert_runtime_path MONOMER_DFT_GPU_MPS_PIPE_ROOT "$MONOMER_DFT_GPU_MPS_PIPE_ROOT"
-  assert_runtime_path MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS"
+  if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
+    assert_runtime_path MONOMER_DFT_GPU_BROKER_UDS "$MONOMER_DFT_GPU_BROKER_UDS"
+    assert_runtime_path MONOMER_DFT_GPU_MPS_PIPE_ROOT "$MONOMER_DFT_GPU_MPS_PIPE_ROOT"
+    assert_runtime_path MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS"
+  fi
   assert_runtime_path AIMNET_CACHE_DIR "$AIMNET_CACHE_DIR"
   assert_runtime_path WARP_CACHE_PATH "$WARP_CACHE_PATH"
   assert_runtime_path UV_CACHE_DIR "$UV_CACHE_DIR"
   assert_runtime_path AIMNET_SOURCE_DIR "$AIMNET_SOURCE_DIR"
   [[ "$MONOMER_DFT_JOB_ROOT" == "$RUNTIME_ROOT/monomer-dft-worker-runs" ]] || fail \
     "job root must use the fixed development runtime path"
-  [[ "$MONOMER_DFT_GPU_BROKER_UDS" == "$GPU_RUNTIME_ROOT/broker.sock" ]] || fail \
-    "GPU Broker socket must use the current development worktree"
-  [[ "$MONOMER_DFT_GPU_MPS_PIPE_ROOT" == "$GPU_RUNTIME_ROOT" ]] || fail \
-    "MPS root must use the current development worktree"
-  [[ "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS" == "$GPU_RUNTIME_ROOT/external-reservations.json" ]] || fail \
-    "GPU reservations must use the current development worktree"
+  if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
+    [[ "$MONOMER_DFT_GPU_BROKER_UDS" == "$GPU_RUNTIME_ROOT/broker.sock" ]] || fail \
+      "GPU Broker socket must use the current development worktree"
+    [[ "$MONOMER_DFT_GPU_MPS_PIPE_ROOT" == "$GPU_RUNTIME_ROOT" ]] || fail \
+      "MPS root must use the current development worktree"
+    [[ "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS" == "$GPU_RUNTIME_ROOT/external-reservations.json" ]] || fail \
+      "GPU reservations must use the current development worktree"
+  fi
   [[ "$AIMNET_CACHE_DIR" == "$RUNTIME_ROOT/aimnet-cache" ]] || fail \
     "AIMNet cache must use the current development worktree"
   [[ "$WARP_CACHE_PATH" == "$RUNTIME_ROOT/warp-cache" ]] || fail \
@@ -567,6 +765,21 @@ start_worker() {
     MONOMER_DFT_GPU_BROKER_UDS="$MONOMER_DFT_GPU_BROKER_UDS" \
     MONOMER_DFT_GPU_MPS_PIPE_ROOT="$MONOMER_DFT_GPU_MPS_PIPE_ROOT" \
     MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS" \
+    NEXPOLY_DFT_FORMAL_ACCEPTANCE="$FORMAL_ACCEPTANCE" \
+    NEXPOLY_DFT_PROJECT_NAME="$FORMAL_PROJECT_NAME" \
+    NEXPOLY_DFT_AUTHORITY_SHA="$FORMAL_AUTHORITY_SHA" \
+    NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY="${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" \
+    NEXPOLY_DFT_GPU_AUTHORITY_PID="${NEXPOLY_DFT_GPU_AUTHORITY_PID:-}" \
+    NEXPOLY_DFT_GPU_AUTHORITY_START_TICKS="${NEXPOLY_DFT_GPU_AUTHORITY_START_TICKS:-}" \
+    NEXPOLY_DFT_GPU_AUTHORITY_ROOT="${NEXPOLY_DFT_GPU_AUTHORITY_ROOT:-}" \
+    NEXPOLY_DFT_GPU_AUTHORITY_ROOT_IDENTITY="${NEXPOLY_DFT_GPU_AUTHORITY_ROOT_IDENTITY:-}" \
+    NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY="${NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY:-}" \
+    NEXPOLY_DFT_GPU_RESERVATIONS_IDENTITY="${NEXPOLY_DFT_GPU_RESERVATIONS_IDENTITY:-}" \
+    NEXPOLY_DFT_GPU_RESERVATIONS_SHA256="${NEXPOLY_DFT_GPU_RESERVATIONS_SHA256:-}" \
+    NEXPOLY_DFT_GPU1_MPS_PIPE_AUTHORITY="${NEXPOLY_DFT_GPU1_MPS_PIPE_AUTHORITY:-}" \
+    NEXPOLY_DFT_GPU1_MPS_PIPE_IDENTITY="${NEXPOLY_DFT_GPU1_MPS_PIPE_IDENTITY:-}" \
+    NEXPOLY_DFT_GPU3_MPS_PIPE_AUTHORITY="${NEXPOLY_DFT_GPU3_MPS_PIPE_AUTHORITY:-}" \
+    NEXPOLY_DFT_GPU3_MPS_PIPE_IDENTITY="${NEXPOLY_DFT_GPU3_MPS_PIPE_IDENTITY:-}" \
     MONOMER_DFT_GPU_BUDGET_MIB="${MONOMER_DFT_GPU_BUDGET_MIB:-4096}" \
     MONOMER_DFT_GPU_ACTIVE_THREAD_PERCENTAGE="${MONOMER_DFT_GPU_ACTIVE_THREAD_PERCENTAGE:-50}" \
     AIMNET_CACHE_DIR="$AIMNET_CACHE_DIR" \

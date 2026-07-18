@@ -45,8 +45,13 @@ REQUIRED_PATHS = (
     "contracts/monomer_dft_api_contract_v1.json",
     "docker-compose.monomer-dft-dev.yml",
     "docker-compose.prod.yml",
+    "gpu_resource/authority.py",
+    "gpu_resource/client.py",
+    "ops/gpu_broker/server.py",
     "scripts/ci/validate_workflows.py",
+    "scripts/gpu_mps_control.sh",
     "scripts/monomer_dft_gpu_acceptance.py",
+    "scripts/monomer_dft_acceptance_env.py",
     "scripts/monomer_dft_runtime_contract.py",
     "scripts/monomer_dft_dev_stack.sh",
     "scripts/monomer_dft_worker_ctl.sh",
@@ -58,7 +63,9 @@ REQUIRED_PATHS = (
     "scripts/validate_monomer_dft_release_contract.py",
     "workers/monomer_dft_worker/aimnet-source.lock.json",
     "workers/monomer_dft_worker/app/config.py",
+    "workers/monomer_dft_worker/app/gpu_broker_client.py",
     "workers/monomer_dft_worker/build-requirements.lock",
+    "workers/monomer_dft_worker/run_host_worker.sh",
 )
 
 
@@ -238,6 +245,9 @@ def validate_development_compose(text: str, failures: list[str]) -> None:
         "target: /app/.runtime/monomer-dft-download-spool",
         "source: ./.runtime/monomer-dft-worker-socket",
         "create_host_path: false",
+        'SOURCE_REVISION: "${NEXPOLY_DFT_AUTHORITY_SHA:-unknown}"',
+        "${NEXPOLY_DFT_BACKEND_IMAGE_REF:-nexpoly-dft-dev-backend:latest}",
+        "${NEXPOLY_DFT_WEB_IMAGE_REF:-nexpoly-dft-dev-frontend:latest}",
     ):
         if marker not in text:
             failures.append(
@@ -256,16 +266,34 @@ def validate_development_compose(text: str, failures: list[str]) -> None:
         )
     if "/data/lzq/gith/nexpoly/" in text:
         failures.append("development Compose references production runtime state")
+    for forbidden in (
+        "/proc/",
+        "NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY",
+        "NEXPOLY_DFT_GPU_AUTHORITY_PID",
+    ):
+        if forbidden in text:
+            failures.append(
+                "descriptor authority must remain on the host Worker boundary: "
+                + forbidden
+            )
 
 
 def validate_development_delivery(root: Path, failures: list[str]) -> None:
     paths = (
+        "gpu_resource/authority.py",
+        "gpu_resource/client.py",
+        "ops/gpu_broker/server.py",
+        "scripts/gpu_mps_control.sh",
         "scripts/monomer_dft_dev_stack.sh",
+        "scripts/monomer_dft_acceptance_env.py",
         "scripts/monomer_dft_worker_ctl.sh",
         "scripts/preflight_monomer_dft_env.py",
         "scripts/run_monomer_dft_gpu_acceptance.py",
         "scripts/setup_monomer_dft_env.sh",
         "scripts/smoke_monomer_dft_env.py",
+        "workers/monomer_dft_worker/app/config.py",
+        "workers/monomer_dft_worker/app/gpu_broker_client.py",
+        "workers/monomer_dft_worker/run_host_worker.sh",
     )
     texts = {relative: _read_text(root, relative, failures) for relative in paths}
     combined = "\n".join(texts.values())
@@ -291,6 +319,17 @@ def validate_development_delivery(root: Path, failures: list[str]) -> None:
         'GPU_RUNTIME_ROOT="$RUNTIME_ROOT/gpu-resource"',
         'HOME="$PRIVATE_HOME"',
         'TMPDIR="$PRIVATE_TMPDIR"',
+        'FORMAL_ACCEPTANCE="${NEXPOLY_DFT_FORMAL_ACCEPTANCE:-0}"',
+        "load_formal_env",
+        "reject_formal_control_environment",
+        "compgen -e",
+        "coproc FORMAL_ENV_COPROC",
+        'wait "$parser_pid"',
+        "FORMAL_ENV_KEY_COUNT=44",
+        "FORMAL_ENV_KEYSET_SHA256=",
+        "configure_formal_gpu_authority",
+        '--expected-root "$GPU_RUNTIME_ROOT"',
+        "NEXPOLY_DFT_GPU1_MPS_PIPE_AUTHORITY",
     ):
         if marker not in worker:
             failures.append(f"development Worker fence is missing: {marker}")
@@ -300,7 +339,69 @@ def validate_development_delivery(root: Path, failures: list[str]) -> None:
                 f"development Worker retains a production/GPU2 branch: {forbidden}"
             )
 
+    stack = texts["scripts/monomer_dft_dev_stack.sh"]
+    for marker in (
+        "NEXPOLY_DFT_ACCEPTANCE_PROJECT_NAME",
+        "^nexpoly_dft_fresh_",
+        "fresh acceptance requires an exact NEXPOLY_DFT_AUTHORITY_SHA",
+        "fresh acceptance must use the fixed local Docker socket",
+        "fresh acceptance environment contains forbidden",
+        "coproc FORMAL_ENV_COPROC",
+        'wait "$parser_pid"',
+        "FORMAL_ENV_KEY_COUNT=44",
+        "FORMAL_ENV_KEYSET_SHA256=",
+        "COMPOSE_ENV_FILE=/dev/null",
+        '--env-file "$COMPOSE_ENV_FILE"',
+        "NEXPOLY_DFT_FORMAL_ACCEPTANCE=1",
+        "compgen -e",
+        "final-main immutable image pull failed",
+        "image_arguments=(--no-build)",
+        "configure_formal_gpu_authority",
+        '--expected-root "$REPO_ROOT/.runtime/gpu-resource"',
+    ):
+        if marker not in stack:
+            failures.append(
+                f"fresh acceptance Compose fence is missing: {marker}"
+            )
+    for forbidden in ("FORMAL_ENV_TEMP", "FORMAL_COMPOSE_ENV_TEMP"):
+        if forbidden in stack or forbidden in worker:
+            failures.append(
+                "formal acceptance must not materialize parsed secrets in "
+                f"a temporary file: {forbidden}"
+            )
+
+    formal_env = texts["scripts/monomer_dft_acceptance_env.py"]
+    for marker in (
+        "ALLOWED_KEYS = frozenset(",
+        "EXPANSION_MARKERS",
+        "def parse_dotenv(",
+        "os.open(path, flags)",
+        "os.O_NOFOLLOW",
+        "os.fstat(descriptor)",
+        "MAX_ENV_BYTES = 64 * 1024",
+        "_file_snapshot(after) != expected",
+        "stat.S_IMODE(metadata.st_mode) != 0o600",
+        "duplicate dotenv key is forbidden",
+        "formal acceptance dotenv is incomplete",
+        "def encode_nul_pairs(",
+    ):
+        if marker not in formal_env:
+            failures.append(
+                f"formal acceptance dotenv data parser is missing: {marker}"
+            )
+
     preflight = texts["scripts/preflight_monomer_dft_env.py"]
+    for marker in (
+        "def effective_environment(",
+        "load_formal_gpu_authority(",
+        'expected_root=repo_root / ".runtime/gpu-resource"',
+        "formal_gpu_authority.root",
+        "formal_gpu_authority.reservations",
+    ):
+        if marker not in preflight:
+            failures.append(
+                f"formal preflight descriptor authority is missing: {marker}"
+            )
     for forbidden in (
         "PRODUCTION_BROKER_SOCKET",
         "PRODUCTION_MPS_PIPE_ROOT",
@@ -327,25 +428,242 @@ def validate_development_delivery(root: Path, failures: list[str]) -> None:
     acceptance = texts["scripts/run_monomer_dft_gpu_acceptance.py"]
     for marker in (
         "def snapshot_gpu2(",
+        "class Gpu2AuditMonitor:",
+        "class FreshAcceptanceControl:",
         "def run_leased_direct(",
         "def run_backend_e2e(",
+        "def _validate_scientific_result(",
+        "def _validate_journal(",
+        "def _safe_command_environment(",
+        "def _production_repo_snapshot(",
+        "def _production_worktree_inventory(",
+        "def _production_git_authority_inventory(",
+        "PRODUCTION_BASELINE_SHA",
+        "PRODUCTION_BASELINE_TREE",
+        "PRODUCTION_BASELINE_ORIGIN",
+        "PRODUCTION_BASELINE_RAW_GIT_AUTHORITY",
+        "PRODUCTION_BASELINE_SNAPSHOT",
+        '"--ignored=matching"',
+        '"GIT_OPTIONAL_LOCKS": "0"',
+        '"GIT_CONFIG_NOSYSTEM": "1"',
+        '"GIT_CONFIG_GLOBAL": "/dev/null"',
+        '"core.fsmonitor=false"',
+        '"core.hooksPath=/dev/null"',
+        'b"info"',
+        '"for-each-ref"',
+        "production tracked worktree status differs from the fixed baseline",
+        "PRODUCTION_CAS_MAX_TOTAL_BYTES",
+        '"ignored_path_count"',
+        '"ignored_content_bytes"',
+        '"inventory_sha256"',
+        '"git_authority_sha256"',
+        '"git_config_sha256"',
+        '"git_refs_sha256"',
+        "def _validate_authority_images_input(",
+        "def _validate_published_platform_manifest(",
+        "def validate_bridge_authority(",
+        "def _broker_rejection_status_projection(",
+        "def _finalize_gpu3_rejection(",
+        "before_status_sha256",
+        "after_status_sha256",
+        "claim_sha256",
+        "def _candidate_image_tags(",
+        "def _docker_image_tag_snapshot(",
+        "ORDINARY_DEV_IMAGE_TAGS",
+        "candidate image tag survived cleanup",
+        "ordinary development image tags changed during acceptance",
+        "def _open_absolute_directory_chain(",
+        "def _require_private_gpu_root(",
+        "acceptance GPU runtime root is not owner-private",
+        "def _formal_gpu_authority_environment(",
+        'f"/proc/{self.authority_process_id}/fd/"',
+        "NEXPOLY_DFT_GPU_AUTHORITY_START_TICKS",
+        "NEXPOLY_DFT_GPU1_MPS_PIPE_AUTHORITY",
+        "def _verify_model_descriptor(",
+        "def _prepare_stable_model_copy(",
+        "def _run_calculations_from_stable_model_copy(",
+        "os.O_NOFOLLOW",
+        "os.pread(",
+        'f"/proc/self/fd/{descriptor}"',
+        "pass_fds=(",
+        "model_copy.model_descriptor,",
+        "mps_pipe_fd,",
+        "broker_root_fd,",
         "smoke_runtime.prepare_runtime(REPO_ROOT)",
+        "def _prepare_formal_smoke_runtime(",
+        'result["formal_gpu_authority"] is True',
         "smoke_runtime.run_calculations(",
         "transient_scope_command(",
         "wait_for_scope_membership(",
         "NEXPOLY_GPU_EXEC_GATE_FD",
+        "direct acceptance is permitted only for GPU3 overflow",
+        "BACKEND_BASE_URL = \"http://127.0.0.1:28000/api/v1/monomer-dft\"",
+        "urllib.request.ProxyHandler({})",
+        "zipfile.ZipFile(",
+        "np.load(",
         '"gpu_capacity_unavailable"',
         '"externally_fenced"',
         '"energy", "forces", "hessian"',
+        '"broker_science"',
+        '"candidate-tree", "final-main"',
+        '"published_exact"',
+        "SAFE_COMMAND_PATH",
+        '"buildx",',
+        '"imagetools",',
+        '"parent_lease_id"',
+        "_bind_gpu3_claim_cas(",
+        "controller.cleanup()",
         "completed_journal_sha256",
         "cancelled_journal_sha256",
-        "artifact_sha256",
+        "hessian_artifact_sha256",
+        "bundle_manifest_sha256",
         "bundle_sha256",
+        "acceptance_contract.validate_gpu3_direct_result(report)",
+        "acceptance_contract.validate_gpu3_actual_lease(lease_evidence)",
+        "acceptance_contract.canonical_json_file_digest(report)",
+        '"result": gpu3_direct',
+        '"lease": gpu3_lease',
+        "canonical_json_digest(science)",
     ):
         if marker not in acceptance:
             failures.append(f"real GPU acceptance control is missing: {marker}")
+    for forbidden in (
+        'gpu_index="1"',
+        '"direct_science"',
+        'choices=("manage", "existing")',
+    ):
+        if forbidden in acceptance:
+            failures.append(
+                f"real GPU acceptance retains an unsafe legacy path: {forbidden}"
+            )
+
+    authority = texts["gpu_resource/authority.py"]
+    for marker in (
+        "def load_formal_gpu_authority(",
+        "def materialize_formal_gpu_authority(",
+        "expected_root: Path | None = None",
+        "GPU root authority differs from the exact development root",
+        "/data/lzq/gith/nexpoly-runtime",
+        'root / "external-reservations.json"',
+        'root / f"mps-{index}" / "pipe"',
+        "_process_start_ticks(process_id) != process_start_ticks",
+        "process-local GPU descriptor authority environment changed",
+    ):
+        if marker not in authority:
+            failures.append(
+                f"formal GPU descriptor authority is missing: {marker}"
+            )
+
+    mps_control = texts["scripts/gpu_mps_control.sh"]
+    for marker in (
+        'expected_development_gpu_root="$REPO_ROOT/.runtime/gpu-resource"',
+        "formal development descriptor authority forbids production GPU2",
+        "formal development descriptor authority forbids the production repository",
+        "NEXPOLY_GPU_MPS_AUTHORITY_START_TICKS",
+        "MPS descriptor authority hierarchy changed",
+        "MPS reservation descriptor authority escaped its root",
+    ):
+        if marker not in mps_control:
+            failures.append(
+                f"MPS descriptor authority fence is missing: {marker}"
+            )
+
+    host_runner = texts[
+        "workers/monomer_dft_worker/run_host_worker.sh"
+    ]
+    for marker in (
+        "NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY",
+        '--expected-root "$RUNTIME_ROOT/gpu-resource"',
+        "GPU descriptor authority validation failed",
+    ):
+        if marker not in host_runner:
+            failures.append(
+                f"host Worker descriptor authority is missing: {marker}"
+            )
+
+    worker_config = texts["workers/monomer_dft_worker/app/config.py"]
+    for marker in (
+        "load_formal_gpu_authority(",
+        "materialize_formal_gpu_authority(",
+        "mps_pipe_directories:",
+        "differs from formal GPU descriptor authority",
+    ):
+        if marker not in worker_config:
+            failures.append(
+                f"Worker Python descriptor authority is missing: {marker}"
+            )
+
+    gpu_client = texts["gpu_resource/client.py"]
+    broker_adapter = texts[
+        "workers/monomer_dft_worker/app/gpu_broker_client.py"
+    ]
+    for marker in (
+        "pipe_directories:",
+        "descriptor-bound MPS pipe authority",
+        r"/proc/[1-9][0-9]*/fd/[0-9]+",
+    ):
+        if marker not in gpu_client:
+            failures.append(
+                f"GPU client descriptor authority is missing: {marker}"
+            )
+    for marker in (
+        "mps_pipe_directories:",
+        'mps_arguments["pipe_directories"]',
+        "expected_pipe_directory",
+    ):
+        if marker not in broker_adapter:
+            failures.append(
+                f"Worker Broker adapter authority is missing: {marker}"
+            )
+
+    broker_server = texts["ops/gpu_broker/server.py"]
+    for marker in (
+        "def process_stable_descriptor_path(",
+        "def _open_external_reservations(",
+        'prefix = "/proc/self/fd/"',
+        "_LOCAL_INHERITED_FD_RE.fullmatch(raw)",
+        "return os.dup(descriptor)",
+        "raw_payload = os.pread(",
+        "args.socket = process_stable_descriptor_path(args.socket)",
+        "args.external_reservations = process_stable_descriptor_path(",
+        "args.mps_state_root = process_stable_descriptor_path(",
+    ):
+        if marker not in broker_server:
+            failures.append(
+                f"GPU Broker process-stable descriptor authority is missing: {marker}"
+            )
 
     acceptance_contract_path = root / "scripts/monomer_dft_gpu_acceptance.py"
+    acceptance_contract_text = _read_text(
+        root,
+        "scripts/monomer_dft_gpu_acceptance.py",
+        failures,
+    )
+    for marker in (
+        "def validate_gpu3_direct_result(",
+        "def validate_gpu3_actual_lease(",
+        "def canonical_json_file_digest(",
+        "PRODUCTION_BASELINE_SHA",
+        "PRODUCTION_BASELINE_TREE",
+        "PRODUCTION_BASELINE_ORIGIN_SHA256",
+        "PRODUCTION_BASELINE_HEAD_REF_SHA256",
+        'gpus["1"]["evidence_sha256"] != canonical_json_digest(science)',
+        '"GPU3 external-fence digest differs from its evidence"',
+        '"GPU3 actual science is not bound to its Broker lease"',
+        '"candidate_image_tags"',
+        '"candidate_images_absent_before"',
+        '"ordinary_dev_images_unchanged"',
+        '"model_copy_sha256"',
+        '"model_copy_path_sha256"',
+        '"model_copy_removed"',
+        '"before_status_sha256"',
+        '"after_status_sha256"',
+        '"claim_sha256"',
+    ):
+        if marker not in acceptance_contract_text:
+            failures.append(
+                f"GPU acceptance evidence binding is missing: {marker}"
+            )
     reservations_path = root / "ops/config/gpu-external-reservations.json"
     try:
         spec = importlib.util.spec_from_file_location(

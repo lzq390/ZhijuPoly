@@ -43,10 +43,12 @@ services:
       start_period: 5s
 
   migrate:
-    image: nexpoly-dft-dev-backend:latest
+    image: ${NEXPOLY_DFT_BACKEND_IMAGE_REF:-nexpoly-dft-dev-backend:latest}
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: "${NEXPOLY_DFT_AUTHORITY_SHA:-unknown}"
     restart: "no"
     environment: *dft-backend-environment
     depends_on:
@@ -55,10 +57,12 @@ services:
     command: ["python", "-m", "app.postgres_migrations", "--mode", "bootstrap"]
 
   backend:
-    image: nexpoly-dft-dev-backend:latest
+    image: ${NEXPOLY_DFT_BACKEND_IMAGE_REF:-nexpoly-dft-dev-backend:latest}
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: "${NEXPOLY_DFT_AUTHORITY_SHA:-unknown}"
     restart: unless-stopped
     environment: *dft-backend-environment
     volumes:
@@ -88,10 +92,12 @@ services:
       start_period: 15s
 
   frontend:
-    image: nexpoly-dft-dev-frontend:latest
+    image: ${NEXPOLY_DFT_WEB_IMAGE_REF:-nexpoly-dft-dev-frontend:latest}
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        SOURCE_REVISION: "${NEXPOLY_DFT_AUTHORITY_SHA:-unknown}"
     restart: unless-stopped
     ports:
       - "127.0.0.1:${NEXPOLY_DFT_FRONTEND_PORT:-25173}:80"

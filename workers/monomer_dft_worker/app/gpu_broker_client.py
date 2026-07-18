@@ -245,6 +245,7 @@ class SharedGpuBrokerAdapter:
         client_id: str,
         mps_pipe_root: Path,
         dev_runtime_root: Path,
+        mps_pipe_directories: tuple[tuple[int, Path], ...] = (),
     ) -> None:
         if environment != "dev":
             raise GpuRuntimeUnhealthy(
@@ -281,6 +282,7 @@ class SharedGpuBrokerAdapter:
         self.environment = environment
         self.client_id = client_id
         self.mps_pipe_root = mps_pipe_root
+        self.mps_pipe_directories = dict(mps_pipe_directories)
         self._managed: dict[str, Any] = {}
         self._lease_contracts: dict[str, GpuLease] = {}
         self._managed_lock = threading.RLock()
@@ -367,20 +369,27 @@ class SharedGpuBrokerAdapter:
             raise GpuRuntimeUnhealthy(
                 "GPU Broker returned a lease outside the DFT resource contract"
             )
+        mps_arguments: dict[str, Any] = {
+            "pipe_root": self.mps_pipe_root,
+        }
+        if self.mps_pipe_directories:
+            mps_arguments["pipe_directories"] = self.mps_pipe_directories
         try:
             client_environment = self._mps_client_environment(
                 shared,
-                pipe_root=self.mps_pipe_root,
+                **mps_arguments,
             )
         except self._error_type as exc:
             with contextlib.suppress(Exception):
                 managed.close()
             self._raise_shared(exc)
+        expected_pipe_directory = self.mps_pipe_directories.get(
+            shared.gpu_index,
+            self.mps_pipe_root / f"mps-{shared.gpu_index}" / "pipe",
+        )
         expected_environment = {
             "CUDA_VISIBLE_DEVICES": shared.gpu_uuid,
-            "CUDA_MPS_PIPE_DIRECTORY": str(
-                self.mps_pipe_root / f"mps-{shared.gpu_index}" / "pipe"
-            ),
+            "CUDA_MPS_PIPE_DIRECTORY": str(expected_pipe_directory),
             "CUDA_MPS_ACTIVE_THREAD_PERCENTAGE": str(active_thread_percentage),
             "CUDA_MPS_CLIENT_PRIORITY": "1",
             "CUDA_MPS_PINNED_DEVICE_MEM_LIMIT": (

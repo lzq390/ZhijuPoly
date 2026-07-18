@@ -1052,6 +1052,7 @@ class ExecutorPool:
                 "gpu_fencing_token": lease.fencing_token,
                 "gpu_broker_instance_id": lease.broker_instance_id,
                 "lease_id": lease.lease_id,
+                "parent_lease_id": lease.parent_lease_id,
                 "fencing_token": lease.fencing_token,
                 "broker_instance_id": lease.broker_instance_id,
                 "gpu_preferred": lease.preferred,
@@ -1319,6 +1320,9 @@ class ExecutorPool:
                 environment=self.settings.deployment,
                 client_id=self.client_id,
                 mps_pipe_root=self.settings.mps_pipe_root,
+                mps_pipe_directories=(
+                    self.settings.mps_pipe_directories
+                ),
                 dev_runtime_root=self.settings.dev_runtime_root,
             )
         else:

@@ -31,8 +31,15 @@ PRODUCTION_REPO_ROOT = pathlib.Path("/data/lzq/gith/nexpoly")
 def prepare_runtime(repo_root: pathlib.Path) -> dict[str, Any]:
     repo_root = preflight.require_development_repo_root(repo_root)
     preflight.require(not os.environ.get("PYTHONPATH"), "inherited PYTHONPATH must be unset or empty")
-    values = preflight.load_env_file(repo_root / ".env.monomer-dft.dev")
-    resolved = preflight.validate_environment(repo_root, values)
+    values, formal_gpu_authority = preflight.effective_environment(
+        repo_root,
+        preflight.load_env_file(repo_root / ".env.monomer-dft.dev"),
+    )
+    resolved = preflight.validate_environment(
+        repo_root,
+        values,
+        formal_gpu_authority,
+    )
     git_result = preflight.validate_git(repo_root)
 
     broker_enabled = values["MONOMER_DFT_GPU_BROKER_ENABLED"] == "1"
@@ -76,6 +83,7 @@ def prepare_runtime(repo_root: pathlib.Path) -> dict[str, Any]:
         "runtime": python_result,
         "default_model_path": str(default_model_path),
         "broker_enabled": broker_enabled,
+        "formal_gpu_authority": formal_gpu_authority is not None,
         "worker_uds": resolved["MONOMER_DFT_WORKER_UDS"],
     }
 

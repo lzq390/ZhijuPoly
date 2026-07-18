@@ -8,9 +8,19 @@ PRODUCTION_REPO_ROOT="/data/lzq/gith/nexpoly"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.monomer-dft-dev.yml"
 ENV_FILE="$REPO_ROOT/.env.monomer-dft.dev"
 WORKER_CTL="$SCRIPT_DIR/monomer_dft_worker_ctl.sh"
+FORMAL_ENV_PARSER="$SCRIPT_DIR/monomer_dft_acceptance_env.py"
+GPU_AUTHORITY_VALIDATOR="$REPO_ROOT/gpu_resource/authority.py"
+COMPOSE_ENV_FILE="$ENV_FILE"
 PROJECT_NAME="${NEXPOLY_DFT_PROJECT_NAME:-nexpoly_dft_dev}"
+ACCEPTANCE_PROJECT_NAME="${NEXPOLY_DFT_ACCEPTANCE_PROJECT_NAME:-}"
+ACCEPTANCE_AUTHORITY_SHA="${NEXPOLY_DFT_AUTHORITY_SHA:-}"
+ACCEPTANCE_IMAGE_MODE="${NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE:-}"
+ACCEPTANCE_BACKEND_IMAGE_REF="${NEXPOLY_DFT_BACKEND_IMAGE_REF:-}"
+ACCEPTANCE_WEB_IMAGE_REF="${NEXPOLY_DFT_WEB_IMAGE_REF:-}"
 MIGRATIONS_DIR="$REPO_ROOT/backend/migrations/postgres"
 DOWNLOAD_SPOOL_DIR="$REPO_ROOT/.runtime/monomer-dft-download-spool"
+FORMAL_ENV_KEY_COUNT=44
+FORMAL_ENV_KEYSET_SHA256="1e27ea88df12273bdaf31f448cc8366e500db644535a555515bf9a815a1cf90a"
 
 log() {
   printf '[monomer-dft-dev] %s\n' "$*"
@@ -21,21 +31,258 @@ fail() {
   exit 2
 }
 
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 [[ "$REPO_ROOT" != "$PRODUCTION_REPO_ROOT" ]] || fail \
   "development DFT control is forbidden in the production repository"
 
+load_formal_env() {
+  local key=""
+  local value=""
+  local pending_key=""
+  local token=""
+  local token_count=0
+  local invalid_output=0
+  local parser_pid=""
+  local parser_fd=""
+  local coproc_read_fd=""
+  local parser_status=0
+  local keyset_digest=""
+  local -a allowed_keys=(
+    AIMNET_CACHE_DIR AIMNET_MODEL_SOURCE_DIR AIMNET_SOURCE_CLONE
+    AIMNET_SOURCE_DIR AIMNET_SOURCE_LOCK CUDA_DEVICE_ORDER
+    MONOMER_DFT_ARTIFACT_RETENTION_DAYS MONOMER_DFT_DEPLOYMENT
+    MONOMER_DFT_DOWNLOAD_MAX_CONCURRENT MONOMER_DFT_DOWNLOAD_SPOOL_ROOT
+    MONOMER_DFT_DRAIN_TIMEOUT_SECONDS
+    MONOMER_DFT_FATAL_RESTART_BACKOFF_SECONDS
+    MONOMER_DFT_FATAL_RESTART_MAX_ATTEMPTS
+    MONOMER_DFT_FATAL_RESTART_MAX_BACKOFF_SECONDS
+    MONOMER_DFT_FATAL_RESTART_RESET_SECONDS
+    MONOMER_DFT_GPU_ACTIVE_THREAD_PERCENTAGE
+    MONOMER_DFT_GPU_BROKER_ENABLED MONOMER_DFT_GPU_BROKER_UDS
+    MONOMER_DFT_GPU_BUDGET_MIB MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS
+    MONOMER_DFT_GPU_MPS_PIPE_ROOT MONOMER_DFT_JOB_ROOT
+    MONOMER_DFT_MAX_CONCURRENT_JOBS MONOMER_DFT_MAX_QUEUED_JOBS
+    MONOMER_DFT_OPTIMIZATION_TIMEOUT_SECONDS MONOMER_DFT_PYTHON
+    MONOMER_DFT_RECONCILE_INTERVAL_SECONDS
+    MONOMER_DFT_SINGLE_POINT_TIMEOUT_SECONDS
+    MONOMER_DFT_STANDALONE_GPU_SMOKE MONOMER_DFT_VALIDATION_CONCURRENCY
+    MONOMER_DFT_WORKER_TIMEOUT_SECONDS MONOMER_DFT_WORKER_UDS
+    NEXPOLY_DFT_BACKEND_PORT NEXPOLY_DFT_FRONTEND_PORT
+    NEXPOLY_DFT_GPU_DEVICE NEXPOLY_DFT_OVERFLOW_GPU_DEVICES
+    NEXPOLY_DFT_POSTGRES_PASSWORD NEXPOLY_DFT_POSTGRES_PORT
+    NEXPOLY_DFT_PROJECT_NAME PYTHONDONTWRITEBYTECODE PYTHONNOUSERSITE
+    PYTHONPATH UV_CACHE_DIR WARP_CACHE_PATH
+  )
+  local -A allowed=()
+  local -A seen=()
+  local -A parsed=()
+  PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  export PATH
+  [[ -f "$FORMAL_ENV_PARSER" && ! -L "$FORMAL_ENV_PARSER" ]] || fail \
+    "formal acceptance dotenv parser is missing or unsafe"
+  for key in "${allowed_keys[@]}"; do
+    allowed["$key"]=1
+  done
+  coproc FORMAL_ENV_COPROC {
+    exec /usr/bin/python3 -I -S "$FORMAL_ENV_PARSER" \
+      --env-file "$ENV_FILE"
+  }
+  parser_pid="$FORMAL_ENV_COPROC_PID"
+  coproc_read_fd="${FORMAL_ENV_COPROC[0]}"
+  exec {parser_fd}<&"$coproc_read_fd"
+  while IFS= read -r -d '' token <&"$parser_fd"; do
+    ((token_count += 1))
+    if (( token_count % 2 == 1 )); then
+      pending_key="$token"
+      if [[ ! "$pending_key" =~ ^[A-Z][A-Z0-9_]*$ ]] ||
+        [[ -z "${allowed[$pending_key]:-}" ]] ||
+        [[ -n "${seen[$pending_key]:-}" ]]; then
+        invalid_output=1
+      else
+        seen["$pending_key"]=1
+      fi
+    else
+      if [[ "$invalid_output" == "0" && -n "$pending_key" ]]; then
+        parsed["$pending_key"]="$token"
+      elif [[ -n "$pending_key" && -n "${seen[$pending_key]:-}" ]]; then
+        parsed["$pending_key"]="$token"
+      fi
+      pending_key=""
+    fi
+  done
+  exec {parser_fd}<&-
+  if wait "$parser_pid"; then
+    parser_status=0
+  else
+    parser_status=$?
+  fi
+  [[ "$parser_status" == "0" ]] || fail \
+    "formal acceptance dotenv validation failed"
+  [[ "$invalid_output" == "0" && $((token_count % 2)) == 0 &&
+    "$token_count" == "$((FORMAL_ENV_KEY_COUNT * 2))" &&
+    "${#seen[@]}" == "$FORMAL_ENV_KEY_COUNT" &&
+    "${#parsed[@]}" == "$FORMAL_ENV_KEY_COUNT" ]] || fail \
+    "formal acceptance parser emitted an invalid token inventory"
+  keyset_digest="$(
+    printf '%s\0' "${!seen[@]}" |
+      /usr/bin/sort -z |
+      /usr/bin/sha256sum |
+      /usr/bin/cut -d ' ' -f1
+  )"
+  [[ "$keyset_digest" == "$FORMAL_ENV_KEYSET_SHA256" ]] || fail \
+    "formal acceptance parser emitted the wrong key set"
+  for key in "${allowed_keys[@]}"; do
+    value="${parsed[$key]}"
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  done
+  COMPOSE_ENV_FILE=/dev/null
+}
+
+reject_formal_control_environment() {
+  local unsafe_name=""
+  local exported_name=""
+  local -a unsafe_environment_names=(
+    BASH_ENV ENV CDPATH GLOBIGNORE
+    LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_PROFILE
+    PYTHONHOME PYTHONSTARTUP PYTHONINSPECT PYTHONWARNINGS
+    HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
+    http_proxy https_proxy all_proxy no_proxy
+    DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+  )
+  for unsafe_name in "${unsafe_environment_names[@]}"; do
+    [[ -z "${!unsafe_name:-}" ]] || fail \
+      "fresh acceptance environment contains forbidden $unsafe_name"
+  done
+  while IFS= read -r exported_name; do
+    case "$exported_name" in
+      COMPOSE_*|GIT_*)
+        [[ -z "${!exported_name:-}" ]] || fail \
+          "fresh acceptance environment contains forbidden $exported_name"
+        ;;
+    esac
+  done < <(compgen -e)
+}
+
+configure_formal_gpu_authority() {
+  local -a authority_names=(
+    NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY
+    NEXPOLY_DFT_GPU_AUTHORITY_PID
+    NEXPOLY_DFT_GPU_AUTHORITY_START_TICKS
+    NEXPOLY_DFT_GPU_AUTHORITY_ROOT
+    NEXPOLY_DFT_GPU_AUTHORITY_ROOT_IDENTITY
+    NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY
+    NEXPOLY_DFT_GPU_RESERVATIONS_IDENTITY
+    NEXPOLY_DFT_GPU_RESERVATIONS_SHA256
+    NEXPOLY_DFT_GPU1_MPS_PIPE_AUTHORITY
+    NEXPOLY_DFT_GPU1_MPS_PIPE_IDENTITY
+    NEXPOLY_DFT_GPU3_MPS_PIPE_AUTHORITY
+    NEXPOLY_DFT_GPU3_MPS_PIPE_IDENTITY
+  )
+  local name=""
+  if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
+    for name in "${authority_names[@]}"; do
+      [[ -z "${!name:-}" ]] || fail \
+        "partial GPU descriptor authority is forbidden"
+    done
+    [[ "$PROJECT_NAME" != nexpoly_dft_fresh_* ]] || fail \
+      "fresh acceptance requires GPU descriptor authority"
+    return 0
+  fi
+  [[ "$PROJECT_NAME" == nexpoly_dft_fresh_* &&
+    "${NEXPOLY_DFT_FORMAL_ACCEPTANCE:-0}" == "1" ]] || fail \
+    "GPU descriptor authority is restricted to fresh formal acceptance"
+  [[ -f "$GPU_AUTHORITY_VALIDATOR" &&
+    ! -L "$GPU_AUTHORITY_VALIDATOR" ]] || fail \
+    "GPU descriptor authority validator is unavailable"
+  for name in "${authority_names[@]}"; do
+    export "$name"
+  done
+  MONOMER_DFT_GPU_BROKER_UDS="${NEXPOLY_DFT_GPU_AUTHORITY_ROOT}/broker.sock"
+  MONOMER_DFT_GPU_MPS_PIPE_ROOT="$NEXPOLY_DFT_GPU_AUTHORITY_ROOT"
+  MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY"
+  export MONOMER_DFT_GPU_BROKER_UDS MONOMER_DFT_GPU_MPS_PIPE_ROOT
+  export MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS
+  /usr/bin/python3 -I -S "$GPU_AUTHORITY_VALIDATOR" \
+    --expected-reservations-file \
+    "$REPO_ROOT/ops/config/gpu-external-reservations.json" \
+    --expected-root "$REPO_ROOT/.runtime/gpu-resource" ||
+    fail "GPU descriptor authority validation failed"
+}
+
 load_env() {
+  local requested_acceptance_project="$ACCEPTANCE_PROJECT_NAME"
+  local requested_authority_sha="$ACCEPTANCE_AUTHORITY_SHA"
+  local requested_image_mode="$ACCEPTANCE_IMAGE_MODE"
+  local requested_backend_image_ref="$ACCEPTANCE_BACKEND_IMAGE_REF"
+  local requested_web_image_ref="$ACCEPTANCE_WEB_IMAGE_REF"
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail "missing safe environment file: $ENV_FILE"
   [[ "$(stat -c '%u' "$ENV_FILE")" == "$(id -u)" ]] || fail "environment file must be owned by uid $(id -u)"
   [[ "$(stat -c '%a' "$ENV_FILE")" == "600" ]] || fail "environment file permissions must be 0600"
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  if [[ -n "$requested_acceptance_project" ]]; then
+    load_formal_env
+  else
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+  fi
+  # The owner-private environment file normally pins ``nexpoly_dft_dev``.
+  # Real acceptance must instead get a one-run Compose namespace chosen by
+  # the clean-F harness.  Apply that narrow override *after* sourcing the
+  # file, and never permit it to select the ordinary development project.
+  if [[ -n "$requested_acceptance_project" ]]; then
+    [[ "$requested_acceptance_project" =~ ^nexpoly_dft_fresh_[a-z0-9][a-z0-9_-]{0,40}$ ]] || fail \
+      "NEXPOLY_DFT_ACCEPTANCE_PROJECT_NAME must name a fresh acceptance project"
+    NEXPOLY_DFT_PROJECT_NAME="$requested_acceptance_project"
+  fi
   PROJECT_NAME="${NEXPOLY_DFT_PROJECT_NAME:-nexpoly_dft_dev}"
+  if [[ -z "$requested_acceptance_project" && "$PROJECT_NAME" == nexpoly_dft_fresh_* ]]; then
+    fail "fresh acceptance project requires the formal non-executing dotenv path"
+  fi
   [[ "$PROJECT_NAME" =~ ^nexpoly_dft_(dev|fresh_[a-z0-9][a-z0-9_-]{0,40})$ ]] || fail \
     "NEXPOLY_DFT_PROJECT_NAME must be the dev project or a fresh dev acceptance project"
   export NEXPOLY_DFT_PROJECT_NAME="$PROJECT_NAME"
+  if [[ "$PROJECT_NAME" == nexpoly_dft_fresh_* ]]; then
+    export NEXPOLY_DFT_FORMAL_ACCEPTANCE=1
+    [[ "${DOCKER_HOST:-}" == "unix:///var/run/docker.sock" ]] || fail \
+      "fresh acceptance must use the fixed local Docker socket"
+    reject_formal_control_environment
+    export DOCKER_HOST=unix:///var/run/docker.sock
+    [[ "$requested_authority_sha" =~ ^[0-9a-f]{40}$ ]] || fail \
+      "fresh acceptance requires an exact NEXPOLY_DFT_AUTHORITY_SHA"
+    NEXPOLY_DFT_AUTHORITY_SHA="$requested_authority_sha"
+    export NEXPOLY_DFT_AUTHORITY_SHA
+    [[ "$requested_image_mode" == "candidate-tree" || \
+      "$requested_image_mode" == "final-main" ]] || fail \
+      "fresh acceptance requires candidate-tree or final-main image mode"
+    NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE="$requested_image_mode"
+    if [[ "$requested_image_mode" == "final-main" ]]; then
+      [[ "$requested_backend_image_ref" =~ ^ghcr\.io/lzq390/nexpoly-backend@sha256:[0-9a-f]{64}$ ]] || fail \
+        "final-main Backend image must be the exact governed GHCR digest ref"
+      [[ "$requested_web_image_ref" =~ ^ghcr\.io/lzq390/nexpoly-web@sha256:[0-9a-f]{64}$ ]] || fail \
+        "final-main Web image must be the exact governed GHCR digest ref"
+      NEXPOLY_DFT_BACKEND_IMAGE_REF="$requested_backend_image_ref"
+      NEXPOLY_DFT_WEB_IMAGE_REF="$requested_web_image_ref"
+      export NEXPOLY_DFT_BACKEND_IMAGE_REF NEXPOLY_DFT_WEB_IMAGE_REF
+    else
+      local expected_candidate_backend_image_ref=""
+      local expected_candidate_web_image_ref=""
+      expected_candidate_backend_image_ref="nexpoly-dft-acceptance-backend:${PROJECT_NAME}-${requested_authority_sha}"
+      expected_candidate_web_image_ref="nexpoly-dft-acceptance-web:${PROJECT_NAME}-${requested_authority_sha}"
+      [[ "$requested_backend_image_ref" == "$expected_candidate_backend_image_ref" ]] || fail \
+        "candidate-tree Backend image must use its project/authority tag"
+      [[ "$requested_web_image_ref" == "$expected_candidate_web_image_ref" ]] || fail \
+        "candidate-tree Web image must use its project/authority tag"
+      NEXPOLY_DFT_BACKEND_IMAGE_REF="$requested_backend_image_ref"
+      NEXPOLY_DFT_WEB_IMAGE_REF="$requested_web_image_ref"
+      export NEXPOLY_DFT_BACKEND_IMAGE_REF NEXPOLY_DFT_WEB_IMAGE_REF
+    fi
+    export NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE
+  fi
   [[ "${MONOMER_DFT_DEPLOYMENT:-dev}" == "dev" ]] || fail \
     "MONOMER_DFT_DEPLOYMENT must be exactly dev; production mode is forbidden"
   [[ "${NEXPOLY_DFT_GPU_DEVICE:-1}" == "1" ]] || fail \
@@ -82,6 +329,7 @@ load_env() {
     "download spool must use the fixed worktree-backed development mount"
   export MONOMER_DFT_WORKER_UDS MONOMER_DFT_WORKER_SOCKET_DIR
   export MONOMER_DFT_DOWNLOAD_SPOOL_ROOT=/app/.runtime/monomer-dft-download-spool
+  configure_formal_gpu_authority
 }
 
 ensure_download_spool() {
@@ -104,7 +352,7 @@ ensure_download_spool() {
 compose() {
   docker compose \
     --project-name "$PROJECT_NAME" \
-    --env-file "$ENV_FILE" \
+    --env-file "$COMPOSE_ENV_FILE" \
     --file "$COMPOSE_FILE" \
     "$@"
 }
@@ -380,7 +628,15 @@ start_stack() {
     fail "worker runtime is not ready"
   fi
 
-  if ! compose up --detach --build --remove-orphans; then
+  local -a image_arguments=(--build)
+  if [[ "${NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE:-}" == "final-main" ]]; then
+    # Pull and execute the already-published immutable F images.  A final
+    # acceptance must never rebuild them from a mutable checkout.
+    compose pull migrate backend frontend || fail \
+      "final-main immutable image pull failed"
+    image_arguments=(--no-build)
+  fi
+  if ! compose up --detach "${image_arguments[@]}" --remove-orphans; then
     compose down --remove-orphans || true
     if [[ "$started_worker" == "true" ]]; then
       "$WORKER_CTL" stop || true

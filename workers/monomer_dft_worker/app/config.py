@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from gpu_resource.authority import (
+    load_formal_gpu_authority,
+    materialize_formal_gpu_authority,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOT = REPO_ROOT / ".runtime"
@@ -85,6 +90,31 @@ def validate_dev_runtime_path(
 
     root = validate_private_dev_runtime_root(runtime_root)
     candidate = _absolute_path(path)
+    authority = load_formal_gpu_authority(
+        expected_reservations_file=(
+            REPO_ROOT / "ops/config/gpu-external-reservations.json"
+        ),
+        expected_root=REPO_ROOT / ".runtime/gpu-resource",
+    )
+    if authority is not None and name in {
+        "MONOMER_DFT_GPU_BROKER_UDS",
+        "MONOMER_DFT_GPU_MPS_PIPE_ROOT",
+        "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS",
+    }:
+        expected = {
+            "MONOMER_DFT_GPU_BROKER_UDS": (
+                authority.root / "broker.sock"
+            ),
+            "MONOMER_DFT_GPU_MPS_PIPE_ROOT": authority.root,
+            "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS": (
+                authority.reservations
+            ),
+        }[name]
+        if candidate != expected:
+            raise ValueError(
+                f"{name} differs from formal GPU descriptor authority"
+            )
+        return candidate
     _reject_production_path(name, candidate)
     if candidate == root or not _is_below(candidate, root):
         raise ValueError(f"{name} must be located below {root}")
@@ -137,6 +167,31 @@ def _runtime_path(name: str, default: str, *, runtime_root: Path | None = None) 
     # normal Path.resolve() would follow it to /usr/bin/python3.12 and falsely
     # report that the configured interpreter escaped .runtime/.
     path = _absolute_path(value)
+    authority = load_formal_gpu_authority(
+        expected_reservations_file=(
+            REPO_ROOT / "ops/config/gpu-external-reservations.json"
+        ),
+        expected_root=REPO_ROOT / ".runtime/gpu-resource",
+    )
+    if authority is not None and name in {
+        "MONOMER_DFT_GPU_BROKER_UDS",
+        "MONOMER_DFT_GPU_MPS_PIPE_ROOT",
+        "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS",
+    }:
+        expected = {
+            "MONOMER_DFT_GPU_BROKER_UDS": (
+                authority.root / "broker.sock"
+            ),
+            "MONOMER_DFT_GPU_MPS_PIPE_ROOT": authority.root,
+            "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS": (
+                authority.reservations
+            ),
+        }[name]
+        if path != expected:
+            raise ValueError(
+                f"{name} differs from formal GPU descriptor authority"
+            )
+        return path
     if path == root or not _is_below(path, root):
         raise ValueError(f"{name} must be located below {root}")
     _reject_production_path(name, path)
@@ -233,6 +288,7 @@ class WorkerSettings:
     standalone_gpu_smoke: bool = False
     broker_uds: Path | None = None
     mps_pipe_root: Path | None = None
+    mps_pipe_directories: tuple[tuple[int, Path], ...] = ()
     gpu_residency_budget_mib: int = 4096
     gpu_active_thread_percentage: int = 50
     dev_runtime_root: Path = field(default_factory=lambda: RUNTIME_ROOT)
@@ -244,6 +300,12 @@ class WorkerSettings:
         code_root = REPO_ROOT.resolve(strict=False)
         _reject_production_path("Worker code root", code_root)
         runtime_root = validate_private_dev_runtime_root(self.dev_runtime_root)
+        formal_gpu_authority = load_formal_gpu_authority(
+            expected_reservations_file=(
+                REPO_ROOT / "ops/config/gpu-external-reservations.json"
+            ),
+            expected_root=REPO_ROOT / ".runtime/gpu-resource",
+        )
         object.__setattr__(self, "dev_runtime_root", runtime_root)
 
         if self.deployment != "dev":
@@ -326,6 +388,15 @@ class WorkerSettings:
                 leaf_kind="directory",
             ),
         )
+        expected_pipe_directories = (
+            formal_gpu_authority.pipe_directories
+            if formal_gpu_authority is not None
+            else ()
+        )
+        if self.mps_pipe_directories != expected_pipe_directories:
+            raise ValueError(
+                "formal MPS pipe descriptor authority is inconsistent"
+            )
         object.__setattr__(
             self,
             "gpu_external_reservations",
@@ -353,6 +424,26 @@ def load_settings() -> WorkerSettings:
 
     code_root = REPO_ROOT.resolve(strict=False)
     _reject_production_path("Worker code root", code_root)
+    formal_gpu_authority = materialize_formal_gpu_authority(
+        expected_reservations_file=(
+            REPO_ROOT / "ops/config/gpu-external-reservations.json"
+        ),
+        expected_root=REPO_ROOT / ".runtime/gpu-resource",
+    )
+    if formal_gpu_authority is not None:
+        os.environ.update(
+            {
+                "MONOMER_DFT_GPU_BROKER_UDS": str(
+                    formal_gpu_authority.root / "broker.sock"
+                ),
+                "MONOMER_DFT_GPU_MPS_PIPE_ROOT": str(
+                    formal_gpu_authority.root
+                ),
+                "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS": str(
+                    formal_gpu_authority.reservations
+                ),
+            }
+        )
     runtime_root = _configured_runtime_root()
     deployment = os.getenv("MONOMER_DFT_DEPLOYMENT", "dev").strip().lower()
     if deployment != "dev":
@@ -490,6 +581,11 @@ def load_settings() -> WorkerSettings:
         standalone_gpu_smoke=standalone_gpu_smoke,
         broker_uds=broker_uds,
         mps_pipe_root=mps_pipe_root,
+        mps_pipe_directories=(
+            formal_gpu_authority.pipe_directories
+            if formal_gpu_authority is not None
+            else ()
+        ),
         gpu_residency_budget_mib=residency_budget,
         gpu_active_thread_percentage=active_threads,
         dev_runtime_root=runtime_root,
