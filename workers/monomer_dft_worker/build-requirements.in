@@ -1,0 +1,13 @@
+# PEP 517 build backend for the AIMNet wheel. Runtime dependencies belong in
+# requirements.in; this file is only for the isolated, hash-locked build environment.
+hatchling
+hatch-vcs
+
+# Regenerate on Linux x86_64 with exactly uv 0.11.21 and Python 3.12:
+# uv pip compile workers/monomer_dft_worker/build-requirements.in \
+#   --python /usr/bin/python3.12 \
+#   --python-version 3.12 \
+#   --python-platform x86_64-unknown-linux-gnu \
+#   --generate-hashes \
+#   --output-file workers/monomer_dft_worker/build-requirements.lock \
+#   --custom-compile-command 'uv 0.11.21; Python 3.12; Linux x86_64; AIMNet wheel build dependencies'

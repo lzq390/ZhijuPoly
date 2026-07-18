@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository_url": "https://github.com/isayevlab/aimnetcentral.git",
+    "commit": "9a6c56440349bccbb7ac0630a0622f9c584f894e",
+    "tree": "fd28c0f8bf2d0e513aad24032228927140d6783c",
+    "package_name": "aimnet",
+    "package_version": "0.2.0.post1.dev41+g9a6c56440",
+    "wheel_install_mode": "non-editable",
+    "python_minor": "3.12",
+    "uv_version": "0.11.21",
+    "source_date_epoch": 1782945961,
+    "build_requirements_sha256": "21165c6077689ee6a99c333d9159cd0969a9a93b0c850bfbae774bb6c2333e76"
+  },
+  "wheel": {
+    "filename": "aimnet-0.2.0.post1.dev41+g9a6c56440-py3-none-any.whl",
+    "sha256": "9cb53c47230f3746872a34948480b1228f98258026d88b338111cf90f8d28557",
+    "file_count": 47,
+    "inventory_sha256": "54ad7842d215f0430c9d376c6c8d550925f2ede9b880e8969dadd72b5b2471ce",
+    "record_path": "aimnet-0.2.0.post1.dev41+g9a6c56440.dist-info/RECORD",
+    "record_sha256": "54b23e6ff673423e19865c702ab174910f39259a8fcdbfd670e19303d6909d61"
+  },
+  "registry": {
+    "path": "aimnet/calculators/model_registry.yaml",
+    "sha256": "000dbcb1d04e058c4b283fd39d96e24f79e09c4f9c4c16fd5dba5386cf1565c5"
+  },
+  "models": [
+    {
+      "alias": "aimnet2",
+      "registry_key": "aimnet2-wb97m-d3_0",
+      "family": "wb97m-d3",
+      "ensemble_member": 0,
+      "file": "aimnet2_wb97m_d3_0.pt",
+      "url": "https://storage.googleapis.com/aimnetcentral/aimnet2v2/AIMNet2/aimnet2_wb97m_d3_0.pt",
+      "sha256": "f0f7c054539ad3261bd36f9b11c56d12f87cb723e25bea7521755bbd3ec24e28",
+      "registry_sha256": "f0f7c054539ad3261bd36f9b11c56d12f87cb723e25bea7521755bbd3ec24e28",
+      "cache_sha256": "f0f7c054539ad3261bd36f9b11c56d12f87cb723e25bea7521755bbd3ec24e28"
+    },
+    {
+      "alias": "aimnet2-b973c",
+      "registry_key": "aimnet2-b973c-d3_0",
+      "family": "b973c-d3",
+      "ensemble_member": 0,
+      "file": "aimnet2_b973c_d3_0.pt",
+      "url": "https://storage.googleapis.com/aimnetcentral/aimnet2v2/AIMNet2/aimnet2_b973c_d3_0.pt",
+      "sha256": "7ec7a3db67bd3a393ad59647d4020398deeb041c07dba1c9cf212d226268e549",
+      "registry_sha256": "7ec7a3db67bd3a393ad59647d4020398deeb041c07dba1c9cf212d226268e549",
+      "cache_sha256": "7ec7a3db67bd3a393ad59647d4020398deeb041c07dba1c9cf212d226268e549"
+    },
+    {
+      "alias": "aimnet2-2025",
+      "registry_key": "aimnet2-b973c-2025-d3_0",
+      "family": "b973c-2025-d3",
+      "ensemble_member": 0,
+      "file": "aimnet2_2025_b973c_d3_0.pt",
+      "url": "https://storage.googleapis.com/aimnetcentral/aimnet2v2/AIMNet2/aimnet2_2025_b973c_d3_0.pt",
+      "sha256": "043ed5418a104e31f79462f8e5ebeca64a2d24422174f5d29f894d32271981b5",
+      "registry_sha256": "043ed5418a104e31f79462f8e5ebeca64a2d24422174f5d29f894d32271981b5",
+      "cache_sha256": "043ed5418a104e31f79462f8e5ebeca64a2d24422174f5d29f894d32271981b5"
+    },
+    {
+      "alias": "aimnet2-nse",
+      "registry_key": "aimnet2-nse_0",
+      "family": "nse",
+      "ensemble_member": 0,
+      "file": "aimnet2nse_wb97m_0.pt",
+      "url": "https://storage.googleapis.com/aimnetcentral/aimnet2v2/AIMNet2NSE/aimnet2nse_wb97m_0.pt",
+      "sha256": "b98b3449b2a3765de6a188edff9344a38cc72df75f9d9bf68f4b898a253c5864",
+      "registry_sha256": "b98b3449b2a3765de6a188edff9344a38cc72df75f9d9bf68f4b898a253c5864",
+      "cache_sha256": "b98b3449b2a3765de6a188edff9344a38cc72df75f9d9bf68f4b898a253c5864"
+    },
+    {
+      "alias": "aimnet2-pd",
+      "registry_key": "aimnet2-pd_0",
+      "family": "pd",
+      "ensemble_member": 0,
+      "file": "aimnet2-pd_0.pt",
+      "url": "https://storage.googleapis.com/aimnetcentral/aimnet2v2/AIMNet2Pd/aimnet2-pd_0.pt",
+      "sha256": "93f10dd5522e187d7d6aaf3b18d54c07746f5452c2e8063cf77fd0420dc39ebd",
+      "registry_sha256": "93f10dd5522e187d7d6aaf3b18d54c07746f5452c2e8063cf77fd0420dc39ebd",
+      "cache_sha256": "93f10dd5522e187d7d6aaf3b18d54c07746f5452c2e8063cf77fd0420dc39ebd"
+    },
+    {
+      "alias": "aimnet2-rxn",
+      "registry_key": "aimnet2-rxn_0",
+      "family": "rxn",
+      "ensemble_member": 0,
+      "file": "aimnet2_rxn_0.pt",
+      "url": "https://storage.googleapis.com/aimnetcentral/aimnet2v2/AIMNet2rxn/aimnet2_rxn_0.pt",
+      "sha256": "ce8bc2a4cc6fcb5ebaa1bc8897fcd75104e5a00fe86e9d5fc6a020d572174894",
+      "registry_sha256": "ce8bc2a4cc6fcb5ebaa1bc8897fcd75104e5a00fe86e9d5fc6a020d572174894",
+      "cache_sha256": "ce8bc2a4cc6fcb5ebaa1bc8897fcd75104e5a00fe86e9d5fc6a020d572174894"
+    }
+  ]
+}
