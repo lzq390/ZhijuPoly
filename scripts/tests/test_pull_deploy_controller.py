@@ -13,6 +13,10 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from scripts.tests.test_postgres_media_evidence import (
+    external_inventory_fixture as external_inventory_v3_fixture,
+)
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPOSITORY_ROOT / "scripts" / "pull_deploy_controller.py"
@@ -88,6 +92,7 @@ def mutable_data_evidence(
 
     dft_ready = ledger_length == 13
     contract_applied = ledger_length >= 12
+    controls_ready = ledger_length >= 10
     business_tables = [
         table_record(schema, table, index)
         for index, (schema, table) in enumerate(
@@ -106,6 +111,19 @@ def mutable_data_evidence(
             CONTROLLER._site_helper_contracts.POST_0013_BUSINESS_MUTABLE_TABLES
         )
     )
+    if dft_ready:
+        for record in business_tables:
+            relation = (record["schema"], record["table"])
+            expected_schema = (
+                CONTROLLER._site_helper_contracts
+                .MONOMER_DFT_TABLE_SCHEMA_SHA256.get(relation)
+            )
+            if expected_schema is not None:
+                record["schema_sha256"] = expected_schema
+                record["content_sha256"] = (
+                    CONTROLLER._site_helper_contracts
+                    .EMPTY_POSTGRES_COPY_SHA256
+                )
     static_tables = [
         table_record(schema, table, index + 8)
         for index, (schema, table) in enumerate(
@@ -113,21 +131,43 @@ def mutable_data_evidence(
         )
     ]
     deployment_table = table_record(
-        "governance", "deployment_control", 7, rows=1
+        "governance",
+        "deployment_control",
+        7,
+        present=controls_ready,
+        rows=1,
     )
     analytics_table = table_record(
-        "governance", "database_analytics_snapshots", 8, rows=0
+        "governance",
+        "database_analytics_snapshots",
+        8,
+        present=controls_ready,
+        rows=0,
     )
     sequences: list[dict[str, object]] = []
-    for index, (schema, sequence, owned_by) in enumerate(
-        CONTROLLER._site_helper_contracts.DATA_SEQUENCES
+    for index, ((schema, sequence, _owned_by), owner) in enumerate(
+        zip(
+            CONTROLLER._site_helper_contracts.DATA_SEQUENCES,
+            CONTROLLER._site_helper_contracts.DATA_SEQUENCE_OWNERSHIP,
+            strict=True,
+        )
     ):
         present = schema != "monomer_dft" or dft_ready
         sequences.append(
             {
                 "schema": schema,
                 "sequence": sequence,
-                "owned_by": owned_by,
+                "ownership": (
+                    {
+                        "schema": owner[0],
+                        "table": owner[1],
+                        "column": owner[2],
+                        "ordinal": owner[3],
+                        "deptype": owner[4],
+                    }
+                    if present
+                    else None
+                ),
                 "state": "present" if present else "absent",
                 "data_type": "bigint" if present else None,
                 "start_value": 1 if present else None,
@@ -207,7 +247,7 @@ def mutable_data_evidence(
             "direct_write_grants": [],
             "effective_write_privileges": [],
         },
-        "digest_algorithm": "sha256-postgres-jsonb-copy-v3",
+        "digest_algorithm": "sha256-postgres-jsonb-copy-v4",
         "migration_ledger": [
             {"version": version, "checksum": checksum}
             for version, checksum in (
@@ -220,15 +260,19 @@ def mutable_data_evidence(
         "governed_controls": {
             "deployment_control": {
                 "table": deployment_table,
-                "row": {
-                    "control_key": "production",
-                    "drain_enabled": True,
-                    "reason": f"pull deployment {operation_id}",
-                    "release_sha": TARGET_SHA,
-                    "activated_at": "2026-07-17T00:00:00Z",
-                    "activated_by": "pull-deploy-controller",
-                    "updated_at": "2026-07-17T00:00:00Z",
-                },
+                "row": (
+                    {
+                        "control_key": "production",
+                        "drain_enabled": True,
+                        "reason": f"pull deployment {operation_id}",
+                        "release_sha": TARGET_SHA,
+                        "activated_at": "2026-07-17T00:00:00Z",
+                        "activated_by": "pull-deploy-controller",
+                        "updated_at": "2026-07-17T00:00:00Z",
+                    }
+                    if controls_ready
+                    else None
+                ),
             },
             "database_analytics_snapshots": {
                 "table": analytics_table,
@@ -244,9 +288,34 @@ def mutable_data_evidence(
             rows=9,
         ),
         "sequences": sequences,
+        "bridge_projection": {
+            "schema": "md",
+            "table": "monomer_md_jobs",
+            "projection": "pre-0009-row-json-v1",
+            "state": "present",
+            "row_count": next(
+                record["row_count"]
+                for record in business_tables
+                if record["schema"] == "md"
+                and record["table"] == "monomer_md_jobs"
+            ),
+            "content_sha256": "sha256:" + "f" * 64,
+            "lease_columns": {
+                "state": "present" if ledger_length >= 9 else "absent",
+                "non_null_counts": {
+                    "worker_instance_id": (
+                        0 if ledger_length >= 9 else None
+                    ),
+                    "heartbeat_at": 0 if ledger_length >= 9 else None,
+                    "lease_expires_at": (
+                        0 if ledger_length >= 9 else None
+                    ),
+                },
+            },
+        },
     }
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,
@@ -273,6 +342,7 @@ def reseal_mutable_data_evidence(
         "static_tables",
         "migration_exception",
         "sequences",
+        "bridge_projection",
     )
     document["snapshot_sha256"] = CONTROLLER.canonical_json_digest(
         {name: document[name] for name in identity_fields}
@@ -280,12 +350,133 @@ def reseal_mutable_data_evidence(
     return document
 
 
+def _rewrite_v3_media_ledger(
+    snapshot: dict[str, object],
+    *,
+    database: str,
+    ledger: list[dict[str, str]],
+    legacy_relation_present: bool,
+) -> None:
+    record = next(
+        value
+        for value in snapshot["media"]
+        if value.get("database") == database
+        and value.get("record_type") == "nexpoly-db"
+        and value.get("disposition") != "retained-private-isolated"
+    )
+    analysis, migration_0013, requires_0014 = (
+        CONTROLLER._site_helper_contracts._external_media_ledger_v2(
+            ledger,
+            legacy_relation_present=legacy_relation_present,
+            isolated=False,
+        )
+    )
+    ledger_digest = CONTROLLER.canonical_json_digest(ledger)
+    ledger_relation = record["ledger_relation"]
+    ledger_relation.update(
+        {
+            "state": "present",
+            "row_count": len(ledger),
+            "content_sha256": ledger_digest,
+        }
+    )
+    legacy_relation = record["legacy_relation"]
+    if legacy_relation_present:
+        if legacy_relation.get("schema_authority") is None:
+            raise AssertionError(
+                "fixture cannot recreate a dropped legacy schema authority"
+            )
+        legacy_relation.update(
+            {
+                "state": "present",
+                "row_count": 9,
+            }
+        )
+    else:
+        legacy_relation.update(
+            {
+                "state": "absent",
+                "row_count": None,
+                "schema_sha256": None,
+                "schema_authority": None,
+                "content_sha256": None,
+            }
+        )
+    primary = {
+        "database_identity": record["database_identity"],
+        "database_identity_sha256": record[
+            "database_identity_sha256"
+        ],
+        "current_user": record["current_user"],
+        "transaction_read_only": record["transaction_read_only"],
+        "role_superuser": record["role_superuser"],
+        "role_create_db": record["role_create_db"],
+        "role_create_role": record["role_create_role"],
+        "ledger": ledger,
+        "ledger_sha256": ledger_digest,
+        "ledger_relation": ledger_relation,
+        "ledger_analysis": analysis,
+        "legacy_relation_present": legacy_relation_present,
+        "legacy_relation": legacy_relation,
+        "migration_0013": migration_0013,
+    }
+    record.update(primary)
+    database_record = next(
+        value
+        for value in record["databases"]
+        if value["name"] == database
+    )
+    database_record["audit"] = {
+        **json.loads(json.dumps(primary)),
+        "requires_0014": requires_0014,
+    }
+    record["source_content_sha256"] = (
+        CONTROLLER.canonical_json_digest(
+            {
+                "database_inventory": record["database_inventory"],
+                "databases": record["databases"],
+            }
+        )
+    )
+    for projection in snapshot["databases"]:
+        if projection["database"] == database:
+            projection.update(
+                {
+                    "ledger": ledger,
+                    "ledger_sha256": ledger_digest,
+                    "legacy_relation_present": legacy_relation_present,
+                }
+            )
+    snapshot["requires_0014"] = any(
+        value["audit"].get("requires_0014", False)
+        for medium in snapshot["media"]
+        if medium.get("record_type") == "nexpoly-db"
+        for value in medium["databases"]
+    )
+
+
+def _reseal_v3_media_runtime(
+    snapshot: dict[str, object],
+    *,
+    captured_at: str,
+) -> None:
+    snapshot["media_registry"]["captured_at"] = captured_at
+    for record in snapshot["media"]:
+        audit = record["audit"]
+        audit["audited_at"] = captured_at
+        audit["postgres_uid"] = 70
+        audit["postgres_gid"] = 70
+        audit.pop("evidence_sha256", None)
+        audit["evidence_sha256"] = CONTROLLER.canonical_json_digest(
+            record
+        )
+
+
 def external_database_audit_binding(
     runtime: Path,
     *,
     captured_at: str = "2026-07-17T00:00:00Z",
 ) -> dict[str, object]:
-    contracts = CONTROLLER._site_helper_contracts
     helper_path = (
         runtime / "config" / CONTROLLER.EXTERNAL_DATABASE_AUDIT_HELPER
     )
@@ -311,249 +502,36 @@ def external_database_audit_binding(
         )
     ]
     through_0011 = [
-        row for row in ledger if row["version"] <= "0011_asset_release_v2"
+        row
+        for row in ledger
+        if row["version"] <= "0011_monomer_md_demo_steps"
     ]
     through_0012 = [
-        row for row in ledger if row["version"] <= "0012_drop_polytao_jobs"
+        row
+        for row in ledger
+        if row["version"] <= "0012_drop_polytao_jobs"
     ]
     through_0008 = [
         row
         for row in ledger
         if row["version"] <= "0008_polytao_backend_runtime"
     ]
-    postgres_image = "docker.io/library/postgres@sha256:" + "a" * 64
-    postgres_image_id = "sha256:" + "b" * 64
-    auditor_sha256 = "sha256:" + "7" * 64
-    service_file_sha256 = "sha256:" + "9" * 64
-
-    def attachment(container_id: str) -> dict[str, object]:
-        return {
-            "container_id": container_id,
-            "container_name": f"/fixture-{container_id[:12]}",
-            "container_image_id": "sha256:" + "c" * 64,
-            "container_config_sha256": "sha256:" + "d" * 64,
-            "container_created_at": "2026-07-17T00:00:00.000000000Z",
-            "container_started_at": "2026-07-17T00:00:01.000000000Z",
-            "container_finished_at": "0001-01-01T00:00:00Z",
-            "container_restart_count": 0,
-            "state": "running",
-            "destination": "/var/lib/postgresql/data",
-            "read_only": False,
-        }
-
-    def media_record(
-        *,
-        name: str,
-        database: str,
-        user: str,
-        migration_ledger: list[dict[str, str]],
-        disposition: str,
-        legacy_relation_present: bool,
-        container_id: str,
-        system_identifier: str,
-    ) -> dict[str, object]:
-        media_id = f"docker-volume:{name}"
-        source_identity = {
-            "name": name,
-            "driver": "local",
-            "mountpoint": f"/var/lib/docker/volumes/{name}/_data",
-            "labels_sha256": "sha256:" + "1" * 64,
-            "inspect_sha256": "sha256:" + "2" * 64,
-            "data_subpath": ".",
-            "attached": [attachment(container_id)],
-        }
-        database_identity = {
-            "database": database,
-            "system_identifier": system_identifier,
-            "system_identifier_scope": "source-cluster",
-            "database_oid": "16384",
-            "database_owner": user,
-            "encoding": "UTF8",
-            "collate": "C",
-            "ctype": "C",
-            "server_version_num": 160004,
-        }
-        ledger_sha256 = CONTROLLER.canonical_json_digest(migration_ledger)
-        ledger_relation = {
-            "state": "present",
-            "row_count": len(migration_ledger),
-            "schema_sha256": "sha256:" + "3" * 64,
-            "content_sha256": ledger_sha256,
-        }
-        legacy_relation = {
-            "state": (
-                "present" if legacy_relation_present else "absent"
-            ),
-            "row_count": 9 if legacy_relation_present else None,
-            "schema_sha256": (
-                "sha256:" + "4" * 64
-                if legacy_relation_present
-                else None
-            ),
-            "content_sha256": (
-                "sha256:" + "5" * 64
-                if legacy_relation_present
-                else None
-            ),
-        }
-        ledger_analysis, migration_0013, requires_0014 = (
-            contracts._external_media_ledger_v2(
-                migration_ledger,
-                legacy_relation_present=legacy_relation_present,
-                isolated=False,
-            )
-        )
-        assert requires_0014 is False
-        source_content_sha256 = CONTROLLER.canonical_json_digest(
-            {
-                "database_identity": database_identity,
-                "ledger": migration_ledger,
-                "ledger_relation": ledger_relation,
-                "legacy_relation": legacy_relation,
-            }
-        )
-        audit = {
-            "method": "live-read-only",
-            "complete": True,
-            "auditor_sha256": auditor_sha256,
-            "postgres_major": 16,
-            "postgres_image": postgres_image,
-            "postgres_image_id": postgres_image_id,
-            "pg_service_file_sha256": service_file_sha256,
-            "audited_at": captured_at,
-            "isolation": {
-                "source_mounted_by_auditor": False,
-                "source_started_by_auditor": False,
-                "transaction_read_only": True,
-            },
-        }
-        record: dict[str, object] = {
-            "media_id": media_id,
-            "kind": "docker_volume",
-            "database": database,
-            "disposition": disposition,
-            "source_identity_before": source_identity,
-            "source_identity_after": source_identity,
-            "source_system_identifier": system_identifier,
-            "source_content_sha256": source_content_sha256,
-            "content_identity_algorithm": "logical-database-identity-v2",
-            "database_identity": database_identity,
-            "database_identity_sha256": (
-                CONTROLLER.canonical_json_digest(database_identity)
-            ),
-            "current_user": user,
-            "transaction_read_only": True,
-            "role_superuser": False,
-            "role_create_db": False,
-            "role_create_role": False,
-            "ledger": migration_ledger,
-            "ledger_sha256": ledger_sha256,
-            "ledger_relation": ledger_relation,
-            "ledger_analysis": ledger_analysis,
-            "legacy_relation_present": legacy_relation_present,
-            "legacy_relation": legacy_relation,
-            "migration_0013": migration_0013,
-            "audit": audit,
-        }
-        audit["evidence_sha256"] = CONTROLLER.canonical_json_digest(record)
-        return record
-
-    production = media_record(
-        name="nexpoly_postgres_data",
-        database="nexpoly",
-        user="nexpoly_production_auditor",
-        migration_ledger=through_0011,
-        disposition="writable-target",
-        legacy_relation_present=True,
-        container_id="1" * 64,
-        system_identifier="7312345678901234561",
+    snapshot = external_inventory_v3_fixture(
+        dev_ledger=through_0012,
+        # The reusable builder uses this ledger for both production and
+        # health; rewrite health below while retaining production at 0011.
+        health_ledger=through_0011,
+        registry_digest=registry_sha256,
+        dev_user="nexpoly_dev_auditor",
+        health_user="nexpoly_health_auditor",
     )
-    development = media_record(
-        name="nexpoly_dev_postgres_data",
-        database="nexpoly_dev",
-        user="nexpoly_dev_auditor",
-        migration_ledger=through_0012,
-        disposition="read-only-online",
-        legacy_relation_present=False,
-        container_id="2" * 64,
-        system_identifier="7312345678901234562",
-    )
-    health = media_record(
-        name="nexpoly_md_health_opt_postgres_data",
+    _rewrite_v3_media_ledger(
+        snapshot,
         database="nexpoly_md_health_opt",
-        user="nexpoly_health_auditor",
-        migration_ledger=through_0008,
-        disposition="read-only-online",
+        ledger=through_0008,
         legacy_relation_present=True,
-        container_id="3" * 64,
-        system_identifier="7312345678901234563",
     )
-    media = sorted(
-        [production, development, health],
-        key=lambda record: record["media_id"],
-    )
-
-    def database_record(
-        stack: str,
-        record: dict[str, object],
-    ) -> dict[str, object]:
-        identity = record["database_identity"]
-        assert isinstance(identity, dict)
-        return {
-            "stack": stack,
-            "media_id": record["media_id"],
-            "database": record["database"],
-            "current_user": record["current_user"],
-            "transaction_read_only": record["transaction_read_only"],
-            "role_superuser": record["role_superuser"],
-            "role_create_db": record["role_create_db"],
-            "role_create_role": record["role_create_role"],
-            "system_identifier": identity["system_identifier"],
-            "database_identity_sha256": record[
-                "database_identity_sha256"
-            ],
-            "ledger": record["ledger"],
-            "ledger_sha256": record["ledger_sha256"],
-            "legacy_relation_present": record[
-                "legacy_relation_present"
-            ],
-        }
-
-    media_ids = [record["media_id"] for record in media]
-    snapshot = {
-        "schema_version": 2,
-        "inventory_complete": True,
-        "writable_target": {
-            "stack": "production",
-            "database": "nexpoly",
-        },
-        "media_registry": {
-            "schema_version": 2,
-            "sha256": registry_sha256,
-            "discovery_boundary_sha256": "sha256:" + "e" * 64,
-            "discovery_state_sha256_before": "sha256:" + "f" * 64,
-            "discovery_state_sha256_after": "sha256:" + "f" * 64,
-            "captured_at": captured_at,
-            "expected_media_ids": media_ids,
-            "discovered_media_ids": media_ids,
-            "docker_inventory_sha256": "sha256:" + "6" * 64,
-            "backup_inventory_sha256": "sha256:" + "8" * 64,
-            "scanned_volume_names": sorted(
-                [
-                    "nexpoly_postgres_data",
-                    "nexpoly_dev_postgres_data",
-                    "nexpoly_md_health_opt_postgres_data",
-                ]
-            ),
-            "scanned_container_ids": ["1" * 64, "2" * 64, "3" * 64],
-        },
-        "databases": [
-            database_record("nexpoly_dev", development),
-            database_record("nexpoly_md_health_opt", health),
-        ],
-        "media": media,
-        "requires_0014": False,
-    }
+    _reseal_v3_media_runtime(snapshot, captured_at=captured_at)
     binding: dict[str, object] = {
         "schema_version": 1,
         "helper": {
@@ -603,6 +581,25 @@ def reseal_external_database_audit_binding(
         }
     )
     return binding
+
+
+def external_database_binding_state(
+    binding: dict[str, object],
+    *,
+    production_ledger: list[dict[str, str]],
+    legacy_relation_present: bool,
+    captured_at: str,
+) -> dict[str, object]:
+    changed = json.loads(json.dumps(binding))
+    snapshot = changed["snapshot"]
+    _rewrite_v3_media_ledger(
+        snapshot,
+        database="nexpoly",
+        ledger=production_ledger,
+        legacy_relation_present=legacy_relation_present,
+    )
+    _reseal_v3_media_runtime(snapshot, captured_at=captured_at)
+    return reseal_external_database_audit_binding(changed)
 
 
 def seed_completed_alias_gate(
@@ -739,6 +736,23 @@ def seed_completed_alias_gate(
     }
     CONTROLLER.atomic_json(audit_dir / "isolated-postgres16-restore.json", restore)
     CONTROLLER.atomic_json(audit_dir / "database-after.json", after)
+    external_transition_path = (
+        audit_dir / "external-database-alias-transition.json"
+    )
+    CONTROLLER.atomic_json(
+        external_transition_path,
+        {"schema_version": 1, "fixture": True},
+    )
+    external_transition = {
+        "path": str(external_transition_path),
+        "sha256": selector.sha256_file(external_transition_path),
+        "identity_sha256": "sha256:" + "1" * 64,
+        "before_state_sha256": "sha256:" + "2" * 64,
+        "after_state_sha256": "sha256:" + "3" * 64,
+        "descriptor_sha256": "sha256:" + "4" * 64,
+        "operation_id": operation_id,
+        "kind": "alias-0005-reconciliation",
+    }
     files = selector._alias_evidence_files(audit_dir, backup_dir)
     completed_at = "2026-07-17T00:00:01Z"
     runtime_stop_fence = {"fixture": True}
@@ -755,6 +769,7 @@ def seed_completed_alias_gate(
         "runtime_stop_fence_sha256": selector.canonical_json_digest(
             runtime_stop_fence
         ).removeprefix("sha256:"),
+        "external_database_alias_transition": external_transition,
         "binaries": {"/fixture/bin": {"sha256": "b" * 64}},
         "files": files,
         "completed_at": completed_at,
@@ -786,6 +801,7 @@ def seed_completed_alias_gate(
             "restore_dump_sha256": dump_sha,
         },
         "after": after,
+        "external_database_alias_transition": external_transition,
         "audit_manifest_sha256": selector.sha256_file(audit_path).removeprefix(
             "sha256:"
         ),
@@ -982,15 +998,20 @@ class FakeLifecycle:
                 "source_mutable_data_identity_sha256": (
                     CONTROLLER.canonical_json_digest(
                         CONTROLLER.mutable_data_identity(
-                            mutable_data_evidence()
+                            mutable_data_evidence(
+                                operation_id=str(
+                                    descriptor["operation_id"]
+                                )
+                            )
                         )
                     )
                 ),
                 "ledger": [
                     {
-                        "version": "0010_deployment_control",
-                        "checksum": "a" * 64,
+                        "version": record["version"],
+                        "checksum": record["checksum"],
                     }
+                    for record in B_MANIFEST_RECORDS[:11]
                 ],
             },
         }
@@ -1003,7 +1024,17 @@ class FakeLifecycle:
     ) -> dict[str, object]:
         projected = dict(descriptor)
         projected["operation_id"] = backup_operation_id
-        return self.backup(controller, projected)
+        backup = self.backup(controller, projected)
+        marker = CONTROLLER.load_private_json(
+            Path(getattr(controller, "marker_path"))
+        )
+        before = marker["mutable_data_before"]
+        backup["restore_verification"][
+            "source_mutable_data_identity_sha256"
+        ] = CONTROLLER.canonical_json_digest(
+            CONTROLLER.mutable_data_identity(before)
+        )
+        return backup
 
     def stop(self, _controller: object, _descriptor: object) -> None:
         self._event("stop")
@@ -1022,16 +1053,10 @@ class FakeLifecycle:
     def migrate(self, _controller: object, _descriptor: object) -> dict[str, object]:
         self._event("migrate")
         return {
-            "newly_applied": ["0010_deployment_control"],
-            "ledger": [
-                {
-                    "version": "0010_deployment_control",
-                    "kind": "expand",
-                    "epoch": 1,
-                    "checksum": "a" * 64,
-                    "requires_contracts": [],
-                }
+            "newly_applied": [
+                record["version"] for record in B_MANIFEST_RECORDS[:11]
             ],
+            "ledger": json.loads(json.dumps(B_MANIFEST_RECORDS[:11])),
         }
 
     def start(self, _controller: object, _descriptor: object) -> None:
@@ -1390,9 +1415,11 @@ class FixtureController(CONTROLLER.PullDeployController):
         )
 
     def _capture_mutable_data(
-        self, _descriptor: dict[str, object]
+        self, descriptor: dict[str, object]
     ) -> dict[str, object]:
-        return mutable_data_evidence()
+        return mutable_data_evidence(
+            operation_id=str(descriptor["operation_id"])
+        )
 
     def asset_evidence(self, expected_digest: str) -> dict[str, object]:
         target = self.runtime_root / "fixture-assets" / expected_digest.split(":", 1)[1]
@@ -1476,15 +1503,7 @@ class FixtureController(CONTROLLER.PullDeployController):
             {
                 "sha256": DIGEST_B,
                 "schema_version": 2,
-                "records": [
-                    {
-                        "version": "0010_deployment_control",
-                        "kind": "expand",
-                        "epoch": 1,
-                        "checksum": "a" * 64,
-                        "requires_contracts": [],
-                    }
-                ],
+                "records": json.loads(json.dumps(B_MANIFEST_RECORDS[:11])),
             },
             {
                 "sha256": "sha256:" + "6" * 64,
@@ -2263,6 +2282,34 @@ class PostgresRuntimeFencingTests(unittest.TestCase):
 
 
 class SlotAndDescriptorTests(PullDeployTestCase):
+    def test_prepare_resumes_existing_descriptor_without_rebuilding_it(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        _operation, descriptor_path, ready_path = (
+            controller._operation_paths(OPERATION_ID)
+        )
+        descriptor_payload = descriptor_path.read_bytes()
+        ready_path.unlink()
+        result = controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(descriptor_path.read_bytes(), descriptor_payload)
+        descriptor = CONTROLLER.validate_descriptor(
+            CONTROLLER.load_private_json(descriptor_path)
+        )
+        controller._validate_ready(
+            CONTROLLER.load_private_json(ready_path),
+            descriptor,
+            descriptor_path,
+        )
+
     def test_pull_uses_shared_strict_schema_v2_asset_contract(self) -> None:
         root = (
             CONTROLLER.ASSET_RELEASES_ROOT
@@ -2830,6 +2877,28 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         observed["snapshot"]["media"][0]["audit"]["audited_at"] = (
             "2026-07-17T00:01:00Z"
         )
+        observed["snapshot"]["media_registry"][
+            "docker_inventory_sha256"
+        ] = "sha256:" + "1" * 64
+        observed["snapshot"]["media_registry"][
+            "backup_inventory_sha256"
+        ] = "sha256:" + "2" * 64
+        observed["snapshot"]["media_registry"][
+            "discovery_state_sha256_before"
+        ] = "sha256:" + "3" * 64
+        observed["snapshot"]["media_registry"][
+            "discovery_state_sha256_after"
+        ] = "sha256:" + "3" * 64
+        observed["snapshot"]["media_registry"][
+            "scanned_container_ids"
+        ] = sorted(
+            [
+                *observed["snapshot"]["media_registry"][
+                    "scanned_container_ids"
+                ],
+                "f" * 64,
+            ]
+        )
         reseal_external_database_audit_binding(observed)
         with mock.patch.object(
             controller,
@@ -2858,6 +2927,333 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             ),
         ):
             controller._revalidate_external_database_audit(descriptor)
+
+    def test_external_database_semantic_state_excludes_fresh_self_seals(
+        self,
+    ) -> None:
+        controller = self.controller()
+        before = external_database_audit_binding(
+            controller.runtime_root
+        )
+        ledger = next(
+            record["ledger"]
+            for record in before["snapshot"]["media"]
+            if record["disposition"] == "writable-target"
+        )
+        after = external_database_binding_state(
+            before,
+            production_ledger=ledger,
+            legacy_relation_present=True,
+            captured_at="2026-07-17T00:02:00Z",
+        )
+        self.assertNotEqual(
+            before["identity_sha256"],
+            after["identity_sha256"],
+        )
+        self.assertEqual(
+            before["state_sha256"],
+            after["state_sha256"],
+        )
+        changed = json.loads(json.dumps(after))
+        medium = changed["snapshot"]["media"][0]
+        medium["source_identity_before"]["attached"][0][
+            "container_started_at"
+        ] = "2026-07-17T00:03:00.000000000Z"
+        medium["source_identity_after"] = json.loads(
+            json.dumps(medium["source_identity_before"])
+        )
+        medium["audit"].pop("evidence_sha256")
+        medium["audit"]["evidence_sha256"] = (
+            CONTROLLER.canonical_json_digest(medium)
+        )
+        reseal_external_database_audit_binding(changed)
+        validated = CONTROLLER.validate_external_database_audit_binding(
+            changed
+        )
+        self.assertNotEqual(
+            before["state_sha256"],
+            validated["state_sha256"],
+        )
+
+    def test_external_database_semantic_state_normalizes_backup_scratch_identity(
+        self,
+    ) -> None:
+        first = {
+            "media_registry": {
+                "schema_version": 2,
+                "sha256": "sha256:" + "1" * 64,
+                "discovery_boundary_sha256": "sha256:" + "2" * 64,
+                "expected_media_ids": ["postgres-backup:/private/db.dump"],
+                "discovered_media_ids": ["postgres-backup:/private/db.dump"],
+                "captured_at": "2026-07-17T00:00:00Z",
+                "discovery_state_sha256_before": "sha256:" + "3" * 64,
+                "discovery_state_sha256_after": "sha256:" + "3" * 64,
+                "docker_inventory_sha256": "sha256:" + "4" * 64,
+                "backup_inventory_sha256": "sha256:" + "5" * 64,
+                "scanned_volume_names": [],
+                "scanned_container_ids": [],
+            },
+            "media": [
+                {
+                    "database_identity": {
+                        "database": "nexpoly",
+                        "system_identifier": "111",
+                        "system_identifier_scope": "isolated-restore-cluster",
+                        "database_oid": "16384",
+                        "database_owner": "postgres",
+                        "encoding": "UTF8",
+                        "collate": "C",
+                        "ctype": "C",
+                        "server_version_num": 160004,
+                    },
+                    "database_identity_sha256": "sha256:" + "6" * 64,
+                    "source_content_sha256": "sha256:" + "7" * 64,
+                    "audit": {
+                        "method": "isolated-backup-restore-read-only",
+                        "audited_at": "2026-07-17T00:00:00Z",
+                        "evidence_sha256": "sha256:" + "8" * 64,
+                    },
+                }
+            ],
+        }
+        second = json.loads(json.dumps(first))
+        second["media"][0]["database_identity"].update(
+            {
+                "system_identifier": "222",
+                "database_oid": "24576",
+                "server_version_num": 160005,
+            }
+        )
+        second["media"][0]["database_identity_sha256"] = (
+            "sha256:" + "9" * 64
+        )
+        self.assertEqual(
+            CONTROLLER.external_database_audit_state(first),
+            CONTROLLER.external_database_audit_state(second),
+        )
+
+    def test_alias_and_bridge_external_database_pairs_form_exact_chain(
+        self,
+    ) -> None:
+        controller = self.controller()
+        canonical = [
+            {"version": version, "checksum": checksum}
+            for version, checksum in (
+                CONTROLLER._site_helper_contracts.CANONICAL_MIGRATION_LEDGER
+            )
+        ]
+        through_0008 = [
+            row
+            for row in canonical
+            if row["version"] <= "0008_polytao_backend_runtime"
+        ]
+        through_0011 = [
+            row
+            for row in canonical
+            if row["version"] <= "0011_monomer_md_demo_steps"
+        ]
+        alias_row = {
+            "version": (
+                CONTROLLER._site_helper_contracts
+                .LEGACY_0005_ALIAS_VERSION
+            ),
+            "checksum": (
+                CONTROLLER._site_helper_contracts
+                .LEGACY_0005_ALIAS_CHECKSUM
+            ),
+        }
+        seed = external_database_audit_binding(
+            controller.runtime_root
+        )
+        pre_alias = external_database_binding_state(
+            seed,
+            production_ledger=sorted(
+                [*through_0008, alias_row],
+                key=lambda row: row["version"],
+            ),
+            legacy_relation_present=True,
+            captured_at="2026-07-17T00:01:00Z",
+        )
+        post_alias = external_database_binding_state(
+            pre_alias,
+            production_ledger=through_0008,
+            legacy_relation_present=True,
+            captured_at="2026-07-17T00:02:00Z",
+        )
+        descriptor_sha256 = "sha256:" + "d" * 64
+        alias_pair = CONTROLLER.build_external_database_alias_pair(
+            pre_alias,
+            post_alias,
+            operation_id="alias-0005-chain-test",
+            descriptor_sha256=descriptor_sha256,
+        )
+        self.assertEqual(
+            CONTROLLER.validate_external_database_alias_pair(
+                alias_pair,
+                before_binding=pre_alias,
+            ),
+            alias_pair,
+        )
+        post_bridge = external_database_binding_state(
+            post_alias,
+            production_ledger=through_0011,
+            legacy_relation_present=True,
+            captured_at="2026-07-17T00:03:00Z",
+        )
+        bridge_pair = CONTROLLER.build_external_database_bridge_pair(
+            post_alias,
+            post_bridge,
+            operation_id=OPERATION_ID,
+            descriptor_sha256=descriptor_sha256,
+        )
+        self.assertEqual(
+            bridge_pair["transition"]["added"],
+            through_0011[len(through_0008) :],
+        )
+        volatile_post_bridge = json.loads(json.dumps(post_bridge))
+        registry = volatile_post_bridge["snapshot"]["media_registry"]
+        registry["docker_inventory_sha256"] = "sha256:" + "0" * 64
+        registry["backup_inventory_sha256"] = "sha256:" + "1" * 64
+        registry["scanned_container_ids"] = sorted(
+            [*registry["scanned_container_ids"], "f" * 64]
+        )
+        reseal_external_database_audit_binding(volatile_post_bridge)
+        volatile_pair = CONTROLLER.build_external_database_bridge_pair(
+            post_alias,
+            volatile_post_bridge,
+            operation_id=OPERATION_ID,
+            descriptor_sha256=descriptor_sha256,
+        )
+        self.assertEqual(
+            volatile_pair["after_binding"]["state_sha256"],
+            bridge_pair["after_binding"]["state_sha256"],
+        )
+        changed = json.loads(json.dumps(post_alias))
+        dormant = next(
+            record
+            for record in changed["snapshot"]["media"]
+            if record["database"] == "nexpoly_dev"
+        )
+        dormant["source_identity_before"]["inspect_sha256"] = (
+            "sha256:" + "0" * 64
+        )
+        dormant["source_identity_after"] = json.loads(
+            json.dumps(dormant["source_identity_before"])
+        )
+        dormant["audit"].pop("evidence_sha256")
+        dormant["audit"]["evidence_sha256"] = (
+            CONTROLLER.canonical_json_digest(dormant)
+        )
+        reseal_external_database_audit_binding(changed)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "read-only external media",
+        ):
+            CONTROLLER.build_external_database_bridge_pair(
+                post_alias,
+                changed,
+                operation_id=OPERATION_ID,
+                descriptor_sha256=descriptor_sha256,
+            )
+
+    def test_external_database_chain_folds_exact_0012_and_0013_endpoints(
+        self,
+    ) -> None:
+        controller = self.controller()
+        canonical = [
+            {"version": version, "checksum": checksum}
+            for version, checksum in (
+                CONTROLLER._site_helper_contracts.CANONICAL_MIGRATION_LEDGER
+            )
+        ]
+        through_0012 = canonical[:12]
+        through_0013 = canonical[:13]
+        bridge = external_database_audit_binding(
+            controller.runtime_root
+        )
+        post_contract = external_database_binding_state(
+            bridge,
+            production_ledger=through_0012,
+            legacy_relation_present=False,
+            captured_at="2026-07-17T00:04:00Z",
+        )
+        contract_pair = (
+            CONTROLLER.build_external_database_contract_pair(
+                bridge,
+                post_contract["snapshot"],
+                operation_id="contract-0012-chain-test",
+            )
+        )
+        self.assertEqual(
+            CONTROLLER.external_database_endpoint(
+                bridge,
+                contract_pair=contract_pair,
+            )["state_sha256"],
+            post_contract["state_sha256"],
+        )
+
+        post_final = external_database_binding_state(
+            post_contract,
+            production_ledger=through_0013,
+            legacy_relation_present=False,
+            captured_at="2026-07-17T00:05:00Z",
+        )
+        descriptor_sha256 = "sha256:" + "d" * 64
+        final_pair = CONTROLLER.build_external_database_final_pair(
+            post_contract,
+            post_final,
+            operation_id="deploy-final-0013-chain-test",
+            descriptor_sha256=descriptor_sha256,
+        )
+        self.assertEqual(
+            CONTROLLER.validate_external_database_final_pair(
+                final_pair,
+                before_binding=post_contract,
+            ),
+            final_pair,
+        )
+        self.assertEqual(
+            final_pair["transition"]["added"],
+            through_0013[len(through_0012) :],
+        )
+        self.assertEqual(
+            CONTROLLER.external_database_endpoint(
+                bridge,
+                contract_pair=contract_pair,
+                final_pair=final_pair,
+            )["state_sha256"],
+            post_final["state_sha256"],
+        )
+
+        wrong_checksum = json.loads(json.dumps(post_final))
+        writable = next(
+            record
+            for record in wrong_checksum["snapshot"]["media"]
+            if record["disposition"] == "writable-target"
+        )
+        writable["ledger"][-1]["checksum"] = "f" * 64
+        writable["ledger_sha256"] = CONTROLLER.canonical_json_digest(
+            writable["ledger"]
+        )
+        writable["ledger_relation"]["content_sha256"] = writable[
+            "ledger_sha256"
+        ]
+        writable["migration_0013"] = {
+            "state": "superseded",
+            "checksum": "f" * 64,
+        }
+        writable["audit"].pop("evidence_sha256")
+        writable["audit"]["evidence_sha256"] = (
+            CONTROLLER.canonical_json_digest(writable)
+        )
+        reseal_external_database_audit_binding(wrong_checksum)
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.build_external_database_final_pair(
+                post_contract,
+                wrong_checksum,
+                operation_id="deploy-final-0013-chain-test",
+                descriptor_sha256=descriptor_sha256,
+            )
 
     def test_bridge_prepare_captures_exact_private_registry_and_fresh_audit(
         self,
@@ -3065,6 +3461,185 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             "post-0013",
         )
 
+    def test_bridge_state_cannot_delete_authority_and_downgrade_to_0011(
+        self,
+    ) -> None:
+        controller = self.controller()
+        descriptor = self.bridge_descriptor(controller)
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        _operation_root, descriptor_path, ready_path = (
+            controller._operation_paths(OPERATION_ID)
+        )
+        CONTROLLER.atomic_json(descriptor_path, descriptor)
+        descriptor_digest = CONTROLLER.sha256_file(descriptor_path)
+        ready = CONTROLLER.load_private_json(ready_path)
+        ready["descriptor_sha256"] = descriptor_digest
+        CONTROLLER.atomic_json(ready_path, ready)
+
+        state["descriptor_sha256"] = descriptor_digest
+        state["migrations"] = json.loads(
+            json.dumps(descriptor["migrations"]["records"])
+        )
+        state["migration_compatibility"] = (
+            CONTROLLER.build_migration_compatibility_state(
+                descriptor["bridge"]["policy"],
+                code_manifest_sha256=B_MANIFEST_DIGEST,
+                migrations=state["migrations"],
+            )
+        )
+        state["external_database_audit"] = (
+            external_database_audit_binding(controller.runtime_root)
+        )
+        state["external_database_transition_chain"] = (
+            CONTROLLER.build_external_database_transition_chain(
+                alias_reference={
+                    "path": "/runtime/audit/alias-transition.json",
+                    "sha256": "sha256:" + "1" * 64,
+                    "identity_sha256": "sha256:" + "2" * 64,
+                    "before_state_sha256": "sha256:" + "3" * 64,
+                    "after_state_sha256": "sha256:" + "4" * 64,
+                    "descriptor_sha256": "sha256:" + "5" * 64,
+                    "operation_id": "alias-0005-fixture",
+                    "kind": "alias-0005-reconciliation",
+                },
+                bridge_reference={
+                    "path": "/runtime/audit/bridge-transition.json",
+                    "sha256": "sha256:" + "6" * 64,
+                    "identity_sha256": "sha256:" + "7" * 64,
+                    "before_state_sha256": "sha256:" + "4" * 64,
+                    "after_state_sha256": state[
+                        "external_database_audit"
+                    ]["state_sha256"],
+                    "descriptor_sha256": descriptor_digest,
+                    "operation_id": OPERATION_ID,
+                    "kind": "bridge-expand-to-0011",
+                },
+                active_binding=state["external_database_audit"],
+            )
+        )
+        controller._validate_state_source_descriptor(state)
+
+        downgraded = json.loads(json.dumps(state))
+        downgraded["migration_compatibility"] = None
+        downgraded["migrations"] = downgraded["migrations"][:11]
+        for field in (
+            "contract_external_database_audit",
+            "final_external_database_audit",
+        ):
+            downgraded.pop(field, None)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "compatibility presence differs",
+        ):
+            controller._validate_state_source_descriptor(downgraded)
+
+        retained_compatibility = json.loads(json.dumps(state))
+        retained_compatibility["migrations"] = (
+            retained_compatibility["migrations"][:11]
+        )
+        retained_compatibility["migration_compatibility"] = (
+            CONTROLLER.build_migration_compatibility_state(
+                descriptor["bridge"]["policy"],
+                code_manifest_sha256=B_MANIFEST_DIGEST,
+                migrations=retained_compatibility["migrations"],
+            )
+        )
+        retained_compatibility.pop("external_database_audit")
+        retained_compatibility.pop("external_database_transition_chain")
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lacks its external database authority",
+        ):
+            controller._validate_state_source_descriptor(
+                retained_compatibility
+            )
+
+    def test_ordinary_successor_exactly_inherits_all_governance_authority(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        controller.apply(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        successor_operation = "deploy-governance-successor"
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=successor_operation,
+        )
+        successor = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=successor_operation,
+        )
+        controller._validate_state_source_descriptor(successor)
+
+        mutations = {
+            "approved_contracts": [{"foreign": True}],
+            "migration_epoch_barrier": {"foreign": True},
+            "schema_compatibility_floor": {"foreign": True},
+            "last_contract_operation": "contract-foreign-0012",
+            "contract_mutable_data_audit": {"foreign": True},
+            "contract_external_database_audit": {"foreign": True},
+        }
+        for field, replacement in mutations.items():
+            with self.subTest(field=field):
+                changed = json.loads(json.dumps(successor))
+                changed[field] = replacement
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    f"governance field {field}",
+                ):
+                    controller._validate_state_source_descriptor(
+                        changed
+                    )
+
+        for field in (
+            "external_database_audit",
+            "external_database_transition_chain",
+        ):
+            with self.subTest(field=field):
+                changed = json.loads(json.dumps(successor))
+                changed[field] = {"foreign": True}
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "external database authority",
+                ):
+                    controller._validate_state_source_descriptor(
+                        changed
+                    )
+
+        changed = json.loads(json.dumps(successor))
+        changed["final_mutable_data_audit"] = {"foreign": True}
+        changed["final_external_database_audit"] = {"foreign": True}
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            controller._validate_state_source_descriptor(changed)
+
+    def test_bootstrap_state_rejects_unproven_final_0013_authority(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        state["final_mutable_data_audit"] = {"foreign": True}
+        state["final_external_database_audit"] = {"foreign": True}
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "unproven final 0013 authority",
+        ):
+            controller._validate_state_source_descriptor(state)
+
     def test_mutable_online_tables_are_sealed_before_and_after_apply(self) -> None:
         before = mutable_data_evidence()
         pair = CONTROLLER.build_mutable_data_pair(
@@ -3087,6 +3662,187 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                     "mutable business table changed",
                 ):
                     CONTROLLER.build_mutable_data_pair(before, after)
+
+    def test_bridge_mutable_pair_proves_exact_0008_to_0011_expansion(
+        self,
+    ) -> None:
+        before = mutable_data_evidence(ledger_length=8)
+        after = mutable_data_evidence(ledger_length=11)
+        restored_pair = CONTROLLER.build_mutable_data_pair(
+            before,
+            json.loads(json.dumps(before)),
+        )
+        self.assertEqual(
+            restored_pair["transition"]["control"]["mode"],
+            "pre-0010-unchanged",
+        )
+        before_md = next(
+            record
+            for record in before["business_tables"]
+            if record["schema"] == "md"
+            and record["table"] == "monomer_md_jobs"
+        )
+        after_md = next(
+            record
+            for record in after["business_tables"]
+            if record["schema"] == "md"
+            and record["table"] == "monomer_md_jobs"
+        )
+        before_md["schema_sha256"] = (
+            CONTROLLER.BRIDGE_MUTABLE_MD_SCHEMA_SHA256_BEFORE
+        )
+        after_md["schema_sha256"] = (
+            CONTROLLER.BRIDGE_MUTABLE_MD_SCHEMA_SHA256_AFTER
+        )
+        after_md["content_sha256"] = "sha256:" + "0" * 64
+        after_control = after["governed_controls"]["deployment_control"]
+        after_control["table"]["schema_sha256"] = (
+            CONTROLLER.BRIDGE_MUTABLE_DEPLOYMENT_CONTROL_SCHEMA_SHA256
+        )
+        after_control["row"].update(
+            {
+                "reason": f"post-canary drain {OPERATION_ID}",
+                "activated_by": "pull-deploy-controller",
+                "release_sha": TARGET_SHA,
+            }
+        )
+        after_analytics = after["governed_controls"][
+            "database_analytics_snapshots"
+        ]
+        after_analytics["table"]["schema_sha256"] = (
+            CONTROLLER.BRIDGE_MUTABLE_ANALYTICS_SCHEMA_SHA256
+        )
+        reseal_mutable_data_evidence(before)
+        reseal_mutable_data_evidence(after)
+        descriptor_digest = "sha256:" + "9" * 64
+        pair = CONTROLLER.build_bridge_mutable_data_pair(
+            before,
+            after,
+            descriptor_sha256=descriptor_digest,
+        )
+        self.assertEqual(
+            pair["transition"]["kind"],
+            "bridge-expand-to-0011",
+        )
+        self.assertEqual(
+            pair["transition"]["descriptor_sha256"],
+            descriptor_digest,
+        )
+
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        state["descriptor_sha256"] = descriptor_digest
+        state["migrations"] = json.loads(
+            json.dumps(B_MANIFEST_RECORDS[:11])
+        )
+        state["mutable_data_audit"] = pair
+        state["database_backup"]["mutable_data_before_sha256"] = (
+            pair["identity_sha256"]
+        )
+        accepted_ledgers = (
+            CONTROLLER._bridge_core.expected_migration_registry(
+                target_manifest_sha256=B_MANIFEST_DIGEST,
+                target_records=B_MANIFEST_RECORDS,
+                authority_manifest_sha256=F_MANIFEST_DIGEST,
+                authority_records=[
+                    *B_MANIFEST_RECORDS,
+                    CONTROLLER._bridge_core.FINAL_MIGRATION_RECORD,
+                ],
+            )
+        )
+        state["migration_compatibility"] = (
+            CONTROLLER.build_migration_compatibility_state(
+                {
+                    "policy_id": "sha256:" + "8" * 64,
+                    "accepted_migration_ledgers": accepted_ledgers,
+                },
+                code_manifest_sha256=B_MANIFEST_DIGEST,
+                migrations=state["migrations"],
+            )
+        )
+        state["external_database_audit"] = (
+            external_database_audit_binding(controller.runtime_root)
+        )
+        state["external_database_transition_chain"] = (
+            CONTROLLER.build_external_database_transition_chain(
+                alias_reference={
+                    "path": "/runtime/audit/alias-transition.json",
+                    "sha256": "sha256:" + "1" * 64,
+                    "identity_sha256": "sha256:" + "2" * 64,
+                    "before_state_sha256": "sha256:" + "3" * 64,
+                    "after_state_sha256": "sha256:" + "4" * 64,
+                    "descriptor_sha256": "sha256:" + "5" * 64,
+                    "operation_id": "alias-0005-fixture",
+                    "kind": "alias-0005-reconciliation",
+                },
+                bridge_reference={
+                    "path": "/runtime/audit/bridge-transition.json",
+                    "sha256": "sha256:" + "6" * 64,
+                    "identity_sha256": "sha256:" + "7" * 64,
+                    "before_state_sha256": "sha256:" + "4" * 64,
+                    "after_state_sha256": state[
+                        "external_database_audit"
+                    ]["state_sha256"],
+                    "descriptor_sha256": descriptor_digest,
+                    "operation_id": OPERATION_ID,
+                    "kind": "bridge-expand-to-0011",
+                },
+                active_binding=state["external_database_audit"],
+            )
+        )
+        CONTROLLER.validate_current_deployment_state(state)
+
+        changed = json.loads(json.dumps(after))
+        changed["bridge_projection"]["content_sha256"] = (
+            "sha256:" + "1" * 64
+        )
+        reseal_mutable_data_evidence(changed)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "changed existing business rows",
+        ):
+            CONTROLLER.build_bridge_mutable_data_pair(
+                before,
+                changed,
+                descriptor_sha256=descriptor_digest,
+            )
+
+        leased = json.loads(json.dumps(after))
+        leased["bridge_projection"]["lease_columns"][
+            "non_null_counts"
+        ]["worker_instance_id"] = 1
+        reseal_mutable_data_evidence(leased)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lease columns changed existing business rows",
+        ):
+            CONTROLLER.build_bridge_mutable_data_pair(
+                before,
+                leased,
+                descriptor_sha256=descriptor_digest,
+            )
+
+        partial_control = json.loads(json.dumps(before))
+        partial_control["governed_controls"]["deployment_control"] = (
+            json.loads(
+                json.dumps(
+                    after["governed_controls"]["deployment_control"]
+                )
+            )
+        )
+        reseal_mutable_data_evidence(partial_control)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "mutable-data audit evidence is invalid",
+        ):
+            CONTROLLER.validate_mutable_data_evidence(partial_control)
 
     def test_mutable_data_allows_only_exact_0012_exception(self) -> None:
         before = mutable_data_evidence(ledger_length=11)
@@ -3153,7 +3909,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         reseal_mutable_data_evidence(advanced)
         with self.assertRaisesRegex(
             CONTROLLER.PullDeployError,
-            "DFT identity sequence is not pristine",
+            "DFT creation evidence is not pristine",
         ):
             CONTROLLER.build_mutable_data_pair(before, advanced)
 
@@ -4063,6 +4819,33 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         state["external_database_audit"] = descriptor[
             "external_database_audit"
         ]
+        state["external_database_transition_chain"] = (
+            CONTROLLER.build_external_database_transition_chain(
+                alias_reference={
+                    "path": "/runtime/audit/alias-transition.json",
+                    "sha256": "sha256:" + "1" * 64,
+                    "identity_sha256": "sha256:" + "2" * 64,
+                    "before_state_sha256": "sha256:" + "3" * 64,
+                    "after_state_sha256": "sha256:" + "4" * 64,
+                    "descriptor_sha256": "sha256:" + "5" * 64,
+                    "operation_id": "alias-0005-fixture",
+                    "kind": "alias-0005-reconciliation",
+                },
+                bridge_reference={
+                    "path": "/runtime/audit/bridge-transition.json",
+                    "sha256": "sha256:" + "6" * 64,
+                    "identity_sha256": "sha256:" + "7" * 64,
+                    "before_state_sha256": "sha256:" + "4" * 64,
+                    "after_state_sha256": state[
+                        "external_database_audit"
+                    ]["state_sha256"],
+                    "descriptor_sha256": descriptor_digest,
+                    "operation_id": OPERATION_ID,
+                    "kind": "bridge-expand-to-0011",
+                },
+                active_binding=state["external_database_audit"],
+            )
+        )
         CONTROLLER.validate_current_deployment_state(state)
         candidate_digest = CONTROLLER.sha256_bytes(
             CONTROLLER.canonical_json_bytes(state) + b"\n"
@@ -4075,13 +4858,94 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         )
         controller.current_state_path.unlink()
         marker = {
+            "phase": "state-commit-started",
             "candidate_state": state,
             "candidate_state_sha256": candidate_digest,
         }
-        recovered = controller._candidate_current_state(
-            descriptor,
-            descriptor_digest,
-            marker,
+        with (
+            mock.patch.object(
+                controller,
+                "_validate_external_database_state_provenance",
+                side_effect=CONTROLLER.validate_current_deployment_state,
+            ),
+            mock.patch.object(
+                controller,
+                "_revalidate_bridge_candidate_database_state",
+            ) as initial_revalidation,
+            mock.patch.object(
+                controller,
+                "_consume_bridge_token",
+                side_effect=OSError("lost token-consume response"),
+            ),
+            self.assertRaisesRegex(OSError, "lost token-consume response"),
+        ):
+            controller._candidate_current_state(
+                descriptor,
+                descriptor_digest,
+                marker,
+            )
+        initial_revalidation.assert_called_once_with(
+            descriptor, state, include_mutable=True
+        )
+        self.assertEqual(
+            CONTROLLER._bridge_core.load_token_authority(
+                controller.state_dir
+            )["status"],
+            "commit-intent",
+        )
+        self.assertEqual(
+            CONTROLLER.sha256_file(controller.current_state_path),
+            candidate_digest,
+        )
+
+        with (
+            mock.patch.object(
+                controller,
+                "_validate_external_database_state_provenance",
+                side_effect=CONTROLLER.validate_current_deployment_state,
+            ),
+            mock.patch.object(
+                controller,
+                "_revalidate_bridge_candidate_database_state",
+                side_effect=CONTROLLER.PullDeployError(
+                    "candidate mutable data changed before commit"
+                ),
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "mutable data changed",
+            ),
+        ):
+            controller._candidate_current_state(
+                descriptor,
+                descriptor_digest,
+                marker,
+            )
+        self.assertEqual(
+            CONTROLLER._bridge_core.load_token_authority(
+                controller.state_dir
+            )["status"],
+            "commit-intent",
+        )
+
+        with (
+            mock.patch.object(
+                controller,
+                "_validate_external_database_state_provenance",
+                side_effect=CONTROLLER.validate_current_deployment_state,
+            ),
+            mock.patch.object(
+                controller,
+                "_revalidate_bridge_candidate_database_state",
+            ) as revalidate_database,
+        ):
+            recovered = controller._candidate_current_state(
+                descriptor,
+                descriptor_digest,
+                marker,
+            )
+        revalidate_database.assert_called_once_with(
+            descriptor, state, include_mutable=True
         )
         self.assertEqual(recovered, state)
         self.assertEqual(
@@ -4195,6 +5059,402 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         finally:
             process.terminate()
             process.wait(timeout=10)
+
+    def test_prepare_operation_owner_is_published_atomically_and_recovers_staging(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        staging = operation.parent / f".{operation.name}.preparing"
+        staging.mkdir(mode=0o700)
+        with controller.deployment_lock():
+            attempt = controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+        self.assertEqual(attempt, 1)
+        self.assertFalse(staging.exists())
+        owner = CONTROLLER.load_private_json(
+            operation / "prepare-owner.json"
+        )
+        self.assertEqual(owner["operation_id"], OPERATION_ID)
+
+        crash_operation_id = "deploy-prepare-quarantine-crash"
+        crash_operation, _descriptor, _ready = (
+            controller._operation_paths(crash_operation_id)
+        )
+        crash_staging = (
+            crash_operation.parent
+            / f".{crash_operation.name}.preparing"
+        )
+        crash_staging.mkdir(mode=0o700)
+        with (
+            controller.deployment_lock(),
+            mock.patch.object(
+                CONTROLLER.shutil,
+                "rmtree",
+                side_effect=OSError("injected quarantine crash"),
+            ),
+            self.assertRaisesRegex(OSError, "quarantine crash"),
+        ):
+            controller._open_prepare_operation(
+                crash_operation,
+                operation_id=crash_operation_id,
+                target_sha=TARGET_SHA,
+            )
+        self.assertTrue(
+            (
+                crash_staging.parent
+                / f"{crash_staging.name}.discard"
+            ).exists()
+        )
+        with controller.deployment_lock():
+            self.assertEqual(
+                controller._open_prepare_operation(
+                    crash_operation,
+                    operation_id=crash_operation_id,
+                    target_sha=TARGET_SHA,
+                ),
+                1,
+            )
+
+        other_operation = "deploy-prepare-foreign-owner"
+        foreign, _descriptor, _ready = controller._operation_paths(
+            other_operation
+        )
+        foreign_staging = (
+            foreign.parent / f".{foreign.name}.preparing"
+        )
+        foreign_staging.mkdir(mode=0o700)
+        CONTROLLER.atomic_json(
+            foreign_staging / "prepare-owner.json",
+            {
+                "schema_version": 1,
+                "operation_id": "deploy-foreign-owner",
+                "target_sha": TARGET_SHA,
+                "controller_sha256": controller.controller_digest(),
+                "created_at": CONTROLLER.utc_now(),
+            },
+        )
+        with (
+            controller.deployment_lock(),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "belongs to another operation",
+            ),
+        ):
+            controller._open_prepare_operation(
+                foreign,
+                operation_id=other_operation,
+                target_sha=TARGET_SHA,
+            )
+
+    def test_prepare_operation_accepts_only_exact_lost_rename_response(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation_id = "deploy-prepare-lost-rename"
+        operation, _descriptor, _ready = controller._operation_paths(
+            operation_id
+        )
+        original = CONTROLLER.rename_directory_noreplace
+        lost = False
+
+        def lose_response(source, target):  # type: ignore[no-untyped-def]
+            nonlocal lost
+            result = original(source, target)
+            if target == operation and not lost:
+                lost = True
+                raise OSError("injected lost prepare rename response")
+            return result
+
+        with (
+            controller.deployment_lock(),
+            mock.patch.object(
+                CONTROLLER,
+                "rename_directory_noreplace",
+                side_effect=lose_response,
+            ),
+        ):
+            attempt = controller._open_prepare_operation(
+                operation,
+                operation_id=operation_id,
+                target_sha=TARGET_SHA,
+            )
+        self.assertTrue(lost)
+        self.assertEqual(attempt, 1)
+        self.assertEqual(
+            CONTROLLER.load_private_json(
+                operation / "prepare-owner.json"
+            )["operation_id"],
+            operation_id,
+        )
+
+    def test_real_md_staging_recovers_ownerless_dirs_and_lost_cache_rename(
+        self,
+    ) -> None:
+        identity_digest = "sha256:" + "9" * 64
+        deploy_env = self.runtime / "config/deploy.env"
+        write_private(
+            deploy_env,
+            deploy_env.read_text(encoding="utf-8")
+            + (
+                "NEXPOLY_WORKER_BASE_PYTHON_IDENTITY_SHA256="
+                + identity_digest
+                + "\n"
+            ),
+        )
+
+        class WheelRunner:
+            def run(
+                self, command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                if "download" in command:
+                    destination = Path(command[command.index("--dest") + 1])
+                    wheel = destination / "fixture-1.0-py3-none-any.whl"
+                    wheel.write_bytes(b"sealed wheel\n")
+                    os.chmod(wheel, 0o600)
+                elif "venv" in command:
+                    venv = Path(command[-1])
+                    (venv / "bin").mkdir(parents=True, mode=0o700)
+                    python = venv / "bin/python"
+                    python.write_bytes(b"fixture python\n")
+                    os.chmod(python, 0o700)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+        controller = self.controller(runner=WheelRunner())
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+        lock_payload = (
+            b"fixture==1.0 --hash=sha256:" + b"1" * 64 + b"\n"
+        )
+        lock_sha = CONTROLLER.sha256_bytes(lock_payload)
+        cache_key = CONTROLLER.sha256_bytes(
+            CONTROLLER.canonical_json_bytes(
+                {
+                    "worker_lock_sha256": lock_sha,
+                    "base_python_identity_sha256": identity_digest,
+                    "platform": sys.platform,
+                }
+            )
+        )
+        cache = controller.wheel_cache_dir / cache_key
+        wheel_staging = (
+            controller.wheel_cache_dir
+            / f".{cache_key}.staging-{OPERATION_ID}"
+        )
+        wheel_staging.mkdir(mode=0o700)
+        slot_staging = (
+            controller.venv_root
+            / f".md-a.preparing-{OPERATION_ID}"
+        )
+        slot_staging.mkdir(mode=0o700)
+        original = CONTROLLER.rename_directory_noreplace
+        lost = False
+
+        def lose_cache_response(source, target):  # type: ignore[no-untyped-def]
+            nonlocal lost
+            result = original(source, target)
+            if target == cache and not lost:
+                lost = True
+                raise OSError("injected lost wheel rename response")
+            return result
+
+        identity = {
+            "resolved_path": str(Path(sys.executable).resolve()),
+            "identity_sha256": identity_digest,
+        }
+        with (
+            controller.deployment_lock(),
+            mock.patch.object(
+                controller,
+                "_base_python_identity",
+                return_value=identity,
+            ),
+            mock.patch.object(
+                CONTROLLER,
+                "shared_inspect_base_python_identity",
+                return_value=identity,
+            ),
+            mock.patch.object(
+                CONTROLLER,
+                "rename_directory_noreplace",
+                side_effect=lose_cache_response,
+            ),
+        ):
+            record = (
+                CONTROLLER.PullDeployController.prepare_md_slot(
+                    controller,
+                    operation_id=OPERATION_ID,
+                    target_sha=TARGET_SHA,
+                    target_tree=TARGET_TREE,
+                    lock_payload=lock_payload,
+                )
+            )
+        self.assertTrue(lost)
+        self.assertTrue((cache / "READY.json").is_file())
+        self.assertFalse(wheel_staging.exists())
+        self.assertFalse(slot_staging.exists())
+        self.assertFalse(
+            (
+                controller.venv_root
+                / f"md-{record['slot']}"
+                / ".preparing.json"
+            ).exists()
+        )
+        self.assertEqual(
+            record["wheel_inventory_sha256"],
+            CONTROLLER.directory_inventory_digest(cache),
+        )
+
+    def test_real_md_staging_rejects_foreign_wheel_and_slot_owners(
+        self,
+    ) -> None:
+        identity_digest = "sha256:" + "9" * 64
+        deploy_env = self.runtime / "config/deploy.env"
+        write_private(
+            deploy_env,
+            deploy_env.read_text(encoding="utf-8")
+            + (
+                "NEXPOLY_WORKER_BASE_PYTHON_IDENTITY_SHA256="
+                + identity_digest
+                + "\n"
+            ),
+        )
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+        lock_payload = (
+            b"fixture==1.0 --hash=sha256:" + b"1" * 64 + b"\n"
+        )
+        lock_sha = CONTROLLER.sha256_bytes(lock_payload)
+        cache_key = CONTROLLER.sha256_bytes(
+            CONTROLLER.canonical_json_bytes(
+                {
+                    "worker_lock_sha256": lock_sha,
+                    "base_python_identity_sha256": identity_digest,
+                    "platform": sys.platform,
+                }
+            )
+        )
+        wheel = (
+            controller.wheel_cache_dir
+            / f".{cache_key}.staging-{OPERATION_ID}"
+        )
+        wheel.mkdir(mode=0o700)
+        CONTROLLER.atomic_json(
+            wheel / ".owner.json",
+            {
+                "schema_version": 1,
+                "operation_id": "deploy-foreign-owner",
+                "wheel_cache_key": cache_key,
+                "worker_lock_sha256": lock_sha,
+                "base_python_identity_sha256": identity_digest,
+            },
+        )
+        identity = {
+            "resolved_path": str(Path(sys.executable).resolve()),
+            "identity_sha256": identity_digest,
+        }
+        with (
+            controller.deployment_lock(),
+            mock.patch.object(
+                controller,
+                "_base_python_identity",
+                return_value=identity,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "another operation",
+            ),
+        ):
+            CONTROLLER.PullDeployController.prepare_md_slot(
+                controller,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+                target_tree=TARGET_TREE,
+                lock_payload=lock_payload,
+            )
+
+        shutil.rmtree(wheel)
+        cache = controller.wheel_cache_dir / cache_key
+        cache.mkdir(mode=0o700)
+        owner = CONTROLLER.PullDeployController._wheel_cache_owner(
+            operation_id=OPERATION_ID,
+            wheel_cache_key=cache_key,
+            worker_lock_sha256=lock_sha,
+            base_python_identity_sha256=identity_digest,
+        )
+        CONTROLLER.atomic_json(cache / ".owner.json", owner)
+        payload_path = cache / "fixture-1.0-py3-none-any.whl"
+        payload_path.write_bytes(b"sealed wheel\n")
+        os.chmod(payload_path, 0o600)
+        payload = CONTROLLER.wheel_payload_inventory(cache)
+        CONTROLLER.atomic_json(
+            cache / "READY.json",
+            {
+                "schema_version": 1,
+                "status": "ready",
+                "operation_id": OPERATION_ID,
+                "wheel_cache_key": cache_key,
+                "worker_lock_sha256": lock_sha,
+                "base_python_identity_sha256": identity_digest,
+                "payload_file_count": len(payload["files"]),
+                "payload_inventory_sha256": payload[
+                    "inventory_sha256"
+                ],
+                "ready_at": CONTROLLER.utc_now(),
+            },
+        )
+        slot_staging = (
+            controller.venv_root
+            / f".md-a.preparing-{OPERATION_ID}"
+        )
+        slot_staging.mkdir(mode=0o700)
+        CONTROLLER.atomic_json(
+            slot_staging / ".preparing.json",
+            {
+                "schema_version": 1,
+                "operation_id": "deploy-foreign-owner",
+                "slot": "a",
+            },
+        )
+        with (
+            controller.deployment_lock(),
+            mock.patch.object(
+                controller,
+                "_base_python_identity",
+                return_value=identity,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "slot staging belongs to another operation",
+            ),
+        ):
+            CONTROLLER.PullDeployController.prepare_md_slot(
+                controller,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+                target_tree=TARGET_TREE,
+                lock_payload=lock_payload,
+            )
 
     def test_active_slot_uses_a_b_values_canonical_digest_and_no_current_symlink(
         self,
@@ -4335,6 +5595,55 @@ class StrictLifecycleEvidenceTests(unittest.TestCase):
             "active_jobs": {name: 0 for name in fields},
             "active_total": 0,
         }
+
+    def persistent_payload(
+        self, *, version: int | None = None
+    ) -> dict[str, object]:
+        selected = 1 if version is None else version
+        fields = (
+            CONTROLLER.PERSISTENT_JOB_FIELDS_V1
+            if selected == 1
+            else CONTROLLER.PERSISTENT_JOB_FIELDS_V2
+        )
+        payload: dict[str, object] = {
+            "drain": {
+                "enabled": False,
+                "reason": None,
+                "release_sha": None,
+                "activated_at": None,
+                "activated_by": None,
+                "updated_at": CONTROLLER.utc_now(),
+            },
+            "active_jobs": {name: 0 for name in fields},
+            "active_total": 0,
+        }
+        if version is not None:
+            payload["active_jobs_schema_version"] = version
+        return payload
+
+    def test_persistent_jobs_accepts_legacy_v1_and_explicit_v2(self) -> None:
+        legacy = self.persistent_payload()
+        explicit_v1 = self.persistent_payload(version=1)
+        explicit_v2 = self.persistent_payload(version=2)
+        for payload in (legacy, explicit_v1, explicit_v2):
+            with self.subTest(payload=payload):
+                self.assertEqual(
+                    CONTROLLER.validate_persistent_drain_evidence(payload),
+                    payload,
+                )
+
+    def test_persistent_jobs_rejects_ambiguous_or_mismatched_versions(self) -> None:
+        implicit_v2 = self.persistent_payload(version=2)
+        implicit_v2.pop("active_jobs_schema_version")
+        explicit_v1_with_v2 = self.persistent_payload(version=2)
+        explicit_v1_with_v2["active_jobs_schema_version"] = 1
+        unsupported = self.persistent_payload(version=2)
+        unsupported["active_jobs_schema_version"] = 3
+        for payload in (implicit_v2, explicit_v1_with_v2, unsupported):
+            with self.subTest(payload=payload), self.assertRaises(
+                CONTROLLER.PullDeployError
+            ):
+                CONTROLLER.validate_persistent_drain_evidence(payload)
 
     def test_active_jobs_rejects_unknown_categories_and_boolean_counts(self) -> None:
         payload = self.active_payload()
@@ -5110,6 +6419,36 @@ class SystemDrainFencingTests(unittest.TestCase):
 
 
 class LifecycleStateMachineTests(PullDeployTestCase):
+    def test_pre_stop_rollback_validates_previous_before_resume(
+        self,
+    ) -> None:
+        previous = {"fixture": "previous-state"}
+        fake = SimpleNamespace(
+            lifecycle=mock.Mock(),
+            _is_pre_stop_abort_marker=mock.Mock(return_value=True),
+            _validate_steady_deployment_state=mock.Mock(
+                side_effect=CONTROLLER.PullDeployError(
+                    "injected previous terminal failure"
+                )
+            ),
+            _previous_runtime_descriptor=mock.Mock(),
+            _recover_unchanged_and_resume=mock.Mock(),
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "previous terminal failure",
+        ):
+            CONTROLLER.PullDeployController._rollback_failed_attempt(
+                fake,
+                {"previous_deployment": previous},
+                {},
+            )
+        fake._validate_steady_deployment_state.assert_called_once_with(
+            previous
+        )
+        fake._previous_runtime_descriptor.assert_not_called()
+        fake._recover_unchanged_and_resume.assert_not_called()
+
     def test_stopped_start_unknown_commit_recovers_authorized_new_instance(
         self,
     ) -> None:
@@ -5230,8 +6569,290 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         self.assertEqual(current["active_monomer_md_slot"]["slot"], "a")
         self.assertEqual(
             [record["version"] for record in current["migrations"]],
-            ["0010_deployment_control"],
+            [record["version"] for record in B_MANIFEST_RECORDS[:11]],
         )
+
+    def test_current_state_cas_rejects_drift_and_accepts_exact_write_response_loss(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        previous = controller.apply(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        previous_digest = CONTROLLER.sha256_file(
+            controller.current_state_path
+        )
+        candidate = json.loads(json.dumps(previous))
+        candidate["deployed_at"] = "2026-07-18T12:00:00Z"
+        candidate_digest = CONTROLLER.sha256_bytes(
+            CONTROLLER.canonical_json_bytes(candidate) + b"\n"
+        )
+        original_atomic_json = CONTROLLER.atomic_json
+        lost = False
+
+        def lose_response(path, value, *args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal lost
+            result = original_atomic_json(path, value, *args, **kwargs)
+            if Path(path) == controller.current_state_path and not lost:
+                lost = True
+                raise OSError("injected lost state write response")
+            return result
+
+        with (
+            mock.patch.object(
+                CONTROLLER,
+                "atomic_json",
+                side_effect=lose_response,
+            ),
+            self.assertRaisesRegex(OSError, "lost state write response"),
+        ):
+            controller._commit_current_state_cas(
+                candidate,
+                candidate_sha256=candidate_digest,
+                expected_pre_state=previous,
+                expected_pre_state_sha256=previous_digest,
+            )
+        self.assertEqual(
+            controller._commit_current_state_cas(
+                candidate,
+                candidate_sha256=candidate_digest,
+                expected_pre_state=previous,
+                expected_pre_state_sha256=previous_digest,
+            ),
+            "already-committed",
+        )
+
+        pretty_payload = (
+            json.dumps(previous, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        controller.current_state_path.write_bytes(pretty_payload)
+        os.chmod(controller.current_state_path, 0o600)
+        with controller.current_state_path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        CONTROLLER.fsync_directory(
+            controller.current_state_path.parent
+        )
+        pretty_digest = CONTROLLER.sha256_file(
+            controller.current_state_path
+        )
+        self.assertNotEqual(pretty_digest, previous_digest)
+        self.assertEqual(
+            controller._commit_current_state_cas(
+                candidate,
+                candidate_sha256=candidate_digest,
+                expected_pre_state=previous,
+                expected_pre_state_sha256=pretty_digest,
+            ),
+            "committed",
+        )
+
+        CONTROLLER.atomic_json(controller.current_state_path, previous)
+        drifted = json.loads(json.dumps(previous))
+        drifted["deployed_at"] = "2026-07-18T12:00:01Z"
+        CONTROLLER.atomic_json(controller.current_state_path, drifted)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "changed before commit",
+        ):
+            controller._commit_current_state_cas(
+                candidate,
+                candidate_sha256=candidate_digest,
+                expected_pre_state=previous,
+                expected_pre_state_sha256=previous_digest,
+            )
+
+    def test_normal_apply_reloads_pre_state_after_long_transaction(self) -> None:
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        controller.apply(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        successor = "deploy-normal-state-cas-drift"
+        controller.prepare(
+            target_sha=TARGET_SHA, operation_id=successor
+        )
+        original_revalidate = (
+            controller._revalidate_candidate_database_state
+        )
+        drifted: dict[str, object] | None = None
+
+        def drift_before_commit(descriptor, state, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal drifted
+            result = original_revalidate(
+                descriptor, state, **kwargs
+            )
+            if state.get("operation_id") == successor:
+                drifted = CONTROLLER.load_private_json(
+                    controller.current_state_path
+                )
+                drifted["deployed_at"] = "2026-07-18T12:00:02Z"
+                CONTROLLER.atomic_json(
+                    controller.current_state_path, drifted
+                )
+            return result
+
+        with (
+            mock.patch.object(
+                controller,
+                "_revalidate_candidate_database_state",
+                side_effect=drift_before_commit,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "state commit is ambiguous",
+            ),
+        ):
+            controller.apply(
+                target_sha=TARGET_SHA, operation_id=successor
+            )
+        self.assertEqual(
+            CONTROLLER.load_private_json(
+                controller.current_state_path
+            ),
+            drifted,
+        )
+        self.assertTrue(controller.marker_path.exists())
+
+    def test_explicit_rollback_reloads_source_state_before_commit(self) -> None:
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        controller.apply(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        successor = "deploy-rollback-state-cas-drift"
+        controller.prepare(
+            target_sha=TARGET_SHA, operation_id=successor
+        )
+        controller.apply(
+            target_sha=TARGET_SHA, operation_id=successor
+        )
+        original_revalidate = (
+            controller._revalidate_candidate_database_state
+        )
+        drifted: dict[str, object] | None = None
+
+        def drift_before_commit(descriptor, state, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal drifted
+            result = original_revalidate(
+                descriptor, state, **kwargs
+            )
+            if state.get("rollback_provenance") is not None:
+                drifted = CONTROLLER.load_private_json(
+                    controller.current_state_path
+                )
+                drifted["deployed_at"] = "2026-07-18T12:00:03Z"
+                CONTROLLER.atomic_json(
+                    controller.current_state_path, drifted
+                )
+            return result
+
+        with (
+            mock.patch.object(
+                controller,
+                "_revalidate_candidate_database_state",
+                side_effect=drift_before_commit,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "changed before commit",
+            ),
+        ):
+            controller.rollback(operation_id=successor)
+        self.assertEqual(
+            CONTROLLER.load_private_json(
+                controller.current_state_path
+            ),
+            drifted,
+        )
+        marker = CONTROLLER.load_private_json(
+            controller.marker_path
+        )
+        self.assertEqual(
+            marker["current_state_precondition_sha256"],
+            marker["rollback_current_state_sha256"],
+        )
+
+    def test_steady_state_requires_outcome_and_exact_success_audit(self) -> None:
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        operation_state = (
+            controller.audit_dir / OPERATION_ID / "operation-state.json"
+        )
+        operation_state.unlink()
+        CONTROLLER.fsync_directory(operation_state.parent)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "deployed terminal outcome",
+        ):
+            controller._validate_steady_deployment_state(
+                state,
+                revalidate_live=False,
+            )
+
+        controller._record_operation_outcome(
+            operation_id=OPERATION_ID,
+            descriptor_sha256=state["descriptor_sha256"],
+            outcome="deployed",
+        )
+        success = controller.audit_dir / OPERATION_ID / "success.json"
+        success.unlink()
+        CONTROLLER.fsync_directory(success.parent)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "exact immutable success audit",
+        ):
+            controller._validate_steady_deployment_state(
+                state,
+                revalidate_live=False,
+            )
+
+    def test_steady_state_rejects_replayed_pre_0012_success_state(self) -> None:
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        contract_operation = "contract-0012-replay-fixture"
+        contract_root = (
+            controller.runtime_root / "state" / "contract-operations"
+        )
+        contract_root.mkdir(mode=0o700)
+        CONTROLLER.atomic_json(
+            contract_root / f"{contract_operation}.json",
+            {
+                "schema_version": 2,
+                "status": "success",
+                "operation_id": contract_operation,
+                "deployment_operation_id": OPERATION_ID,
+                "pull_descriptor_sha256": state["descriptor_sha256"],
+            },
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "omits an already successful 0012",
+        ):
+            controller._validate_steady_deployment_state(
+                state,
+                revalidate_live=False,
+            )
 
     def test_failure_is_rolled_back_and_audited_without_leaving_marker(self) -> None:
         lifecycle = FakeLifecycle(fail_at="start")
@@ -5417,6 +7038,53 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         )
         self.assertFalse(controller.marker_path.exists())
         self.assertNotIn("stop", lifecycle.events)
+
+    def test_admission_resumed_recovery_only_verifies_open_runtime(self) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        marker = {
+            "schema_version": 2,
+            "action": "deploy",
+            "operation_id": OPERATION_ID,
+            "source_sha": TARGET_SHA,
+            "descriptor_sha256": CONTROLLER.sha256_file(descriptor_path),
+            "executor_control": descriptor["controller"]["executor_control"],
+            "executor_control_sha256": descriptor["controller"][
+                "executor_control_sha256"
+            ],
+            "phase": "admission-resumed",
+            "started_at": CONTROLLER.utc_now(),
+            "updated_at": CONTROLLER.utc_now(),
+            "runtime_stopped": True,
+            "source_switched": True,
+            "slot_switched": True,
+            "control_switched": True,
+            "unit_switched": True,
+            "asset_switched": True,
+            "database_change_started": True,
+            "verification": lifecycle.verification(),
+            "candidate_state": state,
+            "candidate_state_sha256": CONTROLLER.sha256_bytes(
+                CONTROLLER.canonical_json_bytes(state) + b"\n"
+            ),
+        }
+        CONTROLLER.atomic_json(controller.marker_path, marker)
+        lifecycle.events.clear()
+
+        recovered = controller.recover_interrupted()
+
+        self.assertEqual(recovered, state)
+        self.assertEqual(lifecycle.events, ["verify-open"])
+        self.assertFalse(controller.marker_path.exists())
 
     def test_explicit_rollback_unknown_commit_rejects_changed_instance(self) -> None:
         lifecycle = LostResumeLifecycle()
@@ -5832,6 +7500,8 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             action="explicit-rollback",
             phase="explicit-rollback-stop-started",
             rollback_current_state_sha256="sha256:" + "a" * 64,
+            rollback_source_terminal_audit_sha256="sha256:" + "b" * 64,
+            rollback_attempt_id="rollback-attempt-fixture-001",
             rollback_backup_operation_id="rollback-independent-001",
         )
         with self.assertRaisesRegex(CONTROLLER.PullDeployError, "drain evidence"):
@@ -5880,6 +7550,204 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         self.assertEqual(recovered["operation_id"], OPERATION_ID)
         self.assertEqual(lifecycle.events.count("backup"), 1)
         self.assertFalse(controller.marker_path.exists())
+
+    def test_explicit_rollback_recovers_write_before_phase_commit(self) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        second_operation = "deploy-20260716-rollback-write-window"
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=second_operation,
+        )
+        controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=second_operation,
+        )
+        original_atomic_json = CONTROLLER.atomic_json
+        lost_response = False
+
+        def lose_current_state_response(path, value, *args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal lost_response
+            result = original_atomic_json(path, value, *args, **kwargs)
+            if (
+                not lost_response
+                and Path(path) == controller.current_state_path
+                and isinstance(value, dict)
+                and value.get("rollback_provenance") is not None
+            ):
+                lost_response = True
+                raise CONTROLLER.PullDeployError(
+                    "injected lost rollback state-write response"
+                )
+            return result
+
+        with (
+            mock.patch.object(
+                CONTROLLER,
+                "atomic_json",
+                side_effect=lose_current_state_response,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "lost rollback state-write response",
+            ),
+        ):
+            controller.rollback(operation_id=second_operation)
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(
+            marker["phase"],
+            "explicit-rollback-state-commit-started",
+        )
+        self.assertEqual(
+            CONTROLLER.sha256_file(controller.current_state_path),
+            marker["rollback_candidate_state_sha256"],
+        )
+
+        recovered = controller.recover_interrupted()
+
+        self.assertEqual(recovered["operation_id"], OPERATION_ID)
+        self.assertFalse(controller.marker_path.exists())
+        self.assertEqual(
+            controller._load_operation_state(second_operation)["outcome"],
+            "rolled-back",
+        )
+
+    def test_explicit_rollback_preserves_pretty_previous_file_digest(self) -> None:
+        controller = self.controller(lifecycle=FakeLifecycle())
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        previous = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        canonical_digest = CONTROLLER.sha256_file(
+            controller.current_state_path
+        )
+        pretty_payload = (
+            json.dumps(previous, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        controller.current_state_path.write_bytes(pretty_payload)
+        os.chmod(controller.current_state_path, 0o600)
+        with controller.current_state_path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        CONTROLLER.fsync_directory(
+            controller.current_state_path.parent
+        )
+        pretty_digest = CONTROLLER.sha256_file(
+            controller.current_state_path
+        )
+        self.assertNotEqual(pretty_digest, canonical_digest)
+
+        successor = "deploy-pretty-previous-rollback"
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=successor,
+        )
+        _root, descriptor_path, _ready = controller._operation_paths(
+            successor
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        self.assertEqual(
+            descriptor["previous_deployment_sha256"],
+            pretty_digest,
+        )
+        controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=successor,
+        )
+
+        rolled_back = controller.rollback(operation_id=successor)
+
+        self.assertEqual(rolled_back["operation_id"], OPERATION_ID)
+        self.assertEqual(
+            rolled_back["rollback_provenance"][
+                "sealed_previous_state_sha256"
+            ],
+            pretty_digest,
+        )
+
+    def test_two_pre_stop_rollback_aborts_use_distinct_nonterminal_audits(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        second_operation = "deploy-20260716-abort-retry"
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=second_operation,
+        )
+        controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=second_operation,
+        )
+        lifecycle.fail_at = "drain"
+        # This test isolates nonterminal audit append semantics.  The fixture
+        # deliberately reuses one synthetic unit path across both operations,
+        # which makes effect-byte reconciliation ambiguous.
+        controller._reconcile_effect_commit_windows = (  # type: ignore[method-assign]
+            lambda _descriptor, _marker: None
+        )
+
+        for _attempt in range(2):
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "injected drain failure",
+            ):
+                controller.rollback(operation_id=second_operation)
+            recovered = controller.recover_interrupted()
+            self.assertEqual(recovered["operation_id"], second_operation)
+            self.assertFalse(controller.marker_path.exists())
+
+        audits = sorted(
+            (controller.audit_dir / second_operation).glob(
+                "recovered-explicit-rollback-aborted-*.json"
+            )
+        )
+        self.assertEqual(len(audits), 2)
+        self.assertNotEqual(audits[0].name, audits[1].name)
+        operation_state = controller._load_operation_state(second_operation)
+        self.assertEqual(operation_state["outcome"], "deployed")
+
+    def test_explicit_rollback_rejects_source_audit_tamper_before_drain(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        second_operation = "deploy-20260716-source-audit-tamper"
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=second_operation,
+        )
+        controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=second_operation,
+        )
+        source_audit = (
+            controller.audit_dir / second_operation / "success.json"
+        )
+        os.chmod(source_audit, 0o644)
+        lifecycle.events.clear()
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "mode 0600",
+        ):
+            controller.rollback(operation_id=second_operation)
+
+        self.assertEqual(lifecycle.events, [])
+        self.assertFalse(controller.marker_path.exists())
+        self.assertEqual(
+            controller._load_operation_state(second_operation)["outcome"],
+            "deployed",
+        )
 
     def test_stable_cli_uses_fixed_roots_and_has_no_extra_mutation_flags(self) -> None:
         parsed = CONTROLLER.parser().parse_args(
