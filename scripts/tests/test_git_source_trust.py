@@ -54,6 +54,31 @@ def canonical_remote(root: Path) -> None:
     )
 
 
+def permission_marker(tmp_path: Path) -> tuple[Path, Path]:
+    runtime = tmp_path / "runtime"
+    state = runtime / "state"
+    state.mkdir(parents=True, mode=0o700)
+    runtime.chmod(0o700)
+    state.chmod(0o700)
+    return runtime, trust.permission_takeover_marker_path(runtime)
+
+
+def make_git_authority_group_writable(root: Path) -> dict[str, int]:
+    paths = [root, *(path for path, _relative in trust._permission_walk(root))]
+    for path in paths:
+        metadata = path.lstat()
+        if path.is_dir():
+            path.chmod((metadata.st_mode & 0o700) | 0o070)
+        else:
+            path.chmod((metadata.st_mode & 0o700) | 0o060)
+    return {
+        str(path.relative_to(root)) if path != root else ".": (
+            path.lstat().st_mode & 0o777
+        )
+        for path in paths
+    }
+
+
 def evidence(root: Path, source_sha: str, source_tree: str):
     return trust.repository_trust_evidence(
         root,
@@ -63,6 +88,111 @@ def evidence(root: Path, source_sha: str, source_tree: str):
         origin=None,
         ambient={},
     )
+
+
+@pytest.mark.parametrize(
+    ("operation", "crash_at"),
+    [
+        ("takeover", "permission:captured"),
+        ("takeover", "permission:root-intent"),
+        ("takeover", "permission:root:action"),
+        ("takeover", "permission:root-hardened"),
+        ("takeover", "permission:metadata-directories-intent"),
+        ("takeover", "permission:directory:.git:action"),
+        ("takeover", "permission:metadata-directories-hardened"),
+        ("takeover", "permission:metadata-files-intent"),
+        ("takeover", "permission:file:.git/config:action"),
+        ("takeover", "permission:metadata-files-hardened"),
+        ("takeover", "permission:hardened"),
+        ("restore", "permission:restore-files-intent"),
+        ("restore", "permission:restore-file:.git/config:action"),
+        ("restore", "permission:restore-files-restored"),
+        ("restore", "permission:restore-directories-intent"),
+        ("restore", "permission:restore-directory:.git:action"),
+        ("restore", "permission:restore-directories-restored"),
+        ("restore", "permission:restore-root-intent"),
+        ("restore", "permission:restore-root:action"),
+        ("restore", "permission:restored"),
+    ],
+)
+def test_permission_takeover_resumes_every_marker_and_action_phase(
+    tmp_path: Path,
+    operation: str,
+    crash_at: str,
+) -> None:
+    root, source_sha, source_tree = repository(tmp_path)
+    original = make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+    crashed = False
+
+    def checkpoint(label: str) -> None:
+        nonlocal crashed
+        if label == crash_at and not crashed:
+            crashed = True
+            raise RuntimeError(f"injected crash: {label}")
+
+    if operation == "restore":
+        trust.takeover_repository_permissions(root, marker)
+        hardened = trust.verify_repository_permission_takeover(root, marker)
+        assert hardened["phase"] == "hardened"
+        assert evidence(root, source_sha, source_tree)["policy"] == trust.POLICY_NAME
+        with pytest.raises(RuntimeError, match="injected crash"):
+            trust.restore_repository_permissions(
+                root,
+                marker,
+                checkpoint=checkpoint,
+            )
+    else:
+        with pytest.raises(RuntimeError, match="injected crash"):
+            trust.takeover_repository_permissions(
+                root,
+                marker,
+                checkpoint=checkpoint,
+            )
+        trust.takeover_repository_permissions(root, marker)
+    assert crashed
+    if operation == "takeover":
+        hardened = trust.verify_repository_permission_takeover(root, marker)
+        assert hardened["phase"] == "hardened"
+        assert (root.stat().st_mode & 0o777) == 0o700
+        assert (
+            evidence(root, source_sha, source_tree)["policy"]
+            == trust.POLICY_NAME
+        )
+
+    restored = trust.restore_repository_permissions(root, marker)
+    assert restored["phase"] == "restored"
+    for relative, mode in original.items():
+        path = root if relative == "." else root / relative
+        assert (path.lstat().st_mode & 0o777) == mode
+    assert trust.restore_repository_permissions(root, marker) == restored
+    with pytest.raises(
+        trust.GitPermissionTakeoverError,
+        match="cannot be silently reused",
+    ):
+        trust.takeover_repository_permissions(root, marker)
+
+
+def test_permission_takeover_rejects_immutable_object_drift(
+    tmp_path: Path,
+) -> None:
+    root, _source_sha, _source_tree = repository(tmp_path)
+    make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+    trust.takeover_repository_permissions(root, marker)
+    loose = next(
+        path
+        for path in (root / ".git/objects").glob("[0-9a-f][0-9a-f]/*")
+        if path.is_file()
+    )
+    loose.chmod(0o600)
+    loose.write_bytes(loose.read_bytes() + b"tamper")
+    loose.chmod(0o400)
+    with pytest.raises(
+        trust.GitPermissionTakeoverError,
+        match="content changed",
+    ):
+        trust.verify_repository_permission_takeover(root, marker)
 
 
 def test_evidence_binds_interpreted_config_index_refs_and_objects(
@@ -301,7 +431,9 @@ def test_worker_slot_checkout_uses_shared_trust_policy(tmp_path: Path) -> None:
 def test_legacy_takeover_uses_shared_trust_policy(tmp_path: Path) -> None:
     root, source_sha, source_tree = repository(tmp_path)
     canonical_remote(root)
-    system = legacy_takeover.LiveSystem(root, tmp_path / "runtime")
+    runtime, marker = permission_marker(tmp_path)
+    trust.takeover_repository_permissions(root, marker)
+    system = legacy_takeover.LiveSystem(root, runtime)
     identity = system.git_identity()
     assert identity["head_sha"] == source_sha
     assert identity["head_tree"] == source_tree
@@ -319,7 +451,8 @@ def test_legacy_takeover_uses_shared_trust_policy(tmp_path: Path) -> None:
 def test_pull_controller_uses_shared_trust_policy(tmp_path: Path) -> None:
     root, source_sha, source_tree = repository(tmp_path)
     canonical_remote(root)
-    runtime = tmp_path / "runtime"
+    runtime, marker = permission_marker(tmp_path)
+    trust.takeover_repository_permissions(root, marker)
     config = runtime / "config"
     config.mkdir(parents=True, mode=0o700)
     for name in ("git-deploy-key", "known_hosts"):
@@ -350,7 +483,10 @@ def test_alias_reconcile_uses_shared_trust_policy(
 ) -> None:
     root, source_sha, source_tree = repository(tmp_path)
     canonical_remote(root)
+    runtime, marker = permission_marker(tmp_path)
+    trust.takeover_repository_permissions(root, marker)
     monkeypatch.setattr(alias_reconcile, "PRODUCTION_ROOT", root)
+    monkeypatch.setattr(alias_reconcile, "RUNTIME_ROOT", runtime)
     monkeypatch.setattr(alias_reconcile, "LEGACY_SOURCE_SHA", source_sha)
     monkeypatch.setattr(alias_reconcile, "LEGACY_SOURCE_TREE", source_tree)
     identity = alias_reconcile._source_identity(
@@ -362,6 +498,7 @@ def test_alias_reconcile_uses_shared_trust_policy(
 
     alternate = root / ".git/objects/info/alternates"
     alternate.write_text("/tmp/untrusted\n", encoding="utf-8")
+    alternate.chmod(0o600)
     with pytest.raises(
         alias_reconcile.ReconcileError,
         match="trust preflight",

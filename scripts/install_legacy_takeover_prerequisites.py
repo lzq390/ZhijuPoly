@@ -686,6 +686,7 @@ def _production_ignored_inventory(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=text,
+                umask=0o077,
             ).stdout
 
         branch = str(git("symbolic-ref", "--quiet", "HEAD")).strip()
@@ -837,10 +838,28 @@ def _install_prerequisites_locked(
             "nexpoly_legacy_git_source_trust": GIT_SOURCE_TRUST,
         },
     )
+    production_permission_takeover: dict[str, Any] | None = None
     production_source_trust: dict[str, Any] | None = None
     if ignored_paths is None:
+        try:
+            production_permission_takeover = (
+                GIT_SOURCE_TRUST.takeover_repository_permissions(
+                    production_root,
+                    GIT_SOURCE_TRUST.permission_takeover_marker_path(
+                        runtime_root
+                    ),
+                )
+            )
+        except Exception as exc:
+            raise PrerequisiteInstallError(
+                "production Git permission takeover did not complete"
+            ) from exc
         ignored_paths, production_source_trust = (
             _production_ignored_inventory(production_root)
+        )
+    if production_permission_takeover is not None:
+        plan["production_permission_takeover"] = (
+            production_permission_takeover
         )
     if production_source_trust is not None:
         plan["production_source_trust"] = production_source_trust
@@ -942,6 +961,16 @@ def _install_prerequisites_locked(
             if production_source_trust is not None
             else None
         ),
+        "production_permission_takeover_sha256": (
+            production_permission_takeover["evidence_sha256"]
+            if production_permission_takeover is not None
+            else None
+        ),
+        "production_permission_inventory_sha256": (
+            production_permission_takeover["inventory_sha256"]
+            if production_permission_takeover is not None
+            else None
+        ),
     }
     installed_manifest = _install_exact(
         runtime_root / "legacy-takeover/INSTALL-MANIFEST.json",
@@ -1003,24 +1032,73 @@ def install_prerequisites(
         )
 
 
+def restore_production_git_permissions(
+    *,
+    runtime_root: Path,
+    production_root: Path = PRODUCTION_ROOT,
+) -> dict[str, Any]:
+    """Recover an installer-time hardening before a takeover was sealed."""
+
+    runtime_root = runtime_root.absolute()
+    production_root = production_root.absolute()
+    _private_directory(runtime_root, create=False)
+    _private_directory(runtime_root / "state", create=False)
+    with _global_deploy_lock(runtime_root):
+        try:
+            return GIT_SOURCE_TRUST.restore_repository_permissions(
+                production_root,
+                GIT_SOURCE_TRUST.permission_takeover_marker_path(
+                    runtime_root
+                ),
+            )
+        except Exception as exc:
+            raise PrerequisiteInstallError(
+                "production Git permission restore did not complete"
+            ) from exc
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description=__doc__)
-    value.add_argument("--authority-sha", required=True)
-    value.add_argument("--authority-tree", required=True)
+    value.add_argument("--authority-sha")
+    value.add_argument("--authority-tree")
     value.add_argument("--apply", action="store_true")
+    value.add_argument(
+        "--restore-production-git-permissions",
+        action="store_true",
+    )
     return value
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
     try:
-        report = install_prerequisites(
-            source_root=SOURCE_ROOT,
-            runtime_root=RUNTIME_ROOT,
-            authority_sha=arguments.authority_sha,
-            authority_tree=arguments.authority_tree,
-            apply=arguments.apply,
-        )
+        if arguments.restore_production_git_permissions:
+            if (
+                arguments.apply
+                or arguments.authority_sha is not None
+                or arguments.authority_tree is not None
+            ):
+                raise PrerequisiteInstallError(
+                    "permission restore cannot be combined with installation"
+                )
+            report = restore_production_git_permissions(
+                runtime_root=RUNTIME_ROOT,
+            )
+        else:
+            if (
+                arguments.authority_sha is None
+                or arguments.authority_tree is None
+            ):
+                raise PrerequisiteInstallError(
+                    "authority SHA and tree are required"
+                )
+            report = install_prerequisites(
+                source_root=SOURCE_ROOT,
+                runtime_root=RUNTIME_ROOT,
+                authority_sha=arguments.authority_sha,
+                authority_tree=arguments.authority_tree,
+                apply=arguments.apply,
+            )
     except PrerequisiteInstallError as exc:
         print(f"legacy-takeover-installer: error: {exc}", file=sys.stderr)
         return 2

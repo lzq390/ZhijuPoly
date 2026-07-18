@@ -168,6 +168,8 @@ RESTORE_PHASES = {
     "checkout-permissions-restore-intent",
     "checkout-permissions-restored",
     "runtime-restore-intent",
+    "runtime-restored",
+    "git-permissions-restore-intent",
     "restored",
 }
 CONTROL_REPLACEMENT_PENDING_PHASES = {
@@ -184,6 +186,8 @@ CONTROL_REPLACEMENT_RESTORED_PHASES = {
     "checkout-permissions-restore-intent",
     "checkout-permissions-restored",
     "runtime-restore-intent",
+    "runtime-restored",
+    "git-permissions-restore-intent",
     "restored",
 }
 CHECKOUT_REPLACEMENT_PENDING_PHASES = {
@@ -200,6 +204,8 @@ CHECKOUT_REPLACEMENT_PENDING_PHASES = {
 CHECKOUT_REPLACEMENT_RESTORED_PHASES = {
     "checkout-permissions-restored",
     "runtime-restore-intent",
+    "runtime-restored",
+    "git-permissions-restore-intent",
     "restored",
 }
 
@@ -1101,6 +1107,9 @@ class LiveSystem:
         self.runtime_root = runtime_root
         self._last_git_identity: dict[str, str] | None = None
         self._last_git_trust_evidence: dict[str, Any] | None = None
+        self.git_permission_marker = (
+            GIT_SOURCE_TRUST.permission_takeover_marker_path(runtime_root)
+        )
         self.environment = {
             "PATH": "/usr/bin:/bin",
             "LANG": "C",
@@ -1115,6 +1124,7 @@ class LiveSystem:
         cwd: Path | None = None,
         timeout: int = 120,
         environment: dict[str, str] | None = None,
+        umask: int = -1,
     ) -> str:
         try:
             completed = subprocess.run(
@@ -1127,6 +1137,7 @@ class LiveSystem:
                 text=True,
                 check=False,
                 timeout=timeout,
+                umask=umask,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise LegacyTakeoverError(f"command failed: {command[0]}") from exc
@@ -1139,6 +1150,11 @@ class LiveSystem:
 
     def _git(self, arguments: list[str]) -> str:
         try:
+            GIT_SOURCE_TRUST.verify_repository_permission_takeover(
+                self.repository,
+                self.git_permission_marker,
+                verify_content=False,
+            )
             GIT_SOURCE_TRUST.repository_preflight_evidence(
                 self.repository,
                 ambient=os.environ,
@@ -1155,7 +1171,103 @@ class LiveSystem:
             raise LegacyTakeoverError(
                 "production Git trust preflight failed"
             ) from exc
-        return self._run(command, cwd=self.repository, environment=environment)
+        return self._run(
+            command,
+            cwd=self.repository,
+            environment=environment,
+            umask=0o077,
+        )
+
+    def git_permission_takeover_evidence(self) -> dict[str, Any]:
+        try:
+            return GIT_SOURCE_TRUST.verify_repository_permission_takeover(
+                self.repository,
+                self.git_permission_marker,
+                verify_content=True,
+                require_original_mutable=True,
+            )
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "production Git permission takeover is unavailable"
+            ) from exc
+
+    def restore_git_permissions(
+        self,
+        expected: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            validated = (
+                GIT_SOURCE_TRUST.validate_permission_takeover_evidence(
+                    expected,
+                    repository=self.repository,
+                    marker_path=self.git_permission_marker,
+                    allowed_phases={"hardened"},
+                )
+            )
+            current = GIT_SOURCE_TRUST.verify_repository_permission_takeover(
+                self.repository,
+                self.git_permission_marker,
+                verify_content=False,
+            )
+            if (
+                current["inventory_sha256"]
+                != validated["inventory_sha256"]
+            ):
+                raise LegacyTakeoverError(
+                    "production Git permission inventory changed"
+                )
+            return GIT_SOURCE_TRUST.restore_repository_permissions(
+                self.repository,
+                self.git_permission_marker,
+            )
+        except LegacyTakeoverError:
+            raise
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "production Git permissions could not be restored"
+            ) from exc
+
+    def verify_git_permissions_restored(
+        self,
+        expected: dict[str, Any],
+        restored: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            expected_document = (
+                GIT_SOURCE_TRUST.validate_permission_takeover_evidence(
+                    expected,
+                    repository=self.repository,
+                    marker_path=self.git_permission_marker,
+                    allowed_phases={"hardened"},
+                )
+            )
+            restored_document = (
+                GIT_SOURCE_TRUST.validate_permission_takeover_evidence(
+                    restored,
+                    repository=self.repository,
+                    marker_path=self.git_permission_marker,
+                    allowed_phases={"restored"},
+                )
+            )
+            current = GIT_SOURCE_TRUST.restore_repository_permissions(
+                self.repository,
+                self.git_permission_marker,
+            )
+            if (
+                current != restored_document
+                or current["inventory_sha256"]
+                != expected_document["inventory_sha256"]
+            ):
+                raise LegacyTakeoverError(
+                    "restored Git permission evidence changed"
+                )
+            return current
+        except LegacyTakeoverError:
+            raise
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "restored Git permissions cannot be verified"
+            ) from exc
 
     def origin_urls(self) -> tuple[list[str], list[str]]:
         fetch = self._git(["remote", "get-url", "--all", "origin"]).splitlines()
@@ -1972,6 +2084,8 @@ class LegacyTakeover:
             "runtime_stopped_at",
             "git_trust_evidence",
             "git_trust_applied",
+            "git_permission_takeover",
+            "git_permission_takeover_restored",
         }
         if (
             not isinstance(value, dict)
@@ -2074,6 +2188,44 @@ class LegacyTakeover:
                 raise LegacyTakeoverError(
                     "takeover Git trust evidence is invalid"
                 )
+        permission_takeover = value.get("git_permission_takeover")
+        permission_restored = value.get(
+            "git_permission_takeover_restored"
+        )
+        if permission_takeover is not None:
+            try:
+                permission_takeover = (
+                    GIT_SOURCE_TRUST.validate_permission_takeover_evidence(
+                        permission_takeover,
+                        repository=self.repository,
+                        allowed_phases={"hardened"},
+                    )
+                )
+                if permission_restored is not None:
+                    permission_restored = (
+                        GIT_SOURCE_TRUST.validate_permission_takeover_evidence(
+                            permission_restored,
+                            repository=self.repository,
+                            allowed_phases={"restored"},
+                        )
+                    )
+                    if (
+                        permission_restored["inventory_sha256"]
+                        != permission_takeover["inventory_sha256"]
+                    ):
+                        raise LegacyTakeoverError(
+                            "restored Git permission inventory differs"
+                        )
+            except LegacyTakeoverError:
+                raise
+            except Exception as exc:
+                raise LegacyTakeoverError(
+                    "takeover Git permission evidence is invalid"
+                ) from exc
+        elif permission_restored is not None:
+            raise LegacyTakeoverError(
+                "restored Git permissions have no takeover evidence"
+            )
         classification_paths = value.get("classification_paths")
         if (
             not isinstance(classification_paths, list)
@@ -2486,6 +2638,89 @@ class LegacyTakeover:
             )
         return json.loads(canonical_json_bytes(evidence))
 
+    def _git_permission_takeover_evidence(
+        self,
+    ) -> dict[str, Any] | None:
+        provider = getattr(
+            self.system,
+            "git_permission_takeover_evidence",
+            None,
+        )
+        if provider is None:
+            # Filesystem-only test doubles do not execute production Git.
+            return None
+        try:
+            evidence = provider()
+            validated = (
+                GIT_SOURCE_TRUST.validate_permission_takeover_evidence(
+                    evidence,
+                    repository=self.repository,
+                    allowed_phases={"hardened"},
+                )
+            )
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "production Git permission takeover is unavailable"
+            ) from exc
+        return validated
+
+    def _restore_git_permissions(
+        self,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        expected = state.get("git_permission_takeover")
+        provider = getattr(self.system, "restore_git_permissions", None)
+        if expected is None or provider is None:
+            raise LegacyTakeoverError(
+                "Git permission restore contract is unavailable"
+            )
+        try:
+            restored = provider(expected)
+            validated = (
+                GIT_SOURCE_TRUST.validate_permission_takeover_evidence(
+                    restored,
+                    repository=self.repository,
+                    allowed_phases={"restored"},
+                )
+            )
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "production Git permission restore failed"
+            ) from exc
+        if validated["inventory_sha256"] != expected[
+            "inventory_sha256"
+        ]:
+            raise LegacyTakeoverError(
+                "restored Git permission inventory differs"
+            )
+        return validated
+
+    def _verify_git_permissions_restored(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+        expected = state.get("git_permission_takeover")
+        restored = state.get("git_permission_takeover_restored")
+        provider = getattr(
+            self.system,
+            "verify_git_permissions_restored",
+            None,
+        )
+        if expected is None or restored is None or provider is None:
+            raise LegacyTakeoverError(
+                "restored Git permission evidence is unavailable"
+            )
+        try:
+            current = provider(expected, restored)
+        except Exception as exc:
+            raise LegacyTakeoverError(
+                "restored Git permissions changed"
+            ) from exc
+        if current != restored:
+            raise LegacyTakeoverError(
+                "restored Git permission marker differs"
+            )
+
     def _assert_checkout(
         self,
         state: dict[str, Any],
@@ -2570,6 +2805,9 @@ class LegacyTakeover:
             if state.get("classification_sha256") != classification_digest:
                 raise LegacyTakeoverError("takeover classification changed")
             return state
+        git_permission_takeover = (
+            self._git_permission_takeover_evidence()
+        )
         self._require_origin(REPOSITORY_HTTPS_URL)
         git_identity = self._git_identity()
         git_trust_evidence = self._git_trust_evidence(git_identity)
@@ -2754,6 +2992,10 @@ class LegacyTakeover:
         }
         if git_trust_evidence is not None:
             state["git_trust_evidence"] = git_trust_evidence
+        if git_permission_takeover is not None:
+            state["git_permission_takeover"] = (
+                git_permission_takeover
+            )
         self._save(state)
         self._checkpoint("sealed")
         return state
@@ -2837,6 +3079,16 @@ class LegacyTakeover:
             "git_trust_applied_sha256": (
                 state.get("git_trust_applied", {}).get("evidence_sha256")
             ),
+            "git_permission_takeover_sha256": (
+                state.get("git_permission_takeover", {}).get(
+                    "evidence_sha256"
+                )
+            ),
+            "git_permission_inventory_sha256": (
+                state.get("git_permission_takeover", {}).get(
+                    "inventory_sha256"
+                )
+            ),
             "helper_report_sha256": state["helper_report_sha256"],
             "runtime_identity_sha256": state["runtime_identity_sha256"],
             "runtime_evidence_sha256": state["runtime_evidence_sha256"],
@@ -2887,6 +3139,16 @@ class LegacyTakeover:
             ],
             "checkout_permissions_replacement_sha256": state.get(
                 "checkout_permissions_replacement_sha256"
+            ),
+            "git_permission_takeover_sha256": (
+                state.get("git_permission_takeover", {}).get(
+                    "evidence_sha256"
+                )
+            ),
+            "git_permission_restored_sha256": (
+                state.get(
+                    "git_permission_takeover_restored", {}
+                ).get("evidence_sha256")
             ),
             "preserved_replacement_controls": [
                 {
@@ -3419,6 +3681,11 @@ class LegacyTakeover:
         stored_digest = state.get(
             "checkout_permissions_replacement_sha256"
         )
+        permission_restore_phase = (
+            state.get("git_permission_takeover") is not None
+            and state["restore_phase"]
+            in {"git-permissions-restore-intent", "restored"}
+        )
         if stored is not None:
             if (
                 expected_digest is not None
@@ -3427,6 +3694,8 @@ class LegacyTakeover:
                 raise LegacyTakeoverError(
                     "checkout permission replacement digest changed"
                 )
+            if permission_restore_phase:
+                return
             if (
                 state["restore_phase"]
                 in CHECKOUT_REPLACEMENT_PENDING_PHASES
@@ -3444,6 +3713,12 @@ class LegacyTakeover:
                 in CHECKOUT_REPLACEMENT_RESTORED_PHASES
             ):
                 self._verify_original_checkout_permissions(state)
+            return
+        if permission_restore_phase:
+            if expected_digest is not None:
+                raise LegacyTakeoverError(
+                    "unbound checkout replacement digest changed"
+                )
             return
         current = self._current_checkout_permissions(state)
         current_digest = checkout_permissions_digest(current)
@@ -3805,10 +4080,16 @@ class LegacyTakeover:
         )
         self._verify_static_evidence(state)
         if state["restore_phase"] == "restored":
-            self._assert_checkout(
-                state,
-                allowed_origins={REPOSITORY_HTTPS_URL},
-            )
+            if state.get("git_permission_takeover") is not None:
+                # Permission restoration is deliberately the final action:
+                # the original checkout may again be group-writable, so no
+                # Git process is permitted after this point.
+                self._verify_git_permissions_restored(state)
+            else:
+                self._assert_checkout(
+                    state,
+                    allowed_origins={REPOSITORY_HTTPS_URL},
+                )
             for move in state["moves"]:
                 verify_path_seal(self.repository / move["path"], move["seal"])
             self._release_active(operation_id)
@@ -3953,6 +4234,41 @@ class LegacyTakeover:
             state["restore_evidence_sha256"] = sha256_bytes(
                 canonical_json_bytes(validated)
             )
+            if state.get("git_permission_takeover") is not None:
+                self._transition(
+                    state,
+                    "restore_phase",
+                    "runtime-restored",
+                    "restore:runtime-restored",
+                )
+            else:
+                state["restored_terminal_sha256"] = (
+                    self._restored_terminal_digest(state)
+                )
+                self._transition(
+                    state,
+                    "restore_phase",
+                    "restored",
+                    "restore:restored",
+                )
+        if state["restore_phase"] == "runtime-restored":
+            self._transition(
+                state,
+                "restore_phase",
+                "git-permissions-restore-intent",
+                "restore:git-permissions-restore-intent",
+            )
+        if (
+            state["restore_phase"]
+            == "git-permissions-restore-intent"
+        ):
+            restored_permissions = self._restore_git_permissions(state)
+            self._checkpoint(
+                "restore:git-permissions-restore-intent:action"
+            )
+            state["git_permission_takeover_restored"] = (
+                restored_permissions
+            )
             state["restored_terminal_sha256"] = (
                 self._restored_terminal_digest(state)
             )
@@ -3981,6 +4297,21 @@ class LegacyTakeover:
             "classification_sha256": state["classification_sha256"],
             "runtime_identity_sha256": state["runtime_identity_sha256"],
             "git_identity": state["git_identity"],
+            "git_permission_takeover_sha256": (
+                state.get("git_permission_takeover", {}).get(
+                    "evidence_sha256"
+                )
+            ),
+            "git_permission_inventory_sha256": (
+                state.get("git_permission_takeover", {}).get(
+                    "inventory_sha256"
+                )
+            ),
+            "git_permission_restore_sha256": (
+                state.get(
+                    "git_permission_takeover_restored", {}
+                ).get("evidence_sha256")
+            ),
             "applied_record_sha256": state.get("applied_record_sha256"),
             "pre_stopped_fence": state.get("pre_stopped_fence"),
             "pre_stopped_fence_sha256": state.get(

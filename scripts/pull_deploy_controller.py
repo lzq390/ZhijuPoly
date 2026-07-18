@@ -889,6 +889,7 @@ class CommandRunner(Protocol):
         stdout: BinaryIO | int | None = subprocess.PIPE,
         timeout: float | None = None,
         pass_fds: tuple[int, ...] = (),
+        umask: int = -1,
     ) -> subprocess.CompletedProcess[Any]: ...
 
     def request_json(self, url: str, token: str) -> dict[str, Any]: ...
@@ -909,6 +910,7 @@ class SystemRunner:
         stdout: BinaryIO | int | None = subprocess.PIPE,
         timeout: float | None = None,
         pass_fds: tuple[int, ...] = (),
+        umask: int = -1,
     ) -> subprocess.CompletedProcess[Any]:
         return subprocess.run(
             command,
@@ -921,6 +923,7 @@ class SystemRunner:
             stderr=subprocess.PIPE,
             timeout=timeout,
             pass_fds=pass_fds,
+            umask=umask,
         )
 
     def request_json(self, url: str, token: str) -> dict[str, Any]:
@@ -7696,6 +7699,11 @@ class PullDeployController:
         self.marker_path = self.state_dir / "deploy-in-progress.json"
         self.contract_marker_path = self.state_dir / "contract-0012-in-progress.json"
         self.bridge_token_path = self.state_dir / "bridge-takeover.json"
+        self.git_permission_marker_path = (
+            _git_source_trust.permission_takeover_marker_path(
+                self.runtime_root
+            )
+        )
         self.current_state_path = self.state_dir / "current-deployment.json"
         self.active_slot_path = self.state_dir / "monomer-md-active-slot.json"
         self.active_control_path = self.state_dir / "active-control.json"
@@ -7923,6 +7931,7 @@ class PullDeployController:
     def _git_trust_preflight(self) -> dict[str, Any] | None:
         if self.test_root_mode and not self._has_complete_test_git_layout():
             return None
+        self._git_permission_takeover()
         environment = self._clean_environment()
         try:
             return _git_source_trust.repository_preflight_evidence(
@@ -7934,6 +7943,28 @@ class PullDeployController:
         except Exception as exc:
             raise PullDeployError(
                 "production Git trust preflight failed"
+            ) from exc
+
+    def _git_permission_takeover(self) -> dict[str, Any] | None:
+        if (
+            self.test_root_mode
+            and not self.git_permission_marker_path.exists()
+            and not self.git_permission_marker_path.is_symlink()
+        ):
+            # Unit-test repositories are not production authority. Complete
+            # tests may opt into the real marker by creating it explicitly.
+            return None
+        try:
+            return (
+                _git_source_trust.verify_repository_permission_takeover(
+                    self.production_root,
+                    self.git_permission_marker_path,
+                    verify_content=False,
+                )
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "production Git permission takeover is unavailable"
             ) from exc
 
     def control_environment(self) -> dict[str, str]:
@@ -8500,6 +8531,7 @@ class PullDeployController:
             cwd=self.production_root,
             env=self._clean_environment(),
             check=check,
+            umask=0o077,
         )
 
     def repository_identity(
@@ -8623,6 +8655,9 @@ class PullDeployController:
                     "production Git trust evidence changed"
                 ) from exc
             identity["trust"] = trust
+            permission_takeover = self._git_permission_takeover()
+            if permission_takeover is not None:
+                identity["permission_takeover"] = permission_takeover
         return identity
 
     def ignored_runtime_entries(self) -> list[str]:

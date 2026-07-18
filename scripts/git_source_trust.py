@@ -20,15 +20,40 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import struct
 import subprocess
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 GIT_BINARY = Path("/usr/bin/git")
 POLICY_NAME = "nexpoly-production-git-source-v1"
 SCHEMA_VERSION = 1
+PERMISSION_POLICY_NAME = "nexpoly-production-git-permission-takeover-v1"
+PERMISSION_SCHEMA_VERSION = 1
+PERMISSION_MARKER_RELATIVE_PATH = Path(
+    "state/legacy-git-permission-takeover.json"
+)
+PERMISSION_MARKER_MAX_BYTES = 128 * 1024 * 1024
+PERMISSION_PHASES = frozenset(
+    {
+        "captured",
+        "root-intent",
+        "root-hardened",
+        "metadata-directories-intent",
+        "metadata-directories-hardened",
+        "metadata-files-intent",
+        "metadata-files-hardened",
+        "hardened",
+        "restore-files-intent",
+        "restore-files-restored",
+        "restore-directories-intent",
+        "restore-directories-restored",
+        "restore-root-intent",
+        "restored",
+    }
+)
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_CONTROL_FILE_BYTES = 64 * 1024 * 1024
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -148,6 +173,10 @@ class GitSourceTrustError(RuntimeError):
     """The repository cannot be interpreted as a trusted production source."""
 
 
+class GitPermissionTakeoverError(GitSourceTrustError):
+    """The pre-Git permission takeover cannot be resumed safely."""
+
+
 def canonical_json_bytes(value: object) -> bytes:
     return json.dumps(
         value,
@@ -253,6 +282,1264 @@ def _cached_object_digest(path: Path, expected: os.stat_result) -> str:
     value = "sha256:" + digest.hexdigest()
     _OBJECT_DIGEST_CACHE[key] = value
     return value
+
+
+def permission_takeover_marker_path(runtime_root: Path) -> Path:
+    """Return the one fixed private marker used by the production checkout."""
+
+    runtime_root = runtime_root.absolute()
+    if not runtime_root.is_absolute() or ".." in runtime_root.parts:
+        raise GitPermissionTakeoverError("runtime root must be absolute")
+    return runtime_root / PERMISSION_MARKER_RELATIVE_PATH
+
+
+def _permission_root(root: Path) -> Path:
+    """Validate a pre-takeover root without requiring safe modes yet."""
+
+    root = root.absolute()
+    try:
+        metadata = root.lstat()
+        resolved = root.resolve(strict=True)
+        git_metadata = (root / ".git").lstat()
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "permission takeover repository is unavailable"
+        ) from exc
+    if (
+        not root.is_absolute()
+        or ".." in root.parts
+        or resolved != root
+        or root.is_symlink()
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or not stat.S_ISDIR(git_metadata.st_mode)
+        or (root / ".git").is_symlink()
+        or git_metadata.st_uid != os.geteuid()
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover requires an owned standalone checkout"
+        )
+    return root
+
+
+def _private_permission_marker_parent(marker_path: Path) -> Path:
+    marker_path = marker_path.absolute()
+    parent = marker_path.parent
+    try:
+        metadata = parent.lstat()
+        resolved = parent.resolve(strict=True)
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "permission takeover marker directory is unavailable"
+        ) from exc
+    if (
+        not marker_path.is_absolute()
+        or ".." in marker_path.parts
+        or resolved != parent
+        or parent.is_symlink()
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover marker directory must be owner-private"
+        )
+    return marker_path
+
+
+def _fsync_permission_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            f"cannot fsync permission takeover directory: {path}"
+        ) from exc
+
+
+def _permission_json_no_duplicates(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise GitPermissionTakeoverError(
+                "permission takeover marker contains a duplicate key"
+            )
+        value[key] = item
+    return value
+
+
+def _atomic_permission_marker(
+    marker_path: Path,
+    document: dict[str, Any],
+) -> None:
+    marker_path = _private_permission_marker_parent(marker_path)
+    payload = canonical_json_bytes(document) + b"\n"
+    temporary = marker_path.parent / (
+        f".{marker_path.name}.tmp-{secrets.token_hex(16)}"
+    )
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb", closefd=True) as stream:
+            descriptor = None
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, marker_path)
+        _fsync_permission_directory(marker_path.parent)
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "cannot persist permission takeover marker"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _read_permission_marker(marker_path: Path) -> dict[str, Any]:
+    marker_path = _private_permission_marker_parent(marker_path)
+    try:
+        descriptor = os.open(
+            marker_path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "permission takeover marker is unavailable"
+        ) from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_nlink != 1
+            or not 0 <= before.st_size <= PERMISSION_MARKER_MAX_BYTES
+        ):
+            raise GitPermissionTakeoverError(
+                "permission takeover marker metadata is unsafe"
+            )
+        payload = b""
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise GitPermissionTakeoverError(
+                    "permission takeover marker was truncated"
+                )
+            payload += chunk
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover marker changed while being read"
+        )
+    try:
+        value = json.loads(
+            payload,
+            object_pairs_hook=_permission_json_no_duplicates,
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise GitPermissionTakeoverError(
+            "permission takeover marker is malformed"
+        ) from exc
+    if not isinstance(value, dict):
+        raise GitPermissionTakeoverError(
+            "permission takeover marker must contain an object"
+        )
+    return value
+
+
+def _permission_relative_path(value: object) -> str:
+    if value == ".":
+        return "."
+    if (
+        not isinstance(value, str)
+        or not value.startswith(".git")
+        or value not in {".git"} and not value.startswith(".git/")
+        or "\\" in value
+        or "\0" in value
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover path is outside Git authority"
+        )
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts or path.as_posix() != value:
+        raise GitPermissionTakeoverError(
+            "permission takeover path escapes the repository"
+        )
+    return value
+
+
+def _permission_path(root: Path, relative: str) -> Path:
+    return root if relative == "." else root / relative
+
+
+def _permission_mutable(relative: str, kind: str) -> bool:
+    # Git may atomically replace its config/index/refs/logs while changing the
+    # canonical origin or moving between B and F. Existing object bytes are
+    # immutable; newly fetched objects are allowed only after a hardened scan.
+    return kind == "file" and not relative.startswith(".git/objects/")
+
+
+def _permission_target_mode(kind: str, mode: int) -> int:
+    if kind == "directory":
+        return 0o700
+    target = mode & 0o700
+    if target & 0o400 == 0:
+        raise GitPermissionTakeoverError(
+            "Git authority file is not owner-readable"
+        )
+    return target
+
+
+def _permission_file_digest(
+    path: Path,
+    expected: os.stat_result,
+) -> str:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            f"cannot hash Git permission authority: {path}"
+        ) from exc
+    digest = hashlib.sha256()
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            )
+            != (
+                expected.st_dev,
+                expected.st_ino,
+                expected.st_size,
+                expected.st_mtime_ns,
+            )
+        ):
+            raise GitPermissionTakeoverError(
+                "Git permission authority changed before hashing"
+            )
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        raise GitPermissionTakeoverError(
+            "Git permission authority changed while hashing"
+        )
+    return "sha256:" + digest.hexdigest()
+
+
+def _permission_record(
+    root: Path,
+    path: Path,
+    relative: str,
+) -> dict[str, Any]:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            f"cannot inventory Git permission path: {path}"
+        ) from exc
+    if stat.S_ISDIR(metadata.st_mode):
+        kind = "directory"
+    elif stat.S_ISREG(metadata.st_mode):
+        kind = "file"
+    else:
+        raise GitPermissionTakeoverError(
+            "Git permission authority contains a symlink or special file"
+        )
+    if (
+        path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or kind == "file" and metadata.st_nlink != 1
+        or kind == "directory" and metadata.st_mode & 0o700 != 0o700
+    ):
+        raise GitPermissionTakeoverError(
+            "Git permission authority is not exclusively owner-controlled"
+        )
+    mode = stat.S_IMODE(metadata.st_mode)
+    content_sha256 = (
+        _permission_file_digest(path, metadata)
+        if kind == "file"
+        else None
+    )
+    return {
+        "path": relative,
+        "type": kind,
+        "mode": f"{mode:04o}",
+        "target_mode": f"{_permission_target_mode(kind, mode):04o}",
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "nlink": metadata.st_nlink if kind == "file" else None,
+        "size": metadata.st_size if kind == "file" else None,
+        "content_sha256": content_sha256,
+        "mutable": _permission_mutable(relative, kind),
+    }
+
+
+def _permission_walk(root: Path) -> list[tuple[Path, str]]:
+    """Walk only the real .git directory without interpreting Git config."""
+
+    git_dir = root / ".git"
+    result: list[tuple[Path, str]] = []
+
+    def walk(directory: Path, relative: str) -> None:
+        result.append((directory, relative))
+        try:
+            children = sorted(
+                os.scandir(directory),
+                key=lambda item: os.fsencode(item.name),
+            )
+        except OSError as exc:
+            raise GitPermissionTakeoverError(
+                f"cannot enumerate Git permission authority: {directory}"
+            ) from exc
+        directories: list[tuple[Path, str]] = []
+        files: list[tuple[Path, str]] = []
+        for child in children:
+            try:
+                child.name.encode("utf-8")
+            except UnicodeError as exc:
+                raise GitPermissionTakeoverError(
+                    "Git permission path is not UTF-8"
+                ) from exc
+            path = directory / child.name
+            child_relative = f"{relative}/{child.name}"
+            try:
+                metadata = path.lstat()
+            except OSError as exc:
+                raise GitPermissionTakeoverError(
+                    "Git permission path disappeared during inventory"
+                ) from exc
+            if stat.S_ISDIR(metadata.st_mode) and not path.is_symlink():
+                directories.append((path, child_relative))
+            elif stat.S_ISREG(metadata.st_mode) and not path.is_symlink():
+                files.append((path, child_relative))
+            else:
+                raise GitPermissionTakeoverError(
+                    "Git authority contains a symlink or special file"
+                )
+        for path, child_relative in directories:
+            walk(path, child_relative)
+        result.extend(files)
+
+    walk(git_dir, ".git")
+    return result
+
+
+def _inventory_permission_records(root: Path) -> list[dict[str, Any]]:
+    root = _permission_root(root)
+    root_record = _permission_record(root, root, ".")
+    metadata_records = [
+        _permission_record(root, path, relative)
+        for path, relative in _permission_walk(root)
+    ]
+    directories = sorted(
+        (
+            record
+            for record in metadata_records
+            if record["type"] == "directory"
+        ),
+        key=lambda record: (
+            len(Path(record["path"]).parts),
+            os.fsencode(record["path"]),
+        ),
+    )
+    files = sorted(
+        (
+            record
+            for record in metadata_records
+            if record["type"] == "file"
+        ),
+        key=lambda record: os.fsencode(record["path"]),
+    )
+    return [root_record, *directories, *files]
+
+
+def _permission_identity(
+    records: list[dict[str, Any]],
+    *,
+    hardened: bool,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": record["path"],
+            "type": record["type"],
+            "mode": (
+                record["target_mode"] if hardened else record["mode"]
+            ),
+            "uid": record["uid"],
+            "gid": record["gid"],
+        }
+        for record in records
+    ]
+
+
+def _permission_document_digest(document: Mapping[str, Any]) -> str:
+    return sha256_bytes(
+        canonical_json_bytes(
+            {
+                key: value
+                for key, value in document.items()
+                if key != "evidence_sha256"
+            }
+        )
+    )
+
+
+def validate_permission_takeover_evidence(
+    value: object,
+    *,
+    repository: Path | None = None,
+    marker_path: Path | None = None,
+    allowed_phases: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Validate a marker embedded in installer/takeover audit evidence."""
+
+    fields = {
+        "schema_version",
+        "policy",
+        "repository",
+        "marker_path",
+        "phase",
+        "generation",
+        "records",
+        "inventory_sha256",
+        "original_permissions_sha256",
+        "hardened_permissions_sha256",
+        "evidence_sha256",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != fields
+        or value.get("schema_version") != PERMISSION_SCHEMA_VERSION
+        or value.get("policy") != PERMISSION_POLICY_NAME
+        or value.get("phase") not in PERMISSION_PHASES
+        or isinstance(value.get("generation"), bool)
+        or not isinstance(value.get("generation"), int)
+        or value["generation"] <= 0
+        or not isinstance(value.get("repository"), str)
+        or not Path(value["repository"]).is_absolute()
+        or not isinstance(value.get("marker_path"), str)
+        or not Path(value["marker_path"]).is_absolute()
+        or any(
+            not isinstance(value.get(name), str)
+            or DIGEST_RE.fullmatch(value[name]) is None
+            for name in (
+                "inventory_sha256",
+                "original_permissions_sha256",
+                "hardened_permissions_sha256",
+                "evidence_sha256",
+            )
+        )
+        or value.get("evidence_sha256")
+        != _permission_document_digest(value)
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover evidence is malformed"
+        )
+    if (
+        repository is not None
+        and value["repository"] != str(repository.absolute())
+    ) or (
+        marker_path is not None
+        and value["marker_path"] != str(marker_path.absolute())
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover evidence belongs elsewhere"
+        )
+    if allowed_phases is not None and value["phase"] not in allowed_phases:
+        raise GitPermissionTakeoverError(
+            "permission takeover marker is in the wrong phase"
+        )
+    records = value.get("records")
+    if not isinstance(records, list) or len(records) < 4:
+        raise GitPermissionTakeoverError(
+            "permission takeover inventory is incomplete"
+        )
+    expected_fields = {
+        "path",
+        "type",
+        "mode",
+        "target_mode",
+        "uid",
+        "gid",
+        "device",
+        "inode",
+        "nlink",
+        "size",
+        "content_sha256",
+        "mutable",
+    }
+    paths: list[str] = []
+    for record in records:
+        if (
+            not isinstance(record, dict)
+            or set(record) != expected_fields
+            or record.get("type") not in {"directory", "file"}
+            or not isinstance(record.get("mode"), str)
+            or re.fullmatch(r"[0-7]{4}", record["mode"]) is None
+            or not isinstance(record.get("target_mode"), str)
+            or re.fullmatch(r"[0-7]{4}", record["target_mode"]) is None
+            or any(
+                isinstance(record.get(name), bool)
+                or not isinstance(record.get(name), int)
+                or record[name] < 0
+                for name in ("uid", "gid", "device", "inode")
+            )
+            or record["uid"] != os.geteuid()
+            or not isinstance(record.get("mutable"), bool)
+        ):
+            raise GitPermissionTakeoverError(
+                "permission takeover record is malformed"
+            )
+        relative = _permission_relative_path(record.get("path"))
+        if relative in paths:
+            raise GitPermissionTakeoverError(
+                "permission takeover path occurs more than once"
+            )
+        paths.append(relative)
+        mode = int(record["mode"], 8)
+        if (
+            record["target_mode"]
+            != f"{_permission_target_mode(record['type'], mode):04o}"
+            or record["mutable"]
+            is not _permission_mutable(relative, record["type"])
+        ):
+            raise GitPermissionTakeoverError(
+                "permission takeover target policy differs"
+            )
+        if record["type"] == "directory":
+            if any(
+                record[name] is not None
+                for name in (
+                    "nlink",
+                    "size",
+                    "content_sha256",
+                )
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission directory record is malformed"
+                )
+        elif (
+            isinstance(record.get("nlink"), bool)
+            or not isinstance(record.get("nlink"), int)
+            or record["nlink"] != 1
+            or isinstance(record.get("size"), bool)
+            or not isinstance(record.get("size"), int)
+            or record["size"] < 0
+            or not isinstance(record.get("content_sha256"), str)
+            or DIGEST_RE.fullmatch(record["content_sha256"]) is None
+        ):
+            raise GitPermissionTakeoverError(
+                "permission file record is malformed"
+            )
+    if (
+        paths[0] != "."
+        or paths[1] != ".git"
+        or not {
+            ".",
+            ".git",
+            ".git/config",
+            ".git/objects",
+        }.issubset(paths)
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover inventory has no repository roots"
+        )
+    if value["inventory_sha256"] != sha256_bytes(
+        canonical_json_bytes(records)
+    ) or value["original_permissions_sha256"] != sha256_bytes(
+        canonical_json_bytes(
+            _permission_identity(records, hardened=False)
+        )
+    ) or value["hardened_permissions_sha256"] != sha256_bytes(
+        canonical_json_bytes(
+            _permission_identity(records, hardened=True)
+        )
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover inventory digest differs"
+        )
+    return json.loads(canonical_json_bytes(value))
+
+
+def _save_permission_document(
+    marker_path: Path,
+    document: dict[str, Any],
+) -> dict[str, Any]:
+    generation = document.get("generation", 0)
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        raise GitPermissionTakeoverError(
+            "permission takeover generation is invalid"
+        )
+    document["generation"] = generation + 1
+    document["evidence_sha256"] = _permission_document_digest(document)
+    validated = validate_permission_takeover_evidence(
+        document,
+        repository=Path(document["repository"]),
+        marker_path=marker_path,
+    )
+    _atomic_permission_marker(marker_path, validated)
+    return validated
+
+
+def _load_permission_document(
+    root: Path,
+    marker_path: Path,
+) -> dict[str, Any]:
+    return validate_permission_takeover_evidence(
+        _read_permission_marker(marker_path),
+        repository=root,
+        marker_path=marker_path,
+    )
+
+
+def _current_permission_paths(root: Path) -> dict[str, os.stat_result]:
+    paths: dict[str, os.stat_result] = {}
+    try:
+        paths["."] = root.lstat()
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "permission repository root disappeared"
+        ) from exc
+    for path, relative in _permission_walk(root):
+        try:
+            paths[relative] = path.lstat()
+        except OSError as exc:
+            raise GitPermissionTakeoverError(
+                "Git permission path disappeared"
+            ) from exc
+    return paths
+
+
+def _validate_current_permission_record(
+    root: Path,
+    record: Mapping[str, Any],
+    *,
+    allowed_modes: set[str],
+    allow_mutable_changes: bool,
+    verify_content: bool,
+    require_original_config: bool = False,
+) -> None:
+    relative = str(record["path"])
+    path = _permission_path(root, relative)
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            f"permission takeover path is unavailable: {relative}"
+        ) from exc
+    kind_matches = (
+        stat.S_ISDIR(metadata.st_mode)
+        if record["type"] == "directory"
+        else stat.S_ISREG(metadata.st_mode)
+    )
+    mutable_changed = (
+        record["mutable"] is True and allow_mutable_changes
+    )
+    if (
+        not kind_matches
+        or path.is_symlink()
+        or metadata.st_uid != record["uid"]
+        or metadata.st_gid != record["gid"]
+        or f"{stat.S_IMODE(metadata.st_mode):04o}" not in allowed_modes
+        or record["type"] == "file" and metadata.st_nlink != 1
+        or (
+            not mutable_changed
+            and (
+                metadata.st_dev != record["device"]
+                or metadata.st_ino != record["inode"]
+            )
+        )
+    ):
+        raise GitPermissionTakeoverError(
+            f"permission takeover compare-and-swap failed: {relative}"
+        )
+    compare_content = (
+        record["type"] == "file"
+        and verify_content
+        and (
+            not mutable_changed
+            or require_original_config and relative == ".git/config"
+        )
+    )
+    if compare_content and (
+        metadata.st_size != record["size"]
+        or _permission_file_digest(path, metadata)
+        != record["content_sha256"]
+    ):
+        raise GitPermissionTakeoverError(
+            f"permission takeover content changed: {relative}"
+        )
+
+
+def _validate_permission_stage(
+    root: Path,
+    records: list[dict[str, Any]],
+    *,
+    root_state: str,
+    directory_state: str,
+    file_state: str,
+    exact_paths: bool,
+    allow_mutable_changes: bool,
+    verify_content: bool,
+    require_original_config: bool = False,
+) -> None:
+    def allowed(record: Mapping[str, Any], state: str) -> set[str]:
+        if state == "original":
+            return {str(record["mode"])}
+        if state == "target":
+            return {str(record["target_mode"])}
+        if state == "either":
+            return {
+                str(record["mode"]),
+                str(record["target_mode"]),
+            }
+        raise GitPermissionTakeoverError(
+            "permission validation stage is invalid"
+        )
+
+    current = _current_permission_paths(root)
+    stored_paths = {record["path"] for record in records}
+    if not stored_paths.issubset(current) or (
+        exact_paths and set(current) != stored_paths
+    ):
+        raise GitPermissionTakeoverError(
+            "Git permission inventory gained or lost paths"
+        )
+    by_path = {record["path"]: record for record in records}
+    for relative, metadata in current.items():
+        record = by_path.get(relative)
+        if record is not None:
+            state = (
+                root_state
+                if relative == "."
+                else directory_state
+                if record["type"] == "directory"
+                else file_state
+            )
+            _validate_current_permission_record(
+                root,
+                record,
+                allowed_modes=allowed(record, state),
+                allow_mutable_changes=allow_mutable_changes,
+                verify_content=verify_content,
+                require_original_config=require_original_config,
+            )
+            continue
+        # Git may add refs, logs and objects after the initial takeover. Such
+        # entries have no original mode to restore, so they must remain
+        # owner-private and single-linked.
+        path = _permission_path(root, relative)
+        if (
+            path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or (
+                stat.S_ISREG(metadata.st_mode)
+                and metadata.st_nlink != 1
+            )
+            or not (
+                stat.S_ISREG(metadata.st_mode)
+                or stat.S_ISDIR(metadata.st_mode)
+            )
+        ):
+            raise GitPermissionTakeoverError(
+                f"new Git permission path is unsafe: {relative}"
+            )
+
+
+def _chmod_permission_record(
+    root: Path,
+    record: dict[str, Any],
+    *,
+    desired: str,
+    alternate: str,
+    allow_mutable_changes: bool,
+    require_original_config: bool,
+) -> bool:
+    _validate_current_permission_record(
+        root,
+        record,
+        allowed_modes={desired, alternate},
+        allow_mutable_changes=allow_mutable_changes,
+        verify_content=True,
+        require_original_config=require_original_config,
+    )
+    path = _permission_path(root, record["path"])
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "permission takeover path disappeared before chmod"
+        ) from exc
+    if f"{stat.S_IMODE(metadata.st_mode):04o}" == desired:
+        return False
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    if record["type"] == "directory":
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            before = os.fstat(descriptor)
+            if (
+                before.st_dev != metadata.st_dev
+                or before.st_ino != metadata.st_ino
+                or before.st_uid != record["uid"]
+                or before.st_gid != record["gid"]
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission path changed before chmod"
+                )
+            os.fchmod(descriptor, int(desired, 8))
+            os.fsync(descriptor)
+            after = os.fstat(descriptor)
+            if (
+                after.st_dev != before.st_dev
+                or after.st_ino != before.st_ino
+                or after.st_uid != record["uid"]
+                or after.st_gid != record["gid"]
+                or f"{stat.S_IMODE(after.st_mode):04o}" != desired
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission chmod did not persist exactly"
+                )
+        finally:
+            os.close(descriptor)
+        _fsync_permission_directory(path.parent)
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            f"cannot change Git permission path: {record['path']}"
+        ) from exc
+    return True
+
+
+def _permission_transition(
+    marker_path: Path,
+    document: dict[str, Any],
+    phase: str,
+    checkpoint: Callable[[str], None],
+) -> dict[str, Any]:
+    document["phase"] = phase
+    document = _save_permission_document(marker_path, document)
+    checkpoint(f"permission:{phase}")
+    return document
+
+
+def takeover_repository_permissions(
+    root: Path,
+    marker_path: Path,
+    *,
+    checkpoint: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Crash-safely harden the checkout before the first production Git call."""
+
+    root = _permission_root(root)
+    marker_path = _private_permission_marker_parent(marker_path)
+    emit = checkpoint or (lambda _label: None)
+    if marker_path.exists() or marker_path.is_symlink():
+        document = _load_permission_document(root, marker_path)
+    else:
+        records = _inventory_permission_records(root)
+        _validate_permission_stage(
+            root,
+            records,
+            root_state="original",
+            directory_state="original",
+            file_state="original",
+            exact_paths=True,
+            allow_mutable_changes=False,
+            verify_content=True,
+        )
+        document = {
+            "schema_version": PERMISSION_SCHEMA_VERSION,
+            "policy": PERMISSION_POLICY_NAME,
+            "repository": str(root),
+            "marker_path": str(marker_path),
+            "phase": "captured",
+            "generation": 0,
+            "records": records,
+            "inventory_sha256": sha256_bytes(
+                canonical_json_bytes(records)
+            ),
+            "original_permissions_sha256": sha256_bytes(
+                canonical_json_bytes(
+                    _permission_identity(records, hardened=False)
+                )
+            ),
+            "hardened_permissions_sha256": sha256_bytes(
+                canonical_json_bytes(
+                    _permission_identity(records, hardened=True)
+                )
+            ),
+        }
+        document = _save_permission_document(marker_path, document)
+        emit("permission:captured")
+    records = document["records"]
+    root_record = records[0]
+    directory_records = [
+        record
+        for record in records[1:]
+        if record["type"] == "directory"
+    ]
+    file_records = [
+        record
+        for record in records
+        if record["type"] == "file"
+    ]
+    if document["phase"] in {
+        "restore-files-intent",
+        "restore-files-restored",
+        "restore-directories-intent",
+        "restore-directories-restored",
+        "restore-root-intent",
+        "restored",
+    }:
+        raise GitPermissionTakeoverError(
+            "restored permission takeover cannot be silently reused"
+        )
+    if document["phase"] == "captured":
+        document = _permission_transition(
+            marker_path, document, "root-intent", emit
+        )
+    if document["phase"] == "root-intent":
+        changed = _chmod_permission_record(
+            root,
+            root_record,
+            desired=root_record["target_mode"],
+            alternate=root_record["mode"],
+            allow_mutable_changes=False,
+            require_original_config=False,
+        )
+        emit(
+            "permission:root:action"
+            if changed
+            else "permission:root:already"
+        )
+        document = _permission_transition(
+            marker_path, document, "root-hardened", emit
+        )
+    if document["phase"] == "root-hardened":
+        document = _permission_transition(
+            marker_path,
+            document,
+            "metadata-directories-intent",
+            emit,
+        )
+    if document["phase"] == "metadata-directories-intent":
+        for record in directory_records:
+            changed = _chmod_permission_record(
+                root,
+                record,
+                desired=record["target_mode"],
+                alternate=record["mode"],
+                allow_mutable_changes=False,
+                require_original_config=False,
+            )
+            emit(
+                f"permission:directory:{record['path']}:"
+                + ("action" if changed else "already")
+            )
+        document = _permission_transition(
+            marker_path,
+            document,
+            "metadata-directories-hardened",
+            emit,
+        )
+    if document["phase"] == "metadata-directories-hardened":
+        document = _permission_transition(
+            marker_path,
+            document,
+            "metadata-files-intent",
+            emit,
+        )
+    if document["phase"] == "metadata-files-intent":
+        for record in file_records:
+            changed = _chmod_permission_record(
+                root,
+                record,
+                desired=record["target_mode"],
+                alternate=record["mode"],
+                allow_mutable_changes=False,
+                require_original_config=False,
+            )
+            emit(
+                f"permission:file:{record['path']}:"
+                + ("action" if changed else "already")
+            )
+        document = _permission_transition(
+            marker_path,
+            document,
+            "metadata-files-hardened",
+            emit,
+        )
+    if document["phase"] == "metadata-files-hardened":
+        _validate_permission_stage(
+            root,
+            records,
+            root_state="target",
+            directory_state="target",
+            file_state="target",
+            exact_paths=True,
+            allow_mutable_changes=False,
+            verify_content=True,
+        )
+        document = _permission_transition(
+            marker_path, document, "hardened", emit
+        )
+    if document["phase"] != "hardened":
+        raise GitPermissionTakeoverError(
+            "permission takeover did not reach its terminal hardened phase"
+        )
+    return verify_repository_permission_takeover(
+        root,
+        marker_path,
+        verify_content=True,
+        require_original_mutable=True,
+    )
+
+
+def verify_repository_permission_takeover(
+    root: Path,
+    marker_path: Path,
+    *,
+    verify_content: bool = True,
+    require_original_mutable: bool = False,
+) -> dict[str, Any]:
+    """Re-verify hardened modes and the content-bound original inventory."""
+
+    root = _permission_root(root)
+    marker_path = _private_permission_marker_parent(marker_path)
+    document = _load_permission_document(root, marker_path)
+    validate_permission_takeover_evidence(
+        document,
+        repository=root,
+        marker_path=marker_path,
+        allowed_phases={"hardened"},
+    )
+    records = document["records"]
+    _validate_permission_stage(
+        root,
+        records,
+        root_state="target",
+        directory_state="target",
+        file_state="target",
+        exact_paths=False,
+        allow_mutable_changes=not require_original_mutable,
+        verify_content=verify_content,
+        require_original_config=require_original_mutable,
+    )
+    return document
+
+
+def restore_repository_permissions(
+    root: Path,
+    marker_path: Path,
+    *,
+    checkpoint: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Restore the exact pre-takeover mode/uid/gid as the final rollback step."""
+
+    root = _permission_root(root)
+    marker_path = _private_permission_marker_parent(marker_path)
+    emit = checkpoint or (lambda _label: None)
+    document = _load_permission_document(root, marker_path)
+    if document["phase"] not in {
+        "hardened",
+        "restore-files-intent",
+        "restore-files-restored",
+        "restore-directories-intent",
+        "restore-directories-restored",
+        "restore-root-intent",
+        "restored",
+    }:
+        raise GitPermissionTakeoverError(
+            "permission hardening must finish before it can be restored"
+        )
+    records = document["records"]
+    root_record = records[0]
+    directory_records = sorted(
+        (
+            record
+            for record in records[1:]
+            if record["type"] == "directory"
+        ),
+        key=lambda record: (
+            len(Path(record["path"]).parts),
+            os.fsencode(record["path"]),
+        ),
+        reverse=True,
+    )
+    file_records = sorted(
+        (
+            record
+            for record in records
+            if record["type"] == "file"
+        ),
+        key=lambda record: os.fsencode(record["path"]),
+        reverse=True,
+    )
+    if document["phase"] == "restored":
+        _validate_permission_stage(
+            root,
+            records,
+            root_state="original",
+            directory_state="original",
+            file_state="original",
+            exact_paths=False,
+            allow_mutable_changes=True,
+            verify_content=True,
+            require_original_config=True,
+        )
+        return document
+    if document["phase"] == "hardened":
+        verify_repository_permission_takeover(
+            root,
+            marker_path,
+            verify_content=True,
+        )
+        document = _permission_transition(
+            marker_path, document, "restore-files-intent", emit
+        )
+    if document["phase"] == "restore-files-intent":
+        for record in file_records:
+            changed = _chmod_permission_record(
+                root,
+                record,
+                desired=record["mode"],
+                alternate=record["target_mode"],
+                allow_mutable_changes=True,
+                require_original_config=True,
+            )
+            emit(
+                f"permission:restore-file:{record['path']}:"
+                + ("action" if changed else "already")
+            )
+        document = _permission_transition(
+            marker_path, document, "restore-files-restored", emit
+        )
+    if document["phase"] == "restore-files-restored":
+        document = _permission_transition(
+            marker_path,
+            document,
+            "restore-directories-intent",
+            emit,
+        )
+    if document["phase"] == "restore-directories-intent":
+        for record in directory_records:
+            changed = _chmod_permission_record(
+                root,
+                record,
+                desired=record["mode"],
+                alternate=record["target_mode"],
+                allow_mutable_changes=False,
+                require_original_config=False,
+            )
+            emit(
+                f"permission:restore-directory:{record['path']}:"
+                + ("action" if changed else "already")
+            )
+        document = _permission_transition(
+            marker_path,
+            document,
+            "restore-directories-restored",
+            emit,
+        )
+    if document["phase"] == "restore-directories-restored":
+        document = _permission_transition(
+            marker_path, document, "restore-root-intent", emit
+        )
+    if document["phase"] == "restore-root-intent":
+        changed = _chmod_permission_record(
+            root,
+            root_record,
+            desired=root_record["mode"],
+            alternate=root_record["target_mode"],
+            allow_mutable_changes=False,
+            require_original_config=False,
+        )
+        emit(
+            "permission:restore-root:action"
+            if changed
+            else "permission:restore-root:already"
+        )
+        document = _permission_transition(
+            marker_path, document, "restored", emit
+        )
+    return restore_repository_permissions(
+        root,
+        marker_path,
+        checkpoint=emit,
+    )
 
 
 def assert_trusted_ambient_environment(
@@ -786,6 +2073,7 @@ def run_git(
             text=text,
             check=check,
             timeout=timeout,
+            umask=0o077,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise GitSourceTrustError("trusted Git command failed") from exc

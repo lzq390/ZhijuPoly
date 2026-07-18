@@ -110,6 +110,9 @@ STATUS_FIELDS = {
     "classification_sha256",
     "runtime_identity_sha256",
     "git_identity",
+    "git_permission_takeover_sha256",
+    "git_permission_inventory_sha256",
+    "git_permission_restore_sha256",
     "applied_record_sha256",
     "pre_stopped_fence",
     "pre_stopped_fence_sha256",
@@ -313,6 +316,8 @@ def validate_install_manifest(
         "helper_report_sha256",
         "classification_sha256",
         "production_source_trust_sha256",
+        "production_permission_takeover_sha256",
+        "production_permission_inventory_sha256",
     }
     if (
         not isinstance(document, dict)
@@ -375,6 +380,16 @@ def validate_install_manifest(
         "production source trust digest",
         optional=True,
     )
+    _digest(
+        document.get("production_permission_takeover_sha256"),
+        "production permission takeover digest",
+        optional=True,
+    )
+    _digest(
+        document.get("production_permission_inventory_sha256"),
+        "production permission inventory digest",
+        optional=True,
+    )
     pgpass = _private_file(
         runtime_root / "config/mutable-data-audit.pgpass",
         0o600,
@@ -427,6 +442,9 @@ def validate_status_document(
     ):
         _digest(document.get(name), f"takeover status {name}")
     for name in (
+        "git_permission_takeover_sha256",
+        "git_permission_inventory_sha256",
+        "git_permission_restore_sha256",
         "applied_record_sha256",
         "pre_stopped_fence_sha256",
         "control_layout_replacement_sha256",
@@ -437,6 +455,31 @@ def validate_status_document(
             document.get(name),
             f"takeover status {name}",
             optional=True,
+        )
+    permission_takeover = document[
+        "git_permission_takeover_sha256"
+    ]
+    permission_inventory = document[
+        "git_permission_inventory_sha256"
+    ]
+    permission_restore = document["git_permission_restore_sha256"]
+    if (permission_takeover is None) != (permission_inventory is None):
+        raise LegacyTakeoverEvidenceError(
+            "takeover Git permission authority is incomplete"
+        )
+    if (
+        permission_restore is not None
+        and permission_takeover is None
+    ) or (
+        document.get("restore_phase") != "restored"
+        and permission_restore is not None
+    ) or (
+        document.get("restore_phase") == "restored"
+        and permission_takeover is not None
+        and permission_restore is None
+    ):
+        raise LegacyTakeoverEvidenceError(
+            "takeover Git permission restore authority differs"
         )
     git_identity = document.get("git_identity")
     if (
@@ -717,6 +760,11 @@ def validate_completed(
         )
         or status["classification_sha256"]
         != manifest["classification_sha256"]
+        or status["git_permission_takeover_sha256"]
+        != manifest["production_permission_takeover_sha256"]
+        or status["git_permission_inventory_sha256"]
+        != manifest["production_permission_inventory_sha256"]
+        or status["git_permission_restore_sha256"] is not None
     ):
         raise LegacyTakeoverEvidenceError(
             "legacy takeover is not a completed apply authority"
@@ -793,6 +841,14 @@ def validate_restored(
         )
         or status["classification_sha256"]
         != manifest["classification_sha256"]
+        or status["git_permission_takeover_sha256"]
+        != manifest["production_permission_takeover_sha256"]
+        or status["git_permission_inventory_sha256"]
+        != manifest["production_permission_inventory_sha256"]
+        or (
+            status["git_permission_takeover_sha256"] is not None
+            and status["git_permission_restore_sha256"] is None
+        )
     ):
         raise LegacyTakeoverEvidenceError(
             "legacy takeover is not an exact terminal restore"

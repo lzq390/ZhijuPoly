@@ -92,6 +92,24 @@ class LegacyTakeoverEvidenceTests(unittest.TestCase):
                 EVIDENCE.canonical_json_bytes(unsigned)
             ),
         )
+        mismatched_permission_authority = dict(validated)
+        mismatched_permission_authority[
+            "git_permission_takeover_sha256"
+        ] = "sha256:" + "a" * 64
+        mismatched_permission_authority[
+            "git_permission_inventory_sha256"
+        ] = "sha256:" + "b" * 64
+        with self.assertRaisesRegex(
+            EVIDENCE.LegacyTakeoverEvidenceError,
+            "completed apply authority",
+        ):
+            EVIDENCE.validate_completed(
+                installer.runtime,
+                OPERATION_ID,
+                AUTHORITY_SHA,
+                AUTHORITY_TREE,
+                status_document=mismatched_permission_authority,
+            )
 
     def test_status_loader_uses_fixed_private_recovery_launcher(self) -> None:
         installer = InstallerFixture()

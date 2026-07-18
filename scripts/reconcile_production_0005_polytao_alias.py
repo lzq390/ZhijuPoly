@@ -273,6 +273,7 @@ class CommandRunner(Protocol):
         text: bool = True,
         timeout: float | None = None,
         check: bool = True,
+        umask: int = -1,
     ) -> subprocess.CompletedProcess[Any]: ...
 
 
@@ -287,6 +288,7 @@ class SystemRunner:
         text: bool = True,
         timeout: float | None = None,
         check: bool = True,
+        umask: int = -1,
     ) -> subprocess.CompletedProcess[Any]:
         return subprocess.run(
             command,
@@ -297,6 +299,7 @@ class SystemRunner:
             text=text,
             timeout=timeout,
             check=check,
+            umask=umask,
         )
 
 
@@ -544,16 +547,19 @@ def _run_checked(
     stdout: BinaryIO | int | None = subprocess.PIPE,
     text: bool = True,
     timeout: float | None = None,
+    umask: int = -1,
 ) -> subprocess.CompletedProcess[Any]:
     try:
-        return runner.run(
-            command,
-            env=env,
-            stdin=stdin,
-            stdout=stdout,
-            text=text,
-            timeout=timeout,
-        )
+        options: dict[str, Any] = {
+            "env": env,
+            "stdin": stdin,
+            "stdout": stdout,
+            "text": text,
+            "timeout": timeout,
+        }
+        if umask != -1:
+            options["umask"] = umask
+        return runner.run(command, **options)
     except (OSError, subprocess.SubprocessError) as exc:
         raise ReconcileError(f"{label} failed") from exc
 
@@ -986,6 +992,20 @@ def _require_restore_matches_before(
 
 def _source_identity(runner: CommandRunner) -> dict[str, Any]:
     try:
+        permission_takeover = (
+            GIT_SOURCE_TRUST.verify_repository_permission_takeover(
+                PRODUCTION_ROOT,
+                GIT_SOURCE_TRUST.permission_takeover_marker_path(
+                    RUNTIME_ROOT
+                ),
+                verify_content=True,
+            )
+        )
+    except Exception as exc:
+        raise ReconcileError(
+            "legacy production Git permission takeover is unavailable"
+        ) from exc
+    try:
         metadata = PRODUCTION_ROOT.lstat()
     except OSError as exc:
         raise ReconcileError("legacy production checkout is missing") from exc
@@ -1019,6 +1039,7 @@ def _source_identity(runner: CommandRunner) -> dict[str, Any]:
         label="legacy source identity",
         env=git_environment,
         timeout=30,
+        umask=0o077,
     )
     lines = str(completed.stdout).splitlines()
     if lines != [LEGACY_SOURCE_SHA, LEGACY_SOURCE_TREE]:
@@ -1035,6 +1056,7 @@ def _source_identity(runner: CommandRunner) -> dict[str, Any]:
         label="legacy source cleanliness",
         env=git_environment,
         timeout=30,
+        umask=0o077,
     )
     if str(status.stdout):
         raise ReconcileError("legacy production checkout is not clean")
@@ -1072,6 +1094,7 @@ def _source_identity(runner: CommandRunner) -> dict[str, Any]:
         "sha": LEGACY_SOURCE_SHA,
         "tree": LEGACY_SOURCE_TREE,
         "trust": evidence,
+        "permission_takeover": permission_takeover,
     }
 
 

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -773,6 +774,133 @@ class LegacyTakeoverTests(unittest.TestCase):
                     )
                 finally:
                     fixture.close()
+
+    def test_git_permission_restore_lost_response_is_terminal_and_resumable(
+        self,
+    ) -> None:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        git_dir = fixture.repository / ".git"
+        objects = git_dir / "objects"
+        config = git_dir / "config"
+        objects.mkdir(mode=0o770)
+        config.write_text(
+            "[core]\n\trepositoryformatversion = 0\n",
+            encoding="utf-8",
+        )
+        os.chmod(fixture.repository, 0o775)
+        os.chmod(git_dir, 0o770)
+        os.chmod(objects, 0o770)
+        os.chmod(config, 0o660)
+        original_modes = {
+            fixture.repository: 0o775,
+            git_dir: 0o770,
+            objects: 0o770,
+            config: 0o660,
+        }
+        trust = TAKEOVER.GIT_SOURCE_TRUST
+        (fixture.runtime / "state").mkdir(mode=0o700)
+        marker = trust.permission_takeover_marker_path(
+            fixture.runtime
+        )
+        hardened = trust.takeover_repository_permissions(
+            fixture.repository,
+            marker,
+        )
+        restored_permissions = False
+
+        def permission_evidence() -> dict[str, object]:
+            return trust.verify_repository_permission_takeover(
+                fixture.repository,
+                marker,
+                verify_content=True,
+                require_original_mutable=True,
+            )
+
+        def restore_permissions(
+            expected: dict[str, object],
+        ) -> dict[str, object]:
+            nonlocal restored_permissions
+            self.assertEqual(
+                expected["inventory_sha256"],
+                hardened["inventory_sha256"],
+            )
+            restored = trust.restore_repository_permissions(
+                fixture.repository,
+                marker,
+            )
+            restored_permissions = True
+            return restored
+
+        def verify_restored(
+            expected: dict[str, object],
+            restored: dict[str, object],
+        ) -> dict[str, object]:
+            self.assertEqual(
+                expected["inventory_sha256"],
+                restored["inventory_sha256"],
+            )
+            return trust.restore_repository_permissions(
+                fixture.repository,
+                marker,
+            )
+
+        original_origin_urls = fixture.system.origin_urls
+
+        def guarded_origin_urls() -> tuple[list[str], list[str]]:
+            if restored_permissions:
+                raise AssertionError(
+                    "Git was invoked after original permissions returned"
+                )
+            return original_origin_urls()
+
+        fixture.system.git_permission_takeover_evidence = (  # type: ignore[attr-defined]
+            permission_evidence
+        )
+        fixture.system.restore_git_permissions = (  # type: ignore[attr-defined]
+            restore_permissions
+        )
+        fixture.system.verify_git_permissions_restored = (  # type: ignore[attr-defined]
+            verify_restored
+        )
+        fixture.system.origin_urls = guarded_origin_urls  # type: ignore[method-assign]
+
+        fixture.seal()
+        fixture.controller.apply(OPERATION_ID)
+        checkpoints = Checkpoints(
+            "restore:git-permissions-restore-intent:action"
+        )
+        with self.assertRaises(InjectedCrash):
+            fixture.recreate_controller(checkpoints).restore(
+                OPERATION_ID
+            )
+        interrupted = fixture.controller._load(OPERATION_ID)
+        self.assertEqual(
+            interrupted["restore_phase"],
+            "git-permissions-restore-intent",
+        )
+        self.assertEqual(
+            trust.restore_repository_permissions(
+                fixture.repository,
+                marker,
+            )["phase"],
+            "restored",
+        )
+
+        resumed = fixture.recreate_controller().restore(OPERATION_ID)
+        self.assertEqual(resumed["restore_phase"], "restored")
+        self.assertEqual(
+            resumed["git_permission_takeover_restored"][
+                "inventory_sha256"
+            ],
+            hardened["inventory_sha256"],
+        )
+        for path, mode in original_modes.items():
+            self.assertEqual(stat.S_IMODE(path.lstat().st_mode), mode)
+        self.assertEqual(
+            fixture.recreate_controller().restore(OPERATION_ID),
+            resumed,
+        )
 
     def test_checkout_replacement_remains_bound_through_worker_restore(
         self,
