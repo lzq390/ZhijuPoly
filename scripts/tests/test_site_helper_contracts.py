@@ -228,6 +228,20 @@ class SiteHelperContractTests(unittest.TestCase):
             for record in registry["expected_media"]
             if record["database"] == "nexpoly_md_health_opt"
         )
+        development = next(
+            record
+            for record in registry["expected_media"]
+            if record["database"] == "nexpoly_dev"
+        )
+        self.assertEqual(
+            development["disposition"],
+            "retained-private-isolated",
+        )
+        self.assertEqual(
+            development["audit_method"],
+            "isolated-volume-copy-read-only",
+        )
+        self.assertIsNone(development["pg_service"])
         self.assertEqual(health["disposition"], "retained-private-isolated")
         self.assertEqual(
             health["audit_method"],
@@ -236,15 +250,7 @@ class SiteHelperContractTests(unittest.TestCase):
         self.assertIsNone(health["pg_service"])
         self.assertEqual(
             registry["required_online_databases"],
-            [
-                {
-                    "stack": "nexpoly_dev",
-                    "media_id": (
-                        "docker-volume:"
-                        "nexpoly_dev_nexpoly_dev_postgres_data"
-                    ),
-                }
-            ],
+            [],
         )
         helper = (
             ROOT / "ops/config/contract-0012-external-database-audit.example"

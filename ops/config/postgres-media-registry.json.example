@@ -75,10 +75,10 @@
       "media_id": "docker-volume:nexpoly_dev_nexpoly_dev_postgres_data",
       "kind": "docker_volume",
       "database": "nexpoly_dev",
-      "database_user": "nexpoly_dev_auditor",
-      "disposition": "read-only-online",
-      "audit_method": "live-read-only",
-      "pg_service": "nexpoly_dev_audit",
+      "database_user": "nexpoly_dev",
+      "disposition": "retained-private-isolated",
+      "audit_method": "isolated-volume-copy-read-only",
+      "pg_service": null,
       "classification": "nexpoly-db",
       "source_postgres_major": 16,
       "databases": [
@@ -88,7 +88,7 @@
           "owner": "nexpoly_dev",
           "allow_connections": true,
           "template": false,
-          "audit_role": "nexpoly_dev_auditor",
+          "audit_role": "nexpoly_dev",
           "migration_scope": "nexpoly-ledger"
         },
         {
@@ -97,7 +97,7 @@
           "owner": "postgres",
           "allow_connections": true,
           "template": false,
-          "audit_role": "nexpoly_dev_auditor",
+          "audit_role": "nexpoly_dev",
           "migration_scope": "adjacent-record-only"
         }
       ]
@@ -211,10 +211,5 @@
       "databases": []
     }
   ],
-  "required_online_databases": [
-    {
-      "stack": "nexpoly_dev",
-      "media_id": "docker-volume:nexpoly_dev_nexpoly_dev_postgres_data"
-    }
-  ]
+  "required_online_databases": []
 }

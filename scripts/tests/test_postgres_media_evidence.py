@@ -284,8 +284,20 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
                         private_root=self.config,
                     )
 
-    def test_health_media_can_be_retained_after_side_dev_cleanup(self) -> None:
+    def test_dev_and_health_media_can_both_remain_retained_offline(self) -> None:
         value = self.valid_document()
+        development = value["expected_media"][1]
+        development.update(
+            {
+                "database_user": "nexpoly_dev",
+                "disposition": "retained-private-isolated",
+                "audit_method": "isolated-volume-copy-read-only",
+                "pg_service": None,
+            }
+        )
+        development["databases"][0].update(
+            {"owner": "nexpoly_dev", "audit_role": "nexpoly_dev"}
+        )
         health = value["expected_media"][2]
         health.update(
             {
@@ -298,9 +310,7 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
         health["databases"][0].update(
             {"owner": "postgres", "audit_role": "postgres"}
         )
-        value["required_online_databases"] = [
-            value["required_online_databases"][0]
-        ]
+        value["required_online_databases"] = []
         self.write_registry(value)
         loaded = MEDIA.load_registry(
             self.registry,
@@ -309,19 +319,99 @@ class RegistryAndPrivatePathTests(unittest.TestCase):
         )
         self.assertEqual(
             loaded.required_online_databases,
-            (
-                {
-                    "stack": "nexpoly_dev",
-                    "media_id": "docker-volume:b-dev",
-                },
-            ),
+            (),
         )
 
-        value["required_online_databases"] = []
+        development.update(
+            {
+                "database_user": "dev_auditor",
+                "disposition": "read-only-online",
+                "audit_method": "live-read-only",
+                "pg_service": "dev_audit",
+            }
+        )
+        development["databases"][0].update(
+            {"owner": "dev_auditor", "audit_role": "dev_auditor"}
+        )
+        health.update(
+            {
+                "database_user": "health_auditor",
+                "disposition": "read-only-online",
+                "audit_method": "live-read-only",
+                "pg_service": "health_audit",
+            }
+        )
+        health["databases"][0].update(
+            {"owner": "health_auditor", "audit_role": "health_auditor"}
+        )
+        value["required_online_databases"] = [
+            {
+                "stack": "nexpoly_md_health_opt",
+                "media_id": "docker-volume:c-health",
+            },
+            {
+                "stack": "nexpoly_dev",
+                "media_id": "docker-volume:b-dev",
+            },
+        ]
         self.write_registry(value)
         with self.assertRaisesRegex(
             MEDIA.MediaEvidenceError,
-            "keep nexpoly_dev online",
+            "canonical subset",
+        ):
+            MEDIA.load_registry(
+                self.registry,
+                policy=self.policy,
+                private_root=self.config,
+            )
+
+    def test_adjacent_pg18_is_record_only_but_managed_pg18_is_rejected(
+        self,
+    ) -> None:
+        value = self.valid_document()
+        adjacent = {
+            **descriptor(
+                "docker-volume:d-adjacent-pg18",
+                "none",
+                disposition="excluded-from-nexpoly-migration",
+                method="adjacent-record-only",
+                user="none",
+                service=None,
+                classification="adjacent-record-only",
+                source_postgres_major=18,
+            ),
+            "databases": [],
+        }
+        value["expected_media"].append(adjacent)
+        self.write_registry(value)
+        loaded = MEDIA.load_registry(
+            self.registry,
+            policy=self.policy,
+            private_root=self.config,
+        )
+        self.assertEqual(
+            loaded.descriptors[-1].source_postgres_major,
+            18,
+        )
+
+        value["expected_media"][-1]["source_postgres_major"] = 19
+        self.write_registry(value)
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "descriptor identity",
+        ):
+            MEDIA.load_registry(
+                self.registry,
+                policy=self.policy,
+                private_root=self.config,
+            )
+
+        value = self.valid_document()
+        value["expected_media"][1]["source_postgres_major"] = 18
+        self.write_registry(value)
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "audit method conflicts",
         ):
             MEDIA.load_registry(
                 self.registry,
@@ -999,8 +1089,8 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
         )
         self.assertEqual(validated["record_type"], "reviewed-non-pg")
 
-    def test_adjacent_pg14_volume_is_never_started_as_postgres(self) -> None:
-        media_id = "docker-volume:adjacent-pg14"
+    def test_adjacent_pg18_volume_is_never_started_as_postgres(self) -> None:
+        media_id = "docker-volume:adjacent-pg18"
         current = MEDIA.MediaDescriptor(
             media_id=media_id,
             kind="docker_volume",
@@ -1010,22 +1100,22 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
             audit_method="adjacent-record-only",
             pg_service=None,
             classification="adjacent-record-only",
-            source_postgres_major=14,
+            source_postgres_major=18,
         )
         source = MEDIA.DiscoveredMedia(
             media_id=media_id,
             kind="docker_volume",
-            locator="adjacent-pg14",
+            locator="adjacent-pg18",
             data_subpath=".",
             attached=(),
             signature="postgres",
-            postgres_major=14,
+            postgres_major=18,
         )
         identity = {
-            "name": "adjacent-pg14",
+            "name": "adjacent-pg18",
             "driver": "local",
             "mountpoint": (
-                "/var/lib/docker/volumes/adjacent-pg14/_data"
+                "/var/lib/docker/volumes/adjacent-pg18/_data"
             ),
             "labels_sha256": "sha256:" + "1" * 64,
             "inspect_sha256": "sha256:" + "2" * 64,
@@ -1062,7 +1152,7 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
         )
         CONTRACTS._external_record_only_medium_v3(
             record,
-            volume_names=["adjacent-pg14"],
+            volume_names=["adjacent-pg18"],
             container_ids=[],
         )
 
@@ -1761,6 +1851,190 @@ class CompleteDockerDiscoveryTests(unittest.TestCase):
             "non-postgres",
         )
         self.assertEqual(set(runner.probed), set(runner.volumes))
+
+    def test_inactive_empty_pgdata_volume_requires_explicit_non_pg_review(
+        self,
+    ) -> None:
+        name = "retired-empty-pgdata"
+        mount = {
+            "Type": "volume",
+            "Name": name,
+            "Source": name,
+            "Destination": "/var/lib/postgresql",
+            "RW": True,
+        }
+        container = self.container(
+            CONTAINER_A,
+            database_mount=mount,
+            pgdata="/var/lib/postgresql/18/docker",
+        )
+        container["State"].update(
+            {
+                "Status": "exited",
+                "FinishedAt": "2026-07-17T11:00:00.000000000Z",
+            }
+        )
+        media_id = f"docker-volume:{name}"
+        reviewed = {
+            **descriptor(
+                media_id,
+                "none",
+                disposition="excluded-from-nexpoly-migration",
+                method="reviewed-content-only",
+                user="none",
+                service=None,
+                classification="reviewed-non-pg",
+                source_postgres_major=None,
+            ),
+            "databases": [],
+        }
+        registry = MEDIA.Registry(
+            payload=b"fixture",
+            digest=MEDIA.sha256_bytes(b"fixture"),
+            audit_image=IMAGE,
+            auditor_sha256=MEDIA._auditor_digest(),
+            service_file_sha256="sha256:" + "7" * 64,
+            descriptors=(MEDIA.MediaDescriptor(**reviewed),),
+            required_online_databases=(),
+            boundary=self.policy.document(),
+        )
+
+        runner = FakeDockerRunner(
+            [container],
+            [self.volume(name)],
+            {name: ""},
+        )
+        result = MEDIA.discover_media(
+            registry,
+            runner=runner,
+            operation=PassthroughScratchOperation(runner, self.root),
+            policy=self.policy,
+        )
+        self.assertEqual(result.media[media_id].signature, "non-postgres")
+        self.assertEqual(
+            result.media[media_id].attached[0]["container_id"],
+            CONTAINER_A,
+        )
+
+        container["State"]["Status"] = "running"
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "PGDATA conflicts",
+        ):
+            runner = FakeDockerRunner(
+                [container],
+                [self.volume(name)],
+                {name: ""},
+            )
+            MEDIA.discover_media(
+                registry,
+                runner=runner,
+                operation=PassthroughScratchOperation(runner, self.root),
+                policy=self.policy,
+            )
+
+        container["State"]["Status"] = "exited"
+        runner = FakeDockerRunner(
+            [container],
+            [self.volume(name)],
+            {name: "V\t/source/18/docker/PG_VERSION\t18\n"},
+        )
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "PGDATA conflicts",
+        ):
+            MEDIA.discover_media(
+                registry,
+                runner=runner,
+                operation=PassthroughScratchOperation(runner, self.root),
+                policy=self.policy,
+            )
+
+    def test_only_read_only_disjoint_postgres_binds_are_inventory_only(
+        self,
+    ) -> None:
+        name = "postgres-with-init-config"
+        container = self.container(
+            CONTAINER_A,
+            database_mount={
+                "Type": "volume",
+                "Name": name,
+                "Source": name,
+                "Destination": "/var/lib/postgresql/data",
+                "RW": True,
+            },
+            pgdata="/var/lib/postgresql/data",
+        )
+        init_bind = {
+            "Type": "bind",
+            "Source": "/private/init/10-schema.sql",
+            "Destination": "/docker-entrypoint-initdb.d/10-schema.sql",
+            "RW": False,
+        }
+        container["Mounts"].append(init_bind)
+        media_id = f"docker-volume:{name}"
+        registry = MEDIA.Registry(
+            payload=b"fixture",
+            digest=MEDIA.sha256_bytes(b"fixture"),
+            audit_image=IMAGE,
+            auditor_sha256=MEDIA._auditor_digest(),
+            service_file_sha256="sha256:" + "7" * 64,
+            descriptors=(
+                MEDIA.MediaDescriptor(
+                    **descriptor(
+                        media_id,
+                        "nexpoly",
+                        disposition="writable-target",
+                        user="production_auditor",
+                        service="production_audit",
+                    )
+                ),
+            ),
+            required_online_databases=(),
+            boundary=self.policy.document(),
+        )
+
+        runner = FakeDockerRunner(
+            [container],
+            [self.volume(name)],
+            {name: postgres_signature("/source")},
+        )
+        result = MEDIA.discover_media(
+            registry,
+            runner=runner,
+            operation=PassthroughScratchOperation(runner, self.root),
+            policy=self.policy,
+        )
+        self.assertEqual(sorted(result.media), [media_id])
+
+        for destination, writable in (
+            ("/docker-entrypoint-initdb.d/10-schema.sql", True),
+            ("/var/lib/postgresql/data/pg_wal", False),
+        ):
+            container["Mounts"][-1] = {
+                **init_bind,
+                "Destination": destination,
+                "RW": writable,
+            }
+            runner = FakeDockerRunner(
+                [container],
+                [self.volume(name)],
+                {name: postgres_signature("/source")},
+            )
+            with self.subTest(destination=destination, writable=writable):
+                with self.assertRaisesRegex(
+                    MEDIA.MediaEvidenceError,
+                    "unclassified persistent bind",
+                ):
+                    MEDIA.discover_media(
+                        registry,
+                        runner=runner,
+                        operation=PassthroughScratchOperation(
+                            runner,
+                            self.root,
+                        ),
+                        policy=self.policy,
+                    )
 
     def test_active_volume_with_unmapped_pgdata_fails_closed(self) -> None:
         name = "opaque-running-database"
@@ -3446,6 +3720,7 @@ def external_inventory_fixture(
     registry_digest: str,
     dev_user: str,
     health_user: str,
+    dev_online: bool = True,
     health_online: bool = True,
 ) -> dict[str, object]:
     auditor_digest = "sha256:" + "6" * 64
@@ -3721,12 +3996,22 @@ def external_inventory_fixture(
     development = physical_record(
         "nexpoly_dev_postgres_data",
         "nexpoly_dev",
-        dev_user,
+        dev_user if dev_online else "nexpoly_dev",
         dev_ledger,
-        disposition="read-only-online",
-        legacy_present=False,
+        disposition=(
+            "read-only-online"
+            if dev_online
+            else "retained-private-isolated"
+        ),
+        legacy_present=(
+            "0007_polytao_jobs"
+            in {record["version"] for record in dev_ledger}
+            and "0012_drop_polytao_jobs"
+            not in {record["version"] for record in dev_ledger}
+        ),
         container_id=CONTAINER_B,
         system_identifier="7312345678901234562",
+        isolated=not dev_online,
     )
     health = physical_record(
         "nexpoly_md_health_opt_postgres_data",
@@ -3884,7 +4169,11 @@ def external_inventory_fixture(
             ],
         },
         "databases": [
-            online("nexpoly_dev", development["media_id"]),
+            *(
+                [online("nexpoly_dev", development["media_id"])]
+                if dev_online
+                else []
+            ),
             *(
                 [online("nexpoly_md_health_opt", health["media_id"])]
                 if health_online
@@ -4121,7 +4410,7 @@ class BuilderAndContractTests(unittest.TestCase):
         unprojected_live_health["databases"].pop()
         with self.assertRaisesRegex(
             CONTRACTS.SiteHelperContractError,
-            "side-dev health medium is not retained-isolated",
+            "offline nexpoly_md_health_opt medium is not retained-isolated",
         ):
             CONTRACTS.validate_external_database_audit(
                 unprojected_live_health,
@@ -4249,6 +4538,56 @@ class BuilderAndContractTests(unittest.TestCase):
             health["audit"]["method"],
             "isolated-volume-copy-read-only",
         )
+
+    def test_site_validator_accepts_empty_online_projection_when_both_are_isolated(
+        self,
+    ) -> None:
+        registry_digest = "sha256:" + "c" * 64
+        envelope = external_inventory_fixture(
+            dev_ledger=[
+                {
+                    "version": version,
+                    "checksum": checksum,
+                }
+                for version, checksum in MEDIA.CANONICAL_MIGRATION_LEDGER[:9]
+            ],
+            health_ledger=[
+                {
+                    "version": version,
+                    "checksum": checksum,
+                }
+                for version, checksum in MEDIA.CANONICAL_MIGRATION_LEDGER[:8]
+            ],
+            registry_digest=registry_digest,
+            dev_user="unused_dev_auditor",
+            health_user="unused_health_auditor",
+            dev_online=False,
+            health_online=False,
+        )
+        validated = CONTRACTS.validate_external_database_audit(
+            envelope,
+            expected_users={
+                "nexpoly_dev": "unused_dev_auditor",
+                "nexpoly_md_health_opt": "unused_health_auditor",
+            },
+            expected_media_registry_digest=registry_digest,
+        )
+        self.assertEqual(validated, envelope)
+        self.assertEqual(envelope["databases"], [])
+        for stack in ("nexpoly_dev", "nexpoly_md_health_opt"):
+            record = next(
+                value
+                for value in envelope["media"]
+                if value.get("database") == stack
+            )
+            self.assertEqual(
+                record["disposition"],
+                "retained-private-isolated",
+            )
+            self.assertEqual(
+                record["audit"]["method"],
+                "isolated-volume-copy-read-only",
+            )
 
 
 class BackupAuditRunner(MEDIA.CommandRunner):

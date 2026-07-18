@@ -40,6 +40,8 @@ RFC3339_UTC_RE = re.compile(
 CANONICAL_0013_CHECKSUM = (
     "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc"
 )
+ADJACENT_POSTGRES_MAJOR_MIN = 9
+ADJACENT_POSTGRES_MAJOR_MAX = 18
 SUPERSEDED_0013_CHECKSUM = (
     "a60cbf66c70981ba6eb7cf545b5bd89df96fa399fff48ef7f6f21d3682c64cab"
 )
@@ -3118,7 +3120,9 @@ def _external_record_only_medium_v3(
             or signature.get("state") != "postgres"
             or isinstance(signature.get("major"), bool)
             or not isinstance(signature.get("major"), int)
-            or not 9 <= signature["major"] <= 16
+            or not ADJACENT_POSTGRES_MAJOR_MIN
+            <= signature["major"]
+            <= ADJACENT_POSTGRES_MAJOR_MAX
         ):
             raise SiteHelperContractError(
                 "adjacent PostgreSQL record-only signature differs"
@@ -3732,15 +3736,24 @@ def validate_external_database_audit(
         "ledger_sha256",
         "legacy_relation_present",
     }
-    if not isinstance(databases, list) or len(databases) not in {1, 2}:
+    if not isinstance(databases, list) or len(databases) > 2:
         raise SiteHelperContractError(
-            "external online database-v3 evidence is incomplete"
+            "external online database-v3 evidence is invalid"
         )
-    expected_stacks = (
-        ["nexpoly_dev"]
-        if len(databases) == 1
-        else ["nexpoly_dev", "nexpoly_md_health_opt"]
-    )
+    observed_stacks = [
+        database.get("stack")
+        if isinstance(database, dict)
+        else None
+        for database in databases
+    ]
+    allowed_stacks = ["nexpoly_dev", "nexpoly_md_health_opt"]
+    expected_stacks = [
+        stack for stack in allowed_stacks if stack in observed_stacks
+    ]
+    if observed_stacks != expected_stacks:
+        raise SiteHelperContractError(
+            "external online database-v3 stack order differs"
+        )
     normalized_databases: list[dict[str, Any]] = []
     for database, stack in zip(
         databases,
@@ -3798,36 +3811,38 @@ def validate_external_database_audit(
                 "external online database-v3 audit user differs"
             )
         normalized_databases.append(dict(database))
-    health_records = [
-        record
-        for record in normalized.values()
-        if record.get("record_type") == "nexpoly-db"
-        and record.get("database") == "nexpoly_md_health_opt"
-    ]
-    health_online = "nexpoly_md_health_opt" in expected_stacks
-    if not health_records:
-        raise SiteHelperContractError(
-            "external media-v3 omits the retained side-dev health medium"
-        )
-    if not health_online and any(
-        record.get("disposition") != "retained-private-isolated"
-        or record["audit"].get("method") == "live-read-only"
-        for record in health_records
-    ):
-        raise SiteHelperContractError(
-            "external media-v3 side-dev health medium is not retained-isolated"
-        )
-    if health_online:
-        projected_health = normalized_databases[-1]
-        source = normalized[projected_health["media_id"]]
-        if (
-            source.get("database") != "nexpoly_md_health_opt"
-            or source.get("disposition") != "read-only-online"
-            or source["audit"].get("method") != "live-read-only"
-        ):
+    projected_by_stack = {
+        database["stack"]: database["media_id"]
+        for database in normalized_databases
+    }
+    for stack in allowed_stacks:
+        stack_records = [
+            record
+            for record in normalized.values()
+            if record.get("record_type") == "nexpoly-db"
+            and record.get("database") == stack
+        ]
+        if not stack_records:
             raise SiteHelperContractError(
-                "external media-v3 online side-dev projection is not live"
+                f"external media-v3 omits retained {stack} media"
             )
+        projected_media_id = projected_by_stack.get(stack)
+        for record in stack_records:
+            if record["media_id"] == projected_media_id:
+                if (
+                    record.get("disposition") != "read-only-online"
+                    or record["audit"].get("method") != "live-read-only"
+                ):
+                    raise SiteHelperContractError(
+                        f"external media-v3 online {stack} projection is not live"
+                    )
+            elif (
+                record.get("disposition") != "retained-private-isolated"
+                or record["audit"].get("method") == "live-read-only"
+            ):
+                raise SiteHelperContractError(
+                    f"external media-v3 offline {stack} medium is not retained-isolated"
+                )
     if document.get("requires_0014") is not requires_0014:
         raise SiteHelperContractError(
             "external media-v3 0014 requirement differs from every database"

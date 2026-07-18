@@ -225,10 +225,21 @@ Every discovered local Docker volume and every regular file below the four
 backup roots has one explicit classification: `nexpoly-db`,
 `adjacent-record-only`, `reviewed-non-pg`, or `unsupported-blocking`.
 PostgreSQL signatures require the matching `PG_VERSION`,
-`global/pg_control`, and `base` directory. Adjacent PostgreSQL 14/15 media is
-content-CAS recorded without being started under PG16; a partial signature or
-an unsupported classification blocks deployable evidence. Reviewed non-PG
+`global/pg_control`, and `base` directory. Adjacent PostgreSQL media is
+content-CAS recorded without being started under PG16. The adjacent-only
+envelope accepts complete PostgreSQL major versions 9 through 18; this does not
+relax the fixed PG16 runtime or permit a Nexpoly database/backup to be started
+or restored under another major. A partial signature or an unsupported
+classification blocks deployable evidence. Reviewed non-PG
 content is hashed and excluded from Nexpoly migration, never silently ignored.
+An exited PostgreSQL-candidate container may retain an empty or otherwise
+complete non-PG volume at its former PGDATA mount only when the registry
+explicitly classifies that volume as `reviewed-non-pg`: every attachment and
+container/config identity is sealed, the content digest is stable, and any
+active reader or partial PostgreSQL signature fails closed. Read-only
+init/configuration binds whose destinations are provably disjoint from PGDATA
+remain covered by the complete Docker inventory but are not database media;
+writable or overlapping binds still block discovery.
 
 The generic `/data/lzq/gith/nexpoly-runtime/backups` operation root is
 deliberately forbidden as a legacy discovery root. Pull's newly created
@@ -303,13 +314,15 @@ their source cluster system identifier, so they explicitly record
 `isolated-restore-cluster`; copied physical media records
 `copied-source-cluster`.
 
-The required-online projection always contains only the development database
-that is actually required: `nexpoly_dev`. The side-dev
-`nexpoly_md_health_opt` medium is canonically
-`retained-private-isolated` and audited through a read-only physical copy, so
-readiness remains possible after its container is removed while its volume is
-retained. A site may temporarily add it to the required-online projection only
-while that side-dev stack is deliberately kept online. If either database is also visible in the production cluster,
+The required-online projection is a canonical ordered subset of
+`nexpoly_dev` and `nexpoly_md_health_opt`, and may be empty when neither has an
+active, deliberately controlled read-only reader. Every non-projected medium
+for either stack must be `retained-private-isolated` and audited through a
+read-only physical copy. This permits the known dirty development volume to
+remain offline and permits readiness after the side-dev container is removed
+while both volumes are retained; it never fabricates an online clone or starts
+a source volume. A site may project either stack only while its exact
+registry-bound medium is deliberately online. If either database is also visible in the production cluster,
 both observations must agree byte-for-byte on the ledger and legacy relation.
 `nexpoly_dev` must already have the exact canonical 0012 checksum and removed
 legacy relation. `nexpoly_md_health_opt` may be at any non-empty, ordered,
@@ -373,9 +386,9 @@ The maintenance inventory is captured with immutable operation evidence before
 
 - `nexpoly` is the only destructive target; archive its legacy history and move
   it through checksum-pinned 0012.
-- `nexpoly_dev` already contains the exact 0012 checksum and must never execute
-  0012 twice, but its known 0009 dirty-image mismatch keeps the whole database
-  isolated until the separately authorized repair above.
+- `nexpoly_dev` must never execute 0012 twice. Its known 0009 dirty-image
+  mismatch keeps the whole source volume isolated until the separately
+  authorized repair above; it is not falsely projected as an online database.
 - `nexpoly_md_health_opt` is an independent temporary stack whose container may
   be removed; its retained volume stays read-only and is audited only through
   a disposable physical copy.

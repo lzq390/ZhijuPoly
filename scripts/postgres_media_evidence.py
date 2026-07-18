@@ -36,6 +36,8 @@ PSQL = "/usr/bin/psql"
 POSTGRES_MAJOR = 16
 POSTGRES_UID = 70
 POSTGRES_GID = 70
+ADJACENT_POSTGRES_MAJOR_MIN = 9
+ADJACENT_POSTGRES_MAJOR_MAX = 18
 MAX_REGISTRY_BYTES = 1024 * 1024
 MAX_DATABASE_JSON_BYTES = 64 * 1024 * 1024
 DEFAULT_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
@@ -2946,7 +2948,9 @@ def load_registry(
             and (
                 isinstance(source_postgres_major, bool)
                 or not isinstance(source_postgres_major, int)
-                or not 9 <= source_postgres_major <= POSTGRES_MAJOR
+                or not ADJACENT_POSTGRES_MAJOR_MIN
+                <= source_postgres_major
+                <= ADJACENT_POSTGRES_MAJOR_MAX
             )
             or not isinstance(raw_databases, list)
         ):
@@ -3161,30 +3165,46 @@ def load_registry(
         )
     stacks = [value["stack"] for value in normalized_online]
     if stacks not in (
+        [],
         ["nexpoly_dev"],
+        ["nexpoly_md_health_opt"],
         ["nexpoly_dev", "nexpoly_md_health_opt"],
     ):
         raise MediaEvidenceError(
-            "registry must keep nexpoly_dev online and use canonical stack order"
+            "registry online database projection is not a canonical subset"
         )
-    health_descriptors = [
-        descriptor
-        for descriptor in descriptors
-        if descriptor.database == "nexpoly_md_health_opt"
-    ]
-    health_online = "nexpoly_md_health_opt" in stacks
-    if not health_descriptors or (
-        not health_online
-        and any(
-            descriptor.disposition != "retained-private-isolated"
-            or descriptor.audit_method == "live-read-only"
-            for descriptor in health_descriptors
-        )
-    ):
-        raise MediaEvidenceError(
-            "side-dev health media must remain explicitly online or "
-            "retained-private-isolated"
-        )
+    online_by_stack = {
+        mapping["stack"]: mapping["media_id"]
+        for mapping in normalized_online
+    }
+    for stack in allowed_stacks:
+        stack_descriptors = [
+            descriptor
+            for descriptor in descriptors
+            if descriptor.database == stack
+            and descriptor.classification == "nexpoly-db"
+        ]
+        if not stack_descriptors:
+            raise MediaEvidenceError(
+                f"{stack} media is absent from the complete registry"
+            )
+        online_media_id = online_by_stack.get(stack)
+        for descriptor in stack_descriptors:
+            if descriptor.media_id == online_media_id:
+                if (
+                    descriptor.disposition != "read-only-online"
+                    or descriptor.audit_method != "live-read-only"
+                ):
+                    raise MediaEvidenceError(
+                        f"{stack} online medium is not explicitly live"
+                    )
+            elif (
+                descriptor.disposition != "retained-private-isolated"
+                or descriptor.audit_method == "live-read-only"
+            ):
+                raise MediaEvidenceError(
+                    f"{stack} non-projected media is not retained-isolated"
+                )
     return Registry(
         payload=payload,
         digest=sha256_bytes(payload),
@@ -3407,6 +3427,34 @@ def _mount_pg_subpath(destination: str, pgdata: str) -> str | None:
     ):
         raise MediaEvidenceError("container PGDATA subpath is unsafe")
     return value
+
+
+def _mount_destination_overlaps_pgdata(
+    destination: str,
+    pgdata: str,
+) -> bool:
+    mount = PurePosixPath(
+        _normalized_container_directory(
+            destination,
+            source="mount destination",
+        )
+    )
+    target = PurePosixPath(
+        _normalized_container_directory(
+            pgdata,
+            source="PGDATA",
+        )
+    )
+    try:
+        mount.relative_to(target)
+        return True
+    except ValueError:
+        pass
+    try:
+        target.relative_to(mount)
+        return True
+    except ValueError:
+        return False
 
 
 def _docker_inventory(
@@ -3990,6 +4038,10 @@ def discover_media(
     policy: DiscoveryPolicy = DiscoveryPolicy(),
 ) -> Discovery:
     containers, volumes = _docker_inventory(runner)
+    descriptor_by_id = {
+        descriptor.media_id: descriptor
+        for descriptor in registry.descriptors
+    }
     volume_attachments: dict[str, list[dict[str, object]]] = {}
     bind_attachments: dict[str, list[dict[str, object]]] = {}
     pg_mounts: dict[tuple[str, str], tuple[str, list[dict[str, object]]]] = {}
@@ -4028,9 +4080,15 @@ def discover_media(
                 if mount_type == "volume" and isinstance(name, str):
                     candidate_extra_volumes.add(name)
                 elif mount_type == "bind":
-                    candidate_extra_binds.add(
-                        _canonical_bind_source(source)
-                    )
+                    canonical_source = _canonical_bind_source(source)
+                    if (
+                        raw_mount.get("RW") is not False
+                        or _mount_destination_overlaps_pgdata(
+                            destination,
+                            pgdata,
+                        )
+                    ):
+                        candidate_extra_binds.add(canonical_source)
                 continue
             matched_pgdata = True
             if mount_type == "volume" and isinstance(name, str):
@@ -4071,6 +4129,7 @@ def discover_media(
         name = value.get("Name")
         if not isinstance(name, str):
             raise MediaEvidenceError("Docker volume name is invalid")
+        media_id = f"docker-volume:{name}"
         attachments = sorted(
             volume_attachments.get(name, []),
             key=lambda item: (str(item["container_id"]), str(item["destination"])),
@@ -4097,7 +4156,25 @@ def discover_media(
                 raise MediaEvidenceError(
                     f"PostgreSQL volume has an unclassified attachment: {name}"
                 )
-            if (
+            inactive_reviewed_non_pg = (
+                signature["signature"] == "non-postgres"
+                and all(
+                    str(attachment["state"])
+                    not in ACTIVE_CONTAINER_STATES
+                    for attachment in attachments
+                )
+                and (
+                    descriptor_by_id.get(media_id)
+                    is not None
+                    and descriptor_by_id[media_id].classification
+                    == "reviewed-non-pg"
+                    and descriptor_by_id[media_id].audit_method
+                    == "reviewed-content-only"
+                )
+            )
+            if inactive_reviewed_non_pg:
+                subpath = "."
+            elif (
                 signature["signature"] != "postgres"
                 or signature["data_subpath"] != subpath
             ):
@@ -4122,7 +4199,6 @@ def discover_media(
                     "an active PostgreSQL volume lacks an exact PGDATA "
                     f"container mapping: {name}"
                 )
-        media_id = f"docker-volume:{name}"
         discovered[media_id] = DiscoveredMedia(
             media_id=media_id,
             kind="docker_volume",
