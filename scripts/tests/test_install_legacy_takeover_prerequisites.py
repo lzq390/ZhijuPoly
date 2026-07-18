@@ -391,6 +391,52 @@ def bootstrap_source_readiness(root, *, expected_sha):
         )
         self.assertFalse(second["install_manifest"]["installed"])
 
+    def test_readiness_collector_and_mutable_audit_templates_are_attested(
+        self,
+    ) -> None:
+        fixture = InstallerFixture()
+        self.addCleanup(fixture.close)
+        expected = {
+            "deployment-mutable-data-audit.example": (
+                "ops/config/deployment-mutable-data-audit.example"
+            ),
+            "production-readiness-collector.example": (
+                "ops/config/production-readiness-collector.example"
+            ),
+        }
+        for name, relative in expected.items():
+            self.assertEqual(
+                INSTALLER.ATTESTATION_FILES[name],
+                relative,
+            )
+        self.assertIn(
+            "production-readiness-collector",
+            fixture.site_names,
+        )
+
+        plan = fixture.install(apply=False)
+        source_hashes = plan["source_hashes"]
+        self.assertIsInstance(source_hashes, dict)
+        for name, relative in expected.items():
+            self.assertEqual(
+                source_hashes[name],
+                INSTALLER.sha256_bytes((ROOT / relative).read_bytes()),
+            )
+
+        collector = fixture.staging / "production-readiness-collector"
+        collector.write_bytes(
+            (
+                ROOT
+                / "ops/config/production-readiness-collector.example"
+            ).read_bytes()
+        )
+        os.chmod(collector, 0o700)
+        with self.assertRaisesRegex(
+            INSTALLER.PrerequisiteInstallError,
+            "fail-closed template",
+        ):
+            fixture.install()
+
     def test_global_deploy_lock_rejects_without_install_side_effects(self) -> None:
         fixture = InstallerFixture()
         self.addCleanup(fixture.close)

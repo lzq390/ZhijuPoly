@@ -97,7 +97,7 @@ class SiteHelperContractTests(unittest.TestCase):
     def test_readiness_hashes_but_never_executes_all_fixed_helpers(self) -> None:
         self.install_helpers()
         marker = self.runtime / "executed"
-        helper = self.config / "bootstrap-active-jobs-probe"
+        helper = self.config / "production-readiness-collector"
         helper.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
         os.chmod(helper, 0o700)
         report = CONTRACTS.inspect_helper_installation(self.runtime)
@@ -109,6 +109,50 @@ class SiteHelperContractTests(unittest.TestCase):
         os.chmod(helper, 0o770)
         with self.assertRaisesRegex(CONTRACTS.SiteHelperContractError, "unsafe"):
             CONTRACTS.inspect_helper_installation(self.runtime)
+
+    def test_production_readiness_collector_is_fail_closed_and_not_evidence_helper(
+        self,
+    ) -> None:
+        name = "production-readiness-collector"
+        self.assertEqual(
+            CONTRACTS.HELPERS[name],
+            {
+                "authority": "site-specific",
+                "effect": "read-only",
+            },
+        )
+        self.assertNotIn(name, CONTRACTS.EVIDENCE_HELPERS)
+        with self.assertRaisesRegex(
+            CONTRACTS.SiteHelperContractError,
+            "no site-evidence contract",
+        ):
+            CONTRACTS.validate_evidence(name, {})
+
+        template = ROOT / "ops/config/production-readiness-collector.example"
+        body = template.read_text(encoding="utf-8")
+        for required in (
+            "SITE_IMPLEMENTATION_REQUIRED",
+            "--authority <exact-F-SHA> --bridge <exact-B-SHA>",
+            "remote_main_before",
+            "remote_main_after",
+            "mode 0700",
+            "mode-0600",
+            "git fetch/pull/push",
+            "Docker non-GET requests",
+            "Compose",
+            "systemctl/systemd",
+            "SQL writes/DDL",
+            "production_readiness.py",
+        ):
+            self.assertIn(required, body)
+        for forbidden_secret in (
+            "PGPASSWORD=",
+            "DATABASE_URL=",
+            "PRIVATE_KEY=",
+            "TOKEN=",
+        ):
+            self.assertNotIn(forbidden_secret, body)
+        self.assertTrue(body.rstrip().endswith("exit 2"))
 
     def test_external_media_templates_are_complete_and_non_destructive(self) -> None:
         registry = json.loads(

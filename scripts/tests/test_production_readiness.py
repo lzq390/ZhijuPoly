@@ -529,6 +529,87 @@ class ProductionReadinessTests(unittest.TestCase):
             now=dt.datetime(2026, 7, 17, 1, 3, tzinfo=dt.timezone.utc),
         )
 
+    def _live_helper_inputs(
+        self,
+        runtime: Path,
+        *,
+        collector_sha256: str,
+        observation_sha256: str,
+    ) -> tuple[
+        dict[str, object],
+        dict[str, object],
+        mock.Mock,
+        Path,
+    ]:
+        report = {
+            "schema_version": 1,
+            "ready": True,
+            "runtime_root": str(runtime),
+            "executed_helpers": False,
+            "helpers": {
+                name: {
+                    **contract,
+                    "path": str(runtime / "config" / name),
+                    "sha256": (
+                        collector_sha256
+                        if name == "production-readiness-collector"
+                        else digest("e")
+                    ),
+                    "mode": "0700",
+                }
+                for name, contract in sorted(
+                    READINESS.site_helper_contracts.HELPERS.items()
+                )
+            },
+        }
+        control_root = runtime / "control"
+        control_root.mkdir(parents=True)
+        manifest_path = control_root / "control-release.json"
+        entrypoint_path = control_root / "production_readiness.py"
+        manifest_path.write_bytes(b"sealed control manifest\n")
+        entrypoint_path.write_bytes(b"sealed readiness entrypoint\n")
+
+        document = fixture()
+        document["helpers"]["installation_sha256"] = (  # type: ignore[index]
+            READINESS.canonical_json_digest(report)
+        )
+        document["helpers"]["control_manifest_sha256"] = (  # type: ignore[index]
+            READINESS.sha256_file(manifest_path)
+        )
+        document["helpers"]["entrypoint_sha256"] = (  # type: ignore[index]
+            READINESS.sha256_file(entrypoint_path)
+        )
+        document["observation"]["collector_sha256"] = (  # type: ignore[index]
+            observation_sha256
+        )
+        reseal_section(document, "helpers")
+        reseal_section(document, "observation")
+        validated = self.validate(document)
+
+        release_id = "1" * 64
+        selector = mock.Mock()
+        selector.CONTROL_MANIFEST_NAME = manifest_path.name
+        selector.load_active_control.return_value = (
+            {
+                "source_sha": AUTHORITY_SHA,
+                "source_tree": AUTHORITY_TREE,
+                "release_id": release_id,
+            },
+            {
+                "source_sha": AUTHORITY_SHA,
+                "source_tree": AUTHORITY_TREE,
+                "release_id": release_id,
+                "entrypoints": {
+                    "production-readiness": {
+                        "kind": "python",
+                        "file": entrypoint_path.name,
+                    }
+                },
+            },
+            control_root,
+        )
+        return validated, report, selector, control_root
+
     def test_valid_fixture_is_ready_and_output_is_sanitized(self) -> None:
         validated = self.validate(fixture())
         output = READINESS.readiness_output(validated)
@@ -779,6 +860,98 @@ class ProductionReadinessTests(unittest.TestCase):
                 )
             self.assertEqual(result, 0)
             live.assert_called_once()
+
+    def test_live_helper_inventory_binds_exact_collector_bytes(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="readiness-live-helper-"
+        ) as raw:
+            runtime = Path(raw)
+            collector_sha256 = digest("c")
+            validated, report, selector, control_root = (
+                self._live_helper_inputs(
+                    runtime,
+                    collector_sha256=collector_sha256,
+                    observation_sha256=collector_sha256,
+                )
+            )
+            with (
+                mock.patch.object(
+                    READINESS.site_helper_contracts,
+                    "inspect_helper_installation",
+                    return_value=report,
+                ),
+                mock.patch.object(
+                    READINESS,
+                    "_load_python_module",
+                    return_value=selector,
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "NEXPOLY_ACTIVE_CONTROL_ROOT": str(control_root),
+                        "NEXPOLY_ACTIVE_CONTROL_RELEASE_ID": "1" * 64,
+                    },
+                ),
+            ):
+                READINESS._validate_live_helpers(runtime, validated)
+
+    def test_live_collector_tamper_and_digest_mismatch_are_rejected(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="readiness-live-helper-tamper-"
+        ) as raw:
+            root = Path(raw)
+            original_sha256 = digest("c")
+            validated, report, _selector, _control_root = (
+                self._live_helper_inputs(
+                    root / "original",
+                    collector_sha256=original_sha256,
+                    observation_sha256=original_sha256,
+                )
+            )
+            tampered = json.loads(json.dumps(report))
+            tampered["helpers"]["production-readiness-collector"][  # type: ignore[index]
+                "sha256"
+            ] = digest("d")
+            with (
+                mock.patch.object(
+                    READINESS.site_helper_contracts,
+                    "inspect_helper_installation",
+                    return_value=tampered,
+                ),
+                self.assertRaisesRegex(
+                    READINESS.ProductionReadinessError,
+                    "installed site helpers changed",
+                ),
+            ):
+                READINESS._validate_live_helpers(
+                    root / "original",
+                    validated,
+                )
+
+            resealed, tampered_report, _selector, _control_root = (
+                self._live_helper_inputs(
+                    root / "resealed",
+                    collector_sha256=digest("d"),
+                    observation_sha256=original_sha256,
+                )
+            )
+            with (
+                mock.patch.object(
+                    READINESS.site_helper_contracts,
+                    "inspect_helper_installation",
+                    return_value=tampered_report,
+                ),
+                self.assertRaisesRegex(
+                    READINESS.ProductionReadinessError,
+                    "collector differs",
+                ),
+            ):
+                READINESS._validate_live_helpers(
+                    root / "resealed",
+                    resealed,
+                )
 
     def test_live_conflict_scan_is_read_only_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory(prefix="readiness-conflict-") as raw:

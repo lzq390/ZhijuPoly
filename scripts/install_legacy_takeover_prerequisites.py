@@ -94,6 +94,12 @@ ATTESTATION_FILES = {
     "contract-0012-external-database-audit.example": (
         "ops/config/contract-0012-external-database-audit.example"
     ),
+    "deployment-mutable-data-audit.example": (
+        "ops/config/deployment-mutable-data-audit.example"
+    ),
+    "production-readiness-collector.example": (
+        "ops/config/production-readiness-collector.example"
+    ),
     "postgres-media-registry.json.example": (
         "ops/config/postgres-media-registry.json.example"
     ),

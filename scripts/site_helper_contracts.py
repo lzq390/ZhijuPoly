@@ -247,6 +247,10 @@ HELPERS: dict[str, dict[str, str]] = {
         "authority": "site-specific",
         "effect": "read-only",
     },
+    "production-readiness-collector": {
+        "authority": "site-specific",
+        "effect": "read-only",
+    },
 }
 
 EVIDENCE_HELPERS = {

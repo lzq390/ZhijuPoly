@@ -53,6 +53,7 @@ SITE_HELPERS = {
     "bootstrap-legacy-runtime-restore",
     "contract-0012-external-database-audit",
     "deployment-mutable-data-audit",
+    "production-readiness-collector",
 }
 RECOVERY_FILES = {
     "bridge_recovery_launcher.py",
@@ -92,6 +93,8 @@ REQUIRED_SOURCE_HASH_NAMES = (
         "bootstrap-legacy-runtime-resume-unchanged.example",
         "bootstrap-legacy-runtime-restore.example",
         "contract-0012-external-database-audit.example",
+        "deployment-mutable-data-audit.example",
+        "production-readiness-collector.example",
         "postgres-media-registry.json.example",
         "postgres-media-audit-role.sql.example",
         "legacy-takeover-classification.json.example",

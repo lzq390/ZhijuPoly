@@ -1613,10 +1613,23 @@ def _validate_live_helpers(
     except Exception as exc:
         raise ProductionReadinessError("site helper inspection failed") from exc
     if (
-        canonical_json_digest(report)
+        not isinstance(report, dict)
+        or canonical_json_digest(report)
         != section["installation_sha256"]
     ):
         _fail("installed site helpers changed")
+    helpers = report.get("helpers")
+    collector = (
+        helpers.get("production-readiness-collector")
+        if isinstance(helpers, dict)
+        else None
+    )
+    if (
+        not isinstance(collector, dict)
+        or collector.get("sha256")
+        != validated["sections"]["observation"]["collector_sha256"]
+    ):
+        _fail("installed readiness collector differs from observation")
     try:
         selector = _load_python_module(
             "nexpoly_readiness_control_runtime_selector",

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+if (( "$#" != 4 )) \
+  || [[ "$1" != "--authority" ]] \
+  || [[ "$3" != "--bridge" ]]; then
+  printf '%s\n' \
+    'usage: production-readiness-collector --authority <exact-F-SHA> --bridge <exact-B-SHA>' \
+    >&2
+  exit 2
+fi
+
+readonly authority_sha="$2"
+readonly bridge_sha="$4"
+readonly full_sha_pattern='^[0-9a-f]{40}$'
+if ! [[ "$authority_sha" =~ $full_sha_pattern ]] \
+  || ! [[ "$bridge_sha" =~ $full_sha_pattern ]] \
+  || [[ "$authority_sha" == "$bridge_sha" ]]; then
+  printf '%s\n' 'exact, distinct F and B commit IDs are required' >&2
+  exit 2
+fi
+
+# SITE_IMPLEMENTATION_REQUIRED
+#
+# Install the reviewed site implementation as:
+#
+#   /data/lzq/gith/nexpoly-runtime/config/production-readiness-collector
+#
+# The config directory and fixed audit output directory must be deploy-user
+# owned, non-symlink directories with mode 0700. The implementation must be a
+# deploy-user-owned, non-symlink regular file with mode 0700. Its sole write is
+# an owner-only mode-0600 temporary evidence file under:
+#
+#   /data/lzq/gith/nexpoly-runtime/audit/production-readiness
+#
+# It must fsync that file and directory, atomically rename it to evidence.json,
+# fsync the directory again, and create no cache, log, marker, clone, ref, lock,
+# or temporary file anywhere else. Audit publication is not production state.
+#
+# The replacement must keep this exact argument surface and bind every
+# observation to these full F/B commits and trees. It must sample the fixed SSH
+# origin's refs/heads/main before collection and after every other observation;
+# remote_main_before and remote_main_after must both equal exact F. The clean,
+# standalone source must remain at exact F, exact B must remain the policy
+# target and a strict ancestor, and neither sample may update a ref or object.
+#
+# The read allowlist is closed: owner-safe fixed files opened without symlink
+# traversal; local Git object/status/fsck inspection; two read-only ls-remote
+# CAS samples; read-only CI/OCI metadata requests; read-only capacity/process
+# inspection; Docker Engine GET-only inspection through a reviewed endpoint
+# allowlist; and PostgreSQL SELECT/COPY in one dedicated-role transaction using
+# REPEATABLE READ, READ ONLY, DEFERRABLE with transaction_read_only verified.
+# Credentials may only come from pre-provisioned owner-only mode-0600 files.
+# Never place a password, DSN, token, private key, or host key in this template,
+# argv, environment, stdout/stderr, or evidence.
+#
+# The implementation must reject unknown inputs and is forbidden from running
+# git fetch/pull/push, any checkout/ref/object write, docker or podman CLI,
+# Docker non-GET requests, Compose, systemctl/systemd commands, image pull/build,
+# container exec/create/start/stop/restart/remove, SQL writes/DDL, or any write
+# to the production checkout, runtime state/config, live asset pointer, units,
+# containers, volumes, images, database, or another audit tree.
+#
+# The collector does not define a site-helper evidence schema. It must emit the
+# complete closed evidence envelope consumed by production_readiness.py, whose
+# strict validator is the sole authority for evidence fields and cross-binding.
+# Installing or executing this fail-closed reference unchanged is forbidden.
+printf '%s\n' 'site-specific production-readiness collector is not implemented' >&2
+exit 2

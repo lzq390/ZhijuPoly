@@ -20,6 +20,61 @@ expires after 15 minutes. The command reads each file through `O_NOFOLLOW`,
 checks the inode before and after the read, and rejects unknown or missing JSON
 fields.
 
+## Collector provisioning and capture
+
+The repository ships
+`ops/config/production-readiness-collector.example` as a fail-closed interface,
+not as a usable collector. A site review must replace its marked body in the
+private bootstrap-input staging directory. The prerequisite installer rejects
+the unchanged template, installs only the reviewed implementation as
+`runtime/config/production-readiness-collector` mode `0700`, and records both
+the collector template and the mutable-data audit template in the
+source-pinned takeover install manifest. The collector is a site-specific
+read-only helper, but it is deliberately not a `site_helper_contracts`
+evidence helper: only `production_readiness.py` validates its complete closed
+evidence envelope.
+
+The private implementation must preserve the exact invocation surface:
+
+```bash
+/data/lzq/gith/nexpoly-runtime/config/production-readiness-collector \
+  --authority <exact-F-SHA> \
+  --bridge <exact-B-SHA>
+```
+
+Both arguments are distinct full 40-character commit IDs. The collector first
+samples the fixed SSH origin's `refs/heads/main`, then captures every other
+section, and finally samples the same ref again. Both CAS samples must equal
+exact `F`; the standalone clean source must still be exact `F`, while exact
+`B` must remain the policy target and a strict ancestor. These are read-only
+`ls-remote` observations: collection must not fetch, pull, update a ref, create
+an object, switch a checkout, or mutate the source.
+
+The collector has a closed read allowlist: owner-safe fixed files; local Git
+object/status/fsck inspection; the two remote-main CAS samples; read-only
+CI/OCI metadata requests; read-only capacity and process inspection; reviewed
+Docker Engine GET-only endpoints; and PostgreSQL `SELECT`/`COPY` through the
+dedicated audit role in one `REPEATABLE READ, READ ONLY, DEFERRABLE`
+transaction after verifying `transaction_read_only`. Credentials come only
+from pre-provisioned, owner-only mode-`0600` files and never appear in argv,
+environment, output, or evidence.
+
+It must not invoke Git fetch/pull/push, Docker or Podman CLI, Compose,
+systemctl/systemd, a non-GET Docker endpoint, an image or container mutation,
+or any database write/DDL. It must not write the production checkout, runtime
+state/config, live asset pointer, unit, container, volume, image, database, or
+another audit tree. Its only write is an owner-only mode-`0600` temporary file
+inside the fixed owner-only mode-`0700`
+`audit/production-readiness` directory, followed by file/directory `fsync` and
+an atomic rename to `evidence.json`. The evidence publication itself is audit
+output, not production state.
+
+After collection, invoke the admission command below with the same exact F/B.
+Do not hand-edit or partially merge section files: stale, unknown, missing, or
+cross-authority fields fail the whole envelope. Live validation rehashes the
+installed collector, preserves the aggregate helper-installation seal, and
+requires that exact byte digest to equal `observation.collector_sha256`.
+
 ## Invocation
 
 Use full 40-character commit IDs, never branches, tags, short SHAs, or mutable

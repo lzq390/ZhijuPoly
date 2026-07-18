@@ -37,6 +37,15 @@ class LegacyTakeoverEvidenceTests(unittest.TestCase):
             AUTHORITY_TREE,
         )
         self.assertEqual(manifest["authority_sha"], AUTHORITY_SHA)
+        self.assertIn(
+            "production-readiness-collector",
+            manifest["installed"],
+        )
+        for name in (
+            "deployment-mutable-data-audit.example",
+            "production-readiness-collector.example",
+        ):
+            self.assertIn(name, manifest["source_hashes"])
 
         helper = fixture.runtime / "config/bootstrap-status"
         helper.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
