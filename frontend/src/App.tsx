@@ -22,6 +22,7 @@ import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { LabDataPage, type LabDataView } from "./components/LabDataPage";
 import { MdSimulationDemoPage } from "./components/MdSimulationDemoPage";
 import { MonomerMdSimulationPage } from "./components/MonomerMdSimulationPage";
+import { MonomerDftPage } from "./components/MonomerDftPage";
 import { MonomerPolymerizationPage } from "./components/MonomerPolymerizationPage";
 import { PolytaoGenerationPage } from "./components/PolytaoGenerationPage";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
@@ -31,6 +32,7 @@ import { useKetcher } from "./hooks/useKetcher";
 import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
 import { standardizeSmiles } from "./services/api";
+import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
 import {
   type AssistantModuleContext,
   type KnowledgeNavigationRequest,
@@ -44,6 +46,7 @@ type ActiveModule =
   | "explorer"
   | "mdSimulationDemo"
   | "monomerMdSimulation"
+  | "monomerDft"
   | "monomerPolymerization"
   | "reverseDesign"
   | "conditionalGeneration"
@@ -100,6 +103,10 @@ function routeFromPath(pathname: string): AppRoute {
 
   if (path === "/monomer-md-simulation") {
     return { module: "monomerMdSimulation", datasetKey: null };
+  }
+
+  if (path === "/monomer-dft") {
+    return { module: "monomerDft", datasetKey: null };
   }
 
   if (path === "/monomer-polymerization") {
@@ -169,6 +176,10 @@ function pathFromRoute(route: AppRoute) {
 
   if (route.module === "monomerMdSimulation") {
     return "/monomer-md-simulation";
+  }
+
+  if (route.module === "monomerDft") {
+    return "/monomer-dft";
   }
 
   if (route.module === "monomerPolymerization") {
@@ -256,6 +267,12 @@ export default function App() {
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
   const [labDataView, setLabDataView] = useState<LabDataView>(() => getInitialRoute().labDataView ?? "collect");
+  const [monomerDftJobId, setMonomerDftJobId] = useState<string | null>(() => {
+    if (typeof window === "undefined" || getInitialRoute().module !== "monomerDft") {
+      return null;
+    }
+    return getMonomerDftJobIdFromSearch(window.location.search);
+  });
   const [knowledgeInitialQuery, setKnowledgeInitialQuery] = useState(() => {
     if (typeof window === "undefined") {
       return "";
@@ -376,6 +393,9 @@ export default function App() {
         setKnowledgeInitialQuery(new URLSearchParams(window.location.search).get("q") ?? "");
         setKnowledgeInitialTerms(getKnowledgeTermsFromSearch(window.location.search));
       }
+      if (route.module === "monomerDft") {
+        setMonomerDftJobId(getMonomerDftJobIdFromSearch(window.location.search));
+      }
       applyRoute(route);
     }
 
@@ -397,6 +417,19 @@ export default function App() {
 
   function openMonomerMdSimulation() {
     navigate({ module: "monomerMdSimulation", datasetKey: null });
+  }
+
+  function openMonomerDft(jobId: string | null = null) {
+    const route = { module: "monomerDft", datasetKey: null } satisfies AppRoute;
+    const path = getMonomerDftPath(jobId);
+    if (typeof window !== "undefined") {
+      if (`${normalizePath(window.location.pathname)}${window.location.search}` !== path) {
+        window.history.pushState(route, "", path);
+      }
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+    setMonomerDftJobId(jobId);
+    applyRoute(route);
   }
 
   function openMonomerPolymerization() {
@@ -491,6 +524,9 @@ export default function App() {
         break;
       case "monomerMdSimulation":
         openMonomerMdSimulation();
+        break;
+      case "monomerDft":
+        openMonomerDft();
         break;
       case "monomerPolymerization":
         openMonomerPolymerization();
@@ -589,6 +625,15 @@ export default function App() {
           icon: <Microscope className="h-4 w-4" />,
           isActive: activeModule === "monomerMdSimulation",
           onClick: openMonomerMdSimulation
+        },
+        {
+          id: "monomerDft",
+          label: "单体 DFT（AIMNet2）",
+          description: "用独立 GPU Worker 计算单点性质、Hessian、频率和几何优化。",
+          route: "/monomer-dft",
+          icon: <FlaskConical className="h-4 w-4" />,
+          isActive: activeModule === "monomerDft",
+          onClick: () => openMonomerDft()
         }
       ]
     },
@@ -662,7 +707,8 @@ export default function App() {
     activeModule === "experimentWorkflowDemo" ||
     activeModule === "highThroughputWorkflowDemo" ||
     activeModule === "mdSimulationDemo" ||
-    activeModule === "monomerMdSimulation";
+    activeModule === "monomerMdSimulation" ||
+    activeModule === "monomerDft";
   const shouldKeepStructureWorkbenchMounted = hasMountedStructureWorkbench && activeModule !== "explorer" && activeModule !== "databaseQuery";
 
   return (
@@ -741,6 +787,16 @@ export default function App() {
 
       {activeModule === "monomerMdSimulation" ? (
         <MonomerMdSimulationPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+      ) : null}
+
+      {activeModule === "monomerDft" ? (
+        <MonomerDftPage
+          structure={structureWorkspace}
+          initialJobId={monomerDftJobId}
+          onJobIdChange={openMonomerDft}
+          onEditStructure={openStructureWorkbench}
+          onBackHome={() => navigate({ module: "home", datasetKey: null })}
+        />
       ) : null}
 
       {activeModule === "conditionalGeneration" ? (

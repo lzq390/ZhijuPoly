@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse, Response
 CROSS_SITE_BLOCK_DETAIL = "cross-site browser requests are not allowed"
 PROTECTED_PATH_PREFIXES = ("/api/",)
 TRUSTED_FETCH_SITES = {"none", "same-origin", "same-site"}
+MONOMER_DFT_API_PREFIX = "/api/v1/monomer-dft"
 
 
 def _origin_from_url(value: str | None) -> str | None:
@@ -61,6 +62,21 @@ def _is_protected_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in PROTECTED_PATH_PREFIXES)
 
 
+def _cross_site_blocked_response(request: Request) -> JSONResponse:
+    path = request.url.path
+    if path == MONOMER_DFT_API_PREFIX or path.startswith(f"{MONOMER_DFT_API_PREFIX}/"):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "code": "cross_site_request_blocked",
+                "message": CROSS_SITE_BLOCK_DETAIL,
+                "retryable": False,
+                "details": {},
+            },
+        )
+    return JSONResponse(status_code=403, content={"detail": CROSS_SITE_BLOCK_DETAIL})
+
+
 class BrowserCrossSiteProtectionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if not _is_protected_path(request.url.path):
@@ -68,16 +84,16 @@ class BrowserCrossSiteProtectionMiddleware(BaseHTTPMiddleware):
 
         fetch_site = request.headers.get("sec-fetch-site", "").strip().lower()
         if fetch_site == "cross-site":
-            return JSONResponse(status_code=403, content={"detail": CROSS_SITE_BLOCK_DETAIL})
+            return _cross_site_blocked_response(request)
         if fetch_site in TRUSTED_FETCH_SITES:
             return await call_next(request)
 
         origin = request.headers.get("origin")
         if origin and not _is_trusted_origin(origin, request):
-            return JSONResponse(status_code=403, content={"detail": CROSS_SITE_BLOCK_DETAIL})
+            return _cross_site_blocked_response(request)
 
         referer = request.headers.get("referer")
         if referer and not _is_trusted_origin(referer, request):
-            return JSONResponse(status_code=403, content={"detail": CROSS_SITE_BLOCK_DETAIL})
+            return _cross_site_blocked_response(request)
 
         return await call_next(request)

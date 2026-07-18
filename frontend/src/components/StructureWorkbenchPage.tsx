@@ -348,6 +348,13 @@ export function StructureWorkbenchPage({ structure, onBackHome, onOpenModule }: 
       onClick: () => void openModuleWithSyncedStructure("explorer")
     },
     {
+      id: "monomerDft",
+      label: "单体 DFT（AIMNet2）",
+      detail: "将当前共享结构带入单点性质或局部几何优化。",
+      icon: <Orbit className="h-4 w-4" />,
+      onClick: () => void openModuleWithSyncedStructure("monomerDft")
+    },
+    {
       id: "monomerPolymerization",
       label: "单体正向聚合",
       detail: "用当前结构作为单体 A，运行一次 SMiPoly 规则聚合。",
