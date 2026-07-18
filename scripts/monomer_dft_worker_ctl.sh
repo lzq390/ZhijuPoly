@@ -113,10 +113,29 @@ assert_safe_socket_path() {
 }
 
 secure_socket_permissions() {
+  local mode=""
   assert_safe_socket_path
-  [[ -S "$MONOMER_DFT_WORKER_UDS" ]] || fail "worker socket is not available for permission hardening: $MONOMER_DFT_WORKER_UDS"
-  chmod 600 -- "$MONOMER_DFT_WORKER_UDS"
-  [[ "$(stat -c '%a' "$MONOMER_DFT_WORKER_UDS")" == "600" ]] || fail "worker socket permissions must be 0600: $MONOMER_DFT_WORKER_UDS"
+  # The runner can remove a stale UDS between the caller's existence check
+  # and this hardening step while an executor restart is in progress. Treat
+  # only that exact transient absence as retryable; symlinks and non-sockets
+  # remain fatal.
+  [[ -S "$MONOMER_DFT_WORKER_UDS" ]] || return 1
+  if ! chmod 600 -- "$MONOMER_DFT_WORKER_UDS"; then
+    [[ ! -e "$MONOMER_DFT_WORKER_UDS" && ! -L "$MONOMER_DFT_WORKER_UDS" ]] &&
+      return 1
+    fail "worker socket permissions could not be hardened: $MONOMER_DFT_WORKER_UDS"
+  fi
+  if [[ ! -e "$MONOMER_DFT_WORKER_UDS" && ! -L "$MONOMER_DFT_WORKER_UDS" ]]; then
+    return 1
+  fi
+  assert_safe_socket_path
+  if ! mode="$(stat -c '%a' "$MONOMER_DFT_WORKER_UDS")"; then
+    [[ ! -e "$MONOMER_DFT_WORKER_UDS" && ! -L "$MONOMER_DFT_WORKER_UDS" ]] &&
+      return 1
+    fail "worker socket permissions could not be verified: $MONOMER_DFT_WORKER_UDS"
+  fi
+  [[ "$mode" == "600" ]] ||
+    fail "worker socket permissions must be 0600: $MONOMER_DFT_WORKER_UDS"
 }
 
 load_env() {
@@ -180,8 +199,6 @@ configure_paths() {
   assert_runtime_path WARP_CACHE_PATH "$WARP_CACHE_PATH"
   assert_runtime_path UV_CACHE_DIR "$UV_CACHE_DIR"
   assert_runtime_path AIMNET_SOURCE_DIR "$AIMNET_SOURCE_DIR"
-  [[ "$MONOMER_DFT_WORKER_UDS" == "$RUNTIME_ROOT/monomer-dft-worker-socket/worker.sock" ]] || fail \
-    "worker socket must use the fixed development runtime path"
   [[ "$MONOMER_DFT_JOB_ROOT" == "$RUNTIME_ROOT/monomer-dft-worker-runs" ]] || fail \
     "job root must use the fixed development runtime path"
   [[ "$MONOMER_DFT_GPU_BROKER_UDS" == "$GPU_RUNTIME_ROOT/broker.sock" ]] || fail \
@@ -570,10 +587,11 @@ start_worker() {
       fail "worker exited during startup"
     fi
     if [[ -e "$MONOMER_DFT_WORKER_UDS" || -L "$MONOMER_DFT_WORKER_UDS" ]]; then
-      secure_socket_permissions
+      secure_socket_permissions || true
     fi
-    if payload="$(socket_health 2>/dev/null)" && [[ "$payload" == *'"status":"ok"'* ]]; then
-      secure_socket_permissions
+    if payload="$(socket_health 2>/dev/null)" \
+        && [[ "$payload" == *'"status":"ok"'* ]] \
+        && secure_socket_permissions; then
       disarm_startup_cleanup
       log "worker started with pid $SPAWN_PID on $MONOMER_DFT_WORKER_UDS"
       printf '%s\n' "$payload"

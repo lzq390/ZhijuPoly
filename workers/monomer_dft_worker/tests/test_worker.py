@@ -57,7 +57,7 @@ import pathlib
 import socket
 
 path = os.environ["MONOMER_DFT_WORKER_UDS"]
-pathlib.Path(os.environ["MONOMER_DFT_TEST_PID_FILE"]).write_text(str(os.getpid()))
+pathlib.Path(__SPAWNED_PID__).write_text(str(os.getpid()))
 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 server.bind(path)
 os.chmod(path, 0o777)
@@ -82,10 +82,14 @@ import os
 import pathlib
 import signal
 
-pathlib.Path(os.environ["MONOMER_DFT_TEST_PID_FILE"]).write_text(str(os.getpid()))
+pathlib.Path(__SPAWNED_PID__).write_text(str(os.getpid()))
 while True:
     signal.pause()
 """
+    runner_content = runner_content.replace(
+        "__SPAWNED_PID__",
+        repr(str(spawned_pid)),
+    )
     _write_executable(runner, runner_content)
     _write_executable(preflight, "#!/usr/bin/env python3\n")
     _write_executable(python, '#!/usr/bin/env bash\nexec /usr/bin/python3 "$@"\n')
@@ -101,7 +105,6 @@ while True:
                 "NEXPOLY_DFT_GPU_DEVICE=1",
                 "PYTHONPATH=",
                 f"MONOMER_DFT_START_TIMEOUT_SECONDS={timeout}",
-                f"MONOMER_DFT_TEST_PID_FILE={spawned_pid}",
                 "APP_POSTGRES_DSN=postgresql://must-not-reach-worker",
                 "NEXPOLY_DFT_POSTGRES_PASSWORD=must-not-reach-worker",
                 "",
