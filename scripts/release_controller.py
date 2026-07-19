@@ -42,6 +42,9 @@ CONTROLLER_DIRECTORY = Path(__file__).resolve().parent
 if str(CONTROLLER_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(CONTROLLER_DIRECTORY))
 
+from asset_release_contract import (  # noqa: E402 - load the verified sibling helper
+    BUILD_EVIDENCE as ASSET_BUILD_EVIDENCE,
+)
 from monomer_worker_env import (  # noqa: E402 - load the verified sibling helper
     SAFE_SYSTEM_PATH,
     WorkerEnvError,
@@ -58,7 +61,7 @@ PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
 ASSET_RELEASES_ROOT = Path("/data/lzq/nexpoly-assets/releases")
 MAIN_REPOSITORY_URL = "https://github.com/lzq390/ZhijuPoly.git"
 SCHEMA_V2_ASSET_MANIFEST_DIGEST = (
-    "sha256:e5088b7954f7ee8f6cc4e45af36761fdc44d2fc374643441fe07283475de06c8"
+    "sha256:0588cc6a9acd50efbcba49850bbea79ab44fa1752fa530b8537ccb21753ebc9b"
 )
 SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST = (
     "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"
@@ -2762,24 +2765,8 @@ def validate_schema_v2_asset_provenance(
         raise ReleaseError("pinned schema-v2 asset manifest has invalid builder identity")
     evidence = build_provenance.get("evidence")
     expected_evidence = {
+        **ASSET_BUILD_EVIDENCE,
         "predecessor_manifest_digest": document.get("predecessor_asset_digest"),
-        "predecessor_all_trees_rehashed": [
-            "model",
-            "database",
-            "backend-data",
-            "byteff2",
-        ],
-        "unchanged_trees_byte_identical": [
-            "model",
-            "database",
-            "backend-data",
-        ],
-        "asset_tree_digest_algorithm": "canonical-manifest-inventory-v1",
-        "byteff2_source_verification": "clean-recursive-commit-and-tree",
-        "staging_directory_mode": "0700",
-        "file_and_directory_fsync": True,
-        "publication": "atomic-rename",
-        "existing_target": "full-content-revalidation",
     }
     if evidence != expected_evidence:
         raise ReleaseError("pinned schema-v2 asset manifest has invalid build evidence")
