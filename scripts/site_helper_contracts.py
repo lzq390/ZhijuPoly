@@ -3033,9 +3033,11 @@ def _external_server_startup_v3(
         or value.get("local_preload_libraries") != ""
         or value.get("dynamic_library_path") != "$libdir"
         or value.get("archive_mode") != "off"
-        or value.get("archive_command") != ""
+        or value.get("archive_command")
+        != ("" if online else "(disabled)")
         or value.get("archive_cleanup_command") != ""
-        or value.get("restore_command") != ""
+        or value.get("restore_command")
+        != ("" if online else "/bin/false")
         or value.get("recovery_end_command") != ""
         or value.get("ssl_passphrase_command") != ""
         or value.get("ssl_passphrase_command_supports_reload") != "off"

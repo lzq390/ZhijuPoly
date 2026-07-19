@@ -56,6 +56,68 @@ POSTGRES_AUDIT_IMAGES = {
         "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
     ),
 }
+# Docker's containerd image store reports the pinned OCI index as the local
+# image ID, while the classic store reports the selected platform config.
+# Keep the linux/amd64 manifest as provenance, but never accept it as a local
+# runtime ID.
+POSTGRES_AUDIT_LINUX_AMD64_CHAINS = {
+    14: {
+        "index": (
+            "sha256:"
+            "f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579"
+        ),
+        "manifest": (
+            "sha256:"
+            "e37b04ced3cdf96db1f814275b1bbdda9c51ee75c9753560481fce661c19923a"
+        ),
+        "config": (
+            "sha256:"
+            "1a6c2409ab71f4d054d676ba09d9b74b5d843d805bd5a0cf08314d27ca659d37"
+        ),
+    },
+    15: {
+        "index": (
+            "sha256:"
+            "3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f"
+        ),
+        "manifest": (
+            "sha256:"
+            "cae15a3b718f23497a60b7cafdcf205216d7949680972da0584db00fb68bf3e6"
+        ),
+        "config": (
+            "sha256:"
+            "9b4593c6de443299b46098151fc1ec154c882339b77a56334c7ce612c8a7be6a"
+        ),
+    },
+    16: {
+        "index": (
+            "sha256:"
+            "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+        ),
+        "manifest": (
+            "sha256:"
+            "7a396fd264a2067788b6551122b50f162bf6136312c7fc9d74381cb92c648382"
+        ),
+        "config": (
+            "sha256:"
+            "de3a4eab8fdfa507ea92aac488b916b08089e515db49b055fe71dfa271ba3a28"
+        ),
+    },
+    18: {
+        "index": (
+            "sha256:"
+            "9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+        ),
+        "manifest": (
+            "sha256:"
+            "b6a16ed0eb96e2c362811f7eeb951eac8b459e7b40be4149ea5444aa7c65569b"
+        ),
+        "config": (
+            "sha256:"
+            "bd1890816ae0b8ad4644f05728570d4be774e1f1490d7232f5084b52ea335183"
+        ),
+    },
+}
 # Online SQL is executed by the existing server process, so pinning only the
 # external client is insufficient.  This source-controlled allowlist binds
 # every currently approved live server to both its local content ID and OCI
@@ -63,12 +125,11 @@ POSTGRES_AUDIT_IMAGES = {
 # added in F before it can participate in migration evidence.
 TRUSTED_POSTGRES_SERVER_IMAGES = {
     14: {
-        (
-            "sha256:"
-            "f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579"
-        ): (
-            "postgres@sha256:"
-            "f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579"
+        POSTGRES_AUDIT_LINUX_AMD64_CHAINS[14]["index"]: (
+            "postgres@" + POSTGRES_AUDIT_LINUX_AMD64_CHAINS[14]["index"]
+        ),
+        POSTGRES_AUDIT_LINUX_AMD64_CHAINS[14]["config"]: (
+            "postgres@" + POSTGRES_AUDIT_LINUX_AMD64_CHAINS[14]["index"]
         ),
         (
             "sha256:"
@@ -79,12 +140,11 @@ TRUSTED_POSTGRES_SERVER_IMAGES = {
         ),
     },
     15: {
-        (
-            "sha256:"
-            "3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f"
-        ): (
-            "postgres@sha256:"
-            "3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f"
+        POSTGRES_AUDIT_LINUX_AMD64_CHAINS[15]["index"]: (
+            "postgres@" + POSTGRES_AUDIT_LINUX_AMD64_CHAINS[15]["index"]
+        ),
+        POSTGRES_AUDIT_LINUX_AMD64_CHAINS[15]["config"]: (
+            "postgres@" + POSTGRES_AUDIT_LINUX_AMD64_CHAINS[15]["index"]
         ),
     },
     16: {
@@ -95,21 +155,19 @@ TRUSTED_POSTGRES_SERVER_IMAGES = {
             "postgres@sha256:"
             "16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229"
         ),
-        (
-            "sha256:"
-            "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
-        ): (
-            "postgres@sha256:"
-            "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+        POSTGRES_AUDIT_LINUX_AMD64_CHAINS[16]["index"]: (
+            "postgres@" + POSTGRES_AUDIT_LINUX_AMD64_CHAINS[16]["index"]
+        ),
+        POSTGRES_AUDIT_LINUX_AMD64_CHAINS[16]["config"]: (
+            "postgres@" + POSTGRES_AUDIT_LINUX_AMD64_CHAINS[16]["index"]
         ),
     },
     18: {
-        (
-            "sha256:"
-            "9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
-        ): (
-            "postgres@sha256:"
-            "9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+        POSTGRES_AUDIT_LINUX_AMD64_CHAINS[18]["index"]: (
+            "postgres@" + POSTGRES_AUDIT_LINUX_AMD64_CHAINS[18]["index"]
+        ),
+        POSTGRES_AUDIT_LINUX_AMD64_CHAINS[18]["config"]: (
+            "postgres@" + POSTGRES_AUDIT_LINUX_AMD64_CHAINS[18]["index"]
         ),
     },
 }
@@ -14993,7 +15051,7 @@ GENERATION_SCHEMA_PUBLICATIONS_SQL = r"""
 
 EVENT_TRIGGERS_SESSION_ASSERT_SQL = r"""
 SELECT (
-  current_setting('event_triggers') = 'false'
+  current_setting('event_triggers')::boolean IS FALSE
 ) AS nexpoly_event_triggers_session_safe \gset
 \if :nexpoly_event_triggers_session_safe
 \else
@@ -15635,6 +15693,16 @@ def _parse_database_audit(
             "jit_provider",
         )
     }
+    expected_command_execution_settings = {
+        "archive_mode": "off",
+        "archive_command": "(disabled)" if isolated else "",
+        "archive_cleanup_command": "",
+        "restore_command": "/bin/false" if isolated else "",
+        "recovery_end_command": "",
+        "ssl_passphrase_command": "",
+        "ssl_passphrase_command_supports_reload": "off",
+        "jit_provider": "llvmjit",
+    }
     if (
         database.get("jit") is not False
         or startup_settings.get("shared_preload_libraries") != ""
@@ -15642,16 +15710,7 @@ def _parse_database_audit(
         or startup_settings.get("local_preload_libraries") != ""
         or startup_settings.get("dynamic_library_path") != "$libdir"
         or command_execution_settings
-        != {
-            "archive_mode": "off",
-            "archive_command": "",
-            "archive_cleanup_command": "",
-            "restore_command": "",
-            "recovery_end_command": "",
-            "ssl_passphrase_command": "",
-            "ssl_passphrase_command_supports_reload": "off",
-            "jit_provider": "llvmjit",
-        }
+        != expected_command_execution_settings
         or not isinstance(data_directory, str)
         or not PurePosixPath(data_directory).is_absolute()
         or any(
@@ -16348,6 +16407,29 @@ def _database_inventory_record(
     }
 
 
+def _require_database_audit_execution_mode(
+    descriptor: MediaDescriptor,
+    *,
+    isolated: bool,
+) -> None:
+    expected_by_method = {
+        "live-read-only": False,
+        "live-read-only-adjacent": False,
+        "isolated-volume-copy-read-only": True,
+        "isolated-bind-copy-read-only": True,
+        "isolated-backup-restore-read-only": True,
+    }
+    expected = expected_by_method.get(descriptor.audit_method)
+    if expected is None:
+        raise MediaEvidenceError(
+            "database audit method is not executable"
+        )
+    if isolated is not expected:
+        raise MediaEvidenceError(
+            "database audit execution mode differs from descriptor authority"
+        )
+
+
 def _audit_container_medium(
     runner: CommandRunner,
     container_id: str,
@@ -16360,6 +16442,10 @@ def _audit_container_medium(
     trusted_image_id: str | None = None,
     expected_role_contracts: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
+    _require_database_audit_execution_mode(
+        descriptor,
+        isolated=isolated,
+    )
     # Direct unit-level orchestration tests construct descriptors without the
     # v3 authority. Registry-loaded production calls can never take this
     # compatibility branch because load_registry requires a full inventory.
@@ -17417,10 +17503,14 @@ def _audit_container_database(
     descriptor: MediaDescriptor,
     *,
     database_authority: dict[str, object] | None = None,
-    isolated: bool = True,
+    isolated: bool,
     trusted_image_id: str | None = None,
     expected_role_contract_sha256: str | None = None,
 ) -> dict[str, object]:
+    _require_database_audit_execution_mode(
+        descriptor,
+        isolated=isolated,
+    )
     trusted_startup: dict[str, object] | None = (
         {} if not isolated else None
     )
@@ -17428,18 +17518,21 @@ def _audit_container_database(
         descriptor.audit_method == "live-read-only-adjacent"
         and descriptor.classification == "adjacent-postgres"
     )
+    if (
+        not isolated
+        and (
+            not isinstance(trusted_image_id, str)
+            or DIGEST_RE.fullmatch(trusted_image_id) is None
+        )
+    ):
+        raise MediaEvidenceError(
+            "online database audit lacks its exact client image ID"
+        )
     if database_authority is None:
         database_name = descriptor.database
         audit_role = descriptor.database_user
         migration_scope = "nexpoly-ledger"
     else:
-        if (
-            not isinstance(trusted_image_id, str)
-            or DIGEST_RE.fullmatch(trusted_image_id) is None
-        ):
-            raise MediaEvidenceError(
-                "online database audit lacks its exact client image ID"
-            )
         database_name = str(database_authority["name"])
         audit_role = database_authority.get("audit_role")
         migration_scope = str(database_authority["migration_scope"])
@@ -17937,11 +18030,10 @@ def _isolated_backup_audit(
                 "--env",
                 f"POSTGRES_USER={descriptor.database_user}",
                 registry.audit_image,
-                "postgres",
-                "-c",
-                "listen_addresses=",
-                "-c",
-                "unix_socket_directories=/var/run/postgresql",
+                *_isolated_postgres_arguments(
+                    postgres_major=POSTGRES_MAJOR,
+                    pgdata="/var/lib/postgresql/data",
+                ),
             ],
             mounts=(
                 {

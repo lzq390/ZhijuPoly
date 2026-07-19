@@ -332,6 +332,8 @@ def role_security_fields(
 
 def database_startup_fields(
     data_directory: str,
+    *,
+    isolated: bool = False,
 ) -> dict[str, object]:
     return {
         "jit": False,
@@ -340,9 +342,9 @@ def database_startup_fields(
         "local_preload_libraries": "",
         "dynamic_library_path": "$libdir",
         "archive_mode": "off",
-        "archive_command": "",
+        "archive_command": "(disabled)" if isolated else "",
         "archive_cleanup_command": "",
-        "restore_command": "",
+        "restore_command": "/bin/false" if isolated else "",
         "recovery_end_command": "",
         "ssl_passphrase_command": "",
         "ssl_passphrase_command_supports_reload": "off",
@@ -363,7 +365,10 @@ def audited_startup_fields(
     *,
     online: bool = False,
 ) -> dict[str, object]:
-    raw = database_startup_fields(data_directory)
+    raw = database_startup_fields(
+        data_directory,
+        isolated=not online,
+    )
     return {
         "jit": raw["jit"],
         "shared_preload_libraries": raw["shared_preload_libraries"],
@@ -424,6 +429,12 @@ TRUSTED_SERVER_IMAGE_ID = (
     "sha256:"
     "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
 )
+TRUSTED_SERVER_CLASSIC_IMAGE_ID = (
+    MEDIA.POSTGRES_AUDIT_LINUX_AMD64_CHAINS[16]["config"]
+)
+TRUSTED_SERVER_PLATFORM_MANIFEST = (
+    MEDIA.POSTGRES_AUDIT_LINUX_AMD64_CHAINS[16]["manifest"]
+)
 TRUSTED_SERVER_REPO_DIGEST = MEDIA.TRUSTED_POSTGRES_SERVER_IMAGES[16][
     TRUSTED_SERVER_IMAGE_ID
 ]
@@ -433,6 +444,7 @@ def trusted_server_epoch_fixture(
     *,
     pgdata: str = "/var/lib/postgresql/data",
     mount_destination: str = "/var/lib/postgresql/data",
+    local_image_id: str = TRUSTED_SERVER_IMAGE_ID,
 ) -> tuple[
     dict[str, object],
     dict[str, object],
@@ -464,7 +476,7 @@ def trusted_server_epoch_fixture(
     container = {
         "Id": CONTAINER_A,
         "Name": "/trusted-postgres",
-        "Image": TRUSTED_SERVER_IMAGE_ID,
+        "Image": local_image_id,
         "Path": "docker-entrypoint.sh",
         "Args": ["postgres"],
         "RestartCount": 0,
@@ -518,7 +530,7 @@ def trusted_server_epoch_fixture(
         },
     }
     image = {
-        "Id": TRUSTED_SERVER_IMAGE_ID,
+        "Id": local_image_id,
         "RepoDigests": [TRUSTED_SERVER_REPO_DIGEST],
         "Config": {
             "Entrypoint": ["docker-entrypoint.sh"],
@@ -663,25 +675,97 @@ class TrustedOnlineServerEpochTests(unittest.TestCase):
     def test_exact_static_server_process_namespace_and_volume_are_sealed(
         self,
     ) -> None:
-        runner = self.runner()
-        with mock.patch.object(
-            MEDIA,
-            "_process_namespace_epoch",
-            return_value=self.PROCESS_EPOCH,
+        for local_image_id in (
+            TRUSTED_SERVER_IMAGE_ID,
+            TRUSTED_SERVER_CLASSIC_IMAGE_ID,
         ):
-            epoch = MEDIA._trusted_server_runtime_epoch(
+            with self.subTest(local_image_id=local_image_id):
+                container, image, volume = trusted_server_epoch_fixture(
+                    local_image_id=local_image_id,
+                )
+                runner = TrustedServerEpochRunner(
+                    container=container,
+                    image=image,
+                    volume=volume,
+                )
+                with mock.patch.object(
+                    MEDIA,
+                    "_process_namespace_epoch",
+                    return_value=self.PROCESS_EPOCH,
+                ):
+                    epoch = MEDIA._trusted_server_runtime_epoch(
+                        runner,
+                        CONTAINER_A,
+                        postgres_major=16,
+                    )
+                self.assertEqual(epoch["image_id"], local_image_id)
+                self.assertEqual(
+                    epoch["server_repo_digest"],
+                    TRUSTED_SERVER_REPO_DIGEST,
+                )
+                self.assertEqual(epoch["process"], self.PROCESS_EPOCH)
+                self.assertEqual(epoch["critical_layer_diff"], [])
+                self.assertEqual(epoch["volumes"][0]["name"], "fixture")
+
+    def test_official_platform_chains_allow_only_index_or_config_id(
+        self,
+    ) -> None:
+        all_chain_digests: list[str] = []
+        for major, chain in (
+            MEDIA.POSTGRES_AUDIT_LINUX_AMD64_CHAINS.items()
+        ):
+            with self.subTest(postgres_major=major):
+                self.assertEqual(
+                    set(chain),
+                    {"index", "manifest", "config"},
+                )
+                self.assertEqual(len(set(chain.values())), 3)
+                self.assertTrue(
+                    all(
+                        MEDIA.DIGEST_RE.fullmatch(value)
+                        for value in chain.values()
+                    )
+                )
+                expected = "postgres@" + chain["index"]
+                trusted = MEDIA.TRUSTED_POSTGRES_SERVER_IMAGES[major]
+                self.assertEqual(trusted[chain["index"]], expected)
+                self.assertEqual(trusted[chain["config"]], expected)
+                self.assertNotIn(chain["manifest"], trusted)
+                self.assertTrue(
+                    MEDIA.POSTGRES_AUDIT_IMAGES[major].endswith(
+                        "@" + chain["index"]
+                    )
+                )
+                all_chain_digests.extend(chain.values())
+        self.assertEqual(
+            len(set(all_chain_digests)),
+            len(all_chain_digests),
+        )
+
+        container, image, volume = trusted_server_epoch_fixture(
+            local_image_id=TRUSTED_SERVER_CLASSIC_IMAGE_ID,
+        )
+        runner = TrustedServerEpochRunner(
+            container=container,
+            image=image,
+            volume=volume,
+        )
+        with (
+            mock.patch.object(
+                MEDIA,
+                "_process_namespace_epoch",
+                return_value=self.PROCESS_EPOCH,
+            ),
+            self.assertRaisesRegex(
+                MEDIA.MediaEvidenceError,
+                "runtime is incomplete",
+            ),
+        ):
+            MEDIA._trusted_server_runtime_epoch(
                 runner,
                 CONTAINER_A,
-                postgres_major=16,
+                postgres_major=15,
             )
-        self.assertEqual(epoch["image_id"], TRUSTED_SERVER_IMAGE_ID)
-        self.assertEqual(
-            epoch["server_repo_digest"],
-            TRUSTED_SERVER_REPO_DIGEST,
-        )
-        self.assertEqual(epoch["process"], self.PROCESS_EPOCH)
-        self.assertEqual(epoch["critical_layer_diff"], [])
-        self.assertEqual(epoch["volumes"][0]["name"], "fixture")
 
     def test_hostile_launch_namespace_mount_peer_and_layer_drift_fail_closed(
         self,
@@ -731,6 +815,16 @@ class TrustedOnlineServerEpochTests(unittest.TestCase):
                         "postgres@sha256:" + "0" * 64
                     ]
                 }
+            ),
+            "platform-manifest-is-not-runtime-id": (
+                lambda runner: (
+                    runner.containers[CONTAINER_A].update(
+                        {"Image": TRUSTED_SERVER_PLATFORM_MANIFEST}
+                    ),
+                    runner.image.update(
+                        {"Id": TRUSTED_SERVER_PLATFORM_MANIFEST}
+                    ),
+                )
             ),
         }
         for name, mutate in cases.items():
@@ -1395,36 +1489,68 @@ class MediaEvidenceLauncherTests(unittest.TestCase):
     def test_real_implementation_accepts_only_its_pinned_inherited_fd(
         self,
     ) -> None:
-        implementation = ROOT / "scripts/postgres_media_evidence.py"
-        expected = MEDIA.sha256_bytes(implementation.read_bytes())
-        descriptor = os.open(implementation, os.O_RDONLY)
-        try:
-            with (
-                mock.patch.object(
-                    MEDIA,
-                    "__file__",
-                    f"/proc/self/fd/{descriptor}",
-                ),
-                mock.patch.dict(
-                    os.environ,
-                    {
-                        "NEXPOLY_MEDIA_AUDITOR_SHA256": expected,
-                        "NEXPOLY_ACTIVE_CONTROL_RELEASE_ID": "a" * 64,
-                    },
-                    clear=False,
-                ),
-            ):
-                self.assertEqual(MEDIA._auditor_digest(), expected)
-                os.environ["NEXPOLY_MEDIA_AUDITOR_SHA256"] = (
-                    "sha256:" + "f" * 64
-                )
-                with self.assertRaisesRegex(
-                    MEDIA.MediaEvidenceError,
-                    "identity differs",
+        source = ROOT / "scripts/postgres_media_evidence.py"
+        with tempfile.TemporaryDirectory(
+            prefix="postgres-media-installed-"
+        ) as raw:
+            implementation = Path(raw) / source.name
+            implementation.write_bytes(source.read_bytes())
+            os.chmod(implementation, 0o700)
+            expected = MEDIA.sha256_bytes(implementation.read_bytes())
+            descriptor = os.open(implementation, os.O_RDONLY)
+            try:
+                with (
+                    mock.patch.object(
+                        MEDIA,
+                        "__file__",
+                        f"/proc/self/fd/{descriptor}",
+                    ),
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "NEXPOLY_MEDIA_AUDITOR_SHA256": expected,
+                            "NEXPOLY_ACTIVE_CONTROL_RELEASE_ID": "a" * 64,
+                        },
+                        clear=False,
+                    ),
+                ):
+                    self.assertEqual(MEDIA._auditor_digest(), expected)
+                    os.environ["NEXPOLY_MEDIA_AUDITOR_SHA256"] = (
+                        "sha256:" + "f" * 64
+                    )
+                    with self.assertRaisesRegex(
+                        MEDIA.MediaEvidenceError,
+                        "identity differs",
+                    ):
+                        MEDIA._auditor_digest()
+            finally:
+                os.close(descriptor)
+
+            os.chmod(implementation, 0o755)
+            descriptor = os.open(implementation, os.O_RDONLY)
+            try:
+                with (
+                    mock.patch.object(
+                        MEDIA,
+                        "__file__",
+                        f"/proc/self/fd/{descriptor}",
+                    ),
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "NEXPOLY_MEDIA_AUDITOR_SHA256": expected,
+                            "NEXPOLY_ACTIVE_CONTROL_RELEASE_ID": "a" * 64,
+                        },
+                        clear=False,
+                    ),
+                    self.assertRaisesRegex(
+                        MEDIA.MediaEvidenceError,
+                        "inherited implementation identity differs",
+                    ),
                 ):
                     MEDIA._auditor_digest()
-        finally:
-            os.close(descriptor)
+            finally:
+                os.close(descriptor)
 
     def test_wrapper_launcher_chain_preserves_only_the_pinned_rules_digest(
         self,
@@ -4157,7 +4283,8 @@ class DatabaseRelationAuthorityTests(unittest.TestCase):
                 "search_path": "pg_catalog",
                 "row_security": True,
                 **database_startup_fields(
-                    "/var/lib/postgresql/data"
+                    "/var/lib/postgresql/data",
+                    isolated=True,
                 ),
                 "role_superuser": True,
                 "role_create_db": True,
@@ -4274,6 +4401,121 @@ class DatabaseRelationAuthorityTests(unittest.TestCase):
                 )
             ),
         )
+
+    def test_isolated_startup_command_sentinels_are_exact(self) -> None:
+        baseline = [
+            json.loads(line)
+            for line in self.payload(
+                self.ledger_relation()
+            ).decode("utf-8").splitlines()
+        ]
+        for field, value in (
+            ("archive_command", ""),
+            ("archive_command", "/bin/false"),
+            ("restore_command", ""),
+            ("restore_command", "(disabled)"),
+        ):
+            with self.subTest(field=field, value=value):
+                records = copy.deepcopy(baseline)
+                records[0][field] = value
+                payload = b"\n".join(
+                    json.dumps(record, sort_keys=True).encode("utf-8")
+                    for record in records
+                ) + b"\n"
+                with self.assertRaisesRegex(
+                    MEDIA.MediaEvidenceError,
+                    "startup configuration is unsafe",
+                ):
+                    MEDIA._parse_database_audit(
+                        payload,
+                        expected_database="nexpoly",
+                        expected_user="postgres",
+                        isolated=True,
+                    )
+
+    def test_descriptor_binds_execution_mode_and_online_client_id(
+        self,
+    ) -> None:
+        authority = {
+            "name": "nexpoly",
+            "oid": "16384",
+            "owner": "postgres",
+            "allow_connections": True,
+            "template": False,
+            "audit_role": "postgres",
+            "migration_scope": "nexpoly-ledger",
+        }
+        descriptor = MEDIA.MediaDescriptor(
+            media_id="docker-volume:fixture",
+            kind="docker_volume",
+            database="nexpoly",
+            database_user="postgres",
+            disposition="retained-private-isolated",
+            audit_method="isolated-volume-copy-read-only",
+            online_admin_role="postgres",
+            source_postgres_major=16,
+            databases=(authority,),
+        )
+        runner = mock.Mock(spec=MEDIA.CommandRunner)
+        runner.run.return_value = subprocess.CompletedProcess(
+            ["docker", "exec"],
+            0,
+            stdout=self.payload(self.ledger_relation()),
+            stderr=b"",
+        )
+        result = MEDIA._audit_container_database(
+            runner,
+            CONTAINER_A,
+            descriptor,
+            database_authority=authority,
+            isolated=True,
+        )
+        self.assertEqual(
+            result["database_identity"]["database"],
+            "nexpoly",
+        )
+        runner.run.assert_called_once()
+
+        online_descriptor = replace(
+            descriptor,
+            disposition="read-only-online",
+            audit_method="live-read-only",
+        )
+        with self.assertRaisesRegex(
+            MEDIA.MediaEvidenceError,
+            "online database audit lacks its exact client image ID",
+        ):
+            MEDIA._audit_container_database(
+                mock.Mock(spec=MEDIA.CommandRunner),
+                CONTAINER_A,
+                online_descriptor,
+                database_authority=authority,
+                isolated=False,
+            )
+        for current, isolated in (
+            (online_descriptor, True),
+            (descriptor, False),
+        ):
+            with self.subTest(
+                audit_method=current.audit_method,
+                isolated=isolated,
+            ):
+                mismatch_runner = mock.Mock(
+                    spec=MEDIA.CommandRunner
+                )
+                with self.assertRaisesRegex(
+                    MEDIA.MediaEvidenceError,
+                    "execution mode differs from descriptor authority",
+                ):
+                    MEDIA._audit_container_database(
+                        mismatch_runner,
+                        CONTAINER_A,
+                        current,
+                        database_authority=authority,
+                        isolated=isolated,
+                        trusted_image_id=IMAGE_ID,
+                    )
+                mismatch_runner.run.assert_not_called()
 
     def test_view_foreign_owner_and_altered_columns_are_rejected(self) -> None:
         for name, mutate in (
@@ -10410,6 +10652,56 @@ def external_inventory_fixture(
 
 
 class BuilderAndContractTests(unittest.TestCase):
+    def test_site_startup_projection_distinguishes_online_and_isolated(
+        self,
+    ) -> None:
+        data_directory = "/var/lib/postgresql/data"
+        isolated = audited_startup_fields(data_directory)
+        online = audited_startup_fields(
+            data_directory,
+            online=True,
+        )
+        self.assertEqual(
+            CONTRACTS._external_server_startup_v3(
+                isolated,
+                data_directory=data_directory,
+                online=False,
+            ),
+            isolated,
+        )
+        self.assertEqual(
+            CONTRACTS._external_server_startup_v3(
+                online,
+                data_directory=data_directory,
+                online=True,
+            ),
+            online,
+        )
+        for baseline, online_mode, field, value in (
+            (isolated, False, "archive_command", ""),
+            (isolated, False, "archive_command", "/bin/false"),
+            (isolated, False, "restore_command", ""),
+            (isolated, False, "restore_command", "(disabled)"),
+            (online, True, "archive_command", "(disabled)"),
+            (online, True, "restore_command", "/bin/false"),
+        ):
+            with self.subTest(
+                online=online_mode,
+                field=field,
+                value=value,
+            ):
+                changed = copy.deepcopy(baseline)
+                changed[field] = value
+                with self.assertRaisesRegex(
+                    CONTRACTS.SiteHelperContractError,
+                    "startup configuration is unsafe",
+                ):
+                    CONTRACTS._external_server_startup_v3(
+                        changed,
+                        data_directory=data_directory,
+                        online=online_mode,
+                    )
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(
             prefix="postgres-media-builder-"
@@ -10971,7 +11263,8 @@ class IsolatedBackupOrchestrationTests(unittest.TestCase):
                 "search_path": "pg_catalog",
                 "row_security": True,
                 **database_startup_fields(
-                    "/var/lib/postgresql/data"
+                    "/var/lib/postgresql/data",
+                    isolated=True,
                 ),
                 "role_superuser": True,
                 "role_create_db": True,
@@ -11067,6 +11360,14 @@ class IsolatedBackupOrchestrationTests(unittest.TestCase):
             f"type=bind,src={self.workspace},dst=/source-audit,readonly",
             run_command,
         )
+        for setting in (
+            "archive_command=/bin/false",
+            "restore_command=/bin/false",
+            "shared_preload_libraries=",
+            "session_preload_libraries=",
+            "local_preload_libraries=",
+        ):
+            self.assertEqual(run_command.count(setting), 1)
         restore = next(
             values for values in runner.calls if "pg_restore" in values
         )
@@ -11084,6 +11385,83 @@ class IsolatedBackupOrchestrationTests(unittest.TestCase):
             any(values[1:3] == ["volume", "rm"] for values in runner.calls)
         )
 
+    def test_isolated_startup_arguments_pin_command_execution_hooks(
+        self,
+    ) -> None:
+        for major in MEDIA.SUPPORTED_POSTGRES_AUDIT_MAJORS:
+            with self.subTest(postgres_major=major):
+                arguments = MEDIA._isolated_postgres_arguments(
+                    postgres_major=major,
+                    pgdata="/var/lib/postgresql/data",
+                )
+                for setting in (
+                    "archive_command=/bin/false",
+                    "restore_command=/bin/false",
+                    "shared_preload_libraries=",
+                    "session_preload_libraries=",
+                    "local_preload_libraries=",
+                ):
+                    self.assertEqual(arguments.count(setting), 1)
+                self.assertEqual(
+                    arguments.count("event_triggers=false"),
+                    1 if major >= 17 else 0,
+                )
+
+    def test_real_resource_cleanup_rejects_ambiguous_inspect_errors(
+        self,
+    ) -> None:
+        class InspectRunner:
+            def __init__(self, *, ambiguous: bool) -> None:
+                self.ambiguous = ambiguous
+                self.calls: list[list[str]] = []
+
+            def run(self, arguments, **_kwargs):
+                values = list(arguments)
+                self.calls.append(values)
+                resource = values[1]
+                if self.ambiguous:
+                    return subprocess.CompletedProcess(
+                        values,
+                        125,
+                        stdout=b"",
+                        stderr=b"docker daemon unavailable",
+                    )
+                return subprocess.CompletedProcess(
+                    values,
+                    1,
+                    stdout=b"",
+                    stderr=(
+                        b"Error: No such container"
+                        if resource == "container"
+                        else b"Error: No such volume"
+                    ),
+                )
+
+        ambiguous = InspectRunner(ambiguous=True)
+        with self.assertRaises(ExceptionGroup):
+            RealDockerPostgresIntegrationTests._cleanup_labeled_container_and_volume(
+                ambiguous,  # type: ignore[arg-type]
+                container_name="owned-container",
+                volume_name="owned-volume",
+                label="owned-fixture",
+            )
+        self.assertEqual(
+            [call[1] for call in ambiguous.calls],
+            ["container", "volume"],
+        )
+
+        absent = InspectRunner(ambiguous=False)
+        RealDockerPostgresIntegrationTests._cleanup_labeled_container_and_volume(
+            absent,  # type: ignore[arg-type]
+            container_name="absent-container",
+            volume_name="absent-volume",
+            label="absent-fixture",
+        )
+        self.assertEqual(
+            [call[1] for call in absent.calls],
+            ["container", "volume"],
+        )
+
 @unittest.skipUnless(
     os.environ.get("NEXPOLY_RUN_POSTGRES_MEDIA_INTEGRATION") == "1",
     "enable the real PostgreSQL media integration explicitly",
@@ -11094,6 +11472,185 @@ class IsolatedBackupOrchestrationTests(unittest.TestCase):
     "acknowledge that only ephemeral localhost Docker resources may be used",
 )
 class RealDockerPostgresIntegrationTests(unittest.TestCase):
+    @staticmethod
+    def _cleanup_labeled_container_and_volume(
+        runner: MEDIA.CommandRunner,
+        *,
+        container_name: str,
+        volume_name: str,
+        label: str,
+    ) -> None:
+        failures: list[Exception] = []
+
+        def is_absent(
+            completed: subprocess.CompletedProcess[bytes],
+            *,
+            resource: str,
+        ) -> bool:
+            error = completed.stderr.decode(
+                "utf-8",
+                "replace",
+            ).lower()
+            if completed.returncode != 1:
+                return False
+            if resource == "container":
+                return (
+                    "no such container" in error
+                    or "no such object" in error
+                )
+            return "no such volume" in error
+
+        container: subprocess.CompletedProcess[bytes] | None = None
+        try:
+            container = runner.run(
+                [
+                    MEDIA.DOCKER,
+                    "container",
+                    "inspect",
+                    "--",
+                    container_name,
+                ],
+                check=False,
+            )
+        except Exception as exc:
+            failures.append(exc)
+        if container is not None and container.returncode == 0:
+            try:
+                records = json.loads(container.stdout)
+                if (
+                    not isinstance(records, list)
+                    or len(records) != 1
+                    or records[0]
+                    .get("Config", {})
+                    .get("Labels", {})
+                    .get("io.nexpoly.test")
+                    != label
+                ):
+                    raise AssertionError(
+                        "ephemeral PostgreSQL container ownership differs"
+                    )
+                container_id = str(records[0]["Id"])
+                runner.run(
+                    [
+                        MEDIA.DOCKER,
+                        "container",
+                        "rm",
+                        "-f",
+                        "--",
+                        container_id,
+                    ],
+                    check=False,
+                )
+                after = runner.run(
+                    [
+                        MEDIA.DOCKER,
+                        "container",
+                        "inspect",
+                        "--",
+                        container_id,
+                    ],
+                    check=False,
+                )
+                if after.returncode == 0:
+                    raise AssertionError(
+                        "ephemeral PostgreSQL container cleanup failed"
+                    )
+                if not is_absent(
+                    after,
+                    resource="container",
+                ):
+                    raise AssertionError(
+                        "cannot prove ephemeral container is absent"
+                    )
+            except Exception as exc:
+                failures.append(exc)
+        elif container is not None and not is_absent(
+            container,
+            resource="container",
+        ):
+            failures.append(
+                AssertionError(
+                    "cannot inspect ephemeral PostgreSQL container"
+                )
+            )
+
+        volume: subprocess.CompletedProcess[bytes] | None = None
+        try:
+            volume = runner.run(
+                [
+                    MEDIA.DOCKER,
+                    "volume",
+                    "inspect",
+                    "--",
+                    volume_name,
+                ],
+                check=False,
+            )
+        except Exception as exc:
+            failures.append(exc)
+        if volume is not None and volume.returncode == 0:
+            try:
+                records = json.loads(volume.stdout)
+                if (
+                    not isinstance(records, list)
+                    or len(records) != 1
+                    or records[0]
+                    .get("Labels", {})
+                    .get("io.nexpoly.test")
+                    != label
+                ):
+                    raise AssertionError(
+                        "ephemeral PostgreSQL volume ownership differs"
+                    )
+                runner.run(
+                    [
+                        MEDIA.DOCKER,
+                        "volume",
+                        "rm",
+                        "-f",
+                        "--",
+                        volume_name,
+                    ],
+                    check=False,
+                )
+                after = runner.run(
+                    [
+                        MEDIA.DOCKER,
+                        "volume",
+                        "inspect",
+                        "--",
+                        volume_name,
+                    ],
+                    check=False,
+                )
+                if after.returncode == 0:
+                    raise AssertionError(
+                        "ephemeral PostgreSQL volume cleanup failed"
+                    )
+                if not is_absent(
+                    after,
+                    resource="volume",
+                ):
+                    raise AssertionError(
+                        "cannot prove ephemeral volume is absent"
+                    )
+            except Exception as exc:
+                failures.append(exc)
+        elif volume is not None and not is_absent(
+            volume,
+            resource="volume",
+        ):
+            failures.append(
+                AssertionError(
+                    "cannot inspect ephemeral PostgreSQL volume"
+                )
+            )
+        if failures:
+            raise ExceptionGroup(
+                "ephemeral PostgreSQL resource cleanup failed",
+                failures,
+            )
+
     def postgres_major(self) -> int:
         try:
             major = int(os.environ["NEXPOLY_TEST_POSTGRES_MAJOR"])
@@ -11153,6 +11710,151 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
         self.assertRegex(version, rf"\b{major}(?:\.[0-9]+)?\b")
         return image
 
+    def test_pg18_role_contract_disables_login_event_triggers(
+        self,
+    ) -> None:
+        if self.postgres_major() != 18:
+            self.skipTest(
+                "login event-trigger provisioning regression is PG18-only"
+            )
+        image = self.pinned_image()
+        runner = MEDIA.CommandRunner()
+        volume = MEDIA._temp_name("integration-pg18-role")
+        name = MEDIA._temp_name("integration-pg18-role-pg")
+        label = "pg18-role-contract-integration"
+        container_id: str | None = None
+        try:
+            runner.run(
+                [
+                    MEDIA.DOCKER,
+                    "volume",
+                    "create",
+                    "--label",
+                    f"io.nexpoly.test={label}",
+                    "--",
+                    volume,
+                ]
+            )
+            completed = runner.run(
+                [
+                    MEDIA.DOCKER,
+                    "run",
+                    "-d",
+                    "--name",
+                    name,
+                    "--label",
+                    f"io.nexpoly.test={label}",
+                    "--network",
+                    "none",
+                    "--read-only",
+                    "--tmpfs",
+                    (
+                        "/var/run/postgresql:rw,noexec,nosuid,size=16m,"
+                        "uid=70,gid=70,mode=0700"
+                    ),
+                    "--mount",
+                    (
+                        f"type=volume,src={volume},"
+                        "dst=/var/lib/postgresql"
+                    ),
+                    "--env",
+                    "POSTGRES_HOST_AUTH_METHOD=trust",
+                    "--env",
+                    "POSTGRES_USER=postgres",
+                    "--env",
+                    "POSTGRES_DB=postgres",
+                    image,
+                ],
+                timeout=120,
+            )
+            container_id = completed.stdout.decode(
+                "ascii",
+                "strict",
+            ).strip()
+            MEDIA._wait_for_postgres(
+                runner,
+                container_id,
+                database="postgres",
+                user="postgres",
+            )
+            inventory = MEDIA._container_database_inventory(
+                runner,
+                container_id,
+                postgres_major=18,
+            )
+            self.assertEqual(
+                [record["name"] for record in inventory],
+                ["postgres"],
+            )
+            database = inventory[0]
+            audit_image_id = MEDIA._local_audit_image_id(
+                runner,
+                image,
+            )
+            MEDIA._run_trusted_psql(
+                runner,
+                container_id=container_id,
+                postgres_major=18,
+                pgoptions=MEDIA._psql_provision_pgoptions(18),
+                arguments=[
+                    "-v",
+                    "audit_role=nexpoly_pg18_auditor",
+                    "-v",
+                    "audit_database=postgres",
+                    "-v",
+                    f"expected_database_oid={database['oid']}",
+                    "-v",
+                    f"expected_database_owner={database['owner']}",
+                    "-v",
+                    "expected_session_user=postgres",
+                    "-v",
+                    "expected_event_triggers_disabled=true",
+                    "-v",
+                    "role_contract_sha256=sha256:" + "a" * 64,
+                    "-U",
+                    "postgres",
+                    "-d",
+                    "postgres",
+                ],
+                input_bytes=(
+                    ROOT
+                    / "ops/config/postgres-media-audit-role.sql.example"
+                ).read_bytes(),
+                timeout=600,
+                expected_image_id=audit_image_id,
+            )
+            role = runner.run(
+                [
+                    MEDIA.DOCKER,
+                    "exec",
+                    "--user",
+                    "postgres",
+                    container_id,
+                    "psql",
+                    "-X",
+                    "-A",
+                    "-t",
+                    "-U",
+                    "postgres",
+                    "-d",
+                    "postgres",
+                    "-c",
+                    (
+                        "SELECT rolname FROM pg_catalog.pg_roles "
+                        "WHERE rolname = 'nexpoly_pg18_auditor';"
+                    ),
+                ],
+                timeout=120,
+            ).stdout.decode("ascii", "strict").strip()
+            self.assertEqual(role, "nexpoly_pg18_auditor")
+        finally:
+            self._cleanup_labeled_container_and_volume(
+                runner,
+                container_name=name,
+                volume_name=volume,
+                label=label,
+            )
+
     def test_mutable_schema_v6_helper_runs_against_real_postgres(
         self,
     ) -> None:
@@ -11169,13 +11871,23 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
         runner = MEDIA.CommandRunner()
         volume = MEDIA._temp_name("integration-mutable-v6")
         name = MEDIA._temp_name("integration-mutable-v6-pg")
+        label = "mutable-schema-v6-integration"
         password = "mutable-v6-admin-secret"
         audit_password = "mutable-v6-audit-secret"
         production_host_port = 55432
         container_id: str | None = None
-        container_started = False
-        runner.run([MEDIA.DOCKER, "volume", "create", "--", volume])
         try:
+            runner.run(
+                [
+                    MEDIA.DOCKER,
+                    "volume",
+                    "create",
+                    "--label",
+                    f"io.nexpoly.test={label}",
+                    "--",
+                    volume,
+                ]
+            )
             completed = runner.run(
                 [
                     MEDIA.DOCKER,
@@ -11184,7 +11896,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                     "--name",
                     name,
                     "--label",
-                    "io.nexpoly.test=mutable-schema-v6-integration",
+                    f"io.nexpoly.test={label}",
                     "--publish",
                     "127.0.0.1::5432",
                     "--read-only",
@@ -11208,7 +11920,6 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 ],
                 timeout=120,
             )
-            container_started = True
             container_id = completed.stdout.decode(
                 "ascii",
                 "strict",
@@ -11532,34 +12243,12 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 after["migration_exception_archive_evidence"]
             )
         finally:
-            cleanup_failures: list[Exception] = []
-            if container_started:
-                try:
-                    runner.run(
-                        [
-                            MEDIA.DOCKER,
-                            "container",
-                            "rm",
-                            "-f",
-                            "--",
-                            container_id or name,
-                        ],
-                        timeout=120,
-                    )
-                except Exception as exc:
-                    cleanup_failures.append(exc)
-            try:
-                runner.run(
-                    [MEDIA.DOCKER, "volume", "rm", "-f", "--", volume],
-                    timeout=120,
-                )
-            except Exception as exc:
-                cleanup_failures.append(exc)
-            if cleanup_failures:
-                raise ExceptionGroup(
-                    "mutable schema-v6 integration cleanup failed",
-                    cleanup_failures,
-                )
+            self._cleanup_labeled_container_and_volume(
+                runner,
+                container_name=name,
+                volume_name=volume,
+                label=label,
+            )
 
     def test_rotated_password_uses_only_the_sealed_credential_fd(
         self,
@@ -12465,6 +13154,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
         runner = MEDIA.CommandRunner()
         volume = MEDIA._temp_name("integration-source")
         initializer_name = MEDIA._temp_name("integration-init")
+        label = "dormant-volume-integration"
         source_mount = (
             "/var/lib/postgresql"
             if major == 18
@@ -12472,8 +13162,19 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
         )
         source_subpath = "18/docker" if major == 18 else "."
         initializer: str | None = None
-        runner.run([MEDIA.DOCKER, "volume", "create", "--", volume])
+        database_authority: tuple[dict[str, object], ...] | None = None
         try:
+            runner.run(
+                [
+                    MEDIA.DOCKER,
+                    "volume",
+                    "create",
+                    "--label",
+                    f"io.nexpoly.test={label}",
+                    "--",
+                    volume,
+                ]
+            )
             completed = runner.run(
                 [
                     MEDIA.DOCKER,
@@ -12481,6 +13182,8 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                     "-d",
                     "--name",
                     initializer_name,
+                    "--label",
+                    f"io.nexpoly.test={label}",
                     "--network",
                     "none",
                     "--read-only",
@@ -12510,6 +13213,23 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 initializer,
                 database="postgres",
                 user="postgres",
+            )
+            observed = MEDIA._container_database_inventory(
+                runner,
+                initializer,
+                postgres_major=major,
+            )
+            self.assertEqual(
+                [record["name"] for record in observed],
+                ["postgres"],
+            )
+            database_authority = tuple(
+                {
+                    **record,
+                    "audit_role": "postgres",
+                    "migration_scope": "nexpoly-ledger",
+                }
+                for record in observed
             )
             if major == 18:
                 pgdata = runner.run(
@@ -12560,17 +13280,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 disposition="retained-private-isolated",
                 audit_method="isolated-volume-copy-read-only",
                 source_postgres_major=major,
-                databases=(
-                    {
-                        "name": "postgres",
-                        "oid": "5",
-                        "owner": "postgres",
-                        "allow_connections": True,
-                        "template": False,
-                        "audit_role": "postgres",
-                        "migration_scope": "nexpoly-ledger",
-                    },
-                ),
+                databases=database_authority or (),
             )
             registry = MEDIA.Registry(
                 payload=b"integration",
@@ -12617,20 +13327,11 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
             self.assertRegex(source_digest, r"^sha256:[0-9a-f]{64}$")
             self.assertTrue(isolation["scratch_destroyed"])
         finally:
-            runner.run(
-                [
-                    MEDIA.DOCKER,
-                    "container",
-                    "rm",
-                    "-f",
-                    "--",
-                    initializer or initializer_name,
-                ],
-                check=False,
-            )
-            runner.run(
-                [MEDIA.DOCKER, "volume", "rm", "--", volume],
-                check=False,
+            self._cleanup_labeled_container_and_volume(
+                runner,
+                container_name=initializer_name,
+                volume_name=volume,
+                label=label,
             )
 
     def test_custom_dump_is_restored_and_audited_in_disposable_pg16(self) -> None:

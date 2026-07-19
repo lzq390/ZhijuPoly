@@ -69,7 +69,7 @@ SELECT (
 
 \if :expected_event_triggers_disabled
 SELECT (
-  current_setting('event_triggers') = 'false'
+  current_setting('event_triggers')::boolean IS FALSE
 ) AS login_event_triggers_disabled
 \gset
 \if :login_event_triggers_disabled

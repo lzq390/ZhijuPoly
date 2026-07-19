@@ -398,6 +398,8 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
     @staticmethod
     def _prepare_runtime(runtime: Path) -> None:
         for relative in (
+            Path("bin"),
+            Path("control-releases"),
             Path("state"),
             MODULE.STATE_ROOT_RELATIVE,
             MODULE.AUDIT_ROOT_RELATIVE,
@@ -411,29 +413,139 @@ class ProductionAliasDockerIntegrationTests(unittest.TestCase):
         os.chmod(lock, 0o600)
 
     def _control_release(self) -> tuple[dict[str, object], Path]:
-        release_id = "1" * 64
-        control_root = self.runtime / "control-releases" / release_id
-        control_root.mkdir(parents=True, mode=0o700)
-        os.chmod(control_root.parent, 0o700)
-        os.chmod(control_root, 0o700)
-        script_name = "reconcile_production_0005_polytao_alias.py"
-        sealed_script = control_root / script_name
-        sealed_script.write_bytes(SCRIPT.read_bytes())
-        os.chmod(sealed_script, 0o700)
-        manifest: dict[str, object] = {
-            "release_id": release_id,
-            "source_sha": "2" * 40,
-            "source_tree": "3" * 40,
-            "entrypoints": {
-                "reconcile-production-0005-alias": {
-                    "kind": "python",
-                    "file": script_name,
-                }
-            },
+        controller_module = PULL_FIXTURES.CONTROLLER
+        source_sha = "2" * 40
+        source_tree = "3" * 40
+        operation_id = "bootstrap-controls-alias-integration"
+        production = self.root / "control-source"
+        production.mkdir(mode=0o700)
+        (production / ".git").mkdir(mode=0o700)
+
+        for name, relative in controller_module.CONTROL_SOURCE_PATHS.items():
+            installed = self.runtime / "bin" / name
+            installed.write_bytes((ROOT / relative).read_bytes())
+            os.chmod(installed, 0o700)
+
+        class SourceController(controller_module.PullDeployController):
+            def _git_show(
+                self,
+                _target_sha: str,
+                relative: str,
+            ) -> bytes:
+                return (ROOT / relative).read_bytes()
+
+        controller = SourceController(
+            production,
+            self.runtime,
+            apply=False,
+        )
+        with controller.deployment_lock():
+            candidate = controller.prepare_control_release(
+                operation_id=operation_id,
+                target_sha=source_sha,
+                target_tree=source_tree,
+            )
+        manifest, control_root = SELECTOR.load_control_release(
+            self.runtime,
+            str(candidate["release_id"]),
+        )
+        active = {
+            "schema_version": SELECTOR.ACTIVE_CONTROL_SCHEMA_VERSION,
+            "protocol_version": SELECTOR.PROTOCOL_VERSION,
+            "component": "deployment-controls",
+            "generation": 1,
+            "release_id": candidate["release_id"],
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+            "manifest_sha256": candidate["manifest_sha256"],
+            "operation_id": operation_id,
+            "previous_release_id": None,
+            "activated_at": "2026-07-17T00:00:00+00:00",
         }
-        manifest_path = control_root / SELECTOR.CONTROL_MANIFEST_NAME
-        manifest_path.write_bytes(SELECTOR.canonical_json_bytes(manifest) + b"\n")
-        os.chmod(manifest_path, 0o600)
+        source_readiness = {
+            "schema_version": 2,
+            "ready": True,
+            "source_root": str(production),
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+            "branch": "main",
+            "origin": "git@github.com:lzq390/ZhijuPoly.git",
+            "remote_names": ["origin"],
+            "origin_fetch_urls": [
+                "git@github.com:lzq390/ZhijuPoly.git"
+            ],
+            "origin_push_urls": [
+                "git@github.com:lzq390/ZhijuPoly.git"
+            ],
+            "origin_main_sha": source_sha,
+            "standalone_object_database": True,
+            "shallow": False,
+            "dirty_entries": 0,
+            "ignored_entries": 0,
+            "unreachable_objects": 0,
+            "replace_refs": 0,
+            "special_index_entries": 0,
+            "sparse_index": False,
+            "owner_private": True,
+            "group_or_world_writable": False,
+        }
+        takeover = {
+            "schema_version": 1,
+            "operation_id": "takeover-alias-integration",
+            "authority_sha": source_sha,
+            "authority_tree": source_tree,
+            "install_manifest_sha256": "sha256:" + "3" * 64,
+            "classification_sha256": "sha256:" + "4" * 64,
+            "runtime_identity_sha256": "sha256:" + "5" * 64,
+            "git_identity": {
+                "branch": "refs/heads/main",
+                "head_sha": "0" * 40,
+                "head_tree": "0" * 40,
+                "local_main_sha": "0" * 40,
+            },
+            "pre_stopped_fence_sha256": "sha256:" + "6" * 64,
+            "control_layout_sha256": "sha256:" + "7" * 64,
+            "checkout_permissions_sha256": "sha256:" + "8" * 64,
+            "applied_record_sha256": "sha256:" + "9" * 64,
+        }
+        takeover["binding_sha256"] = (
+            SELECTOR.canonical_json_digest(takeover)
+        )
+        controller_module.atomic_json(
+            self.runtime / "state/active-control.json",
+            active,
+        )
+        controller_module.atomic_json(
+            self.runtime / "state/bootstrap-control.json",
+            {
+                "schema_version": 2,
+                "status": "completed",
+                "source_sha": source_sha,
+                "source_tree": source_tree,
+                "source_readiness": source_readiness,
+                "source_readiness_sha256": (
+                    SELECTOR.canonical_json_digest(source_readiness)
+                ),
+                "legacy_takeover": takeover,
+                "delivery_gate": {"fixture": True},
+                "production_repository": {"fixture": True},
+                "immutable_files": {
+                    name: SELECTOR.sha256_file(
+                        self.runtime / "bin" / name
+                    )
+                    for name in SELECTOR.BOOTSTRAP_IMMUTABLE_FILES
+                },
+                "worker_unit_takeover": {"fixture": True},
+                "candidate_control": candidate,
+                "active_control": active,
+            },
+        )
+        loaded_active, loaded_manifest, loaded_root = (
+            SELECTOR.load_active_control(self.runtime)
+        )
+        self.assertEqual(loaded_active, active)
+        self.assertEqual(loaded_manifest, manifest)
+        self.assertEqual(loaded_root, control_root)
         return manifest, control_root
 
     def test_real_dump_restore_cas_finalize_replay_and_gates(self) -> None:

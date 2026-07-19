@@ -131,6 +131,14 @@ The sections prove:
 | `conflicts` | Deploy, 0012 contract, alias, takeover, bridge, prepared-operation, and control-handoff conflict sets are all empty. |
 | `observation` | Evidence collection used no fetch, pull, container/service mutation, or state write, and database observation was transaction-read-only. |
 
+For official PostgreSQL audit images, the source pins the complete
+linux/amd64 chain: OCI index, platform manifest, and config digest. A
+containerd image store may report the index as its local image ID, while a
+classic Docker image store reports the config digest. Only those two IDs are
+accepted, and both must still resolve to the exact pinned `postgres@<index>`
+repository digest. The platform manifest digest is provenance only and is
+never accepted as a runtime image ID.
+
 Live mode additionally revalidates the prepared descriptor, READY file, exact
 selector handoff inventory, bridge token, prefetch READY seal, helper
 installation, completed takeover, completed bootstrap child journal,
