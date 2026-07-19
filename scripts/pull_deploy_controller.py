@@ -398,7 +398,7 @@ DEPLOY_USER_HOME = Path("/home/devuser")
 SOURCE_URL = "https://github.com/lzq390/ZhijuPoly"
 ASSET_RELEASES_ROOT = Path("/data/lzq/nexpoly-assets/releases")
 SCHEMA_V2_ASSET_MANIFEST_DIGEST = (
-    "sha256:e5088b7954f7ee8f6cc4e45af36761fdc44d2fc374643441fe07283475de06c8"
+    "sha256:0588cc6a9acd50efbcba49850bbea79ab44fa1752fa530b8537ccb21753ebc9b"
 )
 SCHEMA_V2_PREDECESSOR_ASSET_MANIFEST_DIGEST = (
     "sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2"

@@ -640,7 +640,7 @@ ledger, registered database inventory, asset identity or rollback evidence
 differs from the reviewed plan, the operation stops before mutation.
 
 The frozen schema-v2 asset manifest is
-`sha256:e5088b7954f7ee8f6cc4e45af36761fdc44d2fc374643441fe07283475de06c8`
+`sha256:0588cc6a9acd50efbcba49850bbea79ab44fa1752fa530b8537ccb21753ebc9b`
 and its only accepted predecessor is
 `sha256:ad19a4f1cb954b3ee6999b7157c798fd887ecd3fd7ae12e40ac20a97637575e2`.
 The controller re-hashes both releases and requires the `model`, `database`
