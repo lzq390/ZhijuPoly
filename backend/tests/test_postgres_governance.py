@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
 import shutil
 import sqlite3
 import sys
+from threading import Event
+import time
 import uuid
 
 import psycopg
@@ -14,7 +17,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.errors import DependentObjectsStillExist
 import pytest
 
-from app import postgres_preflight
+from app import postgres_migrations, postgres_preflight
 from app.config import Settings
 from app.import_postgres import (
     BUSINESS_MUTABLE_IMPORT_DATASETS,
@@ -42,6 +45,200 @@ from app.postgres_migrations import (
     migration_checksum,
 )
 from app.services.postgres_database_browser import get_database_analytics_postgres
+
+
+_CONTRACT_OPERATION_ID = "contract-0012-pg-guard"
+_CONTRACT_RELEASE_SHA = "a" * 40
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+
+
+def _contract_guard_for_connection(connection) -> tuple[str, str]:
+    relation = postgres_migrations._polytao_relation_identity(connection)
+    archive_evidence = postgres_migrations._polytao_contract_archive_evidence(
+        connection
+    )
+    database = connection.execute(
+        """
+        SELECT current_database() AS database_name,
+               system_identifier::text AS system_identifier
+        FROM pg_catalog.pg_control_system()
+        """
+    ).fetchone()
+    ledger = [
+        {"version": str(row["version"]), "checksum": str(row["checksum"])}
+        for row in connection.execute(
+            """
+            SELECT version, checksum
+            FROM governance.schema_migrations
+            WHERE version < %s
+            ORDER BY version, checksum
+            """,
+            (postgres_migrations.POLYTAO_CONTRACT_VERSION,),
+        ).fetchall()
+    ]
+    document = {
+        "schema_version": 1,
+        "contract": {
+            "version": postgres_migrations.POLYTAO_CONTRACT_VERSION,
+            "checksum": postgres_migrations.POLYTAO_CONTRACT_CHECKSUM,
+        },
+        "maintenance": {
+            "operation_id": _CONTRACT_OPERATION_ID,
+            "marker_sha256": f"sha256:{'b' * 64}",
+            "audit_manifest_sha256": f"sha256:{'c' * 64}",
+        },
+        "database": {
+            "name": str(database["database_name"]),
+            "system_identifier": str(database["system_identifier"]),
+        },
+        "release_sha": _CONTRACT_RELEASE_SHA,
+        "ledger": ledger,
+        "relation": {
+            "qualified_name": postgres_migrations.POLYTAO_CONTRACT_RELATION,
+            "namespace_oid": relation["namespace_oid"],
+            "relation_oid": relation["relation_oid"],
+            "rows_sha256": archive_evidence["rows_sha256"],
+            "schema_sha256": archive_evidence["schema_sha256"],
+        },
+        "archive_evidence": archive_evidence,
+        "archive_evidence_sha256": postgres_migrations._canonical_json_sha256(
+            archive_evidence
+        ),
+        "deployment_control": {
+            "control_key": "production",
+            "drain_enabled": True,
+            "reason": f"0012 maintenance {_CONTRACT_OPERATION_ID}",
+            "release_sha": _CONTRACT_RELEASE_SHA,
+            "activated_by": postgres_migrations.POLYTAO_CONTRACT_GUARD_ACTOR,
+        },
+        "active_jobs": {
+            "generation.polytao_jobs": 0,
+            "md.monomer_md_jobs": 0,
+            "online_knowledge.jobs": 0,
+        },
+    }
+    guard_json = _canonical_json(document)
+    guard_sha256 = (
+        "sha256:" + hashlib.sha256(guard_json.encode("utf-8")).hexdigest()
+    )
+    return guard_json, guard_sha256
+
+
+def _prepare_polytao_contract_state(
+    postgres_dsn: str,
+    *,
+    completed_job: bool = False,
+    unrelated_generation_table: bool = False,
+) -> tuple[str, str]:
+    version = postgres_migrations.POLYTAO_CONTRACT_VERSION
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute(
+            "DELETE FROM governance.schema_migrations WHERE version = %s",
+            (version,),
+        )
+        connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
+        connection.execute(
+            (MIGRATIONS_DIR / "0007_polytao_jobs.sql").read_text(
+                encoding="utf-8"
+            )
+        )
+        if completed_job:
+            connection.execute(
+                """
+                INSERT INTO generation.polytao_jobs (
+                  job_id, status, descriptor_prompt, progress_message
+                )
+                VALUES ('guard-job', 'completed', 'sealed prompt', 'sealed content')
+                """
+            )
+        if unrelated_generation_table:
+            connection.execute(
+                """
+                CREATE TABLE generation.unrelated_runtime_data (
+                  id integer PRIMARY KEY
+                )
+                """
+            )
+        connection.execute(
+            """
+            UPDATE governance.deployment_control
+            SET drain_enabled = true,
+                reason = %s,
+                release_sha = %s,
+                activated_at = now(),
+                activated_by = %s,
+                updated_at = now()
+            WHERE control_key = 'production'
+            """,
+            (
+                f"0012 maintenance {_CONTRACT_OPERATION_ID}",
+                _CONTRACT_RELEASE_SHA,
+                postgres_migrations.POLYTAO_CONTRACT_GUARD_ACTOR,
+            ),
+        )
+        return _contract_guard_for_connection(connection)
+
+
+def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
+    version = postgres_migrations.POLYTAO_CONTRACT_VERSION
+    checksum = migration_checksum(MIGRATIONS_DIR / f"{version}.sql")
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
+        connection.execute(
+            """
+            INSERT INTO governance.schema_migrations (version, checksum)
+            VALUES (%s, %s)
+            ON CONFLICT (version) DO UPDATE SET checksum = excluded.checksum
+            """,
+            (version, checksum),
+        )
+        connection.execute(
+            """
+            UPDATE governance.deployment_control
+            SET drain_enabled = false,
+                reason = NULL,
+                release_sha = NULL,
+                activated_at = NULL,
+                activated_by = NULL,
+                updated_at = now()
+            WHERE control_key = 'production'
+            """
+        )
+
+
+def _wait_for_application_lock(
+    postgres_dsn: str,
+    application_name: str,
+    *,
+    timeout: float = 5.0,
+) -> None:
+    deadline = time.monotonic() + timeout
+    with psycopg.connect(postgres_dsn, autocommit=True) as observer:
+        while time.monotonic() < deadline:
+            row = observer.execute(
+                """
+                SELECT wait_event_type
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND application_name = %s
+                """,
+                (application_name,),
+            ).fetchone()
+            if row is not None and row[0] == "Lock":
+                return
+            time.sleep(0.02)
+    pytest.fail(
+        f"{application_name} did not reach a PostgreSQL lock wait",
+        pytrace=False,
+    )
 
 
 def _write_file(path: Path, content: bytes = b"source") -> Path:
@@ -962,6 +1159,12 @@ def test_bootstrap_expand_defers_trailing_contract_and_schema_preflight_passes(
             "DELETE FROM governance.schema_migrations WHERE version >= %s",
             ("0009_monomer_md_job_leases",),
         )
+        connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
+        connection.execute(
+            (MIGRATIONS_DIR / "0007_polytao_jobs.sql").read_text(
+                encoding="utf-8"
+            )
+        )
 
     try:
         results = apply_postgres_migrations(
@@ -1000,29 +1203,53 @@ def test_bootstrap_expand_defers_trailing_contract_and_schema_preflight_passes(
         assert report["migrations"]["missing"] == []
         assert report["migrations"]["pending_contracts"] == [version]
     finally:
-        apply_polytao_contract_migration(postgres_dsn)
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute(
+                """
+                UPDATE governance.deployment_control
+                SET drain_enabled = true,
+                    reason = %s,
+                    release_sha = %s,
+                    activated_at = now(),
+                    activated_by = %s,
+                    updated_at = now()
+                WHERE control_key = 'production'
+                """,
+                (
+                    f"0012 maintenance {_CONTRACT_OPERATION_ID}",
+                    _CONTRACT_RELEASE_SHA,
+                    postgres_migrations.POLYTAO_CONTRACT_GUARD_ACTOR,
+                ),
+            )
+            guard_json, guard_sha256 = _contract_guard_for_connection(
+                connection
+            )
+        try:
+            apply_polytao_contract_migration(
+                postgres_dsn,
+                guard_json=guard_json,
+                guard_sha256=guard_sha256,
+            )
+        finally:
+            _restore_applied_polytao_contract_state(postgres_dsn)
 
 
 def test_polytao_contract_rolls_back_when_generation_schema_is_not_empty(
     postgres_dsn: str,
 ) -> None:
     version = "0012_drop_polytao_jobs"
-    checksum = migration_checksum(MIGRATIONS_DIR / f"{version}.sql")
-
-    with postgres_connection(postgres_dsn) as connection:
-        connection.execute(
-            "DELETE FROM governance.schema_migrations WHERE version = %s",
-            (version,),
-        )
-        connection.execute("CREATE SCHEMA generation")
-        connection.execute("CREATE TABLE generation.polytao_jobs (job_id text PRIMARY KEY)")
-        connection.execute(
-            "CREATE TABLE generation.unrelated_runtime_data (id integer PRIMARY KEY)"
-        )
+    guard_json, guard_sha256 = _prepare_polytao_contract_state(
+        postgres_dsn,
+        unrelated_generation_table=True,
+    )
 
     try:
         with pytest.raises(DependentObjectsStillExist):
-            apply_polytao_contract_migration(postgres_dsn)
+            apply_polytao_contract_migration(
+                postgres_dsn,
+                guard_json=guard_json,
+                guard_sha256=guard_sha256,
+            )
 
         with postgres_connection(postgres_dsn) as connection:
             state = connection.execute(
@@ -1043,16 +1270,471 @@ def test_polytao_contract_rolls_back_when_generation_schema_is_not_empty(
         assert state["unrelated_table"] == "generation.unrelated_runtime_data"
         assert state["migration_recorded"] is False
     finally:
+        _restore_applied_polytao_contract_state(postgres_dsn)
+
+
+def test_polytao_contract_guard_applies_and_supports_exact_post_state_retry(
+    postgres_dsn: str,
+) -> None:
+    guard_json, guard_sha256 = _prepare_polytao_contract_state(
+        postgres_dsn,
+        completed_job=True,
+    )
+
+    try:
+        first = apply_polytao_contract_migration(
+            postgres_dsn,
+            guard_json=guard_json,
+            guard_sha256=guard_sha256,
+        )
+        second = apply_polytao_contract_migration(
+            postgres_dsn,
+            guard_json=guard_json,
+            guard_sha256=guard_sha256,
+        )
+
+        first_target = next(
+            result
+            for result in first
+            if result.version == postgres_migrations.POLYTAO_CONTRACT_VERSION
+        )
+        second_target = next(
+            result
+            for result in second
+            if result.version == postgres_migrations.POLYTAO_CONTRACT_VERSION
+        )
+        assert first_target.applied is True
+        assert second_target.applied is False
+        assert first_target.checksum == postgres_migrations.POLYTAO_CONTRACT_CHECKSUM
+        assert second_target.checksum == postgres_migrations.POLYTAO_CONTRACT_CHECKSUM
+
         with postgres_connection(postgres_dsn) as connection:
-            connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
+            state = connection.execute(
+                """
+                SELECT to_regclass('generation.polytao_jobs') AS relation,
+                       to_regnamespace('generation') AS namespace,
+                       checksum
+                FROM governance.schema_migrations
+                WHERE version = %s
+                """,
+                (postgres_migrations.POLYTAO_CONTRACT_VERSION,),
+            ).fetchone()
+        assert state["relation"] is None
+        assert state["namespace"] is None
+        assert state["checksum"] == postgres_migrations.POLYTAO_CONTRACT_CHECKSUM
+    finally:
+        _restore_applied_polytao_contract_state(postgres_dsn)
+
+
+def test_polytao_contract_guard_rejects_event_trigger_side_effects(
+    postgres_dsn: str,
+) -> None:
+    guard_json, guard_sha256 = _prepare_polytao_contract_state(
+        postgres_dsn,
+        completed_job=True,
+    )
+    event_trigger = "nexpoly_test_recreate_generation"
+    trigger_function = "public.nexpoly_test_recreate_generation"
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute(
+            f"""
+            CREATE OR REPLACE FUNCTION {trigger_function}()
+            RETURNS event_trigger
+            LANGUAGE plpgsql
+            AS $function$
+            BEGIN
+              IF TG_TAG = 'DROP SCHEMA' THEN
+                EXECUTE 'CREATE SCHEMA generation';
+              END IF;
+            END;
+            $function$
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE EVENT TRIGGER {event_trigger}
+            ON ddl_command_end
+            WHEN TAG IN ('DROP SCHEMA')
+            EXECUTE FUNCTION {trigger_function}()
+            """
+        )
+
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="event-trigger inventory",
+        ):
+            apply_polytao_contract_migration(
+                postgres_dsn,
+                guard_json=guard_json,
+                guard_sha256=guard_sha256,
+            )
+
+        with postgres_connection(postgres_dsn) as connection:
+            state = connection.execute(
+                """
+                SELECT to_regclass('generation.polytao_jobs') AS relation,
+                       EXISTS (
+                         SELECT 1
+                         FROM governance.schema_migrations
+                         WHERE version = %s
+                       ) AS migration_recorded
+                """,
+                (postgres_migrations.POLYTAO_CONTRACT_VERSION,),
+            ).fetchone()
+        assert state["relation"] == "generation.polytao_jobs"
+        assert state["migration_recorded"] is False
+    finally:
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute(
+                f"DROP EVENT TRIGGER IF EXISTS {event_trigger}"
+            )
+            connection.execute(
+                f"DROP FUNCTION IF EXISTS {trigger_function}()"
+            )
+        _restore_applied_polytao_contract_state(postgres_dsn)
+
+
+def test_polytao_contract_post_verifier_failure_rolls_back_transaction(
+    postgres_dsn: str,
+    monkeypatch,
+) -> None:
+    guard_json, guard_sha256 = _prepare_polytao_contract_state(
+        postgres_dsn,
+        completed_job=True,
+    )
+    original_verify = (
+        postgres_migrations._verify_applied_polytao_contract_guard
+    )
+
+    def reject_after_exact_post_state(
+        connection,
+        guard,
+        *,
+        expected_ledger,
+    ) -> None:
+        original_verify(
+            connection,
+            guard,
+            expected_ledger=expected_ledger,
+        )
+        raise RuntimeError("forced post-state rejection")
+
+    monkeypatch.setattr(
+        postgres_migrations,
+        "_verify_applied_polytao_contract_guard",
+        reject_after_exact_post_state,
+    )
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="forced post-state rejection",
+        ):
+            apply_polytao_contract_migration(
+                postgres_dsn,
+                guard_json=guard_json,
+                guard_sha256=guard_sha256,
+            )
+
+        with postgres_connection(postgres_dsn) as connection:
+            state = connection.execute(
+                """
+                SELECT to_regclass('generation.polytao_jobs') AS relation,
+                       EXISTS (
+                         SELECT 1
+                         FROM governance.schema_migrations
+                         WHERE version = %s
+                       ) AS migration_recorded
+                """,
+                (postgres_migrations.POLYTAO_CONTRACT_VERSION,),
+            ).fetchone()
+        assert state["relation"] == "generation.polytao_jobs"
+        assert state["migration_recorded"] is False
+    finally:
+        _restore_applied_polytao_contract_state(postgres_dsn)
+
+
+def test_polytao_contract_guard_rejects_same_count_update_committed_while_waiting(
+    postgres_dsn: str,
+) -> None:
+    guard_json, guard_sha256 = _prepare_polytao_contract_state(
+        postgres_dsn,
+        completed_job=True,
+    )
+    application_name = "contract-guard-content-race"
+    migration_dsn = make_conninfo(
+        postgres_dsn,
+        application_name=application_name,
+    )
+    writer = psycopg.connect(postgres_dsn)
+
+    try:
+        writer.execute(
+            """
+            UPDATE generation.polytao_jobs
+            SET progress_message = 'committed after archival'
+            WHERE job_id = 'guard-job'
+            """
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                apply_polytao_contract_migration,
+                migration_dsn,
+                guard_json=guard_json,
+                guard_sha256=guard_sha256,
+            )
+            _wait_for_application_lock(postgres_dsn, application_name)
+            writer.commit()
+            with pytest.raises(RuntimeError, match="business-row content changed"):
+                future.result(timeout=10)
+
+        with postgres_connection(postgres_dsn) as connection:
+            state = connection.execute(
+                """
+                SELECT progress_message,
+                       EXISTS (
+                         SELECT 1
+                         FROM governance.schema_migrations
+                         WHERE version = %s
+                       ) AS migration_recorded
+                FROM generation.polytao_jobs
+                WHERE job_id = 'guard-job'
+                """,
+                (postgres_migrations.POLYTAO_CONTRACT_VERSION,),
+            ).fetchone()
+        assert state["progress_message"] == "committed after archival"
+        assert state["migration_recorded"] is False
+    finally:
+        writer.rollback()
+        writer.close()
+        _restore_applied_polytao_contract_state(postgres_dsn)
+
+
+def test_polytao_contract_guard_access_exclusive_blocks_late_writer(
+    postgres_dsn: str,
+    monkeypatch,
+) -> None:
+    guard_json, guard_sha256 = _prepare_polytao_contract_state(
+        postgres_dsn,
+        completed_job=True,
+    )
+    guard_verified = Event()
+    allow_contract = Event()
+    original_verify = postgres_migrations._verify_polytao_contract_guard
+
+    def hold_after_verification(connection, guard) -> None:
+        original_verify(connection, guard)
+        guard_verified.set()
+        if not allow_contract.wait(timeout=10):
+            raise RuntimeError("test did not release the guarded transaction")
+
+    monkeypatch.setattr(
+        postgres_migrations,
+        "_verify_polytao_contract_guard",
+        hold_after_verification,
+    )
+    writer_name = "contract-guard-late-writer"
+    writer_dsn = make_conninfo(postgres_dsn, application_name=writer_name)
+
+    def late_writer() -> None:
+        with psycopg.connect(writer_dsn) as connection:
             connection.execute(
                 """
-                INSERT INTO governance.schema_migrations (version, checksum)
-                VALUES (%s, %s)
-                ON CONFLICT (version) DO UPDATE SET checksum = excluded.checksum
-                """,
-                (version, checksum),
+                UPDATE generation.polytao_jobs
+                SET progress_message = 'must not commit'
+                WHERE job_id = 'guard-job'
+                """
             )
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            migration = executor.submit(
+                apply_polytao_contract_migration,
+                postgres_dsn,
+                guard_json=guard_json,
+                guard_sha256=guard_sha256,
+            )
+            assert guard_verified.wait(timeout=5)
+            writer = executor.submit(late_writer)
+            _wait_for_application_lock(postgres_dsn, writer_name)
+            allow_contract.set()
+            results = migration.result(timeout=10)
+            with pytest.raises(psycopg.Error):
+                writer.result(timeout=10)
+
+        target = next(
+            result
+            for result in results
+            if result.version == postgres_migrations.POLYTAO_CONTRACT_VERSION
+        )
+        assert target.applied is True
+        with postgres_connection(postgres_dsn) as connection:
+            assert (
+                connection.execute(
+                    "SELECT to_regclass('generation.polytao_jobs') AS relation"
+                ).fetchone()["relation"]
+                is None
+            )
+    finally:
+        allow_contract.set()
+        _restore_applied_polytao_contract_state(postgres_dsn)
+
+
+def test_polytao_contract_guard_rejects_active_persistent_job_before_sql(
+    postgres_dsn: str,
+) -> None:
+    guard_json, guard_sha256 = _prepare_polytao_contract_state(postgres_dsn)
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute(
+            """
+            INSERT INTO md.monomer_md_jobs (
+              job_id, status, input_smiles, canonical_smiles
+            )
+            VALUES ('guard-active-md', 'running', 'CC', 'CC')
+            """
+        )
+
+    try:
+        with pytest.raises(RuntimeError, match="active database jobs"):
+            apply_polytao_contract_migration(
+                postgres_dsn,
+                guard_json=guard_json,
+                guard_sha256=guard_sha256,
+            )
+        with postgres_connection(postgres_dsn) as connection:
+            state = connection.execute(
+                """
+                SELECT to_regclass('generation.polytao_jobs') AS relation,
+                       EXISTS (
+                         SELECT 1
+                         FROM governance.schema_migrations
+                         WHERE version = %s
+                       ) AS migration_recorded
+                """,
+                (postgres_migrations.POLYTAO_CONTRACT_VERSION,),
+            ).fetchone()
+        assert state["relation"] == "generation.polytao_jobs"
+        assert state["migration_recorded"] is False
+    finally:
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute(
+                "DELETE FROM md.monomer_md_jobs WHERE job_id = 'guard-active-md'"
+            )
+        _restore_applied_polytao_contract_state(postgres_dsn)
+
+
+@pytest.mark.parametrize("replacement", ["oid", "schema"])
+def test_polytao_contract_guard_rejects_relation_or_schema_replacement_before_sql(
+    postgres_dsn: str,
+    replacement: str,
+) -> None:
+    guard_json, guard_sha256 = _prepare_polytao_contract_state(
+        postgres_dsn,
+        completed_job=True,
+    )
+    with postgres_connection(postgres_dsn) as connection:
+        if replacement == "oid":
+            connection.execute("DROP SCHEMA generation CASCADE")
+            connection.execute(
+                (MIGRATIONS_DIR / "0007_polytao_jobs.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+            expected_message = "relation or namespace OID changed"
+        else:
+            connection.execute(
+                "ALTER TABLE generation.polytao_jobs ADD COLUMN guard_drift text"
+            )
+            expected_message = "schema or business-row content changed"
+
+    try:
+        with pytest.raises(RuntimeError, match=expected_message):
+            apply_polytao_contract_migration(
+                postgres_dsn,
+                guard_json=guard_json,
+                guard_sha256=guard_sha256,
+            )
+        with postgres_connection(postgres_dsn) as connection:
+            state = connection.execute(
+                """
+                SELECT to_regclass('generation.polytao_jobs') AS relation,
+                       EXISTS (
+                         SELECT 1
+                         FROM governance.schema_migrations
+                         WHERE version = %s
+                       ) AS migration_recorded
+                """,
+                (postgres_migrations.POLYTAO_CONTRACT_VERSION,),
+            ).fetchone()
+        assert state["relation"] == "generation.polytao_jobs"
+        assert state["migration_recorded"] is False
+    finally:
+        _restore_applied_polytao_contract_state(postgres_dsn)
+
+
+def test_polytao_contract_guard_revalidates_ledger_after_waiting_for_writer(
+    postgres_dsn: str,
+) -> None:
+    guard_json, guard_sha256 = _prepare_polytao_contract_state(postgres_dsn)
+    application_name = "contract-guard-ledger-race"
+    migration_dsn = make_conninfo(
+        postgres_dsn,
+        application_name=application_name,
+    )
+    predecessor = "0011_monomer_md_demo_steps"
+    predecessor_checksum = migration_checksum(
+        MIGRATIONS_DIR / f"{predecessor}.sql"
+    )
+    writer = psycopg.connect(postgres_dsn)
+
+    try:
+        writer.execute(
+            """
+            UPDATE governance.schema_migrations
+            SET checksum = %s
+            WHERE version = %s
+            """,
+            ("f" * 64, predecessor),
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                apply_polytao_contract_migration,
+                migration_dsn,
+                guard_json=guard_json,
+                guard_sha256=guard_sha256,
+            )
+            _wait_for_application_lock(postgres_dsn, application_name)
+            writer.commit()
+            with pytest.raises(RuntimeError, match="ledger changed"):
+                future.result(timeout=10)
+
+        with postgres_connection(postgres_dsn) as connection:
+            state = connection.execute(
+                """
+                SELECT to_regclass('generation.polytao_jobs') AS relation,
+                       EXISTS (
+                         SELECT 1
+                         FROM governance.schema_migrations
+                         WHERE version = %s
+                       ) AS migration_recorded
+                """,
+                (postgres_migrations.POLYTAO_CONTRACT_VERSION,),
+            ).fetchone()
+        assert state["relation"] == "generation.polytao_jobs"
+        assert state["migration_recorded"] is False
+    finally:
+        writer.rollback()
+        writer.close()
+        with postgres_connection(postgres_dsn) as connection:
+            connection.execute(
+                """
+                UPDATE governance.schema_migrations
+                SET checksum = %s
+                WHERE version = %s
+                """,
+                (predecessor_checksum, predecessor),
+            )
+        _restore_applied_polytao_contract_state(postgres_dsn)
 
 
 def test_strict_runtime_preflight_reports_missing_required_migration(tmp_path: Path, postgres_dsn: str, monkeypatch) -> None:

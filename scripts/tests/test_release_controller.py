@@ -148,7 +148,7 @@ class ReleaseControllerTests(unittest.TestCase):
                 if "up" in literals:
                     calls.append((source_path, node.lineno, literals))
 
-        self.assertEqual(len(calls), 12)
+        self.assertEqual(len(calls), 10)
         for source_path, line, literals in calls:
             with self.subTest(source=source_path.name, line=line):
                 self.assertIn("--no-deps", literals)
@@ -1720,11 +1720,34 @@ class ReleaseControllerTests(unittest.TestCase):
             release_controller.subprocess,
             "run",
             return_value=subprocess.CompletedProcess([], 0, stdout=contract_output),
-        ):
+        ) as contract_run:
+            guard_json = "{}"
+            guard_sha256 = release_controller.sha256_bytes(
+                guard_json.encode("utf-8")
+            )
             self.assertEqual(
-                controller.run_migrations({}, mode="contract-0012"),
+                controller.run_migrations(
+                    {},
+                    mode="contract-0012",
+                    contract_guard_json=guard_json,
+                    contract_guard_sha256=guard_sha256,
+                ),
                 ["0012_drop_polytao_jobs"],
             )
+        self.assertEqual(
+            contract_run.call_args.args[0][-4:],
+            [
+                "--contract-guard-json",
+                guard_json,
+                "--contract-guard-sha256",
+                guard_sha256,
+            ],
+        )
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "requires an exact canonical transaction guard",
+        ):
+            controller.run_migrations({}, mode="contract-0012")
 
         controller.previous_state = {"migrations": ["0011_monomer_md_demo_steps"]}
         with (
@@ -1818,6 +1841,413 @@ class ReleaseControllerTests(unittest.TestCase):
             "complete dynamic business-row set",
         ):
             maintenance._validate_archive_evidence(unknown_status)
+
+        active = json.loads(json.dumps(evidence))
+        active["status_counts"] = {"completed": 36, "running": 1}
+        with self.assertRaisesRegex(
+            release_controller.ReleaseError,
+            "complete dynamic business-row set",
+        ):
+            maintenance._validate_archive_evidence(active)
+
+    def _prepare_0012_transaction_guard_fixture(self):
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "guard-production",
+            self.build_v2(),
+            "contract-0012-guard-fixture",
+            False,
+        )
+        policy_source = REPOSITORY_ROOT / "backend" / "migrations" / "postgres"
+        policy_target = (
+            maintenance.controller.candidate_dir
+            / "backend"
+            / "migrations"
+            / "postgres"
+        )
+        policy_target.parent.mkdir(parents=True)
+        shutil.copytree(policy_source, policy_target)
+        ledger = maintenance._canonical_contract_ledger_prefix(
+            include_contract=False
+        )
+        evidence = {
+            "schema_version": 2,
+            "row_count": 9,
+            "status_counts": {
+                "completed": 7,
+                "failed": 2,
+            },
+            "rows_sha256": "1" * 64,
+            "schema_sha256": "2" * 64,
+            "structure_counts": {
+                "columns": 8,
+                "indexes": 2,
+                "constraints": 3,
+                "triggers": 1,
+            },
+        }
+        maintenance.audit_dir.mkdir(parents=True)
+        os.chmod(maintenance.audit_dir, 0o700)
+        release_controller.atomic_json(
+            maintenance.audit_dir / "legacy-table-evidence.json",
+            evidence,
+        )
+        audit_manifest = maintenance._audit_manifest()
+        marker = {
+            "schema_version": 1,
+            "operation_id": maintenance.operation_id,
+            "source_sha": maintenance.document["source_sha"],
+            "phase": "backed-up",
+            "database_transaction_intent": False,
+            "database_change_started": False,
+        }
+        control = {
+            "control_key": "production",
+            "drain_enabled": True,
+            "reason": f"0012 maintenance {maintenance.operation_id}",
+            "release_sha": maintenance.document["source_sha"],
+            "activated_by": "pull-contract-0012",
+        }
+        pre_snapshot = {
+            "schema_version": 1,
+            "database": "nexpoly",
+            "system_identifier": "7429518609726683136",
+            "generation_namespace_oid": 16401,
+            "relation": {
+                "namespace_oid": 16401,
+                "relation_oid": 16427,
+                "relkind": "r",
+            },
+            "ledger": ledger,
+            "deployment_control": control,
+            "active_jobs": {
+                relation: 0
+                for relation in maintenance.GUARDED_JOB_RELATIONS
+            },
+        }
+        with mock.patch.object(
+            maintenance,
+            "_capture_json",
+            return_value=pre_snapshot,
+        ):
+            guard, guard_json, guard_digest = (
+                maintenance._prepare_contract_transaction_guard(
+                    {},
+                    marker,
+                    evidence,
+                    {"ledger": ledger},
+                    audit_manifest,
+                )
+            )
+        return (
+            maintenance,
+            marker,
+            guard,
+            guard_json,
+            guard_digest,
+            pre_snapshot,
+            evidence,
+        )
+
+    def test_0012_transaction_guard_is_canonical_and_cross_binds_preconditions(
+        self,
+    ) -> None:
+        (
+            maintenance,
+            marker,
+            guard,
+            guard_json,
+            guard_digest,
+            _pre_snapshot,
+            evidence,
+        ) = self._prepare_0012_transaction_guard_fixture()
+        precondition_path = (
+            maintenance.audit_dir / "transaction-guard-marker-precondition.json"
+        )
+        pre_manifest_path = (
+            maintenance.audit_dir / "PRE-TRANSACTION-AUDIT-MANIFEST.json"
+        )
+        guard_path = maintenance.audit_dir / "transaction-guard.json"
+
+        self.assertEqual(
+            guard_json,
+            maintenance._canonical_contract_guard_json(guard),
+        )
+        self.assertNotIn("\n", guard_json)
+        self.assertEqual(
+            guard_digest,
+            release_controller.sha256_bytes(guard_json.encode("utf-8")),
+        )
+        self.assertEqual(guard_path.read_text(encoding="utf-8"), guard_json)
+        self.assertEqual(
+            guard["archive_evidence_sha256"],
+            release_controller.canonical_json_digest(evidence),
+        )
+        self.assertEqual(
+            guard["maintenance"],
+            {
+                "operation_id": maintenance.operation_id,
+                "marker_sha256": release_controller.sha256_file(
+                    precondition_path
+                ),
+                "audit_manifest_sha256": release_controller.sha256_file(
+                    pre_manifest_path
+                ),
+            },
+        )
+        precondition = release_controller.load_manifest(precondition_path)
+        self.assertEqual(
+            precondition["transaction_guard_audit_manifest_path"],
+            str(pre_manifest_path),
+        )
+        self.assertEqual(
+            precondition["transaction_guard_audit_manifest_sha256"],
+            guard["maintenance"]["audit_manifest_sha256"],
+        )
+        self.assertEqual(
+            maintenance._load_contract_transaction_guard(marker),
+            (guard, guard_json, guard_digest),
+        )
+
+        original_precondition = precondition_path.read_bytes()
+        original_pre_manifest = pre_manifest_path.read_bytes()
+        try:
+            # Even if an attacker re-seals both the marker evidence and the
+            # live marker digest, the immutable guard still binds the original.
+            changed_precondition = release_controller.load_manifest(
+                precondition_path
+            )
+            changed_precondition["unbound_field"] = "tampered"
+            release_controller.atomic_json(
+                precondition_path,
+                changed_precondition,
+            )
+            changed_marker = json.loads(json.dumps(marker))
+            changed_marker["transaction_guard_marker_sha256"] = (
+                release_controller.sha256_file(precondition_path)
+            )
+            with self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "transaction guard identity differs",
+            ):
+                maintenance._load_contract_transaction_guard(changed_marker)
+        finally:
+            precondition_path.write_bytes(original_precondition)
+            os.chmod(precondition_path, 0o600)
+
+        try:
+            # Re-sealing a different, individually valid pre-audit manifest
+            # and updating its nested marker reference is rejected by the
+            # guard's original pair of cross-bound digests.
+            changed_manifest = release_controller.load_manifest(pre_manifest_path)
+            changed_manifest["files"] = []
+            release_controller.atomic_json(pre_manifest_path, changed_manifest)
+            changed_precondition = release_controller.load_manifest(
+                precondition_path
+            )
+            changed_precondition[
+                "transaction_guard_audit_manifest_sha256"
+            ] = release_controller.sha256_file(pre_manifest_path)
+            release_controller.atomic_json(
+                precondition_path,
+                changed_precondition,
+            )
+            changed_marker = json.loads(json.dumps(marker))
+            changed_marker["transaction_guard_audit_manifest_sha256"] = (
+                release_controller.sha256_file(pre_manifest_path)
+            )
+            changed_marker["transaction_guard_marker_sha256"] = (
+                release_controller.sha256_file(precondition_path)
+            )
+            with self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "transaction guard identity differs",
+            ):
+                maintenance._load_contract_transaction_guard(changed_marker)
+        finally:
+            pre_manifest_path.write_bytes(original_pre_manifest)
+            os.chmod(pre_manifest_path, 0o600)
+            precondition_path.write_bytes(original_precondition)
+            os.chmod(precondition_path, 0o600)
+
+        original_guard = guard_path.read_bytes()
+        try:
+            release_controller.atomic_json(guard_path, guard)
+            changed_marker = json.loads(json.dumps(marker))
+            changed_marker["transaction_guard_sha256"] = (
+                release_controller.sha256_file(guard_path)
+            )
+            with self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "not exact canonical JSON",
+            ):
+                maintenance._load_contract_transaction_guard(changed_marker)
+        finally:
+            guard_path.write_bytes(original_guard)
+            os.chmod(guard_path, 0o600)
+
+    def test_0012_transaction_guard_classifies_only_exact_database_endpoints(
+        self,
+    ) -> None:
+        (
+            maintenance,
+            marker,
+            guard,
+            _guard_json,
+            _guard_digest,
+            pre_snapshot,
+            evidence,
+        ) = self._prepare_0012_transaction_guard_fixture()
+        with mock.patch.object(
+            maintenance,
+            "_capture_json",
+            side_effect=[pre_snapshot, evidence],
+        ):
+            self.assertEqual(
+                maintenance._classify_contract_database_endpoint({}, marker),
+                "exact-pre",
+            )
+
+        post_snapshot = json.loads(json.dumps(pre_snapshot))
+        post_snapshot["ledger"] = [
+            *guard["ledger"],
+            {
+                "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            },
+        ]
+        post_snapshot["generation_namespace_oid"] = None
+        post_snapshot["relation"] = None
+        with mock.patch.object(
+            maintenance,
+            "_capture_json",
+            return_value=post_snapshot,
+        ):
+            self.assertEqual(
+                maintenance._classify_contract_database_endpoint({}, marker),
+                "exact-post",
+            )
+
+        mixed_snapshot = json.loads(json.dumps(post_snapshot))
+        mixed_snapshot["generation_namespace_oid"] = pre_snapshot[
+            "generation_namespace_oid"
+        ]
+        mixed_snapshot["relation"] = pre_snapshot["relation"]
+        with (
+            mock.patch.object(
+                maintenance,
+                "_capture_json",
+                return_value=mixed_snapshot,
+            ),
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "retained the generation schema",
+            ),
+        ):
+            maintenance._classify_contract_database_endpoint({}, marker)
+
+        changed_archive = json.loads(json.dumps(evidence))
+        changed_archive["rows_sha256"] = "9" * 64
+        with (
+            mock.patch.object(
+                maintenance,
+                "_capture_json",
+                side_effect=[pre_snapshot, changed_archive],
+            ),
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "pre-contract database endpoint differs",
+            ),
+        ):
+            maintenance._classify_contract_database_endpoint({}, marker)
+
+    def test_0012_post_completion_reuses_durable_approval_timestamp(self) -> None:
+        maintenance = release_controller.PolytaoContractMaintenance(
+            self.root / "approval-production",
+            self.build_v2(),
+            "contract-0012-approval-fixture",
+            False,
+        )
+        marker = {
+            "schema_version": 1,
+            "operation_id": maintenance.operation_id,
+            "source_sha": maintenance.document["source_sha"],
+            "database_transaction_intent": True,
+        }
+        previous_state = {
+            "status": "success",
+            "source_sha": maintenance.document["source_sha"],
+            "migrations": [release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION],
+            "approved_contracts": [],
+        }
+        approved_at = "2026-07-19T00:00:00+00:00"
+        with (
+            mock.patch.object(
+                release_controller,
+                "utc_now",
+                return_value=approved_at,
+            ),
+            mock.patch.object(
+                maintenance.controller,
+                "finalize_contract_0012_external_audit",
+                side_effect=release_controller.ReleaseError(
+                    "external audit response lost"
+                ),
+            ),
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "external audit response lost",
+            ),
+        ):
+            maintenance._complete_contract_post_state(
+                marker,
+                {},
+                self.root / "current-release",
+                previous_state,
+                worker_was_drained=False,
+            )
+
+        durable_marker = release_controller.load_manifest(maintenance.marker_path)
+        approval = durable_marker["contract_approval"]
+        self.assertEqual(approval["approved_at"], approved_at)
+        self.assertEqual(
+            durable_marker["contract_approval_sha256"],
+            release_controller.canonical_json_digest(approval),
+        )
+
+        with (
+            mock.patch.object(
+                release_controller,
+                "utc_now",
+                side_effect=AssertionError(
+                    "retry must not mint a new approval timestamp"
+                ),
+            ) as now,
+            mock.patch.object(
+                maintenance.controller,
+                "finalize_contract_0012_external_audit",
+                side_effect=release_controller.ReleaseError(
+                    "external audit still unavailable"
+                ),
+            ),
+            self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "external audit still unavailable",
+            ),
+        ):
+            maintenance._complete_contract_post_state(
+                durable_marker,
+                {},
+                self.root / "current-release",
+                previous_state,
+                worker_was_drained=False,
+            )
+        now.assert_not_called()
+        retried_marker = release_controller.load_manifest(maintenance.marker_path)
+        self.assertEqual(retried_marker["contract_approval"], approval)
+        self.assertEqual(
+            retried_marker["contract_approval_sha256"],
+            release_controller.canonical_json_digest(approval),
+        )
 
     def test_0012_maintenance_rejects_name_only_release_manifest(self) -> None:
         with self.assertRaisesRegex(release_controller.ReleaseError, "V2 release manifest"):
@@ -2056,7 +2486,9 @@ class ReleaseControllerTests(unittest.TestCase):
             **environment,
             "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER": "nexpoly_dev_auditor",
             "NEXPOLY_CONTRACT_0012_MD_HEALTH_AUDIT_USER": "nexpoly_health_auditor",
-            "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256": "sha256:" + "c" * 64,
+            "NEXPOLY_CONTRACT_0012_MEDIA_AUTHORITY_RULES_SHA256": (
+                "sha256:" + "8" * 64
+            ),
         }
         backup_digest = "sha256:" + "b" * 64
         volume_id = "docker-volume:nexpoly_app_postgres_data"
@@ -2193,9 +2625,7 @@ class ReleaseControllerTests(unittest.TestCase):
         external_inventory = external_inventory_fixture(
             dev_ledger=after_contract,
             health_ledger=through_0008,
-            registry_digest=external_environment[
-                "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256"
-            ],
+            registry_digest="sha256:" + "c" * 64,
             dev_user="nexpoly_dev_auditor",
             health_user="nexpoly_health_auditor",
         )
@@ -2629,7 +3059,7 @@ class ReleaseControllerTests(unittest.TestCase):
             mock.patch.object(maintenance, "_resume_admission") as resume,
             self.assertRaisesRegex(
                 release_controller.ReleaseError,
-                "rollback is incomplete",
+                "endpoint is uncertain",
             ),
         ):
             maintenance.run()
@@ -3034,7 +3464,7 @@ class ReleaseControllerTests(unittest.TestCase):
             ) as restore_database,
             self.assertRaisesRegex(
                 release_controller.ReleaseError,
-                "neither exact precondition nor exact postcondition",
+                "automatic 0012 full-database restore is disabled",
             ),
         ):
             maintenance._restore_previous_database({}, previous_state)

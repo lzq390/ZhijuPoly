@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
+import re
+from typing import Any
 
 from app.config import PROJECT_ROOT, Settings
 from app.migration_policy import (
@@ -19,6 +23,24 @@ from app.postgres_database import postgres_connection
 MIGRATIONS_DIR = PROJECT_ROOT / "backend" / "migrations" / "postgres"
 POLYTAO_CONTRACT_VERSION = "0012_drop_polytao_jobs"
 POLYTAO_CONTRACT_CHECKSUM = "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+POLYTAO_CONTRACT_GUARD_SCHEMA_VERSION = 1
+POLYTAO_CONTRACT_GUARD_ACTOR = "pull-contract-0012"
+POLYTAO_CONTRACT_RELATION = "generation.polytao_jobs"
+POLYTAO_ACTIVE_STATUSES = frozenset({"pending", "submitted", "running"})
+POLYTAO_BUSINESS_STATUSES = frozenset(
+    {"pending", "submitted", "running", "completed", "failed", "cancelled"}
+)
+POLYTAO_GUARDED_JOB_TABLES = (
+    "generation.polytao_jobs",
+    "md.monomer_md_jobs",
+    "online_knowledge.jobs",
+)
+_SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+_BARE_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_FULL_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_OPERATION_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
+_SYSTEM_IDENTIFIER_PATTERN = re.compile(r"^[0-9]{1,20}$")
+_MAX_CONTRACT_GUARD_JSON_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,8 +50,356 @@ class MigrationResult:
     applied: bool
 
 
+@dataclass(frozen=True, slots=True)
+class PolytaoContractGuard:
+    document: dict[str, Any]
+    operation_id: str
+    database_name: str
+    system_identifier: str
+    release_sha: str
+    namespace_oid: int
+    relation_oid: int
+    ledger: tuple[tuple[str, str], ...]
+    archive_evidence: dict[str, Any]
+    marker_sha256: str
+    audit_manifest_sha256: str
+
+
 def migration_checksum(path: Path) -> str:
     return canonical_migration_checksum(path)
+
+
+def _canonical_json_bytes(value: object, *, default_to_string: bool = False) -> bytes:
+    kwargs: dict[str, Any] = {
+        "sort_keys": True,
+        "separators": (",", ":"),
+        "ensure_ascii": True,
+        "allow_nan": False,
+    }
+    if default_to_string:
+        kwargs["default"] = str
+    return json.dumps(value, **kwargs).encode("utf-8")
+
+
+def _canonical_json_sha256(value: object) -> str:
+    return f"sha256:{hashlib.sha256(_canonical_json_bytes(value)).hexdigest()}"
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Contract guard JSON contains duplicate key {key!r}")
+        result[key] = value
+    return result
+
+
+def _require_exact_fields(
+    value: object,
+    fields: set[str],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError(f"{label} has an invalid shape")
+    return value
+
+
+def _require_prefixed_sha256(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or _SHA256_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{label} must be a lowercase sha256 digest")
+    return value
+
+
+def _require_bare_sha256(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or _BARE_SHA256_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{label} must be a lowercase SHA-256 checksum")
+    return value
+
+
+def _require_oid(value: object, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 < value < 2**32:
+        raise ValueError(f"{label} must be a positive PostgreSQL OID")
+    return value
+
+
+def _validate_polytao_archive_evidence(value: object) -> dict[str, Any]:
+    evidence = _require_exact_fields(
+        value,
+        {
+            "schema_version",
+            "row_count",
+            "status_counts",
+            "rows_sha256",
+            "schema_sha256",
+            "structure_counts",
+        },
+        label="Contract guard archive_evidence",
+    )
+    row_count = evidence["row_count"]
+    status_counts = evidence["status_counts"]
+    if (
+        evidence["schema_version"] != 2
+        or isinstance(row_count, bool)
+        or not isinstance(row_count, int)
+        or row_count < 0
+        or not isinstance(status_counts, dict)
+        or any(
+            not isinstance(status, str)
+            or status not in POLYTAO_BUSINESS_STATUSES
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count <= 0
+            for status, count in status_counts.items()
+        )
+        or sum(status_counts.values()) != row_count
+        or any(status in POLYTAO_ACTIVE_STATUSES for status in status_counts)
+    ):
+        raise ValueError(
+            "Contract guard archive_evidence must seal the complete active-zero "
+            "PolyTAO business-row set"
+        )
+    _require_bare_sha256(
+        evidence["rows_sha256"],
+        label="Contract guard archive_evidence rows_sha256",
+    )
+    _require_bare_sha256(
+        evidence["schema_sha256"],
+        label="Contract guard archive_evidence schema_sha256",
+    )
+    structure_counts = evidence["structure_counts"]
+    if (
+        not isinstance(structure_counts, dict)
+        or set(structure_counts)
+        != {"columns", "indexes", "constraints", "triggers"}
+        or any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+            for count in structure_counts.values()
+        )
+    ):
+        raise ValueError(
+            "Contract guard archive_evidence has invalid structure counts"
+        )
+    return evidence
+
+
+def _load_polytao_contract_guard(
+    guard_json: str | None,
+    guard_sha256: str | None,
+    *,
+    expected_ledger: list[tuple[str, str]],
+) -> PolytaoContractGuard:
+    if guard_json is None or guard_sha256 is None:
+        raise ValueError(
+            "The checksum-pinned 0012 contract requires a sealed transaction guard"
+        )
+    if not isinstance(guard_json, str):
+        raise ValueError("Contract guard JSON must be text")
+    encoded = guard_json.encode("utf-8")
+    if not encoded or len(encoded) > _MAX_CONTRACT_GUARD_JSON_BYTES:
+        raise ValueError("Contract guard JSON has an invalid size")
+    expected_guard_sha256 = _require_prefixed_sha256(
+        guard_sha256,
+        label="Contract guard detached digest",
+    )
+    actual_guard_sha256 = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    if actual_guard_sha256 != expected_guard_sha256:
+        raise ValueError("Contract guard detached digest does not match its JSON")
+    try:
+        document = json.loads(guard_json, object_pairs_hook=_unique_json_object)
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise ValueError("Contract guard is not valid JSON") from exc
+    if not isinstance(document, dict):
+        raise ValueError("Contract guard must be a JSON object")
+    if _canonical_json_bytes(document) != encoded:
+        raise ValueError("Contract guard JSON must use exact canonical encoding")
+
+    guard = _require_exact_fields(
+        document,
+        {
+            "schema_version",
+            "contract",
+            "maintenance",
+            "database",
+            "release_sha",
+            "ledger",
+            "relation",
+            "archive_evidence",
+            "archive_evidence_sha256",
+            "deployment_control",
+            "active_jobs",
+        },
+        label="Contract guard",
+    )
+    if guard["schema_version"] != POLYTAO_CONTRACT_GUARD_SCHEMA_VERSION:
+        raise ValueError("Contract guard schema_version is unsupported")
+
+    contract = _require_exact_fields(
+        guard["contract"],
+        {"version", "checksum"},
+        label="Contract guard contract identity",
+    )
+    if contract != {
+        "version": POLYTAO_CONTRACT_VERSION,
+        "checksum": POLYTAO_CONTRACT_CHECKSUM,
+    }:
+        raise ValueError("Contract guard identifies a different migration contract")
+
+    maintenance = _require_exact_fields(
+        guard["maintenance"],
+        {"operation_id", "marker_sha256", "audit_manifest_sha256"},
+        label="Contract guard maintenance identity",
+    )
+    operation_id = maintenance["operation_id"]
+    if (
+        not isinstance(operation_id, str)
+        or _OPERATION_ID_PATTERN.fullmatch(operation_id) is None
+    ):
+        raise ValueError("Contract guard operation_id is invalid")
+    marker_sha256 = _require_prefixed_sha256(
+        maintenance["marker_sha256"],
+        label="Contract guard marker_sha256",
+    )
+    audit_manifest_sha256 = _require_prefixed_sha256(
+        maintenance["audit_manifest_sha256"],
+        label="Contract guard audit_manifest_sha256",
+    )
+
+    database = _require_exact_fields(
+        guard["database"],
+        {"name", "system_identifier"},
+        label="Contract guard database identity",
+    )
+    database_name = database["name"]
+    system_identifier = database["system_identifier"]
+    if (
+        not isinstance(database_name, str)
+        or not database_name
+        or len(database_name.encode("utf-8")) > 63
+        or "\x00" in database_name
+    ):
+        raise ValueError("Contract guard database name is invalid")
+    if (
+        not isinstance(system_identifier, str)
+        or _SYSTEM_IDENTIFIER_PATTERN.fullmatch(system_identifier) is None
+    ):
+        raise ValueError("Contract guard database system_identifier is invalid")
+
+    release_sha = guard["release_sha"]
+    if not isinstance(release_sha, str) or _FULL_SHA_PATTERN.fullmatch(release_sha) is None:
+        raise ValueError("Contract guard release_sha must be a full lowercase Git SHA")
+
+    raw_ledger = guard["ledger"]
+    if not isinstance(raw_ledger, list):
+        raise ValueError("Contract guard ledger must be a list")
+    normalized_ledger: list[tuple[str, str]] = []
+    for record in raw_ledger:
+        ledger_record = _require_exact_fields(
+            record,
+            {"version", "checksum"},
+            label="Contract guard ledger record",
+        )
+        version = ledger_record["version"]
+        checksum = ledger_record["checksum"]
+        if (
+            not isinstance(version, str)
+            or MIGRATION_VERSION_PATTERN.fullmatch(version) is None
+            or not isinstance(checksum, str)
+            or MIGRATION_CHECKSUM_PATTERN.fullmatch(checksum) is None
+        ):
+            raise ValueError("Contract guard ledger record is invalid")
+        normalized_ledger.append((version, checksum))
+    if normalized_ledger != expected_ledger:
+        raise ValueError(
+            "Contract guard ledger is not the exact canonical 0012 predecessor chain"
+        )
+
+    archive_evidence = _validate_polytao_archive_evidence(
+        guard["archive_evidence"]
+    )
+    archive_evidence_sha256 = _require_prefixed_sha256(
+        guard["archive_evidence_sha256"],
+        label="Contract guard archive_evidence_sha256",
+    )
+    if _canonical_json_sha256(archive_evidence) != archive_evidence_sha256:
+        raise ValueError(
+            "Contract guard archive_evidence_sha256 does not match archive_evidence"
+        )
+
+    relation = _require_exact_fields(
+        guard["relation"],
+        {
+            "qualified_name",
+            "namespace_oid",
+            "relation_oid",
+            "rows_sha256",
+            "schema_sha256",
+        },
+        label="Contract guard relation identity",
+    )
+    namespace_oid = _require_oid(
+        relation["namespace_oid"],
+        label="Contract guard relation namespace_oid",
+    )
+    relation_oid = _require_oid(
+        relation["relation_oid"],
+        label="Contract guard relation relation_oid",
+    )
+    if (
+        relation["qualified_name"] != POLYTAO_CONTRACT_RELATION
+        or relation["rows_sha256"] != archive_evidence["rows_sha256"]
+        or relation["schema_sha256"] != archive_evidence["schema_sha256"]
+    ):
+        raise ValueError(
+            "Contract guard relation identity differs from its archive evidence"
+        )
+
+    deployment_control = _require_exact_fields(
+        guard["deployment_control"],
+        {
+            "control_key",
+            "drain_enabled",
+            "reason",
+            "release_sha",
+            "activated_by",
+        },
+        label="Contract guard deployment_control",
+    )
+    if deployment_control != {
+        "control_key": "production",
+        "drain_enabled": True,
+        "reason": f"0012 maintenance {operation_id}",
+        "release_sha": release_sha,
+        "activated_by": POLYTAO_CONTRACT_GUARD_ACTOR,
+    }:
+        raise ValueError(
+            "Contract guard is not bound to the current operation-owned drain"
+        )
+
+    active_jobs = _require_exact_fields(
+        guard["active_jobs"],
+        set(POLYTAO_GUARDED_JOB_TABLES),
+        label="Contract guard active_jobs",
+    )
+    if any(
+        isinstance(count, bool) or not isinstance(count, int) or count != 0
+        for count in active_jobs.values()
+    ):
+        raise ValueError("Contract guard active_jobs must prove exact zero")
+
+    return PolytaoContractGuard(
+        document=guard,
+        operation_id=operation_id,
+        database_name=database_name,
+        system_identifier=system_identifier,
+        release_sha=release_sha,
+        namespace_oid=namespace_oid,
+        relation_oid=relation_oid,
+        ledger=tuple(normalized_ledger),
+        archive_evidence=archive_evidence,
+        marker_sha256=marker_sha256,
+        audit_manifest_sha256=audit_manifest_sha256,
+    )
 
 
 def ensure_migration_table(connection) -> None:
@@ -73,6 +443,345 @@ def applied_migrations(connection) -> dict[str, str]:
             + ", ".join(sorted(duplicates))
         )
     return applied
+
+
+def _polytao_contract_archive_evidence(connection) -> dict[str, Any]:
+    rows = [
+        row["payload"]
+        for row in connection.execute(
+            """
+            SELECT to_jsonb(jobs) AS payload
+            FROM generation.polytao_jobs AS jobs
+            ORDER BY job_id::text
+            """
+        ).fetchall()
+    ]
+    statuses = {
+        str(row["status"]): int(row["count"])
+        for row in connection.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM generation.polytao_jobs
+            GROUP BY status
+            ORDER BY status
+            """
+        ).fetchall()
+    }
+    columns = [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT column_name, ordinal_position, data_type, udt_schema, udt_name,
+                   is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'generation' AND table_name = 'polytao_jobs'
+            ORDER BY ordinal_position
+            """
+        ).fetchall()
+    ]
+    indexes = [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT indexname, indexdef
+            FROM pg_indexes
+            WHERE schemaname = 'generation' AND tablename = 'polytao_jobs'
+            ORDER BY indexname
+            """
+        ).fetchall()
+    ]
+    constraints = [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT constraint_row.conname AS name,
+                   constraint_row.contype AS type,
+                   constraint_row.condeferrable AS deferrable,
+                   constraint_row.condeferred AS initially_deferred,
+                   constraint_row.convalidated AS validated,
+                   pg_get_constraintdef(constraint_row.oid, true) AS definition
+            FROM pg_constraint AS constraint_row
+            JOIN pg_class AS relation ON relation.oid = constraint_row.conrelid
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            WHERE namespace.nspname = 'generation'
+              AND relation.relname = 'polytao_jobs'
+            ORDER BY constraint_row.conname
+            """
+        ).fetchall()
+    ]
+    triggers = [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT trigger_row.tgname AS name,
+                   trigger_row.tgenabled AS enabled,
+                   pg_get_triggerdef(trigger_row.oid, true) AS definition
+            FROM pg_trigger AS trigger_row
+            JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            WHERE namespace.nspname = 'generation'
+              AND relation.relname = 'polytao_jobs'
+              AND NOT trigger_row.tgisinternal
+            ORDER BY trigger_row.tgname
+            """
+        ).fetchall()
+    ]
+    structure = {
+        "columns": columns,
+        "indexes": indexes,
+        "constraints": constraints,
+        "triggers": triggers,
+    }
+    return {
+        "schema_version": 2,
+        "row_count": len(rows),
+        "status_counts": statuses,
+        "rows_sha256": hashlib.sha256(
+            _canonical_json_bytes(rows, default_to_string=True)
+        ).hexdigest(),
+        "schema_sha256": hashlib.sha256(
+            _canonical_json_bytes(structure, default_to_string=True)
+        ).hexdigest(),
+        "structure_counts": {
+            name: len(records) for name, records in structure.items()
+        },
+    }
+
+
+def _polytao_relation_identity(connection) -> dict[str, Any]:
+    row = connection.execute(
+        """
+        SELECT namespace.oid::bigint AS namespace_oid,
+               relation.oid::bigint AS relation_oid,
+               relation.relkind
+        FROM pg_class AS relation
+        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'generation'
+          AND relation.relname = 'polytao_jobs'
+        """
+    ).fetchone()
+    if row is None or row["relkind"] != "r":
+        raise RuntimeError(
+            "Contract guard requires generation.polytao_jobs to be the sealed regular table"
+        )
+    return {
+        "namespace_oid": int(row["namespace_oid"]),
+        "relation_oid": int(row["relation_oid"]),
+    }
+
+
+def _lock_polytao_contract_state(connection, *, target_present: bool) -> None:
+    """Acquire every writer-conflicting lock in one documented fixed order."""
+
+    connection.execute("SET LOCAL lock_timeout = '10s'")
+    connection.execute(
+        "LOCK TABLE governance.schema_migrations IN SHARE ROW EXCLUSIVE MODE"
+    )
+    connection.execute(
+        "LOCK TABLE governance.deployment_control IN SHARE ROW EXCLUSIVE MODE"
+    )
+    if target_present:
+        if (
+            connection.execute(
+                "SELECT to_regclass('generation.polytao_jobs') AS relation"
+            ).fetchone()["relation"]
+            is None
+        ):
+            raise RuntimeError(
+                "Contract guard target generation.polytao_jobs is missing"
+            )
+        connection.execute(
+            "LOCK TABLE generation.polytao_jobs IN ACCESS EXCLUSIVE MODE"
+        )
+    connection.execute(
+        "LOCK TABLE md.monomer_md_jobs IN SHARE ROW EXCLUSIVE MODE"
+    )
+    connection.execute(
+        "LOCK TABLE online_knowledge.jobs IN SHARE ROW EXCLUSIVE MODE"
+    )
+
+
+def _locked_contract_ledger(connection) -> list[tuple[str, str]]:
+    return [
+        (str(row["version"]), str(row["checksum"]))
+        for row in connection.execute(
+            """
+            SELECT version, checksum
+            FROM governance.schema_migrations
+            ORDER BY version, checksum
+            """
+        ).fetchall()
+    ]
+
+
+def _require_no_event_triggers(connection) -> None:
+    count = int(
+        connection.execute(
+            "SELECT COUNT(*) AS count FROM pg_catalog.pg_event_trigger"
+        ).fetchone()["count"]
+    )
+    if count != 0:
+        raise RuntimeError(
+            "Contract guard requires an empty PostgreSQL event-trigger inventory"
+        )
+
+
+def _verify_polytao_contract_database_identity(
+    connection,
+    guard: PolytaoContractGuard,
+) -> None:
+    row = connection.execute(
+        """
+        SELECT current_database() AS database_name,
+               system_identifier::text AS system_identifier
+        FROM pg_catalog.pg_control_system()
+        """
+    ).fetchone()
+    if (
+        row is None
+        or str(row["database_name"]) != guard.database_name
+        or str(row["system_identifier"]) != guard.system_identifier
+    ):
+        raise RuntimeError(
+            "Contract guard database name or cluster system identifier changed"
+        )
+
+
+def _verify_polytao_contract_drain(
+    connection,
+    guard: PolytaoContractGuard,
+) -> None:
+    row = connection.execute(
+        """
+        SELECT control_key, drain_enabled, reason, release_sha, activated_by
+        FROM governance.deployment_control
+        WHERE control_key = 'production'
+        """
+    ).fetchone()
+    expected = guard.document["deployment_control"]
+    if row is None or {
+        "control_key": str(row["control_key"]),
+        "drain_enabled": bool(row["drain_enabled"]),
+        "reason": row["reason"],
+        "release_sha": row["release_sha"],
+        "activated_by": row["activated_by"],
+    } != expected:
+        raise RuntimeError(
+            "Contract guard operation-owned deployment drain changed"
+        )
+
+
+def _active_job_counts(connection, *, target_present: bool) -> dict[str, int]:
+    active_statuses = sorted(POLYTAO_ACTIVE_STATUSES)
+    counts: dict[str, int] = {
+        "generation.polytao_jobs": 0,
+        "md.monomer_md_jobs": 0,
+        "online_knowledge.jobs": 0,
+    }
+    if target_present:
+        counts["generation.polytao_jobs"] = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM generation.polytao_jobs
+                WHERE status = ANY(%s)
+                """,
+                (active_statuses,),
+            ).fetchone()["count"]
+        )
+    counts["md.monomer_md_jobs"] = int(
+        connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM md.monomer_md_jobs
+            WHERE status = ANY(%s)
+            """,
+            (active_statuses,),
+        ).fetchone()["count"]
+    )
+    counts["online_knowledge.jobs"] = int(
+        connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM online_knowledge.jobs
+            WHERE status = ANY(%s)
+            """,
+            (active_statuses,),
+        ).fetchone()["count"]
+    )
+    return counts
+
+
+def _verify_polytao_contract_guard(
+    connection,
+    guard: PolytaoContractGuard,
+) -> None:
+    _require_no_event_triggers(connection)
+    _lock_polytao_contract_state(connection, target_present=True)
+    _verify_polytao_contract_database_identity(connection, guard)
+    if _locked_contract_ledger(connection) != list(guard.ledger):
+        raise RuntimeError(
+            "Contract guard migration ledger changed before 0012 execution"
+        )
+    _verify_polytao_contract_drain(connection, guard)
+    relation = _polytao_relation_identity(connection)
+    if (
+        relation["namespace_oid"] != guard.namespace_oid
+        or relation["relation_oid"] != guard.relation_oid
+    ):
+        raise RuntimeError(
+            "Contract guard relation or namespace OID changed before 0012 execution"
+        )
+    current_evidence = _polytao_contract_archive_evidence(connection)
+    if current_evidence != guard.archive_evidence:
+        raise RuntimeError(
+            "Contract guard PolyTAO schema or business-row content changed "
+            "after archival"
+        )
+    if _active_job_counts(connection, target_present=True) != guard.document[
+        "active_jobs"
+    ]:
+        raise RuntimeError(
+            "Contract guard observed active database jobs before 0012 execution"
+        )
+
+
+def _verify_applied_polytao_contract_guard(
+    connection,
+    guard: PolytaoContractGuard,
+    *,
+    expected_ledger: list[tuple[str, str]],
+) -> None:
+    """Verify the exact post-state for an idempotent response-loss retry."""
+
+    _lock_polytao_contract_state(connection, target_present=False)
+    _require_no_event_triggers(connection)
+    _verify_polytao_contract_database_identity(connection, guard)
+    if _locked_contract_ledger(connection) != expected_ledger:
+        raise RuntimeError(
+            "Contract guard migration ledger changed after 0012 execution"
+        )
+    _verify_polytao_contract_drain(connection, guard)
+    relation_state = connection.execute(
+        """
+        SELECT to_regclass('generation.polytao_jobs') AS relation,
+               to_regnamespace('generation') AS namespace
+        """
+    ).fetchone()
+    if (
+        relation_state is None
+        or relation_state["relation"] is not None
+        or relation_state["namespace"] is not None
+    ):
+        raise RuntimeError(
+            "Applied 0012 ledger does not match the contract's absent generation schema"
+        )
+    if _active_job_counts(connection, target_present=False) != guard.document[
+        "active_jobs"
+    ]:
+        raise RuntimeError(
+            "Contract guard observed active database jobs after 0012 execution"
+        )
 
 
 def database_is_fresh_for_bootstrap(connection) -> bool:
@@ -171,10 +880,18 @@ def apply_postgres_migrations(
     allow_contract_on_fresh_database: bool = False,
     defer_trailing_contracts: bool = False,
     restricted_contract: tuple[str, str] | None = None,
+    contract_guard_json: str | None = None,
+    contract_guard_sha256: str | None = None,
 ) -> list[MigrationResult]:
     if allowed_kinds is None:
         raise ValueError(
             "Migration callers must select an explicit policy; use CLI --mode bootstrap for a fresh database"
+        )
+    if restricted_contract is None and (
+        contract_guard_json is not None or contract_guard_sha256 is not None
+    ):
+        raise ValueError(
+            "A transaction guard may be supplied only to the restricted 0012 contract"
         )
     migration_paths = sorted(migrations_dir.glob("*.sql"))
     if not migration_paths:
@@ -186,6 +903,9 @@ def apply_postgres_migrations(
         raise RuntimeError("Validated migration entries do not match migration SQL ordering")
 
     restricted_version: str | None = None
+    restricted_target_index: int | None = None
+    expected_guard_ledger: list[tuple[str, str]] = []
+    contract_guard: PolytaoContractGuard | None = None
     if restricted_contract is not None:
         if restricted_contract != (
             POLYTAO_CONTRACT_VERSION,
@@ -206,6 +926,20 @@ def apply_postgres_migrations(
             )
         if allowed_kinds != {"contract"}:
             raise ValueError("A restricted contract operation may allow only contract migrations")
+        restricted_target_index = next(
+            index
+            for index, manifest_entry in enumerate(entries)
+            if manifest_entry.version == restricted_version
+        )
+        expected_guard_ledger = [
+            (manifest_entry.version, str(manifest_entry.checksum))
+            for manifest_entry in entries[:restricted_target_index]
+        ]
+        contract_guard = _load_polytao_contract_guard(
+            contract_guard_json,
+            contract_guard_sha256,
+            expected_ledger=expected_guard_ledger,
+        )
 
     results: list[MigrationResult] = []
     with postgres_connection(dsn) as connection:
@@ -243,10 +977,11 @@ def apply_postgres_migrations(
                 )
 
         if restricted_version is not None:
-            target_index = next(
-                index for index, entry in enumerate(entries) if entry.version == restricted_version
-            )
-            canonical_prefix = [entry.version for entry in entries[:target_index]]
+            if restricted_target_index is None:  # pragma: no cover - defensive
+                raise RuntimeError("Restricted contract target index is unavailable")
+            canonical_prefix = [
+                entry.version for entry in entries[:restricted_target_index]
+            ]
             expected_ledger = set(canonical_prefix)
             if restricted_version in applied:
                 expected_ledger.add(restricted_version)
@@ -333,6 +1068,24 @@ def apply_postgres_migrations(
                 if entry.version in will_apply:
                     simulated[entry.version] = str(entry.checksum)
 
+        if restricted_version is not None and restricted_version in applied:
+            if contract_guard is None:  # pragma: no cover - validated before connect
+                raise RuntimeError("Restricted contract guard is unavailable")
+            expected_applied_ledger = [
+                *expected_guard_ledger,
+                (restricted_version, POLYTAO_CONTRACT_CHECKSUM),
+            ]
+            # End the read-only planning transaction so that the verification,
+            # locks, exact post-state check, and response-loss retry decision
+            # have one explicit top-level transaction boundary.
+            connection.commit()
+            with connection.transaction():
+                _verify_applied_polytao_contract_guard(
+                    connection,
+                    contract_guard,
+                    expected_ledger=expected_applied_ledger,
+                )
+
         for path in migration_paths:
             version = path.stem
             checksum = str(entries_by_version[version].checksum)
@@ -346,15 +1099,42 @@ def apply_postgres_migrations(
                 continue
 
             sql = path.read_text(encoding="utf-8")
-            with connection.transaction():
-                connection.execute(sql)
-                connection.execute(
-                    """
-                    INSERT INTO governance.schema_migrations (version, checksum)
-                    VALUES (%s, %s)
-                    """,
-                    (version, checksum),
-                )
+            if version == restricted_version:
+                if contract_guard is None:  # pragma: no cover - validated before connect
+                    raise RuntimeError("Restricted contract guard is unavailable")
+                # Planning above is deliberately read-only. Commit it before
+                # opening the sole destructive transaction so ACCESS
+                # EXCLUSIVE, all fresh guard checks, the unchanged canonical
+                # SQL, and the ledger INSERT commit or roll back together.
+                connection.commit()
+                with connection.transaction():
+                    _verify_polytao_contract_guard(connection, contract_guard)
+                    connection.execute(sql)
+                    connection.execute(
+                        """
+                        INSERT INTO governance.schema_migrations (version, checksum)
+                        VALUES (%s, %s)
+                        """,
+                        (version, checksum),
+                    )
+                    _verify_applied_polytao_contract_guard(
+                        connection,
+                        contract_guard,
+                        expected_ledger=[
+                            *expected_guard_ledger,
+                            (version, checksum),
+                        ],
+                    )
+            else:
+                with connection.transaction():
+                    connection.execute(sql)
+                    connection.execute(
+                        """
+                        INSERT INTO governance.schema_migrations (version, checksum)
+                        VALUES (%s, %s)
+                        """,
+                        (version, checksum),
+                    )
             results.append(MigrationResult(version=version, checksum=checksum, applied=True))
     return results
 
@@ -362,6 +1142,9 @@ def apply_postgres_migrations(
 def apply_polytao_contract_migration(
     dsn: str,
     migrations_dir: Path = MIGRATIONS_DIR,
+    *,
+    guard_json: str | None = None,
+    guard_sha256: str | None = None,
 ) -> list[MigrationResult]:
     """Apply only the reviewed 0012 contract at its immutable checksum."""
 
@@ -370,6 +1153,8 @@ def apply_polytao_contract_migration(
         migrations_dir,
         allowed_kinds={"contract"},
         restricted_contract=(POLYTAO_CONTRACT_VERSION, POLYTAO_CONTRACT_CHECKSUM),
+        contract_guard_json=guard_json,
+        contract_guard_sha256=guard_sha256,
     )
 
 
@@ -377,6 +1162,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Apply PolyProp Postgres governance migrations.")
     parser.add_argument("--dsn", default=Settings().app_postgres_dsn)
     parser.add_argument("--migrations-dir", type=Path, default=MIGRATIONS_DIR)
+    parser.add_argument(
+        "--contract-guard-json",
+        help="Exact canonical, non-secret JSON evidence for the 0012 transaction guard.",
+    )
+    parser.add_argument(
+        "--contract-guard-sha256",
+        help="Detached sha256:<hex> digest of --contract-guard-json.",
+    )
     parser.add_argument(
         "--mode",
         choices=(
@@ -398,11 +1191,23 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.mode == "contract-0012":
-        results = apply_polytao_contract_migration(args.dsn, args.migrations_dir)
+        if args.contract_guard_json is None or args.contract_guard_sha256 is None:
+            parser.error(
+                "--mode contract-0012 requires --contract-guard-json and "
+                "--contract-guard-sha256"
+            )
+        results = apply_polytao_contract_migration(
+            args.dsn,
+            args.migrations_dir,
+            guard_json=args.contract_guard_json,
+            guard_sha256=args.contract_guard_sha256,
+        )
         for result in results:
             status = "applied" if result.applied else "skipped"
             print(f"{result.version}\t{status}\t{result.checksum}")
         return
+    if args.contract_guard_json is not None or args.contract_guard_sha256 is not None:
+        parser.error("Contract guard arguments require --mode contract-0012")
 
     allowed_kinds: set[MigrationKind]
     if args.mode in {"bootstrap", "bootstrap-expand", "restore-expand"}:

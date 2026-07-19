@@ -135,8 +135,8 @@ BYTEFF2_AUDITED_OVERLAY_SOURCE_PATHS = {
 CONTRACT_0012_EXTERNAL_AUDIT_COMMAND = (
     "NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND"
 )
-CONTRACT_0012_MEDIA_REGISTRY_DIGEST = (
-    "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256"
+CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST = (
+    "NEXPOLY_CONTRACT_0012_MEDIA_AUTHORITY_RULES_SHA256"
 )
 CONTRACT_0012_EXTERNAL_AUDIT_USERS = {
     "nexpoly_dev": "NEXPOLY_CONTRACT_0012_DEV_AUDIT_USER",
@@ -611,6 +611,129 @@ print(
             "structure_counts": {
                 name: len(records) for name, records in structure.items()
             },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+)
+"""
+CONTRACT_0012_GUARD_SNAPSHOT_PROGRAM = r"""
+import json
+
+from app.config import Settings
+from app.postgres_database import postgres_connection
+
+
+ACTIVE_STATUSES = ["pending", "running", "submitted"]
+JOB_RELATIONS = (
+    "generation.polytao_jobs",
+    "md.monomer_md_jobs",
+    "online_knowledge.jobs",
+)
+
+
+with postgres_connection(Settings().app_postgres_dsn) as connection:
+    connection.execute(
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+    )
+    identity = connection.execute(
+        "SELECT current_database() AS database, "
+        "system_identifier::text AS system_identifier "
+        "FROM pg_catalog.pg_control_system()"
+    ).fetchone()
+    ledger = [
+        {"version": str(row["version"]), "checksum": str(row["checksum"])}
+        for row in connection.execute(
+            "SELECT version, checksum FROM governance.schema_migrations "
+            "ORDER BY version, checksum"
+        ).fetchall()
+    ]
+    relation = connection.execute(
+        "SELECT namespace.oid AS namespace_oid, "
+        "relation.oid AS relation_oid, relation.relkind AS relkind "
+        "FROM pg_catalog.pg_class AS relation "
+        "JOIN pg_catalog.pg_namespace AS namespace "
+        "ON namespace.oid = relation.relnamespace "
+        "WHERE namespace.nspname = 'generation' "
+        "AND relation.relname = 'polytao_jobs'"
+    ).fetchone()
+    namespace = connection.execute(
+        "SELECT to_regnamespace('generation')::oid AS namespace_oid"
+    ).fetchone()
+    control = connection.execute(
+        "SELECT control_key, drain_enabled, reason, release_sha, activated_by "
+        "FROM governance.deployment_control "
+        "WHERE control_key = 'production'"
+    ).fetchone()
+    active_jobs = {}
+    for qualified_name in JOB_RELATIONS:
+        relation_present = (
+            connection.execute(
+                "SELECT to_regclass(%s) AS relation",
+                (qualified_name,),
+            ).fetchone()["relation"]
+            is not None
+        )
+        if not relation_present:
+            if qualified_name != "generation.polytao_jobs":
+                raise RuntimeError(
+                    "0012 guard requires persistent job relation "
+                    + qualified_name
+                )
+            active_jobs[qualified_name] = 0
+            continue
+        if qualified_name == "generation.polytao_jobs":
+            query = (
+                "SELECT COUNT(*) AS count FROM generation.polytao_jobs "
+                "WHERE status = ANY(%s)"
+            )
+        elif qualified_name == "md.monomer_md_jobs":
+            query = (
+                "SELECT COUNT(*) AS count FROM md.monomer_md_jobs "
+                "WHERE status = ANY(%s)"
+            )
+        else:
+            query = (
+                "SELECT COUNT(*) AS count FROM online_knowledge.jobs "
+                "WHERE status = ANY(%s)"
+            )
+        active_jobs[qualified_name] = int(
+            connection.execute(query, (ACTIVE_STATUSES,)).fetchone()["count"]
+        )
+
+print(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "database": str(identity["database"]),
+            "system_identifier": str(identity["system_identifier"]),
+            "generation_namespace_oid": (
+                None
+                if namespace["namespace_oid"] is None
+                else int(namespace["namespace_oid"])
+            ),
+            "relation": (
+                None
+                if relation is None
+                else {
+                    "namespace_oid": int(relation["namespace_oid"]),
+                    "relation_oid": int(relation["relation_oid"]),
+                    "relkind": str(relation["relkind"]),
+                }
+            ),
+            "ledger": ledger,
+            "deployment_control": (
+                None
+                if control is None
+                else {
+                    "control_key": str(control["control_key"]),
+                    "drain_enabled": bool(control["drain_enabled"]),
+                    "reason": control["reason"],
+                    "release_sha": control["release_sha"],
+                    "activated_by": control["activated_by"],
+                }
+            ),
+            "active_jobs": active_jobs,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -4312,6 +4435,109 @@ class ReleaseController:
             )
         return command
 
+    def bootstrap_hook_environment(
+        self,
+        environment: dict[str, str],
+        key: str,
+    ) -> dict[str, str]:
+        """Derive the exact environment for one audited hook."""
+
+        del key
+        return dict(environment)
+
+    def validate_pinned_bootstrap_hook(
+        self,
+        key: str,
+        path: Path,
+        digest: str,
+    ) -> None:
+        """Allow a deployment integration to bind a reviewed hook digest."""
+
+        del key, path, digest
+
+    def run_pinned_bootstrap_hook(
+        self,
+        environment: dict[str, str],
+        key: str,
+        *,
+        arguments: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess[str]:
+        """Open, authenticate, and execute one hook through its pinned FD."""
+
+        command = self.bootstrap_hook_command(environment, key)
+        path = Path(command[0])
+        try:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except OSError as exc:
+            raise ReleaseError(f"{key} executable cannot be pinned") from exc
+        try:
+            before = os.fstat(descriptor)
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > 4 * 1024 * 1024:
+                    raise ReleaseError(f"{key} executable is oversized")
+            after = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) != 0o700
+                or before.st_nlink != 1
+                or (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mtime_ns,
+                    before.st_ctime_ns,
+                    before.st_mode,
+                    before.st_uid,
+                    before.st_nlink,
+                )
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                    after.st_mode,
+                    after.st_uid,
+                    after.st_nlink,
+                )
+            ):
+                raise ReleaseError(f"{key} executable changed while pinned")
+            digest = sha256_bytes(b"".join(chunks))
+            self.validate_pinned_bootstrap_hook(key, path, digest)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            hook_environment = self.bootstrap_hook_environment(
+                environment,
+                key,
+            )
+            print(
+                "[release-controller] "
+                + shlex.join([str(path), *arguments])
+            )
+            return subprocess.run(
+                [f"/proc/self/fd/{descriptor}", *arguments],
+                cwd=self.root,
+                env=hook_environment,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                pass_fds=(descriptor,),
+            )
+        finally:
+            os.close(descriptor)
+
     def run_bootstrap_quiesce(self, environment: dict[str, str]) -> dict[str, Any]:
         """Run the audited legacy hook and require complete zero-work evidence."""
 
@@ -4445,11 +4671,51 @@ class ReleaseController:
         return payload
 
     def run_migrations(
-        self, environment: dict[str, str], *, mode: str = "expand"
+        self,
+        environment: dict[str, str],
+        *,
+        mode: str = "expand",
+        contract_guard_json: str | None = None,
+        contract_guard_sha256: str | None = None,
     ) -> list[str]:
         if mode not in {"bootstrap", "bootstrap-expand", "expand", "contract-0012"}:
             raise ReleaseError(
                 "migration mode must be bootstrap, bootstrap-expand, expand, or contract-0012"
+            )
+        if mode == "contract-0012":
+            if (
+                not isinstance(contract_guard_json, str)
+                or not contract_guard_json
+                or not isinstance(contract_guard_sha256, str)
+                or DIGEST_RE.fullmatch(contract_guard_sha256) is None
+                or sha256_bytes(contract_guard_json.encode("utf-8"))
+                != contract_guard_sha256
+            ):
+                raise ReleaseError(
+                    "contract-0012 requires an exact canonical transaction guard"
+                )
+            try:
+                decoded_guard = json.loads(contract_guard_json)
+            except json.JSONDecodeError as exc:
+                raise ReleaseError(
+                    "contract-0012 transaction guard is invalid JSON"
+                ) from exc
+            if (
+                not isinstance(decoded_guard, dict)
+                or json.dumps(
+                    decoded_guard,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                )
+                != contract_guard_json
+            ):
+                raise ReleaseError(
+                    "contract-0012 transaction guard is not canonically encoded"
+                )
+        elif contract_guard_json is not None or contract_guard_sha256 is not None:
+            raise ReleaseError(
+                "a contract transaction guard may only be used by contract-0012"
             )
         policy_path = (
             self.candidate_dir / "backend" / "migrations" / "postgres" / "manifest.json"
@@ -4508,7 +4774,21 @@ class ReleaseController:
             "--mode",
             mode,
         )
-        print(f"[release-controller] {shlex.join(command)}")
+        if mode == "contract-0012":
+            command.extend(
+                [
+                    "--contract-guard-json",
+                    contract_guard_json,
+                    "--contract-guard-sha256",
+                    contract_guard_sha256,
+                ]
+            )
+        display_command = list(command)
+        if mode == "contract-0012":
+            display_command[display_command.index("--contract-guard-json") + 1] = (
+                "<sealed-contract-guard>"
+            )
+        print(f"[release-controller] {shlex.join(display_command)}")
         result = subprocess.run(
             command,
             cwd=self.root,
@@ -4577,6 +4857,20 @@ class ReleaseController:
                     )
                 applied.append(version)
         return applied
+
+    def finalize_contract_0012_external_audit(
+        self,
+        environment: dict[str, str],
+    ) -> None:
+        """Complete adapter-owned post-contract media evidence.
+
+        The legacy controller has no external media adapter.  The pull
+        controller overrides this hook so a commit-response-loss recovery can
+        finish the same audit that normally follows a successful migration
+        subprocess.
+        """
+
+        del environment
 
     def assert_still_current_main(self, environment: dict[str, str]) -> None:
         """Fail closed inside deploy.lock if an auto/bootstrap release was superseded."""
@@ -8532,6 +8826,14 @@ class PolytaoContractMaintenance:
     BUSINESS_STATUSES = frozenset(
         {"pending", "submitted", "running", "completed", "failed", "cancelled"}
     )
+    ACTIVE_BUSINESS_STATUSES = frozenset({"pending", "submitted", "running"})
+    GUARDED_JOB_RELATIONS = frozenset(
+        {
+            "generation.polytao_jobs",
+            "md.monomer_md_jobs",
+            "online_knowledge.jobs",
+        }
+    )
 
     def __init__(
         self,
@@ -9396,19 +9698,23 @@ class PolytaoContractMaintenance:
                     f"0012 maintenance requires a pinned read-only audit user in {user_key}"
                 )
             expected_users[stack] = expected_user
-        registry_digest = environment.get(CONTRACT_0012_MEDIA_REGISTRY_DIGEST)
+        authority_rules_digest = environment.get(
+            CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST
+        )
         if (
-            not isinstance(registry_digest, str)
-            or DIGEST_RE.fullmatch(registry_digest) is None
+            not isinstance(authority_rules_digest, str)
+            or DIGEST_RE.fullmatch(authority_rules_digest) is None
         ):
             raise ReleaseError(
-                "0012 maintenance requires the pinned external media registry digest"
+                "0012 maintenance requires pinned media authority rules"
             )
         try:
             normalized_inventory = validate_external_database_audit(
                 payload,
                 expected_users=expected_users,
-                expected_media_registry_digest=registry_digest,
+                expected_media_authority_rules_digest=(
+                    authority_rules_digest
+                ),
             )
         except SiteHelperContractError as exc:
             raise ReleaseError(f"external database inventory is unsafe: {exc}") from exc
@@ -9440,19 +9746,11 @@ class PolytaoContractMaintenance:
             raise ReleaseError(
                 "0012 maintenance requires the external database audit command"
             )
-        command = self.controller.bootstrap_hook_command(
-            environment,
-            CONTRACT_0012_EXTERNAL_AUDIT_COMMAND,
-        )
-        print(f"[release-controller] {shlex.join(command)}")
         try:
-            completed = subprocess.run(
-                command,
-                cwd=self.root,
-                env=environment,
-                check=True,
-                text=True,
-                stdout=subprocess.PIPE,
+            completed = self.controller.run_pinned_bootstrap_hook(
+                environment,
+                CONTRACT_0012_EXTERNAL_AUDIT_COMMAND,
+                arguments=("revalidate",),
             )
         except subprocess.CalledProcessError as exc:
             raise ReleaseError("external database audit command failed") from exc
@@ -9544,6 +9842,10 @@ class PolytaoContractMaintenance:
                 for status, count in status_counts.items()
             )
             or sum(status_counts.values()) != row_count
+            or any(
+                status in self.ACTIVE_BUSINESS_STATUSES and count > 0
+                for status, count in status_counts.items()
+            )
         ):
             raise ReleaseError(
                 "0012 archive evidence does not seal the complete dynamic business-row set"
@@ -9567,6 +9869,403 @@ class PolytaoContractMaintenance:
         ):
             raise ReleaseError("0012 archive evidence has invalid structure counts")
         return dict(payload)
+
+    def _validate_contract_guard_snapshot(
+        self,
+        payload: object,
+        *,
+        expected_ledger: object,
+        require_relation: bool | None,
+    ) -> dict[str, Any]:
+        fields = {
+            "schema_version",
+            "database",
+            "system_identifier",
+            "generation_namespace_oid",
+            "relation",
+            "ledger",
+            "deployment_control",
+            "active_jobs",
+        }
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != fields
+            or payload.get("schema_version") != 1
+            or not isinstance(payload.get("database"), str)
+            or not payload["database"]
+            or not isinstance(payload.get("system_identifier"), str)
+            or re.fullmatch(r"[0-9]{1,20}", payload["system_identifier"]) is None
+            or not isinstance(payload.get("ledger"), list)
+            or payload["ledger"] != expected_ledger
+        ):
+            raise ReleaseError("0012 transaction guard snapshot has an invalid identity")
+        namespace_oid = payload.get("generation_namespace_oid")
+        if (
+            namespace_oid is not None
+            and (
+                isinstance(namespace_oid, bool)
+                or not isinstance(namespace_oid, int)
+                or namespace_oid <= 0
+            )
+        ):
+            raise ReleaseError(
+                "0012 transaction guard snapshot has an invalid namespace OID"
+            )
+        relation = payload.get("relation")
+        if relation is not None:
+            if (
+                not isinstance(relation, dict)
+                or set(relation) != {"namespace_oid", "relation_oid", "relkind"}
+                or relation.get("namespace_oid") != namespace_oid
+                or relation.get("relkind") != "r"
+                or any(
+                    isinstance(relation.get(key), bool)
+                    or not isinstance(relation.get(key), int)
+                    or relation[key] <= 0
+                    for key in ("namespace_oid", "relation_oid")
+                )
+            ):
+                raise ReleaseError(
+                    "0012 transaction guard target is not the sealed regular table"
+                )
+        if require_relation is True and relation is None:
+            raise ReleaseError("0012 transaction guard target relation is missing")
+        if require_relation is False and (
+            relation is not None or namespace_oid is not None
+        ):
+            raise ReleaseError(
+                "0012 post-contract endpoint retained the generation schema"
+            )
+        active_jobs = payload.get("active_jobs")
+        if (
+            not isinstance(active_jobs, dict)
+            or set(active_jobs) != self.GUARDED_JOB_RELATIONS
+            or any(
+                isinstance(count, bool)
+                or not isinstance(count, int)
+                or count != 0
+                for count in active_jobs.values()
+            )
+        ):
+            raise ReleaseError(
+                "0012 transaction guard snapshot does not prove zero persistent jobs"
+            )
+        control = payload.get("deployment_control")
+        expected_control = {
+            "control_key": "production",
+            "drain_enabled": True,
+            "reason": f"0012 maintenance {self.operation_id}",
+            "release_sha": self.document["source_sha"],
+            "activated_by": "pull-contract-0012",
+        }
+        if control != expected_control:
+            raise ReleaseError(
+                "0012 transaction guard snapshot lacks its operation-owned drain"
+            )
+        return dict(payload)
+
+    @staticmethod
+    def _canonical_contract_guard_json(document: object) -> str:
+        return json.dumps(
+            document,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+
+    def _load_contract_transaction_guard(
+        self,
+        marker: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, str]:
+        path_value = marker.get("transaction_guard_path")
+        digest = marker.get("transaction_guard_sha256")
+        marker_digest = marker.get("transaction_guard_marker_sha256")
+        marker_precondition_path_value = marker.get(
+            "transaction_guard_marker_precondition_path"
+        )
+        audit_path_value = marker.get("transaction_guard_audit_manifest_path")
+        audit_digest = marker.get("transaction_guard_audit_manifest_sha256")
+        if (
+            not isinstance(path_value, str)
+            or Path(path_value) != self.audit_dir / "transaction-guard.json"
+            or not isinstance(digest, str)
+            or DIGEST_RE.fullmatch(digest) is None
+            or not isinstance(marker_digest, str)
+            or DIGEST_RE.fullmatch(marker_digest) is None
+            or not isinstance(marker_precondition_path_value, str)
+            or Path(marker_precondition_path_value)
+            != self.audit_dir / "transaction-guard-marker-precondition.json"
+            or not isinstance(audit_path_value, str)
+            or Path(audit_path_value)
+            != self.audit_dir / "PRE-TRANSACTION-AUDIT-MANIFEST.json"
+            or not isinstance(audit_digest, str)
+            or DIGEST_RE.fullmatch(audit_digest) is None
+        ):
+            raise ReleaseError("0012 transaction guard marker is incomplete")
+        marker_precondition_path = Path(marker_precondition_path_value)
+        audit_path = Path(audit_path_value)
+        for evidence_path, expected_digest, label in (
+            (
+                marker_precondition_path,
+                marker_digest,
+                "transaction guard marker precondition",
+            ),
+            (
+                audit_path,
+                audit_digest,
+                "transaction guard audit precondition",
+            ),
+        ):
+            try:
+                evidence_metadata = evidence_path.lstat()
+            except OSError as exc:
+                raise ReleaseError(f"0012 {label} is unavailable") from exc
+            if (
+                not stat.S_ISREG(evidence_metadata.st_mode)
+                or evidence_path.is_symlink()
+                or stat.S_IMODE(evidence_metadata.st_mode) != 0o600
+                or sha256_file(evidence_path) != expected_digest
+            ):
+                raise ReleaseError(f"0012 {label} is unsafe or changed")
+        precondition = self._load_operation_document(
+            marker_precondition_path,
+            "transaction guard marker precondition",
+        )
+        if (
+            precondition.get("operation_id") != self.operation_id
+            or precondition.get("source_sha") != self.document["source_sha"]
+            or precondition.get("phase") != "transaction-guard-precondition"
+            or precondition.get("database_transaction_intent") is not False
+            or precondition.get("transaction_guard_audit_manifest_path")
+            != str(audit_path)
+            or precondition.get("transaction_guard_audit_manifest_sha256")
+            != audit_digest
+        ):
+            raise ReleaseError(
+                "0012 transaction guard marker precondition has changed identity"
+            )
+        self._validate_audit_manifest(
+            self._load_operation_document(
+                audit_path,
+                "transaction guard audit precondition",
+            )
+        )
+        path = Path(path_value)
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise ReleaseError("0012 transaction guard file is unavailable") from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or sha256_file(path) != digest
+        ):
+            raise ReleaseError("0012 transaction guard file is unsafe or changed")
+        try:
+            guard_json = path.read_text(encoding="utf-8")
+            document = json.loads(guard_json)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ReleaseError("0012 transaction guard file is invalid") from exc
+        if (
+            not isinstance(document, dict)
+            or self._canonical_contract_guard_json(document) != guard_json
+            or sha256_bytes(guard_json.encode("utf-8")) != digest
+        ):
+            raise ReleaseError(
+                "0012 transaction guard file is not exact canonical JSON"
+            )
+        maintenance = document.get("maintenance")
+        contract = document.get("contract")
+        if (
+            not isinstance(maintenance, dict)
+            or maintenance
+            != {
+                "operation_id": self.operation_id,
+                "marker_sha256": marker_digest,
+                "audit_manifest_sha256": audit_digest,
+            }
+            or contract
+            != {
+                "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "checksum": POLYTAO_CONTRACT_CHECKSUM,
+            }
+            or document.get("release_sha") != self.document["source_sha"]
+        ):
+            raise ReleaseError("0012 transaction guard identity differs")
+        return document, guard_json, digest
+
+    def _prepare_contract_transaction_guard(
+        self,
+        environment: dict[str, str],
+        marker: dict[str, Any],
+        evidence: dict[str, Any],
+        database_inventory: dict[str, Any],
+        audit_manifest: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, str]:
+        ledger = database_inventory.get("ledger")
+        if not isinstance(ledger, list):
+            raise ReleaseError("0012 transaction guard lacks its canonical ledger")
+        pre_manifest_path = self.audit_dir / "PRE-TRANSACTION-AUDIT-MANIFEST.json"
+        atomic_json(pre_manifest_path, audit_manifest)
+        pre_manifest_digest = sha256_file(pre_manifest_path)
+        marker.update(
+            {
+                "phase": "transaction-guard-precondition",
+                "database_transaction_intent": False,
+                "transaction_guard_audit_manifest_path": str(pre_manifest_path),
+                "transaction_guard_audit_manifest_sha256": pre_manifest_digest,
+            }
+        )
+        self._write_marker(marker)
+        marker_precondition_payload = self.marker_path.read_bytes()
+        marker_digest = sha256_bytes(marker_precondition_payload)
+        marker_precondition_path = (
+            self.audit_dir / "transaction-guard-marker-precondition.json"
+        )
+        try:
+            marker_precondition_text = marker_precondition_payload.decode("utf-8")
+        except UnicodeError as exc:  # pragma: no cover - writer is UTF-8
+            raise ReleaseError(
+                "0012 transaction guard marker precondition is not UTF-8"
+            ) from exc
+        atomic_text(
+            marker_precondition_path,
+            marker_precondition_text,
+            mode=0o600,
+        )
+        snapshot = self._validate_contract_guard_snapshot(
+            self._capture_json(
+                CONTRACT_0012_GUARD_SNAPSHOT_PROGRAM,
+                environment,
+            ),
+            expected_ledger=ledger,
+            require_relation=True,
+        )
+        relation = snapshot["relation"]
+        guard = {
+            "schema_version": 1,
+            "contract": {
+                "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "checksum": POLYTAO_CONTRACT_CHECKSUM,
+            },
+            "maintenance": {
+                "operation_id": self.operation_id,
+                "marker_sha256": marker_digest,
+                "audit_manifest_sha256": pre_manifest_digest,
+            },
+            "database": {
+                "name": snapshot["database"],
+                "system_identifier": snapshot["system_identifier"],
+            },
+            "release_sha": self.document["source_sha"],
+            "ledger": ledger,
+            "relation": {
+                "qualified_name": self.BUSINESS_RELATION,
+                "namespace_oid": relation["namespace_oid"],
+                "relation_oid": relation["relation_oid"],
+                "rows_sha256": evidence["rows_sha256"],
+                "schema_sha256": evidence["schema_sha256"],
+            },
+            "archive_evidence": evidence,
+            "archive_evidence_sha256": canonical_json_digest(evidence),
+            "deployment_control": snapshot["deployment_control"],
+            "active_jobs": snapshot["active_jobs"],
+        }
+        guard_json = self._canonical_contract_guard_json(guard)
+        guard_digest = sha256_bytes(guard_json.encode("utf-8"))
+        guard_path = self.audit_dir / "transaction-guard.json"
+        atomic_text(guard_path, guard_json, mode=0o600)
+        marker.update(
+            {
+                "phase": "database-transaction-intent",
+                "database_transaction_intent": True,
+                "database_change_started": False,
+                "transaction_guard_path": str(guard_path),
+                "transaction_guard_sha256": guard_digest,
+                "transaction_guard_marker_sha256": marker_digest,
+                "transaction_guard_marker_precondition_path": str(
+                    marker_precondition_path
+                ),
+            }
+        )
+        self._audit_manifest()
+        marker["audit_manifest_sha256"] = sha256_file(
+            self.audit_dir / "AUDIT-MANIFEST.json"
+        )
+        self._write_marker(marker)
+        return self._load_contract_transaction_guard(marker)
+
+    def _classify_contract_database_endpoint(
+        self,
+        environment: dict[str, str],
+        marker: dict[str, Any],
+    ) -> str:
+        guard, _guard_json, _guard_digest = (
+            self._load_contract_transaction_guard(marker)
+        )
+        pre_ledger = guard.get("ledger")
+        if not isinstance(pre_ledger, list):
+            raise ReleaseError("0012 transaction guard ledger is invalid")
+        post_ledger = [
+            *pre_ledger,
+            {
+                "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "checksum": POLYTAO_CONTRACT_CHECKSUM,
+            },
+        ]
+        snapshot = self._capture_json(
+            CONTRACT_0012_GUARD_SNAPSHOT_PROGRAM,
+            environment,
+        )
+        if not isinstance(snapshot, dict):
+            raise ReleaseError("0012 database endpoint snapshot is invalid")
+        observed_ledger = snapshot.get("ledger")
+        if observed_ledger == pre_ledger:
+            validated = self._validate_contract_guard_snapshot(
+                snapshot,
+                expected_ledger=pre_ledger,
+                require_relation=True,
+            )
+            relation = validated["relation"]
+            if (
+                validated["database"] != guard.get("database", {}).get("name")
+                or validated["system_identifier"]
+                != guard.get("database", {}).get("system_identifier")
+                or relation.get("namespace_oid")
+                != guard.get("relation", {}).get("namespace_oid")
+                or relation.get("relation_oid")
+                != guard.get("relation", {}).get("relation_oid")
+                or self._validate_archive_evidence(
+                    self._capture_json(
+                        CONTRACT_0012_AUDIT_PROGRAM,
+                        environment,
+                    )
+                )
+                != guard.get("archive_evidence")
+            ):
+                raise ReleaseError(
+                    "0012 pre-contract database endpoint differs from its guard"
+                )
+            return "exact-pre"
+        if observed_ledger == post_ledger:
+            validated = self._validate_contract_guard_snapshot(
+                snapshot,
+                expected_ledger=post_ledger,
+                require_relation=False,
+            )
+            if (
+                validated["database"] != guard.get("database", {}).get("name")
+                or validated["system_identifier"]
+                != guard.get("database", {}).get("system_identifier")
+            ):
+                raise ReleaseError(
+                    "0012 post-contract database endpoint differs from its guard"
+                )
+            return "exact-post"
+        raise ReleaseError(
+            "0012 database is neither the exact guarded pre-state nor post-state"
+        )
 
     def _archive_legacy_table(
         self,
@@ -10105,87 +10804,10 @@ class PolytaoContractMaintenance:
         *,
         recorded_database_inventory: object | None = None,
     ) -> None:
-        marker = self._load_operation_document(
-            self.marker_path,
-            "recovery marker",
-        )
-        # Refuse a foreign but structurally valid state before any destructive
-        # database restore.  Exact pre-state means a prior restore committed
-        # and is a valid idempotent retry; exact post-state is the only state
-        # this rollback is authorised to replace.
-        self._revalidate_current_state_authority(
-            marker,
-            require_postcondition=False,
-        )
-        recorded_external_inventory = None
-        if isinstance(recorded_database_inventory, dict):
-            recorded_external_inventory = recorded_database_inventory.get(
-                "external_registered_database_inventory"
-            )
-        self._pre_destructive_database_gate(
-            environment,
-            allow_contract=True,
-            allow_owned_verification=True,
-            recorded_external_inventory=recorded_external_inventory,
-        )
-        release = self.controller.candidate_dir
-        self.controller.run(
-            self.controller.compose(release, "stop", "nginx", "backend"),
-            env=environment,
-        )
-        if release_uses_worker(self.document):
-            self.controller.run(
-                ["systemctl", "--user", "stop", "nexpoly-monomer-md-worker.service"],
-                env=environment,
-            )
-        # Re-open the authority after the potentially long drain/stop phase so
-        # a competing state transition cannot silently authorise this restore.
-        self._revalidate_current_state_authority(
-            marker,
-            require_postcondition=False,
-        )
-        self.controller.restore_database(environment, release=release)
-        self._restore_current_state(previous_state)
-        self.controller.run(
-            self.controller.compose(
-                release,
-                "up",
-                "-d",
-                "--no-build",
-                "--wait",
-                "--wait-timeout",
-                "300",
-                "--no-deps",
-                "backend",
-            ),
-            env=environment,
-        )
-        if release_uses_worker(self.document):
-            self.controller.run(
-                ["systemctl", "--user", "restart", "nexpoly-monomer-md-worker.service"],
-                env=environment,
-            )
-            self.controller.wait_for_worker_health(
-                environment, expected_release=release
-            )
-        self.controller.backend_healthcheck(environment, release=release)
-        self.controller.run_ingress_isolated_contract_smoke(
-            environment,
-            release=release,
-        )
-        self.controller.run(
-            self.controller.compose(
-                release,
-                "up",
-                "-d",
-                "--no-build",
-                "--wait",
-                "--wait-timeout",
-                "120",
-                "--no-deps",
-                "nginx",
-            ),
-            env=environment,
+        del environment, previous_state, recorded_database_inventory
+        raise ReleaseError(
+            "automatic 0012 full-database restore is disabled; the atomic "
+            "guard permits only exact-pre abort or exact-post forward recovery"
         )
 
     def _resume_admission(
@@ -10197,6 +10819,178 @@ class PolytaoContractMaintenance:
         if worker_was_drained and release_uses_worker(self.document):
             self.controller.resume_worker(environment)
         self.controller.drain(environment, False)
+
+    def _complete_contract_post_state(
+        self,
+        marker: dict[str, Any],
+        environment: dict[str, str],
+        current_release: Path,
+        previous_state: dict[str, Any],
+        *,
+        worker_was_drained: bool,
+    ) -> dict[str, Any]:
+        """Finish an exact committed 0012 endpoint without database restore."""
+
+        marker["database_change_started"] = True
+        marker["phase"] = "database-change-started"
+        marker["status"] = "running"
+        approval = marker.get("contract_approval")
+        if approval is None:
+            sealed_post = marker.get("current_state_postcondition")
+            sealed_approvals = (
+                sealed_post.get("approved_contracts")
+                if isinstance(sealed_post, dict)
+                else None
+            )
+            sealed_approval = (
+                sealed_approvals[-1]
+                if isinstance(sealed_approvals, list) and sealed_approvals
+                else None
+            )
+            if (
+                isinstance(sealed_approval, dict)
+                and sealed_approval.get("version")
+                == POLYTAO_SCHEMA_COMPATIBILITY_FLOOR
+                and sealed_approval.get("checksum") == POLYTAO_CONTRACT_CHECKSUM
+                and sealed_approval.get("operation_id") == self.operation_id
+            ):
+                approval = sealed_approval
+            else:
+                approval = {
+                    "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                    "checksum": POLYTAO_CONTRACT_CHECKSUM,
+                    "operation_id": self.operation_id,
+                    "approved_at": utc_now(),
+                }
+            marker["contract_approval"] = approval
+            marker["contract_approval_sha256"] = canonical_json_digest(approval)
+        if (
+            not isinstance(approval, dict)
+            or set(approval)
+            != {
+                "version",
+                "checksum",
+                "operation_id",
+                "approved_at",
+            }
+            or approval.get("version") != POLYTAO_SCHEMA_COMPATIBILITY_FLOOR
+            or approval.get("checksum") != POLYTAO_CONTRACT_CHECKSUM
+            or approval.get("operation_id") != self.operation_id
+            or not isinstance(approval.get("approved_at"), str)
+            or not approval["approved_at"]
+            or marker.get("contract_approval_sha256")
+            != canonical_json_digest(approval)
+        ):
+            raise ReleaseError("0012 durable contract approval is invalid")
+        self._write_marker(marker)
+        self.controller.finalize_contract_0012_external_audit(environment)
+        marker = self._load_operation_document(
+            self.marker_path,
+            "recovery marker",
+        )
+        if (
+            marker.get("operation_id") != self.operation_id
+            or marker.get("source_sha") != self.document["source_sha"]
+            or marker.get("database_transaction_intent") is not True
+        ):
+            raise ReleaseError(
+                "0012 transaction marker changed during post-contract audit"
+            )
+        marker["database_change_started"] = True
+        marker["phase"] = "contract-applied"
+        marker["status"] = "running"
+        self._write_marker(marker)
+
+        verification = self._capture_json(
+            CONTRACT_0012_VERIFY_PROGRAM,
+            environment,
+        )
+        if verification.get("verified") is not True:
+            raise ReleaseError("0012 post-migration verification failed")
+        self.controller.backend_healthcheck(environment, release=current_release)
+
+        # Public ingress remains stopped while the smoke temporarily opens only
+        # the persistent write gate inside the host network.
+        self.controller.run(
+            self.controller.compose(current_release, "stop", "nginx"),
+            env=environment,
+        )
+        marker["nginx_stopped"] = True
+        marker["phase"] = "verifying"
+        self._write_marker(marker)
+        canary = self.controller.run_ingress_isolated_contract_smoke(
+            environment,
+            release=current_release,
+        )
+        if canary is not None:
+            if not isinstance(canary, dict):
+                raise ReleaseError(
+                    "0012 ingress-isolated canary evidence is invalid"
+                )
+            marker["ingress_isolated_canary"] = canary
+            marker["ingress_isolated_canary_sha256"] = canonical_json_digest(canary)
+        self._write_marker(marker)
+
+        approved_at = approval["approved_at"]
+        next_state = json.loads(json.dumps(previous_state))
+        next_state["migrations"] = merge_applied_migrations(
+            previous_state.get("migrations"),
+            [POLYTAO_SCHEMA_COMPATIBILITY_FLOOR],
+        )
+        next_state["applied_migrations"] = [POLYTAO_SCHEMA_COMPATIBILITY_FLOOR]
+        next_state["approved_contracts"] = [
+            *previous_state.get("approved_contracts", []),
+            approval,
+        ]
+        next_state.pop("approved_contract_migrations", None)
+        next_state["schema_compatibility_floor"] = {
+            "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            "checksum": POLYTAO_CONTRACT_CHECKSUM,
+        }
+        next_state["migration_epoch_barrier"] = {
+            "epoch": 1,
+            "contract": {
+                "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "checksum": POLYTAO_CONTRACT_CHECKSUM,
+            },
+            "operation_id": self.operation_id,
+            "approved_at": approved_at,
+        }
+        next_state["last_contract_operation"] = self.operation_id
+        self._seal_current_state_postcondition(marker, next_state)
+        marker["phase"] = "state-commit-started"
+        self._write_marker(marker)
+        audit_manifest = self._audit_manifest_from_marker(marker)
+        journal = self._success_journal(
+            marker,
+            approval,
+            audit_manifest,
+            verification,
+        )
+        self._write_current_state(next_state)
+        marker["phase"] = "state-committed"
+        self._write_marker(marker)
+        self._write_success_journal(journal)
+        self.controller.run(
+            self.controller.compose(
+                current_release,
+                "up",
+                "-d",
+                "--no-build",
+                "--wait",
+                "--wait-timeout",
+                "120",
+                "--no-deps",
+                "nginx",
+            ),
+            env=environment,
+        )
+        self._resume_admission(
+            environment,
+            worker_was_drained=worker_was_drained,
+        )
+        durable_unlink(self.marker_path)
+        return next_state
 
     def _recover(self, marker: dict[str, Any]) -> dict[str, Any]:
         if marker.get("operation_id") != self.operation_id:
@@ -10219,6 +11013,31 @@ class PolytaoContractMaintenance:
         backup_path = marker.get("database_backup")
         if isinstance(backup_path, str):
             self.controller.backup_path = self.controller.marker_backup(marker)
+
+        database_endpoint: str | None = None
+        if marker.get("database_transaction_intent") is True:
+            database_endpoint = self._classify_contract_database_endpoint(
+                environment,
+                marker,
+            )
+            if database_endpoint == "exact-post":
+                marker["database_change_started"] = True
+                marker["phase"] = "database-change-started"
+                marker["status"] = "resume-pending"
+                self._write_marker(marker)
+        elif (
+            marker.get("database_change_started") is True
+            and transition_status != "postcondition"
+        ):
+            # Pre-guard releases used a boolean intent as if it proved a
+            # database mutation.  A full-database restore based on that flag
+            # can overwrite writes committed after the backup.  B2 therefore
+            # leaves the drain and marker intact for explicit forensic
+            # handling instead of guessing.
+            raise ReleaseError(
+                "legacy 0012 marker lacks an atomic transaction guard; "
+                "automatic database restore is forbidden"
+            )
 
         current_state = self._load_current_state(allow_completed_contract=True)
         recorded_database_inventory = marker.get("database_inventory")
@@ -10253,6 +11072,11 @@ class PolytaoContractMaintenance:
             and approved.get("checksum") == POLYTAO_CONTRACT_CHECKSUM
             and approved.get("operation_id") == self.operation_id
         ):
+            self.controller.finalize_contract_0012_external_audit(environment)
+            marker = self._load_operation_document(
+                self.marker_path,
+                "recovery marker",
+            )
             verification = self._capture_json(CONTRACT_0012_VERIFY_PROGRAM, environment)
             if verification.get("verified") is not True:
                 raise ReleaseError("committed 0012 operation could not be re-verified")
@@ -10303,17 +11127,21 @@ class PolytaoContractMaintenance:
             durable_unlink(self.marker_path)
             return current_state
 
-        if marker.get("database_change_started") is True:
-            self._restore_previous_database(
+        if database_endpoint == "exact-post":
+            return self._complete_contract_post_state(
+                marker,
                 environment,
+                current_release,
                 previous_state,
-                recorded_database_inventory=recorded_database_inventory,
+                worker_was_drained=(
+                    marker.get("worker_drain_attempted") is True
+                ),
             )
         self._resume_admission(
             environment,
             worker_was_drained=(
                 marker.get("worker_drain_attempted") is True
-                and marker.get("database_change_started") is not True
+                and database_endpoint != "exact-post"
             ),
         )
         recovered_journal = {
@@ -10322,7 +11150,8 @@ class PolytaoContractMaintenance:
             "operation_id": self.operation_id,
             "source_sha": self.document["source_sha"],
             "recovered_at": utc_now(),
-            "database_restored": marker.get("database_change_started") is True,
+            "database_restored": False,
+            "database_endpoint": database_endpoint or "not-started",
             "retry_requires_new_operation_id": True,
         }
         if self.journal_path.exists() or self.journal_path.is_symlink():
@@ -10463,120 +11292,52 @@ class PolytaoContractMaintenance:
                 marker["audit_manifest_sha256"] = sha256_file(
                     self.audit_dir / "AUDIT-MANIFEST.json"
                 )
-                marker["database_change_started"] = True
-                marker["phase"] = "database-change-started"
                 self._write_marker(marker)
+                _guard, guard_json, guard_digest = (
+                    self._prepare_contract_transaction_guard(
+                        environment,
+                        marker,
+                        evidence,
+                        database_inventory,
+                        audit_manifest,
+                    )
+                )
 
                 applied = self.controller.run_migrations(
                     environment,
                     mode="contract-0012",
+                    contract_guard_json=guard_json,
+                    contract_guard_sha256=guard_digest,
                 )
                 if applied != [POLYTAO_SCHEMA_COMPATIBILITY_FLOOR]:
                     raise ReleaseError(
                         "0012 maintenance did not apply exactly the reviewed contract"
                     )
-                marker["phase"] = "contract-applied"
-                self._write_marker(marker)
-                verification = self._capture_json(
-                    CONTRACT_0012_VERIFY_PROGRAM, environment
+                marker = self._load_operation_document(
+                    self.marker_path,
+                    "recovery marker",
                 )
-                if verification.get("verified") is not True:
-                    raise ReleaseError("0012 post-migration verification failed")
-                self.controller.backend_healthcheck(
-                    environment, release=current_release
-                )
-
-                # Public ingress remains stopped while the smoke temporarily
-                # opens only the persistent write gate inside the host network.
-                self.controller.run(
-                    self.controller.compose(current_release, "stop", "nginx"),
-                    env=environment,
-                )
-                marker["nginx_stopped"] = True
-                marker["phase"] = "verifying"
-                self._write_marker(marker)
-                canary = self.controller.run_ingress_isolated_contract_smoke(
-                    environment,
-                    release=current_release,
-                )
-                if canary is not None:
-                    if not isinstance(canary, dict):
-                        raise ReleaseError(
-                            "0012 ingress-isolated canary evidence is invalid"
-                        )
-                    marker["ingress_isolated_canary"] = canary
-                    marker["ingress_isolated_canary_sha256"] = canonical_json_digest(
-                        canary
-                    )
-                self._write_marker(marker)
-
-                approved_at = utc_now()
-                approval = {
-                    "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
-                    "checksum": POLYTAO_CONTRACT_CHECKSUM,
-                    "operation_id": self.operation_id,
-                    "approved_at": approved_at,
-                }
-                next_state = json.loads(json.dumps(previous_state))
-                next_state["migrations"] = merge_applied_migrations(
-                    previous_state.get("migrations"),
-                    [POLYTAO_SCHEMA_COMPATIBILITY_FLOOR],
-                )
-                next_state["applied_migrations"] = [POLYTAO_SCHEMA_COMPATIBILITY_FLOOR]
-                next_state["approved_contracts"] = [
-                    *previous_state.get("approved_contracts", []),
-                    approval,
-                ]
-                next_state.pop("approved_contract_migrations", None)
-                next_state["schema_compatibility_floor"] = {
-                    "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
-                    "checksum": POLYTAO_CONTRACT_CHECKSUM,
-                }
-                next_state["migration_epoch_barrier"] = {
-                    "epoch": 1,
-                    "contract": {
-                        "version": POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
-                        "checksum": POLYTAO_CONTRACT_CHECKSUM,
-                    },
-                    "operation_id": self.operation_id,
-                    "approved_at": approved_at,
-                }
-                next_state["last_contract_operation"] = self.operation_id
-                self._seal_current_state_postcondition(marker, next_state)
-                marker["phase"] = "state-commit-started"
-                self._write_marker(marker)
-                journal = self._success_journal(
+                return self._complete_contract_post_state(
                     marker,
-                    approval,
-                    audit_manifest,
-                    verification,
-                )
-                self._write_current_state(next_state)
-                state_committed = True
-                marker["phase"] = "state-committed"
-                self._write_marker(marker)
-                self._write_success_journal(journal)
-                self.controller.run(
-                    self.controller.compose(
-                        current_release,
-                        "up",
-                        "-d",
-                        "--no-build",
-                        "--wait",
-                        "--wait-timeout",
-                        "120",
-                        "--no-deps",
-                        "nginx",
-                    ),
-                    env=environment,
-                )
-                self._resume_admission(
                     environment,
+                    current_release,
+                    previous_state,
                     worker_was_drained=worker_drained,
                 )
-                durable_unlink(self.marker_path)
-                return next_state
             except Exception as exc:
+                committed_marker = self._load_operation_document(
+                    self.marker_path,
+                    "recovery marker",
+                )
+                if (
+                    committed_marker.get("operation_id") != self.operation_id
+                    or committed_marker.get("source_sha")
+                    != self.document["source_sha"]
+                ):
+                    raise ReleaseError(
+                        "0012 recovery marker identity changed after failure"
+                    ) from exc
+                marker = committed_marker
                 if (
                     not state_committed
                     and marker.get("current_state_postcondition") is not None
@@ -10607,7 +11368,9 @@ class PolytaoContractMaintenance:
                 self._write_marker(marker)
                 if state_committed:
                     raise
-                rollback_error: Exception | None = None
+                recovery_error: Exception | None = None
+                post_commit_pending = False
+                database_endpoint: str | None = None
                 try:
                     verification_database_cleanup = (
                         self._reconcile_owned_verification_database(
@@ -10640,13 +11403,29 @@ class PolytaoContractMaintenance:
                         verification_database_cleanup
                     )
                     self._write_marker(marker)
-                    if marker.get("database_change_started") is True:
-                        self._restore_previous_database(
-                            environment,
-                            previous_state,
-                            recorded_database_inventory=marker.get(
-                                "database_inventory"
-                            ),
+                    if marker.get("database_transaction_intent") is True:
+                        database_endpoint = (
+                            self._classify_contract_database_endpoint(
+                                environment,
+                                marker,
+                            )
+                        )
+                        marker["database_endpoint"] = database_endpoint
+                        if database_endpoint == "exact-post":
+                            marker["database_change_started"] = True
+                            marker["phase"] = "database-change-started"
+                            marker["status"] = "resume-pending"
+                            self._write_marker(marker)
+                            post_commit_pending = True
+                        else:
+                            self._resume_admission(
+                                environment,
+                                worker_was_drained=worker_drained,
+                            )
+                    elif marker.get("database_change_started") is True:
+                        raise ReleaseError(
+                            "legacy 0012 failure lacks an atomic transaction "
+                            "guard; automatic restore is forbidden"
                         )
                     elif marker.get("nginx_stopped") is True:
                         self.controller.backend_healthcheck(
@@ -10671,15 +11450,27 @@ class PolytaoContractMaintenance:
                             ),
                             env=environment,
                         )
-                    self._resume_admission(
-                        environment,
-                        worker_was_drained=(
-                            worker_drained
-                            and marker.get("database_change_started") is not True
-                        ),
-                    )
+                        self._resume_admission(
+                            environment,
+                            worker_was_drained=worker_drained,
+                        )
+                    else:
+                        self._resume_admission(
+                            environment,
+                            worker_was_drained=worker_drained,
+                        )
                 except Exception as recovery_exc:  # fail closed with marker + drain
-                    rollback_error = recovery_exc
+                    recovery_error = recovery_exc
+                if post_commit_pending:
+                    raise ReleaseError(
+                        "0012 committed exactly but post-contract completion "
+                        "was interrupted; rerun this operation to resume"
+                    ) from exc
+                if recovery_error is not None:
+                    raise ReleaseError(
+                        "0012 maintenance endpoint is uncertain; admission "
+                        "remains drained and automatic restore is forbidden"
+                    ) from recovery_error
                 atomic_json(
                     self.journal_path,
                     {
@@ -10689,16 +11480,11 @@ class PolytaoContractMaintenance:
                         "source_sha": self.document["source_sha"],
                         "failed_at": marker["failed_at"],
                         "error": marker["error"],
-                        "rollback": "failed" if rollback_error else "success",
-                        "rollback_error": str(rollback_error)[:500]
-                        if rollback_error
-                        else None,
+                        "rollback": "not-required",
+                        "rollback_error": None,
+                        "database_endpoint": database_endpoint or "not-started",
                     },
                 )
-                if rollback_error is not None:
-                    raise ReleaseError(
-                        "0012 maintenance failed and rollback is incomplete; admission remains drained"
-                    ) from rollback_error
                 durable_unlink(self.marker_path)
                 raise
 

@@ -50,6 +50,21 @@ POSTGRES16_IMAGE = (
     "postgres:16-alpine@"
     "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
 )
+POSTGRES_AUDIT_IMAGES = {
+    "14": (
+        "postgres:14-alpine@"
+        "sha256:f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579"
+    ),
+    "15": (
+        "postgres:15-alpine@"
+        "sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f"
+    ),
+    "16": POSTGRES16_IMAGE,
+    "18": (
+        "postgres:18-alpine@"
+        "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+    ),
+}
 WORKER_LOCK_RELATIVE_PATH = "workers/monomer_md_worker/requirements.lock"
 CONTROL_MANIFEST_RELATIVE_PATH = "scripts/control-release.json"
 REQUIRED_RECOVERY_PATHS = {
@@ -1070,6 +1085,7 @@ def validate_ready_evidence(
     if not isinstance(images, dict) or set(images) != {
         "authority",
         "target",
+        "postgres_audit",
         "postgres_restore",
     }:
         raise MaintenancePrefetchError("prefetched image set is incomplete")
@@ -1100,12 +1116,33 @@ def validate_ready_evidence(
             expected_reference=target_ref,
             expected_revision=target["sha"],
         )
-    validate_image_evidence(
+    postgres_audit = images["postgres_audit"]
+    if (
+        not isinstance(postgres_audit, dict)
+        or set(postgres_audit) != set(POSTGRES_AUDIT_IMAGES)
+    ):
+        raise MaintenancePrefetchError(
+            "prefetched PostgreSQL audit image set is incomplete"
+        )
+    validated_postgres_audit: dict[str, dict[str, Any]] = {}
+    for major, reference in sorted(POSTGRES_AUDIT_IMAGES.items()):
+        validated_postgres_audit[major] = validate_image_evidence(
+            postgres_audit[major],
+            expected_reference=reference,
+            expected_revision=None,
+            enforce_revision=False,
+        )
+    postgres_restore = validate_image_evidence(
         images["postgres_restore"],
         expected_reference=POSTGRES16_IMAGE,
         expected_revision=None,
         enforce_revision=False,
     )
+    if postgres_restore != validated_postgres_audit["16"]:
+        raise MaintenancePrefetchError(
+            "prefetched PostgreSQL restore image is not the exact "
+            "PostgreSQL 16 audit image"
+        )
     wheels = document.get("wheel_caches")
     if not isinstance(wheels, list) or not 1 <= len(wheels) <= 2:
         raise MaintenancePrefetchError("prefetched wheel caches are incomplete")
@@ -1560,6 +1597,15 @@ class MaintenancePrefetch:
         target: Mapping[str, str],
         policy: Mapping[str, Any],
     ) -> dict[str, Any]:
+        postgres_audit = {
+            major: self._pull_image(
+                reference,
+                expected_revision=None,
+            )
+            for major, reference in sorted(
+                POSTGRES_AUDIT_IMAGES.items()
+            )
+        }
         return {
             "authority": {
                 role: self._pull_image(
@@ -1575,10 +1621,8 @@ class MaintenancePrefetch:
                 )
                 for role in sorted(ROLE_IMAGE_ROOTS)
             },
-            "postgres_restore": self._pull_image(
-                POSTGRES16_IMAGE,
-                expected_revision=None,
-            ),
+            "postgres_audit": postgres_audit,
+            "postgres_restore": dict(postgres_audit["16"]),
         }
 
     def _base_python_identity(self) -> dict[str, Any]:
@@ -2014,14 +2058,28 @@ class MaintenancePrefetch:
             )
             if current_target != validated["images"]["target"][role]:
                 raise MaintenancePrefetchError("prefetched target image changed")
-        current_postgres = self._inspect_image(
-            POSTGRES16_IMAGE,
-            expected_revision=None,
-        )
-        if current_postgres != validated["images"]["postgres_restore"]:
-            raise MaintenancePrefetchError(
-                "prefetched PostgreSQL restore image changed"
+        for major, reference in sorted(
+            POSTGRES_AUDIT_IMAGES.items()
+        ):
+            current_postgres = self._inspect_image(
+                reference,
+                expected_revision=None,
             )
+            if (
+                current_postgres
+                != validated["images"]["postgres_audit"][major]
+            ):
+                raise MaintenancePrefetchError(
+                    "prefetched PostgreSQL audit image changed"
+                )
+            if (
+                major == "16"
+                and current_postgres
+                != validated["images"]["postgres_restore"]
+            ):
+                raise MaintenancePrefetchError(
+                    "prefetched PostgreSQL restore image changed"
+                )
         base_identity = self._base_python_identity()
         identities = {
             identity["sha"]: identity

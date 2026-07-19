@@ -340,11 +340,14 @@ MUTABLE_DATA_PGPASS = "mutable-data-audit.pgpass"
 MUTABLE_DATA_SERVICE = "nexpoly-mutable-audit"
 MUTABLE_DATA_HOST = "127.0.0.1"
 MUTABLE_DATA_PORT = 55432
-EXTERNAL_DATABASE_AUDIT_HELPER = "contract-0012-external-database-audit"
+EXTERNAL_DATABASE_AUDIT_HELPER = "nexpoly-postgres-media-evidence"
 EXTERNAL_DATABASE_MEDIA_AUTHORITY_RULES = (
     "postgres-media-authority-rules.json"
 )
 EXTERNAL_DATABASE_MEDIA_REGISTRY = "postgres-media-registry.json"
+EXTERNAL_DATABASE_AUDIT_ROLE_SQL = (
+    "postgres-media-audit-role.sql.example"
+)
 CONTRACT_0012_EXTERNAL_AUDIT_COMMAND = (
     "NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND"
 )
@@ -413,6 +416,7 @@ SCHEMA_V2_UNCHANGED_ASSET_TREE_DIGESTS = {
 }
 STABLE_HELPER_FILES = (
     "control_runtime_selector.py",
+    "nexpoly-postgres-media-evidence",
     "nexpoly-production-readiness",
     "nexpoly-pull-contract-0012",
     "nexpoly-pull-deploy",
@@ -420,6 +424,9 @@ STABLE_HELPER_FILES = (
 )
 CONTROL_SOURCE_PATHS = {
     "control_runtime_selector.py": "scripts/control_runtime_selector.py",
+    "nexpoly-postgres-media-evidence": (
+        "scripts/nexpoly-postgres-media-evidence"
+    ),
     "nexpoly-production-readiness": "scripts/nexpoly-production-readiness",
     "nexpoly-pull-contract-0012": "scripts/nexpoly-pull-contract-0012",
     "nexpoly-pull-deploy": "scripts/nexpoly-pull-deploy",
@@ -531,6 +538,43 @@ PREPARE_OWNER_FIELDS = {
     "target_sha",
     "controller_sha256",
     "created_at",
+}
+PREPARE_ABORT_FIELDS = {
+    "schema_version",
+    "operation_id",
+    "status",
+    "phase",
+    "prepare_owner",
+    "prepare_owner_sha256",
+    "target_sha",
+    "target_tree",
+    "control_handoff_sha256",
+    "control_handoff_schema_version",
+    "executor_control_sha256",
+    "operation_inventory_sha256",
+    "descriptor_sha256",
+    "prepare_staging",
+    "wheel_staging",
+    "owned_slots",
+    "prepared_ref",
+    "current_state_sha256",
+    "active_control_sha256",
+    "active_slot_sha256",
+    "active_slot",
+    "bridge_token_sha256",
+    "bridge_token_operation_id",
+    "bridge_token_status",
+    "archive_path",
+    "archive_inventory_sha256",
+    "created_at",
+    "completed_at",
+}
+PREPARE_ABORT_PHASES = {
+    "intent",
+    "slot-cleanup-intent",
+    "slots-cleaned",
+    "operation-archive-intent",
+    "completed",
 }
 SLOT_FIELDS = {
     "schema_version",
@@ -1115,6 +1159,80 @@ def private_regular_file(
         os.close(descriptor)
 
 
+@contextlib.contextmanager
+def pinned_private_regular_file(
+    path: Path,
+    *,
+    mode: int,
+    maximum_bytes: int,
+) -> Iterable[tuple[int, bytes, str]]:
+    """Pin a verified private inode through subprocess exec."""
+
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise PullDeployError(f"private input is unavailable: {path}") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != mode
+            or before.st_nlink != 1
+            or before.st_size < 1
+            or before.st_size > maximum_bytes
+        ):
+            raise PullDeployError(f"private input is unsafe: {path}")
+        chunks: list[bytes] = []
+        remaining = maximum_bytes + 1
+        while remaining:
+            chunk = os.read(
+                descriptor,
+                min(1024 * 1024, remaining),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            len(payload) > maximum_bytes
+            or (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+                before.st_mode,
+                before.st_uid,
+                before.st_nlink,
+            )
+            != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+                after.st_mode,
+                after.st_uid,
+                after.st_nlink,
+            )
+        ):
+            raise PullDeployError(
+                f"private input changed while reading: {path}"
+            )
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        yield descriptor, payload, sha256_bytes(payload)
+    finally:
+        os.close(descriptor)
+
+
 def canonical_json_bytes(value: object) -> bytes:
     return json.dumps(
         value,
@@ -1178,7 +1296,10 @@ PREFETCH_BINDING_FIELDS = {
 EXTERNAL_DATABASE_AUDIT_BINDING_FIELDS = {
     "schema_version",
     "helper",
+    "helper_control",
     "authority_rules",
+    "role_sql",
+    "role_provisioning",
     "registry",
     "expected_users",
     "snapshot",
@@ -1342,6 +1463,7 @@ def external_database_audit_state(document: object) -> dict[str, Any]:
         "docker_inventory_sha256",
         "backup_inventory_sha256",
         "scanned_volume_names",
+        "scanned_bind_sources",
         "scanned_container_ids",
     ):
         registry.pop(field, None)
@@ -1399,6 +1521,114 @@ def validate_fresh_external_database_audit(
             )
 
 
+def external_database_role_provisioning(
+    snapshot: Mapping[str, Any],
+    *,
+    role_sql_sha256: str,
+) -> dict[str, Any]:
+    """Seal per-database proof of the reviewed NOLOGIN role contract."""
+
+    role_sql_sha256 = require_digest(
+        role_sql_sha256,
+        "external database audit-role SQL",
+    )
+    role_fields = (
+        "current_user",
+        "transaction_read_only",
+        "role_superuser",
+        "role_create_db",
+        "role_create_role",
+        "role_replication",
+        "role_bypass_rls",
+        "role_inherit",
+        "role_can_login",
+        "role_memberships",
+        "role_incoming_memberships",
+        "role_settings",
+        "role_owned_objects",
+        "role_direct_acl",
+        "role_default_acl",
+        "role_effective_persistent_write",
+    )
+    media = snapshot.get("media")
+    if not isinstance(media, list):
+        raise PullDeployError(
+            "external database role provisioning lacks media"
+        )
+    databases: list[dict[str, Any]] = []
+    for medium in media:
+        if (
+            not isinstance(medium, dict)
+            or medium.get("record_type") != "nexpoly-db"
+            or medium.get("audit", {}).get("method")
+            not in {"live-read-only", "live-read-only-adjacent"}
+        ):
+            continue
+        raw_databases = medium.get("databases")
+        if not isinstance(raw_databases, list):
+            raise PullDeployError(
+                "online external medium lacks database provisioning evidence"
+            )
+        for record in raw_databases:
+            audit = (
+                record.get("audit")
+                if isinstance(record, dict)
+                else None
+            )
+            if (
+                not isinstance(record, dict)
+                or record.get("audit_state") != "complete"
+                or not isinstance(audit, dict)
+                or any(field not in audit for field in role_fields)
+                or record.get("audit_role") != audit.get("current_user")
+                or not isinstance(
+                    audit.get("database_identity"), dict
+                )
+            ):
+                raise PullDeployError(
+                    "online database role provisioning evidence is incomplete"
+                )
+            role_evidence = {
+                "database_identity": audit["database_identity"],
+                **{field: audit[field] for field in role_fields},
+            }
+            databases.append(
+                {
+                    "media_id": medium["media_id"],
+                    "database": record["name"],
+                    "database_oid": record["oid"],
+                    "audit_role": record["audit_role"],
+                    "phase": (
+                        "post-provisioning-read-only-verification"
+                    ),
+                    "role_evidence_sha256": canonical_json_digest(
+                        role_evidence
+                    ),
+                }
+            )
+    databases.sort(
+        key=lambda value: (
+            value["media_id"],
+            value["database"],
+            value["database_oid"],
+        )
+    )
+    if not databases:
+        raise PullDeployError(
+            "external database audit lacks online role provisioning proof"
+        )
+    unsealed = {
+        "schema_version": 1,
+        "phase": "verified-before-external-audit-publication",
+        "role_sql_sha256": role_sql_sha256,
+        "databases": databases,
+    }
+    return {
+        **unsealed,
+        "evidence_sha256": canonical_json_digest(unsealed),
+    }
+
+
 def validate_external_database_audit_binding(
     document: object,
     *,
@@ -1415,7 +1645,9 @@ def validate_external_database_audit_binding(
             "external database audit binding has an invalid shape"
         )
     helper = document.get("helper")
+    helper_control = document.get("helper_control")
     authority_rules = document.get("authority_rules")
+    role_sql = document.get("role_sql")
     registry = document.get("registry")
     for record, filename, mode, fields, label in (
         (
@@ -1451,8 +1683,92 @@ def validate_external_database_audit_binding(
             raise PullDeployError(f"{label} binding is invalid")
         require_digest(record.get("sha256"), f"{label} digest")
     if (
+        not isinstance(helper_control, dict)
+        or set(helper_control)
+        != {
+            "release_id",
+            "source_sha",
+            "source_tree",
+            "manifest_sha256",
+            "launcher_sha256",
+            "implementation_sha256",
+            "authority_rules_sha256",
+            "role_sql_sha256",
+        }
+        or not isinstance(helper_control.get("release_id"), str)
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            helper_control["release_id"],
+        )
+        is None
+    ):
+        raise PullDeployError(
+            "external database helper control binding is invalid"
+        )
+    require_sha(
+        helper_control.get("source_sha"),
+        "external database helper control source SHA",
+    )
+    require_sha(
+        helper_control.get("source_tree"),
+        "external database helper control source tree",
+    )
+    for field in (
+        "manifest_sha256",
+        "launcher_sha256",
+        "implementation_sha256",
+        "authority_rules_sha256",
+        "role_sql_sha256",
+    ):
+        require_digest(
+            helper_control.get(field),
+            f"external database helper control {field}",
+        )
+    if (
+        not isinstance(role_sql, dict)
+        or set(role_sql)
+        != {
+            "path",
+            "sha256",
+            "mode",
+            "control_release_id",
+            "source_sha",
+            "source_tree",
+        }
+        or not isinstance(role_sql.get("path"), str)
+        or not Path(role_sql["path"]).is_absolute()
+        or Path(role_sql["path"]).name
+        != EXTERNAL_DATABASE_AUDIT_ROLE_SQL
+        or role_sql.get("mode") != "0700"
+        or not isinstance(role_sql.get("control_release_id"), str)
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            role_sql["control_release_id"],
+        )
+        is None
+    ):
+        raise PullDeployError(
+            "external database audit-role SQL binding is invalid"
+        )
+    require_digest(
+        role_sql.get("sha256"),
+        "external database audit-role SQL digest",
+    )
+    require_sha(
+        role_sql.get("source_sha"),
+        "external database audit-role SQL source SHA",
+    )
+    require_sha(
+        role_sql.get("source_tree"),
+        "external database audit-role SQL source tree",
+    )
+    if (
         registry.get("authority_rules_sha256")
         != authority_rules.get("sha256")
+        or helper_control.get("authority_rules_sha256")
+        != authority_rules.get("sha256")
+        or helper_control.get("role_sql_sha256")
+        != role_sql.get("sha256")
     ):
         raise PullDeployError(
             "external database media registry belongs to other authority rules"
@@ -1479,6 +1795,14 @@ def validate_external_database_audit_binding(
         raise PullDeployError(
             "external database audit snapshot is invalid"
         ) from exc
+    expected_provisioning = external_database_role_provisioning(
+        snapshot,
+        role_sql_sha256=role_sql["sha256"],
+    )
+    if document.get("role_provisioning") != expected_provisioning:
+        raise PullDeployError(
+            "external database role provisioning evidence differs"
+        )
     snapshot_sha256 = require_digest(
         document.get("snapshot_sha256"),
         "external database audit snapshot",
@@ -1497,6 +1821,7 @@ def validate_external_database_audit_binding(
         required = {
             **_bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
             "media_authority_rules_sha256": authority_rules["sha256"],
+            "audit_role_sql_sha256": role_sql["sha256"],
         }
         if expected_policy != required:
             raise PullDeployError(
@@ -1849,7 +2174,13 @@ def _build_external_database_ledger_transition(
         descriptor_sha256,
         f"{kind} descriptor",
     )
-    for field in ("helper", "registry", "expected_users"):
+    for field in (
+        "helper",
+        "authority_rules",
+        "role_sql",
+        "registry",
+        "expected_users",
+    ):
         if after[field] != before[field]:
             raise PullDeployError(
                 f"{kind} changed external database audit authority"
@@ -2246,7 +2577,13 @@ def build_external_database_contract_pair(
             "ledger_relation",
             "ledger_analysis",
             "legacy_relation_present",
+            "generation_schema",
             "legacy_relation",
+            # Dropping generation.polytao_jobs removes its relation ACL, and
+            # the idempotent audit-role contract removes the now-unneeded
+            # generation schema USAGE grant. Both snapshots have already
+            # passed the schema-v5 exact least-privilege validator.
+            "role_direct_acl",
         )
         stable_before = _external_writable_transition_identity(
             stable_before_media[media_id],
@@ -2385,7 +2722,13 @@ def external_database_contract_after_binding(
     binding: dict[str, Any] = {
         "schema_version": 2,
         "helper": before["helper"],
+        "helper_control": before["helper_control"],
         "authority_rules": before["authority_rules"],
+        "role_sql": before["role_sql"],
+        "role_provisioning": external_database_role_provisioning(
+            validated["after_snapshot"],
+            role_sql_sha256=before["role_sql"]["sha256"],
+        ),
         "registry": before["registry"],
         "expected_users": before["expected_users"],
         "snapshot": validated["after_snapshot"],
@@ -2437,6 +2780,7 @@ def validate_mutable_data_contract(document: object) -> dict[str, Any]:
         "governed_controls",
         "static_tables",
         "migration_exception",
+        "migration_exception_archive_evidence",
         "sequences",
         "bridge_projection",
         "evidence_schema_version",
@@ -2444,8 +2788,8 @@ def validate_mutable_data_contract(document: object) -> dict[str, Any]:
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 5
-        or document.get("evidence_schema_version") != 5
+        or document.get("schema_version") != 6
+        or document.get("evidence_schema_version") != 6
         or document.get("business_tables")
         != list(MUTABLE_DATA_BUSINESS_TABLES)
         or document.get("governed_controls")
@@ -2453,6 +2797,8 @@ def validate_mutable_data_contract(document: object) -> dict[str, Any]:
         or document.get("static_tables")
         != list(MUTABLE_DATA_STATIC_TABLES)
         or document.get("migration_exception") != MUTABLE_DATA_EXCEPTION
+        or document.get("migration_exception_archive_evidence")
+        != "generation.polytao_jobs:canonical-archive-v2"
         or document.get("sequences") != list(MUTABLE_DATA_SEQUENCES)
         or document.get("bridge_projection")
         != "md.monomer_md_jobs:pre-0009-row-json-v1"
@@ -2537,6 +2883,9 @@ def mutable_data_identity(document: object) -> dict[str, Any]:
         "governed_controls": validated["governed_controls"],
         "static_tables": validated["static_tables"],
         "migration_exception": validated["migration_exception"],
+        "migration_exception_archive_evidence": validated[
+            "migration_exception_archive_evidence"
+        ],
         "sequences": validated["sequences"],
         "bridge_projection": validated["bridge_projection"],
         "snapshot_sha256": validated["snapshot_sha256"],
@@ -2765,6 +3114,9 @@ def _derive_mutable_data_transition(
             "row_count": before_exception["row_count"],
             "schema_sha256": before_exception["schema_sha256"],
             "content_sha256": before_exception["content_sha256"],
+            "archive_evidence": before[
+                "migration_exception_archive_evidence"
+            ],
         }
     elif before_exception != after_exception:
         raise PullDeployError(
@@ -3398,6 +3750,97 @@ def rename_directory_noreplace(source: Path, target: Path) -> None:
         raise FileExistsError(error, os.strerror(error), str(target))
     raise PullDeployError(
         f"no-clobber directory publication failed: {os.strerror(error)}"
+    )
+
+
+def quarantine_directory_noreplace(source: Path, target: Path) -> None:
+    """Atomically quarantine a private directory across two private parents."""
+
+    ensure_private_directory(source.parent)
+    ensure_private_directory(target.parent)
+    ensure_private_directory(source)
+    source_parent = source.parent.lstat()
+    target_parent = target.parent.lstat()
+    if source_parent.st_dev != target_parent.st_dev:
+        raise PullDeployError("private directory quarantine crosses filesystems")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise PullDeployError("no-clobber directory quarantine is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        -100,
+        os.fsencode(source),
+        -100,
+        os.fsencode(target),
+        1,  # RENAME_NOREPLACE
+    )
+    if result == 0:
+        fsync_directory(source.parent)
+        fsync_directory(target.parent)
+        return
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        raise FileExistsError(error, os.strerror(error), str(target))
+    raise PullDeployError(
+        f"no-clobber directory quarantine failed: {os.strerror(error)}"
+    )
+
+
+def quarantine_regular_file_noreplace(source: Path, target: Path) -> None:
+    """Atomically quarantine one owner-private regular file without clobbering."""
+
+    ensure_private_directory(source.parent)
+    ensure_private_directory(target.parent)
+    try:
+        metadata = source.lstat()
+    except OSError as exc:
+        raise PullDeployError(
+            f"private quarantine source is unavailable: {source}"
+        ) from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or source.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or source.parent.lstat().st_dev != target.parent.lstat().st_dev
+    ):
+        raise PullDeployError("private file quarantine source is unsafe")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise PullDeployError("no-clobber file quarantine is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        -100,
+        os.fsencode(source),
+        -100,
+        os.fsencode(target),
+        1,  # RENAME_NOREPLACE
+    )
+    if result == 0:
+        fsync_directory(source.parent)
+        fsync_directory(target.parent)
+        return
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        raise FileExistsError(error, os.strerror(error), str(target))
+    raise PullDeployError(
+        f"no-clobber file quarantine failed: {os.strerror(error)}"
     )
 
 
@@ -9285,6 +9728,8 @@ class PullDeployController:
         self.venv_root = self.runtime_root / "worker-venvs"
         self.control_releases_dir = self.runtime_root / "control-releases"
         self.prepared_root = self.state_dir / "prepared"
+        self.prepare_aborts_dir = self.state_dir / "prepare-aborts"
+        self.prepare_abort_archives_dir = self.prepare_aborts_dir / "archives"
         self.control_handoffs_dir = self.state_dir / "control-handoffs"
         self.slots_state_dir = self.state_dir / "worker-slots"
         self.lock_path = self.state_dir / "deploy.lock"
@@ -9740,11 +10185,15 @@ class PullDeployController:
     def external_database_audit_evidence(
         self,
         policy: dict[str, Any],
+        *,
+        lightweight_revalidation: bool = False,
+        role_sql_authority: object | None = None,
+        helper_control_authority: object | None = None,
     ) -> dict[str, Any]:
         """Capture and seal a fresh, complete external PostgreSQL audit."""
 
         values = self.production_deploy_values(check_free_space=False)
-        expected_helper = self.config_dir / EXTERNAL_DATABASE_AUDIT_HELPER
+        expected_helper = self.bin_dir / EXTERNAL_DATABASE_AUDIT_HELPER
         expected_authority_rules = (
             self.config_dir / EXTERNAL_DATABASE_MEDIA_AUTHORITY_RULES
         )
@@ -9758,20 +10207,138 @@ class PullDeployController:
             raise PullDeployError(
                 "external database audit command is not the fixed helper"
             )
-        helper_payload, helper_sha256 = private_regular_file(
-            expected_helper,
-            mode=0o700,
-            maximum_bytes=4 * 1024 * 1024,
-        )
-        if not helper_payload.startswith(b"#!"):
-            raise PullDeployError(
-                "external database audit helper is not executable source"
-            )
         _authority_payload, authority_rules_sha256 = private_regular_file(
             expected_authority_rules,
             mode=0o600,
             maximum_bytes=4 * 1024 * 1024,
         )
+        try:
+            active_control, control_manifest, control_root = (
+                _control_runtime.load_active_control(self.runtime_root)
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "active control release is unavailable for media audit"
+            ) from exc
+        helper_control_files = {
+            "launcher_sha256": "postgres_media_launcher.py",
+            "implementation_sha256": "postgres_media_evidence.py",
+            "authority_rules_sha256": (
+                "postgres-media-authority-rules.json"
+            ),
+            "role_sql_sha256": EXTERNAL_DATABASE_AUDIT_ROLE_SQL,
+        }
+        helper_control: dict[str, Any] = {
+            "release_id": active_control["release_id"],
+            "source_sha": control_manifest["source_sha"],
+            "source_tree": control_manifest["source_tree"],
+            "manifest_sha256": sha256_file(
+                control_root / _control_runtime.CONTROL_MANIFEST_NAME
+            ),
+        }
+        for field, name in helper_control_files.items():
+            record = control_manifest["files"].get(name)
+            path = control_root / name
+            payload, digest = private_regular_file(
+                path,
+                mode=0o700,
+                maximum_bytes=16 * 1024 * 1024,
+            )
+            if record != {
+                "sha256": digest,
+                "size": len(payload),
+                "mode": 0o700,
+            }:
+                raise PullDeployError(
+                    "active PostgreSQL media control closure differs"
+                )
+            helper_control[field] = digest
+        if helper_control_authority is None:
+            expected_helper_control = helper_control
+        else:
+            if not isinstance(helper_control_authority, dict):
+                raise PullDeployError(
+                    "sealed F helper control authority is invalid"
+                )
+            expected_helper_control = helper_control_authority
+            for field in (
+                "launcher_sha256",
+                "implementation_sha256",
+                "authority_rules_sha256",
+                "role_sql_sha256",
+            ):
+                require_digest(
+                    expected_helper_control.get(field),
+                    f"sealed F helper control {field}",
+                )
+        if role_sql_authority is None:
+            role_control = active_control
+            role_manifest = control_manifest
+            role_root = control_root
+            role_sql_path = role_root / EXTERNAL_DATABASE_AUDIT_ROLE_SQL
+        else:
+            if (
+                not isinstance(role_sql_authority, dict)
+                or not isinstance(
+                    role_sql_authority.get("control_release_id"),
+                    str,
+                )
+            ):
+                raise PullDeployError(
+                    "sealed F audit-role SQL authority is invalid"
+                )
+            try:
+                role_manifest, role_root = (
+                    _control_runtime.load_control_release(
+                        self.runtime_root,
+                        role_sql_authority["control_release_id"],
+                    )
+                )
+            except Exception as exc:
+                raise PullDeployError(
+                    "sealed F audit-role SQL control release is unavailable"
+                ) from exc
+            role_control = {
+                "release_id": role_manifest["release_id"],
+                "source_sha": role_manifest["source_sha"],
+                "source_tree": role_manifest["source_tree"],
+            }
+            role_sql_path = role_root / EXTERNAL_DATABASE_AUDIT_ROLE_SQL
+            if (
+                role_sql_authority.get("path") != str(role_sql_path)
+                or role_sql_authority.get("mode") != "0700"
+                or role_sql_authority.get("source_sha")
+                != role_manifest["source_sha"]
+                or role_sql_authority.get("source_tree")
+                != role_manifest["source_tree"]
+            ):
+                raise PullDeployError(
+                    "sealed F audit-role SQL authority changed"
+                )
+        role_sql_payload, role_sql_sha256 = private_regular_file(
+            role_sql_path,
+            mode=0o700,
+            maximum_bytes=4 * 1024 * 1024,
+        )
+        role_sql_manifest = role_manifest["files"].get(
+            EXTERNAL_DATABASE_AUDIT_ROLE_SQL
+        )
+        if (
+            not role_sql_payload
+            or role_sql_manifest
+            != {
+                "sha256": role_sql_sha256,
+                "size": len(role_sql_payload),
+                "mode": 0o700,
+            }
+            or role_control.get("release_id")
+            != role_manifest.get("release_id")
+            or role_sql_authority is not None
+            and role_sql_authority.get("sha256") != role_sql_sha256
+        ):
+            raise PullDeployError(
+                "active control audit-role SQL differs from exact F"
+            )
         configured_authority_rules = require_digest(
             values.get(CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST),
             "configured external media authority rules",
@@ -9780,9 +10347,15 @@ class PullDeployController:
             policy.get("media_authority_rules_sha256"),
             "policy external media authority rules",
         )
+        policy_role_sql = require_digest(
+            policy.get("audit_role_sql_sha256"),
+            "policy external audit-role SQL",
+        )
         if (
             authority_rules_sha256 != configured_authority_rules
             or authority_rules_sha256 != policy_authority_rules
+            or role_sql_sha256 != policy_role_sql
+            or helper_control["role_sql_sha256"] != policy_role_sql
         ):
             raise PullDeployError(
                 "external database media authority rules differ from "
@@ -9805,6 +10378,15 @@ class PullDeployController:
                 CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST: (
                     authority_rules_sha256
                 ),
+                "NEXPOLY_CONTRACT_0012_AUDIT_ROLE_SQL_SHA256": (
+                    role_sql_sha256
+                ),
+                "NEXPOLY_MEDIA_LAUNCHER_SHA256": (
+                    expected_helper_control["launcher_sha256"]
+                ),
+                "NEXPOLY_MEDIA_IMPLEMENTATION_SHA256": (
+                    expected_helper_control["implementation_sha256"]
+                ),
                 **{
                     key: expected_users[stack]
                     for stack, key in CONTRACT_0012_EXTERNAL_AUDIT_USERS.items()
@@ -9812,12 +10394,43 @@ class PullDeployController:
             }
         )
         started_at = dt.datetime.now(dt.timezone.utc)
-        completed = self.runner.run(
-            [str(expected_helper)],
-            cwd=self.production_root,
-            env=environment,
-            timeout=60 * 60,
-        )
+        with pinned_private_regular_file(
+            expected_helper,
+            mode=0o700,
+            maximum_bytes=4 * 1024 * 1024,
+        ) as (helper_descriptor, helper_payload, helper_sha256):
+            if not helper_payload.startswith(b"#!"):
+                raise PullDeployError(
+                    "external database audit helper is not executable source"
+                )
+            bootstrap = load_private_json(
+                self.state_dir / "bootstrap-control.json"
+            )
+            immutable = bootstrap.get("immutable_files")
+            if (
+                bootstrap.get("schema_version") != 2
+                or bootstrap.get("status") != "completed"
+                or not isinstance(immutable, dict)
+                or immutable.get(EXTERNAL_DATABASE_AUDIT_HELPER)
+                != helper_sha256
+            ):
+                raise PullDeployError(
+                    "external database audit helper differs from bootstrap"
+                )
+            completed = self.runner.run(
+                [
+                    f"/proc/self/fd/{helper_descriptor}",
+                    *(
+                        ["revalidate"]
+                        if lightweight_revalidation
+                        else []
+                    ),
+                ],
+                cwd=self.production_root,
+                env=environment,
+                timeout=60 * 60,
+                pass_fds=(helper_descriptor,),
+            )
         completed_at = dt.datetime.now(dt.timezone.utc)
         _helper_after, helper_after_sha256 = private_regular_file(
             expected_helper,
@@ -9872,11 +10485,24 @@ class PullDeployController:
                 "sha256": helper_sha256,
                 "mode": "0700",
             },
+            "helper_control": helper_control,
             "authority_rules": {
                 "path": str(expected_authority_rules),
                 "sha256": authority_rules_sha256,
                 "mode": "0600",
             },
+            "role_sql": {
+                "path": str(role_sql_path),
+                "sha256": role_sql_sha256,
+                "mode": "0700",
+                "control_release_id": role_control["release_id"],
+                "source_sha": role_manifest["source_sha"],
+                "source_tree": role_manifest["source_tree"],
+            },
+            "role_provisioning": external_database_role_provisioning(
+                snapshot,
+                role_sql_sha256=role_sql_sha256,
+            ),
             "registry": {
                 "path": str(expected_registry),
                 "sha256": registry_after_sha256,
@@ -9936,10 +10562,17 @@ class PullDeployController:
             expected_binding,
             expected_policy=policy,
         )
-        observed = self.external_database_audit_evidence(policy)
+        observed = self.external_database_audit_evidence(
+            policy,
+            lightweight_revalidation=True,
+            role_sql_authority=expected["role_sql"],
+            helper_control_authority=expected["helper_control"],
+        )
         for field in (
             "helper",
             "authority_rules",
+            "role_sql",
+            "role_provisioning",
             "registry",
             "expected_users",
             "state_sha256",
@@ -9948,6 +10581,20 @@ class PullDeployController:
                 raise PullDeployError(
                     "external database media changed after its sealed transition"
                 )
+        closure_fields = (
+            "launcher_sha256",
+            "implementation_sha256",
+            "authority_rules_sha256",
+            "role_sql_sha256",
+        )
+        if any(
+            observed["helper_control"][field]
+            != expected["helper_control"][field]
+            for field in closure_fields
+        ):
+            raise PullDeployError(
+                "external database helper control closure changed"
+            )
         return observed
 
     def capture_alias_external_database_transition(
@@ -9998,7 +10645,16 @@ class PullDeployController:
         policy = descriptor["bridge"]["policy"][
             "external_database_audit"
         ]
-        after = self.external_database_audit_evidence(policy)
+        after = self.external_database_audit_evidence(
+            policy,
+            lightweight_revalidation=True,
+            role_sql_authority=descriptor[
+                "external_database_audit"
+            ]["role_sql"],
+            helper_control_authority=descriptor[
+                "external_database_audit"
+            ]["helper_control"],
+        )
         return build_external_database_alias_pair(
             descriptor["external_database_audit"],
             after,
@@ -10159,7 +10815,12 @@ class PullDeployController:
         policy = descriptor["bridge"]["policy"][
             "external_database_audit"
         ]
-        observed = self.external_database_audit_evidence(policy)
+        observed = self.external_database_audit_evidence(
+            policy,
+            lightweight_revalidation=True,
+            role_sql_authority=baseline["role_sql"],
+            helper_control_authority=baseline["helper_control"],
+        )
         descriptor_path = (
             self.prepared_root
             / descriptor["operation_id"]
@@ -10281,8 +10942,14 @@ class PullDeployController:
             "media_authority_rules_sha256": base[
                 "authority_rules"
             ]["sha256"],
+            "audit_role_sql_sha256": base["role_sql"]["sha256"],
         }
-        observed = self.external_database_audit_evidence(policy)
+        observed = self.external_database_audit_evidence(
+            policy,
+            lightweight_revalidation=True,
+            role_sql_authority=base["role_sql"],
+            helper_control_authority=base["helper_control"],
+        )
         pair = build_external_database_final_pair(
             before,
             observed,
@@ -10311,6 +10978,10 @@ class PullDeployController:
                 != pair["after_binding"]["state_sha256"]
                 or existing["after_binding"]["helper"]
                 != pair["after_binding"]["helper"]
+                or existing["after_binding"]["role_sql"]
+                != pair["after_binding"]["role_sql"]
+                or existing["after_binding"]["role_provisioning"]
+                != pair["after_binding"]["role_provisioning"]
                 or existing["after_binding"]["registry"]
                 != pair["after_binding"]["registry"]
                 or existing["after_binding"]["expected_users"]
@@ -11106,7 +11777,7 @@ class PullDeployController:
         )
         return validate_mutable_data_contract(
             {
-                "schema_version": 5,
+                "schema_version": 6,
                 "helper_path": str(path),
                 "helper_sha256": sha256_file(path),
                 "dependencies": dependencies,
@@ -11117,11 +11788,14 @@ class PullDeployController:
                 ),
                 "static_tables": list(MUTABLE_DATA_STATIC_TABLES),
                 "migration_exception": MUTABLE_DATA_EXCEPTION,
+                "migration_exception_archive_evidence": (
+                    "generation.polytao_jobs:canonical-archive-v2"
+                ),
                 "sequences": list(MUTABLE_DATA_SEQUENCES),
                 "bridge_projection": (
                     "md.monomer_md_jobs:pre-0009-row-json-v1"
                 ),
-                "evidence_schema_version": 5,
+                "evidence_schema_version": 6,
             }
         )
 
@@ -11481,6 +12155,7 @@ class PullDeployController:
         return require_sha(lines[0][0], "remote main SHA")
 
     def fetch_target(self, target_sha: str, operation_id: str) -> str:
+        self._require_deploy_lock_for_staging()
         self._git(
             "fetch",
             "--no-tags",
@@ -11532,6 +12207,8 @@ class PullDeployController:
         """
 
         authority_sha = require_sha(authority_sha, "bridge authority SHA")
+        if fetch_authority or create_target_ref:
+            self._require_deploy_lock_for_staging()
         if self.remote_main() != authority_sha:
             raise PullDeployError("bridge authority is no longer current remote main")
         if fetch_authority:
@@ -11679,6 +12356,7 @@ class PullDeployController:
     ) -> dict[str, Any]:
         """Import and validate exact F/B objects from the sealed local bundle."""
 
+        self._require_deploy_lock_for_staging()
         try:
             ready = _prefetch_evidence.validate_ready_evidence(
                 ready,
@@ -11862,7 +12540,7 @@ class PullDeployController:
         authority_sha: str,
         policy: Mapping[str, Any],
     ) -> str:
-        """Bind runtime authority to the immutable rules in exact F."""
+        """Bind media rules and role provisioning SQL to exact F."""
 
         authority_sha = require_sha(
             authority_sha,
@@ -11894,6 +12572,27 @@ class PullDeployController:
         if observed != expected:
             raise PullDeployError(
                 "bridge media authority rules differ from F policy"
+            )
+        expected_role_sql = require_digest(
+            external_policy.get("audit_role_sql_sha256"),
+            "bridge media audit-role SQL",
+        )
+        try:
+            role_sql = self._git_show(
+                authority_sha,
+                _bridge_core.MEDIA_AUDIT_ROLE_SQL_RELATIVE_PATH,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "bridge media audit-role SQL is unavailable from exact F"
+            ) from exc
+        if (
+            not role_sql
+            or len(role_sql) > 4 * 1024 * 1024
+            or sha256_bytes(role_sql) != expected_role_sql
+        ):
+            raise PullDeployError(
+                "bridge media audit-role SQL differs from F policy"
             )
         return observed
 
@@ -12183,6 +12882,7 @@ class PullDeployController:
     ) -> dict[str, Any]:
         """Build or reuse one deterministic, immutable target control release."""
 
+        self._require_deploy_lock_for_staging()
         operation_id = require_operation_id(operation_id)
         target_sha = require_sha(target_sha, "control release source SHA")
         target_tree = require_sha(target_tree, "control release source tree")
@@ -12199,6 +12899,7 @@ class PullDeployController:
             "current_state_schema_versions": 2,
             "marker_schema_versions": 2,
             "worker_slot_schema_versions": SLOT_RECORD_SCHEMA_VERSION,
+            "prepare_abort_abi_versions": 1,
         }
         for field, required in required_versions.items():
             if required not in compatibility[field]:
@@ -13847,10 +14548,48 @@ class PullDeployController:
         self,
         ready: dict[str, Any],
     ) -> dict[str, str]:
-        record = ready["images"]["postgres_restore"]
-        if record["digest_ref"] != POSTGRES16_IMAGE:
+        images = ready.get("images")
+        if not isinstance(images, dict):
             raise PullDeployError(
-                "prefetched PostgreSQL restore image differs"
+                "prefetched PostgreSQL image authority is malformed"
+            )
+        postgres_audit = images.get("postgres_audit")
+        postgres_restore = images.get("postgres_restore")
+        expected_audit = _prefetch_evidence.POSTGRES_AUDIT_IMAGES
+        if (
+            not isinstance(postgres_audit, dict)
+            or set(postgres_audit) != set(expected_audit)
+        ):
+            raise PullDeployError(
+                "prefetched PostgreSQL audit image set is incomplete"
+            )
+        try:
+            validated_audit = {
+                major: _prefetch_evidence.validate_image_evidence(
+                    postgres_audit[major],
+                    expected_reference=reference,
+                    expected_revision=None,
+                    enforce_revision=False,
+                )
+                for major, reference in sorted(expected_audit.items())
+            }
+            record = _prefetch_evidence.validate_image_evidence(
+                postgres_restore,
+                expected_reference=POSTGRES16_IMAGE,
+                expected_revision=None,
+                enforce_revision=False,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "prefetched PostgreSQL image authority differs"
+            ) from exc
+        if (
+            record != validated_audit["16"]
+            or record["digest_ref"] != POSTGRES16_IMAGE
+        ):
+            raise PullDeployError(
+                "prefetched PostgreSQL restore image is not the exact "
+                "PostgreSQL 16 audit image"
             )
         result = self.runner.run(
             ["docker", "image", "inspect", POSTGRES16_IMAGE],
@@ -13904,6 +14643,10 @@ class PullDeployController:
         self.ensure_roots(mutating=False)
         authority_sha = require_sha(authority_sha, "bridge authority SHA")
         operation_id = require_operation_id(operation_id)
+        if self.remote_main() != authority_sha:
+            raise PullDeployError(
+                "bridge authority is no longer current remote main"
+            )
         self._require_no_contract_maintenance(require_alias_completed=False)
         if self.marker_path.exists() or self.marker_path.is_symlink():
             raise PullDeployError(
@@ -13950,6 +14693,10 @@ class PullDeployController:
             raise PullDeployError(
                 "active bootstrap controls are not the bridge authority"
             )
+        if self.remote_main() != authority_sha:
+            raise PullDeployError(
+                "bridge authority changed while planning"
+            )
         return {
             "action": "bridge-plan",
             "apply": False,
@@ -13975,9 +14722,208 @@ class PullDeployController:
             "ignored_runtime_entries": self.ignored_runtime_entries(),
         }
 
+    def _reserve_current_bridge_token(
+        self,
+        *,
+        authority_sha: str,
+        operation_id: str,
+        policy_id: str,
+    ) -> dict[str, Any]:
+        """Reserve a token only while exact F is still protected main."""
+
+        self._require_deploy_lock_for_staging()
+        authority_sha = require_sha(
+            authority_sha, "bridge authority SHA"
+        )
+        if self.remote_main() != authority_sha:
+            raise PullDeployError(
+                "bridge authority changed before descriptor publication"
+            )
+        predecessor_retirement = self._bridge_token_successor_authority()
+        try:
+            return _bridge_core.reserve_token(
+                self.state_dir,
+                operation_id=operation_id,
+                policy_id=policy_id,
+                predecessor_retirement=predecessor_retirement,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "cannot reserve exact bridge takeover authority"
+            ) from exc
+
+    def _plan_current_bridge_token(
+        self,
+        *,
+        authority_sha: str,
+        operation_id: str,
+        policy_id: str,
+    ) -> dict[str, Any]:
+        """Plan random token identity without publishing an unbound record."""
+
+        self._require_deploy_lock_for_staging()
+        authority_sha = require_sha(
+            authority_sha, "bridge authority SHA"
+        )
+        if self.bridge_token_path.exists() or self.bridge_token_path.is_symlink():
+            try:
+                existing = _bridge_core.load_token_authority(
+                    self.state_dir
+                )
+            except Exception as exc:
+                raise PullDeployError(
+                    "bridge token authority is invalid"
+                ) from exc
+            if (
+                existing["operation_id"] == operation_id
+                and existing["policy_id"] == policy_id
+                and existing["status"] == "reserved"
+            ):
+                # Compatibility with a response-lost reservation produced by
+                # an older controller.  The descriptor-first path will bind it
+                # exactly and never creates a new reserved generation.
+                return {
+                    "token_id": existing["token_id"],
+                    "token_sha256": existing["token_sha256"],
+                    "prepared_at": existing["prepared_at"],
+                }
+            if existing["status"] != "retired-precommit":
+                raise PullDeployError(
+                    "bridge token exists without a recoverable descriptor"
+                )
+            self._bridge_token_successor_authority()
+        if self.remote_main() != authority_sha:
+            raise PullDeployError(
+                "bridge authority changed before descriptor publication"
+            )
+        try:
+            identity = _bridge_core.token_identity(os.urandom(32))
+        except Exception as exc:
+            raise PullDeployError(
+                "cannot generate bridge token identity"
+            ) from exc
+        return {
+            **identity,
+            "prepared_at": _bridge_core.utc_now(),
+        }
+
+    def _bind_bridge_descriptor_token(
+        self,
+        descriptor: Mapping[str, Any],
+        descriptor_path: Path,
+    ) -> dict[str, Any]:
+        """Bind or re-prove the token before accepting bridge READY."""
+
+        self._require_deploy_lock_for_staging()
+        if descriptor.get("schema_version") != (
+            BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+        ):
+            raise PullDeployError(
+                "ordinary descriptor cannot bind bridge authority"
+            )
+        bridge = descriptor.get("bridge")
+        if not isinstance(bridge, dict):
+            raise PullDeployError(
+                "bridge descriptor lacks token authority"
+            )
+        existing_token: dict[str, Any] | None = None
+        if (
+            self.bridge_token_path.exists()
+            or self.bridge_token_path.is_symlink()
+        ):
+            try:
+                existing_token = _bridge_core.load_token_authority(
+                    self.state_dir
+                )
+            except Exception as exc:
+                raise PullDeployError(
+                    "bridge token authority is invalid"
+                ) from exc
+        replaying_existing = (
+            existing_token is not None
+            and existing_token["operation_id"] == descriptor["operation_id"]
+            and existing_token["policy_id"]
+            == bridge["policy"]["policy_id"]
+            and existing_token["status"] in {"reserved", "prepared"}
+            and existing_token["token_id"]
+            == bridge["token"]["token_id"]
+            and existing_token["token_sha256"]
+            == bridge["token"]["token_sha256"]
+        )
+        if not replaying_existing and (
+            self.remote_main() != bridge["authority"]["sha"]
+        ):
+            raise PullDeployError(
+                "bridge authority changed before prepared token publication"
+            )
+        try:
+            bound_token = _bridge_core.publish_prepared_token(
+                self.state_dir,
+                operation_id=descriptor["operation_id"],
+                policy_id=bridge["policy"]["policy_id"],
+                descriptor_sha256=sha256_file(descriptor_path),
+                token_id=bridge["token"]["token_id"],
+                token_sha256=bridge["token"]["token_sha256"],
+                prepared_at=descriptor["prepared_at"],
+                predecessor_retirement=(
+                    self._bridge_token_successor_authority()
+                ),
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "bridge token could not bind descriptor"
+            ) from exc
+        if (
+            bound_token["token_id"] != bridge["token"]["token_id"]
+            or bound_token["token_sha256"]
+            != bridge["token"]["token_sha256"]
+        ):
+            raise PullDeployError(
+                "bridge descriptor token identity changed"
+            )
+        return bound_token
+
     def _operation_paths(self, operation_id: str) -> tuple[Path, Path, Path]:
         operation = self.prepared_root / require_operation_id(operation_id)
         return operation, operation / "descriptor.json", operation / "ready.json"
+
+    def _assert_existing_prepare_command_mode(
+        self,
+        *,
+        operation_id: str,
+        bridge_requested: bool,
+    ) -> None:
+        """Reject an existing opposite-mode descriptor before any mutation.
+
+        This fence deliberately reads the raw schema before a handoff fetch,
+        target-ref materialization, control-release publication, token change,
+        or prepare-attempt write.  The normal descriptor validators repeat the
+        check after those read-only decisions to catch a same-UID filesystem
+        race.
+        """
+
+        _operation, descriptor_path, _ready_path = self._operation_paths(
+            operation_id
+        )
+        if not (descriptor_path.exists() or descriptor_path.is_symlink()):
+            return
+        raw_descriptor = load_private_json(descriptor_path)
+        schema_version = raw_descriptor.get("schema_version")
+        if schema_version not in {
+            DESCRIPTOR_SCHEMA_VERSION,
+            BRIDGE_DESCRIPTOR_SCHEMA_VERSION,
+        }:
+            raise PullDeployError(
+                "existing prepare descriptor schema is unsupported"
+            )
+        descriptor_is_bridge = (
+            schema_version == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+        )
+        if descriptor_is_bridge != bridge_requested:
+            raise PullDeployError(
+                "prepared operation requires its original ordinary or bridge "
+                "command mode"
+            )
 
     def prepared_alias_bridge_authority(
         self,
@@ -14186,6 +15132,1692 @@ class PullDeployController:
         )
         return dict(backup)
 
+    def _prepare_abort_journal_path(self, operation_id: str) -> Path:
+        return self.prepare_aborts_dir / (
+            require_operation_id(operation_id) + ".json"
+        )
+
+    @staticmethod
+    def _validate_prepare_owner_document(
+        document: object,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        if (
+            not isinstance(document, dict)
+            or set(document) != PREPARE_OWNER_FIELDS
+            or document.get("schema_version") != 1
+            or document.get("operation_id") != operation_id
+            or not isinstance(document.get("created_at"), str)
+            or not document["created_at"]
+        ):
+            raise PullDeployError("prepare operation owner is invalid")
+        require_sha(document.get("target_sha"), "prepare owner target SHA")
+        require_digest(
+            document.get("controller_sha256"),
+            "prepare owner controller digest",
+        )
+        return dict(document)
+
+    def _ensure_prepare_abort_roots(self) -> None:
+        ensure_private_directory(self.state_dir)
+        for path in (
+            self.prepare_aborts_dir,
+            self.prepare_abort_archives_dir,
+        ):
+            existed = path.exists() or path.is_symlink()
+            ensure_private_directory(path, create=True)
+            if not existed:
+                fsync_directory(path.parent)
+
+    def _optional_private_json_sha256(self, path: Path) -> str | None:
+        if not (path.exists() or path.is_symlink()):
+            return None
+        load_private_json(path)
+        return sha256_file(path)
+
+    def _prepare_abort_handoff_evidence(
+        self,
+        *,
+        operation_id: str,
+        owner: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Bind a target-controller owner to its active-controller handoff."""
+
+        handoff_path = self.control_handoffs_dir / f"{operation_id}.json"
+        if not (handoff_path.exists() or handoff_path.is_symlink()):
+            if (
+                not self.test_root_mode
+                or owner["controller_sha256"] != self.controller_digest()
+            ):
+                raise PullDeployError(
+                    "prepare owner lacks its selector-sealed control handoff"
+                )
+            return {
+                "control_handoff_sha256": None,
+                "control_handoff_schema_version": None,
+                "executor_control_sha256": None,
+                "target_tree": None,
+            }
+        record = load_private_json(handoff_path)
+        schema_version = record.get("schema_version")
+        ordinary_fields = {
+            "schema_version",
+            "protocol_version",
+            "operation_id",
+            "target_sha",
+            "target_tree",
+            "previous_active_control",
+            "previous_active_control_sha256",
+            "executor_control",
+            "executor_control_sha256",
+            "created_at",
+        }
+        bridge_fields = ordinary_fields | {
+            "authority_sha",
+            "authority_tree",
+            "target_ref",
+            "policy_id",
+            "policy_sha256",
+            "prefetch_operation_id",
+            "prefetch",
+            "legacy_takeover",
+        }
+        expected_fields = (
+            ordinary_fields
+            if schema_version == 1
+            else bridge_fields
+            if schema_version == 2
+            else None
+        )
+        if (
+            expected_fields is None
+            or set(record) != expected_fields
+            or record.get("protocol_version")
+            != _control_runtime.PROTOCOL_VERSION
+            or record.get("operation_id") != operation_id
+            or record.get("target_sha") != owner["target_sha"]
+            or not isinstance(record.get("created_at"), str)
+            or not record["created_at"]
+            or canonical_json_digest(record.get("executor_control"))
+            != record.get("executor_control_sha256")
+            or canonical_json_digest(record.get("previous_active_control"))
+            != record.get("previous_active_control_sha256")
+        ):
+            raise PullDeployError("prepare control handoff identity is invalid")
+        target_tree = require_sha(
+            record.get("target_tree"), "prepare handoff target tree"
+        )
+        if schema_version == 2:
+            require_sha(record.get("authority_sha"), "bridge handoff authority SHA")
+            require_sha(
+                record.get("authority_tree"),
+                "bridge handoff authority tree",
+            )
+            require_digest(record.get("policy_id"), "bridge handoff policy ID")
+            require_digest(
+                record.get("policy_sha256"),
+                "bridge handoff policy digest",
+            )
+            require_operation_id(str(record.get("prefetch_operation_id", "")))
+            validate_prefetch_binding(record.get("prefetch"))
+            validate_legacy_takeover_binding(record.get("legacy_takeover"))
+        try:
+            candidate, manifest, release_root = (
+                _control_runtime.load_candidate_control(
+                    self.runtime_root,
+                    record["executor_control"],
+                )
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "prepare control handoff candidate is unavailable"
+            ) from exc
+        deploy_entrypoint = manifest["entrypoints"].get("deploy")
+        if (
+            candidate.get("operation_id") != operation_id
+            or candidate.get("source_sha") != owner["target_sha"]
+            or candidate.get("source_tree") != target_tree
+            or not isinstance(deploy_entrypoint, dict)
+            or deploy_entrypoint.get("kind") != "python"
+            or not isinstance(deploy_entrypoint.get("file"), str)
+        ):
+            raise PullDeployError(
+                "prepare handoff candidate differs from its operation"
+            )
+        controller_name = deploy_entrypoint["file"]
+        controller_record = manifest["files"].get(controller_name)
+        controller_path = release_root / controller_name
+        if (
+            not isinstance(controller_record, dict)
+            or controller_record.get("sha256")
+            != owner["controller_sha256"]
+            or sha256_file(controller_path) != owner["controller_sha256"]
+        ):
+            raise PullDeployError(
+                "prepare owner controller differs from sealed handoff controls"
+            )
+        if self.active_control_evidence() != record["previous_active_control"]:
+            raise PullDeployError(
+                "active controls changed from the prepare handoff authority"
+            )
+        return {
+            "control_handoff_sha256": sha256_file(handoff_path),
+            "control_handoff_schema_version": schema_version,
+            "executor_control_sha256": record["executor_control_sha256"],
+            "target_tree": target_tree,
+        }
+
+    def _capture_prepare_abort_fences(self) -> dict[str, Any]:
+        active_slot = self._active_slot()
+        active_slot_sha256 = (
+            sha256_file(self.active_slot_path)
+            if active_slot is not None
+            else None
+        )
+        active_control = self.active_control_evidence()
+        token: dict[str, Any] | None = None
+        token_sha256: str | None = None
+        if self.bridge_token_path.exists() or self.bridge_token_path.is_symlink():
+            try:
+                token = _bridge_core.load_token_authority(self.state_dir)
+            except Exception as exc:
+                raise PullDeployError(
+                    "bridge token authority is invalid during prepare abort"
+                ) from exc
+            token_sha256 = sha256_file(self.bridge_token_path)
+        return {
+            "current_state_sha256": self._optional_private_json_sha256(
+                self.current_state_path
+            ),
+            "active_control_sha256": sha256_file(self.active_control_path),
+            "active_slot_sha256": active_slot_sha256,
+            "active_slot": active_slot,
+            "bridge_token_sha256": token_sha256,
+            "bridge_token_operation_id": (
+                token["operation_id"] if token is not None else None
+            ),
+            "bridge_token_status": (
+                token["status"] if token is not None else None
+            ),
+        }
+
+    def _assert_prepare_abort_fences(
+        self,
+        journal: Mapping[str, Any],
+    ) -> None:
+        observed = self._capture_prepare_abort_fences()
+        for field in (
+            "current_state_sha256",
+            "active_control_sha256",
+            "active_slot_sha256",
+            "active_slot",
+            "bridge_token_sha256",
+            "bridge_token_operation_id",
+            "bridge_token_status",
+        ):
+            if observed[field] != journal[field]:
+                raise PullDeployError(
+                    f"prepare abort {field.replace('_', ' ')} CAS changed"
+                )
+        handoff_path = (
+            self.control_handoffs_dir / f"{journal['operation_id']}.json"
+        )
+        archived_handoff_path = (
+            Path(journal["archive_path"]) / "control-handoff.json"
+        )
+        observed_live_handoff = (
+            sha256_file(handoff_path)
+            if handoff_path.exists() or handoff_path.is_symlink()
+            else None
+        )
+        observed_archived_handoff = (
+            sha256_file(archived_handoff_path)
+            if archived_handoff_path.exists()
+            or archived_handoff_path.is_symlink()
+            else None
+        )
+        expected_handoff = journal["control_handoff_sha256"]
+        if expected_handoff is None:
+            if (
+                observed_live_handoff is not None
+                or observed_archived_handoff is not None
+            ):
+                raise PullDeployError(
+                    "unrecorded prepare abort control handoff appeared"
+                )
+        elif (
+            (
+                observed_live_handoff,
+                observed_archived_handoff,
+            ).count(expected_handoff)
+            != 1
+            or any(
+                value not in {None, expected_handoff}
+                for value in (
+                    observed_live_handoff,
+                    observed_archived_handoff,
+                )
+            )
+        ):
+            raise PullDeployError("prepare abort control handoff CAS changed")
+        prepared_ref = journal["prepared_ref"]
+        observed_ref = self._observe_prepare_abort_prepared_ref(
+            prepared_ref["name"]
+        )
+        expected_ref = prepared_ref["target_sha"]
+        ref_evidence_path = (
+            Path(journal["archive_path"]) / "prepared-ref.json"
+        )
+        archived_ref = (
+            load_private_json(ref_evidence_path)
+            if ref_evidence_path.exists() or ref_evidence_path.is_symlink()
+            else None
+        )
+        expected_ref_evidence = {
+            "schema_version": 1,
+            "operation_id": journal["operation_id"],
+            "ref": prepared_ref["name"],
+            "target_sha": expected_ref,
+        }
+        if expected_ref is None:
+            if observed_ref is not None or archived_ref is not None:
+                raise PullDeployError(
+                    "unrecorded prepared Git ref appeared during abort"
+                )
+        elif (
+            observed_ref not in {None, expected_ref}
+            or (
+                archived_ref is not None
+                and archived_ref != expected_ref_evidence
+            )
+            or (observed_ref is None and archived_ref is None)
+        ):
+            raise PullDeployError("prepare abort prepared Git ref CAS changed")
+
+    @staticmethod
+    def _validate_prepare_abort_slot_owner(
+        document: object,
+        *,
+        operation_id: str,
+        slot: str,
+    ) -> dict[str, Any]:
+        expected = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "slot": slot,
+        }
+        if document != expected:
+            raise PullDeployError(
+                "prepare-abort Worker slot belongs to another operation"
+            )
+        return expected
+
+    def _capture_prepare_abort_staging(
+        self,
+        *,
+        operation_id: str,
+        owner: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        staging = self.prepared_root / f".{operation_id}.preparing"
+        tombstone = staging.parent / f"{staging.name}.discard"
+        live_present = staging.exists() or staging.is_symlink()
+        tombstone_present = tombstone.exists() or tombstone.is_symlink()
+        if live_present and tombstone_present:
+            raise PullDeployError(
+                "prepare operation staging and quarantine both exist"
+            )
+
+        def validate_tree(path: Path, *, allow_ownerless: bool) -> str:
+            ensure_private_directory(path)
+            owner_path = path / "prepare-owner.json"
+            if owner_path.exists() or owner_path.is_symlink():
+                observed = self._validate_prepare_owner_document(
+                    load_private_json(owner_path),
+                    operation_id,
+                )
+                if any(
+                    observed[field] != owner[field]
+                    for field in (
+                        "schema_version",
+                        "operation_id",
+                        "target_sha",
+                        "controller_sha256",
+                    )
+                ):
+                    raise PullDeployError(
+                        "prepare operation staging has different ownership"
+                    )
+            elif not allow_ownerless or any(path.iterdir()):
+                raise PullDeployError(
+                    "prepare operation staging lacks exact ownership"
+                )
+            return directory_inventory_digest(path)
+
+        return {
+            "live_inventory_sha256": (
+                validate_tree(staging, allow_ownerless=True)
+                if live_present
+                else None
+            ),
+            "tombstone_inventory_sha256": (
+                validate_tree(tombstone, allow_ownerless=True)
+                if tombstone_present
+                else None
+            ),
+        }
+
+    def _capture_prepare_abort_wheel_staging(
+        self,
+        *,
+        operation_id: str,
+    ) -> list[dict[str, Any]]:
+        """Seal only wheel-cache staging paths named for this operation."""
+
+        if not (self.wheel_cache_dir.exists() or self.wheel_cache_dir.is_symlink()):
+            return []
+        ensure_private_directory(self.wheel_cache_dir)
+        suffix = re.escape(operation_id)
+        pattern = re.compile(
+            rf"^\.(sha256:[0-9a-f]{{64}})\.staging-{suffix}(\.discard)?$"
+        )
+        grouped: dict[str, dict[str, Path | None]] = {}
+        for path in sorted(self.wheel_cache_dir.iterdir(), key=lambda item: item.name):
+            match = pattern.fullmatch(path.name)
+            if match is None:
+                continue
+            key = require_digest(match.group(1), "Worker wheel cache key")
+            kind = "tombstone" if match.group(2) else "live"
+            record = grouped.setdefault(key, {"live": None, "tombstone": None})
+            if record[kind] is not None:
+                raise PullDeployError(
+                    "duplicate prepare-abort Worker wheel staging authority"
+                )
+            record[kind] = path
+
+        result: list[dict[str, Any]] = []
+        expected_owner_fields = {
+            "schema_version",
+            "operation_id",
+            "wheel_cache_key",
+            "worker_lock_sha256",
+            "base_python_identity_sha256",
+        }
+
+        def inventory(path: Path, key: str) -> str:
+            ensure_private_directory(path)
+            owner_path = path / ".owner.json"
+            if owner_path.exists() or owner_path.is_symlink():
+                owner = load_private_json(owner_path)
+                if (
+                    set(owner) != expected_owner_fields
+                    or owner.get("schema_version") != 1
+                    or owner.get("operation_id") != operation_id
+                    or owner.get("wheel_cache_key") != key
+                ):
+                    raise PullDeployError(
+                        "prepare-abort Worker wheel staging has different ownership"
+                    )
+                require_digest(
+                    owner.get("worker_lock_sha256"),
+                    "Worker wheel staging lock",
+                )
+                require_digest(
+                    owner.get("base_python_identity_sha256"),
+                    "Worker wheel staging Python identity",
+                )
+            elif any(path.iterdir()):
+                raise PullDeployError(
+                    "prepare-abort Worker wheel staging lacks exact ownership"
+                )
+            return directory_inventory_digest(path)
+
+        for key in sorted(grouped):
+            live = grouped[key]["live"]
+            tombstone = grouped[key]["tombstone"]
+            if live is not None and tombstone is not None:
+                raise PullDeployError(
+                    "Worker wheel staging and quarantine both exist"
+                )
+            result.append(
+                {
+                    "wheel_cache_key": key,
+                    "live_inventory_sha256": (
+                        inventory(live, key) if live is not None else None
+                    ),
+                    "tombstone_inventory_sha256": (
+                        inventory(tombstone, key)
+                        if tombstone is not None
+                        else None
+                    ),
+                }
+            )
+        return result
+
+    def _observe_prepare_abort_prepared_ref(self, ref: str) -> str | None:
+        observed: str | None = None
+        if not (self.test_root_mode and not self._has_complete_test_git_layout()):
+            result = self._git(
+                "show-ref",
+                "--verify",
+                "--hash",
+                ref,
+                check=False,
+            )
+            if result.returncode == 0:
+                lines = [
+                    line.strip()
+                    for line in str(result.stdout).splitlines()
+                    if line.strip()
+                ]
+                if len(lines) != 1:
+                    raise PullDeployError(
+                        "prepared Git ref returned malformed evidence"
+                    )
+                observed = require_sha(lines[0], "prepared Git ref")
+            elif result.returncode != 1:
+                raise PullDeployError("prepared Git ref cannot be inspected")
+        return observed
+
+    def _capture_prepare_abort_prepared_ref(
+        self,
+        *,
+        operation_id: str,
+        target_sha: str,
+    ) -> dict[str, Any]:
+        ref = f"refs/nexpoly/prepared/{operation_id}"
+        observed = self._observe_prepare_abort_prepared_ref(ref)
+        if observed is not None and observed != target_sha:
+            raise PullDeployError(
+                "prepared Git ref belongs to another target"
+            )
+        return {"name": ref, "target_sha": observed}
+
+    def _capture_prepare_abort_slots(
+        self,
+        *,
+        operation_id: str,
+        target_sha: str,
+        expected_target_tree: str | None,
+        active_slot: Mapping[str, Any] | None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        records: list[dict[str, Any]] = []
+        target_tree = expected_target_tree
+        for slot in ("a", "b"):
+            root = self.venv_root / f"md-{slot}"
+            record_path = self.slots_state_dir / f"md-{slot}.json"
+            staging = (
+                self.venv_root / f".md-{slot}.preparing-{operation_id}"
+            )
+            staging_tombstone = staging.parent / f"{staging.name}.discard"
+            slot_tombstone = (
+                self.venv_root / f".{slot}.discard-{operation_id}"
+            )
+            root_present = root.exists() or root.is_symlink()
+            record_present = record_path.exists() or record_path.is_symlink()
+            staging_present = staging.exists() or staging.is_symlink()
+            staging_tombstone_present = (
+                staging_tombstone.exists() or staging_tombstone.is_symlink()
+            )
+            slot_tombstone_present = (
+                slot_tombstone.exists() or slot_tombstone.is_symlink()
+            )
+            if staging_present and staging_tombstone_present:
+                raise PullDeployError(
+                    "Worker slot staging and quarantine both exist"
+                )
+            root_owner: dict[str, Any] | None = None
+            if root_present:
+                ensure_private_directory(root)
+                owner_path = root / ".preparing.json"
+                if owner_path.exists() or owner_path.is_symlink():
+                    raw_owner = load_private_json(owner_path)
+                    root_owner = (
+                        self._validate_prepare_abort_slot_owner(
+                            raw_owner,
+                            operation_id=operation_id,
+                            slot=slot,
+                        )
+                    )
+            slot_record: dict[str, Any] | None = None
+            record_owned = False
+            if record_present:
+                slot_record = validate_slot_record(
+                    load_private_json(record_path),
+                    slot,
+                )
+                record_owned = (
+                    slot_record["prepared_operation_id"] == operation_id
+                )
+                if record_owned:
+                    if slot_record["source_sha"] != target_sha:
+                        raise PullDeployError(
+                            "prepare-abort Worker slot target SHA differs"
+                        )
+                    if (
+                        target_tree is not None
+                        and slot_record["source_tree"] != target_tree
+                    ):
+                        raise PullDeployError(
+                            "prepare-abort Worker slot target tree differs"
+                        )
+                    target_tree = slot_record["source_tree"]
+            root_owned = root_owner is not None or record_owned
+            if root_owner is not None and slot_record is not None and not record_owned:
+                raise PullDeployError(
+                    "partial Worker slot conflicts with another operation record"
+                )
+            if record_owned and not root_present and not slot_tombstone_present:
+                raise PullDeployError(
+                    "prepare-abort Worker slot record has no owned slot tree"
+                )
+            if root_owned and active_slot is not None and active_slot["slot"] == slot:
+                raise PullDeployError(
+                    "prepare abort cannot remove the active Worker slot"
+                )
+            if root_present and root_owned:
+                # The active-slot pointer is necessary but not sufficient: a
+                # stale unit or same-UID process may still execute from an
+                # otherwise inactive slot.  Seal the absence of such readers
+                # before publishing destructive abort intent.
+                self._assert_slot_not_running(root)
+            if root_present and not root_owned and slot_tombstone_present:
+                raise PullDeployError(
+                    "prepare-abort slot quarantine conflicts with a live foreign slot"
+                )
+            slot_tombstone_inventory: str | None = None
+            if slot_tombstone_present:
+                ensure_private_directory(slot_tombstone)
+                tombstone_owner = slot_tombstone / ".preparing.json"
+                if tombstone_owner.exists() or tombstone_owner.is_symlink():
+                    self._validate_prepare_abort_slot_owner(
+                        load_private_json(tombstone_owner),
+                        operation_id=operation_id,
+                        slot=slot,
+                    )
+                elif record_present and not record_owned:
+                    raise PullDeployError(
+                        "ownerless Worker slot quarantine conflicts with "
+                        "another operation record"
+                    )
+                elif root_present and not root_owned:
+                    raise PullDeployError(
+                        "ownerless Worker slot quarantine conflicts with "
+                        "a foreign slot tree"
+                    )
+                slot_tombstone_inventory = directory_inventory_digest(
+                    slot_tombstone
+                )
+                root_owned = True
+            staging_inventory: str | None = None
+            if staging_present:
+                ensure_private_directory(staging)
+                staging_owner = staging / ".preparing.json"
+                if staging_owner.exists() or staging_owner.is_symlink():
+                    self._validate_prepare_abort_slot_owner(
+                        load_private_json(staging_owner),
+                        operation_id=operation_id,
+                        slot=slot,
+                    )
+                elif any(staging.iterdir()):
+                    raise PullDeployError(
+                        "prepare-abort Worker staging lacks exact ownership"
+                    )
+                staging_inventory = directory_inventory_digest(staging)
+            staging_tombstone_inventory: str | None = None
+            if staging_tombstone_present:
+                ensure_private_directory(staging_tombstone)
+                tombstone_owner = staging_tombstone / ".preparing.json"
+                if tombstone_owner.exists() or tombstone_owner.is_symlink():
+                    self._validate_prepare_abort_slot_owner(
+                        load_private_json(tombstone_owner),
+                        operation_id=operation_id,
+                        slot=slot,
+                    )
+                staging_tombstone_inventory = directory_inventory_digest(
+                    staging_tombstone
+                )
+            if (
+                root_owned
+                or staging_inventory is not None
+                or staging_tombstone_inventory is not None
+            ):
+                records.append(
+                    {
+                        "slot": slot,
+                        "root_inventory_sha256": (
+                            directory_inventory_digest(root)
+                            if root_present and root_owned
+                            else None
+                        ),
+                        "record_sha256": (
+                            sha256_file(record_path) if record_owned else None
+                        ),
+                        "slot_tombstone_inventory_sha256": (
+                            slot_tombstone_inventory
+                        ),
+                        "staging_inventory_sha256": staging_inventory,
+                        "staging_tombstone_inventory_sha256": (
+                            staging_tombstone_inventory
+                        ),
+                    }
+                )
+        return records, target_tree
+
+    def _validate_prepare_abort_journal(
+        self,
+        document: object,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        if (
+            not isinstance(document, dict)
+            or set(document) != PREPARE_ABORT_FIELDS
+            or document.get("schema_version") != 1
+            or document.get("operation_id") != operation_id
+            or document.get("phase") not in PREPARE_ABORT_PHASES
+        ):
+            raise PullDeployError("prepare-abort journal has an invalid shape")
+        owner = self._validate_prepare_owner_document(
+            document.get("prepare_owner"),
+            operation_id,
+        )
+        if (
+            document.get("prepare_owner_sha256")
+            != canonical_json_digest(owner)
+            or document.get("target_sha") != owner["target_sha"]
+        ):
+            raise PullDeployError("prepare-abort owner identity differs")
+        target_tree = document.get("target_tree")
+        if target_tree is not None:
+            require_sha(target_tree, "prepare-abort target tree")
+        require_digest(
+            document.get("operation_inventory_sha256"),
+            "prepare-abort operation inventory",
+        )
+        descriptor_sha256 = document.get("descriptor_sha256")
+        if descriptor_sha256 is not None:
+            require_digest(descriptor_sha256, "prepare-abort descriptor")
+        handoff_sha256 = document.get("control_handoff_sha256")
+        handoff_schema = document.get("control_handoff_schema_version")
+        executor_sha256 = document.get("executor_control_sha256")
+        if handoff_sha256 is None:
+            if handoff_schema is not None or executor_sha256 is not None:
+                raise PullDeployError(
+                    "prepare-abort handoff evidence is incomplete"
+                )
+        else:
+            require_digest(handoff_sha256, "prepare-abort control handoff")
+            require_digest(
+                executor_sha256,
+                "prepare-abort executor control",
+            )
+            if handoff_schema not in {1, 2} or target_tree is None:
+                raise PullDeployError(
+                    "prepare-abort control handoff schema is invalid"
+                )
+        staging = document.get("prepare_staging")
+        if not isinstance(staging, dict) or set(staging) != {
+            "live_inventory_sha256",
+            "tombstone_inventory_sha256",
+        }:
+            raise PullDeployError("prepare-abort staging evidence is invalid")
+        for value in staging.values():
+            if value is not None:
+                require_digest(value, "prepare-abort staging inventory")
+        if all(value is not None for value in staging.values()):
+            raise PullDeployError(
+                "prepare-abort staging has two simultaneous authorities"
+            )
+        wheel_staging = document.get("wheel_staging")
+        if not isinstance(wheel_staging, list):
+            raise PullDeployError(
+                "prepare-abort Worker wheel staging evidence is invalid"
+            )
+        seen_wheel_keys: list[str] = []
+        expected_wheel_fields = {
+            "wheel_cache_key",
+            "live_inventory_sha256",
+            "tombstone_inventory_sha256",
+        }
+        for record in wheel_staging:
+            if (
+                not isinstance(record, dict)
+                or set(record) != expected_wheel_fields
+            ):
+                raise PullDeployError(
+                    "prepare-abort Worker wheel staging record is invalid"
+                )
+            key = require_digest(
+                record.get("wheel_cache_key"),
+                "prepare-abort Worker wheel cache key",
+            )
+            if key in seen_wheel_keys:
+                raise PullDeployError(
+                    "prepare-abort Worker wheel staging is duplicated"
+                )
+            seen_wheel_keys.append(key)
+            live = record.get("live_inventory_sha256")
+            tombstone = record.get("tombstone_inventory_sha256")
+            if (live is None) == (tombstone is None):
+                raise PullDeployError(
+                    "prepare-abort Worker wheel staging authority is ambiguous"
+                )
+            require_digest(
+                live if live is not None else tombstone,
+                "prepare-abort Worker wheel staging inventory",
+            )
+        if seen_wheel_keys != sorted(seen_wheel_keys):
+            raise PullDeployError(
+                "prepare-abort Worker wheel staging is not canonical"
+            )
+        slots = document.get("owned_slots")
+        if not isinstance(slots, list) or len(slots) > 2:
+            raise PullDeployError("prepare-abort Worker slot evidence is invalid")
+        expected_slot_fields = {
+            "slot",
+            "root_inventory_sha256",
+            "record_sha256",
+            "slot_tombstone_inventory_sha256",
+            "staging_inventory_sha256",
+            "staging_tombstone_inventory_sha256",
+        }
+        seen_slots: list[str] = []
+        for record in slots:
+            if (
+                not isinstance(record, dict)
+                or set(record) != expected_slot_fields
+                or record.get("slot") not in {"a", "b"}
+                or record["slot"] in seen_slots
+            ):
+                raise PullDeployError(
+                    "prepare-abort Worker slot record is invalid"
+                )
+            seen_slots.append(record["slot"])
+            identities = [
+                record[field]
+                for field in expected_slot_fields - {"slot"}
+            ]
+            if all(value is None for value in identities):
+                raise PullDeployError(
+                    "prepare-abort Worker slot record is empty"
+                )
+            for value in identities:
+                if value is not None:
+                    require_digest(
+                        value,
+                        "prepare-abort Worker slot inventory",
+                    )
+        if seen_slots != sorted(seen_slots):
+            raise PullDeployError(
+                "prepare-abort Worker slots are not canonical"
+            )
+        prepared_ref = document.get("prepared_ref")
+        expected_ref_name = f"refs/nexpoly/prepared/{operation_id}"
+        if (
+            not isinstance(prepared_ref, dict)
+            or set(prepared_ref) != {"name", "target_sha"}
+            or prepared_ref.get("name") != expected_ref_name
+        ):
+            raise PullDeployError("prepare-abort prepared Git ref is invalid")
+        prepared_ref_target = prepared_ref.get("target_sha")
+        if prepared_ref_target is not None:
+            require_sha(prepared_ref_target, "prepare-abort prepared Git ref")
+            if prepared_ref_target != document["target_sha"]:
+                raise PullDeployError(
+                    "prepare-abort prepared Git ref target differs"
+                )
+        current_state_sha256 = document.get("current_state_sha256")
+        if current_state_sha256 is not None:
+            require_digest(
+                current_state_sha256,
+                "prepare-abort current deployment",
+            )
+        require_digest(
+            document.get("active_control_sha256"),
+            "prepare-abort active controls",
+        )
+        active_slot = document.get("active_slot")
+        active_slot_sha256 = document.get("active_slot_sha256")
+        if active_slot is None:
+            if active_slot_sha256 is not None:
+                raise PullDeployError(
+                    "prepare-abort active slot digest lacks a record"
+                )
+        else:
+            validate_active_slot_record(active_slot)
+            require_digest(
+                active_slot_sha256,
+                "prepare-abort active slot",
+            )
+        token_sha256 = document.get("bridge_token_sha256")
+        token_operation_id = document.get("bridge_token_operation_id")
+        token_status = document.get("bridge_token_status")
+        if token_sha256 is None:
+            if token_operation_id is not None or token_status is not None:
+                raise PullDeployError(
+                    "prepare-abort bridge token evidence is incomplete"
+                )
+        else:
+            require_digest(token_sha256, "prepare-abort bridge token")
+            require_operation_id(str(token_operation_id or ""))
+            if token_status not in _bridge_core.TOKEN_STATUSES:
+                raise PullDeployError(
+                    "prepare-abort bridge token status is invalid"
+                )
+            if token_operation_id == operation_id:
+                raise PullDeployError(
+                    "bridge token operation requires first-bridge recovery, "
+                    "not prepare abort"
+                )
+        expected_archive = (
+            self.prepare_abort_archives_dir / operation_id
+        )
+        if document.get("archive_path") != str(expected_archive):
+            raise PullDeployError("prepare-abort archive path differs")
+        phase = document["phase"]
+        if phase == "completed":
+            if (
+                document.get("status") != "aborted"
+                or not isinstance(document.get("completed_at"), str)
+                or not document["completed_at"]
+            ):
+                raise PullDeployError(
+                    "completed prepare-abort journal is incomplete"
+                )
+            require_digest(
+                document.get("archive_inventory_sha256"),
+                "completed prepare-abort archive inventory",
+            )
+        elif (
+            document.get("status") != "aborting"
+            or document.get("archive_inventory_sha256") is not None
+            or document.get("completed_at") is not None
+        ):
+            raise PullDeployError(
+                "in-progress prepare-abort journal is inconsistent"
+            )
+        if (
+            not isinstance(document.get("created_at"), str)
+            or not document["created_at"]
+        ):
+            raise PullDeployError("prepare-abort timestamp is invalid")
+        return dict(document)
+
+    def _load_prepare_abort_journal(
+        self,
+        operation_id: str,
+    ) -> dict[str, Any] | None:
+        path = self._prepare_abort_journal_path(operation_id)
+        if not (path.exists() or path.is_symlink()):
+            return None
+        ensure_private_directory(self.prepare_aborts_dir)
+        return self._validate_prepare_abort_journal(
+            load_private_json(path),
+            operation_id,
+        )
+
+    def _advance_prepare_abort(
+        self,
+        journal: dict[str, Any],
+        phase: str,
+        **updates: Any,
+    ) -> dict[str, Any]:
+        phases = (
+            "intent",
+            "slot-cleanup-intent",
+            "slots-cleaned",
+            "operation-archive-intent",
+            "completed",
+        )
+        current = phases.index(journal["phase"])
+        requested = phases.index(phase)
+        if requested not in {current, current + 1}:
+            raise PullDeployError("prepare-abort phase transition is invalid")
+        candidate = {**journal, **updates, "phase": phase}
+        if phase == "completed":
+            candidate["status"] = "aborted"
+        candidate = self._validate_prepare_abort_journal(
+            candidate,
+            journal["operation_id"],
+        )
+        atomic_json(
+            self._prepare_abort_journal_path(journal["operation_id"]),
+            candidate,
+        )
+        journal.clear()
+        journal.update(candidate)
+        return journal
+
+    def _ensure_prepare_abort_archive(
+        self,
+        journal: Mapping[str, Any],
+    ) -> Path:
+        archive = Path(journal["archive_path"])
+        if archive.parent != self.prepare_abort_archives_dir:
+            raise PullDeployError("prepare-abort archive escapes its authority")
+        if archive.exists() or archive.is_symlink():
+            ensure_private_directory(archive)
+        else:
+            archive.mkdir(mode=0o700)
+            fsync_directory(archive.parent)
+        owner_path = archive / "ARCHIVE-OWNER.json"
+        expected_owner = {
+            "schema_version": 1,
+            "operation_id": journal["operation_id"],
+            "prepare_owner_sha256": journal["prepare_owner_sha256"],
+            "created_at": journal["created_at"],
+        }
+        if owner_path.exists() or owner_path.is_symlink():
+            if load_private_json(owner_path) != expected_owner:
+                raise PullDeployError(
+                    "prepare-abort archive has different ownership"
+                )
+        else:
+            if any(archive.iterdir()):
+                raise PullDeployError(
+                    "prepare-abort archive lacks its exact owner"
+                )
+            atomic_json(owner_path, expected_owner)
+        return archive
+
+    @staticmethod
+    def _ensure_prepare_abort_archive_parent(
+        archive: Path,
+        *components: str,
+    ) -> Path:
+        current = archive
+        for component in components:
+            if (
+                not component
+                or component in {".", ".."}
+                or "/" in component
+                or "\0" in component
+            ):
+                raise PullDeployError(
+                    "prepare-abort archive component is unsafe"
+                )
+            target = current / component
+            existed = target.exists() or target.is_symlink()
+            ensure_private_directory(target, create=True)
+            if not existed:
+                fsync_directory(current)
+            current = target
+        return current
+
+    @staticmethod
+    def _validate_prepare_abort_archive_file(
+        path: Path,
+        expected_sha256: str,
+    ) -> None:
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise PullDeployError(
+                f"prepare-abort archive file is unavailable: {path}"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or sha256_file(path) != expected_sha256
+        ):
+            raise PullDeployError(
+                "prepare-abort archive file differs from sealed evidence"
+            )
+
+    def _archive_prepare_abort_directory(
+        self,
+        *,
+        source: Path,
+        target: Path,
+        expected_inventory_sha256: str | None,
+        label: str,
+    ) -> None:
+        source_present = source.exists() or source.is_symlink()
+        target_present = target.exists() or target.is_symlink()
+        if expected_inventory_sha256 is None:
+            if source_present or target_present:
+                raise PullDeployError(f"unrecorded {label} appeared")
+            return
+        require_digest(
+            expected_inventory_sha256,
+            f"prepare-abort {label} inventory",
+        )
+        if source_present and target_present:
+            raise PullDeployError(
+                f"{label} and its abort archive both exist"
+            )
+        if source_present:
+            ensure_private_directory(source)
+            if directory_inventory_digest(source) != expected_inventory_sha256:
+                raise PullDeployError(
+                    f"{label} changed after prepare-abort intent"
+                )
+            try:
+                quarantine_directory_noreplace(source, target)
+            except BaseException:
+                if (
+                    not (source.exists() or source.is_symlink())
+                    and (target.exists() or target.is_symlink())
+                ):
+                    ensure_private_directory(target)
+                    if (
+                        directory_inventory_digest(target)
+                        == expected_inventory_sha256
+                    ):
+                        return
+                raise
+        if not (target.exists() or target.is_symlink()):
+            raise PullDeployError(f"{label} abort archive is unavailable")
+        ensure_private_directory(target)
+        if directory_inventory_digest(target) != expected_inventory_sha256:
+            raise PullDeployError(
+                f"{label} abort archive differs from sealed evidence"
+            )
+
+    def _archive_prepare_abort_file(
+        self,
+        *,
+        source: Path,
+        target: Path,
+        expected_sha256: str | None,
+        label: str,
+    ) -> None:
+        source_present = source.exists() or source.is_symlink()
+        target_present = target.exists() or target.is_symlink()
+        if expected_sha256 is None:
+            if source_present or target_present:
+                raise PullDeployError(f"unrecorded {label} appeared")
+            return
+        require_digest(expected_sha256, f"prepare-abort {label}")
+        if source_present and target_present:
+            raise PullDeployError(
+                f"{label} and its abort archive both exist"
+            )
+        if source_present:
+            self._validate_prepare_abort_archive_file(
+                source,
+                expected_sha256,
+            )
+            try:
+                quarantine_regular_file_noreplace(source, target)
+            except BaseException:
+                if (
+                    not (source.exists() or source.is_symlink())
+                    and (target.exists() or target.is_symlink())
+                ):
+                    self._validate_prepare_abort_archive_file(
+                        target,
+                        expected_sha256,
+                    )
+                    return
+                raise
+        if not (target.exists() or target.is_symlink()):
+            raise PullDeployError(f"{label} abort archive is unavailable")
+        self._validate_prepare_abort_archive_file(target, expected_sha256)
+
+    def _reconcile_prepare_abort_staging(
+        self,
+        journal: Mapping[str, Any],
+    ) -> None:
+        operation_id = journal["operation_id"]
+        evidence = journal["prepare_staging"]
+        archive = self._ensure_prepare_abort_archive(journal)
+        staging = self.prepared_root / f".{operation_id}.preparing"
+        tombstone = staging.parent / f"{staging.name}.discard"
+        self._archive_prepare_abort_directory(
+            source=staging,
+            target=archive / "prepared-staging",
+            expected_inventory_sha256=evidence["live_inventory_sha256"],
+            label="prepare operation staging",
+        )
+        self._archive_prepare_abort_directory(
+            source=tombstone,
+            target=archive / "prepared-staging-tombstone",
+            expected_inventory_sha256=(
+                evidence["tombstone_inventory_sha256"]
+            ),
+            label="prepare operation staging quarantine",
+        )
+
+    def _reconcile_prepare_abort_wheel_staging(
+        self,
+        journal: Mapping[str, Any],
+    ) -> None:
+        operation_id = journal["operation_id"]
+        archive = self._ensure_prepare_abort_archive(journal)
+        live_parent = self._ensure_prepare_abort_archive_parent(
+            archive,
+            "wheel-staging",
+        )
+        tombstone_parent = self._ensure_prepare_abort_archive_parent(
+            archive,
+            "wheel-staging-tombstones",
+        )
+        for evidence in journal["wheel_staging"]:
+            key = evidence["wheel_cache_key"]
+            component = key.removeprefix("sha256:")
+            staging = (
+                self.wheel_cache_dir
+                / f".{key}.staging-{operation_id}"
+            )
+            tombstone = staging.parent / f"{staging.name}.discard"
+            self._archive_prepare_abort_directory(
+                source=staging,
+                target=live_parent / component,
+                expected_inventory_sha256=(
+                    evidence["live_inventory_sha256"]
+                ),
+                label=f"Worker wheel staging {key}",
+            )
+            self._archive_prepare_abort_directory(
+                source=tombstone,
+                target=tombstone_parent / component,
+                expected_inventory_sha256=(
+                    evidence["tombstone_inventory_sha256"]
+                ),
+                label=f"Worker wheel staging quarantine {key}",
+            )
+
+    def _reconcile_prepare_abort_slot(
+        self,
+        journal: Mapping[str, Any],
+        evidence: Mapping[str, Any],
+    ) -> None:
+        operation_id = journal["operation_id"]
+        slot = evidence["slot"]
+        archive = self._ensure_prepare_abort_archive(journal)
+        root = self.venv_root / f"md-{slot}"
+        record_path = self.slots_state_dir / f"md-{slot}.json"
+        staging = self.venv_root / f".md-{slot}.preparing-{operation_id}"
+        staging_tombstone = staging.parent / f"{staging.name}.discard"
+        slot_tombstone = self.venv_root / f".{slot}.discard-{operation_id}"
+        worker_slots = self._ensure_prepare_abort_archive_parent(
+            archive,
+            "worker-slots",
+        )
+        worker_slot_records = self._ensure_prepare_abort_archive_parent(
+            archive,
+            "worker-slot-records",
+        )
+        worker_slot_tombstones = self._ensure_prepare_abort_archive_parent(
+            archive,
+            "worker-slot-tombstones",
+        )
+        worker_staging = self._ensure_prepare_abort_archive_parent(
+            archive,
+            "worker-staging",
+        )
+        worker_staging_tombstones = (
+            self._ensure_prepare_abort_archive_parent(
+                archive,
+                "worker-staging-tombstones",
+            )
+        )
+
+        self._archive_prepare_abort_directory(
+            source=staging,
+            target=worker_staging / f"md-{slot}",
+            expected_inventory_sha256=evidence[
+                "staging_inventory_sha256"
+            ],
+            label=f"Worker slot {slot} staging",
+        )
+        self._archive_prepare_abort_directory(
+            source=staging_tombstone,
+            target=worker_staging_tombstones / f"md-{slot}",
+            expected_inventory_sha256=evidence[
+                "staging_tombstone_inventory_sha256"
+            ],
+            label=f"Worker slot {slot} staging quarantine",
+        )
+        if evidence["root_inventory_sha256"] is not None:
+            if root.exists() or root.is_symlink():
+                # Recheck after a crash/retry and immediately before the live
+                # slot is renamed out of service.  The durable inventory alone
+                # cannot prove that no reader started after abort intent.
+                self._assert_slot_not_running(root)
+            self._archive_prepare_abort_directory(
+                source=root,
+                target=worker_slots / f"md-{slot}",
+                expected_inventory_sha256=evidence[
+                    "root_inventory_sha256"
+                ],
+                label=f"Worker slot {slot}",
+            )
+        if evidence["record_sha256"] is not None:
+            self._archive_prepare_abort_file(
+                source=record_path,
+                target=worker_slot_records / f"md-{slot}.json",
+                expected_sha256=evidence["record_sha256"],
+                label=f"Worker slot {slot} record",
+            )
+        self._archive_prepare_abort_directory(
+            source=slot_tombstone,
+            target=worker_slot_tombstones / f"md-{slot}",
+            expected_inventory_sha256=evidence[
+                "slot_tombstone_inventory_sha256"
+            ],
+            label=f"Worker slot {slot} quarantine",
+        )
+
+        if record_path.exists() or record_path.is_symlink():
+            remaining_record = validate_slot_record(
+                load_private_json(record_path),
+                slot,
+            )
+            if remaining_record["prepared_operation_id"] == operation_id:
+                raise PullDeployError(
+                    "prepare-abort Worker slot record remains owned"
+                )
+        if root.exists() or root.is_symlink():
+            ensure_private_directory(root)
+            owner_path = root / ".preparing.json"
+            if owner_path.exists() or owner_path.is_symlink():
+                owner = load_private_json(owner_path)
+                if owner.get("operation_id") == operation_id:
+                    raise PullDeployError(
+                        "prepare-abort Worker slot remains owned"
+                    )
+
+    def _reconcile_prepare_abort_archive(
+        self,
+        journal: Mapping[str, Any],
+    ) -> str:
+        operation_id = journal["operation_id"]
+        operation, _descriptor_path, ready_path = self._operation_paths(
+            operation_id
+        )
+        archive = self._ensure_prepare_abort_archive(journal)
+        handoff_path = self.control_handoffs_dir / f"{operation_id}.json"
+        self._archive_prepare_abort_file(
+            source=handoff_path,
+            target=archive / "control-handoff.json",
+            expected_sha256=journal["control_handoff_sha256"],
+            label="prepare control handoff",
+        )
+
+        prepared_ref = journal["prepared_ref"]
+        ref_name = prepared_ref["name"]
+        expected_ref = prepared_ref["target_sha"]
+        ref_evidence_path = archive / "prepared-ref.json"
+        if expected_ref is None:
+            if self._observe_prepare_abort_prepared_ref(ref_name) is not None:
+                raise PullDeployError(
+                    "unrecorded prepared Git ref appeared during abort"
+                )
+            if ref_evidence_path.exists() or ref_evidence_path.is_symlink():
+                raise PullDeployError(
+                    "unrecorded prepared Git ref archive appeared"
+                )
+        else:
+            ref_evidence = {
+                "schema_version": 1,
+                "operation_id": operation_id,
+                "ref": ref_name,
+                "target_sha": expected_ref,
+            }
+            if ref_evidence_path.exists() or ref_evidence_path.is_symlink():
+                if load_private_json(ref_evidence_path) != ref_evidence:
+                    raise PullDeployError(
+                        "prepared Git ref archive differs from sealed evidence"
+                    )
+            else:
+                observed_ref = self._observe_prepare_abort_prepared_ref(
+                    ref_name
+                )
+                if observed_ref != expected_ref:
+                    raise PullDeployError(
+                        "prepared Git ref disappeared before evidence was archived"
+                    )
+                atomic_json(ref_evidence_path, ref_evidence)
+            observed_ref = self._observe_prepare_abort_prepared_ref(ref_name)
+            if observed_ref == expected_ref:
+                try:
+                    self._git(
+                        "update-ref",
+                        "-d",
+                        ref_name,
+                        expected_ref,
+                    )
+                except BaseException:
+                    if (
+                        self._observe_prepare_abort_prepared_ref(ref_name)
+                        is None
+                    ):
+                        pass
+                    else:
+                        raise
+            elif observed_ref is not None:
+                raise PullDeployError(
+                    "prepared Git ref changed before CAS deletion"
+                )
+            if self._observe_prepare_abort_prepared_ref(ref_name) is not None:
+                raise PullDeployError(
+                    "prepared Git ref remains after CAS deletion"
+                )
+
+        if ready_path.exists() or ready_path.is_symlink():
+            raise PullDeployError(
+                "READY prepare cannot be archived by prepare-abort"
+            )
+        self._archive_prepare_abort_directory(
+            source=operation,
+            target=archive / "operation",
+            expected_inventory_sha256=journal[
+                "operation_inventory_sha256"
+            ],
+            label="prepare operation",
+        )
+        return directory_inventory_digest(archive)
+
+    def _assert_no_deployment_terminal_records(
+        self,
+        operation_id: str,
+    ) -> None:
+        state = self._load_operation_state(operation_id)
+        if state is not None:
+            raise PullDeployError(
+                f"operation ID is terminal ({state['outcome']})"
+            )
+        for audit in self._operation_directories(operation_id):
+            if not (audit.exists() or audit.is_symlink()):
+                continue
+            ensure_private_directory(audit)
+            terminal_files = sorted(
+                path.name
+                for path in audit.glob("*.json")
+                if path.name != "operation-state.json"
+            )
+            if terminal_files:
+                raise PullDeployError(
+                    "operation has terminal audit evidence without a valid state record"
+                )
+
+    def abort_prepare(self, *, operation_id: str) -> dict[str, Any]:
+        """Crash-safely retire one unsealed, token-free prepare operation."""
+
+        self.ensure_roots(mutating=True)
+        operation_id = require_operation_id(operation_id)
+        if not self.apply_enabled:
+            raise PullDeployError("prepare-abort requires mutation mode")
+        with self.deployment_lock():
+            self._require_no_contract_maintenance(
+                require_alias_completed=False
+            )
+            if self.marker_path.exists() or self.marker_path.is_symlink():
+                raise PullDeployError(
+                    "deployment recovery must finish before prepare-abort"
+                )
+            operation, descriptor_path, ready_path = self._operation_paths(
+                operation_id
+            )
+            journal = self._load_prepare_abort_journal(operation_id)
+            if journal is not None and journal["phase"] == "completed":
+                archive = Path(journal["archive_path"])
+                if operation.exists() or operation.is_symlink():
+                    raise PullDeployError(
+                        "completed prepare-abort still has a live operation"
+                    )
+                if (
+                    not (archive.exists() or archive.is_symlink())
+                    or directory_inventory_digest(archive)
+                    != journal["archive_inventory_sha256"]
+                ):
+                    raise PullDeployError(
+                        "completed prepare-abort archive is unavailable"
+                    )
+                handoff_path = (
+                    self.control_handoffs_dir / f"{operation_id}.json"
+                )
+                if handoff_path.exists() or handoff_path.is_symlink():
+                    raise PullDeployError(
+                        "completed prepare-abort still has a live handoff"
+                    )
+                archived_handoff = archive / "control-handoff.json"
+                expected_handoff = journal["control_handoff_sha256"]
+                if expected_handoff is None:
+                    if (
+                        archived_handoff.exists()
+                        or archived_handoff.is_symlink()
+                    ):
+                        raise PullDeployError(
+                            "completed prepare-abort has an unrecorded handoff"
+                        )
+                else:
+                    self._validate_prepare_abort_archive_file(
+                        archived_handoff,
+                        expected_handoff,
+                    )
+                prepared_ref = journal["prepared_ref"]
+                if (
+                    self._observe_prepare_abort_prepared_ref(
+                        prepared_ref["name"]
+                    )
+                    is not None
+                ):
+                    raise PullDeployError(
+                        "completed prepare-abort still has a prepared Git ref"
+                    )
+                ref_evidence_path = archive / "prepared-ref.json"
+                if prepared_ref["target_sha"] is None:
+                    if (
+                        ref_evidence_path.exists()
+                        or ref_evidence_path.is_symlink()
+                    ):
+                        raise PullDeployError(
+                            "completed prepare-abort has unrecorded Git evidence"
+                        )
+                elif load_private_json(ref_evidence_path) != {
+                    "schema_version": 1,
+                    "operation_id": operation_id,
+                    "ref": prepared_ref["name"],
+                    "target_sha": prepared_ref["target_sha"],
+                }:
+                    raise PullDeployError(
+                        "completed prepare-abort Git provenance changed"
+                    )
+                archived_operation = archive / "operation"
+                ensure_private_directory(archived_operation)
+                if (
+                    directory_inventory_digest(archived_operation)
+                    != journal["operation_inventory_sha256"]
+                ):
+                    raise PullDeployError(
+                        "completed prepare-abort operation provenance changed"
+                    )
+                return {
+                    "action": "prepare-abort",
+                    "status": "already-aborted",
+                    "operation_id": operation_id,
+                    "archive_path": str(archive),
+                    "archive_inventory_sha256": (
+                        journal["archive_inventory_sha256"]
+                    ),
+                }
+            if journal is None:
+                self._assert_no_deployment_terminal_records(operation_id)
+                if not (operation.exists() or operation.is_symlink()):
+                    raise PullDeployError(
+                        "prepare operation is unavailable for abort"
+                    )
+                ensure_private_directory(operation)
+                if ready_path.exists() or ready_path.is_symlink():
+                    raise PullDeployError(
+                        "READY prepare must use apply/rollback, not prepare-abort"
+                    )
+                owner = self._validate_prepare_owner_document(
+                    load_private_json(operation / "prepare-owner.json"),
+                    operation_id,
+                )
+                operation_inventory_sha256 = directory_inventory_digest(
+                    operation
+                )
+                descriptor_sha256: str | None = None
+                descriptor_target_tree: str | None = None
+                if descriptor_path.exists() or descriptor_path.is_symlink():
+                    descriptor = validate_descriptor(
+                        load_private_json(descriptor_path)
+                    )
+                    if (
+                        descriptor["operation_id"] != operation_id
+                        or descriptor["repository"]["target_sha"]
+                        != owner["target_sha"]
+                    ):
+                        raise PullDeployError(
+                            "prepare-abort descriptor ownership differs"
+                        )
+                    descriptor_sha256 = sha256_file(descriptor_path)
+                    descriptor_target_tree = descriptor["repository"][
+                        "target_tree"
+                    ]
+                handoff = self._prepare_abort_handoff_evidence(
+                    operation_id=operation_id,
+                    owner=owner,
+                )
+                target_tree = handoff["target_tree"]
+                if (
+                    target_tree is not None
+                    and descriptor_target_tree is not None
+                    and target_tree != descriptor_target_tree
+                ):
+                    raise PullDeployError(
+                        "prepare-abort descriptor and handoff trees differ"
+                    )
+                target_tree = target_tree or descriptor_target_tree
+                fences = self._capture_prepare_abort_fences()
+                if fences["bridge_token_operation_id"] == operation_id:
+                    raise PullDeployError(
+                        "bridge token operation requires first-bridge recovery, "
+                        "not prepare-abort"
+                    )
+                prepare_staging = self._capture_prepare_abort_staging(
+                    operation_id=operation_id,
+                    owner=owner,
+                )
+                wheel_staging = (
+                    self._capture_prepare_abort_wheel_staging(
+                        operation_id=operation_id,
+                    )
+                )
+                owned_slots, slot_target_tree = (
+                    self._capture_prepare_abort_slots(
+                        operation_id=operation_id,
+                        target_sha=owner["target_sha"],
+                        expected_target_tree=target_tree,
+                        active_slot=fences["active_slot"],
+                    )
+                )
+                if (
+                    target_tree is not None
+                    and slot_target_tree is not None
+                    and target_tree != slot_target_tree
+                ):
+                    raise PullDeployError(
+                        "prepare-abort slot and source target trees differ"
+                    )
+                target_tree = target_tree or slot_target_tree
+                archive = self.prepare_abort_archives_dir / operation_id
+                if archive.exists() or archive.is_symlink():
+                    raise PullDeployError(
+                        "prepare-abort archive already exists without a journal"
+                    )
+                self._ensure_prepare_abort_roots()
+                journal = {
+                    "schema_version": 1,
+                    "operation_id": operation_id,
+                    "status": "aborting",
+                    "phase": "intent",
+                    "prepare_owner": owner,
+                    "prepare_owner_sha256": canonical_json_digest(owner),
+                    "target_sha": owner["target_sha"],
+                    "target_tree": target_tree,
+                    **handoff,
+                    "operation_inventory_sha256": (
+                        operation_inventory_sha256
+                    ),
+                    "descriptor_sha256": descriptor_sha256,
+                    "prepare_staging": prepare_staging,
+                    "wheel_staging": wheel_staging,
+                    "owned_slots": owned_slots,
+                    "prepared_ref": (
+                        self._capture_prepare_abort_prepared_ref(
+                            operation_id=operation_id,
+                            target_sha=owner["target_sha"],
+                        )
+                    ),
+                    **fences,
+                    "archive_path": str(archive),
+                    "archive_inventory_sha256": None,
+                    "created_at": utc_now(),
+                    "completed_at": None,
+                }
+                journal = self._validate_prepare_abort_journal(
+                    journal,
+                    operation_id,
+                )
+                atomic_json(
+                    self._prepare_abort_journal_path(operation_id),
+                    journal,
+                )
+            else:
+                self._assert_no_deployment_terminal_records(operation_id)
+                if ready_path.exists() or ready_path.is_symlink():
+                    raise PullDeployError(
+                        "READY appeared during prepare-abort"
+                    )
+            self._assert_prepare_abort_fences(journal)
+            if journal["phase"] == "intent":
+                self._advance_prepare_abort(
+                    journal,
+                    "slot-cleanup-intent",
+                )
+            if journal["phase"] == "slot-cleanup-intent":
+                self._reconcile_prepare_abort_staging(journal)
+                self._reconcile_prepare_abort_wheel_staging(journal)
+                for slot_evidence in journal["owned_slots"]:
+                    self._reconcile_prepare_abort_slot(
+                        journal,
+                        slot_evidence,
+                    )
+                self._advance_prepare_abort(journal, "slots-cleaned")
+            if journal["phase"] == "slots-cleaned":
+                if not (operation.exists() or operation.is_symlink()):
+                    raise PullDeployError(
+                        "prepare operation disappeared before archive intent"
+                    )
+                ensure_private_directory(operation)
+                if (
+                    directory_inventory_digest(operation)
+                    != journal["operation_inventory_sha256"]
+                ):
+                    raise PullDeployError(
+                        "prepare operation changed before archive intent"
+                    )
+                self._advance_prepare_abort(
+                    journal,
+                    "operation-archive-intent",
+                )
+            if journal["phase"] == "operation-archive-intent":
+                archive_digest = self._reconcile_prepare_abort_archive(
+                    journal
+                )
+                self._advance_prepare_abort(
+                    journal,
+                    "completed",
+                    archive_inventory_sha256=archive_digest,
+                    completed_at=utc_now(),
+                )
+            return {
+                "action": "prepare-abort",
+                "status": "aborted",
+                "operation_id": operation_id,
+                "archive_path": journal["archive_path"],
+                "archive_inventory_sha256": (
+                    journal["archive_inventory_sha256"]
+                ),
+            }
+
     def _operation_directories(self, operation_id: str) -> tuple[Path, Path]:
         operation_id = require_operation_id(operation_id)
         return (
@@ -14269,24 +16901,13 @@ class PullDeployController:
         return document
 
     def _assert_operation_not_terminal(self, operation_id: str, *, action: str) -> None:
-        state = self._load_operation_state(operation_id)
-        if state is not None:
+        self._assert_no_deployment_terminal_records(operation_id)
+        abort = self._load_prepare_abort_journal(operation_id)
+        if abort is not None:
             raise PullDeployError(
-                f"operation ID is terminal ({state['outcome']}) and cannot {action}"
+                "operation ID has a durable prepare-abort "
+                f"({abort['phase']}) and cannot {action}"
             )
-        for audit in self._operation_directories(operation_id):
-            if not (audit.exists() or audit.is_symlink()):
-                continue
-            ensure_private_directory(audit)
-            terminal_files = sorted(
-                path.name
-                for path in audit.glob("*.json")
-                if path.name != "operation-state.json"
-            )
-            if terminal_files:
-                raise PullDeployError(
-                    "operation has terminal audit evidence without a valid state record"
-                )
 
     def _record_operation_outcome(
         self,
@@ -14511,6 +17132,10 @@ class PullDeployController:
                     "an interrupted deployment must be recovered before prepare"
                 )
             self._assert_operation_not_terminal(operation_id, action="prepare")
+            self._assert_existing_prepare_command_mode(
+                operation_id=operation_id,
+                bridge_requested=False,
+            )
             current = self.repository_identity(require_ssh_origin=True)
             if self.remote_main() != target_sha:
                 raise PullDeployError(
@@ -14627,12 +17252,26 @@ class PullDeployController:
             self._assert_operation_not_terminal(
                 operation_id, action="bridge-prepare"
             )
+            self._assert_existing_prepare_command_mode(
+                operation_id=operation_id,
+                bridge_requested=True,
+            )
             if (
                 self.current_state_path.exists()
                 or self.current_state_path.is_symlink()
             ):
                 raise PullDeployError(
                     "historical bridge is restricted to first governed takeover"
+                )
+            handoff_path = (
+                self.control_handoffs_dir / f"{operation_id}.json"
+            )
+            handoff_exists = (
+                handoff_path.exists() or handoff_path.is_symlink()
+            )
+            if not handoff_exists and self.remote_main() != authority_sha:
+                raise PullDeployError(
+                    "bridge authority is no longer current remote main"
                 )
             current = self.repository_identity(require_ssh_origin=True)
             prefetch_ready, prefetch_binding = (
@@ -14676,8 +17315,7 @@ class PullDeployController:
                 raise PullDeployError(
                     "bridge target is not a fast-forward of production HEAD"
                 )
-            handoff_path = self.control_handoffs_dir / f"{operation_id}.json"
-            if handoff_path.exists() or handoff_path.is_symlink():
+            if handoff_exists:
                 record = load_private_json(handoff_path)
                 if (
                     record.get("schema_version") != 2
@@ -14705,6 +17343,10 @@ class PullDeployController:
                     )
                 candidate = record["executor_control"]
             else:
+                if self.remote_main() != authority_sha:
+                    raise PullDeployError(
+                        "bridge authority changed before control handoff"
+                    )
                 candidate = self.prepare_control_release(
                     operation_id=operation_id,
                     target_sha=target_sha,
@@ -14789,8 +17431,9 @@ class PullDeployController:
         authority_sha: str,
         operation_id: str,
         prefetch_operation_id: str,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Have B independently re-prove F/B from the sealed local bundle."""
+        materialize: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Validate the handoff, importing its bundle only while locked."""
 
         handoff_operation = os.environ.get("NEXPOLY_PREPARE_HANDOFF_OPERATION")
         handoff_digest = os.environ.get("NEXPOLY_PREPARE_HANDOFF_SHA256")
@@ -14853,25 +17496,33 @@ class PullDeployController:
             target_tree=record["target_tree"],
             policy_sha256=record["policy_sha256"],
         )
-        relation = self.materialize_prefetched_bridge_relation(
-            ready,
-            create_target_ref=True,
-        )
+        relation = None
+        if materialize:
+            self._require_deploy_lock_for_staging()
+            relation = self.materialize_prefetched_bridge_relation(
+                ready,
+                create_target_ref=True,
+            )
         current = self.repository_identity(require_ssh_origin=True)
         takeover = self.completed_legacy_takeover_evidence(
             authority_sha=authority_sha,
             authority_tree=record["authority_tree"],
             expected_repository=current,
         )
-        if (
-            record["authority_tree"] != relation["relation"]["authority_tree"]
+        if record["prefetch"] != prefetch or record[
+            "legacy_takeover"
+        ] != takeover:
+            raise PullDeployError(
+                "bridge policy changed across the target-controller handoff"
+            )
+        if relation is not None and (
+            record["authority_tree"]
+            != relation["relation"]["authority_tree"]
             or record["target_sha"] != relation["policy"]["target_sha"]
             or record["target_tree"] != relation["policy"]["target_tree"]
             or record["target_ref"] != relation["policy"]["target_ref"]
             or record["policy_id"] != relation["policy"]["policy_id"]
             or record["policy_sha256"] != relation["policy_sha256"]
-            or record["prefetch"] != prefetch
-            or record["legacy_takeover"] != takeover
         ):
             raise PullDeployError(
                 "bridge policy changed across the target-controller handoff"
@@ -14977,7 +17628,8 @@ class PullDeployController:
         bridge_prefetch_ready: dict[str, Any] | None = None
         bridge_prefetch_binding: dict[str, Any] | None = None
         bridge_takeover_binding: dict[str, Any] | None = None
-        if bridge_authority_sha is not None:
+        bridge_requested = bridge_authority_sha is not None
+        if bridge_requested:
             authority_sha = require_sha(
                 bridge_authority_sha, "bridge authority SHA"
             )
@@ -15013,6 +17665,7 @@ class PullDeployController:
                         authority_sha=authority_sha,
                         operation_id=operation_id,
                         prefetch_operation_id=prefetch_operation_id,
+                        materialize=False,
                     )
                 )
                 bridge_prefetch_binding = validate_prefetch_binding(
@@ -15031,12 +17684,15 @@ class PullDeployController:
                         authority_tree=None,
                     )
                 )
-                bridge_relation = self.materialize_prefetched_bridge_relation(
-                    bridge_prefetch_ready,
-                    create_target_ref=True,
-                )
             target_sha = require_sha(
-                bridge_relation["policy"]["target_sha"], "bridge target SHA"
+                (
+                    bridge_relation["policy"]["target_sha"]
+                    if bridge_relation is not None
+                    else bridge_handoff["target_sha"]
+                    if bridge_handoff is not None
+                    else bridge_prefetch_ready["source"]["target"]["sha"]
+                ),
+                "bridge target SHA",
             )
         else:
             target_sha = require_sha(target_sha, "target SHA")
@@ -15046,7 +17702,11 @@ class PullDeployController:
                 "action": "prepare",
             }
         handoff_record: dict[str, Any] | None = None
-        if not self.test_root_mode and bridge_relation is None:
+        if (
+            not self.test_root_mode
+            and bridge_relation is None
+            and bridge_handoff is None
+        ):
             if os.environ.get("NEXPOLY_PREPARE_HANDOFF_OPERATION") is None:
                 self._handoff_prepare_to_target_controller(
                     target_sha=target_sha, operation_id=operation_id
@@ -15059,12 +17719,20 @@ class PullDeployController:
             )
         with self.deployment_lock():
             self._require_no_contract_maintenance(require_alias_completed=False)
+            operation, descriptor_path, ready_path = self._operation_paths(
+                operation_id
+            )
+            self._assert_existing_prepare_command_mode(
+                operation_id=operation_id,
+                bridge_requested=bridge_requested,
+            )
             if bridge_handoff is not None:
                 bridge_handoff, bridge_relation = (
                     self._validate_bridge_prepare_handoff(
                         authority_sha=authority_sha,
                         operation_id=operation_id,
                         prefetch_operation_id=prefetch_operation_id,
+                        materialize=True,
                     )
                 )
                 bridge_prefetch_binding = validate_prefetch_binding(
@@ -15075,20 +17743,45 @@ class PullDeployController:
                         bridge_handoff["legacy_takeover"]
                     )
                 )
+            elif bridge_prefetch_ready is not None:
+                bridge_relation = self.materialize_prefetched_bridge_relation(
+                    bridge_prefetch_ready,
+                    create_target_ref=True,
+                )
             elif handoff_record is not None:
                 # Revalidate after acquiring the lock; pre-lock validation is
                 # intentionally not authority for descriptor preparation.
                 handoff_record = self._validate_prepare_handoff(
                     target_sha=target_sha, operation_id=operation_id
                 )
+            if bridge_relation is not None:
+                materialized_target = require_sha(
+                    bridge_relation["policy"]["target_sha"],
+                    "materialized bridge target SHA",
+                )
+                if materialized_target != target_sha:
+                    raise PullDeployError(
+                        "bridge target changed while acquiring deploy.lock"
+                    )
             if self.marker_path.exists() or self.marker_path.is_symlink():
                 raise PullDeployError(
                     "an interrupted deployment must be recovered before prepare"
                 )
             self._assert_operation_not_terminal(operation_id, action="prepare")
-            operation, descriptor_path, ready_path = self._operation_paths(operation_id)
             if ready_path.exists() or ready_path.is_symlink():
-                descriptor = validate_descriptor(load_private_json(descriptor_path))
+                raw_descriptor = load_private_json(descriptor_path)
+                descriptor_is_bridge = (
+                    raw_descriptor.get("schema_version")
+                    == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+                )
+                if descriptor_is_bridge != (
+                    bridge_relation is not None
+                ):
+                    raise PullDeployError(
+                        "prepared operation requires its original "
+                        "ordinary or bridge command mode"
+                    )
+                descriptor = validate_descriptor(raw_descriptor)
                 ready = load_private_json(ready_path)
                 self._validate_ready(ready, descriptor, descriptor_path)
                 if descriptor["repository"]["target_sha"] != target_sha:
@@ -15146,6 +17839,10 @@ class PullDeployController:
                         self._revalidate_external_database_audit(
                             descriptor
                         )
+                    self._bind_bridge_descriptor_token(
+                        descriptor,
+                        descriptor_path,
+                    )
                 return {"action": "prepare", "status": "already-ready", **ready}
             if descriptor_path.exists() or descriptor_path.is_symlink():
                 attempt = self._open_prepare_operation(
@@ -15468,14 +18165,10 @@ class PullDeployController:
                         )
                     )
                     try:
-                        predecessor_retirement = (
-                            self._bridge_token_successor_authority()
-                        )
-                        token_record = _bridge_core.reserve_token(
-                            self.state_dir,
+                        token_record = self._plan_current_bridge_token(
+                            authority_sha=authority_sha,
                             operation_id=operation_id,
                             policy_id=bridge_relation["policy"]["policy_id"],
-                            predecessor_retirement=predecessor_retirement,
                         )
                         bridge_descriptor = _bridge_core.build_bridge_descriptor(
                             operation_id=operation_id,
@@ -15493,6 +18186,8 @@ class PullDeployController:
                             token_sha256=token_record["token_sha256"],
                         )
                     except Exception as exc:
+                        if isinstance(exc, PullDeployError):
+                            raise
                         raise PullDeployError(
                             "cannot reserve exact bridge takeover authority"
                         ) from exc
@@ -15569,26 +18264,10 @@ class PullDeployController:
                 else:
                     atomic_json(descriptor_path, descriptor)
                 if bridge_descriptor is not None:
-                    try:
-                        bound_token = _bridge_core.bind_token_descriptor(
-                            self.state_dir,
-                            operation_id=operation_id,
-                            policy_id=bridge_relation["policy"]["policy_id"],
-                            descriptor_sha256=sha256_file(descriptor_path),
-                        )
-                    except Exception as exc:
-                        raise PullDeployError(
-                            "bridge token could not bind the descriptor"
-                        ) from exc
-                    if (
-                        bound_token["token_id"]
-                        != bridge_descriptor["token"]["token_id"]
-                        or bound_token["token_sha256"]
-                        != bridge_descriptor["token"]["token_sha256"]
-                    ):
-                        raise PullDeployError(
-                            "bridge descriptor token identity changed"
-                        )
+                    self._bind_bridge_descriptor_token(
+                        descriptor,
+                        descriptor_path,
+                    )
                 ready = {
                     "schema_version": 1,
                     "status": "ready",
@@ -15682,7 +18361,17 @@ class PullDeployController:
             raise PullDeployError(
                 "descriptor-only prepare recovery received an existing READY"
             )
-        descriptor = validate_descriptor(load_private_json(descriptor_path))
+        raw_descriptor = load_private_json(descriptor_path)
+        descriptor_is_bridge = (
+            raw_descriptor.get("schema_version")
+            == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
+        )
+        if descriptor_is_bridge != (bridge_relation is not None):
+            raise PullDeployError(
+                "interrupted descriptor requires its original ordinary or "
+                "bridge command mode"
+            )
+        descriptor = validate_descriptor(raw_descriptor)
         if (
             descriptor["operation_id"] != operation_id
             or descriptor["repository"]["target_sha"] != target_sha
@@ -15752,25 +18441,10 @@ class PullDeployController:
                 )
             else:
                 self._revalidate_external_database_audit(descriptor)
-            try:
-                bound_token = _bridge_core.bind_token_descriptor(
-                    self.state_dir,
-                    operation_id=operation_id,
-                    policy_id=bridge["policy"]["policy_id"],
-                    descriptor_sha256=sha256_file(descriptor_path),
-                )
-            except Exception as exc:
-                raise PullDeployError(
-                    "interrupted bridge token could not bind descriptor"
-                ) from exc
-            if (
-                bound_token["token_id"] != bridge["token"]["token_id"]
-                or bound_token["token_sha256"]
-                != bridge["token"]["token_sha256"]
-            ):
-                raise PullDeployError(
-                    "interrupted bridge token identity changed"
-                )
+            self._bind_bridge_descriptor_token(
+                descriptor,
+                descriptor_path,
+            )
         ready = {
             "schema_version": 1,
             "status": "ready",
@@ -15848,9 +18522,19 @@ class PullDeployController:
             "identity_sha256": bridge_baseline["identity_sha256"],
             "state_sha256": bridge_baseline["state_sha256"],
             "helper_sha256": bridge_baseline["helper"]["sha256"],
+            "helper_control_sha256": canonical_json_digest(
+                bridge_baseline["helper_control"]
+            ),
             "authority_rules_sha256": bridge_baseline[
                 "authority_rules"
             ]["sha256"],
+            "role_sql_sha256": bridge_baseline["role_sql"]["sha256"],
+            "role_sql_authority_sha256": canonical_json_digest(
+                bridge_baseline["role_sql"]
+            ),
+            "role_provisioning_evidence_sha256": bridge_baseline[
+                "role_provisioning"
+            ]["evidence_sha256"],
             "registry_sha256": bridge_baseline["registry"]["sha256"],
         }
         expected_previous = self._legacy_contract_state_projection(
@@ -17548,6 +20232,9 @@ class PullDeployController:
                     "media_authority_rules_sha256": active[
                         "authority_rules"
                     ]["sha256"],
+                    "audit_role_sql_sha256": active["role_sql"][
+                        "sha256"
+                    ],
                 },
             )
         if include_mutable:
@@ -20114,6 +22801,9 @@ class PullDeployController:
                         "media_authority_rules_sha256": active[
                             "authority_rules"
                         ]["sha256"],
+                        "audit_role_sql_sha256": active["role_sql"][
+                            "sha256"
+                        ],
                     },
                 )
         return validated
@@ -21580,6 +24270,8 @@ def parser() -> argparse.ArgumentParser:
     bridge_recover.add_argument(
         "--restored-terminal-sha256", required=True
     )
+    prepare_abort = commands.add_parser("prepare-abort")
+    prepare_abort.add_argument("--operation-id", required=True)
     rollback = commands.add_parser("rollback")
     rollback.add_argument("--operation-id", required=True)
     return result
@@ -21632,6 +24324,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "apply":
             document = controller.apply(
                 target_sha=args.sha, operation_id=args.operation_id
+            )
+        elif args.command == "prepare-abort":
+            document = controller.abort_prepare(
+                operation_id=args.operation_id
             )
         else:
             document = controller.rollback(operation_id=args.operation_id)

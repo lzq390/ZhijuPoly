@@ -75,6 +75,7 @@ PRIVATE_CONFIG_FILES = {
     "legacy-takeover-classification.json",
     "mutable-data-audit.pg_service.conf",
     "mutable-data-audit.pgpass",
+    "postgres-media-authority-rules.json",
 }
 REQUIRED_INSTALLED_NAMES = (
     REVIEWED_WRAPPERS
@@ -95,7 +96,7 @@ REQUIRED_SOURCE_HASH_NAMES = (
         "contract-0012-external-database-audit.example",
         "deployment-mutable-data-audit.example",
         "production-readiness-collector.example",
-        "postgres-media-registry.json.example",
+        "postgres-media-authority-rules.json",
         "postgres-media-audit-role.sql.example",
         "legacy-takeover-classification.json.example",
         "mutable-data-audit.pg_service.conf.example",
@@ -251,6 +252,10 @@ def _expected_installed_paths(runtime_root: Path) -> dict[str, tuple[Path, int]]
             ),
             "mutable-data-audit.pgpass": (
                 config / "mutable-data-audit.pgpass",
+                0o600,
+            ),
+            "postgres-media-authority-rules.json": (
+                config / "postgres-media-authority-rules.json",
                 0o600,
             ),
         }

@@ -31,6 +31,7 @@ BOOTSTRAP_AUTHORITY_NAME = "bootstrap-control.json"
 BOOTSTRAP_IMMUTABLE_FILES = {
     "control_runtime_selector.py",
     "nexpoly-pull-deploy",
+    "nexpoly-postgres-media-evidence",
     "nexpoly-production-readiness",
     "nexpoly-pull-contract-0012",
     "nexpoly-reconcile-production-0005-polytao-alias",
@@ -39,10 +40,18 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 HEX_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 RELEASE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
-SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}\.py$")
+SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 SAFE_ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 OPERATION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{7,127}$")
 SAFE_CONFIG_RE = re.compile(r"^config/[a-z][a-z0-9_.-]{0,127}$")
+CONTROL_DATA_SOURCES = {
+    "ops/config/postgres-media-authority-rules.json": (
+        "postgres-media-authority-rules.json"
+    ),
+    "ops/config/postgres-media-audit-role.sql.example": (
+        "postgres-media-audit-role.sql.example"
+    ),
+}
 ALIAS_MARKER_RELATIVE = Path("state/maintenance/0005-polytao-alias/operation.json")
 ALIAS_AUDIT_ROOT_RELATIVE = Path("audit/maintenance/0005-polytao-alias")
 ALIAS_BACKUP_ROOT_RELATIVE = Path("backups/maintenance/0005-polytao-alias")
@@ -134,7 +143,174 @@ REQUIRED_COMPATIBILITY = {
     "current_state_schema_versions": 2,
     "marker_schema_versions": 2,
     "worker_slot_schema_versions": 2,
+    "prepare_abort_abi_versions": 1,
 }
+PINNED_PYTHON_BOOTSTRAP = r"""
+import hashlib
+import json
+import os
+import stat
+import sys
+
+
+def fail(message):
+    raise SystemExit("sealed control bootstrap: " + message)
+
+
+def read_regular(path, expected, maximum):
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        payload = bytearray()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            payload.extend(chunk)
+            if len(payload) > maximum:
+                fail("release file is oversized")
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or before.st_nlink != 1
+        or identity
+        != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        or stat.S_IMODE(after.st_mode) != expected["mode"]
+        or len(payload) != expected["size"]
+        or "sha256:" + hashlib.sha256(payload).hexdigest()
+        != expected["sha256"]
+    ):
+        fail("release file identity differs")
+    return bytes(payload)
+
+
+entry_descriptor = int(sys.argv[1])
+entry_path = os.path.abspath(sys.argv[2])
+release_root = os.path.abspath(sys.argv[3])
+try:
+    expected_manifest = json.loads(sys.argv[4])
+    expected_files = json.loads(sys.argv[5])
+except (TypeError, ValueError):
+    fail("file manifest is invalid")
+arguments = sys.argv[6:]
+if (
+    os.path.dirname(entry_path) != release_root
+    or not isinstance(expected_manifest, dict)
+    or set(expected_manifest) != {"sha256", "size", "mode"}
+    or not isinstance(expected_files, dict)
+    or not expected_files
+    or any(
+        not isinstance(name, str)
+        or not name
+        or name in {".", "..", "CONTROL-MANIFEST.json"}
+        or "/" in name
+        or "\x00" in name
+        or not isinstance(record, dict)
+        or set(record) != {"sha256", "size", "mode"}
+        for name, record in expected_files.items()
+    )
+):
+    fail("release identity is invalid")
+try:
+    root_metadata = os.lstat(release_root)
+    actual_names = set(os.listdir(release_root))
+except OSError:
+    fail("release directory is unavailable")
+if (
+    not stat.S_ISDIR(root_metadata.st_mode)
+    or stat.S_ISLNK(root_metadata.st_mode)
+    or root_metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(root_metadata.st_mode) != 0o700
+    or actual_names != set(expected_files) | {"CONTROL-MANIFEST.json"}
+):
+    fail("release directory identity differs")
+for name, expected in sorted(expected_files.items()):
+    read_regular(os.path.join(release_root, name), expected, 16 * 1024 * 1024)
+manifest_path = os.path.join(release_root, "CONTROL-MANIFEST.json")
+manifest_payload = read_regular(
+    manifest_path,
+    expected_manifest,
+    16 * 1024 * 1024,
+)
+try:
+    manifest = json.loads(manifest_payload)
+except (TypeError, ValueError):
+    fail("release manifest payload is invalid")
+if (
+    not isinstance(manifest, dict)
+    or manifest.get("files") != expected_files
+    or manifest.get("release_id") != os.path.basename(release_root)
+):
+    fail("release manifest binding differs")
+entry_name = os.path.basename(entry_path)
+entry_expected = expected_files.get(entry_name)
+if not isinstance(entry_expected, dict):
+    fail("entrypoint is absent from release")
+os.lseek(entry_descriptor, 0, os.SEEK_SET)
+before = os.fstat(entry_descriptor)
+payload = bytearray()
+while True:
+    chunk = os.read(entry_descriptor, 1024 * 1024)
+    if not chunk:
+        break
+    payload.extend(chunk)
+    if len(payload) > 16 * 1024 * 1024:
+        fail("entrypoint is oversized")
+after = os.fstat(entry_descriptor)
+if (
+    not stat.S_ISREG(before.st_mode)
+    or before.st_uid != os.geteuid()
+    or before.st_nlink != 1
+    or (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    or stat.S_IMODE(after.st_mode) != entry_expected["mode"]
+    or len(payload) != entry_expected["size"]
+    or "sha256:" + hashlib.sha256(payload).hexdigest()
+    != entry_expected["sha256"]
+):
+    fail("pinned entrypoint identity differs")
+os.lseek(entry_descriptor, 0, os.SEEK_SET)
+sys.argv = [entry_path, *arguments]
+if not sys.path or sys.path[0] != release_root:
+    sys.path.insert(0, release_root)
+namespace = {
+    "__name__": "__main__",
+    "__file__": entry_path,
+    "__package__": None,
+    "__cached__": None,
+    "__spec__": None,
+}
+exec(compile(bytes(payload), entry_path, "exec"), namespace, namespace)
+"""
 
 
 class ControlRuntimeError(RuntimeError):
@@ -161,6 +337,128 @@ def canonical_json_bytes(value: object) -> bytes:
 
 def canonical_json_digest(value: object) -> str:
     return sha256_bytes(canonical_json_bytes(value))
+
+
+def _open_verified_control_file(
+    release: Path,
+    manifest: Mapping[str, Any],
+    name: str,
+) -> int:
+    """Pin one manifest-authenticated control inode across exec."""
+
+    expected = manifest.get("files", {}).get(name)
+    if not isinstance(expected, dict):
+        raise ControlRuntimeError(
+            f"control release lacks executable file: {name}"
+        )
+    descriptor = os.open(
+        release / name,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        before = os.fstat(descriptor)
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+            if size > 16 * 1024 * 1024:
+                raise ControlRuntimeError(
+                    f"control release file is oversized: {name}"
+                )
+        after = os.fstat(descriptor)
+        observed = {
+            "sha256": "sha256:" + digest.hexdigest(),
+            "size": size,
+            "mode": stat.S_IMODE(after.st_mode),
+        }
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+            or observed != expected
+        ):
+            raise ControlRuntimeError(
+                f"control release file changed before exec: {name}"
+            )
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        os.set_inheritable(descriptor, True)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _control_manifest_identity(release: Path) -> dict[str, int | str]:
+    """Seal the manifest bytes passed to the pinned-source bootstrap."""
+
+    path = release / CONTROL_MANIFEST_NAME
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        before = os.fstat(descriptor)
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+            if size > 16 * 1024 * 1024:
+                raise ControlRuntimeError("control release manifest is oversized")
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) != 0o600
+        or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+    ):
+        raise ControlRuntimeError("control release manifest changed before exec")
+    return {
+        "sha256": "sha256:" + digest.hexdigest(),
+        "size": size,
+        "mode": 0o600,
+    }
 
 
 def release_identity(document_without_release_id: Mapping[str, Any]) -> str:
@@ -942,6 +1240,7 @@ def _validate_compatibility(value: object) -> dict[str, Any]:
         "current_state_schema_versions",
         "marker_schema_versions",
         "worker_slot_schema_versions",
+        "prepare_abort_abi_versions",
     }
     if not isinstance(value, dict) or set(value) != fields:
         raise ControlRuntimeError("control compatibility declaration is invalid")
@@ -1033,15 +1332,21 @@ def parse_source_manifest(payload: bytes) -> dict[str, Any]:
         source = record.get("source")
         mode = record.get("mode")
         pure = PurePosixPath(source) if isinstance(source, str) else PurePosixPath(".")
+        source_is_safe = isinstance(source, str) and (
+            (
+                source.startswith("scripts/")
+                and pure.name == name
+            )
+            or CONTROL_DATA_SOURCES.get(source) == name
+        )
         if (
             not isinstance(name, str)
             or SAFE_NAME_RE.fullmatch(name) is None
             or name in names
             or not isinstance(source, str)
-            or not source.startswith("scripts/")
             or pure.is_absolute()
             or ".." in pure.parts
-            or pure.name != name
+            or not source_is_safe
             or mode != 0o700
         ):
             raise ControlRuntimeError("control source file record is unsafe")
@@ -1724,7 +2029,13 @@ def _selected_release(
 
     alias_marker = None
     deploy_command = arguments[0] if role == "deploy" and arguments else None
-    deploy_preparation = deploy_command in {"plan", "prepare"}
+    deploy_preparation = deploy_command in {
+        "plan",
+        "prepare",
+        "bridge-plan",
+        "bridge-prepare",
+        "prepare-abort",
+    }
     if role in {
         "deploy",
         "contract-0012",
@@ -1801,7 +2112,7 @@ def _selected_release(
         return manifest, root
     command = arguments[0]
     operation_id: str | None = None
-    if command in {"apply", "rollback"}:
+    if command in {"apply", "bridge-apply", "rollback"}:
         if arguments.count("--operation-id") != 1:
             raise ControlRuntimeError("deploy operation ID must occur exactly once")
         try:
@@ -1920,28 +2231,115 @@ def _exec_role(
                 "production PostgreSQL DSN is unavailable or malformed"
             )
         clean_environment["NEXPOLY_PRODUCTION_POSTGRES_DSN"] = dsn
+    if role == "postgres-media-evidence":
+        authority_digest = environment.get(
+            "NEXPOLY_CONTRACT_0012_MEDIA_AUTHORITY_RULES_SHA256"
+        )
+        role_sql_digest = environment.get(
+            "NEXPOLY_CONTRACT_0012_AUDIT_ROLE_SQL_SHA256"
+        )
+        launcher_digest = environment.get(
+            "NEXPOLY_MEDIA_LAUNCHER_SHA256"
+        )
+        implementation_digest = environment.get(
+            "NEXPOLY_MEDIA_IMPLEMENTATION_SHA256"
+        )
+        if (
+            not isinstance(authority_digest, str)
+            or DIGEST_RE.fullmatch(authority_digest) is None
+            or not isinstance(role_sql_digest, str)
+            or DIGEST_RE.fullmatch(role_sql_digest) is None
+            or not isinstance(launcher_digest, str)
+            or DIGEST_RE.fullmatch(launcher_digest) is None
+            or not isinstance(implementation_digest, str)
+            or DIGEST_RE.fullmatch(implementation_digest) is None
+            or manifest["files"].get(entrypoint["file"], {}).get(
+                "sha256"
+            )
+            != launcher_digest
+            or manifest["files"].get(
+                "postgres_media_evidence.py",
+                {},
+            ).get("sha256")
+            != implementation_digest
+        ):
+            raise ControlRuntimeError(
+                "PostgreSQL media authority digests are unavailable"
+            )
+        clean_environment[
+            "NEXPOLY_CONTRACT_0012_MEDIA_AUTHORITY_RULES_SHA256"
+        ] = authority_digest
+        clean_environment[
+            "NEXPOLY_CONTRACT_0012_AUDIT_ROLE_SQL_SHA256"
+        ] = role_sql_digest
+        clean_environment[
+            "NEXPOLY_MEDIA_LAUNCHER_SHA256"
+        ] = launcher_digest
+        clean_environment[
+            "NEXPOLY_MEDIA_IMPLEMENTATION_SHA256"
+        ] = implementation_digest
     python = "/usr/bin/python3"
+    manifest_identity = canonical_json_bytes(
+        _control_manifest_identity(release)
+    ).decode("ascii")
+    file_identities = canonical_json_bytes(manifest["files"]).decode("ascii")
+
+    def pinned_python(
+        descriptor: int,
+        logical_path: Path,
+        values: list[str],
+    ) -> list[str]:
+        return [
+            python,
+            "-I",
+            "-B",
+            "-c",
+            PINNED_PYTHON_BOOTSTRAP,
+            str(descriptor),
+            str(logical_path),
+            str(release),
+            manifest_identity,
+            file_identities,
+            *values,
+        ]
+
     if entrypoint["kind"] == "python":
+        target_descriptor = _open_verified_control_file(
+            release,
+            manifest,
+            entrypoint["file"],
+        )
         target = release / entrypoint["file"]
-        argv = [python, "-I", "-B", str(target), *arguments]
+        argv = pinned_python(target_descriptor, target, arguments)
     else:
+        environment_descriptor = _open_verified_control_file(
+            release,
+            manifest,
+            entrypoint["environment_loader"],
+        )
+        launcher_descriptor = _open_verified_control_file(
+            release,
+            manifest,
+            entrypoint["launcher"],
+        )
         environment_loader = release / entrypoint["environment_loader"]
         launcher = release / entrypoint["launcher"]
         config = runtime_root / entrypoint["config_relative"]
-        argv = [
-            python,
-            "-I",
-            "-B",
-            str(environment_loader),
-            "exec",
-            str(config),
-            "--",
-            python,
-            "-I",
-            "-B",
-            str(launcher),
-            *arguments,
-        ]
+        launcher_argv = pinned_python(
+            launcher_descriptor,
+            launcher,
+            arguments,
+        )
+        argv = pinned_python(
+            environment_descriptor,
+            environment_loader,
+            [
+                "exec",
+                str(config),
+                "--",
+                *launcher_argv,
+            ],
+        )
     os.execve(python, argv, clean_environment)
 
 
@@ -1951,7 +2349,18 @@ def main(argv: list[str] | None = None) -> int:
         print("control-runtime-selector: usage: run <role> [arguments...]", file=sys.stderr)
         return 2
     try:
-        _exec_role(values[1], values[2:], os.environ)
+        selector_path = Path(__file__).resolve()
+        runtime_root = selector_path.parent.parent
+        if selector_path.parent.name != "bin":
+            raise ControlRuntimeError(
+                "control selector is not running from the immutable bin root"
+            )
+        _exec_role(
+            values[1],
+            values[2:],
+            os.environ,
+            runtime_root=runtime_root,
+        )
     except (ControlRuntimeError, OSError, ValueError) as exc:
         print(f"control-runtime-selector: error: {exc}", file=sys.stderr)
         return 2

@@ -128,10 +128,14 @@ WHERE n.nspname = 'md'
 
 Until a separate maintenance PR and explicit authorization perform an exact
 old-to-canonical compare-and-swap with schema/index verification, backup, and an
-audited operation record, `nexpoly_dev` remains isolated and deployment must
-fail closed. That future operation is not part of the 0012 maintenance entry
-point. Do not edit the ledger manually and do not add the dirty checksum to an
-accepted-checksum list.
+audited operation record, the dirty `nexpoly_dev` medium remains privately
+isolated. Any attempt to attach or project it as an online development database
+must fail closed; production deployment may proceed only when schema-v5
+external-media evidence seals that exact medium as
+`retained-private-isolated`. That future repair is not part of the 0012
+maintenance entry point and is required only before the medium is returned to
+service. Do not edit the ledger manually and do not add the dirty checksum to
+an accepted-checksum list.
 
 ## Production 0012 Maintenance
 
@@ -141,8 +145,8 @@ byte-identical governance core; invoking the old `maintain-contract-0012`
 command still fails closed. Operators must not recreate `ops/releases`,
 synthesize a legacy release manifest, or edit the ledger to bypass the adapter.
 
-After the production Pull deployment and the separate Dev checksum repair have
-passed their own gates, run the read-only plan first:
+After the production Pull deployment and external-media evidence has sealed the
+dirty Dev medium as privately isolated, run the read-only plan first:
 
 ```bash
 /data/lzq/gith/nexpoly-runtime/bin/nexpoly-pull-contract-0012 plan \
@@ -181,8 +185,12 @@ manifest, records a
 canonical row and structure digest (columns, indexes, constraints, and triggers)
 for every PolyTAO business row present after the maintenance-window drain and
 active-job lock; row totals and per-status counts are sealed dynamically rather
-than fixed in code. It then restores the full dump into an isolated verification
-database. A pre-existing verification database may be
+than fixed in code. The schema-v6 mutable-data helper derives that archive
+inside the same read-only, deferrable, repeatable-read transaction that seals
+the migration ledger and every online mutable table. After the full dump and
+table/schema archives are complete, the live canonical archive must still
+equal that embedded seal exactly. It then restores the full dump into an
+isolated verification database. A pre-existing verification database may be
 cleaned only when a mode-0600 marker binds its exact name to the current operation
 ID and immutable source SHA and proves the database was absent before the
 create intent. A crash after `createdb` but before the marker advances to
@@ -192,56 +200,71 @@ handles an unknown client result after possible server-side creation: admission
 remains drained and the global operation marker remains durable until a fresh
 inventory proves the reserved name absent, or an exact cleanup plus a second
 inventory proves it absent. A different operation ID cannot adopt or delete
-the uncertain database. It then runs
-only checksum-pinned 0012, verifies the ledger and removed schema, runs strict
+the uncertain database.
+
+Immediately before the migration transaction, a second complete schema-v6
+mutable snapshot must still equal the original. The controller then writes an
+immutable pre-transaction audit manifest and exact pre-intent marker copy,
+captures the database/system identifier, ledger, generation namespace and
+relation OIDs, operation-owned deployment-control row and zero persistent-job
+counts in one database snapshot, and publishes canonical
+`transaction-guard.json`. The guard digest and exact JSON are mandatory
+arguments to the migration runner. Inside the same PostgreSQL transaction as
+0012, the runner locks the ledger, deployment control, PolyTAO and every
+governed job table in fixed order, revalidates every guard field and archive
+digest, executes only checksum-pinned 0012, then proves the exact post-ledger
+and removed generation schema before commit. It subsequently runs strict
 preflight and an ingress-isolated production smoke, and atomically records the
 approval, epoch barrier, rollback floor, operation journal, and audit manifest.
 
 `/data/lzq/gith/nexpoly-runtime/state/contract-0012-in-progress.json` is the
 required durable recovery marker. A retry with the same sealed pull descriptor,
-live source identity and operation ID either resumes a fully committed operation
-(including reconstructing a success journal if interruption occurred between
-the atomic deployment-state write and journal write) or restores
-the verified full dump and previous release state before asking for an explicit
-retry under a new operation ID, preserving the failed/recovered journal and
-audit evidence. Failed recovery keeps admission drained and retains the marker;
-operators must never manufacture a ledger row.
+live source identity and operation ID classifies the database from fresh
+guard-bound evidence, never from a process-local success flag. Exact pre-state
+means the transaction did not commit: admission may be resumed, the attempt is
+closed as not requiring database restore, and a new operation ID is required.
+Exact post-state is completed forward, including reconstructing approval and
+success evidence after a lost response or a crash between database commit,
+deployment-state replace and journal publication. Any mixed ledger, changed
+OID, changed cluster identity, nonzero job count, foreign drain record, archive
+drift or missing/tampered marker/manifest/guard remains drained with the marker
+intact. Automatic full-database restore is intentionally disabled for 0012;
+the verified dump is rollback evidence for an explicitly reviewed manual
+disaster-recovery decision, not an online ambiguity resolver. Operators must
+never delete the marker or manufacture a ledger row.
 
 The production-cluster inventory is not treated as a global inventory. Before
 the destructive marker is created, the controller must execute the pinned,
 deploy-user-owned mode-0700 command configured by
 `NEXPOLY_CONTRACT_0012_EXTERNAL_DATABASE_AUDIT_COMMAND`. Its two online sessions
 use non-superuser/non-CREATEDB/non-CREATEROLE audit users and prove
-`transaction_read_only=true`. It also consumes the deploy-user-owned mode-0600
-schema-v3 `postgres-media-registry.json`. Discovery enumerates every local
+`transaction_read_only=true`. It consumes deploy-user-owned mode-0600 static
+`postgres-media-authority-rules.json`, then the source-pinned builder generates
+a separate schema-v5 `postgres-media-registry.json` from the complete current
+host inventory. Discovery enumerates every local
 Docker container and volume without using a Nexpoly name prefix, derives
 arbitrary PGDATA volume and bind mounts from the complete container inventory,
-recursively read-only probes every volume, and scans all four compiled
+recursively read-only probes every volume, and scans all three compiled
 private backup roots for the fixed PostgreSQL custom and tar formats. It requires
 `expected_media_ids == discovered_media_ids`. Missing, additional, unreachable
 or duplicate media blocks maintenance.
 
-Every discovered local Docker volume and every regular file below the four
-backup roots has one explicit classification: `nexpoly-db`,
-`adjacent-record-only`, `reviewed-non-pg`, or `unsupported-blocking`.
-PostgreSQL signatures require the matching `PG_VERSION`,
-`global/pg_control`, and `base` directory. Adjacent PostgreSQL media is
-content-CAS recorded without being started under PG16. The adjacent-only
-envelope accepts complete PostgreSQL major versions 9 through 18; this does not
-relax the fixed PG16 runtime or permit a Nexpoly database/backup to be started
-or restored under another major. A partial signature or an unsupported
-classification blocks deployable evidence. Reviewed non-PG
-content is hashed and excluded from Nexpoly migration, never silently ignored.
-Valid custom/tar dumps that contain only an adjacent PostgreSQL system or
-administrative database may be classified `postgres_backup` plus
-`adjacent-record-only`. That path never restores, starts, mounts, or passes the
-source to Docker: it opens the file through the fixed private-root
-`openat`/`O_NOFOLLOW` chain and CAS-seals format, path, device, inode, size,
-nanosecond mtime, mode, owner, and complete digest before and after. Unknown,
-partial, or magic-mismatched formats still fail discovery or require an
-explicit non-PG/blocking review. Nexpoly logical dumps remain
-`isolated-backup-restore-read-only`; record-only classification cannot replace
-their disposable restore and ledger audit.
+Every complete PostgreSQL data signature requires matching `PG_VERSION`,
+`global/pg_control`, and `base` entries. An inactive PG14, PG15, PG16, or PG18
+volume is copied read-only and then fully audited in a disposable
+network-isolated cluster using the exact matching-major digest. Its complete
+runtime-observed non-template database inventory, owners, OIDs, ledgers,
+relation authorities, legacy state and 0013 state are sealed; PostgreSQL
+record-only classification is invalid in the generated schema-v5 registry.
+An active PostgreSQL medium that is not the exact production/dev/health reader,
+an unsupported major, a partial signature, or a PostgreSQL-looking bind blocks
+deployable evidence. Every accepted custom/tar dump is copied through the fixed
+private-root `openat`/`O_NOFOLLOW` chain, restored with the separately fixed
+PG16 restore identity, and receives the same full logical audit. Reviewed
+non-PG volumes are excluded only after two deterministic content inventories
+and Docker identity/attachment CAS checks agree; active volumes, a volume name
+containing `postgres`, symlinks, special files, PostgreSQL/backup magic, or
+content drift remain blocking.
 An exited PostgreSQL-candidate container may retain an empty or otherwise
 complete non-PG volume at its former PGDATA mount only when the registry
 explicitly classifies that volume as `reviewed-non-pg`: every attachment and
@@ -254,20 +277,21 @@ writable or overlapping binds still block discovery.
 The generic `/data/lzq/gith/nexpoly-runtime/backups` operation root is
 deliberately forbidden as a legacy discovery root. Pull's newly created
 rollback dump is bound separately by the prepared descriptor and must not make
-the external-media set drift after preparation. A takeover first copies
-reviewed legacy dumps into the exact mode-0700
-`legacy-takeover/preserved-postgres-backups` root and reviewed recovery dumps
-into `/data/lzq/recovery/nexpoly-postgres-media`. The boundary also includes
-the read-only legacy production root `/data/lzq/gith/nexpoly/backups` and the
-fixed dirty-0009 quarantine root
+the external-media set drift after preparation. A takeover first CAS-copies
+the complete sealed legacy backup tree into the exact mode-0700
+`legacy-takeover/preserved-postgres-backups` root, with directories 0700 and
+files 0600, without changing the live production source. The post-takeover
+boundary also includes reviewed recovery dumps in
+`/data/lzq/recovery/nexpoly-postgres-media` and the fixed dirty-0009 quarantine
+root
 `/data/lzq/recovery/nexpoly-pre-merge-20260717T090623Z/dev-0009-quarantine`.
-The former currently contains 23 dump names and the latter contains two; the
-auditor only opens them read-only. Every parent below those anchors and every
-dump must be deploy-user-owned and private. The roots and
+Every parent below those anchors and every dump must be deploy-user-owned and
+private. The three post-takeover roots and
 accepted suffix/magic pairs are compiled into the builder and repeated
-byte-for-byte in registry v3; callers cannot select fewer roots or formats.
-Registry v3 also seals each fixed root's absolute path, device, inode, owner
-and exact mode 0700. Shared ancestors are treated as untrusted names, not as
+byte-for-byte in the static authority rules; callers cannot select fewer roots
+or formats. The generated runtime registry v5 additionally seals each fixed
+root's absolute path, device, inode, owner and exact mode 0700. Shared
+ancestors are treated as untrusted names, not as
 private storage: the auditor opens every path component with
 `O_DIRECTORY|O_NOFOLLOW`, immediately compares the resulting root descriptor
 to the sealed identity, and then performs all recursion and file opens
@@ -277,56 +301,100 @@ substituting another root, or inserting a symlink cannot preserve the sealed
 device/inode tuple; a rename after the root is opened does not redirect the
 in-flight traversal, and the mandatory second root/file CAS detects the path
 change. A registry with missing or placeholder root identities is blocking.
+Before the future takeover, the approved private-archive provisioner must
+create `/data/lzq/recovery/nexpoly-postgres-media` as an empty,
+deploy-user-owned mode-0700 directory. After takeover, readiness verifies that
+root, the takeover-created preserved root and the fixed dirty-0009 quarantine
+root before the first registry build. The current main-only repair does not
+create or modify these paths.
 At this development freeze the production backup directory is still mode
-`0775`, and the two takeover staging roots may not exist. This is an explicit
-readiness blocker, not an exception: the future maintenance preflight must
-first CAS-record the directory identities, create any missing deploy-user-owned
-mode-0700 staging roots, and tighten the production backup directory to 0700
-without reading or rewriting dump contents. The current main-only repair does
-none of those production mutations.
+`0775` and the preserved root does not exist. This is an explicit pre-takeover
+blocked state, not an exception. During the future maintenance operation,
+`legacy-takeover` verifies the classification seal, privately stages every
+file, proves the required `nexpoly-b875829c3f00.dump` PGDMP magic and content
+digest, and atomically publishes the retained root before externalizing the
+ignored checkout path. The current main-only repair performs none of those
+production mutations.
 
-The raw SHA-256 of that private registry is configured as
-`NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256`. Preparation seals the same digest
-into the bridge descriptor, one-time token and current-state transition.
-Preflight, the gate immediately before 0012, completion, rollback and B→F resume
-all compare-and-swap the same value. Changing only `deploy.env` never authorizes
-a different registry.
+The raw SHA-256 of the static authority rules is configured as
+`NEXPOLY_CONTRACT_0012_MEDIA_AUTHORITY_RULES_SHA256` and sealed by the bridge
+policy. The generated runtime registry has its own
+`runtime_media_registry_sha256`; external-media evidence binds both digests,
+the immutable non-PG review inventory, and a second complete discovery CAS
+immediately before atomic publication. Preflight, the gate immediately before
+0012, completion, rollback and B→F resume compare both identities. Changing
+only `deploy.env` never authorizes different rules or a caller-selected
+registry.
 
-Registry v3 pins the complete discovery boundary, PG16 image, the image's
-exact `postgres` runtime identity (`uid=70`, `gid=70` for the pinned Alpine
-digest), exact source-pinned builder digest and private `pg_service.conf`
-digest. The service
-file is checked before and after the audit as sealed authority, but live SQL is
-bound to the exact discovered PostgreSQL container and its local Unix socket;
-it never follows a service-file TCP/DNS endpoint. Every volume record binds its arbitrary name,
-driver, mountpoint, labels, complete Docker inspect identity, PGDATA subpath,
-all attached container IDs, image IDs, immutable config digests, restart
-identity, states and destinations, plus a content digest before and after the
-audit. Online SQL system identifiers must equal an independent
+The authority rules pin the complete discovery boundary, exact
+PG14/15/16/18 audit image map and the images' `postgres` runtime identity
+(`uid=70`, `gid=70` for the pinned Alpine digests). Runtime registry v5 binds
+the exact source-pinned auditor digest and each matching-major local image ID.
+Live SQL is run by the exact matching-major pinned client image, joined to the
+discovered PostgreSQL container's network namespace, and connected only to
+`127.0.0.1` inside that namespace. It never executes `psql` in the target
+container, follows DNS, or uses a host-published endpoint. The server launch,
+process epoch, namespace, image, protected writable layer and startup
+configuration are revalidated before and after every client invocation.
+The fixed launcher opens
+`/data/lzq/gith/nexpoly-runtime/config/postgres-media-credentials.json`
+itself and accepts only one deploy-user-owned, mode-`0600`, single-link regular
+file. It passes the already-open file and its raw SHA-256 to the
+manifest-pinned auditor as an inherited descriptor; caller-selected paths,
+descriptors and digests are discarded at the launcher boundary. Each envelope
+record binds the exact original 64-hex container ID, cluster system identifier,
+inspected bootstrap administrator and PostgreSQL major to the current rotated
+password. The auditor re-reads and re-hashes that same descriptor before and
+after SQL, authenticates through the exact loopback namespace, and verifies
+`pg_control_system()` before running the requested statement. It deliberately
+ignores stale `POSTGRES_PASSWORD` values in Docker launch metadata and still
+rejects `POSTGRES_PASSWORD_FILE`. An explicitly inspected
+`POSTGRES_HOST_AUTH_METHOD=trust` container remains available only to direct,
+ephemeral integration tests; the installed launcher always requires the
+envelope.
+
+The password is never added to the host command line or process environment.
+The auditor frames an escaped pgpass record on the pinned client's stdin; a
+fixed shell writes it with `umask 077` to that disposable client's private
+`/tmp` tmpfs, unsets the shell variable and immediately executes `psql`.
+Docker removes the read-only client container after each invocation. The
+template `ops/config/postgres-media-credentials.json.example` contains no
+usable secret and is rejected unchanged. The real file is installed only by
+the approved secret provisioner and is never committed, bundled or included
+in evidence or logs.
+
+Every volume record binds its arbitrary name, driver, mountpoint, labels,
+complete Docker inspect identity, PGDATA subpath, all attached container IDs,
+image IDs, immutable config digests, restart identity, states and destinations,
+plus a content digest before and after the audit. Online SQL system identifiers
+must equal an independent
 `pg_controldata` read from that exact active container and PGDATA. Every bind is
 copied through an `openat`/`O_NOFOLLOW` private
 traversal; Docker never receives the source bind path. Every backup uses the
 same private parent-chain discipline and binds path, device, inode, size,
 nanosecond mtime, mode, owner, format and complete file digest.
 
-Dormant volumes are mounted read-only only by a copy helper; PostgreSQL starts
-against a disposable copied volume with `network=none`, never against the
-source. Every isolated socket tmpfs uses the registry-sealed and image-probed
-`uid=70,gid=70`; any image/runtime-user drift fails before a source is started.
-Dumps are copied to private staging and restored with fixed flags into
-a new disposable PG16 volume. Exact scratch container/volume deletion is
+Dormant volumes are mounted read-only only by a copy helper; the matching-major
+PostgreSQL image starts against a disposable copied volume with `network=none`,
+never against the source. Every isolated socket tmpfs uses the
+authority-sealed and image-probed `uid=70,gid=70`; any image/runtime-user drift
+fails before a copied cluster is started. Dumps are copied to private staging
+and restored with fixed flags into a new disposable PG16 volume. Exact scratch
+container/volume deletion is
 verified even on failure. Source identity and content digest are captured again
 after audit and must compare equal. The complete Docker/backup discovery
 boundary is rescanned after all media audits and its before/after state digests
 must match. Online sources are never mounted or started by the auditor and are
-observed only through the exact container's local Unix socket plus its
-read-only `pg_controldata`.
-For every Nexpoly medium, registry v3 declares every non-template database by
-name, OID, owner, connection state, audit role and migration scope. The auditor
-re-enumerates that full list and audits each connectable database. An omitted
-database, including a hidden database carrying the superseded 0013 checksum,
-blocks the operation; any such checksum sets the envelope-wide
-`requires_0014=true`. Per-database evidence recomputes system-identifier scope,
+observed only through the pinned loopback client in the exact container network
+namespace plus read-only `pg_controldata`.
+For every PostgreSQL medium, runtime registry v5 records every non-template
+database observed during the isolated or exact-live audit by name, OID, owner,
+connection state, audit role and migration scope. The auditor re-enumerates
+that full list and audits each connectable database. An omitted database,
+including a hidden database carrying the superseded 0013 checksum, blocks the
+operation; any such checksum sets the envelope-wide `requires_0014=true`,
+freezes B, and requires an appended 0014 correction rather than rewriting
+0013. Per-database evidence recomputes system-identifier scope,
 database identity, complete raw ledger, canonical ordinary-table relation
 authority (owner, columns/defaults, indexes and constraints), legacy relation
 schema/content identity,
@@ -334,6 +402,21 @@ auditor digest and a self-sealed evidence digest. Logical dumps cannot preserve
 their source cluster system identifier, so they explicitly record
 `isolated-restore-cluster`; copied physical media records
 `copied-source-cluster`.
+
+Online clusters additionally run a cluster-global audit-role matrix. Every
+managed role is checked in every connectable database, not only in its assigned
+database. The matrix requires one unique role per database, the exact immutable
+contract marker and global role settings, only the target database `CONNECT`
+grant, only the target database's conditional ledger/legacy read grants, and
+zero ownership, default ACL or effective persistent write capability
+everywhere else. A marked role whose database was dropped or renamed is an
+orphan and blocks planning, provisioning and steady-state evidence. A
+pre-existing unmarked role with a planned name is a collision and blocks before
+any provisioning SQL. The plan seals the pre-provision matrix; provisioning
+rechecks it before the first transaction and requires the complete exact matrix
+after the last transaction. This matrix is an auditor semantic guarantee folded
+into the existing schema-v5 completion seal, so it does not rewrite migration
+history or change the external evidence schema.
 
 The required-online projection is a canonical ordered subset of
 `nexpoly_dev` and `nexpoly_md_health_opt`, and may be empty when neither has an
@@ -354,28 +437,45 @@ cleaned. The validated inventory is stored as
 reuses that durable pre-change external evidence so an unrelated audit-stack
 outage cannot prevent restoration of the production database.
 
-The command emits schema v3; schema-v2 registries and evidence fail closed. The repository templates
-`ops/config/contract-0012-external-database-audit.example` and
-`ops/config/postgres-media-registry.json.example` define the complete envelope.
-The repository registry example intentionally contains
-`unsupported-blocking` replacement sentinels for the populated production and
-dirty-0009 roots; it cannot be used as a completeness claim. Before a
-maintenance window, the private site registry must replace those sentinels
-with one reviewed descriptor for every discovered dump. Missing or additional
-files still fail the exact ID-set comparison.
+The command emits schema v5; older registries and evidence fail closed.
+`ops/config/contract-0012-external-database-audit.example` is only the reviewed
+launcher contract. There is deliberately no installable runtime-registry
+example: the builder generates the owner-private schema-v5 registry from the
+current complete Docker/bind/three-root post-takeover discovery boundary and
+seals it to the tracked static authority rules. Placeholder digests,
+device/inode identities,
+media IDs, or replacement sentinels are never accepted as runtime input.
+Missing or additional media still fail the exact ID-set comparison.
+Each successful isolated audit also writes a canonical mode-`0600` checkpoint
+under `audit/postgres-media/.audit-checkpoints`. The checkpoint binds the
+source document and content digest, derived database inventory, descriptor,
+auditor, authority rules, compiled boundary and exact local image IDs. A later
+`revalidate` invocation may reuse that database inventory only after the full
+media union and checkpoint authority validate; before publishing fresh
+evidence it re-hashes the offline source and refreshes every live logical
+audit. It therefore avoids repeated physical copies/restores without treating
+a checkpoint as current-state evidence.
 `ops/config/postgres-media-audit-role.sql.example` grants CONNECT in every
 declared connectable database and only the present read-only relations plus
 `pg_control_system()` execution needed by the builder;
-login secrets remain out of band. Its top-level identity is:
+the roles are NOLOGIN, NOINHERIT and membership-free. Its top-level identity is:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 5,
   "inventory_complete": true,
   "writable_target": {"stack": "production", "database": "nexpoly"},
   "media_registry": {
-    "schema_version": 3,
-    "sha256": "sha256:<private registry digest>",
+    "schema_version": 5,
+    "media_authority_rules_sha256": "sha256:<static authority digest>",
+    "runtime_registry_sha256": "sha256:<private registry digest>",
+    "reviewed_content_inventory_sha256": "sha256:<private review digest>",
+    "audit_images": {
+      "14": {"digest_ref": "<pinned digest>", "image_id": "sha256:<local ID>"},
+      "15": {"digest_ref": "<pinned digest>", "image_id": "sha256:<local ID>"},
+      "16": {"digest_ref": "<pinned digest>", "image_id": "sha256:<local ID>"},
+      "18": {"digest_ref": "<pinned digest>", "image_id": "sha256:<local ID>"}
+    },
     "discovery_boundary_sha256": "sha256:<compiled boundary>",
     "discovery_state_sha256_before": "sha256:<complete pre-audit state>",
     "discovery_state_sha256_after": "sha256:<same post-audit state>",
@@ -383,7 +483,10 @@ login secrets remain out of band. Its top-level identity is:
     "expected_media_ids": ["<sorted complete IDs>"],
     "discovered_media_ids": ["<same sorted complete IDs>"],
     "docker_inventory_sha256": "sha256:<all inspected Docker objects>",
-    "backup_inventory_sha256": "sha256:<all files in four fixed roots>"
+    "backup_inventory_sha256": "sha256:<all files in three fixed roots>",
+    "scanned_volume_names": ["<every local Docker volume>"],
+    "scanned_bind_sources": ["<every local bind source>"],
+    "scanned_container_ids": ["<every local container>"]
   },
   "databases": ["<required-online primary-database projections>"],
   "media": ["<classified record for every local volume and backup-root file>"],
@@ -398,9 +501,11 @@ known identities. The alias is accepted only alongside canonical 0007 and
 before 0012, and relation presence must equal “0007 applied and 0012 absent.”
 The dirty 0009 medium must remain isolated. A canonical
 `ab633a62…` 0013 is accepted. The superseded `a60cbf66…` checksum sets
-`requires_0014=true`; any other or multiple 0013 rows fail closed. The registry
-and evidence must be regenerated in the actual maintenance window, not reused
-from development-time discovery.
+`requires_0014=true`; any other or multiple 0013 rows fail closed. The runtime
+registry and evidence must be generated in the actual maintenance window, not
+copied from development-time discovery. Only a same-host, authority-bound
+offline checkpoint may be reused, and every such source receives a fresh
+content CAS before the new evidence is published.
 
 The maintenance inventory is captured with immutable operation evidence before
 `--apply`:

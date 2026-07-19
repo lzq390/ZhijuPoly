@@ -184,7 +184,7 @@ def _external_database_audit_helper_evidence(
     key = legacy.CONTRACT_0012_EXTERNAL_AUDIT_COMMAND
     configured = values.get(key)
     command = shlex.split(configured) if isinstance(configured, str) else []
-    expected = controller.config_dir / "contract-0012-external-database-audit"
+    expected = controller.bin_dir / pull.EXTERNAL_DATABASE_AUDIT_HELPER
     if len(command) != 1 or Path(command[0]) != expected:
         raise PullContractError("0012 external database audit helper path is not fixed")
     _require_private_file(expected, executable=True)
@@ -215,7 +215,17 @@ def _external_database_authority_for_binding(
         "identity_sha256": baseline["identity_sha256"],
         "state_sha256": baseline["state_sha256"],
         "helper_sha256": baseline["helper"]["sha256"],
+        "helper_control_sha256": pull.canonical_json_digest(
+            baseline["helper_control"]
+        ),
         "authority_rules_sha256": baseline["authority_rules"]["sha256"],
+        "role_sql_sha256": baseline["role_sql"]["sha256"],
+        "role_sql_authority_sha256": pull.canonical_json_digest(
+            baseline["role_sql"]
+        ),
+        "role_provisioning_evidence_sha256": baseline[
+            "role_provisioning"
+        ]["evidence_sha256"],
         "registry_sha256": baseline["registry"]["sha256"],
     }
 
@@ -432,7 +442,7 @@ def load_binding(
             )
         helper = external_database_audit["helper"]
         registry = external_database_audit["registry"]
-        expected_helper = controller.config_dir / pull.EXTERNAL_DATABASE_AUDIT_HELPER
+        expected_helper = controller.bin_dir / pull.EXTERNAL_DATABASE_AUDIT_HELPER
         expected_registry = (
             controller.config_dir
             / pull.EXTERNAL_DATABASE_MEDIA_REGISTRY
@@ -1258,6 +1268,18 @@ class PullRuntimeController(legacy.ReleaseController):
             )
         self._post_contract_external_audit = callback
 
+    def finalize_contract_0012_external_audit(
+        self,
+        environment: dict[str, str],
+    ) -> None:
+        if self._post_contract_external_audit is None:
+            if self.binding.external_database_audit is not None:
+                raise PullContractError(
+                    "0012 lacks its post-contract external database audit"
+                )
+            return
+        self._post_contract_external_audit(environment)
+
     def ensure_root(self) -> None:
         self.pull_controller.ensure_roots(mutating=self.apply)
         for relative in REQUIRED_STATE_DIRECTORIES:
@@ -1454,12 +1476,19 @@ class PullRuntimeController(legacy.ReleaseController):
         environment: dict[str, str],
         *,
         mode: str = "expand",
+        contract_guard_json: str | None = None,
+        contract_guard_sha256: str | None = None,
     ) -> list[str]:
         expected = self._assert_contract_postgres_runtime(
             phase="before 0012 migration"
         )
         try:
-            applied = super().run_migrations(environment, mode=mode)
+            applied = super().run_migrations(
+                environment,
+                mode=mode,
+                contract_guard_json=contract_guard_json,
+                contract_guard_sha256=contract_guard_sha256,
+            )
         except BaseException as migration_error:
             try:
                 self._assert_contract_postgres_runtime(
@@ -1507,6 +1536,55 @@ class PullRuntimeController(legacy.ReleaseController):
                     "0012 external database audit helper differs from the sealed binding"
                 )
         return command
+
+    def bootstrap_hook_environment(
+        self,
+        environment: dict[str, str],
+        key: str,
+    ) -> dict[str, str]:
+        result = super().bootstrap_hook_environment(environment, key)
+        if key != legacy.CONTRACT_0012_EXTERNAL_AUDIT_COMMAND:
+            return result
+        baseline = self.binding.external_database_audit
+        if baseline is None:
+            raise PullContractError(
+                "0012 external database audit lacks sealed F authority"
+            )
+        result.update(
+            {
+                pull.CONTRACT_0012_MEDIA_AUTHORITY_RULES_DIGEST: (
+                    baseline["authority_rules"]["sha256"]
+                ),
+                "NEXPOLY_CONTRACT_0012_AUDIT_ROLE_SQL_SHA256": (
+                    baseline["role_sql"]["sha256"]
+                ),
+                "NEXPOLY_MEDIA_LAUNCHER_SHA256": baseline[
+                    "helper_control"
+                ]["launcher_sha256"],
+                "NEXPOLY_MEDIA_IMPLEMENTATION_SHA256": baseline[
+                    "helper_control"
+                ]["implementation_sha256"],
+            }
+        )
+        return result
+
+    def validate_pinned_bootstrap_hook(
+        self,
+        key: str,
+        path: Path,
+        digest: str,
+    ) -> None:
+        super().validate_pinned_bootstrap_hook(key, path, digest)
+        if key != legacy.CONTRACT_0012_EXTERNAL_AUDIT_COMMAND:
+            return
+        expected = self.validate_external_database_audit_helper()
+        if (
+            path != Path(expected["path"])
+            or digest != expected["sha256"]
+        ):
+            raise PullContractError(
+                "0012 external database audit helper changed before exec"
+            )
 
     def run(
         self,
@@ -1780,10 +1858,7 @@ class PullRuntimeController(legacy.ReleaseController):
 
     def drain(self, environment: dict[str, str], enabled: bool) -> None:
         if enabled:
-            self._drain_evidence = self.lifecycle.drain(
-                self.pull_controller,
-                self.runtime_descriptor,
-            )
+            self._drain_evidence = self._internal_drain_without_ingress()
             verification = {
                 "health": "ok",
                 "mode": "contract-0012-initial-drain",
@@ -3454,18 +3529,6 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         marker["recovery_phase_recorded_at"] = legacy.utc_now()
         self._write_marker(marker)
 
-        # The inherited restore path stops and later replaces Backend/Worker.
-        # Persist replacement authority before it can cross that start
-        # boundary, so a hard kill after both processes start can re-identify
-        # and redrain the sealed new instance rather than comparing it to the
-        # deliberately obsolete pre-restore fence.
-        if marker.get("database_change_started") is True:
-            committed = self.controller._persist_runtime_recovery_start_intent(
-                reason="database-restore"
-            )
-            marker.clear()
-            marker.update(committed)
-
         if runtime_state == "drained" and self.controller.lifecycle.admission_is_open(
             self.binding.controller,
             self.controller.runtime_descriptor,
@@ -3511,37 +3574,9 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             "database-restore-started",
             "database-restored",
         }:
-            previous_state = marker.get("previous_state")
-            if not isinstance(previous_state, dict):
-                raise PullContractError(
-                    "0012 database recovery lacks previous state"
-                )
-            environment = self.controller.environment()
-            current_release = self._bind_current_release(previous_state)
-            self.controller.candidate_dir = current_release
-            self.controller.previous_state = previous_state
-            backup_path = marker.get("database_backup")
-            if isinstance(backup_path, str):
-                self.controller.backup_path = (
-                    self.controller.marker_backup(marker)
-                )
-            if marker.get("phase") == "database-restore-started":
-                self._restore_previous_database(
-                    environment,
-                    previous_state,
-                    recorded_database_inventory=marker.get(
-                        "database_inventory"
-                    ),
-                )
-                marker = self._load_runtime_recovery_marker()
-            self._validate_completed_database_restore(
-                marker,
-                previous_state,
-                environment,
-            )
-            self._finish_recovered_database_restore(
-                marker,
-                environment,
+            raise PullContractError(
+                "legacy 0012 full-database restore state is not automatically "
+                "resumable; admission remains drained for forensic recovery"
             )
         return super()._recover(marker)
 
@@ -3720,18 +3755,32 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             self._write_marker(marker)
         else:
             self._contract_mutable_data_before = before
+        archive_before = self._validate_archive_evidence(
+            before.get("migration_exception_archive_evidence")
+        )
         evidence = super()._archive_legacy_table(
             environment,
             previous_state,
             database_inventory,
         )
         if (
-            evidence.get("row_count")
+            evidence != archive_before
+            or evidence.get("row_count")
             != before["migration_exception"]["row_count"]
         ):
             raise PullContractError(
-                "0012 dynamic archive and mutable-data seal count differ"
+                "0012 dynamic archive changed after its full row/schema seal"
             )
+        legacy.atomic_json(
+            self.audit_dir / "legacy-table-evidence.before.json",
+            archive_before,
+        )
+        marker = self._load_runtime_recovery_marker()
+        marker["archive_evidence_before"] = archive_before
+        marker["archive_evidence_before_sha256"] = (
+            legacy.canonical_json_digest(archive_before)
+        )
+        self._write_marker(marker)
         self._write_mutable_audit_document(
             "mutable-data.before.json",
             before,
@@ -3781,6 +3830,42 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
         )
         return evidence
 
+    def _prepare_contract_transaction_guard(
+        self,
+        environment: dict[str, str],
+        marker: dict[str, Any],
+        evidence: dict[str, Any],
+        database_inventory: dict[str, Any],
+        audit_manifest: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, str]:
+        before = self._sealed_mutable_data_before(
+            self._load_runtime_recovery_marker()
+        )
+        fresh = self.controller.capture_mutable_data(
+            operation_id=self.operation_id
+        )
+        if pull.mutable_data_identity(fresh) != pull.mutable_data_identity(before):
+            raise PullContractError(
+                "0012 mutable database changed after backup verification"
+            )
+        marker = self._load_runtime_recovery_marker()
+        sealed_archive = marker.get("archive_evidence_before")
+        if (
+            sealed_archive != evidence
+            or marker.get("archive_evidence_before_sha256")
+            != legacy.canonical_json_digest(evidence)
+        ):
+            raise PullContractError(
+                "0012 transaction guard archive differs from its pre-backup seal"
+            )
+        return super()._prepare_contract_transaction_guard(
+            environment,
+            marker,
+            evidence,
+            database_inventory,
+            audit_manifest,
+        )
+
     def _restore_previous_database(
         self,
         environment: dict[str, str],
@@ -3790,147 +3875,11 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
     ) -> None:
         """Prove a failed 0012 rollback restored every non-exception row."""
 
-        self._ensure_database_recovery_drain()
-        expected_postgres = self.controller._assert_contract_postgres_runtime(
-            phase="before 0012 recovery"
+        del environment, previous_state, recorded_database_inventory
+        raise PullContractError(
+            "automatic 0012 full-database restore is disabled; recover only "
+            "by exact guarded endpoint classification"
         )
-        marker = self._load_runtime_recovery_marker()
-        restore_already_started = (
-            marker.get("phase") == "database-restore-started"
-            and marker.get("database_restore_started") is True
-            and marker.get("database_restored") is not True
-        )
-        self._revalidate_current_state_authority(
-            marker,
-            require_postcondition=False,
-        )
-        if not restore_already_started:
-            recorded_external_inventory = None
-            if isinstance(recorded_database_inventory, dict):
-                recorded_external_inventory = recorded_database_inventory.get(
-                    "external_registered_database_inventory"
-                )
-            self._pre_destructive_database_gate(
-                environment,
-                allow_contract=True,
-                allow_owned_verification=True,
-                recorded_external_inventory=recorded_external_inventory,
-            )
-            marker = self._load_runtime_recovery_marker()
-            marker["status"] = "failed"
-            marker["phase"] = "database-restore-started"
-            marker["database_restore_started"] = True
-            marker["database_restored"] = False
-            marker["database_restore_started_at"] = legacy.utc_now()
-            self._write_marker(marker)
-        release = self.controller.candidate_dir
-        if release is None:
-            raise PullContractError(
-                "0012 database restore lacks its bound release"
-            )
-        self.controller.run(
-            self.controller.compose(release, "stop", "nginx", "backend"),
-            env=environment,
-        )
-        if legacy.release_uses_worker(self.document):
-            self.controller.run(
-                [
-                    "systemctl",
-                    "--user",
-                    "stop",
-                    "nexpoly-monomer-md-worker.service",
-                ],
-                env=environment,
-            )
-        marker = self._load_runtime_recovery_marker()
-        self._revalidate_current_state_authority(
-            marker,
-            require_postcondition=False,
-        )
-        self.controller.restore_database(environment, release=release)
-        self._restore_current_state(previous_state)
-        self.controller.run(
-            self.controller.compose(
-                release,
-                "up",
-                "-d",
-                "--no-build",
-                "--wait",
-                "--wait-timeout",
-                "300",
-                "--no-deps",
-                "backend",
-            ),
-            env=environment,
-        )
-        self.controller._assert_contract_postgres_runtime(
-            expected=expected_postgres,
-            phase="during 0012 recovery",
-        )
-        marker = self._load_runtime_recovery_marker()
-        before = self._sealed_mutable_data_before(marker)
-        restored = self.controller.capture_mutable_data(
-            operation_id=self.operation_id
-        )
-        for name in (
-            "database",
-            "database_system_identifier",
-            "connection",
-            "postgres_runtime",
-            "migration_ledger",
-            "business_tables",
-            "static_tables",
-            "migration_exception",
-            "sequences",
-        ):
-            if before[name] != restored[name]:
-                raise PullContractError(
-                    f"0012 rollback did not restore mutable-data field: {name}"
-                )
-        if (
-            before["governed_controls"][
-                "database_analytics_snapshots"
-            ]
-            != restored["governed_controls"][
-                "database_analytics_snapshots"
-            ]
-        ):
-            raise PullContractError(
-                "0012 rollback changed database analytics snapshots"
-            )
-        marker["mutable_data_restored"] = restored
-        marker["mutable_data_restored_sha256"] = (
-            pull.canonical_json_digest(
-                pull.mutable_data_identity(restored)
-            )
-        )
-        if self.binding.external_database_audit is not None:
-            self._capturing_restored_external_audit = True
-            try:
-                external_restored = (
-                    self._capture_external_database_inventory(
-                        environment
-                    )
-                )
-            finally:
-                self._capturing_restored_external_audit = False
-            marker["external_database_restored"] = external_restored
-            marker["external_database_restored_state_sha256"] = (
-                pull.canonical_json_digest(
-                    pull.external_database_audit_state(external_restored)
-                )
-            )
-            if (
-                marker["external_database_restored_state_sha256"]
-                != self.binding.external_database_audit["state_sha256"]
-            ):
-                raise PullContractError(
-                    "0012 rollback restored another external database state"
-                )
-        marker["phase"] = "database-restored"
-        marker["database_restored"] = True
-        marker["database_restored_at"] = legacy.utc_now()
-        self._write_marker(marker)
 
     def _success_journal(
         self,
@@ -3995,11 +3944,17 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             )
         transition = pair["transition"]
         archive = marker.get("archive_evidence")
+        archive_before = marker.get("archive_evidence_before")
         if (
             transition.get("kind") != "contract-0012"
             or transition.get("operation_id") != self.operation_id
             or not isinstance(transition.get("polytao_exception"), dict)
             or not isinstance(archive, dict)
+            or archive_before != archive
+            or marker.get("archive_evidence_before_sha256")
+            != legacy.canonical_json_digest(archive)
+            or transition["polytao_exception"].get("archive_evidence")
+            != archive
             or transition["polytao_exception"].get("row_count")
             != archive.get("row_count")
         ):

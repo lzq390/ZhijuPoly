@@ -91,7 +91,7 @@ def migration_contract() -> tuple[list[dict[str, object]], list[dict[str, str]]]
 def policy() -> dict[str, object]:
     _target_records, registry = migration_contract()
     value: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": READINESS.bridge_deploy_core.POLICY_SCHEMA_VERSION,
         "mode": "first-governed-takeover",
         "authority_ref": "refs/heads/main",
         "target_sha": BRIDGE_SHA,
@@ -111,7 +111,8 @@ def policy() -> dict[str, object]:
         "accepted_migration_ledgers": registry,
         "external_database_audit": {
             **READINESS.bridge_deploy_core.EXTERNAL_DATABASE_AUDIT_POLICY,
-            "media_registry_sha256": digest("f"),
+            "media_authority_rules_sha256": digest("a"),
+            "audit_role_sql_sha256": digest("b"),
         },
         "required_ci_jobs": sorted(
             READINESS.bridge_deploy_core.REQUIRED_CI_JOBS
@@ -211,6 +212,19 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
         }
         for role in ("backend", "web")
     }
+    postgres_audit = {
+        major: {
+            "digest_ref": reference,
+            "index_digest": reference.split("@", 1)[1],
+            "platform_digest": digest(
+                {"14": "4", "15": "5", "16": "6", "18": "8"}[major]
+            ),
+            "image_id": digest(
+                {"14": "a", "15": "b", "16": "c", "18": "d"}[major]
+            ),
+        }
+        for major, reference in READINESS.POSTGRES_AUDIT_IMAGES.items()
+    }
     asset = seal(
         {
             "schema_version": 2,
@@ -298,12 +312,8 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
                 "bridge_sha": BRIDGE_SHA,
                 "authority_images": authority_images,
                 "bridge_images": bridge_images,
-                "postgres_restore": {
-                    "digest_ref": READINESS.POSTGRES16_IMAGE,
-                    "index_digest": READINESS.POSTGRES16_IMAGE.split("@", 1)[1],
-                    "platform_digest": digest("5"),
-                    "image_id": digest("6"),
-                },
+                "postgres_audit": postgres_audit,
+                "postgres_restore": dict(postgres_audit["16"]),
                 "prefetch_images_sha256": PREFETCH_IMAGES_SHA256,
             }
         ),
@@ -324,6 +334,7 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
                 "takeover_binding_sha256": takeover_binding,
                 "bridge_token_sha256": digest("3"),
                 "descriptor_ci_sha256": DESCRIPTOR_CI_SHA256,
+                "control_handoff_sha256": digest("4"),
             }
         ),
         "prefetch": seal(
@@ -369,6 +380,9 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
                 "authority_sha": AUTHORITY_SHA,
                 "authority_tree": AUTHORITY_TREE,
                 "binding_sha256": takeover_binding,
+                "bootstrap_control_sha256": digest("9"),
+                "bootstrap_transaction_sha256": digest("a"),
+                "bootstrap_transaction_identity_sha256": digest("b"),
             }
         ),
         "alias": seal(
@@ -390,6 +404,7 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
                 ),
                 "audit_sha256": digest("d"),
                 "validation_sha256": digest("e"),
+                "media_authority_rules_sha256": digest("a"),
                 "registry_sha256": digest("f"),
                 "inventory_complete": True,
                 "writable_target": {
@@ -656,6 +671,27 @@ class ProductionReadinessTests(unittest.TestCase):
         reseal_section(document, "oci")
         with self.assertRaisesRegex(
             READINESS.ProductionReadinessError, "authority differs"
+        ):
+            self.validate(document)
+
+    def test_postgres_audit_map_and_pg16_restore_identity_are_distinct(
+        self,
+    ) -> None:
+        document = fixture()
+        document["oci"]["postgres_audit"].pop("18")  # type: ignore[index]
+        reseal_section(document, "oci")
+        with self.assertRaisesRegex(
+            READINESS.ProductionReadinessError,
+            "PostgreSQL audit images",
+        ):
+            self.validate(document)
+
+        document = fixture()
+        document["oci"]["postgres_restore"]["image_id"] = digest("f")  # type: ignore[index]
+        reseal_section(document, "oci")
+        with self.assertRaisesRegex(
+            READINESS.ProductionReadinessError,
+            "exact PG16 audit image",
         ):
             self.validate(document)
 
@@ -964,6 +1000,379 @@ class ProductionReadinessTests(unittest.TestCase):
             ):
                 READINESS._validate_live_conflicts(runtime)
             self.assertEqual(marker.read_text(encoding="utf-8"), "{}")
+
+    def test_live_external_media_binds_current_authority_and_registry_files(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="readiness-live-media-"
+        ) as raw:
+            runtime = Path(raw)
+            config = runtime / "config"
+            audit_root = runtime / "audit"
+            config.mkdir(mode=0o700)
+            audit_root.mkdir(mode=0o700)
+            rules_payload = b'{"schema_version":1}\n'
+            rules = config / "postgres-media-authority-rules.json"
+            rules.write_bytes(rules_payload)
+            os.chmod(rules, 0o600)
+            rules_digest = READINESS.sha256_bytes(rules_payload)
+            registry_document = {
+                "media_authority_rules_sha256": rules_digest,
+            }
+            registry_payload = json.dumps(
+                registry_document,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode() + b"\n"
+            registry = config / "postgres-media-registry.json"
+            registry.write_bytes(registry_payload)
+            os.chmod(registry, 0o600)
+            audit_document = {"fixture": True}
+            audit_payload = json.dumps(
+                audit_document,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode() + b"\n"
+            audit = (
+                runtime
+                / READINESS.EXTERNAL_DATABASE_AUDIT_RELATIVE_PATH
+            )
+            audit.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(audit.parent, 0o700)
+            audit.write_bytes(audit_payload)
+            os.chmod(audit, 0o600)
+            normalized = {
+                "media": [{}, {}],
+                "media_registry": {
+                    "captured_at": "2026-07-17T01:02:03Z",
+                },
+                "requires_0014": False,
+            }
+            section = {
+                "audit_relative_path": (
+                    READINESS.EXTERNAL_DATABASE_AUDIT_RELATIVE_PATH.as_posix()
+                ),
+                "audit_sha256": READINESS.sha256_bytes(audit_payload),
+                "validation_sha256": (
+                    READINESS.canonical_json_digest(normalized)
+                ),
+                "media_authority_rules_sha256": rules_digest,
+                "registry_sha256": READINESS.sha256_bytes(
+                    registry_payload
+                ),
+                "media_count": 2,
+                "captured_at": "2026-07-17T01:02:03Z",
+            }
+            validated = {"sections": {"external_media": section}}
+            with mock.patch.object(
+                READINESS.site_helper_contracts,
+                "validate_external_database_audit",
+                return_value=normalized,
+            ):
+                READINESS._validate_live_external_media(
+                    runtime,
+                    validated,
+                )
+                rules.write_bytes(b'{"schema_version":2}\n')
+                os.chmod(rules, 0o600)
+                with self.assertRaisesRegex(
+                    READINESS.ProductionReadinessError,
+                    "authority or registry changed",
+                ):
+                    READINESS._validate_live_external_media(
+                        runtime,
+                        validated,
+                    )
+
+    def test_live_prepared_requires_exact_selector_handoff_inventory(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="readiness-live-handoff-"
+        ) as raw:
+            runtime = Path(raw)
+            operation_id = "bridge-operation-0001"
+            operation = runtime / "state/prepared" / operation_id
+            handoff_root = runtime / "state/control-handoffs"
+            operation.mkdir(parents=True, mode=0o700)
+            handoff_root.mkdir(parents=True, mode=0o700)
+            os.chmod(runtime / "state", 0o700)
+            os.chmod(runtime / "state/prepared", 0o700)
+            previous = {"release_id": "a" * 64}
+            executor = {"release_id": "b" * 64}
+            prefetch = {
+                "operation_id": "prefetch-operation-0001",
+                "identity_sha256": digest("1"),
+            }
+            takeover = {"binding_sha256": digest("2")}
+            normalized = {
+                "schema_version": 3,
+                "operation_id": operation_id,
+                "bridge": {
+                    "authority": {
+                        "sha": AUTHORITY_SHA,
+                        "tree": AUTHORITY_TREE,
+                    },
+                    "target": {
+                        "sha": BRIDGE_SHA,
+                        "tree": BRIDGE_TREE,
+                        "exact_ref": (
+                            f"refs/nexpoly/bridge-target/{BRIDGE_SHA}"
+                        ),
+                    },
+                    "policy": {"policy_id": digest("3")},
+                    "policy_sha256": digest("4"),
+                },
+                "prefetch": prefetch,
+                "legacy_takeover": takeover,
+                "ci": {"fixture": True},
+                "controller": {
+                    "previous_active_control": previous,
+                    "executor_control": executor,
+                    "executor_control_sha256": (
+                        READINESS.canonical_json_digest(executor)
+                    ),
+                },
+                "monomer_md": {"slot_record_sha256": digest("5")},
+            }
+            descriptor_payload = b'{"fixture":"descriptor"}\n'
+            descriptor_path = operation / "descriptor.json"
+            descriptor_path.write_bytes(descriptor_payload)
+            os.chmod(descriptor_path, 0o600)
+            descriptor_sha256 = READINESS.sha256_bytes(
+                descriptor_payload
+            )
+            ready = {
+                "schema_version": 1,
+                "status": "ready",
+                "operation_id": operation_id,
+                "source_sha": BRIDGE_SHA,
+                "descriptor_sha256": descriptor_sha256,
+                "executor_control": executor,
+                "executor_control_sha256": (
+                    READINESS.canonical_json_digest(executor)
+                ),
+                "slot_record_sha256": digest("5"),
+                "prepared_at": "2026-07-17T01:02:03Z",
+            }
+            ready_payload = (
+                READINESS.canonical_json_bytes(ready) + b"\n"
+            )
+            ready_path = operation / "ready.json"
+            ready_path.write_bytes(ready_payload)
+            os.chmod(ready_path, 0o600)
+            handoff = {
+                "schema_version": 2,
+                "protocol_version": 1,
+                "operation_id": operation_id,
+                "authority_sha": AUTHORITY_SHA,
+                "authority_tree": AUTHORITY_TREE,
+                "target_sha": BRIDGE_SHA,
+                "target_tree": BRIDGE_TREE,
+                "target_ref": (
+                    f"refs/nexpoly/bridge-target/{BRIDGE_SHA}"
+                ),
+                "policy_id": digest("3"),
+                "policy_sha256": digest("4"),
+                "prefetch_operation_id": prefetch["operation_id"],
+                "prefetch": prefetch,
+                "legacy_takeover": takeover,
+                "previous_active_control": previous,
+                "previous_active_control_sha256": (
+                    READINESS.canonical_json_digest(previous)
+                ),
+                "executor_control": executor,
+                "executor_control_sha256": (
+                    READINESS.canonical_json_digest(executor)
+                ),
+                "created_at": "2026-07-17T01:02:03Z",
+            }
+            handoff_payload = (
+                READINESS.canonical_json_bytes(handoff) + b"\n"
+            )
+            handoff_path = handoff_root / f"{operation_id}.json"
+            handoff_path.write_bytes(handoff_payload)
+            os.chmod(handoff_path, 0o600)
+            section = {
+                "operation_id": operation_id,
+                "descriptor_sha256": descriptor_sha256,
+                "ready_sha256": READINESS.sha256_bytes(ready_payload),
+                "policy_sha256": digest("4"),
+                "prefetch_identity_sha256": digest("1"),
+                "takeover_binding_sha256": digest("2"),
+                "bridge_token_sha256": digest("6"),
+                "descriptor_ci_sha256": (
+                    READINESS.canonical_json_digest({"fixture": True})
+                ),
+                "control_handoff_sha256": (
+                    READINESS.sha256_bytes(handoff_payload)
+                ),
+            }
+            validated = {
+                "authority": {"sha": AUTHORITY_SHA, "tree": AUTHORITY_TREE},
+                "bridge": {"sha": BRIDGE_SHA, "tree": BRIDGE_TREE},
+                "policy": {"policy_id": digest("3")},
+                "sections": {"prepared": section},
+            }
+            pull_module = mock.Mock()
+            pull_module.validate_descriptor.return_value = normalized
+            pull_module._control_runtime.PROTOCOL_VERSION = 1
+            token = {
+                "operation_id": operation_id,
+                "policy_id": digest("3"),
+                "descriptor_sha256": descriptor_sha256,
+                "status": "prepared",
+            }
+            with (
+                mock.patch.object(
+                    READINESS,
+                    "_load_sibling",
+                    return_value=pull_module,
+                ),
+                mock.patch.object(
+                    READINESS.bridge_deploy_core,
+                    "load_token_authority",
+                    return_value=token,
+                ),
+                mock.patch.object(
+                    READINESS.bridge_deploy_core,
+                    "token_record_digest",
+                    return_value=digest("6"),
+                ),
+            ):
+                READINESS._validate_live_prepared(runtime, validated)
+                extra = handoff_root / "foreign.json"
+                extra.write_bytes(b"{}\n")
+                os.chmod(extra, 0o600)
+                with self.assertRaisesRegex(
+                    READINESS.ProductionReadinessError,
+                    "handoff inventory",
+                ):
+                    READINESS._validate_live_prepared(runtime, validated)
+
+    def test_live_takeover_requires_completed_bootstrap_child_transaction(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="readiness-bootstrap-child-"
+        ) as raw:
+            runtime = Path(raw)
+            operation_id = "takeover-operation-0001"
+            state = runtime / "state"
+            children = (
+                state / "legacy-takeover/bootstrap-children"
+            )
+            children.mkdir(parents=True, mode=0o700)
+            os.chmod(runtime, 0o700)
+            os.chmod(state, 0o700)
+            os.chmod(state / "legacy-takeover", 0o700)
+            binding = {
+                "operation_id": operation_id,
+                "binding_sha256": digest("1"),
+            }
+            active = {
+                "source_sha": AUTHORITY_SHA,
+                "source_tree": AUTHORITY_TREE,
+            }
+            active_payload = (
+                READINESS.canonical_json_bytes(active) + b"\n"
+            )
+            active_path = state / "active-control.json"
+            active_path.write_bytes(active_payload)
+            os.chmod(active_path, 0o600)
+            active_sha256 = READINESS.sha256_bytes(active_payload)
+            bootstrap = {
+                "schema_version": 2,
+                "status": "completed",
+                "source_sha": AUTHORITY_SHA,
+                "source_tree": AUTHORITY_TREE,
+                "legacy_takeover": binding,
+                "active_control": active,
+            }
+            bootstrap_payload = (
+                READINESS.canonical_json_bytes(bootstrap) + b"\n"
+            )
+            bootstrap_path = state / "bootstrap-control.json"
+            bootstrap_path.write_bytes(bootstrap_payload)
+            os.chmod(bootstrap_path, 0o600)
+            bootstrap_sha256 = READINESS.sha256_bytes(
+                bootstrap_payload
+            )
+            identity = {"legacy_takeover": binding}
+            identity_sha256 = READINESS.canonical_json_digest(identity)
+            child = {
+                "status": "completed",
+                "phase": "completed",
+                "operation_id": operation_id,
+                "source_sha": AUTHORITY_SHA,
+                "source_tree": AUTHORITY_TREE,
+                "identity": identity,
+                "identity_sha256": identity_sha256,
+                "step_evidence": {
+                    "authority_commit": {
+                        "bootstrap_control_sha256": bootstrap_sha256,
+                        "active_control_sha256": active_sha256,
+                        "active_control": active,
+                    }
+                },
+            }
+            child_payload = (
+                READINESS.canonical_json_bytes(child) + b"\n"
+            )
+            child_name = f"{operation_id}-{AUTHORITY_SHA}.json"
+            child_path = children / child_name
+            child_path.write_bytes(child_payload)
+            os.chmod(child_path, 0o600)
+            section = {
+                "operation_id": operation_id,
+                "binding_sha256": digest("1"),
+                "bootstrap_control_sha256": bootstrap_sha256,
+                "bootstrap_transaction_sha256": (
+                    READINESS.sha256_bytes(child_payload)
+                ),
+                "bootstrap_transaction_identity_sha256": (
+                    identity_sha256
+                ),
+            }
+            validated = {
+                "authority": {
+                    "sha": AUTHORITY_SHA,
+                    "tree": AUTHORITY_TREE,
+                },
+                "sections": {"takeover": section},
+            }
+            legacy_module = mock.Mock()
+            legacy_module.validate_completed.return_value = binding
+            bootstrap_module = mock.Mock()
+            bootstrap_module._validate_bootstrap_transaction.side_effect = (
+                lambda document, **_kwargs: document
+            )
+
+            def sibling(_name: str, filename: str):
+                if filename == "legacy_takeover_evidence.py":
+                    return legacy_module
+                if filename == "bootstrap_pull_deploy.py":
+                    return bootstrap_module
+                raise AssertionError(filename)
+
+            with mock.patch.object(
+                READINESS,
+                "_load_sibling",
+                side_effect=sibling,
+            ):
+                READINESS._validate_live_takeover(runtime, validated)
+                extra = children / "foreign.json"
+                extra.write_bytes(b"{}\n")
+                os.chmod(extra, 0o600)
+                with self.assertRaisesRegex(
+                    READINESS.ProductionReadinessError,
+                    "child transaction inventory",
+                ):
+                    READINESS._validate_live_takeover(
+                        runtime,
+                        validated,
+                    )
 
     def test_live_evidence_must_be_fresh_and_mode_0600(self) -> None:
         with self.assertRaisesRegex(

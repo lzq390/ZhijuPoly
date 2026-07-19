@@ -53,7 +53,7 @@ class SelectorTests(unittest.TestCase):
                 (
                     "import importlib.util\n"
                     "from pathlib import Path\n"
-                    "p=Path(__file__).with_name('env.py')\n"
+                    "p=Path(__file__).resolve().with_name('env.py')\n"
                     "s=importlib.util.spec_from_file_location('sealed_env', p)\n"
                     "m=importlib.util.module_from_spec(s)\n"
                     "s.loader.exec_module(m)\n"
@@ -106,6 +106,7 @@ class SelectorTests(unittest.TestCase):
                 "current_state_schema_versions": [2],
                 "marker_schema_versions": [2, 3],
                 "worker_slot_schema_versions": [2],
+                "prepare_abort_abi_versions": [1],
             },
             "entrypoints": entrypoints,
             "files": files,
@@ -521,7 +522,9 @@ class SelectorTests(unittest.TestCase):
         ):
             SELECTOR.load_active_control(self.runtime)
 
-    def test_ready_routes_apply_to_exact_candidate_and_rejects_duplicate_operation(self) -> None:
+    def test_ready_routes_apply_commands_to_exact_candidate_and_rejects_duplicate_operation(
+        self,
+    ) -> None:
         first, _ = self.release(
             source_sha="1" * 40, source_tree="2" * 40, variant="a"
         )
@@ -545,18 +548,53 @@ class SelectorTests(unittest.TestCase):
             SELECTOR.canonical_json_bytes(ready) + b"\n",
             0o600,
         )
-        _manifest, selected = SELECTOR._selected_release(
-            self.runtime,
-            "deploy",
-            ["apply", "--sha", "3" * 40, "--operation-id", operation],
-        )
-        self.assertEqual(selected, second_root)
+        for command, extra_arguments in (
+            ("apply", ["--sha", "3" * 40]),
+            ("bridge-apply", ["--authority-sha", "1" * 40]),
+        ):
+            with self.subTest(command=command):
+                _manifest, selected = SELECTOR._selected_release(
+                    self.runtime,
+                    "deploy",
+                    [
+                        command,
+                        *extra_arguments,
+                        "--operation-id",
+                        operation,
+                    ],
+                )
+                self.assertEqual(selected, second_root)
+        captured: dict[str, object] = {}
+
+        def fake_exec(
+            path: str,
+            argv: list[str],
+            environment: dict[str, str],
+        ) -> None:
+            captured.update(path=path, argv=argv, environment=environment)
+            raise RuntimeError("captured")
+
+        with mock.patch.object(SELECTOR.os, "execve", fake_exec):
+            with self.assertRaisesRegex(RuntimeError, "captured"):
+                SELECTOR._exec_role(
+                    "deploy",
+                    [
+                        "bridge-apply",
+                        "--authority-sha",
+                        "1" * 40,
+                        "--operation-id",
+                        operation,
+                    ],
+                    {},
+                    runtime_root=self.runtime,
+                )
+        self.assertEqual(Path(str(captured["argv"][6])), second_root / "deploy.py")
         with self.assertRaisesRegex(SELECTOR.ControlRuntimeError, "exactly once"):
             SELECTOR._selected_release(
                 self.runtime,
                 "deploy",
                 [
-                    "apply",
+                    "bridge-apply",
                     "--operation-id",
                     operation,
                     "--operation-id",
@@ -672,7 +710,10 @@ class SelectorTests(unittest.TestCase):
                     },
                     runtime_root=self.runtime,
                 )
-        self.assertIn(str(root / "alias.py"), captured["argv"])
+        captured_argv = list(captured["argv"])
+        self.assertEqual(captured_argv[3], "-c")
+        self.assertGreaterEqual(int(str(captured_argv[5])), 0)
+        self.assertEqual(captured_argv[6], str(root / "alias.py"))
         environment = dict(captured["environment"])
         self.assertEqual(environment["NEXPOLY_PRODUCTION_POSTGRES_DSN"], secret)
         self.assertNotIn("LD_PRELOAD", environment)
@@ -714,7 +755,7 @@ class SelectorTests(unittest.TestCase):
                         runtime_root=self.runtime,
                     )
 
-    def test_deploy_plan_prepare_allow_missing_alias_but_not_interrupted_alias(
+    def test_deploy_preparation_allows_missing_alias_but_not_interrupted_alias(
         self,
     ) -> None:
         manifest, root = self.release(
@@ -727,7 +768,13 @@ class SelectorTests(unittest.TestCase):
         completed = SELECTOR._load_private_json(marker_path)
         marker_path.unlink()
 
-        for command in ("plan", "prepare"):
+        for command in (
+            "plan",
+            "prepare",
+            "bridge-plan",
+            "bridge-prepare",
+            "prepare-abort",
+        ):
             with self.subTest(command=command):
                 selected, selected_root = SELECTOR._selected_release(
                     self.runtime,
@@ -751,7 +798,13 @@ class SelectorTests(unittest.TestCase):
             SELECTOR.canonical_json_bytes(interrupted) + b"\n",
             0o600,
         )
-        for command in ("plan", "prepare"):
+        for command in (
+            "plan",
+            "prepare",
+            "bridge-plan",
+            "bridge-prepare",
+            "prepare-abort",
+        ):
             with self.subTest(command=command):
                 with self.assertRaisesRegex(
                     SELECTOR.ControlRuntimeError,
@@ -845,6 +898,9 @@ class SelectorTests(unittest.TestCase):
         argv = list(captured["argv"])
         environment = dict(captured["environment"])
         self.assertEqual(argv[:3], ["/usr/bin/python3", "-I", "-B"])
+        self.assertEqual(argv[3], "-c")
+        target_fd = int(str(argv[5]))
+        self.assertEqual(argv[6], str(root / "deploy.py"))
         self.assertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
         for _ in range(2):
             completed = subprocess.run(
@@ -853,6 +909,7 @@ class SelectorTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                pass_fds=(target_fd,),
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             SELECTOR.load_active_control(self.runtime)
@@ -867,6 +924,79 @@ class SelectorTests(unittest.TestCase):
                 "alias.py",
             },
         )
+
+    def test_pinned_python_rejects_entrypoint_or_sibling_path_replacement(
+        self,
+    ) -> None:
+        for index, replacement_name in enumerate(
+            ("deploy.py", "env.py"),
+            start=1,
+        ):
+            with self.subTest(replacement_name=replacement_name):
+                manifest, root = self.release(
+                    source_sha=str(index) * 40,
+                    source_tree=str(index + 5) * 40,
+                    variant=f"hostile-{index}",
+                    imports_sibling=True,
+                )
+                self.activate(
+                    manifest,
+                    operation_id=f"bootstrap-controls-hostile-{index}",
+                    generation=index,
+                )
+                captured: dict[str, object] = {}
+
+                def fake_exec(
+                    path: str,
+                    argv: list[str],
+                    environment: dict[str, str],
+                ) -> None:
+                    captured.update(
+                        path=path,
+                        argv=argv,
+                        environment=environment,
+                    )
+                    raise RuntimeError("captured")
+
+                with (
+                    mock.patch.object(SELECTOR.os, "execve", fake_exec),
+                    self.assertRaisesRegex(RuntimeError, "captured"),
+                ):
+                    SELECTOR._exec_role(
+                        "deploy",
+                        ["plan"],
+                        {},
+                        runtime_root=self.runtime,
+                    )
+                argv = list(captured["argv"])
+                target_fd = int(str(argv[5]))
+                marker = self.runtime / f"hostile-{index}.executed"
+                original_payload = (root / replacement_name).read_bytes()
+                replacement = root / f".{replacement_name}.replacement"
+                replacement.write_text(
+                    "from pathlib import Path\n"
+                    f"Path({str(marker)!r}).write_text('executed')\n",
+                    encoding="utf-8",
+                )
+                os.chmod(replacement, 0o700)
+                os.replace(replacement, root / replacement_name)
+
+                completed = subprocess.run(
+                    argv,
+                    env=dict(captured["environment"]),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    pass_fds=(target_fd,),
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("sealed control bootstrap", completed.stderr)
+                self.assertFalse(marker.exists())
+                self._write(
+                    root / replacement_name,
+                    original_payload,
+                    0o700,
+                )
 
     def test_three_immutable_releases_preserve_old_rollback_targets(self) -> None:
         releases = [

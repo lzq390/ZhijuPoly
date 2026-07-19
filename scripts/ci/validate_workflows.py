@@ -35,6 +35,16 @@ EXPECTED_POSTGRES_IMAGE = (
     "postgres:16-alpine@sha256:"
     "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
 )
+EXPECTED_POSTGRES_AUDIT_IMAGES = (
+    "docker.io/library/postgres@sha256:"
+    "f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579",
+    "docker.io/library/postgres@sha256:"
+    "3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f",
+    "docker.io/library/postgres@sha256:"
+    "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+    "docker.io/library/postgres@sha256:"
+    "9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+)
 
 
 def require_markers(text: str, markers: tuple[str, ...], failures: list[str]) -> None:
@@ -164,14 +174,30 @@ def main() -> int:
             'NEXPOLY_ALIAS_DOCKER_INTEGRATION: "1"',
             "NEXPOLY_ALIAS_DOCKER_TEST_ACK: ephemeral-localhost-only",
             "NEXPOLY_ALIAS_TEST_PG_BIN: /usr/lib/postgresql/16/bin",
+            "  postgres-media-integration:\n"
+            "    name: PostgreSQL media matching-major integration "
+            "(${{ matrix.major }})\n"
+            "    needs: resolve-sha\n"
+            "    runs-on: ubuntu-24.04",
             'NEXPOLY_RUN_POSTGRES_MEDIA_INTEGRATION: "1"',
+            'NEXPOLY_RUN_MUTABLE_HELPER_INTEGRATION: "1"',
             "NEXPOLY_POSTGRES_MEDIA_TEST_ACK: ephemeral-localhost-only",
-            f"NEXPOLY_TEST_POSTGRES_IMAGE: {EXPECTED_POSTGRES_IMAGE}",
+            "NEXPOLY_TEST_POSTGRES_MAJOR: ${{ matrix.major }}",
+            "NEXPOLY_TEST_POSTGRES_IMAGE: ${{ matrix.image }}",
+            "Install PostgreSQL 16 client for mutable-data audit",
+            "sudo apt-get install --yes postgresql-client-16",
+            '/usr/bin/psql --version | grep -F "PostgreSQL) 16."',
+            *EXPECTED_POSTGRES_AUDIT_IMAGES,
             "docker pull \"$POSTGRES_IMAGE\"",
+            "docker pull \"$NEXPOLY_TEST_POSTGRES_IMAGE\"",
             "test_reconcile_production_0005_polytao_alias_integration.py",
-            "Run real all-media PostgreSQL 16 audit integration",
-            "scripts/tests/test_postgres_media_evidence.py",
+            "Run real matching-major external-media integration",
+            (
+                "scripts.tests.test_postgres_media_evidence."
+                "RealDockerPostgresIntegrationTests"
+            ),
             "      - production-alias-integration",
+            "      - postgres-media-integration",
             "      - bridge-validation",
             "python3 scripts/ci/validate_dependency_locks.py",
             "python3 -m app.migration_policy",
@@ -241,16 +267,60 @@ def main() -> int:
         failures.append("every checkout must be followed by an immutable SHA assertion")
     if ci_text.count("uses: actions/checkout@") != ci_text.count("persist-credentials: false"):
         failures.append("every checkout must disable persisted GitHub credentials")
+    exact_candidate_ref = (
+        "ref: ${{ needs.resolve-sha.outputs.candidate_sha }}"
+    )
+    if ci_text.count("uses: actions/checkout@") != ci_text.count(
+        exact_candidate_ref
+    ):
+        failures.append(
+            "every checkout must use the exact resolved candidate SHA"
+        )
     if ci_text.count("runs-on:") != ci_text.count("timeout-minutes:"):
         failures.append("every job must define a timeout")
-    if ci_text.count(f"POSTGRES_IMAGE: {EXPECTED_POSTGRES_IMAGE}") != 2:
+    media_job_match = re.search(
+        r"(?ms)^  postgres-media-integration:\n"
+        r"(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        ci_text,
+    )
+    if media_job_match is None:
+        failures.append("postgres-media-integration job is missing")
+    else:
+        media_job = media_job_match.group("body")
+        if media_job.count("timeout-minutes:") != 1:
+            failures.append(
+                "postgres-media-integration must define one job timeout"
+            )
+        if (
+            media_job.count("- name: Check out candidate") != 1
+            or media_job.count("uses: actions/checkout@") != 1
+            or media_job.count(exact_candidate_ref) != 1
+        ):
+            failures.append(
+                "postgres-media-integration must contain one exact "
+                "candidate checkout"
+            )
+    if ci_text.count(f"POSTGRES_IMAGE: {EXPECTED_POSTGRES_IMAGE}") != 1:
         failures.append(
-            "global and all-media integration PostgreSQL images must use "
-            "the same exact pinned Alpine digest"
+            "the actual-operation PostgreSQL 16 image must have one "
+            "exact global pin"
         )
-    if ci_text.count("Run real all-media PostgreSQL 16 audit integration") != 1:
+    if any(
+        ci_text.count(image) != 1
+        for image in EXPECTED_POSTGRES_AUDIT_IMAGES
+    ):
         failures.append(
-            "ci.yml must run the real all-media PostgreSQL integration once"
+            "each matching-major PostgreSQL audit image must have one "
+            "exact matrix pin"
+        )
+    if (
+        ci_text.count(
+            "Run real matching-major external-media integration"
+        )
+        != 1
+    ):
+        failures.append(
+            "ci.yml must define one matching-major media integration matrix"
         )
     if ci_text.count("git ls-files -z -- '*.sh'") < 2:
         failures.append("ci.yml must syntax-check and ShellCheck every tracked shell script")

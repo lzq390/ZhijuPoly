@@ -29,6 +29,9 @@ POLICY_RELATIVE_PATH = "ops/config/production-bridge-policy.json"
 MEDIA_AUTHORITY_RULES_RELATIVE_PATH = (
     "ops/config/postgres-media-authority-rules.json"
 )
+MEDIA_AUDIT_ROLE_SQL_RELATIVE_PATH = (
+    "ops/config/postgres-media-audit-role.sql.example"
+)
 TOKEN_RELATIVE_PATH = Path("state/bridge-takeover.json")
 TOKEN_RETIREMENT_DIRECTORY = Path("bridge-token-retirements")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -52,9 +55,9 @@ REQUIRED_LEDGER_ORDER = ("pre-0012", "post-0012", "post-0013")
 REQUIRED_LEDGER_NAMES = set(REQUIRED_LEDGER_ORDER)
 EXTERNAL_DATABASE_AUDIT_POLICY = {
     "schema_version": 2,
-    "evidence_schema_version": 4,
+    "evidence_schema_version": 5,
     "authority_rules_schema_version": 1,
-    "runtime_registry_schema_version": 4,
+    "runtime_registry_schema_version": 5,
     "require_exact_authority_digest": True,
     "require_complete_discovery": True,
     "require_fresh_snapshot": True,
@@ -419,6 +422,7 @@ def validate_policy(document: object) -> dict[str, Any]:
         != {
             *EXTERNAL_DATABASE_AUDIT_POLICY,
             "media_authority_rules_sha256",
+            "audit_role_sql_sha256",
         }
         or any(
             external_database_audit.get(key) != value
@@ -431,6 +435,10 @@ def validate_policy(document: object) -> dict[str, Any]:
     media_authority_rules_sha256 = _require_digest(
         external_database_audit.get("media_authority_rules_sha256"),
         "bridge external database media authority rules",
+    )
+    audit_role_sql_sha256 = _require_digest(
+        external_database_audit.get("audit_role_sql_sha256"),
+        "bridge external database audit-role SQL",
     )
     jobs = document.get("required_ci_jobs")
     if (
@@ -457,6 +465,7 @@ def validate_policy(document: object) -> dict[str, Any]:
             "media_authority_rules_sha256": (
                 media_authority_rules_sha256
             ),
+            "audit_role_sql_sha256": audit_role_sql_sha256,
         },
         "required_ci_jobs": list(jobs),
         "policy_id": document.get("policy_id"),
@@ -1107,6 +1116,111 @@ def reserve_token(
         **identity,
         "candidate_state_sha256": None,
         "prepared_at": utc_now(),
+        "commit_started_at": None,
+        "consumed_at": None,
+        "retirement": None,
+    }
+    _atomic_json(path, document)
+    return load_token_authority(state_root)
+
+
+def publish_prepared_token(
+    state_root: Path,
+    *,
+    operation_id: str,
+    policy_id: str,
+    descriptor_sha256: str,
+    token_id: str,
+    token_sha256: str,
+    prepared_at: str,
+    predecessor_retirement: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Publish descriptor-bound token authority without an unbound generation.
+
+    The caller must durably publish the exact private descriptor first.  A
+    response loss can then replay this CAS from the descriptor's public random
+    identity; no global ``reserved`` record is created by the normal path.
+    """
+
+    _require_private_state_directory(state_root)
+    path = state_root / TOKEN_RELATIVE_PATH.name
+    operation_id = _require_operation_id(operation_id)
+    policy_id = _require_digest(policy_id, "bridge policy identity")
+    descriptor_sha256 = _require_digest(
+        descriptor_sha256, "bridge descriptor digest"
+    )
+    token_id = _require_digest(token_id, "bridge token identity")
+    token_sha256 = _require_digest(token_sha256, "bridge token digest")
+    if not isinstance(prepared_at, str) or not prepared_at:
+        raise BridgeDeployError("bridge token preparation timestamp is invalid")
+    if path.exists() or path.is_symlink():
+        existing = load_token_authority(state_root)
+        if (
+            existing["operation_id"] == operation_id
+            and existing["policy_id"] == policy_id
+        ):
+            if (
+                existing["token_id"] != token_id
+                or existing["token_sha256"] != token_sha256
+                or existing["prepared_at"] != prepared_at
+            ):
+                raise BridgeDeployError(
+                    "bridge token descriptor identity differs"
+                )
+            if existing["status"] == "reserved":
+                if predecessor_retirement is not None:
+                    raise BridgeDeployError(
+                        "existing bridge reservation cannot change predecessor"
+                    )
+                return bind_token_descriptor(
+                    state_root,
+                    operation_id=operation_id,
+                    policy_id=policy_id,
+                    descriptor_sha256=descriptor_sha256,
+                )
+            if (
+                existing["status"] == "prepared"
+                and existing["descriptor_sha256"] == descriptor_sha256
+            ):
+                return existing
+            raise BridgeDeployError(
+                "bridge takeover token is already committed or differs"
+            )
+        if existing["status"] != "retired-precommit":
+            raise BridgeDeployError(
+                "bridge takeover token is already owned or consumed"
+            )
+        expected_predecessor = retirement_reuse_authority(existing)
+        if predecessor_retirement != expected_predecessor:
+            raise BridgeDeployError(
+                "bridge token successor lacks exact failed restore authority"
+            )
+        if existing["operation_id"] == operation_id:
+            raise BridgeDeployError(
+                "retired bridge operation ID cannot be rearmed"
+            )
+        predecessor_digest = _archive_retired_token(state_root, existing)
+        generation = existing["generation"] + 1
+    else:
+        if predecessor_retirement is not None:
+            raise BridgeDeployError(
+                "first bridge token cannot claim a retirement predecessor"
+            )
+        predecessor_digest = None
+        generation = 1
+    document = {
+        "schema_version": TOKEN_SCHEMA_VERSION,
+        "mode": BRIDGE_MODE,
+        "generation": generation,
+        "previous_retirement_sha256": predecessor_digest,
+        "status": "prepared",
+        "operation_id": operation_id,
+        "policy_id": policy_id,
+        "descriptor_sha256": descriptor_sha256,
+        "token_id": token_id,
+        "token_sha256": token_sha256,
+        "candidate_state_sha256": None,
+        "prepared_at": prepared_at,
         "commit_started_at": None,
         "consumed_at": None,
         "retirement": None,

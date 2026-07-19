@@ -492,23 +492,60 @@ class BootstrapPullDeployTests(unittest.TestCase):
             "--confirm-worker-unit-sha256",
             BOOTSTRAP.digest(unit.read_bytes()),
         ]
-        with mock.patch.object(
-            BOOTSTRAP,
-            "_daemon_reload_worker_unit",
-            side_effect=BOOTSTRAP.BootstrapError("injected reload crash"),
+        reload_pending = False
+        reload_calls = 0
+
+        def unit_state(path: Path, *, allow_test: bool) -> dict[str, str]:
+            del allow_test
+            return {
+                "LoadState": "loaded",
+                "FragmentPath": str(path),
+                "DropInPaths": "",
+                "NeedDaemonReload": "yes" if reload_pending else "no",
+                "UnitFileState": "enabled",
+            }
+
+        def reload_unit(*, allow_test: bool) -> None:
+            nonlocal reload_pending, reload_calls
+            del allow_test
+            reload_calls += 1
+            if reload_calls == 1:
+                reload_pending = True
+                raise BOOTSTRAP.BootstrapError("injected reload crash")
+            reload_pending = False
+
+        with (
+            mock.patch.object(
+                BOOTSTRAP,
+                "_worker_unit_state",
+                side_effect=unit_state,
+            ),
+            mock.patch.object(
+                BOOTSTRAP,
+                "_daemon_reload_worker_unit",
+                side_effect=reload_unit,
+            ),
         ):
             result, _output, error = self.run_main(*arguments)
-        self.assertEqual(result, 2)
-        self.assertIn("injected reload crash", error)
-        self.assertEqual(stat.S_IMODE(unit.stat().st_mode), 0o600)
-        self.assertTrue(
-            (self.runtime / "audit/bootstrap-worker-unit/takeover-intent.json").is_file()
-        )
-        self.assertFalse(
-            (self.runtime / "audit/bootstrap-worker-unit/takeover.json").exists()
-        )
-        result, _output, error = self.run_main(*arguments)
-        self.assertEqual(result, 0, error)
+            self.assertEqual(result, 2)
+            self.assertIn("injected reload crash", error)
+            self.assertEqual(stat.S_IMODE(unit.stat().st_mode), 0o600)
+            self.assertTrue(
+                (
+                    self.runtime
+                    / "audit/bootstrap-worker-unit/takeover-intent.json"
+                ).is_file()
+            )
+            self.assertFalse(
+                (
+                    self.runtime
+                    / "audit/bootstrap-worker-unit/takeover.json"
+                ).exists()
+            )
+            self.assertTrue(reload_pending)
+            result, _output, error = self.run_main(*arguments)
+            self.assertEqual(result, 0, error)
+            self.assertFalse(reload_pending)
 
     def test_worker_unit_pre_replace_crash_never_claims_legacy_inode_is_private(
         self,
@@ -1244,6 +1281,45 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertEqual(second, 2)
         self.assertIn("control release", error)
 
+    def test_complete_prerename_control_staging_is_resumed_exactly(self) -> None:
+        first, output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(first, 0, error)
+        active = json.loads(output)["active_control"]
+        release = self.runtime / "control-releases" / active["release_id"]
+        staging = (
+            self.runtime
+            / "control-releases"
+            / f".bootstrap-{active['release_id']}"
+        )
+        os.rename(release, staging)
+        BOOTSTRAP._fsync_directory(staging.parent)
+
+        second, output, error = self.run_main(*self.apply_arguments())
+
+        self.assertEqual(second, 0, error)
+        self.assertTrue(release.is_dir())
+        self.assertFalse(staging.exists())
+        self.assertEqual(
+            json.loads(output)["active_control"]["release_id"],
+            active["release_id"],
+        )
+
+    def test_foreign_control_staging_is_never_silently_removed(self) -> None:
+        first, _output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(first, 0, error)
+        foreign = self.runtime / "control-releases/.bootstrap-foreign"
+        foreign.mkdir(mode=0o700)
+        (foreign / "evidence").write_text("foreign\n", encoding="utf-8")
+
+        second, _output, error = self.run_main(*self.apply_arguments())
+
+        self.assertEqual(second, 2)
+        self.assertIn("foreign bootstrap staging", error)
+        self.assertEqual(
+            (foreign / "evidence").read_text(encoding="utf-8"),
+            "foreign\n",
+        )
+
     def test_immutable_router_bytes_must_match_the_reviewed_git_object(self) -> None:
         current = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -1259,6 +1335,36 @@ class BootstrapPullDeployTests(unittest.TestCase):
                     source_sha=current,
                     allow_test=False,
                 )
+
+    def test_installed_reviewed_evidence_can_load_snapshot_dependency(
+        self,
+    ) -> None:
+        installed = self.runtime / "legacy-takeover/bin"
+        installed.mkdir(parents=True, mode=0o700)
+        for name in (
+            "legacy_takeover_evidence.py",
+            "legacy_takeover.py",
+            "site_helper_contracts.py",
+            "git_source_trust.py",
+        ):
+            target = installed / name
+            target.write_bytes(
+                (REPOSITORY_ROOT / "scripts" / name).read_bytes()
+            )
+            os.chmod(target, 0o700)
+        validator = BOOTSTRAP._legacy_takeover_evidence(
+            source_sha=SOURCE_SHA,
+            allow_test=True,
+            installed_runtime_root=self.runtime,
+        )
+
+        snapshot = validator.snapshot_current_control_layout(self.runtime)
+
+        self.assertRegex(snapshot["sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(
+            [record["relative_path"] for record in snapshot["records"]],
+            list(validator.CONTROL_LAYOUT_RELATIVE_PATHS),
+        )
 
     def test_locked_delivery_gate_drift_leaves_no_installed_authority(self) -> None:
         first = {
@@ -1277,6 +1383,124 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertIn("delivery evidence changed", error)
         self.assertFalse((self.runtime / "state/active-control.json").exists())
         self.assertEqual(list((self.runtime / "bin").iterdir()), [])
+
+    def test_late_delivery_drift_has_durable_abort_authority(self) -> None:
+        accepted = {
+            "remote_main": SOURCE_SHA,
+            "ci": {"head_sha": SOURCE_SHA, "conclusion": "success"},
+        }
+        drifted = {
+            "remote_main": "f" * 40,
+            "ci": {"head_sha": "f" * 40, "conclusion": "success"},
+        }
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_delivery_gate",
+            side_effect=[accepted, accepted, drifted],
+        ):
+            result, _output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 2)
+        self.assertIn(
+            "authority changed before active-control commit",
+            error,
+        )
+        transaction_path = BOOTSTRAP._bootstrap_transaction_path(
+            self.runtime,
+            operation_id=TAKEOVER_OPERATION_ID,
+            source_sha=SOURCE_SHA,
+        )
+        transaction = BOOTSTRAP._validate_bootstrap_transaction(
+            BOOTSTRAP._load_private_json(transaction_path),
+            path=transaction_path,
+        )
+        self.assertEqual(transaction["status"], "in-progress")
+        self.assertEqual(transaction["phase"], "control-release-ready")
+        self.assertFalse(
+            (self.runtime / "state/bootstrap-control.json").exists()
+        )
+        self.assertFalse((self.runtime / "state/active-control.json").exists())
+        self.assertTrue(any((self.runtime / "bin").iterdir()))
+        self.assertEqual(
+            stat.S_IMODE((self.production / ".git").stat().st_mode),
+            0o700,
+        )
+
+        control_digest = "sha256:" + "a" * 64
+        permission_digest = "sha256:" + "b" * 64
+        terminal_digest = "sha256:" + "c" * 64
+        evidence = SimpleNamespace(
+            validate_install_manifest=lambda _root, _sha, _tree: {
+                "authority_sha": SOURCE_SHA,
+                "authority_tree": SOURCE_TREE,
+            },
+            sha256_file=lambda _path: "sha256:" + "3" * 64,
+            snapshot_current_control_layout=lambda _root: {
+                "sha256": control_digest
+            },
+            snapshot_current_checkout_permissions=lambda _root, _operation: {
+                "sha256": permission_digest
+            },
+            validate_status_document=lambda _response, _operation: {
+                "active": False,
+                "restore_phase": "restored",
+                "control_layout_replacement_sha256": control_digest,
+                "checkout_permissions_replacement_sha256": permission_digest,
+                "restored_terminal_sha256": terminal_digest,
+            },
+        )
+        restore = mock.Mock(
+            return_value=subprocess.CompletedProcess(
+                ["legacy-restore"],
+                0,
+                "{}\n",
+                "",
+            )
+        )
+        abort_arguments = [
+            "--sha",
+            SOURCE_SHA,
+            "--abort",
+            "--production-root",
+            str(self.production),
+            "--runtime-root",
+            str(self.runtime),
+            "--confirm-production-root",
+            str(self.production.absolute()),
+            "--confirm-runtime-root",
+            str(self.runtime.absolute()),
+            "--legacy-takeover-operation-id",
+            TAKEOVER_OPERATION_ID,
+            "--confirm-source-tree",
+            SOURCE_TREE,
+        ]
+        with (
+            mock.patch.object(
+                BOOTSTRAP,
+                "_legacy_takeover_evidence",
+                return_value=evidence,
+            ),
+            mock.patch.object(
+                BOOTSTRAP,
+                "_run_bootstrap_legacy_restore",
+                restore,
+            ),
+        ):
+            result, output, error = self.run_main(*abort_arguments)
+            self.assertEqual(result, 0, error)
+            self.assertEqual(json.loads(output)["status"], "aborted")
+            result, output, error = self.run_main(*abort_arguments)
+            self.assertEqual(result, 0, error)
+            self.assertEqual(json.loads(output)["status"], "already-aborted")
+        restore.assert_called_once()
+        command = restore.call_args.args[0]
+        self.assertIn(control_digest, command)
+        self.assertIn(permission_digest, command)
+        terminal = BOOTSTRAP._load_private_json(transaction_path)
+        self.assertEqual(terminal["status"], "aborted")
+        self.assertEqual(
+            terminal["restored_terminal_sha256"],
+            terminal_digest,
+        )
 
     def test_partial_bootstrap_before_active_pointer_is_safely_resumable(self) -> None:
         first, output, error = self.run_main(*self.apply_arguments())

@@ -6,7 +6,8 @@
     "descriptor_schema_versions": [2, 3],
     "current_state_schema_versions": [2],
     "marker_schema_versions": [2],
-    "worker_slot_schema_versions": [2]
+    "worker_slot_schema_versions": [2],
+    "prepare_abort_abi_versions": [1]
   },
   "entrypoints": {
     "deploy": {
@@ -28,6 +29,10 @@
     "production-readiness": {
       "kind": "python",
       "file": "production_readiness.py"
+    },
+    "postgres-media-evidence": {
+      "kind": "python",
+      "file": "postgres_media_launcher.py"
     },
     "contract-0012": {
       "kind": "python",
@@ -108,6 +113,26 @@
     {
       "name": "production_readiness.py",
       "source": "scripts/production_readiness.py",
+      "mode": 448
+    },
+    {
+      "name": "postgres_media_evidence.py",
+      "source": "scripts/postgres_media_evidence.py",
+      "mode": 448
+    },
+    {
+      "name": "postgres_media_launcher.py",
+      "source": "scripts/postgres_media_launcher.py",
+      "mode": 448
+    },
+    {
+      "name": "postgres-media-authority-rules.json",
+      "source": "ops/config/postgres-media-authority-rules.json",
+      "mode": 448
+    },
+    {
+      "name": "postgres-media-audit-role.sql.example",
+      "source": "ops/config/postgres-media-audit-role.sql.example",
       "mode": 448
     },
     {
