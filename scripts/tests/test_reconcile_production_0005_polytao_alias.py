@@ -341,6 +341,38 @@ class ReconcileTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ReconcileError, "malformed"):
             operation._image_identity()
 
+    def test_restore_environment_is_exact_with_unique_order_independent_keys(
+        self,
+    ) -> None:
+        expected = [
+            "POSTGRES_HOST_AUTH_METHOD=trust",
+            "POSTGRES_DB=nexpoly_alias_restore",
+            *MODULE.POSTGRES16_IMAGE_ENV,
+        ]
+        expected_map = MODULE._unique_environment_map(expected)
+
+        self.assertIsNotNone(expected_map)
+        self.assertEqual(
+            MODULE._unique_environment_map(list(reversed(expected))),
+            expected_map,
+        )
+        self.assertIsNone(
+            MODULE._unique_environment_map(
+                [*expected, "POSTGRES_DB=unexpected"]
+            )
+        )
+        self.assertNotEqual(
+            MODULE._unique_environment_map(
+                [
+                    "POSTGRES_HOST_AUTH_METHOD=trust",
+                    "POSTGRES_DB=unexpected",
+                    *MODULE.POSTGRES16_IMAGE_ENV,
+                ]
+            ),
+            expected_map,
+        )
+        self.assertIsNone(MODULE._unique_environment_map(["malformed"]))
+
     def test_operation_id_and_cli_do_not_accept_general_ledger_selectors(self) -> None:
         self.assertEqual(
             MODULE.safe_operation_id("alias-0005-20260717"),
@@ -1031,6 +1063,350 @@ class ReconcileTests(unittest.TestCase):
 
         expected = mock.call(operation._container_name(), archive)
         self.assertEqual(operation._remove_owned_container.call_args_list, [expected, expected])
+
+    def test_restore_failure_remains_primary_when_owned_cleanup_also_fails(
+        self,
+    ) -> None:
+        operation = self._operation(FakeSession())
+        control, source, binaries = operation.identities()
+        identity = MODULE._marker_identity(
+            operation_id=operation.operation_id,
+            control=control,
+            source=source,
+            binaries=binaries,
+            database_endpoint=operation.database_endpoint,
+            restore_image=FIXTURE_RESTORE_IMAGE,
+            bridge_authority=operation._bridge_authority(control, source)[0],
+        )
+        operation._prepare_roots()
+        marker = operation._new_marker(identity)
+        operation._write_marker(
+            marker, "runtime-fenced", runtime_stop_fence={"fixture": True}
+        )
+        before = {"ledger": [], "archive": {"rows_sha256": "fixture"}}
+        operation._write_marker(marker, "locked-preverified", before=before)
+        archive = {"dump_sha256": "d" * 64}
+        operation._write_marker(
+            marker, "backup-complete", database_backup=archive
+        )
+        operation._restore_proof = MODULE.Reconciliation._restore_proof.__get__(
+            operation, MODULE.Reconciliation
+        )
+        primary = MODULE.ReconcileError("unknown docker run result")
+        cleanup = MODULE.ReconcileError("ambiguous cleanup identity")
+        operation._remove_owned_container = mock.Mock(
+            side_effect=[None, cleanup]
+        )
+
+        with (
+            mock.patch.object(MODULE, "_run_checked", side_effect=primary),
+            self.assertRaisesRegex(
+                MODULE.ReconcileError, "unknown docker run result"
+            ) as raised,
+        ):
+            operation._restore_proof(marker, archive)
+
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(
+            getattr(primary, "__notes__", []),
+            [MODULE.RESTORE_CONTAINER_CLEANUP_FAILURE_NOTE],
+        )
+        expected = mock.call(operation._container_name(), archive)
+        self.assertEqual(
+            operation._remove_owned_container.call_args_list,
+            [expected, expected],
+        )
+
+    def test_created_restore_container_waits_for_exact_runtime_convergence(
+        self,
+    ) -> None:
+        operation = self._operation(FakeSession())
+        missing: dict[str, object] = {"fixture": "missing-runtime-fields"}
+        complete: dict[str, object] = {"fixture": "complete-runtime"}
+        operation._inspect_container = mock.Mock(
+            side_effect=[None, missing, complete]
+        )
+        operation._running_owned_container = mock.Mock(
+            side_effect=[False, True]
+        )
+        archive = {"dump_sha256": "d" * 64}
+
+        with mock.patch.object(MODULE.time, "sleep") as sleep:
+            actual = operation._wait_for_running_owned_container(
+                operation._container_name(), archive
+            )
+
+        self.assertIs(actual, complete)
+        self.assertEqual(operation._inspect_container.call_count, 3)
+        self.assertEqual(
+            operation._running_owned_container.call_args_list,
+            [
+                mock.call(missing, archive=archive),
+                mock.call(complete, archive=archive),
+            ],
+        )
+        self.assertEqual(
+            sleep.call_args_list,
+            [
+                mock.call(MODULE.RESTORE_CONTAINER_CONVERGENCE_INTERVAL_SECONDS),
+                mock.call(MODULE.RESTORE_CONTAINER_CONVERGENCE_INTERVAL_SECONDS),
+            ],
+        )
+
+    def test_created_restore_container_convergence_is_bounded_and_fail_closed(
+        self,
+    ) -> None:
+        operation = self._operation(FakeSession())
+        partial: dict[str, object] = {"fixture": "partial-runtime"}
+        operation._inspect_container = mock.Mock(return_value=partial)
+        operation._running_owned_container = mock.Mock(return_value=False)
+        archive = {"dump_sha256": "d" * 64}
+
+        with (
+            mock.patch.object(
+                MODULE, "RESTORE_CONTAINER_CONVERGENCE_ATTEMPTS", 3
+            ),
+            mock.patch.object(MODULE.time, "sleep") as sleep,
+            self.assertRaisesRegex(
+                MODULE.ReconcileError,
+                "did not converge to sealed runtime spec",
+            ),
+        ):
+            operation._wait_for_running_owned_container(
+                operation._container_name(), archive
+            )
+
+        self.assertEqual(operation._inspect_container.call_count, 3)
+        self.assertEqual(operation._running_owned_container.call_count, 3)
+        self.assertEqual(
+            sleep.call_args_list,
+            [
+                mock.call(MODULE.RESTORE_CONTAINER_CONVERGENCE_INTERVAL_SECONDS),
+                mock.call(MODULE.RESTORE_CONTAINER_CONVERGENCE_INTERVAL_SECONDS),
+            ],
+        )
+
+    def test_isolated_postgres_waits_for_final_pid1_before_readiness(
+        self,
+    ) -> None:
+        operation = self._operation(FakeSession())
+        operation.runner = mock.Mock()
+        record: dict[str, object] = {"fixture": "owned"}
+        operation._inspect_container = mock.Mock(return_value=record)
+        operation._running_owned_container = mock.Mock(return_value=True)
+        operation.runner.run.side_effect = [
+            subprocess.CompletedProcess([], 75, "", ""),
+            subprocess.CompletedProcess([], 0, "final-ready\n", ""),
+        ]
+        name = operation._container_name()
+        archive = {"dump_sha256": "d" * 64}
+
+        with mock.patch.object(MODULE.time, "sleep") as sleep:
+            operation._wait_for_isolated_postgres(name, archive)
+
+        probe = mock.call(
+            [
+                str(MODULE.DOCKER),
+                "exec",
+                "--user",
+                "postgres",
+                name,
+                "/bin/sh",
+                "-ceu",
+                MODULE.RESTORE_POSTGRES_FINAL_PROBE,
+            ],
+            env=MODULE.CONTROL_ENVIRONMENT,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(
+            operation.runner.run.call_args_list,
+            [probe, probe],
+        )
+        self.assertEqual(operation._inspect_container.call_count, 2)
+        self.assertEqual(
+            operation._running_owned_container.call_args_list,
+            [
+                mock.call(record, archive=archive),
+                mock.call(record, archive=archive),
+            ],
+        )
+        self.assertEqual(
+            sleep.call_args_list,
+            [
+                mock.call(MODULE.RESTORE_POSTGRES_READINESS_INTERVAL_SECONDS),
+            ],
+        )
+
+    def test_isolated_postgres_readiness_timeout_is_bounded(self) -> None:
+        operation = self._operation(FakeSession())
+        operation.runner = mock.Mock()
+        operation._inspect_container = mock.Mock(
+            return_value={"fixture": "owned"}
+        )
+        operation._running_owned_container = mock.Mock(return_value=True)
+        operation.runner.run.return_value = subprocess.CompletedProcess(
+            [], 75, "", ""
+        )
+        archive = {"dump_sha256": "d" * 64}
+
+        with (
+            mock.patch.object(MODULE, "RESTORE_POSTGRES_READINESS_ATTEMPTS", 3),
+            mock.patch.object(MODULE.time, "sleep") as sleep,
+            self.assertRaisesRegex(
+                MODULE.ReconcileError,
+                "isolated PostgreSQL 16 did not become ready",
+            ),
+        ):
+            operation._wait_for_isolated_postgres(
+                operation._container_name(), archive
+            )
+
+        self.assertEqual(operation.runner.run.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_isolated_postgres_readiness_rejects_drift_and_unknown_output(
+        self,
+    ) -> None:
+        operation = self._operation(FakeSession())
+        operation.runner = mock.Mock()
+        record: dict[str, object] = {"fixture": "ambiguous"}
+        operation._inspect_container = mock.Mock(return_value=record)
+        operation._running_owned_container = mock.Mock(return_value=False)
+        archive = {"dump_sha256": "d" * 64}
+
+        with self.assertRaisesRegex(
+            MODULE.ReconcileError,
+            "container identity changed during readiness",
+        ):
+            operation._wait_for_isolated_postgres(
+                operation._container_name(), archive
+            )
+        operation.runner.run.assert_not_called()
+
+        operation._running_owned_container.return_value = True
+        operation.runner.run.return_value = subprocess.CompletedProcess(
+            [], 75, "unexpected", ""
+        )
+        with self.assertRaisesRegex(
+            MODULE.ReconcileError,
+            "final readiness probe failed",
+        ):
+            operation._wait_for_isolated_postgres(
+                operation._container_name(), archive
+            )
+
+    def test_ambiguous_restore_container_remains_non_owned_and_is_not_removed(
+        self,
+    ) -> None:
+        operation = self._operation(FakeSession())
+        operation._remove_owned_container = (
+            MODULE.Reconciliation._remove_owned_container.__get__(
+                operation, MODULE.Reconciliation
+            )
+        )
+        operation._inspect_container = mock.Mock(
+            return_value={"fixture": "partial-runtime"}
+        )
+        operation._owned_container = mock.Mock(return_value=False)
+        archive = {"dump_sha256": "d" * 64}
+
+        with (
+            mock.patch.object(MODULE, "_run_checked") as run_checked,
+            self.assertRaisesRegex(
+                MODULE.ReconcileError,
+                "pre-existing restore container is not operation-owned",
+            ),
+        ):
+            operation._remove_owned_container(
+                operation._container_name(), archive
+            )
+
+        operation._owned_container.assert_called_once_with(
+            {"fixture": "partial-runtime"}, archive=archive
+        )
+        run_checked.assert_not_called()
+
+    def test_cli_reports_only_the_fixed_cleanup_recovery_note(self) -> None:
+        primary = MODULE.ReconcileError("restore did not converge")
+        primary.add_note(MODULE.RESTORE_CONTAINER_CLEANUP_FAILURE_NOTE)
+        primary.add_note("unreviewed note must remain private")
+        operation = mock.Mock()
+        operation.apply.side_effect = primary
+        stderr = io.StringIO()
+
+        with (
+            mock.patch.object(
+                MODULE.sys, "flags", mock.Mock(isolated=1)
+            ),
+            mock.patch.object(
+                MODULE, "Reconciliation", return_value=operation
+            ),
+            contextlib.redirect_stderr(stderr),
+        ):
+            status = MODULE.main(
+                [
+                    "--operation-id",
+                    "alias-0005-20260717",
+                    "--apply",
+                    "--confirm-database",
+                    MODULE.DATABASE_NAME,
+                ]
+            )
+
+        self.assertEqual(status, 2)
+        output = stderr.getvalue()
+        self.assertIn(
+            "reconcile-production-0005-alias: error: "
+            "restore did not converge",
+            output,
+        )
+        self.assertIn(
+            "reconcile-production-0005-alias: recovery: "
+            + MODULE.RESTORE_CONTAINER_CLEANUP_FAILURE_NOTE,
+            output,
+        )
+        self.assertNotIn("unreviewed note", output)
+
+    def test_cli_reports_fixed_cleanup_note_for_unexpected_primary_error(
+        self,
+    ) -> None:
+        primary = RuntimeError("private unexpected detail")
+        primary.add_note(MODULE.RESTORE_CONTAINER_CLEANUP_FAILURE_NOTE)
+        primary.add_note("unreviewed note must remain private")
+        operation = mock.Mock()
+        operation.apply.side_effect = primary
+        stderr = io.StringIO()
+
+        with (
+            mock.patch.object(
+                MODULE.sys, "flags", mock.Mock(isolated=1)
+            ),
+            mock.patch.object(
+                MODULE, "Reconciliation", return_value=operation
+            ),
+            contextlib.redirect_stderr(stderr),
+        ):
+            status = MODULE.main(
+                [
+                    "--operation-id",
+                    "alias-0005-20260717",
+                    "--apply",
+                    "--confirm-database",
+                    MODULE.DATABASE_NAME,
+                ]
+            )
+
+        self.assertEqual(status, 2)
+        output = stderr.getvalue()
+        self.assertIn("maintenance failed safely", output)
+        self.assertIn(
+            "reconcile-production-0005-alias: recovery: "
+            + MODULE.RESTORE_CONTAINER_CLEANUP_FAILURE_NOTE,
+            output,
+        )
+        self.assertNotIn("private unexpected detail", output)
+        self.assertNotIn("unreviewed note", output)
 
     def test_marker_fences_a_different_operation_identity(self) -> None:
         session = FakeSession()
