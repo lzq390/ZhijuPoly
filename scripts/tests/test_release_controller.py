@@ -632,28 +632,8 @@ class ReleaseControllerTests(unittest.TestCase):
                         "script_blob": "3" * 40,
                     },
                     "evidence": {
+                        **release_controller.ASSET_BUILD_EVIDENCE,
                         "predecessor_manifest_digest": predecessor_digest,
-                        "predecessor_all_trees_rehashed": [
-                            "model",
-                            "database",
-                            "backend-data",
-                            "byteff2",
-                        ],
-                        "unchanged_trees_byte_identical": [
-                            "model",
-                            "database",
-                            "backend-data",
-                        ],
-                        "asset_tree_digest_algorithm": (
-                            "canonical-manifest-inventory-v1"
-                        ),
-                        "byteff2_source_verification": (
-                            "clean-recursive-commit-and-tree"
-                        ),
-                        "staging_directory_mode": "0700",
-                        "file_and_directory_fsync": True,
-                        "publication": "atomic-rename",
-                        "existing_target": "full-content-revalidation",
                     },
                 },
             }
