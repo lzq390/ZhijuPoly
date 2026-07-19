@@ -152,6 +152,49 @@ RESTORE_TMPFS = {
     "/var/lib/postgresql/data": "rw,nosuid,nodev,mode=0700",
     "/var/run/postgresql": "rw,nosuid,nodev,mode=0770",
 }
+RESTORE_CONTAINER_CONVERGENCE_ATTEMPTS = 101
+RESTORE_CONTAINER_CONVERGENCE_INTERVAL_SECONDS = 0.1
+RESTORE_POSTGRES_READINESS_ATTEMPTS = 60
+RESTORE_POSTGRES_READINESS_INTERVAL_SECONDS = 1
+RESTORE_POSTGRES_FINAL_PROBE = r"""exe=$(readlink /proc/1/exe 2>/dev/null) || exit 76
+cmdline=$(tr '\000' ' ' </proc/1/cmdline 2>/dev/null) || exit 76
+postmaster_pid=$(head -n1 /var/lib/postgresql/data/postmaster.pid 2>/dev/null) ||
+  exit 75
+if test "$exe" != /usr/local/bin/postgres ||
+   test "$cmdline" != "postgres " ||
+   test "$postmaster_pid" != 1; then
+  exit 75
+fi
+pg_isready -q \
+  -h /var/run/postgresql \
+  -d nexpoly_alias_restore \
+  -U postgres >/dev/null 2>&1 ||
+  exit 75
+result=$(
+  psql -X \
+    -h /var/run/postgresql \
+    -d nexpoly_alias_restore \
+    -U postgres \
+    -Atq <<'SQL'
+SELECT CASE
+  WHEN current_database() = 'nexpoly_alias_restore'
+   AND current_setting('server_version_num')::integer BETWEEN 160000 AND 169999
+   AND current_setting('data_directory') = '/var/lib/postgresql/data'
+   AND NOT pg_is_in_recovery()
+  THEN 'final-ready'
+  ELSE 'wrong-server'
+END;
+SQL
+) 2>/dev/null ||
+  exit 75
+test "$result" = final-ready ||
+  exit 76
+printf '%s\n' "$result"
+"""
+RESTORE_CONTAINER_CLEANUP_FAILURE_NOTE = (
+    "restore-container cleanup also failed; an ambiguous container was left "
+    "in place for fail-closed recovery"
+)
 DOCKER = Path("/usr/bin/docker")
 GIT = Path("/usr/bin/git")
 SYSTEMCTL = Path("/usr/bin/systemctl")
@@ -261,6 +304,20 @@ def _load_pull_deploy_controller() -> Any:
 
 class ReconcileError(RuntimeError):
     """The one-purpose maintenance contract failed closed."""
+
+
+def _unique_environment_map(value: object) -> dict[str, str] | None:
+    if not isinstance(value, list):
+        return None
+    environment: dict[str, str] = {}
+    for entry in value:
+        if not isinstance(entry, str):
+            return None
+        name, separator, setting = entry.partition("=")
+        if separator != "=" or not name or name in environment:
+            return None
+        environment[name] = setting
+    return environment
 
 
 class CommandRunner(Protocol):
@@ -1902,6 +1959,9 @@ class Reconciliation:
             "POSTGRES_DB=nexpoly_alias_restore",
             *POSTGRES16_IMAGE_ENV,
         ]
+        # Docker inspect may reorder unique Env entries; duplicate keys remain
+        # ambiguous and are rejected by the strict map parser.
+        expected_environment_map = _unique_environment_map(expected_environment)
         expected_bind = f"{self.backup_dir}:/archive:ro"
         return (
             isinstance(config, dict)
@@ -1913,7 +1973,9 @@ class Reconciliation:
             and record.get("RestartCount") == 0
             and config.get("Image") == restore_image["digest_ref"]
             and labels == expected_labels
-            and config.get("Env") == expected_environment
+            and expected_environment_map is not None
+            and _unique_environment_map(config.get("Env"))
+            == expected_environment_map
             and config.get("Cmd") == ["postgres"]
             and config.get("Entrypoint") == ["docker-entrypoint.sh"]
             and config.get("User") == ""
@@ -1961,6 +2023,69 @@ class Reconciliation:
             and state.get("Dead") is False
         )
 
+    def _wait_for_running_owned_container(
+        self, name: str, archive: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        for attempt in range(RESTORE_CONTAINER_CONVERGENCE_ATTEMPTS):
+            record = self._inspect_container(name)
+            if record is not None and self._running_owned_container(
+                record, archive=archive
+            ):
+                return record
+            if attempt + 1 < RESTORE_CONTAINER_CONVERGENCE_ATTEMPTS:
+                time.sleep(RESTORE_CONTAINER_CONVERGENCE_INTERVAL_SECONDS)
+        raise ReconcileError(
+            "created restore container did not converge to sealed runtime spec"
+        )
+
+    def _wait_for_isolated_postgres(
+        self, name: str, archive: Mapping[str, Any]
+    ) -> None:
+        for attempt in range(RESTORE_POSTGRES_READINESS_ATTEMPTS):
+            record = self._inspect_container(name)
+            if record is None or not self._running_owned_container(
+                record, archive=archive
+            ):
+                raise ReconcileError(
+                    "isolated PostgreSQL 16 container identity changed "
+                    "during readiness"
+                )
+            # The official image first runs a temporary postmaster.  It can
+            # accept pg_isready and SQL before PID 1 execs the final server.
+            probe = self.runner.run(
+                [
+                    str(DOCKER),
+                    "exec",
+                    "--user",
+                    "postgres",
+                    name,
+                    "/bin/sh",
+                    "-ceu",
+                    RESTORE_POSTGRES_FINAL_PROBE,
+                ],
+                env=CONTROL_ENVIRONMENT,
+                check=False,
+                timeout=10,
+            )
+            if probe.returncode == 0:
+                if probe.stdout != "final-ready\n" or probe.stderr != "":
+                    raise ReconcileError(
+                        "isolated PostgreSQL 16 final readiness output "
+                        "is malformed"
+                    )
+                return
+            if (
+                probe.returncode != 75
+                or probe.stdout != ""
+                or probe.stderr != ""
+            ):
+                raise ReconcileError(
+                    "isolated PostgreSQL 16 final readiness probe failed"
+                )
+            if attempt + 1 < RESTORE_POSTGRES_READINESS_ATTEMPTS:
+                time.sleep(RESTORE_POSTGRES_READINESS_INTERVAL_SECONDS)
+        raise ReconcileError("isolated PostgreSQL 16 did not become ready")
+
     def _remove_owned_container(self, name: str, archive: Mapping[str, Any]) -> None:
         record = self._inspect_container(name)
         if record is None:
@@ -2001,6 +2126,7 @@ class Reconciliation:
             },
         )
         self._remove_owned_container(name, archive)
+        primary_error: BaseException | None = None
         try:
             _run_checked(
                 self.runner,
@@ -2037,36 +2163,8 @@ class Reconciliation:
                 env=CONTROL_ENVIRONMENT,
                 timeout=120,
             )
-            created = self._inspect_container(name)
-            if created is None or not self._running_owned_container(
-                created, archive=archive
-            ):
-                raise ReconcileError(
-                    "created restore container differs from sealed runtime spec"
-                )
-            ready = False
-            for _ in range(60):
-                probe = self.runner.run(
-                    [
-                        str(DOCKER),
-                        "exec",
-                        name,
-                        "pg_isready",
-                        "--username",
-                        "postgres",
-                        "--dbname",
-                        "nexpoly_alias_restore",
-                    ],
-                    env=CONTROL_ENVIRONMENT,
-                    check=False,
-                    timeout=10,
-                )
-                if probe.returncode == 0:
-                    ready = True
-                    break
-                time.sleep(1)
-            if not ready:
-                raise ReconcileError("isolated PostgreSQL 16 did not become ready")
+            self._wait_for_running_owned_container(name, archive)
+            self._wait_for_isolated_postgres(name, archive)
             _run_checked(
                 self.runner,
                 [
@@ -2122,8 +2220,16 @@ class Reconciliation:
             restored = validate_inventory(
                 restored_document, expected_phase="pre", restored=True
             )
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
-            self._remove_owned_container(name, archive)
+            try:
+                self._remove_owned_container(name, archive)
+            except BaseException:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(RESTORE_CONTAINER_CLEANUP_FAILURE_NOTE)
         proof = {
             "image": self._bound_restore_image(),
             "container_name": name,
@@ -3205,6 +3311,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _report_cleanup_recovery_note(exc: BaseException) -> None:
+    if RESTORE_CONTAINER_CLEANUP_FAILURE_NOTE in getattr(
+        exc, "__notes__", ()
+    ):
+        print(
+            "reconcile-production-0005-alias: recovery: "
+            + RESTORE_CONTAINER_CLEANUP_FAILURE_NOTE,
+            file=sys.stderr,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     if not sys.flags.isolated:
         print(
@@ -3236,13 +3353,15 @@ def main(argv: list[str] | None = None) -> int:
         result = operation.apply() if arguments.apply else operation.plan()
     except ReconcileError as exc:
         print(f"reconcile-production-0005-alias: error: {exc}", file=sys.stderr)
+        _report_cleanup_recovery_note(exc)
         return 2
-    except BaseException:
+    except BaseException as exc:
         print(
             "reconcile-production-0005-alias: error: maintenance failed safely; "
             "reuse the same operation ID for recovery",
             file=sys.stderr,
         )
+        _report_cleanup_recovery_note(exc)
         return 2
     finally:
         os.umask(previous_umask)

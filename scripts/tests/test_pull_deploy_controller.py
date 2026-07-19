@@ -3016,6 +3016,9 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 "token_id": token["token_id"],
                 "token_sha256": token["token_sha256"],
             }
+            # A response-lost reservation is the timestamp authority too;
+            # production prepare copies this value into the descriptor.
+            descriptor["prepared_at"] = token["prepared_at"]
             CONTROLLER.atomic_json(descriptor_path, descriptor)
             bound = controller._bind_bridge_descriptor_token(
                 descriptor,
