@@ -136,6 +136,10 @@ CONTROL_LAYOUT_RESTORE_STATUSES = {
     "restored",
 }
 PRESERVED_CONTROL_LAYOUT_PATHS = {"audit", "backups"}
+PRESERVED_POSTGRES_BACKUP_DIRECTORY = Path(
+    "legacy-takeover/preserved-postgres-backups"
+)
+REQUIRED_LEGACY_POSTGRES_BACKUP = "nexpoly-b875829c3f00.dump"
 CHECKOUT_PERMISSION_RESTORE_STATUSES = {
     "pending",
     "restore-intent",
@@ -658,6 +662,128 @@ def verify_path_seal_subset(path: Path, expected: object) -> None:
             raise LegacyTakeoverError(
                 f"takeover trash is not a sealed subset: {path}"
             )
+
+
+def private_backup_seal(expected: object) -> dict[str, Any]:
+    """Project a legacy backup seal into its owner-private retained form."""
+
+    original = validate_seal_document(expected)
+    records: list[dict[str, Any]] = []
+    for record in original["records"]:
+        if record["type"] == "symlink":
+            raise LegacyTakeoverError(
+                "PostgreSQL backup preservation refuses symlinks"
+            )
+        records.append(
+            {
+                **record,
+                "mode": (
+                    "0700"
+                    if record["type"] == "directory"
+                    else "0600"
+                ),
+            }
+        )
+    projected: dict[str, Any] = {
+        "schema_version": 1,
+        "records": records,
+    }
+    projected["digest"] = sha256_bytes(canonical_json_bytes(projected))
+    return projected
+
+
+def _privatize_backup_copy(path: Path) -> None:
+    metadata = path.lstat()
+    kind = _path_kind(metadata)
+    if kind == "symlink" or metadata.st_uid != os.geteuid():
+        raise LegacyTakeoverError(
+            "preserved PostgreSQL backup tree is not deploy-user-owned"
+        )
+    if kind == "file":
+        os.chmod(path, 0o600, follow_symlinks=False)
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        return
+    for child in sorted(os.scandir(path), key=lambda item: os.fsencode(item.name)):
+        _privatize_backup_copy(path / child.name)
+    os.chmod(path, 0o700, follow_symlinks=False)
+    _fsync_directory(path)
+
+
+def _restore_private_backup_copy(
+    source: Path,
+    destination: Path,
+    expected: object,
+    *,
+    stage_label: str,
+) -> None:
+    """Restore the private fixed backup copy to its original sealed modes."""
+
+    original = validate_seal_document(expected)
+    private = private_backup_seal(original)
+    if destination.exists() or destination.is_symlink():
+        verify_path_seal(destination, original)
+        verify_path_seal(source, private)
+        return
+    verify_path_seal(source, private)
+    try:
+        parent = destination.parent.lstat()
+    except OSError as exc:
+        raise LegacyTakeoverError(
+            f"restore parent is unavailable: {destination.parent}"
+        ) from exc
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or destination.parent.is_symlink()
+        or parent.st_uid != os.geteuid()
+        or bool(stat.S_IMODE(parent.st_mode) & 0o022)
+    ):
+        raise LegacyTakeoverError(
+            f"restore parent is unsafe: {destination.parent}"
+        )
+    stage = destination.parent / f".takeover-stage-{stage_label}"
+    if stage.exists() or stage.is_symlink():
+        _remove_tree(stage)
+    _copy_preserving(source, stage)
+    verify_path_seal(stage, private)
+    for record in sorted(
+        original["records"],
+        key=lambda value: (
+            str(value["path"]).count("/"),
+            str(value["path"]),
+        ),
+        reverse=True,
+    ):
+        relative = str(record["path"])
+        target = stage if relative == "." else stage / relative
+        metadata = target.lstat()
+        if (
+            metadata.st_uid != record["uid"]
+            or metadata.st_gid != record["gid"]
+            or _path_kind(metadata) != record["type"]
+        ):
+            raise LegacyTakeoverError(
+                "private PostgreSQL backup ownership changed before restore"
+            )
+        os.chmod(
+            target,
+            int(str(record["mode"]), 8),
+            follow_symlinks=False,
+        )
+        if record["type"] == "directory":
+            _fsync_directory(target)
+    verify_path_seal(stage, original)
+    verify_path_seal(source, private)
+    _rename_noreplace(stage, destination)
+    verify_path_seal(destination, original)
 
 
 def _permission_record(root: Path, path: Path, relative: str) -> dict[str, Any]:
@@ -2514,17 +2640,26 @@ class LegacyTakeover:
             relative = _normal_relative_path(move.get("path"))
             category = move.get("class")
             classification = classification_paths[index]
+            expected_destination = (
+                (
+                    self.runtime_root
+                    / PRESERVED_POSTGRES_BACKUP_DIRECTORY
+                )
+                if relative == "backups"
+                else (
+                    self.external_roots[category]
+                    / operation_id
+                    / relative
+                    if category in self.external_roots
+                    else None
+                )
+            )
             if (
                 category not in self.external_roots
                 or relative in seen
                 or classification
                 != {"path": relative, "class": category}
-                or move.get("destination")
-                != str(
-                    self.external_roots[category]
-                    / operation_id
-                    / relative
-                )
+                or move.get("destination") != str(expected_destination)
                 or move.get("source_trash")
                 != str(
                     self.repository
@@ -2890,9 +3025,13 @@ class LegacyTakeover:
             source = self.repository / record["path"]
             expected = seal_path(source)
             destination = (
-                self.external_roots[record["class"]]
-                / operation_id
-                / record["path"]
+                self.runtime_root / PRESERVED_POSTGRES_BACKUP_DIRECTORY
+                if record["path"] == "backups"
+                else (
+                    self.external_roots[record["class"]]
+                    / operation_id
+                    / record["path"]
+                )
             )
             if destination.exists() or destination.is_symlink():
                 raise LegacyTakeoverError(
@@ -3187,19 +3326,29 @@ class LegacyTakeover:
     ) -> None:
         source = self.repository / move["path"]
         destination = Path(move["destination"])
+        destination_seal = (
+            private_backup_seal(move["seal"])
+            if move["path"] == "backups"
+            else move["seal"]
+        )
         label = f"move-{move['index']}"
         if move["status"] == "pending":
             move["status"] = "copy-intent"
             self._save(state)
             self._checkpoint(f"{label}:copy-intent")
         if move["status"] == "copy-intent":
-            _ensure_copy(
-                source,
-                destination,
-                move["seal"],
-                stage_label=f"{state['operation_id']}-{move['index']}",
-                private_anchor=self.external_roots[move["class"]],
-            )
+            if move["path"] == "backups":
+                self._preserve_postgres_backups(state)
+                verify_path_seal(destination, destination_seal)
+                verify_path_seal(source, move["seal"])
+            else:
+                _ensure_copy(
+                    source,
+                    destination,
+                    move["seal"],
+                    stage_label=f"{state['operation_id']}-{move['index']}",
+                    private_anchor=self.external_roots[move["class"]],
+                )
             self._checkpoint(f"{label}:copy-action")
             move["status"] = "destination-ready"
             self._save(state)
@@ -3209,7 +3358,7 @@ class LegacyTakeover:
             self._save(state)
             self._checkpoint(f"{label}:source-remove-intent")
         if move["status"] == "source-remove-intent":
-            verify_path_seal(destination, move["seal"])
+            verify_path_seal(destination, destination_seal)
             _ensure_detached_removed(
                 source,
                 Path(move["source_trash"]),
@@ -3227,9 +3376,84 @@ class LegacyTakeover:
             self._checkpoint(f"{label}:externalized")
         if move["status"] != "externalized":
             raise LegacyTakeoverError("legacy path did not externalize")
-        verify_path_seal(destination, move["seal"])
+        verify_path_seal(destination, destination_seal)
         if source.exists() or source.is_symlink():
             raise LegacyTakeoverError("externalized source path reappeared")
+
+    def _preserve_postgres_backups(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+        backup_moves = [
+            move
+            for move in state["moves"]
+            if move["path"] == "backups"
+        ]
+        if not backup_moves:
+            # Unit/site deployments with no classified legacy backup path have
+            # no production dump to preserve. The real production
+            # classification is exact and includes its ignored backups path.
+            return
+        if len(backup_moves) != 1:
+            raise LegacyTakeoverError(
+                "takeover classification has conflicting backups paths"
+            )
+        move = backup_moves[0]
+        expected = validate_seal_document(move["seal"])
+        required_records = [
+            record
+            for record in expected["records"]
+            if record["path"] == REQUIRED_LEGACY_POSTGRES_BACKUP
+        ]
+        if (
+            len(required_records) != 1
+            or required_records[0]["type"] != "file"
+            or required_records[0]["size"] < 5
+        ):
+            raise LegacyTakeoverError(
+                "required b875829 PostgreSQL dump is absent from backups seal"
+            )
+        private_seal = private_backup_seal(expected)
+        destination = (
+            self.runtime_root / PRESERVED_POSTGRES_BACKUP_DIRECTORY
+        )
+        if destination.exists() or destination.is_symlink():
+            verify_path_seal(destination, private_seal)
+        else:
+            source = self.repository / "backups"
+            if not (source.exists() or source.is_symlink()):
+                source = Path(move["destination"])
+            verify_path_seal(source, expected)
+            _ensure_private_descendant(
+                destination.parent,
+                self.runtime_root,
+            )
+            stage = destination.parent / (
+                f".preserved-postgres-backups-stage-"
+                f"{state['operation_id']}"
+            )
+            if stage.exists() or stage.is_symlink():
+                _remove_tree(stage)
+            _copy_preserving(source, stage)
+            _privatize_backup_copy(stage)
+            verify_path_seal(stage, private_seal)
+            _rename_noreplace(stage, destination)
+            _fsync_directory(destination.parent)
+            verify_path_seal(destination, private_seal)
+        required = destination / REQUIRED_LEGACY_POSTGRES_BACKUP
+        descriptor = os.open(
+            required,
+            os.O_RDONLY
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            if os.read(descriptor, 5) != b"PGDMP":
+                raise LegacyTakeoverError(
+                    "required b875829 PostgreSQL dump magic differs"
+                )
+        finally:
+            os.close(descriptor)
 
     def apply(self, operation_id: str) -> dict[str, Any]:
         with self._execution_lock():
@@ -3388,6 +3612,7 @@ class LegacyTakeover:
                 )
                 self._checkpoint("worker-unit-backup:ready")
                 self._backup_control_layout(state)
+                self._preserve_postgres_backups(state)
                 if "pre_stopped_fence" not in state:
                     stopped_at = utc_now()
                     fence = {
@@ -3458,6 +3683,7 @@ class LegacyTakeover:
                 )
                 continue
             if phase == "externalizing":
+                self._preserve_postgres_backups(state)
                 for move in state["moves"]:
                     self._assert_checkout(
                         state,
@@ -3532,6 +3758,11 @@ class LegacyTakeover:
     ) -> None:
         source = self.repository / move["path"]
         destination = Path(move["destination"])
+        destination_seal = (
+            private_backup_seal(move["seal"])
+            if move["path"] == "backups"
+            else move["seal"]
+        )
         label = f"restore-move-{move['index']}"
         if move["restore_status"] == "pending":
             if source.exists() or source.is_symlink():
@@ -3544,13 +3775,25 @@ class LegacyTakeover:
                 self._save(state)
                 self._checkpoint(f"{label}:copy-intent")
         if move["restore_status"] == "copy-intent":
-            _ensure_copy(
-                destination,
-                source,
-                move["seal"],
-                stage_label=f"restore-{state['operation_id']}-{move['index']}",
-                require_private_parent=False,
-            )
+            if move["path"] == "backups":
+                _restore_private_backup_copy(
+                    destination,
+                    source,
+                    move["seal"],
+                    stage_label=(
+                        f"restore-{state['operation_id']}-{move['index']}"
+                    ),
+                )
+            else:
+                _ensure_copy(
+                    destination,
+                    source,
+                    move["seal"],
+                    stage_label=(
+                        f"restore-{state['operation_id']}-{move['index']}"
+                    ),
+                    require_private_parent=False,
+                )
             self._checkpoint(f"{label}:copy-action")
             move["restore_status"] = "source-ready"
             self._save(state)
@@ -3567,7 +3810,7 @@ class LegacyTakeover:
             _ensure_detached_removed(
                 destination,
                 Path(move["destination_trash"]),
-                move["seal"],
+                destination_seal,
                 private_anchor=(
                     self.external_roots[move["class"]]
                     / ".takeover-trash"

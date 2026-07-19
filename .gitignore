@@ -13,6 +13,7 @@ __pycache__/
 backend/.env
 /.env.dev
 /.env.dev.ai
+/ops/config/postgres-media-credentials.json
 
 # Generated SQLite databases
 *.db

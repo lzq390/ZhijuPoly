@@ -115,24 +115,33 @@ The sections prove:
 | --- | --- |
 | `git` | Remote-main CAS before/after equals `F`; the local source is owner-private, clean, standalone, complete, SSH-only, and has no ignored, dangling, replacement, sparse, or special-index state; exact `B` is a strict ancestor and matches the F policy. |
 | `ci` | Every policy-required job succeeded for exact `F`, with immutable workflow digest and run/attempt identity. |
-| `oci` | F and B backend/web records separately bind digest ref, OCI index digest, platform digest, local Docker image ID, revision, and source version; the PG16 restore image is fixed. |
+| `oci` | F and B backend/web records separately bind digest ref, OCI index digest, platform digest, local Docker image ID, revision, and source version. A complete PG14/15/16/18 read-only audit image map is independently bound, while the actual-operation restore identity must equal the exact PG16 member of that map. |
 | `asset` | The inactive schema-v2 digest matches policy; predecessor and all tree digests match the fixed contract; the B0 builder archive proves B0→B→F ancestry; the live pointer is unchanged and database effect is `none`. |
-| `prepared` | Descriptor schema v3, READY file, one-time bridge token, policy, prefetch identity, takeover binding, F authority, and B target are one operation. |
+| `prepared` | Descriptor schema v3, READY file, the only live selector handoff, one-time bridge token, policy, prefetch identity, takeover binding, F authority, and B target are one operation. The handoff digest and every nested candidate/previous-control binding must equal the descriptor. |
 | `prefetch` | Exact F/B bundle, recovery tools, source-readiness, immutable images/wheels, and schema-v2 asset evidence are sealed. Live mode checks the existing READY identity without running the deep verifier that creates a temporary clone. |
 | `helpers` | All reviewed and site-specific helper contracts are installed with an exact installation digest, and the command itself is executing from the active content-addressed F control release. |
-| `takeover` | The crash-safe legacy takeover reached its completed terminal state under F, with no active operation marker. |
+| `takeover` | The crash-safe legacy takeover and its bootstrap child transaction reached their completed terminal states under F, with no active operation marker. The only child journal binds the exact bootstrap-control and active-control file digests. |
 | `alias` | The persistent 0005 operation is completed and its backup, isolated PG16 restore, audit manifest, and production system identifier remain valid. |
-| `external_media` | The registry is complete, both external databases and every registered dormant volume/backup were audited read-only, the writable target is production only, and no old-0013 medium requires 0014. |
+| `external_media` | Static authority rules and the generated runtime schema-v5 registry have separate exact digests; both external databases and every discovered dormant PG14/15/16/18 volume are fully audited read-only with a matching-major image, non-PG content has a deterministic private inventory, the writable target is production only, and no old-0013 medium requires 0014. Discovery of the superseded 0013 checksum freezes B until a new 0014 correction is added. |
 | `postgres` | Running container, image, volume, system identifier, and ledger source are digest-bound; the system identifier remains the alias-gate identity and the probe was read-only. |
 | `migrations` | The observed ledger is exactly one of frozen `pre-0012`, `post-0012`, or canonical `post-0013`; 0012/0013 flags and manifest digest agree. |
-| `mutable_data` | A schema-v4, repeatable-read, read-only/deferrable snapshot seals every business table (including `online_knowledge.jobs/history`), static table, PG runtime identity, row count, and content digest against the same PG and migration ledger. |
+| `mutable_data` | A schema-v6, repeatable-read, read-only/deferrable snapshot seals every business table (including `online_knowledge.jobs/history`), static table, PG runtime identity, row count, and content digest against the same PG and migration ledger. Before 0012 that same transaction also carries the canonical PolyTAO row/schema/structure archive seal; after 0012 the exception seal is exactly absent. |
 | `native_runtime` | Python 3.12, uv/build lock, wheel inventory/RECORD, clean AIMNet archive, model digests, F image/tree GPU report, GPU1/3 use, and no production GPU2 contact. |
 | `capacity` | Available disk/memory meet the sealed requirements; disk requirements cover wheel cache, schema-v2 release, and backup reserve. |
 | `conflicts` | Deploy, 0012 contract, alias, takeover, bridge, prepared-operation, and control-handoff conflict sets are all empty. |
 | `observation` | Evidence collection used no fetch, pull, container/service mutation, or state write, and database observation was transaction-read-only. |
 
-Live mode additionally revalidates the prepared descriptor and READY file,
-bridge token, prefetch READY seal, helper installation, completed takeover,
+For official PostgreSQL audit images, the source pins the complete
+linux/amd64 chain: OCI index, platform manifest, and config digest. A
+containerd image store may report the index as its local image ID, while a
+classic Docker image store reports the config digest. Only those two IDs are
+accepted, and both must still resolve to the exact pinned `postgres@<index>`
+repository digest. The platform manifest digest is provenance only and is
+never accepted as a runtime image ID.
+
+Live mode additionally revalidates the prepared descriptor, READY file, exact
+selector handoff inventory, bridge token, prefetch READY seal, helper
+installation, completed takeover, completed bootstrap child journal,
 completed alias gate, external-media audit, and the global deploy/contract/
 takeover conflict markers. It also revalidates the mutable-data snapshot and
 binds its container, image, volume, system identifier, and ledger back to the

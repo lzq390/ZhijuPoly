@@ -146,9 +146,6 @@ jobs:
       NEXPOLY_ALIAS_DOCKER_INTEGRATION: "1"
       NEXPOLY_ALIAS_DOCKER_TEST_ACK: ephemeral-localhost-only
       NEXPOLY_ALIAS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
-      NEXPOLY_RUN_POSTGRES_MEDIA_INTEGRATION: "1"
-      NEXPOLY_POSTGRES_MEDIA_TEST_ACK: ephemeral-localhost-only
-      NEXPOLY_TEST_POSTGRES_IMAGE: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     steps:
       - name: Check out candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -170,10 +167,50 @@ jobs:
         run: >-
           python3 -m unittest -v
           scripts/tests/test_reconcile_production_0005_polytao_alias_integration.py
-      - name: Run real all-media PostgreSQL 16 audit integration
+
+  postgres-media-integration:
+    name: PostgreSQL media matching-major integration (${{ matrix.major }})
+    needs: resolve-sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - major: "14"
+            image: docker.io/library/postgres@sha256:f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579
+          - major: "15"
+            image: docker.io/library/postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
+          - major: "16"
+            image: docker.io/library/postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+          - major: "18"
+            image: docker.io/library/postgres@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    env:
+      NEXPOLY_RUN_POSTGRES_MEDIA_INTEGRATION: "1"
+      NEXPOLY_RUN_MUTABLE_HELPER_INTEGRATION: "1"
+      NEXPOLY_POSTGRES_MEDIA_TEST_ACK: ephemeral-localhost-only
+      NEXPOLY_TEST_POSTGRES_MAJOR: ${{ matrix.major }}
+      NEXPOLY_TEST_POSTGRES_IMAGE: ${{ matrix.image }}
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Install PostgreSQL 16 client for mutable-data audit
+        if: matrix.major == '16'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client-16
+          /usr/bin/psql --version | grep -F "PostgreSQL) 16."
+      - name: Pull the exact matching-major audit image
+        run: docker pull "$NEXPOLY_TEST_POSTGRES_IMAGE"
+      - name: Run real matching-major external-media integration
         run: >-
           python3 -m unittest -v
-          scripts/tests/test_postgres_media_evidence.py
+          scripts.tests.test_postgres_media_evidence.RealDockerPostgresIntegrationTests
 
   backend-tests:
     name: Backend tests (shard ${{ matrix.shard }})
@@ -368,6 +405,7 @@ jobs:
       - policy
       - script-tests
       - production-alias-integration
+      - postgres-media-integration
       - backend-tests
       - frontend
       - worker-tests

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -27,6 +28,85 @@ from app.postgres_migrations import (
 
 
 MIGRATIONS_DIR = PROJECT_ROOT / "backend" / "migrations" / "postgres"
+
+
+def _guard_digest(document: str) -> str:
+    return f"sha256:{hashlib.sha256(document.encode('utf-8')).hexdigest()}"
+
+
+def _contract_guard() -> tuple[str, str]:
+    entries = validate_migration_manifest_entries(MIGRATIONS_DIR)
+    target_index = next(
+        index
+        for index, entry in enumerate(entries)
+        if entry.version == postgres_migrations.POLYTAO_CONTRACT_VERSION
+    )
+    archive_evidence = {
+        "schema_version": 2,
+        "row_count": 0,
+        "status_counts": {},
+        "rows_sha256": hashlib.sha256(b"[]").hexdigest(),
+        "schema_sha256": "1" * 64,
+        "structure_counts": {
+            "columns": 0,
+            "indexes": 0,
+            "constraints": 0,
+            "triggers": 0,
+        },
+    }
+    release_sha = "a" * 40
+    operation_id = "contract-0012-unit"
+    document = {
+        "schema_version": 1,
+        "contract": {
+            "version": postgres_migrations.POLYTAO_CONTRACT_VERSION,
+            "checksum": postgres_migrations.POLYTAO_CONTRACT_CHECKSUM,
+        },
+        "maintenance": {
+            "operation_id": operation_id,
+            "marker_sha256": f"sha256:{'2' * 64}",
+            "audit_manifest_sha256": f"sha256:{'3' * 64}",
+        },
+        "database": {
+            "name": "nexpoly_guard_test",
+            "system_identifier": "123456789",
+        },
+        "release_sha": release_sha,
+        "ledger": [
+            {"version": entry.version, "checksum": entry.checksum}
+            for entry in entries[:target_index]
+        ],
+        "relation": {
+            "qualified_name": "generation.polytao_jobs",
+            "namespace_oid": 42,
+            "relation_oid": 43,
+            "rows_sha256": archive_evidence["rows_sha256"],
+            "schema_sha256": archive_evidence["schema_sha256"],
+        },
+        "archive_evidence": archive_evidence,
+        "archive_evidence_sha256": postgres_migrations._canonical_json_sha256(
+            archive_evidence
+        ),
+        "deployment_control": {
+            "control_key": "production",
+            "drain_enabled": True,
+            "reason": f"0012 maintenance {operation_id}",
+            "release_sha": release_sha,
+            "activated_by": "pull-contract-0012",
+        },
+        "active_jobs": {
+            "generation.polytao_jobs": 0,
+            "md.monomer_md_jobs": 0,
+            "online_knowledge.jobs": 0,
+        },
+    }
+    guard_json = json.dumps(
+        document,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return guard_json, _guard_digest(guard_json)
 
 
 def test_repository_migration_manifest_classifies_every_sql_file() -> None:
@@ -497,12 +577,20 @@ def test_restricted_contract_requires_exact_canonical_ledger_prefix(
         yield connection
 
     monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+    guard_json, guard_sha256 = _contract_guard()
 
     with pytest.raises(RuntimeError, match="exact canonical ledger prefix"):
         postgres_migrations.apply_polytao_contract_migration(
             "postgresql://fixture",
             MIGRATIONS_DIR,
+            guard_json=guard_json,
+            guard_sha256=guard_sha256,
         )
+    contract_sql = (
+        MIGRATIONS_DIR
+        / f"{postgres_migrations.POLYTAO_CONTRACT_VERSION}.sql"
+    ).read_text(encoding="utf-8")
+    assert contract_sql not in connection.queries
 
 
 def test_automated_migration_policy_rejects_baseline_and_contract() -> None:
@@ -549,19 +637,47 @@ def test_automated_expand_cli_defers_only_trailing_contracts(monkeypatch, mode: 
     }
 
 
+def test_contract_0012_cli_rejects_missing_guard(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["postgres_migrations", "--mode", "contract-0012"],
+    )
+
+    with pytest.raises(SystemExit):
+        postgres_migrations.main()
+
+
 def test_only_checksum_pinned_0012_contract_is_exposed_by_cli(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    guard_json, guard_sha256 = _contract_guard()
 
-    def fake_apply(dsn, migrations_dir):
-        captured.update({"dsn": dsn, "migrations_dir": migrations_dir})
+    def fake_apply(dsn, migrations_dir, **kwargs):
+        captured.update(
+            {"dsn": dsn, "migrations_dir": migrations_dir, **kwargs}
+        )
         return []
 
     monkeypatch.setattr(postgres_migrations, "apply_polytao_contract_migration", fake_apply)
-    monkeypatch.setattr(sys, "argv", ["postgres_migrations", "--mode", "contract-0012"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "postgres_migrations",
+            "--mode",
+            "contract-0012",
+            "--contract-guard-json",
+            guard_json,
+            "--contract-guard-sha256",
+            guard_sha256,
+        ],
+    )
 
     postgres_migrations.main()
 
     assert captured["migrations_dir"] == postgres_migrations.MIGRATIONS_DIR
+    assert captured["guard_json"] == guard_json
+    assert captured["guard_sha256"] == guard_sha256
     with pytest.raises(SystemExit):
         monkeypatch.setattr(sys, "argv", ["postgres_migrations", "--mode", "contract"])
         postgres_migrations.main()
@@ -573,6 +689,80 @@ def test_only_checksum_pinned_0012_contract_is_exposed_by_cli(monkeypatch) -> No
             allowed_kinds={"contract"},
             restricted_contract=("0013_future_contract", "f" * 64),
         )
+
+
+def test_contract_0012_library_rejects_missing_or_wrong_guard_before_connect(
+    monkeypatch,
+) -> None:
+    connected = False
+
+    @contextmanager
+    def fake_connection(_dsn):
+        nonlocal connected
+        connected = True
+        yield _LedgerConnection()
+
+    monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+    with pytest.raises(ValueError, match="requires a sealed transaction guard"):
+        postgres_migrations.apply_polytao_contract_migration(
+            "postgresql://fixture",
+            MIGRATIONS_DIR,
+        )
+
+    guard_json, _ = _contract_guard()
+    with pytest.raises(ValueError, match="detached digest does not match"):
+        postgres_migrations.apply_polytao_contract_migration(
+            "postgresql://fixture",
+            MIGRATIONS_DIR,
+            guard_json=guard_json,
+            guard_sha256=f"sha256:{'f' * 64}",
+        )
+    assert connected is False
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda raw: json.dumps(
+                {**json.loads(raw), "unknown": True},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "invalid shape",
+        ),
+        (lambda raw: raw.replace(":", ": ", 1), "exact canonical encoding"),
+        (
+            lambda raw: raw[:-1] + ',"schema_version":1}',
+            "duplicate key",
+        ),
+    ],
+)
+def test_contract_0012_guard_rejects_unknown_duplicate_or_noncanonical_json(
+    monkeypatch,
+    mutate,
+    message: str,
+) -> None:
+    connected = False
+
+    @contextmanager
+    def fake_connection(_dsn):
+        nonlocal connected
+        connected = True
+        yield _LedgerConnection()
+
+    monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+    guard_json, _ = _contract_guard()
+    invalid_json = mutate(guard_json)
+
+    with pytest.raises(ValueError, match=message):
+        postgres_migrations.apply_polytao_contract_migration(
+            "postgresql://fixture",
+            MIGRATIONS_DIR,
+            guard_json=invalid_json,
+            guard_sha256=_guard_digest(invalid_json),
+        )
+    assert connected is False
 
 
 class _Result:

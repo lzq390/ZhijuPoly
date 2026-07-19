@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "discovery_boundary": {
+    "schema_version": 1,
+    "docker_scope": "all-local-containers-volumes-and-pgdata-binds",
+    "backup_roots": [
+      "/data/lzq/gith/nexpoly-runtime/legacy-takeover/preserved-postgres-backups",
+      "/data/lzq/recovery/nexpoly-postgres-media",
+      "/data/lzq/recovery/nexpoly-pre-merge-20260717T090623Z/dev-0009-quarantine"
+    ],
+    "backup_formats": [
+      {
+        "name": "postgres-custom-v1",
+        "suffixes": [
+          ".backup",
+          ".dump"
+        ]
+      },
+      {
+        "name": "postgres-tar-v1",
+        "suffixes": [
+          ".tar"
+        ]
+      }
+    ],
+    "discovery_methods": [
+      "all-docker-containers-and-volumes-v1",
+      "container-pgdata-mounts-v1",
+      "all-volume-pg-version-readonly-recursive-probe-v1",
+      "fixed-private-backup-roots-v1"
+    ],
+    "takeover_backup_transition": {
+      "legacy_root": "/data/lzq/gith/nexpoly/backups",
+      "preserved_root": "/data/lzq/gith/nexpoly-runtime/legacy-takeover/preserved-postgres-backups",
+      "state_directory": "/data/lzq/gith/nexpoly-runtime/state/legacy-takeover",
+      "required_relative_path": "nexpoly-b875829c3f00.dump",
+      "pre_takeover": "blocked",
+      "post_takeover": "completed-operation-required"
+    }
+  },
+  "audit_runtime": {
+    "postgres_image": "docker.io/library/postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+    "postgres_images": {
+      "14": "docker.io/library/postgres@sha256:f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579",
+      "15": "docker.io/library/postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f",
+      "16": "docker.io/library/postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+      "18": "docker.io/library/postgres@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+    },
+    "postgres_major": 16,
+    "postgres_uid": 70,
+    "postgres_gid": 70
+  },
+  "production_identity": {
+    "stack": "production",
+    "database": "nexpoly",
+    "kind": "docker_volume",
+    "media_id": "docker-volume:nexpoly_app_postgres_data",
+    "postgres_major": 16,
+    "system_identifier": "7659245354718314530"
+  },
+  "logical_media": {
+    "schema_version": 1,
+    "named_stacks": [
+      {
+        "stack": "nexpoly_dev",
+        "volume_name_pattern": "^nexpoly_dev(?:_nexpoly_dev)?_postgres_data$",
+        "database": "nexpoly_dev",
+        "audit_role": "nexpoly_dev_auditor",
+        "online_service": "nexpoly_dev_audit",
+        "allowed_state": "online-or-retained-isolated"
+      },
+      {
+        "stack": "nexpoly_md_health_opt",
+        "volume_name_pattern": "^nexpoly_md_health_opt(?:_app)?_postgres_data$",
+        "database": "nexpoly_md_health_opt",
+        "audit_role": "nexpoly_health_auditor",
+        "online_service": "nexpoly_md_health_opt_audit",
+        "allowed_state": "online-or-retained-isolated"
+      }
+    ],
+    "additional_postgres": {
+      "allowed_majors": [
+        14,
+        15,
+        16,
+        18
+      ],
+      "active": "live-read-only-adjacent-with-source-epoch-role-provisioning",
+      "inactive": "full-isolated-ledger-audit",
+      "database_inventory": "runtime-observed-all-nontemplate"
+    },
+    "non_postgres": {
+      "active": "pinned-read-only-volume-marker-probe-after-complete-local-view-proof",
+      "active_pgdata_candidate": "fail-closed",
+      "postgres_named_without_signature": "fail-closed",
+      "inactive": "private-reviewed-content-inventory-v1",
+      "reject_symlink_or_special": true,
+      "reject_postgres_or_backup_signatures": true,
+      "maximum_single_file_bytes": 17179869184,
+      "maximum_files": 10000000,
+      "maximum_bytes": 1099511627776
+    },
+    "future_takeover_backup": {
+      "media_id": "postgres-backup:/data/lzq/gith/nexpoly-runtime/legacy-takeover/preserved-postgres-backups/nexpoly-b875829c3f00.dump",
+      "pre_takeover": "media-evidence-blocked-until-takeover",
+      "post_takeover": "completed-operation-and-exact-seal-required"
+    }
+  },
+  "unmatched_media": {
+    "non_postgres": "active-complete-view-metadata-exclusion-or-inactive-private-content-review",
+    "postgres": "active-live-read-only-adjacent-or-inactive-isolated-ledger-audit",
+    "postgres_backup": "full-isolated-ledger-audit"
+  }
+}

@@ -13,7 +13,7 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
@@ -23,6 +23,7 @@ from typing import Any, Callable
 PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 MAX_EVIDENCE_BYTES = 256 * 1024
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+BARE_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OCI_IMAGE_DIGEST_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 CONTAINER_RE = re.compile(r"^[0-9a-f]{64}$")
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -37,9 +38,57 @@ RFC3339_UTC_RE = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
     r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
 )
+
+
+def _valid_pg_identifier(value: object) -> bool:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return False
+    try:
+        return len(value.encode("utf-8")) <= 63
+    except UnicodeError:
+        return False
+
+
+def media_id_for_locator(kind: str, locator: str) -> str:
+    prefixes = {
+        "docker_volume": "docker-volume",
+        "container_bind": "container-bind",
+        "postgres_backup": "postgres-backup",
+        "reviewed_file": "reviewed-file",
+    }
+    prefix = prefixes.get(kind)
+    if prefix is None or not isinstance(locator, str) or not locator:
+        raise SiteHelperContractError("external media locator is invalid")
+    candidate = f"{prefix}:{locator}"
+    if MEDIA_ID_RE.fullmatch(candidate) is not None:
+        return candidate
+    return (
+        f"{prefix}-sha256:"
+        + hashlib.sha256(locator.encode("utf-8")).hexdigest()
+    )
 CANONICAL_0013_CHECKSUM = (
     "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc"
 )
+ADJACENT_POSTGRES_MAJOR_MIN = 9
+ADJACENT_POSTGRES_MAJOR_MAX = 18
+POSTGRES_AUDIT_IMAGES = {
+    14: (
+        "docker.io/library/postgres@"
+        "sha256:f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579"
+    ),
+    15: (
+        "docker.io/library/postgres@"
+        "sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f"
+    ),
+    16: (
+        "docker.io/library/postgres@"
+        "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+    ),
+    18: (
+        "docker.io/library/postgres@"
+        "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+    ),
+}
 SUPERSEDED_0013_CHECKSUM = (
     "a60cbf66c70981ba6eb7cf545b5bd89df96fa399fff48ef7f6f21d3682c64cab"
 )
@@ -1328,7 +1377,11 @@ def _validate_external_database_audit_schema_v1(
             if (
                 not isinstance(before.get("name"), str)
                 or VOLUME_RE.fullmatch(before["name"]) is None
-                or media_id != f"docker-volume:{before['name']}"
+                or media_id
+                != media_id_for_locator(
+                    "docker_volume",
+                    before["name"],
+                )
                 or not isinstance(before.get("driver"), str)
                 or not before["driver"]
                 or not isinstance(before.get("mountpoint"), str)
@@ -1381,7 +1434,8 @@ def _validate_external_database_audit_schema_v1(
                 not isinstance(path, str)
                 or not Path(path).is_absolute()
                 or ".." in Path(path).parts
-                or media_id != f"postgres-backup:{path}"
+                or media_id
+                != media_id_for_locator("postgres_backup", path)
                 or any(
                     isinstance(before.get(name), bool)
                     or not isinstance(before.get(name), int)
@@ -1814,6 +1868,9 @@ def _external_source_identity_v2(
     *,
     kind: str,
     media_id: str,
+    allow_readonly_bind: bool = False,
+    require_bind_ctime: bool = False,
+    require_file_ctime: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise SiteHelperContractError("external media source identity is invalid")
@@ -1835,7 +1892,8 @@ def _external_source_identity_v2(
         if (
             not isinstance(name, str)
             or VOLUME_RE.fullmatch(name) is None
-            or media_id != f"docker-volume:{name}"
+            or media_id
+            != media_id_for_locator("docker_volume", name)
             or not isinstance(value.get("driver"), str)
             or not value["driver"]
             or not isinstance(value.get("mountpoint"), str)
@@ -1859,7 +1917,7 @@ def _external_source_identity_v2(
         _require_digest(value.get("labels_sha256"), "volume labels digest")
         _require_digest(value.get("inspect_sha256"), "volume inspect digest")
     elif kind == "container_bind":
-        if set(value) != {
+        bind_fields = {
             "path",
             "device",
             "inode",
@@ -1868,7 +1926,15 @@ def _external_source_identity_v2(
             "uid",
             "data_subpath",
             "attached",
-        }:
+        }
+        if require_bind_ctime:
+            bind_fields.add("ctime_ns")
+        redirected = (
+            "audit_path" in value or "takeover_redirect" in value
+        )
+        if redirected:
+            bind_fields.update({"audit_path", "takeover_redirect"})
+        if set(value) != bind_fields:
             raise SiteHelperContractError(
                 "external PostgreSQL bind identity is invalid"
             )
@@ -1878,22 +1944,30 @@ def _external_source_identity_v2(
             not isinstance(path, str)
             or not Path(path).is_absolute()
             or ".." in Path(path).parts
-            or media_id != f"container-bind:{path}"
+            or media_id
+            != media_id_for_locator("container_bind", path)
             or not isinstance(attached, list)
             or not isinstance(value.get("data_subpath"), str)
         ):
             raise SiteHelperContractError(
                 "external PostgreSQL bind identity differs"
             )
-        for name in ("device", "inode", "mtime_ns", "mode", "uid"):
+        for name in (
+            "device",
+            "inode",
+            "mtime_ns",
+            "mode",
+            "uid",
+            *(("ctime_ns",) if require_bind_ctime else ()),
+        ):
             field = value.get(name)
             if isinstance(field, bool) or not isinstance(field, int) or field < 0:
                 raise SiteHelperContractError(
                     "external PostgreSQL bind metadata is invalid"
                 )
-        if value["mode"] & 0o077:
+        if value["mode"] & (0o022 if allow_readonly_bind else 0o077):
             raise SiteHelperContractError(
-                "external PostgreSQL bind is not private"
+                "external PostgreSQL bind permissions are unsafe"
             )
         normalized_attached = [
             _external_attachment_v2(record) for record in attached
@@ -1905,8 +1979,118 @@ def _external_source_identity_v2(
             raise SiteHelperContractError(
                 "external PostgreSQL bind attachments are not canonical"
             )
+        if redirected:
+            audit_path = value.get("audit_path")
+            redirect = value.get("takeover_redirect")
+            redirect_fields = {
+                "schema_version",
+                "operation_id",
+                "operation_state_sha256",
+                "move_index",
+                "move_seal_sha256",
+                "source_root",
+                "destination_root",
+                "relative_path",
+                "audit_path",
+                "legacy_stopped_container_ids",
+            }
+            if (
+                not require_bind_ctime
+                or not isinstance(audit_path, str)
+                or not Path(audit_path).is_absolute()
+                or not isinstance(redirect, dict)
+                or set(redirect) != redirect_fields
+                or redirect.get("schema_version") != 1
+                or not isinstance(redirect.get("operation_id"), str)
+                or OPERATION_ID_RE.fullmatch(
+                    redirect["operation_id"]
+                )
+                is None
+                or not isinstance(redirect.get("move_index"), int)
+                or isinstance(redirect.get("move_index"), bool)
+                or redirect["move_index"] < 0
+                or redirect.get("audit_path") != audit_path
+            ):
+                raise SiteHelperContractError(
+                    "takeover bind redirect authority is invalid"
+                )
+            for name in (
+                "operation_state_sha256",
+                "move_seal_sha256",
+            ):
+                _require_digest(
+                    redirect.get(name),
+                    f"takeover bind {name}",
+                )
+            source_root = redirect.get("source_root")
+            destination_root = redirect.get("destination_root")
+            relative_path = redirect.get("relative_path")
+            stopped = redirect.get("legacy_stopped_container_ids")
+            if (
+                not isinstance(source_root, str)
+                or not Path(source_root).is_absolute()
+                or not isinstance(destination_root, str)
+                or not Path(destination_root).is_absolute()
+                or not isinstance(relative_path, str)
+                or relative_path != "."
+                and (
+                    PurePosixPath(relative_path).is_absolute()
+                    or str(PurePosixPath(relative_path))
+                    != relative_path
+                    or any(
+                        part in {"", ".", ".."}
+                        for part in PurePosixPath(relative_path).parts
+                    )
+                )
+                or not isinstance(stopped, list)
+                or any(
+                    not isinstance(container_id, str)
+                    or CONTAINER_RE.fullmatch(container_id) is None
+                    for container_id in stopped
+                )
+                or stopped != sorted(set(stopped))
+            ):
+                raise SiteHelperContractError(
+                    "takeover bind redirect path binding is invalid"
+                )
+            expected_source = (
+                Path(source_root)
+                if relative_path == "."
+                else Path(source_root).joinpath(
+                    *PurePosixPath(relative_path).parts
+                )
+            )
+            expected_audit = (
+                Path(destination_root)
+                if relative_path == "."
+                else Path(destination_root).joinpath(
+                    *PurePosixPath(relative_path).parts
+                )
+            )
+            if (
+                Path(path) != expected_source
+                or Path(audit_path) != expected_audit
+                or not {
+                    str(record["container_id"])
+                    for record in normalized_attached
+                }.issubset(set(stopped))
+                or any(
+                    str(record["state"])
+                    in {
+                        "created",
+                        "running",
+                        "paused",
+                        "restarting",
+                        "removing",
+                    }
+                    for record in normalized_attached
+                )
+            ):
+                raise SiteHelperContractError(
+                    "takeover bind redirect reader binding differs"
+                )
     elif kind == "postgres_backup":
-        if set(value) != {
+        backup_fields = {
             "path",
             "device",
             "inode",
@@ -1916,7 +2100,10 @@ def _external_source_identity_v2(
             "uid",
             "sha256",
             "format",
-        }:
+        }
+        if require_file_ctime:
+            backup_fields.add("ctime_ns")
+        if set(value) != backup_fields:
             raise SiteHelperContractError(
                 "external PostgreSQL backup identity is invalid"
             )
@@ -1925,7 +2112,8 @@ def _external_source_identity_v2(
             not isinstance(path, str)
             or not Path(path).is_absolute()
             or ".." in Path(path).parts
-            or media_id != f"postgres-backup:{path}"
+            or media_id
+            != media_id_for_locator("postgres_backup", path)
             or value.get("format")
             not in {"postgres-custom-v1", "postgres-tar-v1"}
         ):
@@ -1937,6 +2125,7 @@ def _external_source_identity_v2(
             "inode",
             "size_bytes",
             "mtime_ns",
+            *(("ctime_ns",) if require_file_ctime else ()),
             "mode",
             "uid",
         ):
@@ -2043,6 +2232,7 @@ def _validate_external_database_audit_schema_v2_retired(
         "docker_inventory_sha256",
         "backup_inventory_sha256",
         "scanned_volume_names",
+        "scanned_bind_sources",
         "scanned_container_ids",
     }
     if (
@@ -2100,6 +2290,7 @@ def _validate_external_database_audit_schema_v2_retired(
             "external media complete discovery differs from registry v2"
         )
     volume_names = registry.get("scanned_volume_names")
+    bind_sources = registry.get("scanned_bind_sources")
     container_ids = registry.get("scanned_container_ids")
     if (
         not isinstance(volume_names, list)
@@ -2107,6 +2298,14 @@ def _validate_external_database_audit_schema_v2_retired(
         or any(
             not isinstance(name, str) or VOLUME_RE.fullmatch(name) is None
             for name in volume_names
+        )
+        or not isinstance(bind_sources, list)
+        or bind_sources != sorted(set(bind_sources))
+        or any(
+            not isinstance(source, str)
+            or not Path(source).is_absolute()
+            or ".." in Path(source).parts
+            for source in bind_sources
         )
         or not isinstance(container_ids, list)
         or container_ids != sorted(set(container_ids))
@@ -2172,7 +2371,7 @@ def _validate_external_database_audit_schema_v2_retired(
         "isolated-bind-copy-read-only": "postgres-private-tree-sha256-v1",
         "isolated-backup-restore-read-only": "sha256-file-v1",
     }
-    audit_runtime_identity: tuple[str, str, str, str] | None = None
+    audit_runtime_identity: tuple[str, str, str] | None = None
     for record in raw_media:
         if not isinstance(record, dict) or set(record) != media_fields:
             raise SiteHelperContractError(
@@ -2225,7 +2424,6 @@ def _validate_external_database_audit_schema_v2_retired(
             "postgres_major",
             "postgres_image",
             "postgres_image_id",
-            "pg_service_file_sha256",
             "audited_at",
             "isolation",
             "evidence_sha256",
@@ -2255,15 +2453,10 @@ def _validate_external_database_audit_schema_v2_retired(
             audit.get("postgres_image_id"),
             "PG16 image ID",
         )
-        service_file_digest = _require_digest(
-            audit.get("pg_service_file_sha256"),
-            "PostgreSQL service-file digest",
-        )
         observed_runtime = (
             auditor_digest,
             audit["postgres_image"],
             postgres_image_id,
-            service_file_digest,
         )
         if audit_runtime_identity is None:
             audit_runtime_identity = observed_runtime
@@ -2654,6 +2847,7 @@ def _external_reviewed_file_identity_v3(
         "inode",
         "size_bytes",
         "mtime_ns",
+        "ctime_ns",
         "mode",
         "uid",
     }
@@ -2666,7 +2860,8 @@ def _external_reviewed_file_identity_v3(
         not isinstance(path, str)
         or not Path(path).is_absolute()
         or ".." in Path(path).parts
-        or media_id != f"reviewed-file:{path}"
+        or media_id
+        != media_id_for_locator("reviewed_file", path)
         or value.get("mode") != 0o600
     ):
         raise SiteHelperContractError(
@@ -2686,6 +2881,7 @@ def _external_source_identity_v3(
     *,
     kind: str,
     media_id: str,
+    allow_readonly_bind: bool = False,
 ) -> dict[str, Any]:
     if kind == "reviewed_file":
         return _external_reviewed_file_identity_v3(
@@ -2696,6 +2892,9 @@ def _external_source_identity_v3(
         value,
         kind=kind,
         media_id=media_id,
+        allow_readonly_bind=allow_readonly_bind,
+        require_bind_ctime=kind == "container_bind",
+        require_file_ctime=kind == "postgres_backup",
     )
 
 
@@ -2793,6 +2992,110 @@ def _external_relation_v3(
     return dict(value)
 
 
+def _external_server_startup_v3(
+    value: object,
+    *,
+    data_directory: str,
+    online: bool,
+) -> dict[str, Any]:
+    fields = {
+        "jit",
+        "shared_preload_libraries",
+        "session_preload_libraries",
+        "local_preload_libraries",
+        "dynamic_library_path",
+        "archive_mode",
+        "archive_command",
+        "archive_cleanup_command",
+        "restore_command",
+        "recovery_end_command",
+        "ssl_passphrase_command",
+        "ssl_passphrase_command_supports_reload",
+        "jit_provider",
+        "config_file",
+        "hba_file",
+        "ident_file",
+        "config_source_files",
+        "config_errors",
+        "independent_configuration_tree_sha256",
+        "verification",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SiteHelperContractError(
+            "external PostgreSQL startup evidence shape is invalid"
+        )
+    sources = value.get("config_source_files")
+    root = Path(data_directory)
+    if (
+        value.get("jit") is not False
+        or value.get("shared_preload_libraries") != ""
+        or value.get("session_preload_libraries") != ""
+        or value.get("local_preload_libraries") != ""
+        or value.get("dynamic_library_path") != "$libdir"
+        or value.get("archive_mode") != "off"
+        or value.get("archive_command")
+        != ("" if online else "(disabled)")
+        or value.get("archive_cleanup_command") != ""
+        or value.get("restore_command")
+        != ("" if online else "/bin/false")
+        or value.get("recovery_end_command") != ""
+        or value.get("ssl_passphrase_command") != ""
+        or value.get("ssl_passphrase_command_supports_reload") != "off"
+        or value.get("jit_provider") != "llvmjit"
+        or not isinstance(sources, list)
+        or sources != sorted(set(sources))
+        or any(
+            not isinstance(source, str)
+            or not Path(source).is_absolute()
+            or root not in Path(source).parents
+            or (
+                not source.endswith(".conf")
+                and not source.endswith("/postgresql.auto.conf")
+            )
+            for source in sources
+        )
+        or value.get("config_file") not in sources
+        or value.get("config_errors") != []
+        or any(
+            not isinstance(value.get(key), str)
+            or not Path(value[key]).is_absolute()
+            for key in ("config_file", "hba_file", "ident_file")
+        )
+        or (
+            online
+            and (
+                value.get("verification")
+                != "pinned-read-only-config-parse-v1"
+                or not isinstance(
+                    value.get(
+                        "independent_configuration_tree_sha256"
+                    ),
+                    str,
+                )
+                or DIGEST_RE.fullmatch(
+                    value["independent_configuration_tree_sha256"]
+                )
+                is None
+            )
+        )
+        or (
+            not online
+            and (
+                value.get("verification")
+                != "owned-isolated-cluster-v1"
+                or value.get(
+                    "independent_configuration_tree_sha256"
+                )
+                is not None
+            )
+        )
+    ):
+        raise SiteHelperContractError(
+            "external PostgreSQL startup configuration is unsafe"
+        )
+    return dict(value)
+
+
 def _external_database_record_v3(
     value: object,
     *,
@@ -2805,14 +3108,31 @@ def _external_database_record_v3(
         "database_identity_sha256",
         "current_user",
         "transaction_read_only",
+        "server_startup",
+        "event_triggers_disabled",
         "role_superuser",
         "role_create_db",
         "role_create_role",
+        "role_replication",
+        "role_bypass_rls",
+        "role_inherit",
+        "role_can_login",
+        "role_contract_marker",
+        "role_contract_sha256",
+        "role_memberships",
+        "role_incoming_memberships",
+        "role_settings",
+        "role_owned_objects",
+        "role_direct_acl",
+        "role_default_acl",
+        "event_triggers",
+        "role_effective_persistent_write",
         "ledger",
         "ledger_sha256",
         "ledger_relation",
         "ledger_analysis",
         "legacy_relation_present",
+        "generation_schema",
         "legacy_relation",
         "migration_0013",
         "requires_0014",
@@ -2836,7 +3156,7 @@ def _external_database_record_v3(
     }
     expected_scope = (
         "source-cluster"
-        if method == "live-read-only"
+        if method in {"live-read-only", "live-read-only-adjacent"}
         else "isolated-restore-cluster"
         if method == "isolated-backup-restore-read-only"
         else "copied-source-cluster"
@@ -2852,7 +3172,8 @@ def _external_database_record_v3(
         or PG_SYSTEM_ID_RE.fullmatch(identity["system_identifier"]) is None
         or isinstance(identity.get("server_version_num"), bool)
         or not isinstance(identity.get("server_version_num"), int)
-        or identity["server_version_num"] // 10000 != 16
+        or identity["server_version_num"] // 10000
+        not in POSTGRES_AUDIT_IMAGES
         or not isinstance(identity.get("data_directory"), str)
         or not Path(identity["data_directory"]).is_absolute()
     ):
@@ -2865,23 +3186,186 @@ def _external_database_record_v3(
         raise SiteHelperContractError(
             "external per-database identity digest differs"
         )
+    _external_server_startup_v3(
+        value.get("server_startup"),
+        data_directory=str(identity["data_directory"]),
+        online=method in {"live-read-only", "live-read-only-adjacent"},
+    )
     isolated = disposition == "retained-private-isolated"
+    adjacent_admin = method == "live-read-only-adjacent"
+    role_contract_marker = value.get("role_contract_marker")
+    role_contract_sha256 = value.get("role_contract_sha256")
+    if (
+        method == "live-read-only"
+        and (
+            not isinstance(role_contract_sha256, str)
+            or DIGEST_RE.fullmatch(role_contract_sha256) is None
+            or role_contract_marker
+            != (
+                "nexpoly-postgres-media-audit-role-v1:"
+                + role_contract_sha256
+            )
+        )
+        or method != "live-read-only"
+        and (
+            role_contract_marker is not None
+            or role_contract_sha256 is not None
+        )
+    ):
+        raise SiteHelperContractError(
+            "external database audit role contract marker differs"
+        )
+    role_memberships = value.get("role_memberships")
+    incoming_memberships = value.get("role_incoming_memberships")
+    role_settings = value.get("role_settings")
+    role_owned_objects = value.get("role_owned_objects")
+    role_direct_acl = value.get("role_direct_acl")
+    role_default_acl = value.get("role_default_acl")
+    event_triggers = value.get("event_triggers")
+    effective_write = value.get("role_effective_persistent_write")
+    canonical_string_lists = (
+        role_memberships,
+        incoming_memberships,
+        role_settings,
+        role_owned_objects,
+        effective_write,
+    )
     if (
         value.get("current_user") != authority["audit_role"]
         or value.get("transaction_read_only") is not True
-        or value.get("role_superuser") is not isolated
+        or value.get("event_triggers_disabled")
+        is not (
+            True
+            if identity["server_version_num"] // 10000 >= 17
+            else None
+        )
+        or value.get("role_superuser")
+        is not (isolated or adjacent_admin)
         or not isinstance(value.get("role_create_db"), bool)
         or not isinstance(value.get("role_create_role"), bool)
+        or not isinstance(value.get("role_replication"), bool)
+        or not isinstance(value.get("role_bypass_rls"), bool)
+        or not isinstance(value.get("role_inherit"), bool)
+        or not isinstance(value.get("role_can_login"), bool)
+        or any(
+            not isinstance(current, list)
+            or current != sorted(set(current))
+            or any(not isinstance(item, str) for item in current)
+            for current in canonical_string_lists
+        )
+        or any(
+            not _valid_pg_identifier(role)
+            for role in role_memberships
+        )
+        or any(
+            not _valid_pg_identifier(role)
+            for role in incoming_memberships
+        )
+        or not isinstance(role_direct_acl, list)
+        or not isinstance(role_default_acl, list)
+        or event_triggers != []
         or (
             not isolated
+            and not adjacent_admin
             and (
                 value["role_create_db"]
                 or value["role_create_role"]
+                or value["role_replication"]
+                or value["role_bypass_rls"]
+                or value["role_inherit"]
+                or value["role_can_login"]
+                or role_memberships
+                or incoming_memberships
+                or role_owned_objects
+                or role_default_acl
+                or effective_write
+                or role_settings
+                != [
+                    "default_transaction_read_only=on",
+                    "lock_timeout=5s",
+                    "statement_timeout=5min",
+                ]
             )
         )
     ):
         raise SiteHelperContractError(
             "external per-database audit role is unsafe"
+        )
+    normalized_direct_acl: list[dict[str, object]] = []
+    for acl in role_direct_acl:
+        if (
+            not isinstance(acl, dict)
+            or set(acl)
+            != {
+                "object_kind",
+                "object_name",
+                "privilege",
+                "grantable",
+            }
+            or acl.get("object_kind")
+            not in {
+                "database",
+                "schema",
+                "relation",
+                "function",
+                "type",
+                "language",
+                "foreign-data-wrapper",
+                "foreign-server",
+                "tablespace",
+                "large-object",
+                "parameter",
+            }
+            or not isinstance(acl.get("object_name"), str)
+            or not acl["object_name"]
+            or not isinstance(acl.get("privilege"), str)
+            or not acl["privilege"]
+            or not isinstance(acl.get("grantable"), bool)
+        ):
+            raise SiteHelperContractError(
+                "external per-database direct ACL is invalid"
+            )
+        normalized_direct_acl.append(dict(acl))
+    if normalized_direct_acl != sorted(
+        normalized_direct_acl,
+        key=canonical_json_bytes,
+    ):
+        raise SiteHelperContractError(
+            "external per-database direct ACL is not canonical"
+        )
+    normalized_default_acl: list[dict[str, object]] = []
+    for acl in role_default_acl:
+        if (
+            not isinstance(acl, dict)
+            or set(acl)
+            != {
+                "owner",
+                "namespace",
+                "object_type",
+                "privilege",
+                "grantable",
+            }
+            or not _valid_pg_identifier(acl.get("owner"))
+            or (
+                acl.get("namespace") is not None
+                and not _valid_pg_identifier(acl.get("namespace"))
+            )
+            or not isinstance(acl.get("object_type"), str)
+            or not acl["object_type"]
+            or not isinstance(acl.get("privilege"), str)
+            or not acl["privilege"]
+            or not isinstance(acl.get("grantable"), bool)
+        ):
+            raise SiteHelperContractError(
+                "external per-database default ACL is invalid"
+            )
+        normalized_default_acl.append(dict(acl))
+    if normalized_default_acl != sorted(
+        normalized_default_acl,
+        key=canonical_json_bytes,
+    ):
+        raise SiteHelperContractError(
+            "external per-database default ACL is not canonical"
         )
     ledger = value.get("ledger")
     if value.get("ledger_sha256") != sha256_bytes(
@@ -2896,6 +3380,17 @@ def _external_database_record_v3(
             "external per-database legacy state is invalid"
         )
     migration_scope = authority["migration_scope"]
+    if migration_scope == "auto-detect-adjacent":
+        migration_scope = (
+            "nexpoly-ledger"
+            if (
+                isinstance(value.get("ledger_relation"), dict)
+                and value["ledger_relation"].get("state") == "present"
+            )
+            or ledger != []
+            or legacy_present
+            else "adjacent-record-only"
+        )
     if migration_scope == "nexpoly-ledger":
         expected_analysis, expected_0013, requires_0014 = (
             _external_media_ledger_v2(
@@ -2937,6 +3432,62 @@ def _external_database_record_v3(
         raise SiteHelperContractError(
             "adjacent database fabricated a migration ledger"
         )
+    if not isolated and not adjacent_admin:
+        allowed_acl = [
+            {
+                "object_kind": "database",
+                "object_name": authority["name"],
+                "privilege": "CONNECT",
+                "grantable": False,
+            },
+            {
+                "object_kind": "function",
+                "object_name": "pg_catalog.pg_control_system()",
+                "privilege": "EXECUTE",
+                "grantable": False,
+            },
+        ]
+        if ledger_present:
+            allowed_acl.extend(
+                [
+                    {
+                        "object_kind": "relation",
+                        "object_name": "governance.schema_migrations",
+                        "privilege": "SELECT",
+                        "grantable": False,
+                    },
+                    {
+                        "object_kind": "schema",
+                        "object_name": "governance",
+                        "privilege": "USAGE",
+                        "grantable": False,
+                    },
+                ]
+            )
+        if legacy_present:
+            allowed_acl.extend(
+                [
+                    {
+                        "object_kind": "relation",
+                        "object_name": "generation.polytao_jobs",
+                        "privilege": "SELECT",
+                        "grantable": False,
+                    },
+                    {
+                        "object_kind": "schema",
+                        "object_name": "generation",
+                        "privilege": "USAGE",
+                        "grantable": False,
+                    },
+                ]
+            )
+        if normalized_direct_acl != sorted(
+            allowed_acl,
+            key=canonical_json_bytes,
+        ):
+            raise SiteHelperContractError(
+                "external per-database direct ACL differs"
+            )
     _external_relation_v3(
         value.get("ledger_relation"),
         relation="ledger",
@@ -2944,6 +3495,60 @@ def _external_database_record_v3(
         rows=ledger,
         present=ledger_present,
     )
+    generation_schema = value.get("generation_schema")
+    expected_schema_acl = (
+        []
+        if (
+            isolated
+            or adjacent_admin
+            or authority["audit_role"] == authority["owner"]
+        )
+        else [
+            {
+                "grantee": authority["audit_role"],
+                "privilege": "USAGE",
+                "grantable": False,
+            }
+        ]
+    )
+    expected_schema_authority = {
+        "owner": authority["owner"],
+        "acl": expected_schema_acl,
+        "comments": [],
+        "security_labels": [],
+        "default_acl": [],
+        "initial_privileges": [],
+        "publications": [],
+        "unapproved_dependents": [],
+    }
+    if (
+        not isinstance(generation_schema, dict)
+        or set(generation_schema)
+        != {"state", "schema_sha256", "schema_authority"}
+        or generation_schema.get("state")
+        != ("present" if legacy_present else "absent")
+        or (
+            legacy_present
+            and (
+                generation_schema.get("schema_authority")
+                != expected_schema_authority
+                or generation_schema.get("schema_sha256")
+                != sha256_bytes(
+                    canonical_json_bytes(expected_schema_authority)
+                )
+            )
+        )
+        or (
+            not legacy_present
+            and (
+                generation_schema.get("schema_authority") is not None
+                or generation_schema.get("schema_sha256") is not None
+            )
+        )
+    ):
+        raise SiteHelperContractError(
+            "external generation schema authority differs"
+        )
     _external_relation_v3(
         value.get("legacy_relation"),
         relation="legacy",
@@ -2959,7 +3564,10 @@ def _external_audit_runtime_v3(
     *,
     method: str,
     isolation: dict[str, object],
-) -> tuple[dict[str, Any], tuple[str, str, int, int, str, str]]:
+) -> tuple[
+    dict[str, Any],
+    tuple[str, int, int, int, str, str],
+]:
     fields = {
         "method",
         "complete",
@@ -2969,7 +3577,6 @@ def _external_audit_runtime_v3(
         "postgres_gid",
         "postgres_image",
         "postgres_image_id",
-        "pg_service_file_sha256",
         "audited_at",
         "isolation",
         "evidence_sha256",
@@ -2979,7 +3586,7 @@ def _external_audit_runtime_v3(
         or set(audit) != fields
         or audit.get("method") != method
         or audit.get("complete") is not True
-        or audit.get("postgres_major") != 16
+        or audit.get("postgres_major") not in POSTGRES_AUDIT_IMAGES
         or isinstance(audit.get("postgres_uid"), bool)
         or not isinstance(audit.get("postgres_uid"), int)
         or audit.get("postgres_uid") != 70
@@ -2987,7 +3594,8 @@ def _external_audit_runtime_v3(
         or not isinstance(audit.get("postgres_gid"), int)
         or audit.get("postgres_gid") != 70
         or not isinstance(audit.get("postgres_image"), str)
-        or OCI_IMAGE_DIGEST_RE.fullmatch(audit["postgres_image"]) is None
+        or audit.get("postgres_image")
+        != POSTGRES_AUDIT_IMAGES.get(audit.get("postgres_major"))
         or not isinstance(audit.get("audited_at"), str)
         or RFC3339_UTC_RE.fullmatch(audit["audited_at"]) is None
         or audit.get("isolation") != isolation
@@ -3003,21 +3611,17 @@ def _external_audit_runtime_v3(
         audit.get("postgres_image_id"),
         "media-v3 PostgreSQL image ID",
     )
-    service = _require_digest(
-        audit.get("pg_service_file_sha256"),
-        "media-v3 service-file digest",
-    )
     _require_digest(
         audit.get("evidence_sha256"),
         "media-v3 evidence digest",
     )
     return dict(audit), (
         auditor,
-        audit["postgres_image"],
+        audit["postgres_major"],
         audit["postgres_uid"],
         audit["postgres_gid"],
+        audit["postgres_image"],
         image_id,
-        service,
     )
 
 
@@ -3026,7 +3630,7 @@ def _external_record_only_medium_v3(
     *,
     volume_names: list[str],
     container_ids: list[str],
-) -> tuple[dict[str, Any], tuple[str, str, int, int, str, str]]:
+) -> tuple[dict[str, Any], tuple[str, int, int, int, str, str]]:
     fields = {
         "record_type",
         "media_id",
@@ -3055,6 +3659,7 @@ def _external_record_only_medium_v3(
         or kind not in {
             "docker_volume",
             "container_bind",
+            "postgres_backup",
             "reviewed_file",
         }
         or classification
@@ -3070,11 +3675,19 @@ def _external_record_only_medium_v3(
         record.get("source_identity_before"),
         kind=kind,
         media_id=media_id,
+        allow_readonly_bind=(
+            kind == "container_bind"
+            and classification == "reviewed-non-pg"
+        ),
     )
     after = _external_source_identity_v3(
         record.get("source_identity_after"),
         kind=kind,
         media_id=media_id,
+        allow_readonly_bind=(
+            kind == "container_bind"
+            and classification == "reviewed-non-pg"
+        ),
     )
     readers = record.get("readers")
     expected_readers = (
@@ -3111,14 +3724,31 @@ def _external_record_only_medium_v3(
         algorithm = (
             "docker-volume-tree-sha256-v1"
             if kind == "docker_volume"
+            else "sha256-file-v1"
+            if kind == "postgres_backup"
             else "private-bind-tree-sha256-v1"
         )
         if (
-            kind not in {"docker_volume", "container_bind"}
-            or signature.get("state") != "postgres"
-            or isinstance(signature.get("major"), bool)
-            or not isinstance(signature.get("major"), int)
-            or not 9 <= signature["major"] <= 16
+            kind
+            not in {
+                "docker_volume",
+                "container_bind",
+                "postgres_backup",
+            }
+            or kind == "postgres_backup"
+            and (
+                signature.get("state") != "postgres-backup"
+                or signature.get("major") is not None
+            )
+            or kind != "postgres_backup"
+            and (
+                signature.get("state") != "postgres"
+                or isinstance(signature.get("major"), bool)
+                or not isinstance(signature.get("major"), int)
+                or not ADJACENT_POSTGRES_MAJOR_MIN
+                <= signature["major"]
+                <= ADJACENT_POSTGRES_MAJOR_MAX
+            )
         ):
             raise SiteHelperContractError(
                 "adjacent PostgreSQL record-only signature differs"
@@ -3143,10 +3773,17 @@ def _external_record_only_medium_v3(
         raise SiteHelperContractError(
             "record-only content identity algorithm differs"
         )
-    _require_digest(
+    source_digest = _require_digest(
         record.get("source_content_sha256"),
         "record-only source content digest",
     )
+    if (
+        kind == "postgres_backup"
+        and before.get("sha256") != source_digest
+    ):
+        raise SiteHelperContractError(
+            "record-only PostgreSQL backup content digest differs"
+        )
     isolation = (
         {
             "source_mounted_read_only": True,
@@ -3156,10 +3793,18 @@ def _external_record_only_medium_v3(
         if kind == "docker_volume"
         else {
             "source_opened_with_openat_no_follow": True,
+            "source_passed_to_docker": False,
             "source_started_as_postgres": False,
             "content_cas_verified": True,
         }
         if kind == "container_bind"
+        else {
+            "source_opened_with_openat_no_follow": True,
+            "source_passed_to_docker": False,
+            "source_started_as_postgres": False,
+            "content_cas_verified": True,
+        }
+        if kind == "postgres_backup"
         else {
             "source_opened_with_openat_no_follow": True,
             "source_passed_to_docker": False,
@@ -3195,7 +3840,7 @@ def _external_nexpoly_medium_v3(
     container_ids: list[str],
 ) -> tuple[
     dict[str, Any],
-    tuple[str, str, int, int, str, str],
+    tuple[str, int, int, int, str, str],
     bool,
 ]:
     primary_fields = {
@@ -3203,14 +3848,29 @@ def _external_nexpoly_medium_v3(
         "database_identity_sha256",
         "current_user",
         "transaction_read_only",
+        "server_startup",
+        "event_triggers_disabled",
         "role_superuser",
         "role_create_db",
         "role_create_role",
+        "role_replication",
+        "role_bypass_rls",
+        "role_inherit",
+        "role_can_login",
+        "role_memberships",
+        "role_incoming_memberships",
+        "role_settings",
+        "role_owned_objects",
+        "role_direct_acl",
+        "role_default_acl",
+        "event_triggers",
+        "role_effective_persistent_write",
         "ledger",
         "ledger_sha256",
         "ledger_relation",
         "ledger_analysis",
         "legacy_relation_present",
+        "generation_schema",
         "legacy_relation",
         "migration_0013",
     }
@@ -3221,6 +3881,7 @@ def _external_nexpoly_medium_v3(
         "classification",
         "database",
         "disposition",
+        "online_admin_role",
         "source_identity_before",
         "source_identity_after",
         "source_system_identifier",
@@ -3240,21 +3901,36 @@ def _external_nexpoly_medium_v3(
     kind = record.get("kind")
     database_name = record.get("database")
     disposition = record.get("disposition")
+    online_admin_role = record.get("online_admin_role")
+    adjacent = record.get("record_type") == "adjacent-postgres"
     if (
-        record.get("record_type") != "nexpoly-db"
-        or record.get("classification") != "nexpoly-db"
+        record.get("record_type")
+        not in {"nexpoly-db", "adjacent-postgres"}
+        or record.get("classification") != record.get("record_type")
         or not isinstance(media_id, str)
         or MEDIA_ID_RE.fullmatch(media_id) is None
         or kind
         not in {"docker_volume", "container_bind", "postgres_backup"}
-        or not isinstance(database_name, str)
-        or ROLE_RE.fullmatch(database_name) is None
+        or adjacent
+        and kind == "postgres_backup"
+        or not _valid_pg_identifier(database_name)
         or disposition
         not in {
             "writable-target",
             "read-only-online",
             "retained-private-isolated",
+            "excluded-from-nexpoly-migration",
         }
+        or adjacent
+        and disposition != "excluded-from-nexpoly-migration"
+        or not adjacent
+        and disposition == "excluded-from-nexpoly-migration"
+        or disposition != "retained-private-isolated"
+        and (
+            not _valid_pg_identifier(online_admin_role)
+        )
+        or disposition == "retained-private-isolated"
+        and online_admin_role is not None
     ):
         raise SiteHelperContractError(
             "Nexpoly external medium-v3 identity differs"
@@ -3290,7 +3966,9 @@ def _external_nexpoly_medium_v3(
             "Nexpoly external medium is outside Docker inventory"
         )
     method = (
-        "live-read-only"
+        "live-read-only-adjacent"
+        if adjacent
+        else "live-read-only"
         if disposition != "retained-private-isolated"
         else "isolated-volume-copy-read-only"
         if kind == "docker_volume"
@@ -3305,9 +3983,10 @@ def _external_nexpoly_medium_v3(
         in {"created", "running", "paused", "restarting", "removing"}
     ]
     if (
-        method == "live-read-only"
+        method in {"live-read-only", "live-read-only-adjacent"}
         and len(active) != 1
-        or method != "live-read-only"
+        or method
+        not in {"live-read-only", "live-read-only-adjacent"}
         and active
     ):
         raise SiteHelperContractError(
@@ -3315,6 +3994,7 @@ def _external_nexpoly_medium_v3(
         )
     expected_algorithm = {
         "live-read-only": "logical-cluster-inventory-v3",
+        "live-read-only-adjacent": "logical-cluster-inventory-v3",
         "isolated-volume-copy-read-only": (
             "postgres-data-directory-tar-sha256-v1"
         ),
@@ -3363,6 +4043,7 @@ def _external_nexpoly_medium_v3(
     primary_audit: dict[str, Any] | None = None
     requires_0014 = False
     system_identifiers: set[str] = set()
+    server_majors: set[int] = set()
     for observed, database_record in zip(
         inventory,
         databases,
@@ -3378,13 +4059,11 @@ def _external_nexpoly_medium_v3(
                 for key in base_fields
             }
             != observed
-            or not isinstance(observed.get("name"), str)
-            or ROLE_RE.fullmatch(observed["name"]) is None
+            or not _valid_pg_identifier(observed.get("name"))
             or not isinstance(observed.get("oid"), str)
             or not observed["oid"].isdigit()
             or observed["oid"] in oids
-            or not isinstance(observed.get("owner"), str)
-            or ROLE_RE.fullmatch(observed["owner"]) is None
+            or not _valid_pg_identifier(observed.get("owner"))
             or not isinstance(observed.get("allow_connections"), bool)
             or observed.get("template") is not False
         ):
@@ -3405,41 +4084,39 @@ def _external_nexpoly_medium_v3(
                 "migration_scope",
             )
         }
-        if database_record.get("audit_state") == "complete":
-            if (
-                observed["allow_connections"] is not True
-                or not isinstance(authority["audit_role"], str)
-                or ROLE_RE.fullmatch(authority["audit_role"]) is None
-            ):
-                raise SiteHelperContractError(
-                    "complete database inventory role differs"
+        if (
+            database_record.get("audit_state") != "complete"
+            or observed["allow_connections"] is not True
+            or (
+                not _valid_pg_identifier(authority["audit_role"])
+                if adjacent
+                else (
+                    not isinstance(authority["audit_role"], str)
+                    or ROLE_RE.fullmatch(authority["audit_role"]) is None
                 )
-            database_audit, needs_0014 = _external_database_record_v3(
-                database_record.get("audit"),
-                authority=authority,
-                method=method,
-                disposition=disposition,
             )
-            requires_0014 = requires_0014 or needs_0014
-            system_identifiers.add(
-                database_audit["database_identity"]["system_identifier"]
-            )
-            if observed["name"] == database_name:
-                primary_audit = database_audit
-        elif database_record.get("audit_state") == "not-connectable-record-only":
-            if (
-                observed["allow_connections"] is not False
-                or authority["audit_role"] is not None
-                or authority["migration_scope"] != "adjacent-record-only"
-                or database_record.get("audit") is not None
-            ):
-                raise SiteHelperContractError(
-                    "non-connectable database record differs"
-                )
-        else:
+        ):
             raise SiteHelperContractError(
-                "database inventory audit state differs"
+                "every non-template database requires a complete audit"
             )
+        database_audit, needs_0014 = _external_database_record_v3(
+            database_record.get("audit"),
+            authority=authority,
+            method=method,
+            disposition=disposition,
+        )
+        requires_0014 = requires_0014 or needs_0014
+        system_identifiers.add(
+            database_audit["database_identity"]["system_identifier"]
+        )
+        server_majors.add(
+            database_audit["database_identity"][
+                "server_version_num"
+            ]
+            // 10000
+        )
+        if observed["name"] == database_name:
+            primary_audit = database_audit
     if names != sorted(set(names)) or primary_audit is None:
         raise SiteHelperContractError(
             "Nexpoly database inventory is not canonical or lacks primary"
@@ -3469,7 +4146,7 @@ def _external_nexpoly_medium_v3(
         raise SiteHelperContractError(
             "logical backup content digest differs"
         )
-    if method == "live-read-only":
+    if method in {"live-read-only", "live-read-only-adjacent"}:
         logical_digest = sha256_bytes(
             canonical_json_bytes(
                 {
@@ -3484,6 +4161,11 @@ def _external_nexpoly_medium_v3(
             )
     isolation = {
         "live-read-only": {
+            "source_mounted_by_auditor": False,
+            "source_started_by_auditor": False,
+            "transaction_read_only": True,
+        },
+        "live-read-only-adjacent": {
             "source_mounted_by_auditor": False,
             "source_started_by_auditor": False,
             "transaction_read_only": True,
@@ -3518,6 +4200,10 @@ def _external_nexpoly_medium_v3(
         method=method,
         isolation=isolation,
     )
+    if server_majors != {audit["postgres_major"]}:
+        raise SiteHelperContractError(
+            "external database major differs from its pinned audit image"
+        )
     unsealed = {
         **record,
         "audit": {
@@ -3535,12 +4221,323 @@ def _external_nexpoly_medium_v3(
     return dict(record), runtime, requires_0014
 
 
+def _external_excluded_non_pg_medium_v4(
+    record: object,
+    *,
+    volume_names: list[str],
+    bind_sources: list[str],
+    container_ids: list[str],
+) -> tuple[dict[str, Any], str]:
+    fields = {
+        "record_type",
+        "media_id",
+        "kind",
+        "classification",
+        "disposition",
+        "source_identity_before",
+        "source_identity_after",
+        "postgres_signature",
+        "readers",
+        "excluded_from_nexpoly_migration",
+        "audit",
+    }
+    if not isinstance(record, dict) or set(record) != fields:
+        raise SiteHelperContractError(
+            "excluded non-PG medium contains content-derived fields"
+        )
+    media_id = record.get("media_id")
+    kind = record.get("kind")
+    before = record.get("source_identity_before")
+    after = record.get("source_identity_after")
+    if (
+        record.get("record_type") != "excluded-non-pg-media"
+        or record.get("classification") != "excluded-non-pg"
+        or record.get("disposition") != "excluded-from-nexpoly-migration"
+        or kind not in {"docker_volume", "container_bind"}
+        or not isinstance(media_id, str)
+        or MEDIA_ID_RE.fullmatch(media_id) is None
+        or not isinstance(before, dict)
+        or before != after
+        or record.get("excluded_from_nexpoly_migration") is not True
+        or record.get("postgres_signature")
+        != {"state": "non-postgres", "major": None, "data_subpath": "."}
+    ):
+        raise SiteHelperContractError(
+            "excluded non-PG medium identity is invalid"
+        )
+    identity_fields = {
+        "locator",
+        "data_subpath",
+        "attached",
+        "classification_probe",
+    }
+    if kind == "docker_volume":
+        identity_fields.add("docker_inspect_sha256")
+    else:
+        if before.get("root_state") == "absent":
+            identity_fields.update(
+                {
+                    "audit_locator",
+                    "resolved_parent",
+                    "root_state",
+                    "transient_runtime",
+                }
+            )
+        else:
+            identity_fields.update(
+                {
+                    "audit_locator",
+                    "resolved_parent",
+                    "parent_device",
+                    "parent_inode",
+                    "entry_type",
+                    "transient_runtime",
+                    "device",
+                    "inode",
+                    "size",
+                    "mtime_ns",
+                    "ctime_ns",
+                    "mode",
+                    "uid",
+                    "gid",
+                }
+            )
+            if before.get("entry_type") == "symlink":
+                identity_fields.add("symlink_target")
+            if "takeover_redirect" in before:
+                identity_fields.update(
+                    {
+                        "takeover_redirect",
+                        "takeover_move_seal_sha256",
+                    }
+                )
+    if set(before) != identity_fields:
+        raise SiteHelperContractError(
+            "excluded non-PG metadata identity shape is invalid"
+        )
+    locator = before.get("locator")
+    attachments = before.get("attached")
+    probe = before.get("classification_probe")
+    expected_probe_fields: set[str] | None = None
+    if isinstance(probe, dict):
+        method = probe.get("method")
+        if method == "container-metadata-exclusion-v1":
+            expected_probe_fields = {
+                "method",
+                "result",
+                "content_read_scope",
+            }
+            valid_result = probe.get("result") in {
+                "no-container-pgdata-mapping",
+                "trusted-non-postgres-active-reader",
+            }
+        elif method in {
+            "bounded-postgres-marker-probe-v1",
+            "bounded-openat-postgres-marker-probe-v1",
+            "exact-openat-pgdata-marker-probe-v1",
+            "takeover-move-seal-marker-proof-v1",
+        }:
+            expected_probe_fields = {
+                "method",
+                "result",
+                "maximum_entries",
+                "content_read_scope",
+            }
+            if method == "bounded-postgres-marker-probe-v1":
+                expected_probe_fields.update(
+                    {
+                        "maximum_marker_results",
+                        "timeout_seconds",
+                    }
+                )
+            valid_result = probe.get("result") == "no-postgres-markers"
+        elif method == "existing-reader-bounded-marker-probe-v1":
+            expected_probe_fields = {
+                "method",
+                "result",
+                "maximum_entries",
+                "maximum_marker_results",
+                "timeout_seconds",
+                "content_read_scope",
+                "container_id",
+                "mount_destination",
+            }
+            valid_result = (
+                probe.get("result") == "no-postgres-markers"
+                and isinstance(probe.get("container_id"), str)
+                and probe["container_id"] in container_ids
+                and isinstance(probe.get("mount_destination"), str)
+                and Path(probe["mount_destination"]).is_absolute()
+            )
+        else:
+            valid_result = False
+    else:
+        valid_result = False
+    if (
+        not isinstance(locator, str)
+        or before.get("data_subpath") != "."
+        or media_id != media_id_for_locator(kind, locator)
+        or kind == "docker_volume"
+        and locator not in volume_names
+        or kind == "container_bind"
+        and locator not in bind_sources
+        or not isinstance(attachments, list)
+        or attachments != record.get("readers")
+        or any(
+            not isinstance(value, dict)
+            or value.get("container_id") not in container_ids
+            for value in attachments
+        )
+        or expected_probe_fields is None
+        or set(probe) != expected_probe_fields
+        or not valid_result
+        or probe.get("content_read_scope")
+        not in {"none", "PG_VERSION-up-to-32-bytes"}
+    ):
+        raise SiteHelperContractError(
+            "excluded non-PG probe or Docker binding is invalid"
+        )
+    if kind == "docker_volume":
+        _require_digest(
+            before.get("docker_inspect_sha256"),
+            "excluded Docker-volume inspect digest",
+        )
+    else:
+        if before.get("root_state") == "absent":
+            if (
+                before.get("transient_runtime") is not True
+                or not isinstance(before.get("audit_locator"), str)
+                or not Path(before["audit_locator"]).is_absolute()
+                or not isinstance(before.get("resolved_parent"), str)
+                or not Path(before["resolved_parent"]).is_absolute()
+            ):
+                raise SiteHelperContractError(
+                    "absent transient bind identity is invalid"
+                )
+            audit = record.get("audit")
+        else:
+            audit = None
+        if (
+            before.get("root_state") != "absent"
+            and (
+            not isinstance(before.get("audit_locator"), str)
+            or not Path(before["audit_locator"]).is_absolute()
+            or before.get("entry_type")
+            not in {
+                "directory",
+                "file",
+                "unix-socket",
+                "fifo",
+                "block-device",
+                "character-device",
+                "unknown-special",
+                "symlink",
+            }
+            or before.get("transient_runtime")
+            is not (
+                before.get("entry_type") not in {"directory", "file"}
+            )
+            or any(
+                isinstance(before.get(name), bool)
+                or not isinstance(before.get(name), int)
+                or before[name] < 0
+                for name in (
+                    "device",
+                    "inode",
+                    "size",
+                    "mtime_ns",
+                    "ctime_ns",
+                    "mode",
+                    "uid",
+                    "gid",
+                    "parent_device",
+                    "parent_inode",
+                )
+            )
+            )
+        ):
+            raise SiteHelperContractError(
+                "excluded container-bind root metadata is invalid"
+            )
+        if (
+            before.get("root_state") != "absent"
+            and "takeover_redirect" in before
+        ):
+            _require_digest(
+                before.get("takeover_move_seal_sha256"),
+                "excluded takeover move-seal digest",
+            )
+            if not isinstance(before.get("takeover_redirect"), dict):
+                raise SiteHelperContractError(
+                    "excluded takeover redirect binding is invalid"
+                )
+    audit = record.get("audit")
+    if (
+        not isinstance(audit, dict)
+        or set(audit)
+        != {
+            "method",
+            "complete",
+            "auditor_sha256",
+            "audited_at",
+            "classification_content_read_scope",
+            "content_digest_computed",
+            "evidence_sha256",
+        }
+        or audit.get("method") != "metadata-only-exclusion"
+        or audit.get("complete") is not True
+        or audit.get("classification_content_read_scope")
+        != probe.get("content_read_scope")
+        or audit.get("content_digest_computed") is not False
+        or not isinstance(audit.get("audited_at"), str)
+        or RFC3339_UTC_RE.fullmatch(audit["audited_at"]) is None
+    ):
+        raise SiteHelperContractError(
+            "excluded non-PG audit authority is invalid"
+        )
+    auditor = _require_digest(
+        audit.get("auditor_sha256"),
+        "excluded non-PG auditor digest",
+    )
+    evidence_digest = _require_digest(
+        audit.get("evidence_sha256"),
+        "excluded non-PG evidence digest",
+    )
+    unsealed = {
+        **record,
+        "audit": {
+            key: value
+            for key, value in audit.items()
+            if key != "evidence_sha256"
+        },
+    }
+    if evidence_digest != sha256_bytes(canonical_json_bytes(unsealed)):
+        raise SiteHelperContractError(
+            "excluded non-PG evidence self-seal differs"
+        )
+    return dict(record), auditor
+
+
 def validate_external_database_audit(
     document: object,
     *,
     expected_users: dict[str, str] | None,
+    expected_media_authority_rules_digest: str | None = None,
+    expected_runtime_registry_digest: str | None = None,
     expected_media_registry_digest: str | None = None,
 ) -> dict[str, Any]:
+    if expected_media_registry_digest is not None:
+        if (
+            expected_runtime_registry_digest is not None
+            and expected_runtime_registry_digest
+            != expected_media_registry_digest
+        ):
+            raise SiteHelperContractError(
+                "conflicting expected runtime media-registry digests"
+            )
+        expected_runtime_registry_digest = (
+            expected_media_registry_digest
+        )
     fields = {
         "schema_version",
         "inventory_complete",
@@ -3553,18 +4550,21 @@ def validate_external_database_audit(
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 3
+        or document.get("schema_version") != 5
         or document.get("inventory_complete") is not True
         or document.get("writable_target")
         != {"stack": "production", "database": "nexpoly"}
     ):
         raise SiteHelperContractError(
-            "external-database evidence is not explicit schema v3"
+            "external-database evidence is not explicit schema v5"
         )
     registry = document.get("media_registry")
     registry_fields = {
         "schema_version",
-        "sha256",
+        "media_authority_rules_sha256",
+        "runtime_registry_sha256",
+        "reviewed_content_inventory_sha256",
+        "audit_images",
         "discovery_boundary_sha256",
         "discovery_state_sha256_before",
         "discovery_state_sha256_after",
@@ -3574,32 +4574,77 @@ def validate_external_database_audit(
         "docker_inventory_sha256",
         "backup_inventory_sha256",
         "scanned_volume_names",
+        "scanned_bind_sources",
         "scanned_container_ids",
     }
     if (
         not isinstance(registry, dict)
         or set(registry) != registry_fields
-        or registry.get("schema_version") != 3
+        or registry.get("schema_version") != 5
         or not isinstance(registry.get("captured_at"), str)
         or RFC3339_UTC_RE.fullmatch(registry["captured_at"]) is None
     ):
         raise SiteHelperContractError(
-            "external media registry-v3 identity is invalid"
+            "external media registry-v5 binding is invalid"
         )
-    registry_digest = _require_digest(
-        registry.get("sha256"),
-        "external media registry-v3 digest",
+    authority_rules_digest = _require_digest(
+        registry.get("media_authority_rules_sha256"),
+        "external media authority-rules digest",
     )
+    runtime_registry_digest = _require_digest(
+        registry.get("runtime_registry_sha256"),
+        "external runtime media-registry digest",
+    )
+    _require_digest(
+        registry.get("reviewed_content_inventory_sha256"),
+        "external reviewed-content inventory digest",
+    )
+    raw_audit_images = registry.get("audit_images")
     if (
-        expected_media_registry_digest is not None
-        and registry_digest
+        not isinstance(raw_audit_images, dict)
+        or set(raw_audit_images)
+        != {str(major) for major in POSTGRES_AUDIT_IMAGES}
+    ):
+        raise SiteHelperContractError(
+            "external media-v5 audit-image authority is incomplete"
+        )
+    audit_images: dict[int, tuple[str, str]] = {}
+    for major, digest_ref in POSTGRES_AUDIT_IMAGES.items():
+        image = raw_audit_images.get(str(major))
+        if (
+            not isinstance(image, dict)
+            or set(image) != {"digest_ref", "image_id"}
+            or image.get("digest_ref") != digest_ref
+        ):
+            raise SiteHelperContractError(
+                "external media-v5 audit-image reference differs"
+            )
+        image_id = _require_digest(
+            image.get("image_id"),
+            f"external PostgreSQL {major} local image ID",
+        )
+        audit_images[major] = (digest_ref, image_id)
+    if (
+        expected_media_authority_rules_digest is not None
+        and authority_rules_digest
         != _require_digest(
-            expected_media_registry_digest,
-            "expected external media registry-v3 digest",
+            expected_media_authority_rules_digest,
+            "expected external media authority-rules digest",
         )
     ):
         raise SiteHelperContractError(
-            "external media registry-v3 digest differs"
+            "external media authority-rules digest differs"
+        )
+    if (
+        expected_runtime_registry_digest is not None
+        and runtime_registry_digest
+        != _require_digest(
+            expected_runtime_registry_digest,
+            "expected external runtime media-registry digest",
+        )
+    ):
+        raise SiteHelperContractError(
+            "external runtime media-registry digest differs"
         )
     for name in (
         "discovery_boundary_sha256",
@@ -3619,6 +4664,7 @@ def validate_external_database_audit(
     expected_ids = registry.get("expected_media_ids")
     discovered_ids = registry.get("discovered_media_ids")
     volume_names = registry.get("scanned_volume_names")
+    bind_sources = registry.get("scanned_bind_sources")
     container_ids = registry.get("scanned_container_ids")
     if (
         not isinstance(expected_ids, list)
@@ -3637,6 +4683,14 @@ def validate_external_database_audit(
             or VOLUME_RE.fullmatch(name) is None
             for name in volume_names
         )
+        or not isinstance(bind_sources, list)
+        or bind_sources != sorted(set(bind_sources))
+        or any(
+            not isinstance(source, str)
+            or not Path(source).is_absolute()
+            or ".." in Path(source).parts
+            for source in bind_sources
+        )
         or not isinstance(container_ids, list)
         or container_ids != sorted(set(container_ids))
         or any(
@@ -3649,15 +4703,32 @@ def validate_external_database_audit(
             "external media registry-v3 complete inventory differs"
         )
     expected_volume_ids = {
-        f"docker-volume:{name}" for name in volume_names
+        media_id_for_locator("docker_volume", name)
+        for name in volume_names
     }
     if {
         media_id
         for media_id in expected_ids
-        if media_id.startswith("docker-volume:")
+        if media_id.startswith(
+            ("docker-volume:", "docker-volume-sha256:")
+        )
     } != expected_volume_ids:
         raise SiteHelperContractError(
             "external media-v3 did not classify every local volume"
+        )
+    expected_bind_ids = {
+        media_id_for_locator("container_bind", source)
+        for source in bind_sources
+    }
+    if {
+        media_id
+        for media_id in expected_ids
+        if media_id.startswith(
+            ("container-bind:", "container-bind-sha256:")
+        )
+    } != expected_bind_ids:
+        raise SiteHelperContractError(
+            "external media-v3 did not classify every scanned bind"
         )
     raw_media = document.get("media")
     if not isinstance(raw_media, list):
@@ -3665,37 +4736,76 @@ def validate_external_database_audit(
             "external media-v3 record list is invalid"
         )
     normalized: dict[str, dict[str, Any]] = {}
-    common_runtime: tuple[str, str, int, int, str, str] | None = None
+    runtimes_by_major: dict[
+        int,
+        tuple[str, int, int, int, str, str],
+    ] = {}
+    common_auditor: str | None = None
     requires_0014 = False
     for raw in raw_media:
         if not isinstance(raw, dict):
             raise SiteHelperContractError(
                 "external media-v3 record is invalid"
             )
-        if raw.get("record_type") == "nexpoly-db":
+        if raw.get("record_type") in {
+            "nexpoly-db",
+            "adjacent-postgres",
+        }:
             record, runtime, needs_0014 = _external_nexpoly_medium_v3(
                 raw,
                 volume_names=volume_names,
                 container_ids=container_ids,
             )
             requires_0014 = requires_0014 or needs_0014
+            auditor = runtime[0]
+        elif raw.get("record_type") == "excluded-non-pg-media":
+            record, auditor = _external_excluded_non_pg_medium_v4(
+                raw,
+                volume_names=volume_names,
+                bind_sources=bind_sources,
+                container_ids=container_ids,
+            )
+            runtime = None
         else:
+            if raw.get("record_type") != "reviewed-non-pg":
+                raise SiteHelperContractError(
+                    "schema-v5 PostgreSQL media requires a full logical audit"
+                )
             record, runtime = _external_record_only_medium_v3(
                 raw,
                 volume_names=volume_names,
                 container_ids=container_ids,
             )
+            auditor = runtime[0]
         media_id = record["media_id"]
         if media_id in normalized:
             raise SiteHelperContractError(
                 "external media-v3 contains duplicate identities"
             )
-        if common_runtime is None:
-            common_runtime = runtime
-        elif common_runtime != runtime:
+        if common_auditor is None:
+            common_auditor = auditor
+        elif common_auditor != auditor:
             raise SiteHelperContractError(
-                "external media-v3 mixes audit runtimes"
+                "external media-v3 mixes auditor implementations"
             )
+        if runtime is not None:
+            major = runtime[1]
+            if (
+                audit_images.get(major)
+                != (runtime[4], runtime[5])
+            ):
+                raise SiteHelperContractError(
+                    "external media-v5 runtime differs from registry image"
+                )
+            previous_runtime = runtimes_by_major.get(major)
+            if (
+                previous_runtime is not None
+                and previous_runtime != runtime
+            ):
+                raise SiteHelperContractError(
+                    "external media-v5 mixes one-major audit runtimes"
+                )
+            runtimes_by_major[major] = runtime
         normalized[media_id] = record
     if sorted(normalized) != expected_ids:
         raise SiteHelperContractError(
@@ -3726,21 +4836,35 @@ def validate_external_database_audit(
         "role_superuser",
         "role_create_db",
         "role_create_role",
+        "role_replication",
+        "role_bypass_rls",
+        "role_inherit",
+        "role_can_login",
+        "role_memberships",
         "system_identifier",
         "database_identity_sha256",
         "ledger",
         "ledger_sha256",
         "legacy_relation_present",
     }
-    if not isinstance(databases, list) or len(databases) not in {1, 2}:
+    if not isinstance(databases, list) or len(databases) > 2:
         raise SiteHelperContractError(
-            "external online database-v3 evidence is incomplete"
+            "external online database-v3 evidence is invalid"
         )
-    expected_stacks = (
-        ["nexpoly_dev"]
-        if len(databases) == 1
-        else ["nexpoly_dev", "nexpoly_md_health_opt"]
-    )
+    observed_stacks = [
+        database.get("stack")
+        if isinstance(database, dict)
+        else None
+        for database in databases
+    ]
+    allowed_stacks = ["nexpoly_dev", "nexpoly_md_health_opt"]
+    expected_stacks = [
+        stack for stack in allowed_stacks if stack in observed_stacks
+    ]
+    if observed_stacks != expected_stacks:
+        raise SiteHelperContractError(
+            "external online database-v3 stack order differs"
+        )
     normalized_databases: list[dict[str, Any]] = []
     for database, stack in zip(
         databases,
@@ -3774,6 +4898,11 @@ def validate_external_database_audit(
             "role_superuser": source["role_superuser"],
             "role_create_db": source["role_create_db"],
             "role_create_role": source["role_create_role"],
+            "role_replication": source["role_replication"],
+            "role_bypass_rls": source["role_bypass_rls"],
+            "role_inherit": source["role_inherit"],
+            "role_can_login": source["role_can_login"],
+            "role_memberships": source["role_memberships"],
             "system_identifier": source["database_identity"][
                 "system_identifier"
             ],
@@ -3798,42 +4927,44 @@ def validate_external_database_audit(
                 "external online database-v3 audit user differs"
             )
         normalized_databases.append(dict(database))
-    health_records = [
-        record
-        for record in normalized.values()
-        if record.get("record_type") == "nexpoly-db"
-        and record.get("database") == "nexpoly_md_health_opt"
-    ]
-    health_online = "nexpoly_md_health_opt" in expected_stacks
-    if not health_records:
-        raise SiteHelperContractError(
-            "external media-v3 omits the retained side-dev health medium"
-        )
-    if not health_online and any(
-        record.get("disposition") != "retained-private-isolated"
-        or record["audit"].get("method") == "live-read-only"
-        for record in health_records
-    ):
-        raise SiteHelperContractError(
-            "external media-v3 side-dev health medium is not retained-isolated"
-        )
-    if health_online:
-        projected_health = normalized_databases[-1]
-        source = normalized[projected_health["media_id"]]
-        if (
-            source.get("database") != "nexpoly_md_health_opt"
-            or source.get("disposition") != "read-only-online"
-            or source["audit"].get("method") != "live-read-only"
-        ):
+    projected_by_stack = {
+        database["stack"]: database["media_id"]
+        for database in normalized_databases
+    }
+    for stack in allowed_stacks:
+        stack_records = [
+            record
+            for record in normalized.values()
+            if record.get("record_type") == "nexpoly-db"
+            and record.get("database") == stack
+        ]
+        if not stack_records:
             raise SiteHelperContractError(
-                "external media-v3 online side-dev projection is not live"
+                f"external media-v3 omits retained {stack} media"
             )
+        projected_media_id = projected_by_stack.get(stack)
+        for record in stack_records:
+            if record["media_id"] == projected_media_id:
+                if (
+                    record.get("disposition") != "read-only-online"
+                    or record["audit"].get("method") != "live-read-only"
+                ):
+                    raise SiteHelperContractError(
+                        f"external media-v3 online {stack} projection is not live"
+                    )
+            elif (
+                record.get("disposition") != "retained-private-isolated"
+                or record["audit"].get("method") == "live-read-only"
+            ):
+                raise SiteHelperContractError(
+                    f"external media-v3 offline {stack} medium is not retained-isolated"
+                )
     if document.get("requires_0014") is not requires_0014:
         raise SiteHelperContractError(
             "external media-v3 0014 requirement differs from every database"
         )
     return {
-        "schema_version": 3,
+        "schema_version": 5,
         "inventory_complete": True,
         "writable_target": {"stack": "production", "database": "nexpoly"},
         "media_registry": dict(registry),
@@ -3906,6 +5037,87 @@ def _validate_table_inventory(
             }
         )
     return normalized
+
+
+def _validate_polytao_archive_evidence(
+    document: object,
+    *,
+    migration_exception: dict[str, Any],
+) -> dict[str, Any] | None:
+    if migration_exception["state"] == "absent":
+        if document is not None:
+            raise SiteHelperContractError(
+                "post-0012 mutable-data audit fabricated a PolyTAO archive seal"
+            )
+        return None
+    fields = {
+        "schema_version",
+        "row_count",
+        "status_counts",
+        "rows_sha256",
+        "schema_sha256",
+        "structure_counts",
+    }
+    if not isinstance(document, dict) or set(document) != fields:
+        raise SiteHelperContractError(
+            "mutable-data PolyTAO archive seal has an invalid shape"
+        )
+    row_count = document.get("row_count")
+    status_counts = document.get("status_counts")
+    business_statuses = {
+        "pending",
+        "submitted",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+    }
+    if (
+        document.get("schema_version") != 2
+        or isinstance(row_count, bool)
+        or not isinstance(row_count, int)
+        or row_count != migration_exception["row_count"]
+        or not isinstance(status_counts, dict)
+        or any(
+            not isinstance(status, str)
+            or status not in business_statuses
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count <= 0
+            for status, count in status_counts.items()
+        )
+        or sum(status_counts.values()) != row_count
+        or not isinstance(document.get("rows_sha256"), str)
+        or BARE_SHA256_RE.fullmatch(document["rows_sha256"]) is None
+        or not isinstance(document.get("schema_sha256"), str)
+        or BARE_SHA256_RE.fullmatch(document["schema_sha256"]) is None
+    ):
+        raise SiteHelperContractError(
+            "mutable-data PolyTAO archive seal is incomplete"
+        )
+    structure_counts = document.get("structure_counts")
+    if (
+        not isinstance(structure_counts, dict)
+        or set(structure_counts)
+        != {"columns", "indexes", "constraints", "triggers"}
+        or any(
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+            for count in structure_counts.values()
+        )
+    ):
+        raise SiteHelperContractError(
+            "mutable-data PolyTAO archive structure seal is invalid"
+        )
+    return {
+        "schema_version": 2,
+        "row_count": row_count,
+        "status_counts": dict(status_counts),
+        "rows_sha256": document["rows_sha256"],
+        "schema_sha256": document["schema_sha256"],
+        "structure_counts": dict(structure_counts),
+    }
 
 
 def _validate_mutable_ledger(records: object) -> list[dict[str, str]]:
@@ -4337,7 +5549,11 @@ def _validate_mutable_audit_role_security(
     return dict(document)
 
 
-def validate_mutable_data_audit(document: object) -> dict[str, Any]:
+def _validate_mutable_data_audit(
+    document: object,
+    *,
+    expected_connection_port: int,
+) -> dict[str, Any]:
     fields = {
         "schema_version",
         "operation_id",
@@ -4355,6 +5571,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         "governed_controls",
         "static_tables",
         "migration_exception",
+        "migration_exception_archive_evidence",
         "sequences",
         "bridge_projection",
         "snapshot_sha256",
@@ -4363,7 +5580,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 5
+        or document.get("schema_version") != 6
         or not isinstance(document.get("operation_id"), str)
         or OPERATION_ID_RE.fullmatch(document["operation_id"]) is None
         or document.get("database") != "nexpoly"
@@ -4390,7 +5607,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         != {"service", "host", "port", "database", "user"}
         or connection.get("service") != "nexpoly-mutable-audit"
         or connection.get("host") != "127.0.0.1"
-        or connection.get("port") != 55432
+        or connection.get("port") != expected_connection_port
         or connection.get("database") != "nexpoly"
         or connection.get("user") != "nexpoly_mutable_audit"
     ):
@@ -4504,6 +5721,12 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
             else frozenset()
         ),
     )[0]
+    migration_exception_archive_evidence = (
+        _validate_polytao_archive_evidence(
+            document.get("migration_exception_archive_evidence"),
+            migration_exception=migration_exception,
+        )
+    )
     governed_controls = _validate_governed_controls(
         document.get("governed_controls"),
         controls_ready=controls_ready,
@@ -4539,6 +5762,9 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         "governed_controls": governed_controls,
         "static_tables": static_tables,
         "migration_exception": migration_exception,
+        "migration_exception_archive_evidence": (
+            migration_exception_archive_evidence
+        ),
         "sequences": sequences,
         "bridge_projection": bridge_projection,
     }
@@ -4547,7 +5773,7 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
     ):
         raise SiteHelperContractError("mutable-data snapshot digest differs")
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,
@@ -4555,6 +5781,15 @@ def validate_mutable_data_audit(document: object) -> dict[str, Any]:
         "snapshot_sha256": document["snapshot_sha256"],
         "captured_at": document["captured_at"],
     }
+
+
+def validate_mutable_data_audit(document: object) -> dict[str, Any]:
+    """Validate the production helper's fixed localhost endpoint."""
+
+    return _validate_mutable_data_audit(
+        document,
+        expected_connection_port=55432,
+    )
 
 
 def validate_monomer_dft_0013_creation(
@@ -4624,7 +5859,8 @@ def validate_evidence(
     *,
     expected_runtime_digest: str | None = None,
     expected_users: dict[str, str] | None = None,
-    expected_media_registry_digest: str | None = None,
+    expected_media_authority_rules_digest: str | None = None,
+    expected_runtime_registry_digest: str | None = None,
 ) -> dict[str, Any]:
     validators: dict[str, Callable[..., dict[str, Any]]] = {
         "bootstrap-active-jobs-probe": validate_active_jobs,
@@ -4646,7 +5882,12 @@ def validate_evidence(
         return validator(
             document,
             expected_users=expected_users,
-            expected_media_registry_digest=expected_media_registry_digest,
+            expected_media_authority_rules_digest=(
+                expected_media_authority_rules_digest
+            ),
+            expected_runtime_registry_digest=(
+                expected_runtime_registry_digest
+            ),
         )
     return validator(document, expected_runtime_digest=expected_runtime_digest)
 
@@ -4727,7 +5968,8 @@ def parser() -> argparse.ArgumentParser:
     validate.add_argument("--expected-runtime-digest")
     validate.add_argument("--dev-audit-user")
     validate.add_argument("--health-audit-user")
-    validate.add_argument("--media-registry-sha256")
+    validate.add_argument("--media-authority-rules-sha256")
+    validate.add_argument("--runtime-media-registry-sha256")
     commands.add_parser("describe")
     return root
 
@@ -4760,7 +6002,12 @@ def main(argv: list[str] | None = None) -> int:
                 _load_evidence(arguments.input),
                 expected_runtime_digest=arguments.expected_runtime_digest,
                 expected_users=expected_users,
-                expected_media_registry_digest=arguments.media_registry_sha256,
+                expected_media_authority_rules_digest=(
+                    arguments.media_authority_rules_sha256
+                ),
+                expected_runtime_registry_digest=(
+                    arguments.runtime_media_registry_sha256
+                ),
             )
     except (OSError, SiteHelperContractError) as exc:
         print(f"site-helper-contracts: error: {exc}", file=sys.stderr)

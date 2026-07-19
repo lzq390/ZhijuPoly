@@ -233,6 +233,134 @@ def test_permission_takeover_rejects_immutable_object_drift(
         trust.verify_repository_permission_takeover(root, marker)
 
 
+def test_permission_takeover_rejects_explicit_pushurl_before_mutation(
+    tmp_path: Path,
+) -> None:
+    root, _source_sha, _source_tree = repository(tmp_path)
+    canonical_remote(root)
+    git(
+        root,
+        "config",
+        "remote.origin.pushurl",
+        "https://github.com/lzq390/ZhijuPoly.git",
+    )
+    original = make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+
+    with raises(
+        trust.GitPermissionTakeoverError,
+        match="redirect policy",
+    ):
+        trust.takeover_repository_permissions(root, marker)
+
+    assert not marker.exists()
+    assert not marker.is_symlink()
+    assert git(root, "config", "--get-all", "remote.origin.pushurl") == (
+        "https://github.com/lzq390/ZhijuPoly.git"
+    )
+    for relative, mode in original.items():
+        path = root if relative == "." else root / relative
+        assert (path.lstat().st_mode & 0o777) == mode
+
+
+def _with_legacy_pushurl_policy(function: Callable[[], None]) -> None:
+    original = trust.ALLOWED_CONFIG
+    trust.ALLOWED_CONFIG = {
+        **original,
+        'remote "origin"': frozenset(
+            {*original['remote "origin"'], "pushurl"}
+        ),
+    }
+    try:
+        function()
+    finally:
+        trust.ALLOWED_CONFIG = original
+
+
+def test_existing_captured_marker_cannot_bypass_new_pushurl_policy(
+    tmp_path: Path,
+) -> None:
+    root, _source_sha, _source_tree = repository(tmp_path)
+    canonical_remote(root)
+    git(
+        root,
+        "config",
+        "remote.origin.pushurl",
+        "https://github.com/lzq390/ZhijuPoly.git",
+    )
+    original = make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+
+    def capture_with_legacy_policy() -> None:
+        with raises(RuntimeError, match="legacy captured marker"):
+            trust.takeover_repository_permissions(
+                root,
+                marker,
+                checkpoint=lambda label: (
+                    (_ for _ in ()).throw(
+                        RuntimeError("legacy captured marker")
+                    )
+                    if label == "permission:captured"
+                    else None
+                ),
+            )
+
+    _with_legacy_pushurl_policy(capture_with_legacy_policy)
+    assert marker.exists()
+    before_retry = {
+        relative: (
+            root if relative == "." else root / relative
+        ).lstat().st_mode
+        & 0o777
+        for relative in original
+    }
+
+    with raises(
+        trust.GitPermissionTakeoverError,
+        match="redirect policy",
+    ):
+        trust.takeover_repository_permissions(root, marker)
+
+    assert {
+        relative: (
+            root if relative == "." else root / relative
+        ).lstat().st_mode
+        & 0o777
+        for relative in original
+    } == before_retry
+    assert trust._load_permission_document(root, marker)["phase"] == "captured"
+
+
+def test_existing_hardened_pushurl_marker_can_only_restore(
+    tmp_path: Path,
+) -> None:
+    root, _source_sha, _source_tree = repository(tmp_path)
+    canonical_remote(root)
+    git(
+        root,
+        "config",
+        "remote.origin.pushurl",
+        "https://github.com/lzq390/ZhijuPoly.git",
+    )
+    original = make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+    _with_legacy_pushurl_policy(
+        lambda: trust.takeover_repository_permissions(root, marker)
+    )
+
+    with raises(
+        trust.GitPermissionTakeoverError,
+        match="redirect policy",
+    ):
+        trust.takeover_repository_permissions(root, marker)
+
+    restored = trust.restore_repository_permissions(root, marker)
+    assert restored["phase"] == "restored"
+    for relative, mode in original.items():
+        path = root if relative == "." else root / relative
+        assert (path.lstat().st_mode & 0o777) == mode
+
+
 def test_evidence_binds_interpreted_config_index_refs_and_objects(
     tmp_path: Path,
 ) -> None:
@@ -637,6 +765,18 @@ def load_tests(
         (
             "safe_child_environment",
             test_safe_child_environment_does_not_inherit_loader_or_user_config,
+        ),
+        (
+            "permission_rejects_explicit_pushurl_before_mutation",
+            test_permission_takeover_rejects_explicit_pushurl_before_mutation,
+        ),
+        (
+            "existing_captured_marker_rejects_pushurl",
+            test_existing_captured_marker_cannot_bypass_new_pushurl_policy,
+        ),
+        (
+            "existing_hardened_marker_restores_pushurl",
+            test_existing_hardened_pushurl_marker_can_only_restore,
         ),
         ("object_store_symlink_rejected", test_object_store_symlink_is_rejected),
         ("worker_slot_uses_trust_policy", test_worker_slot_checkout_uses_shared_trust_policy),

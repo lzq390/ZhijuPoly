@@ -38,6 +38,7 @@ WORKER_UNIT_PATH = Path(
 SCRIPT_ROOT = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_ROOT.parent
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+TAKEOVER_OPERATION_RE = re.compile(r"takeover-[a-z0-9][a-z0-9-]{7,79}\Z")
 REPOSITORY_SSH_URL = "git@github.com:lzq390/ZhijuPoly.git"
 REPOSITORY_API_ROOT = "https://api.github.com/repos/lzq390/ZhijuPoly"
 SYSTEM_CA_BUNDLE = Path("/etc/ssl/certs/ca-certificates.crt")
@@ -83,6 +84,10 @@ DIRECTORIES = {
 IMMUTABLE_FILES = {
     "control_runtime_selector.py": (SCRIPT_ROOT / "control_runtime_selector.py", 0o700),
     "nexpoly-pull-deploy": (SCRIPT_ROOT / "nexpoly-pull-deploy", 0o700),
+    "nexpoly-postgres-media-evidence": (
+        SCRIPT_ROOT / "nexpoly-postgres-media-evidence",
+        0o700,
+    ),
     "nexpoly-production-readiness": (
         SCRIPT_ROOT / "nexpoly-production-readiness",
         0o700,
@@ -96,6 +101,26 @@ IMMUTABLE_FILES = {
         0o700,
     ),
 }
+
+BOOTSTRAP_TRANSACTION_SCHEMA_VERSION = 1
+BOOTSTRAP_TRANSACTION_RELATIVE_DIRECTORY = Path(
+    "state/legacy-takeover/bootstrap-children"
+)
+BOOTSTRAP_PHASES = (
+    "intent",
+    "runtime-layout-intent",
+    "runtime-layout-ready",
+    "checkout-intent",
+    "checkout-ready",
+    "worker-unit-intent",
+    "worker-unit-ready",
+    "immutable-controls-intent",
+    "immutable-controls-ready",
+    "control-release-intent",
+    "control-release-ready",
+    "authority-commit-intent",
+    "completed",
+)
 
 
 class BootstrapError(RuntimeError):
@@ -129,21 +154,48 @@ def _control_runtime(*, source_sha: str, allow_test: bool) -> object:
 
 
 def _legacy_takeover_evidence(
-    *, source_sha: str, allow_test: bool
+    *,
+    source_sha: str,
+    allow_test: bool,
+    installed_runtime_root: Path | None = None,
 ) -> object:
     """Load the takeover validator from the exact reviewed F commit."""
 
-    payload = _read_reviewed_source(
+    reviewed = _read_reviewed_source(
         "scripts/legacy_takeover_evidence.py",
         source_sha=source_sha,
         allow_test=allow_test,
     )
+    if installed_runtime_root is None:
+        payload = reviewed
+        module_path = f"git:{source_sha}:scripts/legacy_takeover_evidence.py"
+    else:
+        path = (
+            installed_runtime_root
+            / "legacy-takeover/bin/legacy_takeover_evidence.py"
+        )
+        try:
+            metadata = path.lstat()
+            payload = path.read_bytes()
+        except OSError as exc:
+            raise BootstrapError(
+                "installed takeover evidence validator is unavailable"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or payload != reviewed
+        ):
+            raise BootstrapError(
+                "installed takeover evidence validator differs from reviewed F"
+            )
+        module_path = str(path)
     module = types.ModuleType("nexpoly_bootstrap_legacy_takeover_evidence")
-    module.__file__ = (
-        f"git:{source_sha}:scripts/legacy_takeover_evidence.py"
-    )
+    module.__file__ = module_path
     try:
-        exec(compile(payload, module.__file__, "exec"), module.__dict__)
+        exec(compile(payload, module_path, "exec"), module.__dict__)
     except BaseException as exc:
         raise BootstrapError(
             "reviewed legacy takeover validator cannot be loaded"
@@ -542,6 +594,323 @@ def _load_private_json(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise BootstrapError(f"private bootstrap record is invalid: {path}")
     return value
+
+
+def _canonical_json_digest(value: object) -> str:
+    return digest(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    )
+
+
+def _bootstrap_transaction_path(
+    runtime_root: Path,
+    *,
+    operation_id: str,
+    source_sha: str,
+) -> Path:
+    if TAKEOVER_OPERATION_RE.fullmatch(operation_id) is None:
+        raise BootstrapError("legacy takeover operation ID is invalid")
+    if SHA_RE.fullmatch(source_sha) is None:
+        raise BootstrapError("bootstrap transaction source SHA is invalid")
+    return (
+        runtime_root
+        / BOOTSTRAP_TRANSACTION_RELATIVE_DIRECTORY
+        / f"{operation_id}-{source_sha}.json"
+    )
+
+
+def _ensure_bootstrap_transaction_directory(runtime_root: Path) -> Path:
+    """Create only the journal path that legacy control restore never removes."""
+
+    current = runtime_root
+    for relative in (
+        Path("state"),
+        Path("state/legacy-takeover"),
+        BOOTSTRAP_TRANSACTION_RELATIVE_DIRECTORY,
+    ):
+        path = runtime_root / relative
+        if path != current:
+            try:
+                path.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise BootstrapError(
+                f"bootstrap transaction directory is unavailable: {path}"
+            ) from exc
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise BootstrapError(
+                f"bootstrap transaction directory is unsafe: {path}"
+            )
+        current = path
+    return runtime_root / BOOTSTRAP_TRANSACTION_RELATIVE_DIRECTORY
+
+
+def _validate_bootstrap_transaction(
+    document: dict[str, object],
+    *,
+    path: Path,
+) -> dict[str, object]:
+    required = {
+        "schema_version",
+        "status",
+        "phase",
+        "operation_id",
+        "source_sha",
+        "source_tree",
+        "identity",
+        "identity_sha256",
+        "prepared_at",
+        "created_at",
+        "updated_at",
+        "step_evidence",
+    }
+    optional = {
+        "abort_authority",
+        "restored_terminal_sha256",
+        "aborted_at",
+    }
+    if (
+        not required.issubset(document)
+        or not set(document).issubset(required | optional)
+        or document.get("schema_version")
+        != BOOTSTRAP_TRANSACTION_SCHEMA_VERSION
+        or document.get("status")
+        not in {"in-progress", "completed", "aborting", "aborted"}
+        or not isinstance(document.get("identity"), dict)
+        or _canonical_json_digest(document["identity"])
+        != document.get("identity_sha256")
+        or not isinstance(document.get("step_evidence"), dict)
+    ):
+        raise BootstrapError("bootstrap child transaction has an invalid shape")
+    operation_id = document.get("operation_id")
+    source_sha = document.get("source_sha")
+    source_tree = document.get("source_tree")
+    if (
+        not isinstance(operation_id, str)
+        or TAKEOVER_OPERATION_RE.fullmatch(operation_id) is None
+        or not isinstance(source_sha, str)
+        or SHA_RE.fullmatch(source_sha) is None
+        or not isinstance(source_tree, str)
+        or SHA_RE.fullmatch(source_tree) is None
+        or path
+        != _bootstrap_transaction_path(
+            path.parents[3],
+            operation_id=operation_id,
+            source_sha=source_sha,
+        )
+    ):
+        raise BootstrapError("bootstrap child transaction identity is invalid")
+    status = document["status"]
+    phase = document["phase"]
+    if status in {"in-progress", "completed"}:
+        if phase not in BOOTSTRAP_PHASES:
+            raise BootstrapError("bootstrap child transaction phase is invalid")
+        if (status == "completed") != (phase == "completed"):
+            raise BootstrapError(
+                "bootstrap child transaction completion is inconsistent"
+            )
+        if any(name in document for name in optional):
+            raise BootstrapError(
+                "active bootstrap transaction contains abort authority"
+            )
+    else:
+        if phase not in {"abort-intent", "aborted"}:
+            raise BootstrapError("bootstrap abort phase is invalid")
+        abort_authority = document.get("abort_authority")
+        if not isinstance(abort_authority, dict):
+            raise BootstrapError("bootstrap abort authority is missing")
+        if (status == "aborted") != (phase == "aborted"):
+            raise BootstrapError("bootstrap abort completion is inconsistent")
+        restored = document.get("restored_terminal_sha256")
+        if status == "aborted":
+            if (
+                not isinstance(restored, str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", restored) is None
+                or not isinstance(document.get("aborted_at"), str)
+            ):
+                raise BootstrapError(
+                    "bootstrap abort terminal authority is invalid"
+                )
+        elif restored is not None or "aborted_at" in document:
+            raise BootstrapError(
+                "nonterminal bootstrap abort has terminal authority"
+            )
+    return document
+
+
+def _load_or_create_bootstrap_transaction(
+    runtime_root: Path,
+    *,
+    operation_id: str,
+    source_sha: str,
+    source_tree: str,
+    identity: dict[str, object],
+) -> tuple[Path, dict[str, object]]:
+    directory = _ensure_bootstrap_transaction_directory(runtime_root)
+    path = _bootstrap_transaction_path(
+        runtime_root,
+        operation_id=operation_id,
+        source_sha=source_sha,
+    )
+    if path.exists() or path.is_symlink():
+        transaction = _validate_bootstrap_transaction(
+            _load_private_json(path),
+            path=path,
+        )
+        if (
+            transaction["operation_id"] != operation_id
+            or transaction["source_sha"] != source_sha
+            or transaction["source_tree"] != source_tree
+            or transaction["identity"] != identity
+            or transaction["identity_sha256"]
+            != _canonical_json_digest(identity)
+        ):
+            raise BootstrapError(
+                "existing bootstrap child transaction has different authority"
+            )
+        if transaction["status"] in {"aborting", "aborted"}:
+            raise BootstrapError(
+                "aborted bootstrap transaction cannot be resumed"
+            )
+        return path, transaction
+    prepared_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    transaction = {
+        "schema_version": BOOTSTRAP_TRANSACTION_SCHEMA_VERSION,
+        "status": "in-progress",
+        "phase": "intent",
+        "operation_id": operation_id,
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "identity": identity,
+        "identity_sha256": _canonical_json_digest(identity),
+        "prepared_at": prepared_at,
+        "created_at": prepared_at,
+        "updated_at": prepared_at,
+        "step_evidence": {},
+    }
+    _atomic_json(path, transaction)
+    _fsync_directory(directory)
+    return path, _validate_bootstrap_transaction(
+        _load_private_json(path),
+        path=path,
+    )
+
+
+def _begin_bootstrap_step(
+    path: Path,
+    transaction: dict[str, object],
+    *,
+    previous_phase: str,
+    intent_phase: str,
+) -> dict[str, object]:
+    transaction = _validate_bootstrap_transaction(
+        _load_private_json(path),
+        path=path,
+    )
+    if transaction["status"] == "completed":
+        return transaction
+    if transaction["status"] != "in-progress":
+        raise BootstrapError("bootstrap transaction is not resumable")
+    current = str(transaction["phase"])
+    current_index = BOOTSTRAP_PHASES.index(current)
+    intent_index = BOOTSTRAP_PHASES.index(intent_phase)
+    if current_index >= intent_index:
+        return transaction
+    if current != previous_phase or intent_index != current_index + 1:
+        raise BootstrapError("bootstrap transaction phase is discontinuous")
+    transaction["phase"] = intent_phase
+    transaction["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    _atomic_json(path, transaction)
+    return _validate_bootstrap_transaction(
+        _load_private_json(path),
+        path=path,
+    )
+
+
+def _complete_bootstrap_step(
+    path: Path,
+    transaction: dict[str, object],
+    *,
+    intent_phase: str,
+    ready_phase: str,
+    evidence_name: str,
+    evidence: object,
+) -> dict[str, object]:
+    transaction = _validate_bootstrap_transaction(
+        _load_private_json(path),
+        path=path,
+    )
+    step_evidence = dict(transaction["step_evidence"])
+    if transaction["status"] == "completed" or (
+        transaction["phase"] in BOOTSTRAP_PHASES
+        and BOOTSTRAP_PHASES.index(str(transaction["phase"]))
+        >= BOOTSTRAP_PHASES.index(ready_phase)
+    ):
+        if step_evidence.get(evidence_name) != evidence:
+            raise BootstrapError(
+                f"bootstrap {evidence_name} evidence changed on resume"
+            )
+        return transaction
+    if (
+        transaction["status"] != "in-progress"
+        or transaction["phase"] != intent_phase
+    ):
+        raise BootstrapError("bootstrap transaction step cannot commit")
+    step_evidence[evidence_name] = evidence
+    transaction["step_evidence"] = step_evidence
+    transaction["phase"] = ready_phase
+    transaction["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    _atomic_json(path, transaction)
+    return _validate_bootstrap_transaction(
+        _load_private_json(path),
+        path=path,
+    )
+
+
+def _complete_bootstrap_transaction(
+    path: Path,
+    *,
+    evidence: object,
+) -> dict[str, object]:
+    transaction = _validate_bootstrap_transaction(
+        _load_private_json(path),
+        path=path,
+    )
+    step_evidence = dict(transaction["step_evidence"])
+    if transaction["status"] == "completed":
+        if step_evidence.get("authority_commit") != evidence:
+            raise BootstrapError(
+                "bootstrap authority commit evidence changed on resume"
+            )
+        return transaction
+    if (
+        transaction["status"] != "in-progress"
+        or transaction["phase"] != "authority-commit-intent"
+    ):
+        raise BootstrapError("bootstrap authority transaction cannot commit")
+    step_evidence["authority_commit"] = evidence
+    transaction["step_evidence"] = step_evidence
+    transaction["phase"] = "completed"
+    transaction["status"] = "completed"
+    transaction["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    _atomic_json(path, transaction)
+    return _validate_bootstrap_transaction(
+        _load_private_json(path),
+        path=path,
+    )
 
 
 def _sealed_bootstrap_delivery_gate(
@@ -1163,6 +1532,7 @@ def _build_control_release(
     source_sha: str,
     source_tree: str,
     allow_test: bool,
+    prepared_at: str | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     source_payload = _read_reviewed_source(
         "scripts/control-release.json", source_sha=source_sha, allow_test=allow_test
@@ -1200,6 +1570,80 @@ def _build_control_release(
     ).encode("utf-8") + b"\n"
     release_parent = runtime_root / "control-releases"
     release = release_parent / release_id
+    staging = release_parent / f".bootstrap-{release_id}"
+    staging_owner = {
+        "schema_version": 1,
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "release_id": release_id,
+        "manifest_sha256": digest(manifest_payload),
+    }
+
+    def inspect_staging() -> str:
+        metadata = staging.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or staging.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise BootstrapError("bootstrap control-release staging is unsafe")
+        entries = {entry.name: entry for entry in staging.iterdir()}
+        owner_path = staging / ".owner.json"
+        if ".owner.json" in entries:
+            if _load_private_json(owner_path) != staging_owner:
+                raise BootstrapError(
+                    "bootstrap control-release staging has foreign ownership"
+                )
+            return "owned"
+        if not entries:
+            return "empty"
+        expected_names = set(payloads) | {control.CONTROL_MANIFEST_NAME}
+        if set(entries) != expected_names:
+            raise BootstrapError(
+                "ownerless bootstrap staging is neither empty nor complete"
+            )
+        for name, payload in payloads.items():
+            path = entries[name]
+            file_metadata = path.lstat()
+            if (
+                not stat.S_ISREG(file_metadata.st_mode)
+                or path.is_symlink()
+                or file_metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(file_metadata.st_mode) != 0o700
+                or path.read_bytes() != payload
+            ):
+                raise BootstrapError(
+                    "ownerless bootstrap staging payload differs"
+                )
+        manifest_path = entries[control.CONTROL_MANIFEST_NAME]
+        manifest_metadata = manifest_path.lstat()
+        if (
+            not stat.S_ISREG(manifest_metadata.st_mode)
+            or manifest_path.is_symlink()
+            or manifest_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(manifest_metadata.st_mode) != 0o600
+            or manifest_path.read_bytes() != manifest_payload
+        ):
+            raise BootstrapError(
+                "ownerless bootstrap staging manifest differs"
+            )
+        return "complete"
+
+    foreign_staging = [
+        path
+        for path in release_parent.glob(".bootstrap-*")
+        if path != staging
+    ]
+    if foreign_staging:
+        raise BootstrapError(
+            "control-releases contains foreign bootstrap staging"
+        )
+    staging_state = (
+        inspect_staging()
+        if staging.exists() or staging.is_symlink()
+        else None
+    )
     if release.exists() or release.is_symlink():
         try:
             existing, root = control.load_control_release(runtime_root, release_id)
@@ -1207,24 +1651,54 @@ def _build_control_release(
             raise BootstrapError("existing initial control release is invalid") from exc
         if existing != manifest or root != release:
             raise BootstrapError("existing initial control release differs")
+        if staging_state is not None:
+            if staging_state not in {"owned", "empty", "complete"}:
+                raise BootstrapError(
+                    "bootstrap control-release residue is invalid"
+                )
+            import shutil
+
+            shutil.rmtree(staging)
+            _fsync_directory(release_parent)
     else:
-        staging = release_parent / f".bootstrap-{os.urandom(12).hex()}"
-        staging.mkdir(mode=0o700)
-        try:
-            for name, payload in payloads.items():
-                _atomic_file(staging / name, payload, 0o700)
-            _atomic_file(staging / control.CONTROL_MANIFEST_NAME, manifest_payload, 0o600)
-            _fsync_directory(staging)
+        if staging_state == "complete":
             os.rename(staging, release)
             _fsync_directory(release_parent)
-        except BaseException:
-            if staging.exists() and not staging.is_symlink():
-                import shutil
+            control.load_control_release(runtime_root, release_id)
+            staging_state = None
+        elif staging_state is not None:
+            import shutil
 
-                shutil.rmtree(staging)
-            raise
+            shutil.rmtree(staging)
+            _fsync_directory(release_parent)
+            staging_state = None
+        if not release.exists() and not release.is_symlink():
+            staging.mkdir(mode=0o700)
+            _atomic_json(staging / ".owner.json", staging_owner)
+            try:
+                for name, payload in payloads.items():
+                    _atomic_file(staging / name, payload, 0o700)
+                _atomic_file(
+                    staging / control.CONTROL_MANIFEST_NAME,
+                    manifest_payload,
+                    0o600,
+                )
+                (staging / ".owner.json").unlink()
+                _fsync_directory(staging)
+                os.rename(staging, release)
+                _fsync_directory(release_parent)
+            except BaseException:
+                if staging.exists() and not staging.is_symlink():
+                    import shutil
+
+                    shutil.rmtree(staging)
+                raise
         control.load_control_release(runtime_root, release_id)
     operation_id = "bootstrap-controls-" + source_sha[:16]
+    if prepared_at is None:
+        prepared_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    if not isinstance(prepared_at, str) or not prepared_at:
+        raise BootstrapError("bootstrap control prepared timestamp is invalid")
     candidate = {
         "schema_version": control.CONTROL_CANDIDATE_SCHEMA_VERSION,
         "protocol_version": control.PROTOCOL_VERSION,
@@ -1234,7 +1708,7 @@ def _build_control_release(
         "source_tree": source_tree,
         "manifest_sha256": digest(manifest_payload),
         "operation_id": operation_id,
-        "prepared_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "prepared_at": prepared_at,
     }
     control.validate_candidate_record(candidate)
     active = {
@@ -1626,13 +2100,24 @@ def _preflight_worker_unit(
         "NeedDaemonReload": "no",
         "UnitFileState": "enabled",
     }
-    if unit_state != expected_state:
-        raise BootstrapError("existing Worker unit is not the enabled no-drop-in baseline")
     intent_path = runtime_root / "audit/bootstrap-worker-unit/takeover-intent.json"
     completed_path = runtime_root / "audit/bootstrap-worker-unit/takeover.json"
     intent_present = intent_path.exists() or intent_path.is_symlink()
     completed_present = completed_path.exists() or completed_path.is_symlink()
     mode = stat.S_IMODE(metadata.st_mode)
+    reload_pending_state = {
+        **expected_state,
+        "NeedDaemonReload": "yes",
+    }
+    if unit_state != expected_state and not (
+        unit_state == reload_pending_state
+        and mode == 0o600
+        and intent_present
+        and not completed_present
+    ):
+        raise BootstrapError(
+            "existing Worker unit is not the enabled no-drop-in baseline"
+        )
     if mode == 0o664 and completed_present:
         raise BootstrapError("completed Worker unit takeover regressed to legacy mode")
     if mode == 0o600 and not (intent_present or completed_present):
@@ -1669,6 +2154,11 @@ def _take_over_worker_unit(
     if snapshot is None:
         raise BootstrapError("Worker unit disappeared after preflight")
     payload, metadata, expected_state = snapshot
+    if expected_state.get("NeedDaemonReload") == "yes":
+        expected_state = {
+            **expected_state,
+            "NeedDaemonReload": "no",
+        }
     unit_sha256 = digest(payload)
     audit_root = runtime_root / "audit/bootstrap-worker-unit"
     backup_root = runtime_root / "backups/bootstrap-worker-unit"
@@ -1865,6 +2355,270 @@ def _production_repository_identity(
     }
 
 
+def _run_bootstrap_legacy_restore(
+    command: list[str],
+    *,
+    deploy_lock_fd: int,
+    allow_test: bool,
+) -> subprocess.CompletedProcess[str]:
+    environment = {
+        "HOME": os.environ.get("HOME", "") if allow_test else "/home/devuser",
+        "USER": "devuser",
+        "LOGNAME": "devuser",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    return subprocess.run(
+        command,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+        pass_fds=(deploy_lock_fd,),
+        timeout=1800,
+    )
+
+
+def _abort_bootstrap_transaction(
+    args: argparse.Namespace,
+    *,
+    production_root: Path,
+    runtime_root: Path,
+    worker_unit_path: Path,
+    allow_test: bool,
+) -> dict[str, object]:
+    if (
+        args.confirm_production_root != str(production_root)
+        or args.confirm_runtime_root != str(runtime_root)
+        or args.confirm_source_tree is None
+    ):
+        raise BootstrapError(
+            "bootstrap abort requires exact production, runtime and tree confirmations"
+        )
+    if not allow_test and (
+        production_root != PRODUCTION_ROOT
+        or runtime_root != RUNTIME_ROOT
+        or production_root.resolve() != PRODUCTION_ROOT
+        or runtime_root.resolve() != RUNTIME_ROOT
+    ):
+        raise BootstrapError("bootstrap abort requires the fixed production roots")
+    path = _bootstrap_transaction_path(
+        runtime_root,
+        operation_id=args.legacy_takeover_operation_id,
+        source_sha=args.sha,
+    )
+    transaction = _validate_bootstrap_transaction(
+        _load_private_json(path),
+        path=path,
+    )
+    if (
+        transaction["source_tree"] != args.confirm_source_tree
+        or transaction["operation_id"] != args.legacy_takeover_operation_id
+    ):
+        raise BootstrapError("bootstrap abort confirmation differs from transaction")
+    lock = runtime_root / "state/deploy.lock"
+    with _open_deploy_lock(lock) as stream:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise BootstrapError("another deployment holds deploy.lock") from exc
+        locked = _validate_bootstrap_transaction(
+            _load_private_json(path),
+            path=path,
+        )
+        if locked != transaction:
+            raise BootstrapError(
+                "bootstrap child transaction changed while acquiring deploy.lock"
+            )
+        transaction = locked
+        if transaction["status"] == "completed":
+            raise BootstrapError(
+                "completed bootstrap must be recovered by the governed controller"
+            )
+        if transaction["status"] == "aborted":
+            return {
+                "action": "abort-bootstrap",
+                "status": "already-aborted",
+                "transaction": transaction,
+            }
+        evidence = _legacy_takeover_evidence(
+            source_sha=str(transaction["source_sha"]),
+            allow_test=allow_test,
+            installed_runtime_root=runtime_root,
+        )
+        identity = transaction["identity"]
+        assert isinstance(identity, dict)
+        takeover_binding = identity.get("legacy_takeover")
+        if not isinstance(takeover_binding, dict):
+            raise BootstrapError(
+                "bootstrap transaction lacks legacy takeover authority"
+            )
+        try:
+            install_manifest = evidence.validate_install_manifest(
+                runtime_root,
+                str(transaction["source_sha"]),
+                str(transaction["source_tree"]),
+            )
+            install_manifest_sha256 = evidence.sha256_file(
+                runtime_root / "legacy-takeover/INSTALL-MANIFEST.json"
+            )
+        except Exception as exc:
+            raise BootstrapError(
+                "installed exact legacy restore closure is unavailable"
+            ) from exc
+        if (
+            install_manifest.get("authority_sha")
+            != transaction["source_sha"]
+            or install_manifest.get("authority_tree")
+            != transaction["source_tree"]
+            or install_manifest_sha256
+            != takeover_binding.get("install_manifest_sha256")
+        ):
+            raise BootstrapError(
+                "installed legacy restore closure differs from bootstrap authority"
+            )
+        if transaction["status"] == "in-progress":
+            try:
+                control = evidence.snapshot_current_control_layout(runtime_root)
+                permissions = evidence.snapshot_current_checkout_permissions(
+                    runtime_root,
+                    str(transaction["operation_id"]),
+                )
+            except Exception as exc:
+                raise BootstrapError(
+                    "cannot seal partial bootstrap state for abort"
+                ) from exc
+            expected_worker = identity.get("worker_unit")
+            if not isinstance(expected_worker, dict):
+                raise BootstrapError(
+                    "bootstrap transaction lacks Worker unit authority"
+                )
+            worker = _worker_unit_snapshot(
+                worker_unit_path,
+                allow_test=allow_test,
+            )
+            if expected_worker.get("present") is True:
+                if worker is None:
+                    raise BootstrapError(
+                        "bootstrap Worker unit disappeared before abort"
+                    )
+                worker_payload, worker_metadata, _worker_state = worker
+                worker_sha256: str | None = digest(worker_payload)
+                if (
+                    worker_sha256 != expected_worker.get("sha256")
+                    or stat.S_IMODE(worker_metadata.st_mode)
+                    not in {0o600, 0o664}
+                ):
+                    raise BootstrapError(
+                        "bootstrap Worker unit changed before abort"
+                    )
+            else:
+                if worker is not None:
+                    raise BootstrapError(
+                        "unexpected Worker unit appeared before abort"
+                    )
+                worker_sha256 = None
+            started_at = dt.datetime.now(dt.timezone.utc).isoformat()
+            abort_authority = {
+                "operation_id": transaction["operation_id"],
+                "transaction_identity_sha256": transaction[
+                    "identity_sha256"
+                ],
+                "control_layout_sha256": control["sha256"],
+                "checkout_permissions_sha256": permissions["sha256"],
+                "worker_unit_sha256": worker_sha256,
+                "started_at": started_at,
+            }
+            transaction["status"] = "aborting"
+            transaction["phase"] = "abort-intent"
+            transaction["abort_authority"] = abort_authority
+            transaction["updated_at"] = started_at
+            _atomic_json(path, transaction)
+            transaction = _validate_bootstrap_transaction(
+                _load_private_json(path),
+                path=path,
+            )
+        abort_authority = transaction["abort_authority"]
+        assert isinstance(abort_authority, dict)
+        launcher = (
+            runtime_root
+            / "legacy-takeover/bin/nexpoly-legacy-takeover"
+        )
+        command = [
+            str(launcher),
+            "restore",
+            "--operation-id",
+            str(transaction["operation_id"]),
+            "--expected-control-layout-sha256",
+            str(abort_authority["control_layout_sha256"]),
+            "--expected-checkout-permissions-sha256",
+            str(abort_authority["checkout_permissions_sha256"]),
+            "--parent-deploy-lock-fd",
+            str(stream.fileno()),
+        ]
+        worker_sha256 = abort_authority.get("worker_unit_sha256")
+        if worker_sha256 is not None:
+            command.extend(
+                ["--expected-worker-unit-sha256", str(worker_sha256)]
+            )
+        try:
+            completed = _run_bootstrap_legacy_restore(
+                command,
+                deploy_lock_fd=stream.fileno(),
+                allow_test=allow_test,
+            )
+            response = json.loads(completed.stdout)
+            restored = evidence.validate_status_document(
+                response,
+                str(transaction["operation_id"]),
+            )
+        except Exception as exc:
+            raise BootstrapError(
+                "exact legacy takeover restore did not complete bootstrap abort"
+            ) from exc
+        if (
+            restored.get("active") is not False
+            or restored.get("restore_phase") != "restored"
+            or restored.get("control_layout_replacement_sha256")
+            != abort_authority["control_layout_sha256"]
+            or restored.get("checkout_permissions_replacement_sha256")
+            != abort_authority["checkout_permissions_sha256"]
+            or not isinstance(
+                restored.get("restored_terminal_sha256"),
+                str,
+            )
+            or re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                str(restored.get("restored_terminal_sha256")),
+            )
+            is None
+        ):
+            raise BootstrapError(
+                "legacy takeover restore terminal differs from bootstrap abort"
+            )
+        finished_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        transaction["status"] = "aborted"
+        transaction["phase"] = "aborted"
+        transaction["restored_terminal_sha256"] = restored[
+            "restored_terminal_sha256"
+        ]
+        transaction["aborted_at"] = finished_at
+        transaction["updated_at"] = finished_at
+        _atomic_json(path, transaction)
+        transaction = _validate_bootstrap_transaction(
+            _load_private_json(path),
+            path=path,
+        )
+        return {
+            "action": "abort-bootstrap",
+            "status": "aborted",
+            "transaction": transaction,
+        }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
@@ -1879,7 +2633,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--production-root", default=str(PRODUCTION_ROOT))
     parser.add_argument("--runtime-root", default=str(RUNTIME_ROOT))
-    parser.add_argument("--apply", action="store_true")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--apply", action="store_true")
+    action.add_argument(
+        "--abort",
+        action="store_true",
+        help="restore the exact legacy state for an interrupted bootstrap",
+    )
     parser.add_argument("--confirm-production-root")
     parser.add_argument("--confirm-runtime-root")
     parser.add_argument("--confirm-source-tree")
@@ -1904,7 +2664,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     args = build_parser().parse_args(argv)
     if args.check_source_readiness:
-        if args.apply:
+        if args.apply or args.abort:
             print(
                 "bootstrap-pull-deploy: error: source readiness is read-only",
                 file=sys.stderr,
@@ -1951,6 +2711,28 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.abort:
+        try:
+            result = _abort_bootstrap_transaction(
+                args,
+                production_root=production_root,
+                runtime_root=runtime_root,
+                worker_unit_path=_worker_unit_path(
+                    production_root,
+                    allow_test=allow_test,
+                ),
+                allow_test=allow_test,
+            )
+        except (
+            BootstrapError,
+            OSError,
+            UnicodeError,
+            subprocess.SubprocessError,
+        ) as exc:
+            print(f"bootstrap-pull-deploy: error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
     try:
         if not allow_test:
             source_readiness = bootstrap_source_readiness(
@@ -2156,6 +2938,54 @@ def main(argv: list[str] | None = None) -> int:
                 raise BootstrapError(
                     "legacy takeover authority changed before installation"
                 )
+            locked_unit = _preflight_worker_unit(
+                runtime_root,
+                worker_unit_path,
+                expected_sha256=args.confirm_worker_unit_sha256,
+                allow_test=allow_test,
+            )
+            if locked_unit != initial_unit_preflight:
+                raise BootstrapError("Worker unit changed before bootstrap intent")
+            transaction_identity = {
+                "source_readiness_sha256": source_readiness_sha256,
+                "legacy_takeover": legacy_takeover,
+                "delivery_gate": delivery_gate,
+                "production_repository": production_repository,
+                "checkout_permissions_authority_sha256": legacy_takeover[
+                    "checkout_permissions_sha256"
+                ],
+                "worker_unit": {
+                    "present": initial_unit_preflight.get("present"),
+                    "path": initial_unit_preflight.get("path"),
+                    "sha256": initial_unit_preflight.get("sha256"),
+                },
+                "directories": {
+                    relative: format(mode, "04o")
+                    for relative, mode in DIRECTORIES.items()
+                },
+                "immutable_files": {
+                    name: {
+                        "sha256": digest(payload),
+                        "mode": format(mode, "04o"),
+                    }
+                    for name, (payload, mode) in immutable_payloads.items()
+                },
+            }
+            transaction_path, transaction = (
+                _load_or_create_bootstrap_transaction(
+                    runtime_root,
+                    operation_id=args.legacy_takeover_operation_id,
+                    source_sha=source_sha,
+                    source_tree=source_tree,
+                    identity=transaction_identity,
+                )
+            )
+            transaction = _begin_bootstrap_step(
+                transaction_path,
+                transaction,
+                previous_phase="intent",
+                intent_phase="runtime-layout-intent",
+            )
             _initialize_runtime_root(runtime_root)
             for relative, mode in DIRECTORIES.items():
                 path = runtime_root / relative
@@ -2167,6 +2997,24 @@ def main(argv: list[str] | None = None) -> int:
                 ):
                     raise BootstrapError(f"runtime directory is unsafe: {path}")
                 os.chmod(path, mode)
+            layout_evidence = {
+                relative: {
+                    "path": str(runtime_root / relative),
+                    "mode": format(
+                        stat.S_IMODE((runtime_root / relative).lstat().st_mode),
+                        "04o",
+                    ),
+                }
+                for relative in DIRECTORIES
+            }
+            transaction = _complete_bootstrap_step(
+                transaction_path,
+                transaction,
+                intent_phase="runtime-layout-intent",
+                ready_phase="runtime-layout-ready",
+                evidence_name="runtime_layout",
+                evidence=layout_evidence,
+            )
             locked_gate = _delivery_gate(
                 production_root,
                 runtime_root,
@@ -2176,6 +3024,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             if locked_gate != delivery_gate:
                 raise BootstrapError("protected-main delivery evidence changed before install")
+            transaction = _begin_bootstrap_step(
+                transaction_path,
+                transaction,
+                previous_phase="runtime-layout-ready",
+                intent_phase="checkout-intent",
+            )
             _harden_checkout(production_root)
             locked_repository = _production_repository_identity(
                 production_root, source_sha, allow_test=allow_test
@@ -2194,19 +3048,52 @@ def main(argv: list[str] | None = None) -> int:
                 raise BootstrapError(
                     "legacy takeover authority changed during installation"
                 )
-            locked_unit = _preflight_worker_unit(
+            checkout_evidence = {
+                "repository": locked_repository,
+                "checkout": _path_inventory(production_root),
+                "git": _path_inventory(production_root / ".git"),
+            }
+            transaction = _complete_bootstrap_step(
+                transaction_path,
+                transaction,
+                intent_phase="checkout-intent",
+                ready_phase="checkout-ready",
+                evidence_name="checkout",
+                evidence=checkout_evidence,
+            )
+            locked_unit_after_checkout = _preflight_worker_unit(
                 runtime_root,
                 worker_unit_path,
                 expected_sha256=args.confirm_worker_unit_sha256,
                 allow_test=allow_test,
             )
-            if locked_unit != initial_unit_preflight:
+            if locked_unit_after_checkout != initial_unit_preflight:
                 raise BootstrapError("Worker unit changed before takeover")
+            transaction = _begin_bootstrap_step(
+                transaction_path,
+                transaction,
+                previous_phase="checkout-ready",
+                intent_phase="worker-unit-intent",
+            )
             plan["worker_unit_takeover"] = _take_over_worker_unit(
                 runtime_root,
                 worker_unit_path,
                 expected_sha256=args.confirm_worker_unit_sha256,
                 allow_test=allow_test,
+            )
+            transaction = _complete_bootstrap_step(
+                transaction_path,
+                transaction,
+                intent_phase="worker-unit-intent",
+                ready_phase="worker-unit-ready",
+                evidence_name="worker_unit",
+                evidence=plan["worker_unit_takeover"],
+            )
+            transaction = _begin_bootstrap_step(
+                transaction_path,
+                transaction,
+                previous_phase="worker-unit-ready",
+                intent_phase="immutable-controls-intent",
             )
             installed = {
                 name: _install_exact(runtime_root / "bin" / name, payload, mode)
@@ -2215,12 +3102,38 @@ def main(argv: list[str] | None = None) -> int:
             actual_bin = {entry.name for entry in (runtime_root / "bin").iterdir()}
             if actual_bin != set(IMMUTABLE_FILES):
                 raise BootstrapError("runtime/bin contains non-immutable or missing controls")
+            transaction = _complete_bootstrap_step(
+                transaction_path,
+                transaction,
+                intent_phase="immutable-controls-intent",
+                ready_phase="immutable-controls-ready",
+                evidence_name="immutable_controls",
+                evidence=installed,
+            )
+            transaction = _begin_bootstrap_step(
+                transaction_path,
+                transaction,
+                previous_phase="immutable-controls-ready",
+                intent_phase="control-release-intent",
+            )
             candidate, active = _build_control_release(
                 runtime_root,
                 control=control,
                 source_sha=source_sha,
                 source_tree=source_tree,
                 allow_test=allow_test,
+                prepared_at=str(transaction["prepared_at"]),
+            )
+            transaction = _complete_bootstrap_step(
+                transaction_path,
+                transaction,
+                intent_phase="control-release-intent",
+                ready_phase="control-release-ready",
+                evidence_name="control_release",
+                evidence={
+                    "candidate": candidate,
+                    "active": active,
+                },
             )
             final_readiness = (
                 source_readiness
@@ -2270,6 +3183,12 @@ def main(argv: list[str] | None = None) -> int:
                 raise BootstrapError(
                     "bootstrap authority changed before active-control commit"
                 )
+            transaction = _begin_bootstrap_step(
+                transaction_path,
+                transaction,
+                previous_phase="control-release-ready",
+                intent_phase="authority-commit-intent",
+            )
             active_path = runtime_root / "state/active-control.json"
             bootstrap_record_path = runtime_root / "state/bootstrap-control.json"
             existing_bootstrap_record: dict[str, object] | None = None
@@ -2390,7 +3309,18 @@ def main(argv: list[str] | None = None) -> int:
                 raise BootstrapError(
                     "completed bootstrap authority did not enable initial controls"
                 )
+            transaction = _complete_bootstrap_transaction(
+                transaction_path,
+                evidence={
+                    "bootstrap_control_sha256": digest(
+                        bootstrap_record_path.read_bytes()
+                    ),
+                    "active_control_sha256": digest(active_path.read_bytes()),
+                    "active_control": active,
+                },
+            )
         plan["status"] = "initialized"
+        plan["bootstrap_transaction"] = transaction
         plan["installed_sha256"] = installed
         plan["candidate_control"] = candidate
         plan["active_control"] = active

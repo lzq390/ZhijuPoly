@@ -426,6 +426,15 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                         revision=TARGET_SHA,
                     ),
                 },
+                "postgres_audit": {
+                    major: image_record(
+                        reference,
+                        revision=None,
+                    )
+                    for major, reference in (
+                        PREFETCH.POSTGRES_AUDIT_IMAGES.items()
+                    )
+                },
                 "postgres_restore": image_record(
                     PREFETCH.POSTGRES16_IMAGE,
                     revision=None,
@@ -479,6 +488,90 @@ class MaintenancePrefetchEvidenceTests(unittest.TestCase):
                 runtime_root=Path("/private/runtime"),
             )
         self.assertEqual(validated["identity_sha256"], document["identity_sha256"])
+
+    def test_prefetch_producer_emits_full_audit_map_and_separate_restore(
+        self,
+    ) -> None:
+        controller = object.__new__(PREFETCH.MaintenancePrefetch)
+        controller.authority_images = {
+            "backend": (
+                f"{PREFETCH.ROLE_IMAGE_ROOTS['backend']}@{DIGEST_A}"
+            ),
+            "web": f"{PREFETCH.ROLE_IMAGE_ROOTS['web']}@{DIGEST_B}",
+        }
+
+        def pulled(
+            reference: str,
+            *,
+            expected_revision: str | None,
+        ) -> dict[str, object]:
+            return image_record(
+                reference,
+                revision=expected_revision,
+            )
+
+        controller._pull_image = pulled
+        images = controller._prefetch_images(
+            authority={
+                "sha": AUTHORITY_SHA,
+                "tree": AUTHORITY_TREE,
+            },
+            target={"sha": TARGET_SHA, "tree": TARGET_TREE},
+            policy=self._policy(),
+        )
+        self.assertEqual(
+            set(images["postgres_audit"]),
+            set(PREFETCH.POSTGRES_AUDIT_IMAGES),
+        )
+        self.assertEqual(
+            images["postgres_restore"],
+            images["postgres_audit"]["16"],
+        )
+        self.assertIsNot(
+            images["postgres_restore"],
+            images["postgres_audit"]["16"],
+        )
+
+    def test_ready_evidence_requires_separate_restore_equal_to_pg16_audit(
+        self,
+    ) -> None:
+        document = self._document()
+        document["images"]["postgres_restore"]["local_image_id"] = (
+            "sha256:" + "f" * 64
+        )
+        document["identity_sha256"] = PREFETCH.sha256_bytes(
+            PREFETCH.canonical_json_bytes(PREFETCH.ready_identity(document))
+        )
+        with (
+            mock.patch.object(
+                PREFETCH.bridge_deploy_core,
+                "validate_policy",
+                return_value=self._policy(),
+            ),
+            mock.patch.object(PREFETCH, "validate_git_bundle_evidence"),
+            mock.patch.object(PREFETCH, "validate_controller_evidence"),
+            mock.patch.object(PREFETCH, "validate_asset_evidence"),
+            mock.patch.object(PREFETCH, "validate_recovery_tools"),
+            mock.patch.object(PREFETCH, "require_private_directory"),
+            mock.patch.object(PREFETCH, "require_private_file"),
+            mock.patch.object(PREFETCH, "sha256_file", return_value=DIGEST_B),
+            mock.patch.object(
+                PREFETCH,
+                "validate_wheel_record",
+                side_effect=[
+                    {"source_sha": AUTHORITY_SHA},
+                    {"source_sha": TARGET_SHA},
+                ],
+            ),
+            self.assertRaisesRegex(
+                PREFETCH.MaintenancePrefetchError,
+                "exact PostgreSQL 16 audit image",
+            ),
+        ):
+            PREFETCH.validate_ready_evidence(
+                document,
+                runtime_root=Path("/private/runtime"),
+            )
 
     def test_asset_evidence_rejects_pointer_drift_and_dataset_rebuilds(
         self,

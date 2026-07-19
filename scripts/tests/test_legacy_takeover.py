@@ -456,6 +456,39 @@ class Fixture:
 
 
 class LegacyTakeoverTests(unittest.TestCase):
+    @staticmethod
+    def add_production_backups(fixture: Fixture) -> None:
+        backups = fixture.repository / "backups"
+        backups.mkdir(mode=0o775)
+        dump = backups / TAKEOVER.REQUIRED_LEGACY_POSTGRES_BACKUP
+        dump.write_bytes(b"PGDMP" + b"\0" * 1024)
+        os.chmod(dump, 0o664)
+        note = backups / "README.txt"
+        note.write_text("legacy backup inventory\n", encoding="utf-8")
+        os.chmod(note, 0o664)
+        paths = [
+            *fixture.PATHS,
+            {"path": "backups", "class": "runtime"},
+        ]
+        fixture.classification.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "review_id": "review:fixture-backups-20260718",
+                    "paths": paths,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(fixture.classification, 0o600)
+        fixture.classification_digest = TAKEOVER.sha256_file(
+            fixture.classification
+        )
+        fixture.system.classified_paths = [
+            record["path"] for record in paths
+        ]
+
     def test_live_postgres_fence_includes_volume_and_system_identifier(
         self,
     ) -> None:
@@ -669,6 +702,88 @@ class LegacyTakeoverTests(unittest.TestCase):
         fixture.assert_restored()
         for relative, seal in original_seals.items():
             TAKEOVER.verify_path_seal(fixture.repository / relative, seal)
+
+    def test_postgres_backups_have_one_fixed_private_destination_and_restore(
+        self,
+    ) -> None:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        self.add_production_backups(fixture)
+        original = TAKEOVER.seal_path(fixture.repository / "backups")
+        sealed = fixture.seal()
+        move = next(
+            record
+            for record in sealed["moves"]
+            if record["path"] == "backups"
+        )
+        fixed = (
+            fixture.runtime
+            / TAKEOVER.PRESERVED_POSTGRES_BACKUP_DIRECTORY
+        )
+        dynamic = (
+            fixture.external["runtime"] / OPERATION_ID / "backups"
+        )
+        self.assertEqual(move["destination"], str(fixed))
+
+        applied = fixture.controller.apply(OPERATION_ID)
+        applied_move = next(
+            record
+            for record in applied["moves"]
+            if record["path"] == "backups"
+        )
+        self.assertEqual(applied_move["status"], "externalized")
+        self.assertFalse((fixture.repository / "backups").exists())
+        self.assertFalse(dynamic.exists())
+        TAKEOVER.verify_path_seal(
+            fixed,
+            TAKEOVER.private_backup_seal(original),
+        )
+        self.assertEqual(fixed.stat().st_mode & 0o7777, 0o700)
+        self.assertEqual(
+            (
+                fixed / TAKEOVER.REQUIRED_LEGACY_POSTGRES_BACKUP
+            ).stat().st_mode
+            & 0o7777,
+            0o600,
+        )
+        self.assertEqual(
+            [
+                path
+                for path in fixture.root.rglob(
+                    TAKEOVER.REQUIRED_LEGACY_POSTGRES_BACKUP
+                )
+                if path.is_file()
+            ],
+            [fixed / TAKEOVER.REQUIRED_LEGACY_POSTGRES_BACKUP],
+        )
+
+        restored = fixture.controller.restore(OPERATION_ID)
+        restored_move = next(
+            record
+            for record in restored["moves"]
+            if record["path"] == "backups"
+        )
+        self.assertEqual(restored_move["restore_status"], "restored")
+        self.assertFalse(fixed.exists())
+        self.assertFalse(dynamic.exists())
+        TAKEOVER.verify_path_seal(
+            fixture.repository / "backups",
+            original,
+        )
+        self.assertEqual(
+            [
+                path
+                for path in fixture.root.rglob(
+                    TAKEOVER.REQUIRED_LEGACY_POSTGRES_BACKUP
+                )
+                if path.is_file()
+            ],
+            [
+                fixture.repository
+                / "backups"
+                / TAKEOVER.REQUIRED_LEGACY_POSTGRES_BACKUP
+            ],
+        )
 
     def test_seal_lost_response_is_idempotent(self) -> None:
         checkpoints = Checkpoints("sealed")

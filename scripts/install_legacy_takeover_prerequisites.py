@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -I -B
+#!/usr/bin/python3 -I
 """Install source-pinned, pre-bootstrap legacy takeover prerequisites."""
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ import subprocess
 import sys
 import types
 from typing import Any, Callable, Iterator
+
+sys.dont_write_bytecode = True
 
 
 def _load_git_source_trust() -> Any:
@@ -100,8 +102,8 @@ ATTESTATION_FILES = {
     "production-readiness-collector.example": (
         "ops/config/production-readiness-collector.example"
     ),
-    "postgres-media-registry.json.example": (
-        "ops/config/postgres-media-registry.json.example"
+    "postgres-media-authority-rules.json": (
+        "ops/config/postgres-media-authority-rules.json"
     ),
     "postgres-media-audit-role.sql.example": (
         "ops/config/postgres-media-audit-role.sql.example"
@@ -122,6 +124,7 @@ ATTESTATION_FILES = {
 CLASSIFICATION_NAME = "legacy-takeover-classification.json"
 MUTABLE_SERVICE_NAME = "mutable-data-audit.pg_service.conf"
 MUTABLE_PGPASS_NAME = "mutable-data-audit.pgpass"
+MEDIA_AUTHORITY_RULES_NAME = "postgres-media-authority-rules.json"
 
 
 class PrerequisiteInstallError(RuntimeError):
@@ -908,6 +911,11 @@ def _install_prerequisites_locked(
         "installed": False,
         "provisioned": True,
     }
+    installed[MEDIA_AUTHORITY_RULES_NAME] = _install_exact(
+        config / MEDIA_AUTHORITY_RULES_NAME,
+        source_payloads[MEDIA_AUTHORITY_RULES_NAME],
+        0o600,
+    )
     for name in sorted(RECOVERY_FILES):
         installed[name] = _install_exact(
             recovery_bin / name,

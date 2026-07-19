@@ -111,6 +111,21 @@ POSTGRES16_IMAGE = (
     "postgres:16-alpine@"
     "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
 )
+POSTGRES_AUDIT_IMAGES = {
+    "14": (
+        "postgres:14-alpine@"
+        "sha256:f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579"
+    ),
+    "15": (
+        "postgres:15-alpine@"
+        "sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f"
+    ),
+    "16": POSTGRES16_IMAGE,
+    "18": (
+        "postgres:18-alpine@"
+        "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+    ),
+}
 MAX_EVIDENCE_BYTES = 8 * 1024 * 1024
 MAX_LIVE_EVIDENCE_AGE = dt.timedelta(minutes=15)
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -507,6 +522,7 @@ def _validate_oci(
             "bridge_sha",
             "authority_images",
             "bridge_images",
+            "postgres_audit",
             "postgres_restore",
             "prefetch_images_sha256",
         },
@@ -534,18 +550,42 @@ def _validate_oci(
                 revision=revision,
                 expected_ref=None if expected is None else expected[role],
             )
-    postgres = _exact_dict(
+    raw_postgres_audit = _exact_dict(
+        section["postgres_audit"],
+        set(POSTGRES_AUDIT_IMAGES),
+        "PostgreSQL audit images",
+    )
+    postgres_audit: dict[str, dict[str, Any]] = {}
+    for major, reference in sorted(POSTGRES_AUDIT_IMAGES.items()):
+        record = _exact_dict(
+            raw_postgres_audit[major],
+            {"digest_ref", "index_digest", "platform_digest", "image_id"},
+            f"PostgreSQL {major} audit image",
+        )
+        if (
+            record["digest_ref"] != reference
+            or record["index_digest"] != reference.split("@", 1)[1]
+        ):
+            _fail(f"PostgreSQL {major} audit image differs")
+        for name in ("index_digest", "platform_digest", "image_id"):
+            _digest(record[name], f"PostgreSQL {major} audit {name}")
+        postgres_audit[major] = record
+    postgres_restore = _exact_dict(
         section["postgres_restore"],
         {"digest_ref", "index_digest", "platform_digest", "image_id"},
         "PostgreSQL restore image",
     )
     if (
-        postgres["digest_ref"] != POSTGRES16_IMAGE
-        or postgres["index_digest"] != POSTGRES16_IMAGE.split("@", 1)[1]
+        postgres_restore != postgres_audit["16"]
+        or postgres_restore["digest_ref"] != POSTGRES16_IMAGE
+        or postgres_restore["index_digest"]
+        != POSTGRES16_IMAGE.split("@", 1)[1]
     ):
-        _fail("PostgreSQL restore image differs")
+        _fail(
+            "PostgreSQL restore image is not the exact PG16 audit image"
+        )
     for name in ("index_digest", "platform_digest", "image_id"):
-        _digest(postgres[name], f"PostgreSQL restore {name}")
+        _digest(postgres_restore[name], f"PostgreSQL restore {name}")
     return section
 
 
@@ -680,6 +720,7 @@ def _validate_prepared(
         "takeover_binding_sha256",
         "bridge_token_sha256",
         "descriptor_ci_sha256",
+        "control_handoff_sha256",
     }
     section = _sealed(value, fields, "prepared deployment evidence")
     _operation_id(section["operation_id"], "prepared operation ID")
@@ -701,6 +742,7 @@ def _validate_prepared(
         "takeover_binding_sha256",
         "bridge_token_sha256",
         "descriptor_ci_sha256",
+        "control_handoff_sha256",
     ):
         _digest(section[name], f"prepared {name}")
     return section
@@ -813,6 +855,9 @@ def _validate_takeover(
             "authority_sha",
             "authority_tree",
             "binding_sha256",
+            "bootstrap_control_sha256",
+            "bootstrap_transaction_sha256",
+            "bootstrap_transaction_identity_sha256",
         },
         "legacy takeover evidence",
     )
@@ -825,6 +870,12 @@ def _validate_takeover(
     ):
         _fail("legacy takeover completion differs")
     _digest(section["binding_sha256"], "legacy takeover binding")
+    for name in (
+        "bootstrap_control_sha256",
+        "bootstrap_transaction_sha256",
+        "bootstrap_transaction_identity_sha256",
+    ):
+        _digest(section[name], f"legacy takeover {name}")
     return section
 
 
@@ -861,6 +912,7 @@ def _validate_external_media(value: object) -> dict[str, Any]:
         "audit_relative_path",
         "audit_sha256",
         "validation_sha256",
+        "media_authority_rules_sha256",
         "registry_sha256",
         "inventory_complete",
         "writable_target",
@@ -880,7 +932,12 @@ def _validate_external_media(value: object) -> dict[str, Any]:
     ):
         _fail("external database/media audit is not deployable")
     _utc_timestamp(section["captured_at"], "external media capture time")
-    for name in ("audit_sha256", "validation_sha256", "registry_sha256"):
+    for name in (
+        "audit_sha256",
+        "validation_sha256",
+        "media_authority_rules_sha256",
+        "registry_sha256",
+    ):
         _digest(section[name], f"external media {name}")
     _positive_int(section["media_count"], "external media count")
     cas = section["cas"]
@@ -1250,6 +1307,13 @@ def validate_evidence(
     )
     alias = _validate_alias(value["alias"])
     external_media = _validate_external_media(value["external_media"])
+    external_policy = policy.get("external_database_audit")
+    if (
+        not isinstance(external_policy, dict)
+        or external_media["media_authority_rules_sha256"]
+        != external_policy.get("media_authority_rules_sha256")
+    ):
+        _fail("external media authority differs from bridge policy")
     postgres = _validate_postgres(value["postgres"], alias=alias)
     migrations, migration = _validate_migrations(
         value["migrations"],
@@ -1505,6 +1569,75 @@ def _validate_live_prepared(
         != normalized["monomer_md"]["slot_record_sha256"]
     ):
         _fail("prepared descriptor or READY binding differs")
+    handoff_directory = _runtime_path(
+        runtime_root,
+        Path("state/control-handoffs"),
+    )
+    _require_private_directory(handoff_directory)
+    expected_handoff_name = f"{section['operation_id']}.json"
+    if {
+        entry.name
+        for entry in handoff_directory.iterdir()
+    } != {expected_handoff_name}:
+        _fail("control handoff inventory differs from prepared operation")
+    handoff_path = handoff_directory / expected_handoff_name
+    handoff, handoff_file_digest = _read_json_file(
+        handoff_path,
+        private=True,
+    )
+    handoff_fields = {
+        "schema_version",
+        "protocol_version",
+        "operation_id",
+        "authority_sha",
+        "authority_tree",
+        "target_sha",
+        "target_tree",
+        "target_ref",
+        "policy_id",
+        "policy_sha256",
+        "prefetch_operation_id",
+        "prefetch",
+        "legacy_takeover",
+        "previous_active_control",
+        "previous_active_control_sha256",
+        "executor_control",
+        "executor_control_sha256",
+        "created_at",
+    }
+    bridge = normalized["bridge"]
+    if (
+        handoff_file_digest != section["control_handoff_sha256"]
+        or not isinstance(handoff, dict)
+        or set(handoff) != handoff_fields
+        or handoff.get("schema_version") != 2
+        or handoff.get("protocol_version")
+        != pull_deploy_controller._control_runtime.PROTOCOL_VERSION
+        or handoff.get("operation_id") != section["operation_id"]
+        or handoff.get("authority_sha") != validated["authority"]["sha"]
+        or handoff.get("authority_tree") != validated["authority"]["tree"]
+        or handoff.get("target_sha") != validated["bridge"]["sha"]
+        or handoff.get("target_tree") != validated["bridge"]["tree"]
+        or handoff.get("target_ref") != bridge["target"]["exact_ref"]
+        or handoff.get("policy_id") != bridge["policy"]["policy_id"]
+        or handoff.get("policy_sha256") != section["policy_sha256"]
+        or handoff.get("prefetch_operation_id")
+        != normalized["prefetch"]["operation_id"]
+        or handoff.get("prefetch") != normalized["prefetch"]
+        or handoff.get("legacy_takeover")
+        != normalized["legacy_takeover"]
+        or handoff.get("previous_active_control")
+        != normalized["controller"]["previous_active_control"]
+        or canonical_json_digest(handoff.get("previous_active_control"))
+        != handoff.get("previous_active_control_sha256")
+        or handoff.get("executor_control")
+        != normalized["controller"]["executor_control"]
+        or canonical_json_digest(handoff.get("executor_control"))
+        != handoff.get("executor_control_sha256")
+        or not isinstance(handoff.get("created_at"), str)
+        or not handoff["created_at"]
+    ):
+        _fail("selector control handoff differs from prepared descriptor")
     try:
         token = bridge_deploy_core.load_token_authority(runtime_root / "state")
     except Exception as exc:
@@ -1592,15 +1725,23 @@ def _validate_live_prefetch(
                 or summary["version"] != raw.get("version")
             ):
                 _fail("prefetched OCI image summary differs")
-    raw_postgres = raw_images["postgres_restore"]
-    summary_postgres = oci["postgres_restore"]
-    if (
-        summary_postgres["digest_ref"] != raw_postgres.get("digest_ref")
-        or summary_postgres["index_digest"]
-        != raw_postgres.get("oci_reference_digest")
-        or summary_postgres["image_id"] != raw_postgres.get("local_image_id")
-    ):
-        _fail("prefetched PostgreSQL image summary differs")
+    raw_postgres_audit = raw_images["postgres_audit"]
+    for major in sorted(POSTGRES_AUDIT_IMAGES):
+        raw_postgres = raw_postgres_audit[major]
+        summary_postgres = oci["postgres_audit"][major]
+        if (
+            summary_postgres["digest_ref"]
+            != raw_postgres.get("digest_ref")
+            or summary_postgres["index_digest"]
+            != raw_postgres.get("oci_reference_digest")
+            or summary_postgres["image_id"]
+            != raw_postgres.get("local_image_id")
+        ):
+            _fail(
+                f"prefetched PostgreSQL {major} audit image summary differs"
+            )
+    if oci["postgres_restore"] != oci["postgres_audit"]["16"]:
+        _fail("PostgreSQL restore summary is not the PG16 audit image")
 
 
 def _validate_live_helpers(
@@ -1685,6 +1826,73 @@ def _validate_live_takeover(
         ) from exc
     if binding.get("binding_sha256") != section["binding_sha256"]:
         _fail("legacy takeover binding changed")
+    bootstrap_path = _runtime_path(
+        runtime_root,
+        Path("state/bootstrap-control.json"),
+    )
+    bootstrap, bootstrap_digest = _read_json_file(
+        bootstrap_path,
+        private=True,
+    )
+    child_directory = _runtime_path(
+        runtime_root,
+        Path("state/legacy-takeover/bootstrap-children"),
+    )
+    _require_private_directory(child_directory)
+    child_name = (
+        f"{section['operation_id']}-{validated['authority']['sha']}.json"
+    )
+    if {entry.name for entry in child_directory.iterdir()} != {child_name}:
+        _fail("bootstrap child transaction inventory differs")
+    child_path = child_directory / child_name
+    child, child_digest = _read_json_file(child_path, private=True)
+    try:
+        bootstrap_pull_deploy = _load_sibling(
+            "nexpoly_readiness_bootstrap_pull_deploy",
+            "bootstrap_pull_deploy.py",
+        )
+        child = bootstrap_pull_deploy._validate_bootstrap_transaction(
+            child,
+            path=child_path,
+        )
+    except Exception as exc:
+        raise ProductionReadinessError(
+            "bootstrap child transaction validation failed"
+        ) from exc
+    active_path = _runtime_path(
+        runtime_root,
+        Path("state/active-control.json"),
+    )
+    active, active_digest = _read_json_file(active_path, private=True)
+    authority_commit = child.get("step_evidence", {}).get(
+        "authority_commit"
+    )
+    if (
+        bootstrap_digest != section["bootstrap_control_sha256"]
+        or child_digest != section["bootstrap_transaction_sha256"]
+        or child.get("identity_sha256")
+        != section["bootstrap_transaction_identity_sha256"]
+        or child.get("status") != "completed"
+        or child.get("phase") != "completed"
+        or child.get("operation_id") != section["operation_id"]
+        or child.get("source_sha") != validated["authority"]["sha"]
+        or child.get("source_tree") != validated["authority"]["tree"]
+        or not isinstance(child.get("identity"), dict)
+        or child["identity"].get("legacy_takeover") != binding
+        or not isinstance(authority_commit, dict)
+        or authority_commit.get("bootstrap_control_sha256")
+        != bootstrap_digest
+        or authority_commit.get("active_control_sha256") != active_digest
+        or authority_commit.get("active_control") != active
+        or not isinstance(bootstrap, dict)
+        or bootstrap.get("schema_version") != 2
+        or bootstrap.get("status") != "completed"
+        or bootstrap.get("source_sha") != validated["authority"]["sha"]
+        or bootstrap.get("source_tree") != validated["authority"]["tree"]
+        or bootstrap.get("legacy_takeover") != binding
+        or bootstrap.get("active_control") != active
+    ):
+        _fail("bootstrap child transaction differs from F/takeover authority")
 
 
 def _validate_live_alias(
@@ -1736,6 +1944,30 @@ def _validate_live_external_media(
     validated: Mapping[str, Any],
 ) -> None:
     section = validated["sections"]["external_media"]
+    authority_path = _runtime_path(
+        runtime_root,
+        Path("config/postgres-media-authority-rules.json"),
+    )
+    registry_path = _runtime_path(
+        runtime_root,
+        Path("config/postgres-media-registry.json"),
+    )
+    _authority_document, authority_digest = _read_json_file(
+        authority_path,
+        private=True,
+    )
+    registry_document, registry_digest = _read_json_file(
+        registry_path,
+        private=True,
+    )
+    if (
+        authority_digest
+        != section["media_authority_rules_sha256"]
+        or registry_digest != section["registry_sha256"]
+        or registry_document.get("media_authority_rules_sha256")
+        != authority_digest
+    ):
+        _fail("live external media authority or registry changed")
     path = _runtime_path(
         runtime_root,
         Path(section["audit_relative_path"]),
@@ -1745,6 +1977,9 @@ def _validate_live_external_media(
         normalized = site_helper_contracts.validate_external_database_audit(
             document,
             expected_users=None,
+            expected_media_authority_rules_digest=section[
+                "media_authority_rules_sha256"
+            ],
             expected_media_registry_digest=section["registry_sha256"],
         )
     except Exception as exc:
@@ -1867,6 +2102,9 @@ def readiness_output(validated: Mapping[str, Any]) -> dict[str, Any]:
         },
         "asset_manifest_digest": sections["asset"]["manifest_digest"],
         "external_media": {
+            "media_authority_rules_sha256": sections["external_media"][
+                "media_authority_rules_sha256"
+            ],
             "registry_sha256": sections["external_media"]["registry_sha256"],
             "cas_status": "ready" if cas is not None else "not-present",
             "cas_evidence_sha256": (
@@ -1955,11 +2193,13 @@ def output_json_schema() -> dict[str, Any]:
                 "type": "object",
                 "additionalProperties": False,
                 "required": [
+                    "media_authority_rules_sha256",
                     "registry_sha256",
                     "cas_status",
                     "cas_evidence_sha256",
                 ],
                 "properties": {
+                    "media_authority_rules_sha256": digest,
                     "registry_sha256": digest,
                     "cas_status": {"enum": ["ready", "not-present"]},
                     "cas_evidence_sha256": {

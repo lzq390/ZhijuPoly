@@ -59,6 +59,10 @@ The single `.github/workflows/ci.yml` runs for pull requests and pushes to
 - Both images carry `revision`, `source` and `version` OCI labels.
 - CI resolves the pushed tags to immutable digests and smokes those exact
   digests against PostgreSQL 16.
+- The production-alias integration remains an independent PG16 restore test;
+  a separate real-Docker matrix pulls the exact PG14/15/16/18 audit digests,
+  exercises matching-major dormant-volume isolation, and verifies the PG18
+  `/var/lib/postgresql/18/docker` source layout.
 - The named `bridge-validation` job is part of the same required-job contract
   consumed by bootstrap, Pull and the F→B bridge policy.
 - CI has no production environment, host credentials or production execution
@@ -123,22 +127,104 @@ bootstrap executables are mode `0700`:
   `config/bootstrap-legacy-runtime-restore`.
 - the source-read-only
   `config/contract-0012-external-database-audit` helper, its source-pinned
-  `nexpoly-postgres-media-evidence` builder, private schema-v2 registry and
-  registry-pinned private `pg_service.conf` digest and PG16 image. It
+  `nexpoly-postgres-media-evidence` builder, tracked static authority rules,
+  generated private schema-v5 runtime registry and exact PG14/15/16/18
+  read-only audit image map.
+  The audit image map is distinct from the actual-operation PG16 restore image
+  used for logical backup recovery and the 0005 alias gate. The helper
   enumerates arbitrary-named PostgreSQL volumes, PGDATA
-  bind mounts, both fixed private backup roots and the independent dev/health
-  stacks. Dormant media are copied before PostgreSQL starts; logical backups
-  restore only into network-none disposable clusters.
+  bind mounts, all three post-takeover private backup roots and the independent
+  dev/health
+  stacks. Dormant media are copied before a matching-major PostgreSQL audit
+  process starts; logical backups restore only with the separately fixed PG16
+  image in network-none disposable clusters. Any medium containing the
+  superseded 0013 checksum freezes B and requires a new 0014 correction rather
+  than rewriting 0013.
+  A successful isolated audit also publishes an owner-private mode-`0600`
+  checkpoint below `audit/postgres-media/.audit-checkpoints`. Each checkpoint
+  is bound to the exact source descriptor, static authority-rules digest,
+  complete auditor digest, compiled discovery boundary and every local
+  PG14/15/16/18 image ID. The first capture uses `build`; subsequent Pull
+  gates use the fixed `revalidate` mode. Revalidation still repeats the whole
+  Docker/backup discovery, live role/database audit and final offline content
+  CAS, but it does not copy, start or restore an unchanged dormant cluster.
+  A missing, altered or source-mismatched checkpoint fails closed.
+
+  Before the future takeover, the approved private-archive provisioner must
+  create the independent recovery root without adding any dump:
+
+  ```bash
+  install -d -m 0700 /data/lzq/recovery/nexpoly-postgres-media
+  [[ "$(stat -c '%u:%a' /data/lzq/recovery/nexpoly-postgres-media)" == \
+     "$(id -u):700" ]]
+  ```
+
+  After takeover, readiness must additionally prove that the takeover-created
+  `runtime/legacy-takeover/preserved-postgres-backups` root and the fixed
+  dirty-0009 quarantine root both exist as deploy-user-owned mode-`0700`
+  directories. Missing roots are blocking; the current main repair does not
+  create or modify any of them.
 - the reviewed, non-secret
   `ops/config/postgres-media-audit-role.sql.example` contract for the online
-  audit users. Provision their login secrets separately.
+  NOLOGIN audit roles. A matching-major pinned client joins the exact active
+  container's network namespace and connects to `127.0.0.1`; it does not run
+  `psql` in the target container, use DNS, or use a host-published port. The
+  helper connects as the inspected `POSTGRES_USER` and enters those
+  membership-free roles with `SET LOCAL ROLE`. Its fixed launcher opens only
+  `runtime/config/postgres-media-credentials.json`, validates it as one
+  deploy-user-owned mode-`0600` regular file, and passes the already-open file
+  plus its digest to the exact-F auditor. The schema-v1 envelope binds each
+  current password to the exact original container ID, cluster system
+  identifier, inspected administrator and PostgreSQL major. Stale
+  `POSTGRES_PASSWORD` values in container launch metadata are ignored and
+  `POSTGRES_PASSWORD_FILE` is rejected. The password crosses neither host argv
+  nor host env: it is framed through stdin into a private 0600 pgpass file on
+  the pinned disposable client's tmpfs. `pg_control_system()` must match the
+  sealed system identifier before requested SQL runs.
+
+  Generate the real envelope from
+  `ops/config/postgres-media-credentials.json.example` only through the
+  approved secret provisioner. The placeholder template is intentionally
+  invalid, contains no secret, and must never be copied unchanged. Install the
+  real file before the future maintenance window; do not commit, bundle,
+  print, source or pass it as a command-line argument. Direct trust mode is
+  limited to ephemeral integration tests and cannot pass through the installed
+  launcher. Do not invoke the SQL file manually. The stable helper derives the
+  authority-rules, role-SQL, launcher and implementation digests from the
+  validated active F control manifest; absent digest environment variables are
+  supported for this operator path, while any caller-supplied mismatch is
+  rejected. This entry cannot run until takeover has published the preserved
+  backup root and Bootstrap has activated F; use only the chronological
+  post-bootstrap step below.
+
+  `role-plan` is read-only with respect to source databases and binds every
+  database OID/owner, inspected session administrator, container attachment,
+  Docker/source epoch, exact F role-SQL digest, runtime registry and the
+  pre-provision cluster-global role matrix. That matrix checks every managed
+  marker role in every connectable database; orphan markers, reused role names,
+  cross-database ACL/default-ACL/ownership and any non-target write capability
+  all block before SQL. Review that private JSON before confirmation.
+  `provision-roles` is the only
+  mutating phase: the launcher passes manifest-pinned SQL by inherited file
+  descriptor, re-CASes the container/database immediately before and after
+  every idempotent transaction, and the transaction verifies session user,
+  database OID and owner. After a lost response or partial multi-database
+  failure, generate and review a fresh plan; never reuse a stale confirmation.
+  The first bridge `prepare` performs the one mandatory fresh full `build`;
+  operators do not run a second manual build. All later 0012 and steady-state
+  captures use `revalidate` and must not regenerate the registry.
 - a reviewed, non-secret
   `ops/config/mutable-data-audit-role.sql.example` provisioning/check
   contract. Run it as the cluster role administrator, connected to `nexpoly`
   in the maintenance window; provision the `nexpoly_mutable_audit` password
   out of band and install only the mode-`0600` pgpass value. The helper's
-  schema-v4 evidence rejects any role attribute, membership, ownership or
+  schema-v6 evidence rejects any role attribute, membership, ownership or
   persistent write authority outside the exact `pg_read_all_data` contract.
+  One read-only, deferrable, repeatable-read transaction now also seals the
+  complete canonical PolyTAO row/schema/structure archive while 0012 is
+  pending. The controller requires that embedded seal to equal the later full
+  backup/isolated-restore evidence byte for byte before it may publish the
+  transaction guard; after 0012 the field must be exactly `null`.
 - `bootstrap-input/legacy-takeover-classification.json`, mode `0600`, covering
   the production checkout's ignored paths exactly with `runtime`, `secret` or
   `asset` classifications. The reviewed file must contain no secret value.
@@ -190,6 +276,19 @@ but deliberately does not invoke recovery helpers:
 Captured site-helper JSON can be validated separately with
 `site-helper-readiness validate --helper <fixed-name> --input <private-json>`.
 
+Control compatibility also declares `prepare_abort_abi_versions: [1]`.
+ABI v1 fixes the ordinary/bridge descriptor schemas and the complete set of
+prepare-owned resources: the operation tree and staging tree, monomer-MD slot
+tree/record/staging quarantines, content-addressed wheel-cache staging,
+selector handoff, and `refs/nexpoly/prepared/<operation>`. The active release
+refuses to hand preparation to a candidate that does not declare this ABI.
+`prepare-abort` atomically moves each exact, intent-sealed resource into one
+owner-private archive, archives the handoff and Git-ref provenance, and
+CAS-deletes only the exact prepared ref. Final F must retain ABI v1 and may not
+add a production prepare artifact or descriptor field. Such a change requires
+a new bridge release that can generically recover both ABI generations before
+it can become an upgrade target.
+
 The initial controller must be installed from a clean temporary standalone
 clone at the reviewed base SHA/tree, beneath an owner-controlled directory that
 is not group/world writable. A shared Git worktree is rejected because its
@@ -225,9 +324,28 @@ mismatch:
 Before stopping service, prefetch and verify the exact F authority, policy-
 pinned B commit/tree and OCI digests, schema-v2 asset, wheels and restore tools.
 The prefetch evidence must be complete while ingress is still open; no mutable
-tag or 90-day artifact is an authority. Then seal and apply the legacy takeover
-using only the installed recovery launcher and the classification digest from
-the install manifest:
+tag or 90-day artifact is an authority. Use one operation ID throughout the
+later bridge plan and prepare. The authority image references are the exact F
+GHCR digest references; the base-Python path and identity must be copied
+verbatim from the sealed runtime `deploy.env`:
+
+```bash
+prefetch_operation_id=prefetch-<utc-timestamp>
+/data/lzq/gith/nexpoly-runtime/legacy-takeover/bin/nexpoly-maintenance-prefetch \
+  --source-root /home/devuser/nexpoly-bootstrap/source \
+  --runtime-root /data/lzq/gith/nexpoly-runtime \
+  --operation-id "$prefetch_operation_id" \
+  --authority-backend-image ghcr.io/lzq390/nexpoly-backend@sha256:<64-lowercase-hex> \
+  --authority-web-image ghcr.io/lzq390/nexpoly-web@sha256:<64-lowercase-hex> \
+  --docker-config /data/lzq/gith/nexpoly-runtime/config/docker \
+  --base-python /home/devuser/miniconda3/envs/byteff2-repro/bin/python \
+  --base-python-identity-sha256 sha256:<64-lowercase-hex>
+```
+
+Review the emitted `status=ready`, exact F/B source identities, images, wheel
+caches, asset and recovery-tool inventories before continuing. Then seal and
+apply the legacy takeover using only the installed recovery launcher and the
+classification digest from the install manifest:
 
 ```bash
 /data/lzq/gith/nexpoly-runtime/legacy-takeover/bin/nexpoly-legacy-takeover \
@@ -259,6 +377,7 @@ plane be planned:
 ```bash
 ./scripts/bootstrap_pull_deploy.py \
   --sha <main-sha> \
+  --legacy-takeover-operation-id takeover-<same-utc-timestamp> \
   --production-root /data/lzq/gith/nexpoly \
   --runtime-root /data/lzq/gith/nexpoly-runtime
 ```
@@ -274,6 +393,7 @@ private inodes:
 ```bash
 ./scripts/bootstrap_pull_deploy.py \
   --sha <main-sha> \
+  --legacy-takeover-operation-id takeover-<same-utc-timestamp> \
   --apply \
   --production-root /data/lzq/gith/nexpoly \
   --runtime-root /data/lzq/gith/nexpoly-runtime \
@@ -283,12 +403,31 @@ private inodes:
   --confirm-worker-unit-sha256 sha256:<64-lowercase-hex>
 ```
 
-Bootstrap consumes the already-installed takeover operation and fence from the
-private runtime state; callers do not supply their digests. It atomically
+Bootstrap consumes the named, already-installed takeover operation and fence
+from private runtime state; callers supply its operation ID but none of its
+digests. It atomically
 installs F controls, replaces the exact mode-`0664` Worker unit under CAS, runs
 `daemon-reload`, and records the takeover authority. Never pre-`chmod`, replace
 or manually reload that unit. Remove the temporary bootstrap source only after
 the installed immutable inventory and completed bootstrap authority verify.
+
+### Post-bootstrap external-media role provisioning
+
+Only now—after takeover has published the preserved backup root and Bootstrap
+has activated exact F controls—may the operator prepare audit roles. First
+verify all three fixed backup roots are present with the owner/modes documented
+above, then run the installed helper:
+
+```bash
+/data/lzq/gith/nexpoly-runtime/bin/nexpoly-postgres-media-evidence role-plan
+/data/lzq/gith/nexpoly-runtime/bin/nexpoly-postgres-media-evidence \
+  provision-roles --confirm-plan-sha256 sha256:<reviewed-plan-digest>
+```
+
+Review the complete plan before confirming it. If provisioning is interrupted,
+generate and review a new plan. Do not invoke the zero-argument build manually:
+the following exact `bridge-prepare` is the sole fresh registry build, while
+all later gates use `revalidate`.
 
 ### One-time production ledger-alias gate
 
@@ -296,11 +435,34 @@ The audited legacy production ledger contains one duplicate historical alias,
 `0005_polytao_jobs`. The first full Pull deployment is deliberately blocked
 until the fixed-purpose reconciliation control has removed exactly that ledger
 row. Bootstrap installs this control outside the still-legacy checkout. Complete
-Pull `plan` and `prepare` while the current production runtime is still online,
-then enter the maintenance window, reconcile the alias, and run the already
-prepared Pull `apply`. Once an alias operation marker exists but is incomplete,
-all Pull commands remain blocked until that same alias operation recovers. Do
-not update the production checkout first.
+Pull `bridge-plan` and `bridge-prepare` for the exact policy-selected B before
+reconciling the alias, then run the already prepared `bridge-apply`. Ordinary
+`plan`/`prepare`/`apply` against current main are not a substitute for this
+one-time bridge. Once an alias operation marker exists but is incomplete, all
+Pull commands remain blocked until that same alias operation recovers. Do not
+update the production checkout first.
+
+Recover the exact prefetch operation ID recorded by the earlier ready evidence
+and use one new bridge operation ID for all three bridge commands. The caller
+supplies only F; `ops/config/production-bridge-policy.json` selects B:
+
+```bash
+prefetch_operation_id=prefetch-<recorded-utc-timestamp>
+bridge_operation_id=bridge-<utc-timestamp>
+
+nexpoly-pull-deploy bridge-plan \
+  --authority-sha <full-F-sha> \
+  --operation-id "$bridge_operation_id" \
+  --prefetch-operation-id "$prefetch_operation_id"
+
+nexpoly-pull-deploy bridge-prepare \
+  --authority-sha <full-F-sha> \
+  --operation-id "$bridge_operation_id" \
+  --prefetch-operation-id "$prefetch_operation_id"
+```
+
+Review the plan and READY descriptor and finish `bridge-prepare` before the
+alias maintenance begins.
 
 Provision the one-line production DSN out of band into a deploy-user-owned
 mode-`0600` credential file. It must use the pinned
@@ -349,47 +511,18 @@ lock-internal revalidation and a one-row compare-and-swap delete. Any unknown
 commit result remains fenced by its durable operation marker and is recoverable
 only with that same operation ID.
 
-Every attempt uses a unique lowercase operation ID and the full 40-character
-SHA currently at `origin/main`:
+With the alias marker complete, apply the already prepared exact B bridge:
 
 ```bash
-nexpoly-pull-deploy plan \
-  --sha <main-sha> \
-  --operation-id deploy-<utc-timestamp>
-
-nexpoly-pull-deploy prepare \
-  --sha <main-sha> \
-  --operation-id deploy-<utc-timestamp>
-
-nexpoly-pull-deploy apply \
-  --sha <main-sha> \
-  --operation-id deploy-<utc-timestamp>
+nexpoly-pull-deploy bridge-apply \
+  --authority-sha <full-F-sha> \
+  --operation-id "$bridge_operation_id"
 ```
-
-`plan` and `prepare` do not interrupt serving traffic. `prepare` must finish
-before the maintenance window. It verifies the protected-main candidate and CI
-checks, resolves image digests and labels, validates assets and migrations,
-downloads locked wheels, and builds the inactive Worker environment directly
-at its final A/B slot path.
 
 The first governed takeover is the sole exception to “deploy current main”.
 After crash-safe legacy takeover has produced a clean SSH checkout and
 bootstrap has installed the current F control plane, the operator supplies
-only F—not a historical target—to the bridge commands:
-
-```bash
-nexpoly-pull-deploy bridge-plan \
-  --authority-sha <full-F-sha> \
-  --operation-id bridge-<utc-timestamp>
-
-nexpoly-pull-deploy bridge-prepare \
-  --authority-sha <full-F-sha> \
-  --operation-id bridge-<utc-timestamp>
-
-nexpoly-pull-deploy bridge-apply \
-  --authority-sha <full-F-sha> \
-  --operation-id bridge-<utc-timestamp>
-```
+only F—not a historical target—to these bridge commands.
 
 F's `ops/config/production-bridge-policy.json` is the only source of B. It pins
 the full B commit/tree, the private `refs/nexpoly/bridge-target/<B>` ref, image
@@ -435,7 +568,33 @@ a new operation ID and generation; the retired generation is first written to
 an immutable digest-addressed archive chain. `commit-intent` and `consumed`
 generations can never be retired or rearmed.
 
-`apply` obtains the exclusive deployment lock and then:
+### Subsequent ordinary deployments
+
+Only after the one-time F→B bridge and later B→F deployment are complete may
+the ordinary current-main path be used. Every attempt uses a unique lowercase
+operation ID and the full 40-character SHA currently at `origin/main`:
+
+```bash
+nexpoly-pull-deploy plan \
+  --sha <main-sha> \
+  --operation-id deploy-<utc-timestamp>
+
+nexpoly-pull-deploy prepare \
+  --sha <main-sha> \
+  --operation-id deploy-<utc-timestamp>
+
+nexpoly-pull-deploy apply \
+  --sha <main-sha> \
+  --operation-id deploy-<utc-timestamp>
+```
+
+`plan` and `prepare` do not interrupt serving traffic. `prepare` must finish
+before the maintenance window. It verifies the protected-main candidate and CI
+checks, resolves image digests and labels, validates assets and migrations,
+downloads locked wheels, and builds the inactive Worker environment directly
+at its final A/B slot path.
+
+An ordinary `apply` obtains the exclusive deployment lock and then:
 
 1. Enables Backend and Worker drain and waits for all active work to finish.
 2. Isolates public ingress and stops Backend, Web, MD Worker and DFT Worker.

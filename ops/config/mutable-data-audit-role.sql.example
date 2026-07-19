@@ -337,4 +337,4 @@ COMMIT;
 
 -- No password is emitted or accepted by this template.  Set/rotate it using a
 -- secret channel after this transaction, then execute the deployment mutable
--- data helper; its schema-v4 evidence rechecks the complete role contract.
+-- data helper; its schema-v6 evidence rechecks the complete role contract.

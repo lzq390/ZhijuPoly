@@ -151,6 +151,34 @@ class InstallerFixture:
 
 
 class LegacyTakeoverPrerequisiteInstallerTests(unittest.TestCase):
+    def test_entrypoint_runs_directly_with_isolated_fixed_python(self) -> None:
+        self.assertEqual(
+            SCRIPT.read_text(encoding="utf-8").splitlines()[0],
+            "#!/usr/bin/python3 -I",
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="legacy-installer-hostile-python-"
+        ) as temporary:
+            hostile = Path(temporary)
+            marker = hostile / "sitecustomize-ran"
+            (hostile / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).touch()\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [str(SCRIPT), "--help"],
+                env={
+                    "PATH": str(hostile),
+                    "PYTHONPATH": str(hostile),
+                },
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertFalse(marker.exists())
+
     def test_real_authority_readiness_runs_from_commit_bound_blob(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="legacy-installer-real-readiness-"

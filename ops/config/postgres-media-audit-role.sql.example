@@ -1,14 +1,26 @@
 \set ON_ERROR_STOP on
+SET search_path = pg_catalog;
+SET statement_timeout = '5min';
+SET lock_timeout = '5s';
+SET row_security = on;
+SET jit = off;
 
--- Run once in every connectable, non-template database declared by the
--- media-registry v3 inventory, with both variables supplied. This includes
--- adjacent databases such as "postgres"; the auditor proves those databases
--- do not contain an undeclared Nexpoly migration ledger.
--- Do not start or connect to retained-private-isolated media such as the
--- side-dev health volume. Its disposable copy is audited as local postgres.
---   psql -X -v audit_role=nexpoly_dev_auditor \
---     -v audit_database=nexpoly_dev -f postgres-media-audit-role.sql
--- Provision the role's login secret separately; never put it in this file.
+-- This contract is intentionally collision-safe.  A role is created only
+-- when its exact name is absent.  A pre-existing role is accepted only when
+-- it carries the immutable F contract marker and still has the exact
+-- non-login, non-owning, membership-free state.  It is never repaired,
+-- reset, revoked, altered, or otherwise taken over.
+--
+-- Run once for each connectable database in one confirmed role-plan v2:
+--   psql -X \
+--     -v audit_role=nexpoly_dev_auditor \
+--     -v audit_database=nexpoly_dev \
+--     -v expected_database_oid=16384 \
+--     -v expected_database_owner=polyprop \
+--     -v expected_session_user=polyprop \
+--     -v expected_event_triggers_disabled=false \
+--     -v role_contract_sha256=sha256:... \
+--     -f postgres-media-audit-role.sql
 \if :{?audit_role}
 \else
   \echo 'audit_role is required'
@@ -19,34 +31,223 @@
   \echo 'audit_database is required'
   \quit 2
 \endif
-
-SELECT current_database() = :'audit_database' AS expected_database \gset
-\if :expected_database
+\if :{?expected_database_oid}
 \else
-  \echo 'connected database differs from audit_database'
+  \echo 'expected_database_oid is required'
+  \quit 2
+\endif
+\if :{?expected_database_owner}
+\else
+  \echo 'expected_database_owner is required'
+  \quit 2
+\endif
+\if :{?expected_session_user}
+\else
+  \echo 'expected_session_user is required'
+  \quit 2
+\endif
+\if :{?expected_event_triggers_disabled}
+\else
+  \echo 'expected_event_triggers_disabled is required'
+  \quit 2
+\endif
+\if :{?role_contract_sha256}
+\else
+  \echo 'role_contract_sha256 is required'
+  \quit 2
+\endif
+
+SELECT (
+  :'role_contract_sha256' ~ '^sha256:[0-9a-f]{64}$'
+) AS valid_role_contract_sha256
+\gset
+\if :valid_role_contract_sha256
+\else
+  \warn 'role contract digest is malformed'
+  SELECT 'NEXPOLY_PROVISION_REFUSED_ROLE_CONTRACT_DIGEST'::integer;
+\endif
+
+\if :expected_event_triggers_disabled
+SELECT (
+  current_setting('event_triggers')::boolean IS FALSE
+) AS login_event_triggers_disabled
+\gset
+\if :login_event_triggers_disabled
+\else
+  \warn 'login event triggers are not disabled'
+  SELECT 'NEXPOLY_PROVISION_REFUSED_LOGIN_EVENT_TRIGGERS'::integer;
+\endif
+\endif
+
+SELECT (
+  current_database() = :'audit_database'
+  AND session_user = :'expected_session_user'
+  AND EXISTS (
+    SELECT 1
+    FROM pg_database AS database_value
+    WHERE database_value.datname = current_database()
+      AND database_value.oid::text = :'expected_database_oid'
+      AND pg_get_userbyid(database_value.datdba)
+          = :'expected_database_owner'
+  )
+) AS expected_database_epoch
+\gset
+\if :expected_database_epoch
+\else
+  \echo 'connected database epoch differs from confirmed role plan'
   \quit 2
 \endif
 
 BEGIN;
-ALTER ROLE :"audit_role"
-  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+LOCK TABLE pg_catalog.pg_event_trigger IN SHARE MODE;
+SELECT NOT EXISTS (
+  SELECT 1 FROM pg_catalog.pg_event_trigger
+) AS no_database_event_triggers
+\gset
+\if :no_database_event_triggers
+\else
+  \warn 'database event triggers block audit-role provisioning'
+  SELECT 'NEXPOLY_PROVISION_REFUSED_DATABASE_EVENT_TRIGGERS'::integer;
+\endif
+
+-- Serialize this one stable role contract without coupling its persistent
+-- marker to the host-wide Docker discovery epoch.
+SELECT pg_advisory_xact_lock(
+  hashtextextended(
+    'nexpoly-postgres-media-audit-role-v1:' || :'audit_role',
+    0
+  )
+);
+SELECT (
+  'nexpoly-postgres-media-audit-role-v1:'
+  || :'role_contract_sha256'
+) AS expected_role_marker
+\gset
+SELECT EXISTS (
+  SELECT 1 FROM pg_roles WHERE rolname = :'audit_role'
+) AS role_preexisting
+\gset
+
+\if :role_preexisting
+SELECT (
+  shobj_description(role.oid, 'pg_authid')
+    = :'expected_role_marker'
+) AS existing_role_marker_exact
+FROM pg_roles AS role
+WHERE role.rolname = :'audit_role'
+\gset
+\if :existing_role_marker_exact
+\else
+  \warn 'pre-existing audit role is not owned by this exact F contract'
+  SELECT 'NEXPOLY_PROVISION_REFUSED_ROLE_COLLISION'::integer;
+\endif
+\else
+SELECT format(
+  'CREATE ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE '
+  'NOREPLICATION NOBYPASSRLS NOINHERIT NOLOGIN',
+  :'audit_role'
+)
+\gexec
+COMMENT ON ROLE :"audit_role" IS :'expected_role_marker';
 ALTER ROLE :"audit_role" SET default_transaction_read_only = on;
 ALTER ROLE :"audit_role" SET statement_timeout = '5min';
 ALTER ROLE :"audit_role" SET lock_timeout = '5s';
 
 GRANT CONNECT ON DATABASE :"audit_database" TO :"audit_role";
-GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO :"audit_role";
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system()
+  TO :"audit_role";
 
-SELECT to_regclass('governance.schema_migrations') IS NOT NULL AS ledger_present \gset
+SELECT to_regclass('governance.schema_migrations') IS NOT NULL
+  AS ledger_present
+\gset
 \if :ledger_present
   GRANT USAGE ON SCHEMA governance TO :"audit_role";
   GRANT SELECT ON governance.schema_migrations TO :"audit_role";
 \endif
 
-SELECT to_regclass('generation.polytao_jobs') IS NOT NULL AS legacy_present \gset
+SELECT to_regclass('generation.polytao_jobs') IS NOT NULL
+  AS legacy_present
+\gset
 \if :legacy_present
   GRANT USAGE ON SCHEMA generation TO :"audit_role";
   GRANT SELECT ON generation.polytao_jobs TO :"audit_role";
+\endif
+\endif
+
+-- This check runs before a pre-existing role is ever entered.  It also
+-- verifies the just-created role before commit, so a crash before commit
+-- leaves no partial role or marker and a crash after commit resumes as an
+-- exact no-op.
+SELECT (
+  role.rolsuper IS FALSE
+  AND role.rolcreatedb IS FALSE
+  AND role.rolcreaterole IS FALSE
+  AND role.rolreplication IS FALSE
+  AND role.rolbypassrls IS FALSE
+  AND role.rolinherit IS FALSE
+  AND role.rolcanlogin IS FALSE
+  AND shobj_description(role.oid, 'pg_authid')
+      = :'expected_role_marker'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_auth_members AS membership
+    WHERE membership.member = role.oid
+       OR membership.roleid = role.oid
+  )
+  AND (
+    SELECT COALESCE(
+      array_agg(setting ORDER BY setting COLLATE "C"),
+      ARRAY[]::text[]
+    )
+    FROM unnest(COALESCE(role.rolconfig, ARRAY[]::text[]))
+      AS setting
+  ) = ARRAY[
+    'default_transaction_read_only=on',
+    'lock_timeout=5s',
+    'statement_timeout=5min'
+  ]::text[]
+  AND (
+    SELECT count(*) = 1
+    FROM pg_db_role_setting AS database_setting
+    WHERE database_setting.setrole = role.oid
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_db_role_setting AS database_setting
+    WHERE database_setting.setrole = role.oid
+      AND (
+        database_setting.setdatabase <> 0
+        OR ARRAY(
+          SELECT setting
+          FROM unnest(
+            COALESCE(
+              database_setting.setconfig,
+              ARRAY[]::text[]
+            )
+          ) AS setting
+          ORDER BY setting COLLATE "C"
+        ) <> ARRAY[
+          'default_transaction_read_only=on',
+          'lock_timeout=5s',
+          'statement_timeout=5min'
+        ]::text[]
+      )
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_shdepend AS dependency
+    WHERE dependency.refclassid = 'pg_authid'::regclass
+      AND dependency.refobjid = role.oid
+      AND dependency.deptype = 'o'
+  )
+) AS exact_role_contract_state
+FROM pg_roles AS role
+WHERE role.rolname = :'audit_role'
+\gset
+\if :exact_role_contract_state
+\else
+  \warn 'audit role differs from its immutable contract'
+  SELECT 'NEXPOLY_PROVISION_REFUSED_ROLE_STATE'::integer;
 \endif
 COMMIT;
 

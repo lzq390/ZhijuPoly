@@ -108,7 +108,11 @@ ALLOWED_CONFIG: dict[str, frozenset[str]] = {
             "precomposeunicode",
         }
     ),
-    'remote "origin"': frozenset({"url", "fetch", "pushurl", "tagopt"}),
+    # An explicit pushurl makes a two-step origin CAS crash-unsafe: changing
+    # the fetch URL first leaves fetch and push pointing at different
+    # authorities.  The legacy checkout uses the fetch URL as the implicit
+    # push URL, so there is no valid production representation for pushurl.
+    'remote "origin"': frozenset({"url", "fetch", "tagopt"}),
     'branch "main"': frozenset(
         {"remote", "merge", "vscode-merge-base"}
     ),
@@ -720,6 +724,99 @@ def _inventory_permission_records(root: Path) -> list[dict[str, Any]]:
     return [root_record, *directories, *files]
 
 
+def _validate_permission_takeover_config(
+    root: Path,
+    records: list[dict[str, Any]],
+) -> None:
+    """Parse the sealed local config before the first permission mutation."""
+
+    matches = [
+        record
+        for record in records
+        if record["path"] == ".git/config" and record["type"] == "file"
+    ]
+    if len(matches) != 1:
+        raise GitPermissionTakeoverError(
+            "Git permission authority lacks one local config"
+        )
+    expected = matches[0]
+    path = root / ".git/config"
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "Git local config cannot be opened safely"
+        ) from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != expected["uid"]
+            or before.st_gid != expected["gid"]
+            or before.st_dev != expected["device"]
+            or before.st_ino != expected["inode"]
+            or before.st_nlink != expected["nlink"]
+            or before.st_size != expected["size"]
+            or before.st_size < 1
+            or before.st_size > MAX_CONFIG_BYTES
+        ):
+            raise GitPermissionTakeoverError(
+                "Git local config changed after permission inventory"
+            )
+        payload = b""
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise GitPermissionTakeoverError(
+                    "Git local config was truncated"
+                )
+            payload += chunk
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+            before.st_mode,
+            before.st_uid,
+            before.st_gid,
+            before.st_nlink,
+        )
+        != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+            after.st_mode,
+            after.st_uid,
+            after.st_gid,
+            after.st_nlink,
+        )
+        or sha256_bytes(payload) != expected["content_sha256"]
+    ):
+        raise GitPermissionTakeoverError(
+            "Git local config changed while validating takeover"
+        )
+    try:
+        _canonical_config(payload)
+    except GitSourceTrustError as exc:
+        raise GitPermissionTakeoverError(
+            "Git local config contains executable or redirect policy"
+        ) from exc
+
+
 def _permission_identity(
     records: list[dict[str, Any]],
     *,
@@ -1208,6 +1305,19 @@ def takeover_repository_permissions(
     emit = checkpoint or (lambda _label: None)
     if marker_path.exists() or marker_path.is_symlink():
         document = _load_permission_document(root, marker_path)
+        if document["phase"] not in {
+            "restore-files-intent",
+            "restore-files-restored",
+            "restore-directories-intent",
+            "restore-directories-restored",
+            "restore-root-intent",
+            "restored",
+        }:
+            # A marker written by an older controller is not permission to
+            # resume under policy that the current controller rejects.  This
+            # check is read-only and still leaves the explicit restore path
+            # available for a previously hardened checkout.
+            _validate_permission_takeover_config(root, document["records"])
     else:
         records = _inventory_permission_records(root)
         _validate_permission_stage(
@@ -1220,6 +1330,7 @@ def takeover_repository_permissions(
             allow_mutable_changes=False,
             verify_content=True,
         )
+        _validate_permission_takeover_config(root, records)
         document = {
             "schema_version": PERMISSION_SCHEMA_VERSION,
             "policy": PERMISSION_POLICY_NAME,

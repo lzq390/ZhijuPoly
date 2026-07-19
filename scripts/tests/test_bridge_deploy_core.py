@@ -36,7 +36,7 @@ AUTHORITY_RECORDS = [*TARGET_RECORDS, BRIDGE.FINAL_MIGRATION_RECORD]
 
 def policy() -> dict[str, object]:
     document: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": BRIDGE.POLICY_SCHEMA_VERSION,
         "mode": BRIDGE.BRIDGE_MODE,
         "authority_ref": BRIDGE.AUTHORITY_REF,
         "target_sha": TARGET_SHA,
@@ -57,7 +57,8 @@ def policy() -> dict[str, object]:
         ),
         "external_database_audit": {
             **BRIDGE.EXTERNAL_DATABASE_AUDIT_POLICY,
-            "media_registry_sha256": "sha256:" + "5" * 64,
+            "media_authority_rules_sha256": "sha256:" + "5" * 64,
+            "audit_role_sql_sha256": "sha256:" + "6" * 64,
         },
         "required_ci_jobs": sorted(BRIDGE.REQUIRED_CI_JOBS),
         "policy_id": None,
@@ -68,30 +69,43 @@ def policy() -> dict[str, object]:
 
 
 class BridgePolicyTests(unittest.TestCase):
-    def test_policy_requires_one_exact_schema_bound_media_registry(self) -> None:
+    def test_policy_pins_authority_but_not_runtime_registry(self) -> None:
         document = policy()
         self.assertEqual(
             document["external_database_audit"],
             {
-                "schema_version": 1,
-                "evidence_schema_version": 3,
-                "registry_schema_version": 3,
-                "require_exact_registry_digest": True,
+                "schema_version": 2,
+                "evidence_schema_version": 5,
+                "authority_rules_schema_version": 1,
+                "runtime_registry_schema_version": 5,
+                "require_exact_authority_digest": True,
+                "require_complete_discovery": True,
                 "require_fresh_snapshot": True,
-                "media_registry_sha256": "sha256:" + "5" * 64,
+                "media_authority_rules_sha256": "sha256:" + "5" * 64,
+                "audit_role_sql_sha256": "sha256:" + "6" * 64,
             },
+        )
+        self.assertNotIn(
+            "runtime_registry_sha256",
+            document["external_database_audit"],
         )
         for label, mutate in (
             (
                 "floating digest",
                 lambda value: value["external_database_audit"].__setitem__(
-                    "media_registry_sha256", "latest"
+                    "media_authority_rules_sha256", "latest"
                 ),
             ),
             (
                 "optional audit",
                 lambda value: value["external_database_audit"].__setitem__(
                     "require_fresh_snapshot", False
+                ),
+            ),
+            (
+                "caller-selected runtime registry",
+                lambda value: value["external_database_audit"].__setitem__(
+                    "runtime_registry_sha256", "sha256:" + "6" * 64
                 ),
             ),
         ):
@@ -340,6 +354,74 @@ class BridgeTokenTests(unittest.TestCase):
                 policy_id=str(policy()["policy_id"]),
                 descriptor_sha256="sha256:" + "d" * 64,
             )
+
+    def test_descriptor_first_publication_never_persists_unbound_token(
+        self,
+    ) -> None:
+        identity = BRIDGE.token_identity(b"descriptor-first-token" * 2)
+        prepared = BRIDGE.publish_prepared_token(
+            self.state,
+            operation_id=OPERATION_ID,
+            policy_id=str(policy()["policy_id"]),
+            descriptor_sha256=self.descriptor_digest,
+            token_id=identity["token_id"],
+            token_sha256=identity["token_sha256"],
+            prepared_at="2026-07-18T00:00:00Z",
+        )
+        self.assertEqual(prepared["status"], "prepared")
+        self.assertEqual(
+            prepared["descriptor_sha256"],
+            self.descriptor_digest,
+        )
+        self.assertEqual(
+            BRIDGE.publish_prepared_token(
+                self.state,
+                operation_id=OPERATION_ID,
+                policy_id=str(policy()["policy_id"]),
+                descriptor_sha256=self.descriptor_digest,
+                token_id=identity["token_id"],
+                token_sha256=identity["token_sha256"],
+                prepared_at="2026-07-18T00:00:00Z",
+            ),
+            prepared,
+        )
+        with self.assertRaisesRegex(
+            BRIDGE.BridgeDeployError,
+            "descriptor identity differs|already committed or differs",
+        ):
+            BRIDGE.publish_prepared_token(
+                self.state,
+                operation_id=OPERATION_ID,
+                policy_id=str(policy()["policy_id"]),
+                descriptor_sha256=self.descriptor_digest,
+                token_id="sha256:" + "9" * 64,
+                token_sha256=identity["token_sha256"],
+                prepared_at="2026-07-18T00:00:00Z",
+            )
+
+    def test_descriptor_first_publication_upgrades_exact_legacy_reservation(
+        self,
+    ) -> None:
+        reserved = BRIDGE.reserve_token(
+            self.state,
+            operation_id=OPERATION_ID,
+            policy_id=str(policy()["policy_id"]),
+            token=b"x" * 32,
+        )
+        prepared = BRIDGE.publish_prepared_token(
+            self.state,
+            operation_id=OPERATION_ID,
+            policy_id=str(policy()["policy_id"]),
+            descriptor_sha256=self.descriptor_digest,
+            token_id=reserved["token_id"],
+            token_sha256=reserved["token_sha256"],
+            prepared_at=reserved["prepared_at"],
+        )
+        self.assertEqual(prepared["status"], "prepared")
+        self.assertEqual(
+            prepared["descriptor_sha256"],
+            self.descriptor_digest,
+        )
 
     def test_single_global_token_is_idempotent_only_for_same_authority(self) -> None:
         first = self.prepare()

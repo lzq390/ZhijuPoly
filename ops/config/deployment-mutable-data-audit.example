@@ -71,7 +71,12 @@ tables = (
     ("experimental", "property_records", "record_id", None),
     ("model_registry", "assets", "asset_id", None),
     ("md", "monomer_md_jobs", "job_id", None),
-    ("generation", "polytao_jobs", "job_id", "polytao_present"),
+    (
+        "generation",
+        "polytao_jobs",
+        "job_id::text",
+        "polytao_present",
+    ),
     ("monomer_dft", "jobs", "job_id", "dft_jobs_present"),
     (
         "monomer_dft",
@@ -167,7 +172,7 @@ schema_query = (
     "FROM pg_catalog.pg_index AS i "
     "WHERE i.indrelid='{relation}'::regclass ORDER BY 1"
 )
-role_security_query = """
+role_security_query = " ".join("""
 WITH target AS (
     SELECT *
     FROM pg_catalog.pg_roles
@@ -488,7 +493,7 @@ CROSS JOIN role_settings
 CROSS JOIN owned_objects
 CROSS JOIN direct_write_grants
 CROSS JOIN effective_write_privileges
-"""
+""".split())
 commands = [
     "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE;",
     (
@@ -553,6 +558,68 @@ for schema, table, order, condition in tables:
     )
     if condition is not None:
         commands.append("\\endif")
+commands.append("\\if :polytao_present")
+for name, query in (
+    (
+        "columns",
+        (
+            "SELECT jsonb_build_object("
+            "'column_name',column_name,'ordinal_position',ordinal_position,"
+            "'data_type',data_type,'udt_schema',udt_schema,'udt_name',udt_name,"
+            "'is_nullable',is_nullable,'column_default',column_default)::text "
+            "FROM information_schema.columns "
+            "WHERE table_schema='generation' AND table_name='polytao_jobs' "
+            "ORDER BY ordinal_position"
+        ),
+    ),
+    (
+        "indexes",
+        (
+            "SELECT jsonb_build_object("
+            "'indexname',indexname,'indexdef',indexdef)::text "
+            "FROM pg_indexes WHERE schemaname='generation' "
+            "AND tablename='polytao_jobs' ORDER BY indexname"
+        ),
+    ),
+    (
+        "constraints",
+        (
+            "SELECT jsonb_build_object("
+            "'name',constraint_row.conname,'type',constraint_row.contype,"
+            "'deferrable',constraint_row.condeferrable,"
+            "'initially_deferred',constraint_row.condeferred,"
+            "'validated',constraint_row.convalidated,"
+            "'definition',pg_get_constraintdef(constraint_row.oid,true))::text "
+            "FROM pg_constraint AS constraint_row "
+            "JOIN pg_class AS relation ON relation.oid=constraint_row.conrelid "
+            "JOIN pg_namespace AS namespace "
+            "ON namespace.oid=relation.relnamespace "
+            "WHERE namespace.nspname='generation' "
+            "AND relation.relname='polytao_jobs' "
+            "ORDER BY constraint_row.conname"
+        ),
+    ),
+    (
+        "triggers",
+        (
+            "SELECT jsonb_build_object("
+            "'name',trigger_row.tgname,'enabled',trigger_row.tgenabled,"
+            "'definition',pg_get_triggerdef(trigger_row.oid,true))::text "
+            "FROM pg_trigger AS trigger_row "
+            "JOIN pg_class AS relation ON relation.oid=trigger_row.tgrelid "
+            "JOIN pg_namespace AS namespace "
+            "ON namespace.oid=relation.relnamespace "
+            "WHERE namespace.nspname='generation' "
+            "AND relation.relname='polytao_jobs' "
+            "AND NOT trigger_row.tgisinternal ORDER BY trigger_row.tgname"
+        ),
+    ),
+):
+    commands.append(
+        f"\\copy ({query}) TO "
+        f"'{literal(root / ('generation__polytao_jobs.archive-' + name + '.rows'))}'"
+    )
+commands.append("\\endif")
 commands.append(
     "\\copy (SELECT (to_jsonb(value) - "
     "ARRAY['worker_instance_id','heartbeat_at','lease_expires_at']::text[])::text "
@@ -888,6 +955,36 @@ lease_columns_present = lease_projection.get("columns_present") is True
 role_security_rows = json_lines(root / "role_security.json")
 if len(role_security_rows) != 1 or not isinstance(role_security_rows[0], dict):
     raise SystemExit("mutable audit role-security evidence is invalid")
+migration_exception = table_record("generation", "polytao_jobs")
+if migration_exception["state"] == "present":
+    exception_rows = json_lines(root / "generation__polytao_jobs.rows")
+    exception_structure = {
+        name: json_lines(
+            root / f"generation__polytao_jobs.archive-{name}.rows"
+        )
+        for name in ("columns", "indexes", "constraints", "triggers")
+    }
+    exception_status_counts: dict[str, int] = {}
+    for row in exception_rows:
+        if not isinstance(row, dict) or not isinstance(row.get("status"), str):
+            raise SystemExit("PolyTAO canonical archive row is invalid")
+        status = row["status"]
+        exception_status_counts[status] = exception_status_counts.get(status, 0) + 1
+    migration_exception_archive_evidence = {
+        "schema_version": 2,
+        "row_count": len(exception_rows),
+        "status_counts": exception_status_counts,
+        "rows_sha256": hashlib.sha256(canonical(exception_rows)).hexdigest(),
+        "schema_sha256": hashlib.sha256(
+            canonical(exception_structure)
+        ).hexdigest(),
+        "structure_counts": {
+            name: len(records)
+            for name, records in exception_structure.items()
+        },
+    }
+else:
+    migration_exception_archive_evidence = None
 identity = {
     "operation_id": operation_id,
     "database": metadata["database"],
@@ -913,7 +1010,10 @@ identity = {
     "static_tables": [
         table_record(schema, table) for schema, table in static
     ],
-    "migration_exception": table_record("generation", "polytao_jobs"),
+    "migration_exception": migration_exception,
+    "migration_exception_archive_evidence": (
+        migration_exception_archive_evidence
+    ),
     "sequences": sequences,
     "bridge_projection": {
         "schema": "md",
@@ -944,7 +1044,7 @@ identity = {
     },
 }
 document = {
-    "schema_version": 5,
+    "schema_version": 6,
     **identity,
     "transaction_isolation": metadata["transaction_isolation"],
     "transaction_read_only": metadata["transaction_read_only"],

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -155,46 +159,23 @@ class SiteHelperContractTests(unittest.TestCase):
         self.assertTrue(body.rstrip().endswith("exit 2"))
 
     def test_external_media_templates_are_complete_and_non_destructive(self) -> None:
-        registry = json.loads(
+        self.assertFalse(
             (
                 ROOT / "ops/config/postgres-media-registry.json.example"
-            ).read_text(encoding="utf-8")
+            ).exists(),
+            "a generated runtime registry must never have an installable "
+            "placeholder example",
         )
-        self.assertEqual(registry["schema_version"], 3)
+        authority_path = (
+            ROOT / "ops/config/postgres-media-authority-rules.json"
+        )
+        authority_text = authority_path.read_text(encoding="utf-8")
+        authority = json.loads(authority_text)
+        self.assertEqual(authority["schema_version"], 1)
+        self.assertNotIn("replace-with", authority_text)
         self.assertEqual(
-            registry["audit_runtime"]["postgres_uid"],
-            70,
-        )
-        self.assertEqual(
-            registry["audit_runtime"]["postgres_gid"],
-            70,
-        )
-        self.assertEqual(
-            registry["audit_runtime"]["postgres_image"],
-            (
-                "docker.io/library/postgres@sha256:"
-                "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
-            ),
-        )
-        self.assertTrue(
-            all(
-                (
-                    record.get("classification") == "nexpoly-db"
-                    and isinstance(record.get("databases"), list)
-                    and record["databases"]
-                )
-                or (
-                    record.get("classification") == "unsupported-blocking"
-                    and record.get("audit_method") == "unsupported-blocking"
-                    and record.get("databases") == []
-                )
-                for record in registry["expected_media"]
-            )
-        )
-        self.assertEqual(
-            registry["discovery_boundary"]["backup_roots"],
+            authority["discovery_boundary"]["backup_roots"],
             [
-                "/data/lzq/gith/nexpoly/backups",
                 (
                     "/data/lzq/gith/nexpoly-runtime/legacy-takeover/"
                     "preserved-postgres-backups"
@@ -207,56 +188,100 @@ class SiteHelperContractTests(unittest.TestCase):
                 ),
             ],
         )
-        blockers = [
-            record["media_id"]
-            for record in registry["expected_media"]
-            if record["classification"] == "unsupported-blocking"
-        ]
-        self.assertEqual(len(blockers), 2)
-        self.assertTrue(
-            all("replace-with-every-discovered-backup" in item for item in blockers)
-        )
         self.assertEqual(
-            [record["media_id"] for record in registry["expected_media"]],
-            sorted(
-                record["media_id"]
-                for record in registry["expected_media"]
-            ),
-        )
-        health = next(
-            record
-            for record in registry["expected_media"]
-            if record["database"] == "nexpoly_md_health_opt"
-        )
-        self.assertEqual(health["disposition"], "retained-private-isolated")
-        self.assertEqual(
-            health["audit_method"],
-            "isolated-volume-copy-read-only",
-        )
-        self.assertIsNone(health["pg_service"])
-        self.assertEqual(
-            registry["required_online_databases"],
-            [
-                {
-                    "stack": "nexpoly_dev",
-                    "media_id": (
-                        "docker-volume:"
-                        "nexpoly_dev_nexpoly_dev_postgres_data"
-                    ),
-                }
-            ],
+            sorted(authority["audit_runtime"]["postgres_images"]),
+            ["14", "15", "16", "18"],
         )
         helper = (
             ROOT / "ops/config/contract-0012-external-database-audit.example"
         ).read_text(encoding="utf-8")
         for required in (
             "nexpoly-postgres-media-evidence",
-            "--expected-registry-sha256",
-            "NEXPOLY_CONTRACT_0012_MEDIA_REGISTRY_SHA256",
+            "NEXPOLY_CONTRACT_0012_MEDIA_AUTHORITY_RULES_SHA256",
+            "mode=build",
+            "mode=revalidate",
+            'exec "$builder"',
+            'exec "$builder" revalidate',
         ):
             self.assertIn(required, helper)
         self.assertNotIn("docker volume rm", helper)
         self.assertNotIn("docker system prune", helper)
+
+    def test_external_media_helper_preserves_zero_argument_build_abi(
+        self,
+    ) -> None:
+        binary = self.runtime / "bin"
+        binary.mkdir(mode=0o700)
+        rules = self.config / "postgres-media-authority-rules.json"
+        rules_payload = b'{"schema_version":1}\n'
+        rules.write_bytes(rules_payload)
+        os.chmod(rules, 0o600)
+        capture = self.runtime / "builder-arguments"
+        builder = binary / "nexpoly-postgres-media-evidence"
+        builder.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$#\" \"$@\" > \"$CAPTURE_PATH\"\n",
+            encoding="utf-8",
+        )
+        os.chmod(builder, 0o700)
+        helper = self.runtime / "external-database-audit"
+        helper.write_text(
+            (
+                ROOT
+                / "ops/config/contract-0012-external-database-audit.example"
+            )
+            .read_text(encoding="utf-8")
+            .replace(
+                "runtime_root=/data/lzq/gith/nexpoly-runtime",
+                f"runtime_root={self.runtime}",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(helper, 0o700)
+        environment = {
+            "PATH": "/usr/bin:/bin",
+            "CAPTURE_PATH": str(capture),
+            "NEXPOLY_CONTRACT_0012_MEDIA_AUTHORITY_RULES_SHA256": (
+                "sha256:" + hashlib.sha256(rules_payload).hexdigest()
+            ),
+        }
+
+        built = subprocess.run(
+            [str(helper)],
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(built.returncode, 0, built.stderr)
+        self.assertEqual(capture.read_text(encoding="utf-8"), "0\n")
+
+        revalidated = subprocess.run(
+            [str(helper), "revalidate"],
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            revalidated.returncode,
+            0,
+            revalidated.stderr,
+        )
+        self.assertEqual(
+            capture.read_text(encoding="utf-8"),
+            "1\nrevalidate\n",
+        )
+
+        rejected = subprocess.run(
+            [str(helper), "build"],
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
 
     def test_active_jobs_contract_rejects_unknown_boolean_and_bad_total(self) -> None:
         document = {
@@ -621,7 +646,7 @@ class SiteHelperContractTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(
             CONTRACTS.SiteHelperContractError,
-            "schema v3",
+            "schema v5",
         ):
             CONTRACTS.validate_external_database_audit(
                 document,
@@ -930,6 +955,19 @@ class SiteHelperContractTests(unittest.TestCase):
                 25,
                 rows=9,
             ),
+            "migration_exception_archive_evidence": {
+                "schema_version": 2,
+                "row_count": 9,
+                "status_counts": {"completed": 9},
+                "rows_sha256": "1" * 64,
+                "schema_sha256": "2" * 64,
+                "structure_counts": {
+                    "columns": 1,
+                    "indexes": 1,
+                    "constraints": 1,
+                    "triggers": 0,
+                },
+            },
             "sequences": sequences,
             "bridge_projection": {
                 "schema": "md",
@@ -954,7 +992,7 @@ class SiteHelperContractTests(unittest.TestCase):
             },
         }
         document = {
-            "schema_version": 5,
+            "schema_version": 6,
             **identity,
             "transaction_isolation": "repeatable read",
             "transaction_read_only": True,
@@ -990,6 +1028,12 @@ class SiteHelperContractTests(unittest.TestCase):
             (
                 "sequence",
                 lambda value: value["sequences"][0].update(last_value=99),
+            ),
+            (
+                "archive-seal",
+                lambda value: value[
+                    "migration_exception_archive_evidence"
+                ].update(rows_sha256="3" * 64),
             ),
             (
                 "ledger",
@@ -1072,6 +1116,7 @@ class SiteHelperContractTests(unittest.TestCase):
             25,
             present=False,
         )
+        post_0013["migration_exception_archive_evidence"] = None
         for record in post_0013["business_tables"]:
             relation = (record["schema"], record["table"])
             expected_schema = CONTRACTS.MONOMER_DFT_TABLE_SCHEMA_SHA256.get(
@@ -1191,6 +1236,38 @@ class SiteHelperContractTests(unittest.TestCase):
             "'deptype',dependency.deptype",
         ):
             self.assertIn(required, helper)
+
+    def test_mutable_helper_generates_single_line_psql_copy_commands(self) -> None:
+        helper_path = (
+            ROOT / "ops/config/deployment-mutable-data-audit.example"
+        )
+        helper = helper_path.read_text(encoding="utf-8")
+        generator = helper.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory() as raw:
+            capture = Path(raw)
+            namespace = {
+                "__name__": "__main__",
+                "__file__": str(helper_path),
+            }
+            with mock.patch.object(sys, "argv", [str(helper_path), str(capture)]):
+                exec(
+                    compile(generator, str(helper_path), "exec"),
+                    namespace,
+                    namespace,
+                )
+            lines = (capture / "capture.sql").read_text(
+                encoding="utf-8"
+            ).splitlines()
+        copy_lines = [line for line in lines if line.startswith("\\copy ")]
+        self.assertGreater(len(copy_lines), 1)
+        self.assertTrue(
+            all(" TO '" in line for line in copy_lines),
+            "every psql meta-command must be complete on one physical line",
+        )
+        self.assertFalse(
+            any(line == "\\copy (" for line in lines),
+            "psql does not continue a bare multi-line \\copy meta-command",
+        )
         self.assertNotIn("f\"'owned_by','{owned_by}',\"", helper)
 
     def test_cli_validate_never_changes_input(self) -> None:
