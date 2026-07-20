@@ -13,7 +13,8 @@ docs/superpowers/
 !.env.monomer-dft.dev.example
 docker-compose.dev.yml
 scripts/dev_server_gpu.sh
-.runtime/
+/.runtime/
+**/.runtime/
 /.venv-monomer-md-worker/
 /.venv-monomer-md-worker.staging-*/
 /.venv-monomer-md-worker.previous-*/

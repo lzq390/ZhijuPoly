@@ -15,8 +15,8 @@ React 19 / Vite / Ketcher / 3Dmol
                   v
                     FastAPI API
           /             |             |              \
- PostgreSQL      本地模型运行时      在线知识服务      Monomer-MD Worker
-                                                  （HTTP / UDS，ByteFF2 / OpenMM / GROMACS）
+ PostgreSQL      本地模型运行时      在线知识服务      科学计算 Worker
+                                                  （Monomer-MD；隔离开发 Monomer-DFT）
 ```
 
 - 前端负责工作台、数据分析、任务轮询、Ketcher 结构编辑和 3D 展示。
@@ -24,13 +24,15 @@ React 19 / Vite / Ketcher / 3Dmol
 - PostgreSQL 是唯一在线结构化数据后端；SQLite 仅保留为历史导入、迁移或审计输入。
 - OCSR、条件生成、逆合成和 PolyTAO 等能力依赖本地模型资产与功能开关。
 - Monomer-MD 通过 HTTP 或 Unix Domain Socket 连接独立 Worker，作业状态写入 PostgreSQL。
+- Monomer-DFT 使用 AIMNet2、Host Broker/MPS 与 Unix Domain Socket Worker；
+  当前仅允许在隔离开发栈启用，生产配置保持 hard-off。
 
 ## 功能边界
 
 | 类型 | 模块 |
 |---|---|
 | 真实业务能力 | 结构工作台、SMILES 标准化与检索、性质预测、数据库分析、实验数据、知识检索、Tg 逆向设计、条件生成、PolyTAO、单体正向聚合与逆合成 |
-| 依赖外部运行时 | 结构图片识别、本地大模型生成、在线知识抽取、正式 Monomer-MD 协议 |
+| 依赖外部运行时 | 结构图片识别、本地大模型生成、在线知识抽取、正式 Monomer-MD 协议、隔离开发 Monomer-DFT |
 | Demo 能力 | 内置轨迹 MD Demo、LocalStorage 实验流程、固定场景高通量优化、预制结果 PDF 相似度预览 |
 
 功能是否可用应以对应 `/status` 接口、环境开关和模型资产检查结果为准，不应仅根据页面是否显示判断。Demo 结果不得描述为在线计算结果。
@@ -96,6 +98,13 @@ PolyTAO 的最大公开参数保持不变，但内部按最多 2 条序列的微
 条件生成和 PolyTAO 保留 `202 + job_id + 轮询`，但作业状态存放在 Backend
 单进程的有界内存中；重启或终态淘汰后查询返回 410，前端会保留输入并提示重提。
 
+Monomer-DFT 不属于上述通用 dev Compose。它使用独立数据库、端口、私有
+`.runtime/`、GPU1 主设备和 GPU3 overflow，并禁止向生产 GPU2 发起 CUDA
+或工作负载访问（正式验收仅进行只读稳定性采样）。准备
+AIMNet 锁定运行时、启动 Worker、恢复 journal 或生成正式 GPU 验收证据前，
+必须遵循 [Monomer-DFT 开发与恢复指南](docs/monomer-dft-development.md)；
+不得从生产仓、普通 dev Broker 或相邻的脏 AIMNet 仓启动。
+
 ## 干净克隆与外部资产
 
 仓库不包含完整的生产数据、模型 checkpoint、密钥或宿主机 Worker 环境。干净克隆不能直接假定所有模块可用，需要单独准备：
@@ -104,6 +113,8 @@ PolyTAO 的最大公开参数保持不变，但内部按最多 2 条序列的微
 - OCSR、条件生成、逆合成及 PolyTAO 等模型资产；
 - 在线知识服务所需密钥；
 - 正式 Monomer-MD 所需的 ByteFF2/OpenMM/GROMACS 环境；
+- 隔离开发 Monomer-DFT 所需的锁定 AIMNet 源码、wheel、模型和 Host
+  Broker/MPS 环境；
 - 与目标机器匹配的 dev overlay 或生产环境配置。
 
 不要在 README 复制容易漂移的完整资产列表。模型清单以 [`backend/app/model_asset_manifest.py`](backend/app/model_asset_manifest.py) 为准，生产资产以只读 `ASSET-MANIFEST.json` 为准，部署检查以 [`scripts/pull_deploy_controller.py`](scripts/pull_deploy_controller.py) 及发布控制器文档为准。
@@ -114,7 +125,7 @@ PolyTAO 的最大公开参数保持不变，但内部按最多 2 条序列的微
 |---|---|
 | `frontend/` | React/Vite 前端、Ketcher 与 3Dmol 静态资源 |
 | `backend/` | FastAPI、领域服务、PostgreSQL 迁移、导入工具和测试 |
-| `workers/` | 需要独立科学计算环境的 Monomer-MD Worker；PolyTAO 直接运行在 backend 内 |
+| `workers/` | 需要独立科学计算环境的 Monomer-MD 与隔离开发 Monomer-DFT Worker；PolyTAO 直接运行在 backend 内 |
 | `database/` | 可跟踪的基础 CSV；大体量运行数据通常由部署环境提供 |
 | `model/` | 随仓库提供的 RF 模型和外部模型目录入口 |
 | `docs/` | 部署、数据库治理、Worker 和历史设计文档 |
@@ -154,6 +165,7 @@ docker compose config --quiet
 - [CI/CD 与生产部署入口](docs/deployment.md)
 - [PostgreSQL 迁移治理](docs/postgres-migration-governance.md)
 - [Monomer-MD Worker](docs/monomer-md-worker.md)
+- [Monomer-DFT 开发与恢复](docs/monomer-dft-development.md)
 - [后端测试环境](backend/tests/README.md)
 - [UI 设计系统](design-system/polyprop/MASTER.md)
 

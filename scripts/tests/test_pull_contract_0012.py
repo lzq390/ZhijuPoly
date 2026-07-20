@@ -5,13 +5,17 @@ import io
 import json
 import os
 from pathlib import Path
-import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from scripts import pull_contract_0012 as contract
+from scripts.tests.bridge_manifest_fixtures import (
+    F_MANIFEST_RECORDS,
+    F_MANIFEST_SHA256,
+    materialize_b_migration_directory,
+)
 from scripts.tests.test_postgres_media_evidence import (
     audited_startup_fields,
     role_security_fields as external_role_security_fields,
@@ -1657,11 +1661,8 @@ class PullContract0012Tests(unittest.TestCase):
             encoding="utf-8",
         )
         os.chmod(deploy_env, 0o600)
-        migration_source = (
-            Path(__file__).resolve().parents[2] / "backend/migrations/postgres"
-        )
         self.manifest = self.production / "backend/migrations/postgres/manifest.json"
-        shutil.copytree(migration_source, self.manifest.parent)
+        materialize_b_migration_directory(self.manifest.parent)
         self.raw_manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.descriptor: dict[str, object] = {
             "repository": {"target_sha": SHA, "target_tree": TREE},
@@ -1852,11 +1853,8 @@ class PullContract0012Tests(unittest.TestCase):
                     "sha256"
                 ],
                 target_records=self.raw_manifest["migrations"],
-                authority_manifest_sha256="sha256:" + "f" * 64,
-                authority_records=[
-                    *self.raw_manifest["migrations"],
-                    contract.pull._bridge_core.FINAL_MIGRATION_RECORD,
-                ],
+                authority_manifest_sha256=F_MANIFEST_SHA256,
+                authority_records=F_MANIFEST_RECORDS,
             )
         )
         migration_compatibility = (

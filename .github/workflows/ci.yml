@@ -128,6 +128,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Assert immutable checkout
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
@@ -420,15 +421,18 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Assert immutable checkout
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
       - name: Validate exact bridge policy and schema compatibility states
-        run: >-
-          python3 -m unittest -v
-          scripts/tests/test_bridge_deploy_core.py
-          scripts/tests/test_pull_contract_0012.py
-          scripts/tests/test_pull_deploy_controller.py
+        run: |
+          python3 scripts/validate_production_bridge_policy.py
+          python3 -m unittest -v \
+            scripts/tests/test_bridge_deploy_core.py \
+            scripts/tests/test_production_bridge_policy.py \
+            scripts/tests/test_pull_contract_0012.py \
+            scripts/tests/test_pull_deploy_controller.py
 
   exact-b-bridge:
     name: exact-B bridge compatibility

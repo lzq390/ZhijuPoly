@@ -159,15 +159,8 @@ committed tree based on the current `origin/main`, the canonical CI and
 release controls, the exact 0012 contract migration, the 0013 expand
 migration, and a passing release-contract validator.
 
-For routine development use the default private project. For an acceptance
-run, set a new name matching `nexpoly_dft_fresh_<id>` in the private env file;
-this creates a distinct network and PostgreSQL volume:
-
-```dotenv
-NEXPOLY_DFT_PROJECT_NAME=nexpoly_dft_fresh_20260718a
-```
-
-Then use only the scoped controller:
+For routine development use the default private project and only the scoped
+controller:
 
 ```bash
 ./scripts/monomer_dft_dev_stack.sh config
@@ -176,6 +169,12 @@ Then use only the scoped controller:
 ./scripts/monomer_dft_dev_stack.sh logs
 ./scripts/monomer_dft_dev_stack.sh stop
 ```
+
+Formal acceptance does not reuse that project and must not be configured by
+editing the private env file. The acceptance runner injects a one-run
+`nexpoly_dft_fresh_<id>` namespace after loading the fixed development
+configuration, then proves that its network, PostgreSQL volume, containers,
+Worker, Broker and MPS state were all freshly created and collected.
 
 The fixed loopback endpoints are:
 
@@ -273,11 +272,21 @@ updates. Run `--check` again and require `v1_count=0` and
 
 ## Release acceptance and shutdown
 
-Formal GPU acceptance must run only after B is frozen and the final F
-commit/tree and immutable Backend/Web OCI digests exist. Use
-`scripts/run_monomer_dft_gpu_acceptance.py --help` from the isolated Python
-environment and provide the full F/B commit and tree IDs plus an owner-private
-OCI evidence JSON file. Do not call its internal child mode directly.
+Formal GPU acceptance has two deliberately different stages after B is
+frozen. Before merge, run `candidate-tree` against the clean candidate tree
+to exercise the real science and control plane; its report is provisional and
+can never satisfy production readiness. After squash merge, wait for the main
+release to publish Backend/Web images labelled with the final F SHA, pull
+their exact GHCR digest references, and rerun `final-main`. That second run
+uses Compose `--no-build`, verifies the registry index and linux/amd64
+platform digest, local image ID, RepoDigest, OCI labels, and running container
+image ID, and is the only run allowed to produce final acceptance evidence.
+
+Use `scripts/run_monomer_dft_gpu_acceptance.py --help` from the isolated
+Python environment. Both stages require the full F/B commit and tree IDs;
+`final-main` additionally requires an owner-private OCI evidence JSON file.
+Do not call the runner's internal child mode directly or relabel a
+`candidate-tree` report after publication.
 
 The runner must own a fresh exact-F Broker, MPS, Worker, and fresh Compose
 project for the entire evidence window. A passing sealed report proves:
@@ -286,8 +295,10 @@ project for the entire evidence window. A passing sealed report proves:
   artifact/bundle paths;
 - either an exact GPU3 overflow execution or a causally proven external fence;
 - exact source, wheel, model, runtime, image, F, and B provenance;
-- no development access to GPU2 or production sockets, mounts, containers,
-  database, repository, or asset pointer;
+- no development mutation of GPU2 or production sockets, mounts, containers,
+  database, repository, or asset pointer. The harness performs only the
+  explicit read-only GPU2 samples, Docker inventory needed to fence GPU3, and
+  production-repository content CAS described by the acceptance contract;
 - complete drain and removal of runner-owned processes, scopes, leases,
   sockets, and containers before the final production/GPU2 comparison.
 

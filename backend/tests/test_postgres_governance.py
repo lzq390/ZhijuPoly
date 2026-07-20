@@ -50,6 +50,7 @@ from app.services.postgres_database_browser import get_database_analytics_postgr
 
 _CONTRACT_OPERATION_ID = "contract-0012-pg-guard"
 _CONTRACT_RELEASE_SHA = "a" * 40
+_DFT_MIGRATION_VERSION = "0013_monomer_dft_jobs"
 
 
 def _canonical_json(value: object) -> str:
@@ -141,9 +142,13 @@ def _prepare_polytao_contract_state(
 ) -> tuple[str, str]:
     version = postgres_migrations.POLYTAO_CONTRACT_VERSION
     with postgres_connection(postgres_dsn) as connection:
+        connection.execute("DROP SCHEMA IF EXISTS monomer_dft CASCADE")
         connection.execute(
-            "DELETE FROM governance.schema_migrations WHERE version = %s",
-            (version,),
+            """
+            DELETE FROM governance.schema_migrations
+            WHERE version = ANY(%s)
+            """,
+            ([version, _DFT_MIGRATION_VERSION],),
         )
         connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
         connection.execute(
@@ -190,17 +195,51 @@ def _prepare_polytao_contract_state(
 
 def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
     version = postgres_migrations.POLYTAO_CONTRACT_VERSION
-    checksum = migration_checksum(MIGRATIONS_DIR / f"{version}.sql")
     with postgres_connection(postgres_dsn) as connection:
-        connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
         connection.execute(
             """
-            INSERT INTO governance.schema_migrations (version, checksum)
-            VALUES (%s, %s)
-            ON CONFLICT (version) DO UPDATE SET checksum = excluded.checksum
+            DELETE FROM governance.schema_migrations
+            WHERE version = ANY(%s)
             """,
-            (version, checksum),
+            ([version, _DFT_MIGRATION_VERSION],),
         )
+        connection.execute("DROP SCHEMA IF EXISTS monomer_dft CASCADE")
+        connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
+        connection.execute(
+            (MIGRATIONS_DIR / "0007_polytao_jobs.sql").read_text(
+                encoding="utf-8"
+            )
+        )
+        connection.execute(
+            """
+            UPDATE governance.deployment_control
+            SET drain_enabled = true,
+                reason = %s,
+                release_sha = %s,
+                activated_at = now(),
+                activated_by = %s,
+                updated_at = now()
+            WHERE control_key = 'production'
+            """,
+            (
+                f"0012 maintenance {_CONTRACT_OPERATION_ID}",
+                _CONTRACT_RELEASE_SHA,
+                postgres_migrations.POLYTAO_CONTRACT_GUARD_ACTOR,
+            ),
+        )
+        guard_json, guard_sha256 = _contract_guard_for_connection(connection)
+
+    apply_polytao_contract_migration(
+        postgres_dsn,
+        guard_json=guard_json,
+        guard_sha256=guard_sha256,
+    )
+    apply_postgres_migrations(
+        postgres_dsn,
+        allowed_kinds={"baseline", "expand"},
+    )
+
+    with postgres_connection(postgres_dsn) as connection:
         connection.execute(
             """
             UPDATE governance.deployment_control
@@ -213,6 +252,57 @@ def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
             WHERE control_key = 'production'
             """
         )
+        ledger = {
+            str(row["version"]): str(row["checksum"])
+            for row in connection.execute(
+                """
+                SELECT version, checksum
+                FROM governance.schema_migrations
+                WHERE version = ANY(%s)
+                """,
+                ([version, _DFT_MIGRATION_VERSION],),
+            ).fetchall()
+        }
+        schema = connection.execute(
+            """
+            SELECT
+              to_regnamespace('generation') AS generation,
+              to_regnamespace('monomer_dft') AS monomer_dft,
+              to_regclass('monomer_dft.jobs') AS jobs
+            """
+        ).fetchone()
+        sequence = connection.execute(
+            """
+            SELECT last_value, is_called
+            FROM monomer_dft.jobs_enqueue_sequence_seq
+            """
+        ).fetchone()
+        if ledger != {
+            version: postgres_migrations.POLYTAO_CONTRACT_CHECKSUM,
+            _DFT_MIGRATION_VERSION: migration_checksum(
+                MIGRATIONS_DIR / f"{_DFT_MIGRATION_VERSION}.sql"
+            ),
+        }:
+            raise AssertionError(
+                "test fixture did not restore exact 0012/0013 migration records"
+            )
+        if (
+            schema is None
+            or schema["generation"] is not None
+            or schema["monomer_dft"] != "monomer_dft"
+            or schema["jobs"] != "monomer_dft.jobs"
+        ):
+            raise AssertionError(
+                "test fixture did not restore the exact post-0013 schema"
+            )
+        if (
+            sequence is None
+            or sequence["last_value"] != 1
+            or sequence["is_called"] is not False
+        ):
+            raise AssertionError(
+                "test fixture did not restore the pristine 0013 identity sequence"
+            )
 
 
 def _wait_for_application_lock(
@@ -1335,7 +1425,7 @@ def test_polytao_database_contract_is_applied(postgres_dsn: str) -> None:
     assert schema is None
 
 
-def test_historical_bootstrap_expand_defers_trailing_contract(
+def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
     tmp_path: Path,
     postgres_dsn: str,
     monkeypatch,
@@ -1344,8 +1434,7 @@ def test_historical_bootstrap_expand_defers_trailing_contract(
 
     settings = _governance_settings(tmp_path, postgres_dsn)
     version = "0012_drop_polytao_jobs"
-    dft_version = "0013_monomer_dft_jobs"
-    dft_checksum = migration_checksum(MIGRATIONS_DIR / f"{dft_version}.sql")
+    dft_version = _DFT_MIGRATION_VERSION
     monkeypatch.setattr(
         postgres_preflight,
         "_analytics_snapshot_report",
@@ -1389,6 +1478,7 @@ def test_historical_bootstrap_expand_defers_trailing_contract(
             ],),
         )
         connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
+        connection.execute("DROP SCHEMA IF EXISTS monomer_dft CASCADE")
         connection.execute(
             (MIGRATIONS_DIR / "0007_polytao_jobs.sql").read_text(
                 encoding="utf-8"
@@ -1426,12 +1516,15 @@ def test_historical_bootstrap_expand_defers_trailing_contract(
             dsn=postgres_dsn,
             mode="schema",
             strict=True,
+            schema_target=postgres_preflight.SCHEMA_TARGET_STARTUP,
         )
-        assert report["status"] == "ok"
-        assert report["strict_ok"] is True
-        assert report["strict_errors"] == []
-        assert report["migrations"]["missing"] == []
+        assert report["status"] == "failed"
+        assert report["strict_ok"] is False
+        assert report["migrations"]["missing"] == [version]
         assert report["migrations"]["pending_contracts"] == [version]
+        assert any(
+            version in error for error in report["strict_errors"]
+        )
     finally:
         with postgres_connection(postgres_dsn) as connection:
             connection.execute(
@@ -1462,15 +1555,6 @@ def test_historical_bootstrap_expand_defers_trailing_contract(
             )
         finally:
             _restore_applied_polytao_contract_state(postgres_dsn)
-        with postgres_connection(postgres_dsn) as connection:
-            connection.execute(
-                """
-                INSERT INTO governance.schema_migrations (version, checksum)
-                VALUES (%s, %s)
-                ON CONFLICT (version) DO UPDATE SET checksum = excluded.checksum
-                """,
-                (dft_version, dft_checksum),
-            )
 
 
 def test_polytao_contract_rolls_back_when_generation_schema_is_not_empty(
@@ -1690,6 +1774,7 @@ def test_polytao_contract_post_verifier_failure_rolls_back_transaction(
         assert state["relation"] == "generation.polytao_jobs"
         assert state["migration_recorded"] is False
     finally:
+        monkeypatch.undo()
         _restore_applied_polytao_contract_state(postgres_dsn)
 
 
@@ -1816,6 +1901,7 @@ def test_polytao_contract_guard_access_exclusive_blocks_late_writer(
             )
     finally:
         allow_contract.set()
+        monkeypatch.undo()
         _restore_applied_polytao_contract_state(postgres_dsn)
 
 

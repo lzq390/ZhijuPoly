@@ -8,6 +8,13 @@ import tempfile
 import unittest
 from unittest import mock
 
+from scripts.tests.bridge_manifest_fixtures import (
+    B_MANIFEST_RECORDS,
+    B_MANIFEST_SHA256,
+    F_MANIFEST_RECORDS,
+    F_MANIFEST_SHA256,
+)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/bridge_deploy_core.py"
@@ -24,14 +31,10 @@ TARGET_TREE = "d" * 40
 OPERATION_ID = "bridge-20260717-0001"
 DIGEST_A = "sha256:" + "1" * 64
 DIGEST_B = "sha256:" + "2" * 64
-TARGET_MANIFEST_SHA256 = "sha256:" + "4" * 64
-AUTHORITY_MANIFEST_SHA256 = "sha256:" + "6" * 64
-TARGET_RECORDS = json.loads(
-    (ROOT / "backend/migrations/postgres/manifest.json").read_text(
-        encoding="utf-8"
-    )
-)["migrations"]
-AUTHORITY_RECORDS = [*TARGET_RECORDS, BRIDGE.FINAL_MIGRATION_RECORD]
+TARGET_MANIFEST_SHA256 = B_MANIFEST_SHA256
+AUTHORITY_MANIFEST_SHA256 = F_MANIFEST_SHA256
+TARGET_RECORDS = B_MANIFEST_RECORDS
+AUTHORITY_RECORDS = F_MANIFEST_RECORDS
 
 
 def policy() -> dict[str, object]:
