@@ -3444,7 +3444,7 @@ class MpsRuntimeGuard:
                 "MPS control authority reported multiple servers",
             )
         server_pid = next(iter(first_servers))
-        control_pid = self._control_pid(pipe_directory)
+        control_pid = self._control_pid(pipe_directory, uuid)
         control_cgroup = self._validate_process_identity(
             control_pid,
             self.control_executable,
@@ -3497,7 +3497,7 @@ class MpsRuntimeGuard:
             )
         if (
             self._server_list(index, deadline=deadline) != first_servers
-            or self._control_pid(pipe_directory) != control_pid
+            or self._control_pid(pipe_directory, uuid) != control_pid
             or self._pipe_identity(pipe_directory) != pipe_before
         ):
             raise BrokerError(
@@ -3568,7 +3568,7 @@ class MpsRuntimeGuard:
             or control_stat.st_nlink != 1
             or control_stat.st_uid != 1001
             or control_stat.st_gid != 1001
-            or stat.S_IMODE(control_stat.st_mode) & 0o022
+            or stat.S_IMODE(control_stat.st_mode) not in {0o600, 0o666}
         ):
             raise BrokerError(
                 "mps_control_unavailable",
@@ -3606,11 +3606,79 @@ class MpsRuntimeGuard:
             return False
         return True
 
-    def _control_pid(self, pipe_directory: Path) -> int:
+    def _discover_control_pid(
+        self,
+        pipe_directory: Path,
+        expected_uuid: str,
+    ) -> int:
+        """Discover NVIDIA's daemon when it does not publish a PID file."""
+
+        try:
+            entries = list(self.proc_root.iterdir())
+        except OSError as exc:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control process inventory is unavailable",
+            ) from exc
+        if len(entries) > 1_000_000:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control process inventory is oversized",
+            )
+        candidates: list[int] = []
+        for entry in entries:
+            if not entry.name.isdecimal() or entry.name.startswith("0"):
+                continue
+            pid = int(entry.name)
+            try:
+                cgroup = self._validate_process_identity(
+                    pid,
+                    self.control_executable,
+                    kind="control",
+                )
+                environment = self._read_process_environment(pid)
+                reported_pipe = self._resolve_process_authority_path(
+                    environment["CUDA_MPS_PIPE_DIRECTORY"],
+                    pid,
+                )
+                expected_pipe = pipe_directory.resolve(strict=True)
+            except (
+                BrokerError,
+                KeyError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ):
+                continue
+            if (
+                _cgroup_has_scoped_path(cgroup)
+                and environment.get("CUDA_VISIBLE_DEVICES") == expected_uuid
+                and reported_pipe == expected_pipe
+            ):
+                candidates.append(pid)
+        if len(candidates) != 1:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control process authority is ambiguous",
+            )
+        return candidates[0]
+
+    def _control_pid(
+        self,
+        pipe_directory: Path,
+        expected_uuid: str,
+    ) -> int:
         path = pipe_directory / "nvidia-cuda-mps-control.pid"
         descriptor = -1
         try:
             declared_before = path.lstat()
+        except FileNotFoundError:
+            return self._discover_control_pid(
+                pipe_directory,
+                expected_uuid,
+            )
+        try:
             if (
                 stat.S_ISLNK(declared_before.st_mode)
                 or not stat.S_ISREG(declared_before.st_mode)

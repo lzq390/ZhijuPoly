@@ -634,6 +634,7 @@ def test_mps_client_environment_uses_uuid_cap_priority_and_private_pipe(
     pipe_directory.mkdir(parents=True)
     pipe_directory.chmod(0o700)
     os.mkfifo(pipe_directory / "control", 0o600)
+    (pipe_directory / "control").chmod(0o666)
     lease = GpuLease(
         lease_id="lease-1",
         fencing_token=1,
@@ -2886,6 +2887,23 @@ def test_mps_authority_rejects_control_endpoint_replacement_during_audit(
         mps_guard.authorized_server_pids(1, EXPECTED_GPU_UUIDS[1])
 
     assert error.value.code == "mps_control_unavailable"
+
+
+def test_mps_authority_discovers_exact_control_when_nvidia_omits_pid_file(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    pid_file = state["pid_file"]
+    server_pid = state["server_pid"]
+    gpu_uuid = state["gpu_uuid"]
+    assert isinstance(pid_file, Path)
+    assert isinstance(server_pid, int)
+    assert isinstance(gpu_uuid, str)
+    pid_file.unlink()
+
+    assert mps_guard.authorized_server_pids(1, gpu_uuid) == frozenset(
+        {server_pid}
+    )
 
 
 def test_mps_authority_rejects_hardlinked_control_endpoint(tmp_path: Path) -> None:
