@@ -109,7 +109,12 @@ def validate_complete_history_checkouts(
     ci_text: str,
     failures: list[str],
 ) -> None:
-    jobs = ("script-tests", "bridge-validation", "exact-b-bridge")
+    jobs = (
+        "script-tests",
+        "production-alias-integration",
+        "bridge-validation",
+        "exact-b-bridge",
+    )
     checkout = "uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
     candidate_ref = "ref: ${{ needs.resolve-sha.outputs.candidate_sha }}"
     for job_name in jobs:
@@ -142,8 +147,8 @@ def validate_complete_history_checkouts(
         )
     if ci_text.count("fetch-depth: 0") != len(jobs):
         failures.append(
-            "only script-tests, bridge-validation, and exact-b-bridge may request "
-            "complete Git history"
+            "only script-tests, production-alias-integration, bridge-validation, "
+            "and exact-b-bridge may request complete Git history"
         )
 
 

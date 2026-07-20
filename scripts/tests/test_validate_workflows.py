@@ -14,7 +14,7 @@ EXACT_B_TEXT = (ROOT / "scripts/ci/test_exact_b_bridge.sh").read_text(
 
 
 class StructuredWorkflowPolicyTests(unittest.TestCase):
-    def test_complete_history_is_bound_to_the_three_consuming_jobs(self) -> None:
+    def test_complete_history_is_bound_to_all_consuming_jobs(self) -> None:
         failures: list[str] = []
         policy.validate_complete_history_checkouts(CI_TEXT, failures)
         self.assertEqual(failures, [])

@@ -632,6 +632,7 @@ def test_mps_client_environment_uses_uuid_cap_priority_and_private_pipe(
 ) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
     os.mkfifo(pipe_directory / "control", 0o600)
     lease = GpuLease(
         lease_id="lease-1",
@@ -801,11 +802,18 @@ def test_external_reservation_inventory_blocks_gpu3(tmp_path: Path) -> None:
     }
 
 
-def test_repository_systemd_registrations_bind_the_real_manager_scopes() -> None:
+def test_repository_systemd_registrations_bind_the_real_manager_scopes(
+    tmp_path: Path,
+) -> None:
     repository = Path(__file__).resolve().parents[3]
-    policy = load_external_reservations(
-        repository / "ops/config/gpu-external-reservations.json"
+    runtime_policy = tmp_path / "external-reservations.json"
+    runtime_policy.write_bytes(
+        (
+            repository / "ops/config/gpu-external-reservations.json"
+        ).read_bytes()
     )
+    runtime_policy.chmod(0o600)
+    policy = load_external_reservations(runtime_policy)
 
     assert set(policy.managed_systemd_claims) == {
         "user:nexpoly-monomer-md-worker.service",
@@ -1101,6 +1109,7 @@ def test_scope_revalidation_failure_prevents_mps_termination(
 def test_mps_guard_uses_host_ps_pid_and_waits_for_cuda_success(tmp_path: Path) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
     os.mkfifo(pipe_directory / "control", 0o600)
     commands: list[str] = []
     partial_uuid = "GPU-0e19c809-f81d"
@@ -1128,6 +1137,7 @@ def test_mps_guard_uses_host_ps_pid_and_waits_for_cuda_success(tmp_path: Path) -
 def test_mps_guard_rejects_non_successful_termination(tmp_path: Path) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
     os.mkfifo(pipe_directory / "control", 0o600)
 
     def run(command, **kwargs):
@@ -1828,6 +1838,7 @@ def test_reparented_mps_client_is_owned_by_registered_process_group(
 ) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
     os.mkfifo(pipe_directory / "control", 0o600)
     orphan_pid = 987_654
 
@@ -1864,6 +1875,7 @@ def test_registered_workload_rejects_descendant_or_pgid_outside_its_cgroup(
 ) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
     os.mkfifo(pipe_directory / "control", 0o600)
     escaped_pid = 987_654
 
@@ -1940,6 +1952,7 @@ def test_root_cgroup_alone_cannot_claim_an_unrelated_mps_client(
 ) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
     os.mkfifo(pipe_directory / "control", 0o600)
     unrelated_pid = 987_654
 
@@ -3071,6 +3084,7 @@ def test_mps_allocation_audit_rejects_unowned_and_wrong_device_clients(
 ) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
     os.mkfifo(pipe_directory / "control", 0o600)
     reported_pid = 987_654
     reported_device = ["GPU-0e19c809-f81d"]

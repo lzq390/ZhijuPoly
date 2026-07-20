@@ -370,6 +370,8 @@ async def _wait_until(predicate, timeout: float = 3.0) -> None:
 
 
 def _manager(tmp_path: Path, engine, **kwargs) -> JobManager:
+    tmp_path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp_path.chmod(0o700)
     return JobManager(
         job_root=tmp_path / "runs",
         engine=engine,
