@@ -967,6 +967,19 @@ def _validate_artifact_descriptor(value: object) -> dict[str, Any]:
     return descriptor
 
 
+def _canonical_artifact_manifest(
+    value: object,
+    *,
+    evidence_name: str,
+) -> list[dict[str, Any]]:
+    _require(isinstance(value, list), f"{evidence_name} is not a list")
+    normalized = [_validate_artifact_descriptor(item) for item in value]
+    return sorted(
+        normalized,
+        key=lambda item: (item["name"], item["artifact_id"]),
+    )
+
+
 def _download_and_validate_artifacts(
     *,
     base_url: str,
@@ -1139,11 +1152,22 @@ def _validate_journal(
             snapshot.get("worker_instance_id") == worker_instance_id,
             "completed journal Worker identity differs",
         )
-    normalized_artifacts = [_validate_artifact_descriptor(item) for item in artifacts]
+    normalized_artifacts = _canonical_artifact_manifest(
+        artifacts,
+        evidence_name="Backend artifact manifest",
+    )
+    journal_snapshot_artifacts = _canonical_artifact_manifest(
+        snapshot.get("artifacts"),
+        evidence_name=f"{status} journal snapshot artifact manifest",
+    )
+    journal_artifacts = _canonical_artifact_manifest(
+        journal.get("artifact_manifest"),
+        evidence_name=f"{status} journal artifact manifest",
+    )
     _require(
         snapshot.get("result") == public_result
-        and snapshot.get("artifacts") == normalized_artifacts
-        and journal.get("artifact_manifest") == normalized_artifacts
+        and journal_snapshot_artifacts == normalized_artifacts
+        and journal_artifacts == normalized_artifacts
         and journal.get("artifact_state")
         == ("available" if status == "completed" else "none"),
         f"{status} journal result/artifact state differs from Backend evidence",

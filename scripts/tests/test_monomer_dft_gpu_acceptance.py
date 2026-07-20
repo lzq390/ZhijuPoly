@@ -730,6 +730,72 @@ class GpuAcceptanceContractTests(unittest.TestCase):
 
 
 class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
+    def test_journal_artifact_comparison_uses_backend_canonical_order(
+        self,
+    ) -> None:
+        initial = {
+            "artifact_id": "initial_structure",
+            "name": "initial_structure.xyz",
+            "media_type": "chemical/x-xyz",
+            "size_bytes": 10,
+            "sha256": "1" * 64,
+        }
+        final = {
+            "artifact_id": "final_structure",
+            "name": "final_structure.xyz",
+            "media_type": "chemical/x-xyz",
+            "size_bytes": 11,
+            "sha256": "2" * 64,
+        }
+        result = {"schema_version": 2}
+        job_id = "a-job"
+        journal = {
+            "journal_schema_version": 2,
+            "artifact_state": "available",
+            "artifact_manifest": [initial, final],
+            "snapshot": {
+                "job_id": job_id,
+                "status": "completed",
+                "worker_instance_id": "3" * 32,
+                "result": result,
+                "artifacts": [initial, final],
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.json"
+            path.write_text(json.dumps(journal), encoding="utf-8")
+            validated = HARNESS._validate_journal(
+                path,
+                job_id=job_id,
+                status="completed",
+                public_result=result,
+                artifacts=[
+                    {**final, "available": True},
+                    {**initial, "available": True},
+                ],
+                worker_instance_id="3" * 32,
+            )
+            self.assertEqual(validated, journal)
+
+            journal["artifact_manifest"] = [initial]
+            path.write_text(json.dumps(journal), encoding="utf-8")
+            with self.assertRaisesRegex(
+                HARNESS.AcceptanceHarnessError,
+                "journal result/artifact state differs",
+            ):
+                HARNESS._validate_journal(
+                    path,
+                    job_id=job_id,
+                    status="completed",
+                    public_result=result,
+                    artifacts=[
+                        {**final, "available": True},
+                        {**initial, "available": True},
+                    ],
+                    worker_instance_id="3" * 32,
+                )
+
     def test_fenced_provenance_uses_existing_physical_gpu_contract(
         self,
     ) -> None:
