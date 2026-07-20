@@ -861,6 +861,47 @@ def test_async_worker_client_uses_exact_payload_and_structured_error_contract() 
     asyncio.run(scenario())
 
 
+def test_worker_client_preserves_exact_artifact_backed_result_shape() -> None:
+    prepared = prepare_monomer_dft_request(
+        REQUEST_ADAPTER.validate_python(_single_point_request())
+    )
+    job_id = str(uuid4())
+    submit_payload = {
+        "schema_version": 2,
+        "job_id": job_id,
+        "attempt_token": "a" * 64,
+        "request_sha256": prepared.request_sha256,
+        "enqueue_sequence": 1,
+        **prepared.worker_request,
+    }
+    snapshot = _completed_v2_worker_snapshot(submit_payload, prepared)
+    artifact_result = deepcopy(snapshot["result"])
+    assert artifact_result["optimization"] is None
+    assert "spin_charges" not in artifact_result["properties"]
+    assert "hessian" not in artifact_result["properties"]
+    assert "frequencies" not in artifact_result["properties"]
+
+    async def scenario() -> None:
+        raw_client = httpx.AsyncClient(
+            base_url="http://monomer-dft-worker",
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(200, json=snapshot)
+            ),
+        )
+        client = MonomerDftWorkerClient(
+            base_url="http://monomer-dft-worker",
+            uds_path="/unused/test.sock",
+            validation_limiter=anyio.CapacityLimiter(1),
+            client=raw_client,
+        )
+        completed = await client.get_job(job_id)
+        assert completed["result"] == artifact_result
+        assert "optimization" in completed["result"]
+        await raw_client.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_worker_snapshot_validation_uses_shared_limiter_off_event_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

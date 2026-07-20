@@ -442,7 +442,16 @@ class MonomerDftWorkerClient:
             raise self._invalid_response(operation)
         if expected_enqueue_sequence is not None and snapshot.enqueue_sequence != expected_enqueue_sequence:
             raise self._invalid_response(operation)
-        return snapshot.model_dump(mode="json")
+        payload = snapshot.model_dump(mode="json")
+        if snapshot.result is not None:
+            # Preserve the Worker's artifact-backed result shape.  Pydantic
+            # defaults must not manufacture optional null properties that are
+            # absent from both the scientific artifact and durable journal.
+            payload["result"] = snapshot.result.model_dump(
+                mode="json",
+                exclude_unset=True,
+            )
+        return payload
 
     @staticmethod
     async def _response_error(
