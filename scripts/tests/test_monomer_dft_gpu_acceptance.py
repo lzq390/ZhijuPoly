@@ -730,6 +730,47 @@ class GpuAcceptanceContractTests(unittest.TestCase):
 
 
 class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
+    def test_fenced_provenance_uses_existing_physical_gpu_contract(
+        self,
+    ) -> None:
+        provenance = {
+            "gpu_uuid": HARNESS.GPU_UUIDS["1"],
+            "lease_id": "1" * 32,
+            "parent_lease_id": "2" * 32,
+            "fencing_token": 7,
+            "execution_path": "primary",
+            "gpu_preferred": True,
+            "model_alias": "aimnet2",
+            "model_id": "aimnet2",
+            "visible_gpu_count": 1,
+            "physical_gpu": "1",
+            "gpu_physical_device": "1",
+            "worker_instance_id": "3" * 32,
+            "broker_instance_id": "4" * 32,
+            "aimnet_commit": "5" * 40,
+            "aimnet_wheel_sha256": "6" * 64,
+            "model_sha256": "7" * 64,
+            "model_registry_key": "aimnet2-wb97m-d3_0",
+        }
+
+        self.assertIs(
+            HARNESS._validate_fenced_provenance(
+                {"provenance": provenance}
+            ),
+            provenance,
+        )
+        for field in ("physical_gpu", "gpu_physical_device"):
+            with self.subTest(field=field):
+                drifted = dict(provenance)
+                drifted[field] = "3"
+                with self.assertRaisesRegex(
+                    HARNESS.AcceptanceHarnessError,
+                    "exact lease/fencing provenance",
+                ):
+                    HARNESS._validate_fenced_provenance(
+                        {"provenance": drifted}
+                    )
+
     def bind_runtime_authority(
         self,
         controller,

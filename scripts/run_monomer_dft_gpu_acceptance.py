@@ -786,13 +786,11 @@ def _validate_fenced_provenance(
 ) -> dict[str, Any]:
     provenance = job.get("provenance")
     _require(isinstance(provenance, dict), "completed job lacks provenance")
-    gpu_index = provenance.get("gpu_index")
     gpu_uuid = provenance.get("gpu_uuid")
     lease_id = provenance.get("lease_id")
     fencing_token = provenance.get("fencing_token")
     _require(
-        gpu_index in {1, "1"}
-        and gpu_uuid == GPU_UUIDS["1"]
+        gpu_uuid == GPU_UUIDS["1"]
         and isinstance(lease_id, str)
         and bool(lease_id)
         and provenance.get("execution_path") == "primary"
@@ -803,6 +801,7 @@ def _validate_fenced_provenance(
         and provenance.get("model_alias") == "aimnet2"
         and provenance.get("model_id") == "aimnet2"
         and provenance.get("visible_gpu_count") == 1
+        and str(provenance.get("physical_gpu")) == "1"
         and str(provenance.get("gpu_physical_device")) == "1"
         and isinstance(fencing_token, int)
         and not isinstance(fencing_token, bool)
