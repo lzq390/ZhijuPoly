@@ -1855,6 +1855,11 @@ def test_primary_executor_is_resident_and_execution_is_fenced(tmp_path: Path) ->
     assert execution.result["provenance"]["broker_instance_id"].startswith("disabled-")
     assert execution.result["provenance"]["lease_id"] == identity["lease_id"]
     assert execution.result["provenance"]["fencing_token"] == identity["fencing_token"]
+    assert not {
+        "gpu_lease_id",
+        "gpu_fencing_token",
+        "gpu_broker_instance_id",
+    } & execution.result["provenance"].keys()
     assert execution.timings["gpu_wait_ms"] >= 0
     assert execution.timings["model_load_ms"] == 0
     assert len(factory.handles) == 1

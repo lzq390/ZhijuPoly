@@ -1048,9 +1048,6 @@ class ExecutorPool:
                     else lease.budget_mib
                 ),
                 "gpu_active_thread_percentage": lease.active_thread_percentage,
-                "gpu_lease_id": lease.lease_id,
-                "gpu_fencing_token": lease.fencing_token,
-                "gpu_broker_instance_id": lease.broker_instance_id,
                 "lease_id": lease.lease_id,
                 "parent_lease_id": lease.parent_lease_id,
                 "fencing_token": lease.fencing_token,
