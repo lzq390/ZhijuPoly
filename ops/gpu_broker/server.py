@@ -89,6 +89,14 @@ class DockerGpuClaim:
 
 
 @dataclass(frozen=True, slots=True)
+class SystemdGpuDeclarer:
+    pid: int
+    process_start_ticks: int
+    process_cgroup: str
+    gpu_uuids: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
 class SystemdGpuClaim:
     scope: str
     unit: str
@@ -96,6 +104,9 @@ class SystemdGpuClaim:
     control_group: str
     process_pids: frozenset[int]
     gpu_uuids: frozenset[str]
+    static_gpu_uuids: frozenset[str] = frozenset()
+    active_gpu_uuids: frozenset[str] = frozenset()
+    live_gpu_declarers: tuple[SystemdGpuDeclarer, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1749,7 +1760,9 @@ def query_systemd_gpu_claims(
                     read_process_start_ticks=read_process_start_ticks,
                 )
 
-            live_environments: list[dict[str, str]] = []
+            live_environments: list[
+                tuple[dict[str, str], int, int, str]
+            ] = []
             for pid in sorted(process_pids):
                 _ensure_admission_open(deadline, monotonic=monotonic)
                 expected_identity = process_identities.get(pid)
@@ -1820,10 +1833,17 @@ def query_systemd_gpu_claims(
                     read_process_cgroup=read_process_cgroup,
                     read_process_start_ticks=read_process_start_ticks,
                 )
-                live_environments.append(environment)
+                live_environments.append(
+                    (
+                        environment,
+                        pid,
+                        expected_identity[0],
+                        expected_identity[1],
+                    )
+                )
 
-            gpu_uuids = set(active_uuids)
-            for environment in (configured, *live_environments):
+            def declared_gpu_uuids(environment: dict[str, str]) -> frozenset[str]:
+                declared: set[str] = set()
                 for name in relevant_names:
                     value = environment.get(name)
                     if value is None:
@@ -1832,10 +1852,10 @@ def query_systemd_gpu_claims(
                     if normalized.lower() in {"", "none", "void"}:
                         continue
                     if normalized.lower() == "all":
-                        gpu_uuids.update(EXPECTED_GPU_UUIDS.values())
+                        declared.update(EXPECTED_GPU_UUIDS.values())
                         continue
                     try:
-                        gpu_uuids.update(
+                        declared.update(
                             _resolve_gpu_claim_tokens(normalized.split(","))
                         )
                     except ValueError as exc:
@@ -1843,6 +1863,23 @@ def query_systemd_gpu_claims(
                             "gpu_claim_inventory_unavailable",
                             "systemd GPU declaration is outside governance",
                         ) from exc
+                return frozenset(declared)
+
+            static_gpu_uuids = declared_gpu_uuids(configured)
+            live_gpu_declarers = tuple(
+                SystemdGpuDeclarer(
+                    pid=pid,
+                    process_start_ticks=start_ticks,
+                    process_cgroup=process_cgroup,
+                    gpu_uuids=gpu_uuids,
+                )
+                for environment, pid, start_ticks, process_cgroup in live_environments
+                if (gpu_uuids := declared_gpu_uuids(environment))
+            )
+            gpu_uuids = set(active_uuids)
+            gpu_uuids.update(static_gpu_uuids)
+            for declarer in live_gpu_declarers:
+                gpu_uuids.update(declarer.gpu_uuids)
             for pid, (start_ticks, process_cgroup) in sorted(
                 process_identities.items()
             ):
@@ -1865,6 +1902,9 @@ def query_systemd_gpu_claims(
                         control_group=control_group,
                         process_pids=process_pids,
                         gpu_uuids=frozenset(gpu_uuids),
+                        static_gpu_uuids=static_gpu_uuids,
+                        active_gpu_uuids=frozenset(active_uuids),
+                        live_gpu_declarers=live_gpu_declarers,
                     )
                 )
     # Bind the list/show control-plane identity before accepting the process
@@ -2115,12 +2155,16 @@ class _ExternalGpuAdmission:
         owner: OwnerIdentity,
         component: str,
         environment: str,
+        client_id: str | None,
+        parent_lease_id: str | None,
     ) -> None:
         self.guard = guard
         self.leases = leases
         self.owner = owner
         self.component = component
         self.environment = environment
+        self.client_id = client_id
+        self.parent_lease_id = parent_lease_id
         self.deadline = (
             guard._monotonic() + guard._admission_timeout_seconds
         )
@@ -2204,6 +2248,8 @@ class ExternalGpuGuard:
         owner: OwnerIdentity,
         component: str,
         environment: str,
+        client_id: str | None = None,
+        parent_lease_id: str | None = None,
     ) -> _ExternalGpuAdmission:
         return _ExternalGpuAdmission(
             self,
@@ -2211,6 +2257,8 @@ class ExternalGpuGuard:
             owner=owner,
             component=component,
             environment=environment,
+            client_id=client_id,
+            parent_lease_id=parent_lease_id,
         )
 
     def __call__(
@@ -2221,6 +2269,9 @@ class ExternalGpuGuard:
         owner: OwnerIdentity,
         component: str,
         environment: str,
+        *,
+        client_id: str | None = None,
+        parent_lease_id: str | None = None,
     ) -> bool:
         # Direct callers receive an isolated one-candidate audit.
         return self.begin_admission(
@@ -2228,6 +2279,8 @@ class ExternalGpuGuard:
             owner=owner,
             component=component,
             environment=environment,
+            client_id=client_id,
+            parent_lease_id=parent_lease_id,
         )(_index, uuid)
 
     def _candidate_busy(
@@ -2261,6 +2314,8 @@ class ExternalGpuGuard:
                 owner=admission.owner,
                 component=admission.component,
                 environment=admission.environment,
+                client_id=admission.client_id,
+                parent_lease_id=admission.parent_lease_id,
                 authorized_mps_servers=initial_mps,
             ):
                 return True
@@ -2292,6 +2347,8 @@ class ExternalGpuGuard:
                 owner=admission.owner,
                 component=admission.component,
                 environment=admission.environment,
+                client_id=admission.client_id,
+                parent_lease_id=admission.parent_lease_id,
                 authorized_mps_servers=final_mps,
             ):
                 return True
@@ -2377,6 +2434,8 @@ class ExternalGpuGuard:
         owner: OwnerIdentity,
         component: str,
         environment: str,
+        client_id: str | None,
+        parent_lease_id: str | None,
         authorized_mps_servers: frozenset[int],
     ) -> bool:
         for claim in snapshot.docker_claims:
@@ -2416,6 +2475,18 @@ class ExternalGpuGuard:
         systemd_authorized_mps_servers: set[int] = set()
         for claim in snapshot.systemd_claims:
             if uuid not in claim.gpu_uuids:
+                continue
+            if self._claim_is_current_dft_residency_scope(
+                claim,
+                index=index,
+                uuid=uuid,
+                leases=leases,
+                owner=owner,
+                component=component,
+                environment=environment,
+                client_id=client_id,
+                parent_lease_id=parent_lease_id,
+            ):
                 continue
             identity = f"{claim.scope}:{claim.unit}"
             if self.policy.managed_systemd_claims.get(identity) != claim.gpu_uuids:
@@ -2457,6 +2528,101 @@ class ExternalGpuGuard:
             if not any(_pid_is_or_descends_from(pid, owner) for owner in owners):
                 return True
         return False
+
+    @staticmethod
+    def _claim_is_current_dft_residency_scope(
+        claim: SystemdGpuClaim,
+        *,
+        index: int,
+        uuid: str,
+        leases: tuple[Lease, ...],
+        owner: OwnerIdentity,
+        component: str,
+        environment: str,
+        client_id: str | None,
+        parent_lease_id: str | None,
+    ) -> bool:
+        """Recognize one exact live declarer behind a parented DFT attempt.
+
+        The system manager reports the UID 1001 user manager as the ancestor
+        claim, so its unit-level process set is intentionally too broad for
+        authorization.  Only the per-process live-environment declarer may be
+        matched to the exact residency scope and parent lease.
+        """
+
+        broker_uid = 1001
+        if (
+            component != "dft"
+            or environment != "dev"
+            or client_id is None
+            or parent_lease_id is None
+            or os.geteuid() != broker_uid
+        ):
+            return False
+        candidates = tuple(
+            lease
+            for lease in leases
+            if lease.lease_id == parent_lease_id
+            if lease.kind == "residency"
+            and lease.placement == "preferred"
+            and lease.preferred is True
+            and lease.component == component
+            and lease.environment == environment
+            and lease.client_id == client_id
+            and lease.gpu_index == index
+            and lease.gpu_uuid == uuid
+            and lease.parent_lease_id is None
+            and lease.status == "active"
+            and lease.mps_termination_status == "none"
+            and lease.owner_pid == owner.pid
+            and lease.owner_process_start_ticks == owner.process_start_ticks
+            and lease.owner_boot_id == owner.boot_id
+        )
+        if len(candidates) != 1:
+            return False
+        lease = candidates[0]
+        workload_pid = lease.workload_pid
+        if (
+            workload_pid is None
+            or lease.workload_process_start_ticks is None
+            or lease.workload_process_group_id is None
+            or workload_pid <= 0
+            or lease.workload_process_start_ticks <= 0
+            or lease.workload_process_group_id <= 0
+            or lease.workload_process_group_id != workload_pid
+        ):
+            return False
+        try:
+            expected_control_group = scope_control_group(
+                lease.lease_id,
+                uid=broker_uid,
+            )
+            process_start_ticks = read_process_start_ticks(workload_pid)
+            process_control_group = _read_unified_process_cgroup(workload_pid)
+        except (BrokerError, OSError, TypeError, ValueError):
+            return False
+        target_declarers = tuple(
+            declarer
+            for declarer in claim.live_gpu_declarers
+            if uuid in declarer.gpu_uuids
+        )
+        return (
+            claim.scope == "system"
+            and claim.unit == f"user@{broker_uid}.service"
+            and claim.control_group == user_manager_control_group(broker_uid)
+            and not claim.static_gpu_uuids
+            and len(target_declarers) == 1
+            and target_declarers[0]
+            == SystemdGpuDeclarer(
+                pid=workload_pid,
+                process_start_ticks=lease.workload_process_start_ticks,
+                process_cgroup=expected_control_group,
+                gpu_uuids=frozenset({uuid}),
+            )
+            and lease.workload_cgroup == f"0::{expected_control_group}"
+            and process_start_ticks == lease.workload_process_start_ticks
+            and process_control_group == expected_control_group
+        )
 
     def _query_compute_processes(
         self,

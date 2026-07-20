@@ -1106,6 +1106,8 @@ class HostGpuBroker:
                 owner=owner,
                 component=component,
                 environment=environment,
+                client_id=client_id,
+                parent_lease_id=parent_lease_id,
             )
             if callable(begin_external_admission)
             else None

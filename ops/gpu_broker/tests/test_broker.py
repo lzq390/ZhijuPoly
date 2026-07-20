@@ -44,6 +44,7 @@ from ops.gpu_broker.server import (
     MpsClient,
     MpsRuntimeGuard,
     SystemdGpuClaim,
+    SystemdGpuDeclarer,
     _read_systemd_environment_file,
     _snapshot_systemd_process_cgroups,
     load_external_reservations,
@@ -3568,6 +3569,188 @@ def test_systemd_gpu_declaration_requires_exact_managed_unit_registration() -> N
     assert unbound_guard(2, gpu2, (), _owner(), "md", "prod") is True
 
 
+def test_parented_dft_execution_accepts_only_its_live_residency_declarer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    claims: list[SystemdGpuClaim] = []
+    processes: dict[str, frozenset[int]] = {}
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: processes,
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: tuple(claims),
+        unmanaged_mps_client_query=lambda *_args: False,
+        cache_seconds=0,
+    )
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        gpu_runtime_healthy=lambda _index, _uuid: True,
+        gpu_externally_busy=guard,
+    )
+    residency = _acquire(
+        broker,
+        component="dft",
+        environment="dev",
+        kind="residency",
+    )
+    owner = _owner()
+    workload_pid = owner.pid
+    control_group = scope_control_group(residency.lease_id, uid=1001)
+    residency.status = "active"
+    residency.workload_pid = workload_pid
+    residency.workload_process_start_ticks = owner.process_start_ticks
+    residency.workload_process_group_id = workload_pid
+    residency.workload_cgroup = f"0::{control_group}"
+    claims.append(
+        SystemdGpuClaim(
+            scope="system",
+            unit="user@1001.service",
+            main_pid=workload_pid,
+            control_group=user_manager_control_group(1001),
+            process_pids=frozenset({workload_pid}),
+            gpu_uuids=frozenset({residency.gpu_uuid}),
+            active_gpu_uuids=frozenset({residency.gpu_uuid}),
+            live_gpu_declarers=(
+                SystemdGpuDeclarer(
+                    pid=workload_pid,
+                    process_start_ticks=owner.process_start_ticks,
+                    process_cgroup=control_group,
+                    gpu_uuids=frozenset({residency.gpu_uuid}),
+                ),
+            ),
+        )
+    )
+    processes[residency.gpu_uuid] = frozenset({workload_pid})
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda pid: control_group if pid == workload_pid else "/foreign",
+    )
+    execution = _acquire(
+        broker,
+        component="dft",
+        environment="dev",
+        kind="execution",
+        parent_lease_id=residency.lease_id,
+        client_id=residency.client_id,
+    )
+
+    assert execution.parent_lease_id == residency.lease_id
+    assert execution.gpu_index == residency.gpu_index
+    status = broker.status()
+    assert status["usage_mib"][str(residency.gpu_index)] == residency.memory_mib
+    assert status["waiters"] == 0
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    (
+        "pid",
+        "start_ticks",
+        "cgroup",
+        "gpu_uuid",
+        "extra_declarer",
+        "static_declaration",
+        "parent_lease",
+        "lease_cgroup",
+        "lease_status",
+    ),
+)
+def test_dft_residency_declarer_mismatch_remains_external(
+    tmp_path: Path,
+    monkeypatch,
+    mismatch: str,
+) -> None:
+    broker = HostGpuBroker(tmp_path / "state.json")
+    lease = _acquire(
+        broker,
+        component="dft",
+        environment="dev",
+        kind="residency",
+    )
+    owner = _owner()
+    workload_pid = owner.pid
+    control_group = scope_control_group(lease.lease_id, uid=1001)
+    lease.status = "active"
+    lease.workload_pid = workload_pid
+    lease.workload_process_start_ticks = owner.process_start_ticks
+    lease.workload_process_group_id = workload_pid
+    lease.workload_cgroup = f"0::{control_group}"
+    declarer = SystemdGpuDeclarer(
+        pid=workload_pid,
+        process_start_ticks=owner.process_start_ticks,
+        process_cgroup=control_group,
+        gpu_uuids=frozenset({lease.gpu_uuid}),
+    )
+    if mismatch == "pid":
+        declarer = replace(declarer, pid=999_999_999)
+    elif mismatch == "start_ticks":
+        declarer = replace(declarer, process_start_ticks=1)
+    elif mismatch == "cgroup":
+        declarer = replace(declarer, process_cgroup="/foreign.scope")
+    elif mismatch == "gpu_uuid":
+        declarer = replace(
+            declarer,
+            gpu_uuids=frozenset({EXPECTED_GPU_UUIDS[3]}),
+        )
+    declarers = (declarer,)
+    if mismatch == "extra_declarer":
+        declarers += (
+            replace(declarer, pid=999_999_999),
+        )
+    claim = SystemdGpuClaim(
+        scope="system",
+        unit="user@1001.service",
+        main_pid=workload_pid,
+        control_group=user_manager_control_group(1001),
+        process_pids=frozenset({workload_pid}),
+        gpu_uuids=frozenset({lease.gpu_uuid}),
+        static_gpu_uuids=(
+            frozenset({lease.gpu_uuid})
+            if mismatch == "static_declaration"
+            else frozenset()
+        ),
+        active_gpu_uuids=frozenset({lease.gpu_uuid}),
+        live_gpu_declarers=declarers,
+    )
+    if mismatch == "lease_cgroup":
+        lease.workload_cgroup = "0::/foreign.scope"
+    elif mismatch == "lease_status":
+        lease.status = "suspect"
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda pid: control_group if pid == workload_pid else "/foreign",
+    )
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {
+            lease.gpu_uuid: frozenset({workload_pid}),
+        },
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (claim,),
+        unmanaged_mps_client_query=lambda *_args: False,
+        cache_seconds=0,
+    )
+
+    assert (
+        guard(
+            lease.gpu_index,
+            lease.gpu_uuid,
+            (lease,),
+            owner,
+            "dft",
+            "dev",
+            client_id=lease.client_id,
+            parent_lease_id=(
+                "f" * 32
+                if mismatch == "parent_lease"
+                else lease.lease_id
+            ),
+        )
+        is True
+    )
+
+
 def test_systemd_claim_inventory_reads_active_unit_environment_in_batches() -> None:
     gpu2 = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
     control_group = "/user.slice/user-1001.slice/nexpoly-backend.service"
@@ -3611,6 +3794,15 @@ def test_systemd_claim_inventory_reads_active_unit_environment_in_batches() -> N
             control_group=control_group,
             process_pids=frozenset({1234}),
             gpu_uuids=frozenset({gpu2}),
+            static_gpu_uuids=frozenset({gpu2}),
+            live_gpu_declarers=(
+                SystemdGpuDeclarer(
+                    pid=1234,
+                    process_start_ticks=_stable_systemd_ticks(1234),
+                    process_cgroup=control_group,
+                    gpu_uuids=frozenset({gpu2}),
+                ),
+            ),
         ),
     )
     assert len(calls) == 6
@@ -4160,6 +4352,15 @@ def test_systemd_inventory_keeps_same_named_user_and_system_units_distinct() -> 
             control_group=system_cgroup,
             process_pids=frozenset({2101}),
             gpu_uuids=frozenset({gpu3}),
+            static_gpu_uuids=frozenset({gpu3}),
+            live_gpu_declarers=(
+                SystemdGpuDeclarer(
+                    pid=2101,
+                    process_start_ticks=_stable_systemd_ticks(2101),
+                    process_cgroup=system_cgroup,
+                    gpu_uuids=frozenset({gpu3}),
+                ),
+            ),
         ),
         SystemdGpuClaim(
             scope="user",
@@ -4168,6 +4369,21 @@ def test_systemd_inventory_keeps_same_named_user_and_system_units_distinct() -> 
             control_group=user_cgroup,
             process_pids=frozenset({1101, 1102}),
             gpu_uuids=frozenset({gpu1}),
+            static_gpu_uuids=frozenset({gpu1}),
+            live_gpu_declarers=(
+                SystemdGpuDeclarer(
+                    pid=1101,
+                    process_start_ticks=_stable_systemd_ticks(1101),
+                    process_cgroup=user_cgroup,
+                    gpu_uuids=frozenset({gpu1}),
+                ),
+                SystemdGpuDeclarer(
+                    pid=1102,
+                    process_start_ticks=_stable_systemd_ticks(1102),
+                    process_cgroup=user_cgroup,
+                    gpu_uuids=frozenset({gpu1}),
+                ),
+            ),
         ),
     )
     assert {
@@ -4226,6 +4442,7 @@ def test_systemd_mps_inventory_with_main_pid_zero_flows_into_guard() -> None:
             control_group=control_group,
             process_pids=frozenset({server_pid}),
             gpu_uuids=frozenset({gpu1}),
+            active_gpu_uuids=frozenset({gpu1}),
         ),
     )
 
@@ -4303,11 +4520,20 @@ def test_systemd_inventory_applies_pass_then_unset_environment(
                 scope="system",
                 unit=unit,
                 main_pid=pid,
-                control_group=control_group,
-                process_pids=frozenset({pid}),
-                gpu_uuids=expected_gpu_uuids,
-            ),
-        )
+                    control_group=control_group,
+                    process_pids=frozenset({pid}),
+                    gpu_uuids=expected_gpu_uuids,
+                    static_gpu_uuids=expected_gpu_uuids,
+                    live_gpu_declarers=(
+                        SystemdGpuDeclarer(
+                            pid=pid,
+                            process_start_ticks=_stable_systemd_ticks(pid),
+                            process_cgroup=control_group,
+                            gpu_uuids=expected_gpu_uuids,
+                        ),
+                    ),
+                ),
+            )
     else:
         assert claims == ()
 
@@ -4358,6 +4584,7 @@ def test_systemd_inventory_attributes_active_gpu_pid_to_its_exact_gpu() -> None:
             control_group=control_group,
             process_pids=frozenset({worker_pid}),
             gpu_uuids=frozenset({gpu3}),
+            active_gpu_uuids=frozenset({gpu3}),
         ),
     )
 
@@ -4415,6 +4642,15 @@ def test_systemd_claim_inventory_accepts_omitted_empty_environment_files() -> No
             control_group=control_group,
             process_pids=frozenset({1234}),
             gpu_uuids=frozenset({gpu2}),
+            static_gpu_uuids=frozenset({gpu2}),
+            live_gpu_declarers=(
+                SystemdGpuDeclarer(
+                    pid=1234,
+                    process_start_ticks=_stable_systemd_ticks(1234),
+                    process_cgroup=control_group,
+                    gpu_uuids=frozenset({gpu2}),
+                ),
+            ),
         ),
     )
 
@@ -4452,6 +4688,14 @@ def test_systemd_claim_inventory_detects_gpu_declared_only_in_live_environment()
             control_group=control_group,
             process_pids=frozenset({1234}),
             gpu_uuids=frozenset({gpu3}),
+            live_gpu_declarers=(
+                SystemdGpuDeclarer(
+                    pid=1234,
+                    process_start_ticks=_stable_systemd_ticks(1234),
+                    process_cgroup=control_group,
+                    gpu_uuids=frozenset({gpu3}),
+                ),
+            ),
         ),
     )
 
@@ -4560,6 +4804,15 @@ def test_systemd_claim_inventory_reads_environment_files_and_live_process(
             control_group=control_group,
             process_pids=frozenset({os.getpid()}),
             gpu_uuids=frozenset({gpu1}),
+            static_gpu_uuids=frozenset({gpu1}),
+            live_gpu_declarers=(
+                SystemdGpuDeclarer(
+                    pid=os.getpid(),
+                    process_start_ticks=read_process_start_ticks(os.getpid()),
+                    process_cgroup=control_group,
+                    gpu_uuids=frozenset({gpu1}),
+                ),
+            ),
         ),
     )
 
@@ -4604,6 +4857,15 @@ def test_systemd_claim_inventory_reads_repeated_and_prefixed_optional_files(
             control_group=control_group,
             process_pids=frozenset({os.getpid()}),
             gpu_uuids=frozenset({gpu1}),
+            static_gpu_uuids=frozenset({gpu1}),
+            live_gpu_declarers=(
+                SystemdGpuDeclarer(
+                    pid=os.getpid(),
+                    process_start_ticks=read_process_start_ticks(os.getpid()),
+                    process_cgroup=control_group,
+                    gpu_uuids=frozenset({gpu1}),
+                ),
+            ),
         ),
     )
 
