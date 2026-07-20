@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "public_api_prefix": "/api/v1/monomer-dft",
+  "worker_http_protocol_version": 2,
+  "database_schema_gate": {
+    "migration_version": "0013_monomer_dft_jobs",
+    "migration_checksum_sha256": "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc",
+    "readiness_field": "schema_ready",
+    "safe_without_schema": ["/status", "/capabilities"],
+    "guarded_resource_prefixes": ["/jobs"],
+    "not_ready_error": {
+      "http_status": 503,
+      "code": "schema_not_ready",
+      "retry_after_seconds": 5
+    }
+  },
+  "scientific_results": {
+    "readable_schema_versions": [1, 2],
+    "produced_schema_version": 2,
+    "v1_optional_rdkit_fields": ["optimization_performed", "optimization_state"],
+    "v1_optional_provenance_fields": ["rdkit_optimization_performed", "rdkit_optimization_status"],
+    "v2_required_atom_fields": ["isotope_mass_numbers", "atomic_masses_u"],
+    "v2_required_provenance_fields": [
+      "rdkit_optimization_performed",
+      "rdkit_optimization_status",
+      "rdkit_version",
+      "mass_source",
+      "execution_path",
+      "gpu_uuid",
+      "gpu_budget_mib",
+      "broker_instance_id",
+      "lease_id",
+      "fencing_token"
+    ],
+    "v2_required_timing_fields": [
+      "queue_wait_ms",
+      "gpu_wait_ms",
+      "model_load_ms",
+      "structure_prepare_ms",
+      "model_compute_ms",
+      "optimization_ms",
+      "hessian_ms",
+      "frequency_ms",
+      "artifact_ms",
+      "total_ms"
+    ],
+    "v2_mass_source": "rdkit_periodic_table_explicit_isotopes"
+  },
+  "worker_snapshot_artifact_states": ["none", "available", "deleting", "deleted"],
+  "artifacts_states": ["none", "available", "delete_requested", "deleted"],
+  "completed_delete_count_source": "persisted_artifact_manifest",
+  "delete_examples": [
+    {
+      "http_status": 200,
+      "retry_after": null,
+      "body": {
+        "job_id": "123e4567-e89b-42d3-a456-426614174000",
+        "deleted": true,
+        "deleted_artifacts": 3,
+        "artifacts_state": "deleted",
+        "message": "Artifacts were deleted."
+      }
+    },
+    {
+      "http_status": 202,
+      "retry_after": "5",
+      "body": {
+        "job_id": "123e4567-e89b-42d3-a456-426614174000",
+        "deleted": false,
+        "deleted_artifacts": 0,
+        "artifacts_state": "delete_requested",
+        "message": "Artifact deletion is pending."
+      }
+    }
+  ],
+  "stable_error_codes": [
+    "submission_disabled",
+    "schema_not_ready",
+    "worker_socket_not_configured",
+    "worker_unavailable",
+    "gpu_capacity_unavailable",
+    "gpu_lease_lost",
+    "gpu_runtime_unhealthy",
+    "charge_out_of_range",
+    "unsupported_isotope",
+    "artifact_integrity_mismatch",
+    "artifact_bundle_invalid",
+    "artifact_size_out_of_contract",
+    "download_capacity_full",
+    "artifact_deletion_pending",
+    "journal_upgrade_missing_enqueue_sequence"
+  ],
+  "error_example": {
+    "code": "unsupported_isotope",
+    "message": "The requested isotope is not supported.",
+    "retryable": false,
+    "details": {}
+  }
+}

@@ -13,6 +13,13 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from scripts.tests.bridge_manifest_fixtures import (
+    B_MANIFEST_PAYLOAD,
+    B_MANIFEST_RECORDS,
+    B_MANIFEST_SHA256,
+    F_MANIFEST_RECORDS,
+    F_MANIFEST_SHA256,
+)
 from scripts.tests.test_postgres_media_evidence import (
     external_inventory_fixture as external_inventory_v3_fixture,
     role_security_fields as external_role_security_fields,
@@ -34,12 +41,8 @@ TARGET_TREE = "4" * 40
 OPERATION_ID = "deploy-20260716-0001"
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
-B_MANIFEST_PAYLOAD = (
-    REPOSITORY_ROOT / "backend/migrations/postgres/manifest.json"
-).read_bytes()
-B_MANIFEST_RECORDS = json.loads(B_MANIFEST_PAYLOAD)["migrations"]
-B_MANIFEST_DIGEST = CONTROLLER.sha256_bytes(B_MANIFEST_PAYLOAD)
-F_MANIFEST_DIGEST = "sha256:" + "e" * 64
+B_MANIFEST_DIGEST = B_MANIFEST_SHA256
+F_MANIFEST_DIGEST = F_MANIFEST_SHA256
 
 
 def write_private(path: Path, payload: str) -> None:
@@ -3344,10 +3347,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                     target_manifest_sha256=B_MANIFEST_DIGEST,
                     target_records=B_MANIFEST_RECORDS,
                     authority_manifest_sha256=F_MANIFEST_DIGEST,
-                    authority_records=[
-                        *B_MANIFEST_RECORDS,
-                        CONTROLLER._bridge_core.FINAL_MIGRATION_RECORD,
-                    ],
+                    authority_records=F_MANIFEST_RECORDS,
                 )
             ),
             "external_database_audit": {
@@ -4422,13 +4422,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         for name, rows in (
             ("pre-0012", manifest[:-1]),
             ("post-0012", manifest),
-            (
-                "post-0013",
-                [
-                    *manifest,
-                    CONTROLLER._bridge_core.FINAL_MIGRATION_RECORD,
-                ],
-            ),
+            ("post-0013", F_MANIFEST_RECORDS),
         ):
             history = CONTROLLER.canonical_ledger_history(
                 [
@@ -4478,10 +4472,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
 
     def test_b_state_can_truthfully_record_f_0013_ledger(self) -> None:
         descriptor = self.bridge_descriptor(self.controller())
-        migrations = [
-            *descriptor["migrations"]["records"],
-            CONTROLLER._bridge_core.FINAL_MIGRATION_RECORD,
-        ]
+        migrations = json.loads(json.dumps(F_MANIFEST_RECORDS))
         compatibility = CONTROLLER.build_migration_compatibility_state(
             descriptor["bridge"]["policy"],
             code_manifest_sha256=B_MANIFEST_DIGEST,
@@ -4790,10 +4781,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 target_manifest_sha256=B_MANIFEST_DIGEST,
                 target_records=B_MANIFEST_RECORDS,
                 authority_manifest_sha256=F_MANIFEST_DIGEST,
-                authority_records=[
-                    *B_MANIFEST_RECORDS,
-                    CONTROLLER._bridge_core.FINAL_MIGRATION_RECORD,
-                ],
+                authority_records=F_MANIFEST_RECORDS,
             )
         )
         state["migration_compatibility"] = (

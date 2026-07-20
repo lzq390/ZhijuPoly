@@ -7,11 +7,26 @@ import signal
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
-from gpu_resource import GpuBrokerClientError
+from gpu_resource import GpuBrokerClientError, transient_scope_command
 from workers.monomer_md_worker.app import process_control
+
+
+def _identity_scope_command(
+    _lease_id: object,
+    command: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(command)
+
+
+def _identity_scope_membership(
+    _pid: int,
+    _lease_id: object,
+) -> int:
+    return 1
 
 
 class _Process:
@@ -51,6 +66,21 @@ class _Lease:
         self.quarantined = True
         self.events.append("quarantine")
         return {"reason": reason}
+
+
+def test_broker_disabled_spawn_never_creates_a_transient_scope() -> None:
+    calls: list[object] = []
+
+    async def scenario() -> int:
+        process = await process_control.create_fenced_subprocess_exec(
+            [sys.executable, "-c", "pass"],
+            execution_lease=None,
+            scope_command_builder=lambda *_args: calls.append(_args),
+        )
+        return await process.wait()
+
+    assert asyncio.run(scenario()) == 0
+    assert calls == []
 
 
 def test_mps_context_is_terminated_before_any_posix_signal(monkeypatch) -> None:
@@ -139,6 +169,7 @@ def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -
 
     class Lease:
         workload_pid: int | None = None
+        lease = SimpleNamespace(lease_id="a" * 32)
 
         def register_workload(self, workload_pid: int) -> None:
             self.workload_pid = workload_pid
@@ -160,6 +191,8 @@ def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -
             process_control.create_fenced_subprocess_exec(
                 [sys.executable, "-c", "raise AssertionError('gate opened')"],
                 execution_lease=lease,  # type: ignore[arg-type]
+                scope_command_builder=_identity_scope_command,
+                scope_membership_waiter=_identity_scope_membership,
             )
         )
         assert await asyncio.to_thread(started.wait, 1)
@@ -173,6 +206,47 @@ def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -
     asyncio.run(scenario())
     assert lease.workload_pid is not None
     assert process_control._process_group_alive(lease.workload_pid) is False
+
+
+def test_cancel_during_scope_transition_never_registers_or_opens_exec_gate() -> None:
+    transition_started = threading.Event()
+    allow_transition = threading.Event()
+    transitioned_pid: list[int] = []
+    registrations: list[int] = []
+
+    class Lease:
+        lease = SimpleNamespace(lease_id="e" * 32)
+
+        def register_workload(self, workload_pid: int) -> None:
+            registrations.append(workload_pid)
+
+    def wait_for_transition(pid: int, _lease_id: object) -> int:
+        transitioned_pid.append(pid)
+        transition_started.set()
+        allow_transition.wait(timeout=2)
+        return 1
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            process_control.create_fenced_subprocess_exec(
+                [sys.executable, "-c", "raise AssertionError('gate opened')"],
+                execution_lease=Lease(),  # type: ignore[arg-type]
+                scope_command_builder=_identity_scope_command,
+                scope_membership_waiter=wait_for_transition,
+            )
+        )
+        assert await asyncio.to_thread(transition_started.wait, 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        allow_transition.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert registrations == []
+    assert len(transitioned_pid) == 1
+    assert process_control._process_group_alive(transitioned_pid[0]) is False
 
 
 def test_fenced_spawn_does_not_run_sitecustomize_before_registration(
@@ -189,6 +263,8 @@ def test_fenced_spawn_does_not_run_sitecustomize_before_registration(
     )
 
     class Lease:
+        lease = SimpleNamespace(lease_id="b" * 32)
+
         def register_workload(self, _workload_pid: int) -> None:
             registration_started.set()
             allow_registration.wait(timeout=2)
@@ -206,6 +282,8 @@ def test_fenced_spawn_does_not_run_sitecustomize_before_registration(
                 ],
                 execution_lease=Lease(),  # type: ignore[arg-type]
                 env={**os.environ, "PYTHONPATH": str(tmp_path)},
+                scope_command_builder=_identity_scope_command,
+                scope_membership_waiter=_identity_scope_membership,
             )
         )
         assert await asyncio.to_thread(registration_started.wait, 1)
@@ -221,6 +299,79 @@ def test_fenced_spawn_does_not_run_sitecustomize_before_registration(
     assert target_marker.is_file()
 
 
+def test_systemd_scope_exec_preserves_pid_gate_fds_environment_and_stdout(
+    tmp_path: Path,
+) -> None:
+    systemd_run = tmp_path / "bin" / "systemd-run"
+    systemd_run.parent.mkdir()
+    arguments_path = tmp_path / "scope-arguments"
+    systemd_run.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$@\" > {arguments_path}\n"
+        "while [ \"$1\" != '--' ]; do shift; done\n"
+        "shift\n"
+        "exec \"$@\"\n",
+        encoding="utf-8",
+    )
+    systemd_run.chmod(0o700)
+    lease_id = "d" * 32
+    registered: list[int] = []
+
+    class Lease:
+        lease = SimpleNamespace(lease_id=lease_id)
+
+        def register_workload(self, workload_pid: int) -> None:
+            registered.append(workload_pid)
+
+    async def scenario() -> tuple[int, bytes]:
+        process = await process_control.create_fenced_subprocess_exec(
+            [
+                sys.executable,
+                "-c",
+                "import os; print(f'target:{os.getpid()}', flush=True)",
+            ],
+            execution_lease=Lease(),  # type: ignore[arg-type]
+            scope_command_builder=lambda exact_lease_id, command: (
+                transient_scope_command(
+                    exact_lease_id,
+                    command,
+                    systemd_run=systemd_run,
+                )
+            ),
+            scope_membership_waiter=_identity_scope_membership,
+            stdout=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await process.communicate()
+        return process.pid, stdout
+
+    pid, stdout = asyncio.run(scenario())
+    assert registered == [pid]
+    assert stdout == f"target:{pid}\n".encode()
+    arguments = arguments_path.read_text(encoding="utf-8").splitlines()
+    assert arguments[:10] == [
+        "--user",
+        "--scope",
+        "--quiet",
+        "--no-ask-password",
+        f"--unit=nexpoly-gpu-job-{lease_id}.scope",
+        "--slice=nexpoly-gpu-jobs.slice",
+        "--property=KillMode=control-group",
+        "--property=CollectMode=inactive-or-failed",
+        "--expand-environment=no",
+        "--",
+    ]
+    assert arguments[10:14] == [
+        sys.executable,
+        "-I",
+        "-S",
+        os.fspath(
+            Path(process_control.__file__).resolve().parents[3]
+            / "gpu_resource"
+            / "exec_gate.py"
+        ),
+    ]
+
+
 def test_fenced_spawn_failure_closes_both_gate_descriptors(monkeypatch) -> None:
     async def fail_spawn(*_args, **_kwargs):
         raise OSError("spawn failed")
@@ -232,7 +383,7 @@ def test_fenced_spawn_failure_closes_both_gate_descriptors(monkeypatch) -> None:
     )
 
     class Lease:
-        pass
+        lease = SimpleNamespace(lease_id="c" * 32)
 
     async def scenario() -> None:
         before = len(list(Path("/proc/self/fd").iterdir()))
@@ -241,6 +392,8 @@ def test_fenced_spawn_failure_closes_both_gate_descriptors(monkeypatch) -> None:
                 await process_control.create_fenced_subprocess_exec(
                     [sys.executable, "-c", "pass"],
                     execution_lease=Lease(),  # type: ignore[arg-type]
+                    scope_command_builder=_identity_scope_command,
+                    scope_membership_waiter=_identity_scope_membership,
                 )
         after = len(list(Path("/proc/self/fd").iterdir()))
         assert after <= before + 1

@@ -125,6 +125,7 @@ def expected_environment(
         "MONOMER_MD_TRANSPORT_CUDA_SMOKE_ENABLED": "true",
         "NEXPOLY_GPU_DEVICE": "2",
         "MONOMER_MD_GPU_BROKER_ENABLED": "false",
+        "MONOMER_MD_GPU_SCOPE_LAUNCHER": "systemd-user-scope",
         "MONOMER_MD_GPU_BROKER_ENVIRONMENT": "prod",
         "MONOMER_MD_GPU_BROKER_SOCKET_PATH": str(gpu_state_root / "broker.sock"),
         "MONOMER_MD_GPU_MPS_PIPE_ROOT": str(gpu_state_root),

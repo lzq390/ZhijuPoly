@@ -8,9 +8,20 @@ from numbers import Integral
 from threading import Lock
 from typing import Any
 
+from .monomer_dft_schema import (
+    MonomerDftSchemaState,
+    probe_monomer_dft_schema,
+)
+
 
 CONTROL_KEY = "production"
 ACTIVE_STATUSES = ("pending", "submitted", "running")
+MONOMER_DFT_ACTIVE_STATUSES = (
+    "pending",
+    "queued",
+    "running",
+    "cancel_requested",
+)
 FULL_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -27,6 +38,7 @@ class DrainState:
 @dataclass(frozen=True, slots=True)
 class ActiveJobSummary:
     counts: dict[str, int]
+    active_jobs_schema_version: int = 1
 
     @property
     def total(self) -> int:
@@ -178,7 +190,24 @@ def count_active_postgres_jobs(connection: Any) -> ActiveJobSummary:
         "monomer_md": _count_statuses(connection, "md", "monomer_md_jobs"),
         "online_knowledge": _count_statuses(connection, "online_knowledge", "jobs"),
     }
-    return ActiveJobSummary(counts=counts)
+    dft_schema = probe_monomer_dft_schema(connection)
+    if dft_schema.state is MonomerDftSchemaState.INVALID:
+        raise RuntimeError(
+            "monomer DFT deployment schema is invalid: "
+            f"{dft_schema.reason}"
+        )
+    if dft_schema.state is MonomerDftSchemaState.READY:
+        counts["monomer_dft"] = _count_statuses(
+            connection,
+            "monomer_dft",
+            "jobs",
+            statuses=MONOMER_DFT_ACTIVE_STATUSES,
+        )
+        return ActiveJobSummary(
+            counts=counts,
+            active_jobs_schema_version=2,
+        )
+    return ActiveJobSummary(counts=counts, active_jobs_schema_version=1)
 
 
 def count_in_memory_jobs(app: Any) -> ActiveJobSummary:
@@ -218,10 +247,14 @@ def count_in_memory_jobs(app: Any) -> ActiveJobSummary:
 
 
 def aggregate_active_jobs(connection: Any, app: Any | None = None) -> ActiveJobSummary:
-    counts = dict(count_active_postgres_jobs(connection).counts)
+    persistent = count_active_postgres_jobs(connection)
+    counts = dict(persistent.counts)
     if app is not None:
         counts.update(count_in_memory_jobs(app).counts)
-    return ActiveJobSummary(counts=counts)
+    return ActiveJobSummary(
+        counts=counts,
+        active_jobs_schema_version=persistent.active_jobs_schema_version,
+    )
 
 
 def _drain_state_from_row(row: Any) -> DrainState:
@@ -248,7 +281,13 @@ def _table_exists(connection: Any, schema: str, table: str) -> bool:
     return row is not None
 
 
-def _count_statuses(connection: Any, schema: str, table: str) -> int:
+def _count_statuses(
+    connection: Any,
+    schema: str,
+    table: str,
+    *,
+    statuses: tuple[str, ...] = ACTIVE_STATUSES,
+) -> int:
     if not _table_exists(connection, schema, table):
         raise RuntimeError(
             f"required deployment job table is unavailable: {schema}.{table}"
@@ -256,7 +295,7 @@ def _count_statuses(connection: Any, schema: str, table: str) -> int:
     # schema/table are fixed internal constants, never request input.
     row = connection.execute(
         f"SELECT COUNT(*) AS count FROM {schema}.{table} WHERE status = ANY(%s)",
-        (list(ACTIVE_STATUSES),),
+        (list(statuses),),
     ).fetchone()
     return int(row["count"])
 

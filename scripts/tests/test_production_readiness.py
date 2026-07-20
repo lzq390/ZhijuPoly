@@ -137,6 +137,320 @@ def image(role: str, revision: str, character: str) -> dict[str, str]:
     }
 
 
+def gpu_acceptance(
+    authority_images: dict[str, dict[str, str]],
+) -> dict[str, object]:
+    runtime = READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT
+    acceptance = READINESS.monomer_dft_gpu_acceptance
+    snapshot = {
+        "index": 2,
+        "uuid": acceptance.GPU_UUIDS["2"],
+        "memory_used_mib": 256,
+        "compute_processes": [
+            {
+                "pid": 1234,
+                "process_start_ticks": 5678,
+                "process_name": "nvidia-cuda-mps-server",
+                "used_memory_mib": 128,
+            }
+        ],
+    }
+    process = {
+        "pid": 4321,
+        "process_start_ticks": 8765,
+        "cwd": str(REPOSITORY_ROOT),
+        "command_sha256": digest("1"),
+    }
+    production = dict(acceptance.PRODUCTION_BASELINE_SNAPSHOT)
+    worker_instance = "1" * 32
+    broker_instance = "2" * 32
+    claim = {
+        "kind": "docker",
+        "container_id": "a" * 64,
+        "container_name": "foreign-gpu3",
+        "device_request_sha256": digest("3"),
+        "inspection_before_sha256": digest("4"),
+        "inspection_after_sha256": digest("4"),
+        "observed_before_at": "2026-07-17T01:01:00.250000Z",
+        "observed_after_at": "2026-07-17T01:01:00.750000Z",
+    }
+    broker_status = {
+        "schema_version": 1,
+        "broker_instance_id": broker_instance,
+        "draining": False,
+        "gpu3_uuid": acceptance.GPU_UUIDS["3"],
+        "gpu3_usage_mib": 0,
+        "gpu3_lease_ids": [],
+        "gpu3_quarantined": False,
+        "waiters": 0,
+    }
+    rejection = {
+        "code": "gpu_capacity_unavailable",
+        "gpu_index": 3,
+        "gpu_uuid": acceptance.GPU_UUIDS["3"],
+        "placement": "overflow",
+        "request_id": "dft-acceptance-gpu3-reject-" + "a" * 32,
+        "blocked_reason": acceptance.GPU3_BLOCKED_REASON,
+        "broker_instance_id": broker_instance,
+        "before_status": dict(broker_status),
+        "before_status_sha256": acceptance.canonical_json_digest(
+            broker_status
+        ),
+        "after_status": dict(broker_status),
+        "after_status_sha256": acceptance.canonical_json_digest(
+            broker_status
+        ),
+        "claim_sha256": acceptance.canonical_json_digest(claim),
+    }
+    rejection["broker_report_sha256"] = acceptance.canonical_json_digest(
+        rejection
+    )
+    report_payload = {
+            "schema_version": 1,
+            "status": "passed",
+            "run_kind": "final-main",
+            "captured_at": "2026-07-17T01:01:02Z",
+            "authority": {"sha": AUTHORITY_SHA, "tree": AUTHORITY_TREE},
+            "bridge": {"sha": BRIDGE_SHA, "tree": BRIDGE_TREE},
+            "images": authority_images,
+            "runtime": {
+                "contract_sha256": (
+                    READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT_SHA256
+                ),
+                "python_version": "3.12.3",
+                "uv_version": runtime["uv_version"],
+                "build_lock_sha256": runtime["build_lock_sha256"],
+                "source": {
+                    "commit": runtime["source"]["commit"],
+                    "tree": runtime["source"]["tree"],
+                    "archive_sha256": runtime["source"][
+                        "archive_inventory_sha256"
+                    ],
+                },
+                "wheel": {
+                    key: runtime["wheel"][key]
+                    for key in (
+                        "filename",
+                        "sha256",
+                        "inventory_sha256",
+                        "record_sha256",
+                    )
+                },
+                "model_registry_sha256": runtime["registry_sha256"],
+                "models_sha256": runtime["models_sha256"],
+            },
+            "control_plane": {
+                "mode": "fresh_exact_f",
+                "image_mode": "published_exact",
+                "project_name": "nexpoly_dft_fresh_aaaaaaaa_1234",
+                "authority": {
+                    "sha": AUTHORITY_SHA,
+                    "tree": AUTHORITY_TREE,
+                },
+                "broker": {
+                    "instance_id": broker_instance,
+                    "process": dict(process),
+                    "initial_leases": [],
+                    "final_leases": [],
+                    "socket_sha256": digest("5"),
+                },
+                "worker": {
+                    "instance_id": worker_instance,
+                    "process": dict(process),
+                    "authority_sha": AUTHORITY_SHA,
+                    "fresh": True,
+                },
+                "containers": {
+                    "project_name": "nexpoly_dft_fresh_aaaaaaaa_1234",
+                    **{
+                        role: {
+                            "container_id": character * 64,
+                            "image_id": authority_images[role]["image_id"],
+                            "digest_ref": authority_images[role]["digest_ref"],
+                            "index_digest": authority_images[role][
+                                "index_digest"
+                            ],
+                            "platform_digest": authority_images[role][
+                                "platform_digest"
+                            ],
+                            "source_revision": authority_images[role][
+                                "revision"
+                            ],
+                            "source": authority_images[role]["source"],
+                            "version": authority_images[role]["version"],
+                            "started_at": "2026-07-17T01:01:00Z",
+                        }
+                        for role, character in (
+                            ("backend", "b"),
+                            ("web", "c"),
+                        )
+                    },
+                    "postgres": {
+                        "container_id": "d" * 64,
+                        "image_id": digest("d"),
+                        "source_revision": None,
+                        "started_at": "2026-07-17T01:01:00Z",
+                    },
+                },
+                "cleanup": {
+                    "worker_stopped": True,
+                    "containers_removed": True,
+                    "volume_removed": True,
+                    "network_removed": True,
+                    "broker_drained": True,
+                    "broker_stopped": True,
+                    "mps_indices_stopped": [1],
+                    "leases_empty": True,
+                    "candidate_image_tags": [],
+                    "candidate_image_tags_sha256": (
+                        acceptance.canonical_json_digest([])
+                    ),
+                    "candidate_images_absent_before": True,
+                    "candidate_images_removed": True,
+                    "ordinary_dev_images_before_sha256": digest("e"),
+                    "ordinary_dev_images_after_sha256": digest("e"),
+                    "ordinary_dev_images_unchanged": True,
+                },
+            },
+            "production_cas": {
+                "before": dict(production),
+                "after": dict(production),
+                "unchanged": True,
+            },
+            "coverage": {
+                "broker_science": {
+                    "status": "passed",
+                    "gpu_index": 1,
+                    "gpu_uuid": acceptance.GPU_UUIDS["1"],
+                    "properties": ["energy", "forces", "hessian"],
+                    "completed_job_id": "11111111-1111-4111-8111-111111111111",
+                    "worker_instance_id": worker_instance,
+                    "execution_path": "primary",
+                    "parent_lease_id": "a" * 32,
+                    "lease_id": "b" * 32,
+                    "fencing_token": 7,
+                    "broker_instance_id": broker_instance,
+                    "atom_count": 3,
+                    "atomic_numbers": [8, 1, 1],
+                    "energy_eV": -76.0,
+                    "forces_shape": [3, 3],
+                    "max_force_eV_per_A": 0.1,
+                    "hessian_shape": [9, 9],
+                    "hessian_symmetry_max_abs_eV_per_A2": 0.0001,
+                    "hessian_symmetry_relative_error": 0.00001,
+                    "hessian_symmetric_within_tolerance": True,
+                    "scientific_result_sha256": digest("6"),
+                    "hessian_artifact_sha256": digest("7"),
+                    "artifact_manifest_sha256": digest("8"),
+                    "bundle_manifest_sha256": digest("9"),
+                    "bundle_sha256": digest("0"),
+                    "completed_journal_sha256": digest("a"),
+                    "provenance_sha256": digest("b"),
+                    "aimnet_commit": runtime["source"]["commit"],
+                    "aimnet_wheel_sha256": runtime["wheel"]["sha256"],
+                    "model_sha256": acceptance.AIMNET2_MODEL_SHA256,
+                    "model_registry_key": acceptance.AIMNET2_MODEL_REGISTRY_KEY,
+                },
+                "broker_uds_backend_e2e": {
+                    "status": "passed",
+                    "transport": "broker+uds+backend",
+                    "gpu_indices": [1],
+                    "overflow_test_status": "externally_fenced",
+                    "completed_job_id": "11111111-1111-4111-8111-111111111111",
+                    "cancelled_job_id": "22222222-2222-4222-8222-222222222222",
+                    "submit": True,
+                    "poll": True,
+                    "cancel": True,
+                    "journal": True,
+                    "artifact": True,
+                    "bundle": True,
+                    "fencing": True,
+                    "fresh_worker_instance_id": worker_instance,
+                    "cancelled_journal_sha256": digest("3"),
+                },
+            },
+            "gpus": {
+                "1": {
+                    "index": 1,
+                    "uuid": acceptance.GPU_UUIDS["1"],
+                    "mode": "actual",
+                    "cuda_started": True,
+                    "fencing_verified": True,
+                    "evidence_sha256": "",
+                },
+                "2": {
+                    "index": 2,
+                    "uuid": acceptance.GPU_UUIDS["2"],
+                    "mode": "unchanged",
+                    "cuda_started": False,
+                    "before": snapshot,
+                    "after": dict(snapshot),
+                    "audit": {
+                        "started_at": "2026-07-17T01:01:00Z",
+                        "finished_at": "2026-07-17T01:01:01Z",
+                        "interval_ms": 250,
+                        "sample_count": 5,
+                        "samples": [
+                            snapshot,
+                            snapshot,
+                            snapshot,
+                            snapshot,
+                            snapshot,
+                        ],
+                        "sampled_at": [
+                            "2026-07-17T01:01:00Z",
+                            "2026-07-17T01:01:00.250000Z",
+                            "2026-07-17T01:01:00.500000Z",
+                            "2026-07-17T01:01:00.750000Z",
+                            "2026-07-17T01:01:01Z",
+                        ],
+                        "samples_sha256": acceptance.canonical_json_digest(
+                            [
+                                snapshot,
+                                snapshot,
+                                snapshot,
+                                snapshot,
+                                snapshot,
+                            ]
+                        ),
+                        "drift_detected": False,
+                    },
+                    "processes_unchanged": True,
+                    "memory_unchanged": True,
+                },
+                "3": {
+                    "index": 3,
+                    "uuid": acceptance.GPU_UUIDS["3"],
+                    "mode": "externally_fenced",
+                    "cuda_started": False,
+                    "fencing_verified": True,
+                    "evidence_sha256": "",
+                    "reservations_sha256": (
+                        acceptance.EXTERNAL_RESERVATIONS_SHA256
+                    ),
+                    "blocked_reason": (
+                        acceptance.GPU3_BLOCKED_REASON
+                    ),
+                    "claim": claim,
+                    "rejection": rejection,
+                },
+            },
+        }
+    science = report_payload["coverage"]["broker_science"]  # type: ignore[index]
+    report_payload["gpus"]["1"]["evidence_sha256"] = (  # type: ignore[index]
+        acceptance.canonical_json_digest(science)
+    )
+    gpu3 = report_payload["gpus"]["3"]  # type: ignore[index]
+    gpu3["evidence_sha256"] = acceptance.canonical_json_digest(
+        {
+            "claim": gpu3["claim"],
+            "rejection": gpu3["rejection"],
+            "blocked_reason": gpu3["blocked_reason"],
+        }
+    )
+    return acceptance.seal_report(report_payload)
+
+
 def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
     bridge_policy = policy()
     target_records, registry = migration_contract()
@@ -463,29 +777,43 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
                 "status": "ready",
                 "authority_sha": AUTHORITY_SHA,
                 "python_version": "3.12.3",
-                "uv_version": "0.11.21",
-                "build_lock_sha256": digest("4"),
-                "wheel_filename": "aimnet2calc-0.1-py3-none-any.whl",
-                "wheel_sha256": digest("5"),
-                "wheel_inventory_sha256": digest("6"),
-                "record_sha256": digest("7"),
+                "uv_version": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "uv_version"
+                ],
+                "build_lock_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "build_lock_sha256"
+                ],
+                "wheel_filename": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "wheel"
+                ]["filename"],
+                "wheel_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "wheel"
+                ]["sha256"],
+                "wheel_inventory_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "wheel"
+                ]["inventory_sha256"],
+                "record_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "wheel"
+                ]["record_sha256"],
                 "aimnet_source": {
-                    "commit": "2" * 40,
-                    "tree": "3" * 40,
-                    "archive_sha256": digest("8"),
+                    "commit": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                        "source"
+                    ]["commit"],
+                    "tree": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                        "source"
+                    ]["tree"],
+                    "archive_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                        "source"
+                    ]["archive_inventory_sha256"],
                 },
-                "model_registry_sha256": digest("9"),
-                "models_sha256": digest("a"),
+                "model_registry_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "registry_sha256"
+                ],
+                "models_sha256": READINESS.monomer_dft_runtime_contract.RUNTIME_CONTRACT[
+                    "models_sha256"
+                ],
                 "prefetch_wheel_caches_sha256": PREFETCH_WHEELS_SHA256,
-                "gpu_acceptance": {
-                    "status": "passed",
-                    "authority_tree": AUTHORITY_TREE,
-                    "image_digest": authority_images["backend"]["index_digest"],
-                    "model_registry_sha256": digest("9"),
-                    "gpus": [1, 3],
-                    "production_gpu_2_touched": False,
-                    "report_sha256": digest("b"),
-                },
+                "gpu_acceptance": gpu_acceptance(authority_images),
             }
         ),
         "capacity": seal(
@@ -763,12 +1091,68 @@ class ProductionReadinessTests(unittest.TestCase):
     def test_gpu2_contact_is_rejected(self) -> None:
         document = fixture()
         acceptance = document["native_runtime"]["gpu_acceptance"]  # type: ignore[index]
-        acceptance["production_gpu_2_touched"] = True
+        acceptance["gpus"]["2"]["after"]["memory_used_mib"] += 1
+        document["native_runtime"]["gpu_acceptance"] = (
+            READINESS.monomer_dft_gpu_acceptance.seal_report(acceptance)
+        )
         reseal_section(document, "native_runtime")
         with self.assertRaisesRegex(
             READINESS.ProductionReadinessError, "GPU acceptance"
         ):
             self.validate(document)
+
+    def test_candidate_tree_gpu_report_is_explicitly_rejected(self) -> None:
+        document = fixture()
+        acceptance = document["native_runtime"]["gpu_acceptance"]  # type: ignore[index]
+        acceptance["status"] = "prevalidated"
+        acceptance["run_kind"] = "candidate-tree"
+        acceptance["control_plane"]["image_mode"] = "candidate_local"
+        document["native_runtime"]["gpu_acceptance"] = (
+            READINESS.monomer_dft_gpu_acceptance.seal_report(acceptance)
+        )
+        reseal_section(document, "native_runtime")
+        with self.assertRaisesRegex(
+            READINESS.ProductionReadinessError,
+            "GPU acceptance",
+        ):
+            self.validate(document)
+
+    def test_native_runtime_must_equal_every_fixed_aimnet_lock_identity(self) -> None:
+        mutations = (
+            ("python_version", "3.13.0"),
+            ("uv_version", "9.9.9"),
+            ("build_lock_sha256", digest("0")),
+            ("wheel_filename", "different-9.9-py3-none-any.whl"),
+            ("wheel_sha256", digest("1")),
+            ("wheel_inventory_sha256", digest("2")),
+            ("record_sha256", digest("3")),
+            ("model_registry_sha256", digest("4")),
+            ("models_sha256", digest("5")),
+        )
+        for field, value in mutations:
+            document = fixture()
+            native = document["native_runtime"]  # type: ignore[assignment]
+            native[field] = value  # type: ignore[index]
+            reseal_section(document, "native_runtime")
+            with self.subTest(field=field), self.assertRaisesRegex(
+                READINESS.ProductionReadinessError,
+                "fixed AIMNet runtime lock",
+            ):
+                self.validate(document)
+
+        for field, value in (
+            ("commit", "a" * 40),
+            ("tree", "b" * 40),
+            ("archive_sha256", digest("0")),
+        ):
+            document = fixture()
+            document["native_runtime"]["aimnet_source"][field] = value  # type: ignore[index]
+            reseal_section(document, "native_runtime")
+            with self.subTest(source_field=field), self.assertRaisesRegex(
+                READINESS.ProductionReadinessError,
+                "AIMNet source differs",
+            ):
+                self.validate(document)
 
     def test_any_conflict_marker_is_rejected(self) -> None:
         document = fixture()

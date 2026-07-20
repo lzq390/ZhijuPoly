@@ -1,7 +1,8 @@
 [Unit]
 Description=NexPoly host GPU resource broker
-After=network-online.target
+After=network-online.target user@1001.service
 Wants=network-online.target
+Requires=user@1001.service
 
 [Service]
 Type=simple
@@ -11,10 +12,11 @@ WorkingDirectory=/data/lzq/gith/nexpoly
 Environment="PYTHONDONTWRITEBYTECODE=1"
 Environment="PYTHONNOUSERSITE=1"
 Environment="XDG_RUNTIME_DIR=/run/user/1001"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus"
 UnsetEnvironment=PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONUSERBASE
 ExecStartPre=/usr/bin/install -d -m 0700 /data/lzq/gith/nexpoly-runtime/state/gpu-resource
 ExecStartPre=/usr/bin/install -m 0600 /data/lzq/gith/nexpoly/ops/config/gpu-external-reservations.json /data/lzq/gith/nexpoly-runtime/state/gpu-resource/external-reservations.json
-ExecStart=/usr/bin/python3 -E -s -B -m ops.gpu_broker.server --socket /data/lzq/gith/nexpoly-runtime/state/gpu-resource/broker.sock --state /data/lzq/gith/nexpoly-runtime/state/gpu-resource/broker-state.json --policy /data/lzq/gith/nexpoly/ops/config/gpu-broker-policy.json --external-reservations /data/lzq/gith/nexpoly-runtime/state/gpu-resource/external-reservations.json --mps-state-root /data/lzq/gith/nexpoly-runtime/state/gpu-resource --job-cgroup-root /sys/fs/cgroup/nexpoly-gpu-jobs
+ExecStart=/usr/bin/python3 -E -s -B -m ops.gpu_broker.server --socket /data/lzq/gith/nexpoly-runtime/state/gpu-resource/broker.sock --state /data/lzq/gith/nexpoly-runtime/state/gpu-resource/broker-state.json --policy /data/lzq/gith/nexpoly/ops/config/gpu-broker-policy.json --external-reservations /data/lzq/gith/nexpoly-runtime/state/gpu-resource/external-reservations.json --mps-state-root /data/lzq/gith/nexpoly-runtime/state/gpu-resource
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

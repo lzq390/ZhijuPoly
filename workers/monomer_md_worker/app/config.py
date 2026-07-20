@@ -152,6 +152,15 @@ def load_settings() -> WorkerSettings:
             "Broker-governed MD requires MONOMER_MD_MAX_CONCURRENT_JOBS=1 "
             "and MONOMER_MD_MAX_ACTIVE_JOBS=1"
         )
+    gpu_scope_launcher = os.getenv(
+        "MONOMER_MD_GPU_SCOPE_LAUNCHER", ""
+    ).strip()
+    if gpu_broker_enabled and gpu_scope_launcher != "systemd-user-scope":
+        raise ValueError(
+            "Broker-governed MD is host-only and requires "
+            "MONOMER_MD_GPU_SCOPE_LAUNCHER=systemd-user-scope; "
+            "Docker/OCI Workers are unsupported"
+        )
 
     byteff2_openmm_dir = os.getenv("BYTEFF2_OPENMM_DIR", "").strip()
 

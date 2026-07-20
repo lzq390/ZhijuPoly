@@ -94,6 +94,14 @@ site_helper_contracts = _load_sibling(
     "nexpoly_readiness_site_helper_contracts",
     "site_helper_contracts.py",
 )
+monomer_dft_runtime_contract = _load_sibling(
+    "nexpoly_readiness_monomer_dft_runtime_contract",
+    "monomer_dft_runtime_contract.py",
+)
+monomer_dft_gpu_acceptance = _load_sibling(
+    "nexpoly_readiness_monomer_dft_gpu_acceptance",
+    "monomer_dft_gpu_acceptance.py",
+)
 
 SCHEMA_VERSION = 1
 OUTPUT_SCHEMA_VERSION = 1
@@ -1092,7 +1100,9 @@ def _validate_native_runtime(
     value: object,
     *,
     authority: Mapping[str, str],
+    bridge: Mapping[str, str],
     oci: Mapping[str, Any],
+    observed_at: dt.datetime,
 ) -> dict[str, Any]:
     fields = {
         "status",
@@ -1111,17 +1121,30 @@ def _validate_native_runtime(
         "gpu_acceptance",
     }
     section = _sealed(value, fields, "native Worker runtime evidence")
+    runtime_lock = monomer_dft_runtime_contract.RUNTIME_CONTRACT
+    wheel_lock = runtime_lock["wheel"]
+    source_lock = runtime_lock["source"]
     if (
         section["status"] != "ready"
         or section["authority_sha"] != authority["sha"]
         or not isinstance(section["python_version"], str)
         or PYTHON_VERSION_RE.fullmatch(section["python_version"]) is None
+        or ".".join(section["python_version"].split(".")[:2])
+        != runtime_lock["python_minor"]
         or not isinstance(section["uv_version"], str)
         or UV_VERSION_RE.fullmatch(section["uv_version"]) is None
+        or section["uv_version"] != runtime_lock["uv_version"]
         or not isinstance(section["wheel_filename"], str)
         or WHEEL_RE.fullmatch(section["wheel_filename"]) is None
+        or section["build_lock_sha256"] != runtime_lock["build_lock_sha256"]
+        or section["wheel_filename"] != wheel_lock["filename"]
+        or section["wheel_sha256"] != wheel_lock["sha256"]
+        or section["wheel_inventory_sha256"] != wheel_lock["inventory_sha256"]
+        or section["record_sha256"] != wheel_lock["record_sha256"]
+        or section["model_registry_sha256"] != runtime_lock["registry_sha256"]
+        or section["models_sha256"] != runtime_lock["models_sha256"]
     ):
-        _fail("native Worker build identity is invalid")
+        _fail("native Worker build identity differs from the fixed AIMNet runtime lock")
     for name in (
         "build_lock_sha256",
         "wheel_sha256",
@@ -1140,31 +1163,45 @@ def _validate_native_runtime(
     _sha(source["commit"], "AIMNet commit")
     _sha(source["tree"], "AIMNet tree")
     _digest(source["archive_sha256"], "AIMNet archive")
-    acceptance = _exact_dict(
-        section["gpu_acceptance"],
-        {
-            "status",
-            "authority_tree",
-            "image_digest",
-            "model_registry_sha256",
-            "gpus",
-            "production_gpu_2_touched",
-            "report_sha256",
-        },
-        "GPU acceptance",
-    )
-    authority_backend = oci["authority_images"]["backend"]["index_digest"]
     if (
-        acceptance["status"] != "passed"
-        or acceptance["authority_tree"] != authority["tree"]
-        or acceptance["image_digest"] != authority_backend
-        or acceptance["model_registry_sha256"]
-        != section["model_registry_sha256"]
-        or acceptance["gpus"] != [1, 3]
-        or acceptance["production_gpu_2_touched"] is not False
+        source["commit"] != source_lock["commit"]
+        or source["tree"] != source_lock["tree"]
+        or source["archive_sha256"]
+        != source_lock["archive_inventory_sha256"]
     ):
-        _fail("GPU acceptance is not bound to F or touched production GPU2")
-    _digest(acceptance["report_sha256"], "GPU acceptance report")
+        _fail("AIMNet source differs from the fixed runtime lock")
+    try:
+        acceptance = monomer_dft_gpu_acceptance.validate_report(
+            section["gpu_acceptance"],
+            authority=authority,
+            bridge=bridge,
+            authority_images=oci["authority_images"],
+            runtime_contract=runtime_lock,
+            runtime_contract_sha256=(
+                monomer_dft_runtime_contract.RUNTIME_CONTRACT_SHA256
+            ),
+            observed_at=observed_at,
+        )
+    except monomer_dft_gpu_acceptance.GpuAcceptanceError as exc:
+        _fail(f"GPU acceptance is invalid: {exc}")
+    acceptance_runtime = acceptance["runtime"]
+    if (
+        acceptance_runtime["python_version"] != section["python_version"]
+        or acceptance_runtime["uv_version"] != section["uv_version"]
+        or acceptance_runtime["build_lock_sha256"]
+        != section["build_lock_sha256"]
+        or acceptance_runtime["source"] != source
+        or acceptance_runtime["wheel"]["filename"] != section["wheel_filename"]
+        or acceptance_runtime["wheel"]["sha256"] != section["wheel_sha256"]
+        or acceptance_runtime["wheel"]["inventory_sha256"]
+        != section["wheel_inventory_sha256"]
+        or acceptance_runtime["wheel"]["record_sha256"]
+        != section["record_sha256"]
+        or acceptance_runtime["model_registry_sha256"]
+        != section["model_registry_sha256"]
+        or acceptance_runtime["models_sha256"] != section["models_sha256"]
+    ):
+        _fail("GPU acceptance runtime differs from native Worker evidence")
     return section
 
 
@@ -1339,7 +1376,9 @@ def validate_evidence(
     native_runtime = _validate_native_runtime(
         value["native_runtime"],
         authority=authority,
+        bridge=bridge,
         oci=oci,
+        observed_at=captured_at,
     )
     capacity = _validate_capacity(value["capacity"])
     conflicts = _validate_conflicts(value["conflicts"])

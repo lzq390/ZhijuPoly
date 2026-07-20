@@ -50,6 +50,7 @@ REQUIRED_CI_JOBS = {
     "ci-gate",
     "Publish and smoke immutable main images",
     "bridge-validation",
+    "exact-B bridge compatibility",
 }
 REQUIRED_LEDGER_ORDER = ("pre-0012", "post-0012", "post-0013")
 REQUIRED_LEDGER_NAMES = set(REQUIRED_LEDGER_ORDER)

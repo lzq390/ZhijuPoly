@@ -32,9 +32,13 @@ class WorkerEnvironmentTests(unittest.TestCase):
         self.path.chmod(mode)
 
     def run_helper(self, *args: str) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment.pop("XDG_RUNTIME_DIR", None)
+        environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
         return subprocess.run(
             [sys.executable, str(HELPER_PATH), *args],
             cwd=REPOSITORY_ROOT,
+            env=environment,
             capture_output=True,
             text=True,
             check=False,
@@ -204,6 +208,40 @@ class WorkerEnvironmentTests(unittest.TestCase):
             "UNRELATED",
         ):
             self.assertNotIn(key, environment)
+
+    def test_systemd_user_bus_is_only_preserved_with_exact_runtime_identity(
+        self,
+    ) -> None:
+        runtime = f"/run/user/{os.geteuid()}"
+        environment = helper.build_worker_process_environment(
+            {},
+            inherited={
+                "XDG_RUNTIME_DIR": runtime,
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus",
+            },
+        )
+        self.assertEqual(environment["XDG_RUNTIME_DIR"], runtime)
+        self.assertEqual(
+            environment["DBUS_SESSION_BUS_ADDRESS"],
+            f"unix:path={runtime}/bus",
+        )
+
+        for inherited in (
+            {
+                "XDG_RUNTIME_DIR": runtime,
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/attacker-bus",
+            },
+            {"XDG_RUNTIME_DIR": runtime},
+            {"DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus"},
+        ):
+            with self.assertRaisesRegex(
+                helper.WorkerEnvError,
+                "manager environment identity is invalid",
+            ):
+                helper.build_worker_process_environment(
+                    {},
+                    inherited=inherited,
+                )
 
     def test_cli_exec_sets_only_safe_summary_fields(self) -> None:
         self.write(

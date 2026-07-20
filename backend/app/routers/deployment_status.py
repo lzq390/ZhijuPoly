@@ -139,7 +139,7 @@ def deployment_status(request: Request) -> dict[str, object]:
         raise HTTPException(status_code=503, detail="deployment state is unavailable") from exc
 
     return {
-        "active_jobs_schema_version": 1,
+        "active_jobs_schema_version": jobs.active_jobs_schema_version,
         "drain": {
             "enabled": drain.enabled,
             "reason": drain.reason,

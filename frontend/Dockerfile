@@ -5,6 +5,8 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
 
+COPY contracts/monomer_dft_api_contract_v1.json /app/contracts/monomer_dft_api_contract_v1.json
+COPY backend/tests/fixtures/monomer_dft_scientific_result_v1_legacy.json /app/backend/tests/fixtures/monomer_dft_scientific_result_v1_legacy.json
 COPY frontend ./
 RUN npm run build
 
@@ -20,5 +22,8 @@ LABEL org.opencontainers.image.source="$SOURCE_URL" \
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/frontend/dist /usr/share/nginx/html
+RUN chmod 0644 /etc/nginx/conf.d/default.conf \
+    && find /usr/share/nginx/html -type d -exec chmod 0755 {} + \
+    && find /usr/share/nginx/html -type f -exec chmod 0644 {} +
 
 EXPOSE 80

@@ -1,0 +1,56 @@
+{
+  "accepted_migration_ledgers": [
+    {
+      "ledger_sha256": "sha256:cfa2e2b70b54dcb316e546f5dd88322edc11fe3fb5b8211cc4a33c6e1f045696",
+      "manifest_sha256": "sha256:3f149c17e596c9dfe7c88245894c36e3e2d22ab67cf38375c84f2b1d7d7224fa",
+      "name": "pre-0012",
+      "terminal_version": "0011_monomer_md_demo_steps"
+    },
+    {
+      "ledger_sha256": "sha256:6aa45e5547afa4f4fcd1db0cfdf1d52112d4b70e2b42dc237612d2b9110efa0f",
+      "manifest_sha256": "sha256:3f149c17e596c9dfe7c88245894c36e3e2d22ab67cf38375c84f2b1d7d7224fa",
+      "name": "post-0012",
+      "terminal_version": "0012_drop_polytao_jobs"
+    },
+    {
+      "ledger_sha256": "sha256:2e452deb511655c72b7724bf24b449136e171b63b43ed088aecac7bfbeb9f765",
+      "manifest_sha256": "sha256:f3dc3ae7b5cf835af3d8ff0090e472b768bd1ad8056b3791979014e270983a3e",
+      "name": "post-0013",
+      "terminal_version": "0013_monomer_dft_jobs"
+    }
+  ],
+  "asset_manifest_digest": "sha256:0588cc6a9acd50efbcba49850bbea79ab44fa1752fa530b8537ccb21753ebc9b",
+  "authority_ref": "refs/heads/main",
+  "datasets_on_asset_change": [],
+  "external_database_audit": {
+    "audit_role_sql_sha256": "sha256:206d15b6fc4f33c3a5ee97e803946289ccad1bae7db068535d1f78e5cd5bf95f",
+    "authority_rules_schema_version": 1,
+    "evidence_schema_version": 5,
+    "media_authority_rules_sha256": "sha256:80543b0e2a63e744c89c83c72d9977ac1978adf35f30444d3830d2b57fc50a12",
+    "require_complete_discovery": true,
+    "require_exact_authority_digest": true,
+    "require_fresh_snapshot": true,
+    "runtime_registry_schema_version": 5,
+    "schema_version": 2
+  },
+  "final_migration": {
+    "checksum": "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc",
+    "version": "0013_monomer_dft_jobs"
+  },
+  "mode": "first-governed-takeover",
+  "policy_id": "sha256:8c40db452b5805452b750011df43ec1af5782a0c73c0cf6fe2c264b998429f22",
+  "required_ci_jobs": [
+    "Publish and smoke immutable main images",
+    "bridge-validation",
+    "ci-gate",
+    "exact-B bridge compatibility"
+  ],
+  "schema_version": 2,
+  "target_images": {
+    "backend": "ghcr.io/lzq390/nexpoly-backend@sha256:ec850b6873cca0340a63faf47ab19b3c4a65f1a656c5866e73487890a6f057f4",
+    "web": "ghcr.io/lzq390/nexpoly-web@sha256:6b7e51ba07861e9894d484e7f0133128697c47fe02c230ab179a38c3d053d008"
+  },
+  "target_ref": "refs/nexpoly/bridge-target/82a69ddb42bcd5c4666b5bf038d02414bccc6dde",
+  "target_sha": "82a69ddb42bcd5c4666b5bf038d02414bccc6dde",
+  "target_tree": "44e4b4c398b7b84abdeb40bc02b885569aba4d8b"
+}

@@ -10,9 +10,11 @@ docs/superpowers/
 **/.env*
 !backend/.env.example
 !frontend/.env.example
+!.env.monomer-dft.dev.example
 docker-compose.dev.yml
 scripts/dev_server_gpu.sh
 /.runtime/
+**/.runtime/
 /.venv-monomer-md-worker/
 /.venv-monomer-md-worker.staging-*/
 /.venv-monomer-md-worker.previous-*/
@@ -20,6 +22,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 backend/tests/
+!backend/tests/
+backend/tests/*
+!backend/tests/fixtures/
+backend/tests/fixtures/*
+!backend/tests/fixtures/monomer_dft_scientific_result_v1_legacy.json
 
 # Runtime data is mounted through docker-compose.
 backend/data/

@@ -128,10 +128,25 @@ try:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 except Exception as exc:
     fail(f"invalid ASSET-MANIFEST.json: {exc}")
+if isinstance(manifest, dict) and manifest.get("schema_version") == 2:
+    try:
+        from scripts.asset_release_contract import (
+            AssetContractError,
+            validate_schema_v2_release,
+        )
+
+        validate_schema_v2_release(
+            release_root,
+            expected_digest=f"sha256:{release_root.name}",
+            releases_root=release_root.parent,
+        )
+    except (AssetContractError, OSError, ValueError) as exc:
+        fail(f"schema-v2 contract validation failed: {exc}")
+    raise SystemExit(0)
 if not isinstance(manifest, dict) or set(manifest) != {
     "schema_version", "byteff2_commit", "byteff2_submodules", "assets"
 } or manifest.get("schema_version") != 1:
-    fail("ASSET-MANIFEST.json must use schema_version 1")
+    fail("ASSET-MANIFEST.json must use supported schema_version 1 or 2")
 byteff2_commit = manifest.get("byteff2_commit")
 byteff2_submodules = manifest.get("byteff2_submodules")
 if not isinstance(byteff2_commit, str) or re.fullmatch(r"[0-9a-f]{40}", byteff2_commit) is None:
@@ -631,8 +646,8 @@ worker_up() {
     export MONOMER_MD_WORKER_MODE=real
     export MONOMER_MD_WORKER_UDS="$WORKER_SOCKET"
     export NEXPOLY_GPU_DEVICE="${NEXPOLY_DEV_GPU_DEVICE:-1}"
-    export PATH="$(dirname "$WORKER_PYTHON"):$PATH"
-    export PYTHONPATH="$BYTEFF2_ROOT:$BYTEFF2_ROOT/submodules/bytemol${PYTHONPATH:+:$PYTHONPATH}"
+    export PATH="$(dirname "$WORKER_PYTHON"):$(dirname "$WORKER_BASE_PYTHON"):$PATH"
+    export PYTHONPATH="$ROOT_DIR:$BYTEFF2_ROOT:$BYTEFF2_ROOT/submodules/bytemol${PYTHONPATH:+:$PYTHONPATH}"
     exec nohup "$WORKER_PYTHON" -m uvicorn app.main:app --uds "$WORKER_SOCKET"
   ) >>"$WORKER_LOG_FILE" 2>&1 < /dev/null &
   echo "$!" > "$WORKER_PID_FILE"

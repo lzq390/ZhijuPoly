@@ -1075,6 +1075,7 @@ class ReleaseControllerTests(unittest.TestCase):
             f"MONOMER_MD_WORKER_UDS={controller.ops / 'state' / 'monomer-md-worker-socket' / 'worker.sock'}\n"
             "MONOMER_MD_WORKER_MODE=real\n"
             "MONOMER_MD_GPU_BROKER_ENABLED=false\n"
+            "MONOMER_MD_GPU_SCOPE_LAUNCHER=systemd-user-scope\n"
             "MONOMER_MD_GPU_BROKER_ENVIRONMENT=prod\n"
             f"MONOMER_MD_GPU_BROKER_SOCKET_PATH={controller.ops / 'state' / 'gpu-resource' / 'broker.sock'}\n"
             f"MONOMER_MD_GPU_MPS_PIPE_ROOT={controller.ops / 'state' / 'gpu-resource'}\n"
@@ -1425,6 +1426,26 @@ class ReleaseControllerTests(unittest.TestCase):
         self.assertEqual(contract["epoch"], 1)
         self.assertEqual(contract["checksum"], release_controller.POLYTAO_CONTRACT_CHECKSUM)
         self.assertEqual(contract["requires_contracts"], [])
+        dft = next(
+            record
+            for record in document["migrations"]
+            if record["version"] == "0013_monomer_dft_jobs"
+        )
+        self.assertEqual(dft["kind"], "expand")
+        self.assertEqual(dft["epoch"], 2)
+        self.assertEqual(
+            dft["checksum"],
+            "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc",
+        )
+        self.assertEqual(
+            dft["requires_contracts"],
+            [
+                {
+                    "version": "0012_drop_polytao_jobs",
+                    "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                }
+            ],
+        )
 
     def test_epoch_two_expand_requires_exact_checksum_approval(self) -> None:
         contract = {
@@ -3599,6 +3620,216 @@ class ReleaseControllerTests(unittest.TestCase):
         self.assertEqual(marker["status"], "verified-resume-pending")
         self.assertEqual(resume_attempts, 1)
 
+    def test_migration_only_failure_restores_database_before_previous_runtime(self) -> None:
+        manifest = self.build()
+        release_document = release_controller.load_manifest(manifest)
+        release_document["schema_version"] = 2
+        release_document["migrations"] = [
+            {
+                "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "kind": "contract",
+                "epoch": 1,
+                "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                "requires_contracts": [],
+            },
+            {
+                "version": "0013_monomer_dft_jobs",
+                "kind": "expand",
+                "epoch": 2,
+                "checksum": (
+                    "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc"
+                ),
+                "requires_contracts": [
+                    {
+                        "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                        "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                    }
+                ],
+            },
+        ]
+        manifest.write_text(json.dumps(release_document), encoding="utf-8")
+        production = self.root / "production"
+        controller = release_controller.ReleaseController(production, manifest, "auto", True)
+        previous_sha = "1" * 40
+        operation_id = "contract-0012-fixture"
+        approved_at = "2026-07-15T00:00:00+00:00"
+        approval = {
+            "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            "operation_id": operation_id,
+            "approved_at": approved_at,
+        }
+        previous = {
+            "status": "success",
+            "source_sha": previous_sha,
+            "asset_manifest_digest": DIGEST,
+            "byteff2_commit": SHA,
+            "migrations": [
+                release_controller.POLYTAO_CONTRACT_PREVIOUS_VERSION,
+                release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+            ],
+            "approved_contracts": [approval],
+            "schema_compatibility_floor": {
+                "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+            },
+            "migration_epoch_barrier": {
+                "epoch": 1,
+                "contract": {
+                    "version": release_controller.POLYTAO_SCHEMA_COMPATIBILITY_FLOOR,
+                    "checksum": release_controller.POLYTAO_CONTRACT_CHECKSUM,
+                },
+                "operation_id": operation_id,
+                "approved_at": approved_at,
+            },
+            "last_contract_operation": operation_id,
+        }
+        controller.state_path.parent.mkdir(parents=True)
+        controller.state_path.write_text(json.dumps(previous), encoding="utf-8")
+        previous_release = controller.ops / "releases" / previous_sha
+        previous_release.mkdir(parents=True)
+        asset_root = self.root / "assets"
+        controller.document.update(
+            {
+                "current_asset_manifest_digest": DIGEST,
+                "current_asset_root": str(asset_root),
+                "current_byteff2_commit": SHA,
+                "resolved_asset_manifest_digest": DIGEST,
+                "resolved_asset_root": str(asset_root),
+                "resolved_byteff2_commit": SHA,
+            }
+        )
+
+        backup = production / "backups" / "pre-0013.dump"
+        backup.parent.mkdir(parents=True)
+        backup.write_bytes(b"verified pre-0013 backup")
+        events: list[str] = []
+
+        def prepare(_environment: dict[str, str]) -> None:
+            self.prepare_mock_ready_release(controller)
+
+        def create_backup(_environment: dict[str, str], _from_sha: str) -> None:
+            controller.backup_path = backup
+
+        def record_run(command: list[str], **_kwargs: object) -> None:
+            if "candidate-health-failed" not in events:
+                return
+            if "stop" in command and command[-2:] == ["nginx", "backend"]:
+                events.append("stop-failed-candidate")
+            elif command == [
+                "systemctl",
+                "--user",
+                "stop",
+                "nexpoly-monomer-md-worker.service",
+            ]:
+                events.append("stop-failed-worker")
+
+        def fail_candidate_health(_environment: dict[str, str]) -> None:
+            events.append("candidate-health-failed")
+            raise release_controller.ReleaseError("candidate health failed after 0013")
+
+        def restore_database(
+            _environment: dict[str, str],
+            *,
+            release: Path,
+        ) -> None:
+            self.assertEqual(release, previous_release)
+            events.append("restore-pre-0013-database")
+
+        def rollback_runtime(_environment: dict[str, str]) -> None:
+            events.append("rollback-previous-runtime")
+
+        def drain(_environment: dict[str, str], enabled: bool) -> None:
+            events.append("drain-enabled" if enabled else "drain-resumed")
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                mock.patch.multiple(
+                    controller,
+                    ensure_root=mock.DEFAULT,
+                    validate_current_runtime=mock.DEFAULT,
+                    verify_image_labels=mock.DEFAULT,
+                    assert_still_current_main=mock.DEFAULT,
+                    wait_for_jobs=mock.DEFAULT,
+                    refresh_analytics_snapshot=mock.DEFAULT,
+                    switch_current=mock.DEFAULT,
+                    restart_or_defer_worker=mock.DEFAULT,
+                    run_ingress_isolated_contract_smoke=mock.DEFAULT,
+                    run_ingress_isolated_monomer_smoke=mock.DEFAULT,
+                    run_isolated_web_smoke=mock.DEFAULT,
+                    healthcheck=mock.DEFAULT,
+                )
+            )
+            stack.enter_context(mock.patch.object(controller, "environment", return_value={}))
+            stack.enter_context(
+                mock.patch.object(controller, "prepare_staging", side_effect=prepare)
+            )
+            stack.enter_context(mock.patch.object(controller, "run", side_effect=record_run))
+            stack.enter_context(mock.patch.object(controller, "drain", side_effect=drain))
+            stack.enter_context(
+                mock.patch.object(controller, "backup_database", side_effect=create_backup)
+            )
+            run_migrations = stack.enter_context(
+                mock.patch.object(
+                    controller,
+                    "run_migrations",
+                    return_value=["0013_monomer_dft_jobs"],
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(controller, "candidate_asset_environment", return_value={})
+            )
+            stack.enter_context(
+                mock.patch.object(
+                    controller,
+                    "drain_worker",
+                    return_value={"supported": True, "active_jobs": 0},
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(
+                    controller,
+                    "backend_healthcheck",
+                    side_effect=fail_candidate_health,
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(controller, "restore_database", side_effect=restore_database)
+            )
+            stack.enter_context(
+                mock.patch.object(controller, "rollback_runtime", side_effect=rollback_runtime)
+            )
+            stack.enter_context(
+                mock.patch.object(
+                    controller,
+                    "recover_drained_worker",
+                    side_effect=lambda _environment: events.append("recover-worker"),
+                )
+            )
+            with self.assertRaisesRegex(
+                release_controller.ReleaseError,
+                "candidate health failed after 0013",
+            ):
+                controller.deploy()
+
+        run_migrations.assert_called_once_with(mock.ANY, mode="expand")
+        self.assertEqual(
+            events,
+            [
+                "drain-enabled",
+                "candidate-health-failed",
+                "stop-failed-candidate",
+                "stop-failed-worker",
+                "restore-pre-0013-database",
+                "rollback-previous-runtime",
+                "recover-worker",
+                "drain-resumed",
+            ],
+        )
+        self.assertFalse(controller.in_progress_path.exists())
+        self.assertTrue(controller.release_dir.is_dir())
+        self.assertFalse(controller.staging.exists())
+
     def test_asset_change_failure_restores_dump_pointer_and_previous_runtime(self) -> None:
         manifest = self.build_single_bundle()
         production = self.root / "production"
@@ -4098,6 +4329,84 @@ class ReleaseControllerTests(unittest.TestCase):
         self.assertFalse(controller.staging.exists())
         self.assertFalse(controller.in_progress_path.exists())
 
+    def test_interrupted_migration_only_change_restores_database_before_runtime(self) -> None:
+        manifest = self.build()
+        production = self.root / "production"
+        controller = release_controller.ReleaseController(production, manifest, "auto", True)
+        previous_sha = "1" * 40
+        previous_release = controller.ops / "releases" / previous_sha
+        previous_release.mkdir(parents=True)
+        backup = production / "backups" / "interrupted-migration-only.dump"
+        backup.parent.mkdir(parents=True)
+        backup.write_bytes(b"verified pre-migration backup")
+        marker = {
+            "source_sha": SHA,
+            "phase": "db-changed",
+            "previous_state": {"status": "success", "source_sha": previous_sha},
+            "bootstrap": False,
+            "database_change_started": True,
+            "data_change_started": False,
+            "runtime_switch_started": False,
+            "database_backup": str(backup),
+            "database_backup_sha256": release_controller.sha256_file(backup),
+        }
+        self.seal_mock_interrupted_release(controller, marker)
+        controller.in_progress_path.parent.mkdir(parents=True, exist_ok=True)
+        controller.in_progress_path.write_text(json.dumps(marker), encoding="utf-8")
+        events: list[str] = []
+
+        def record_run(command: list[str], **_kwargs: object) -> None:
+            if "stop" in command and command[-2:] == ["nginx", "backend"]:
+                events.append("stop-failed-candidate")
+            elif command == [
+                "systemctl",
+                "--user",
+                "stop",
+                "nexpoly-monomer-md-worker.service",
+            ]:
+                events.append("stop-failed-worker")
+
+        with (
+            mock.patch.object(controller, "environment", return_value={}),
+            mock.patch.object(controller, "_validate_provisioned_ready"),
+            mock.patch.object(controller, "run", side_effect=record_run),
+            mock.patch.object(controller, "switch_asset_pointer") as switch_assets,
+            mock.patch.object(
+                controller,
+                "restore_database",
+                side_effect=lambda _environment, *, release: events.append(
+                    f"restore:{release}"
+                ),
+            ) as restore_database,
+            mock.patch.object(
+                controller,
+                "rollback_runtime",
+                side_effect=lambda _environment: events.append("rollback-runtime"),
+            ),
+            mock.patch.object(
+                controller,
+                "drain",
+                side_effect=lambda _environment, enabled: events.append(
+                    "drain-enabled" if enabled else "drain-resumed"
+                ),
+            ),
+        ):
+            controller.recover_interrupted_deployment(marker)
+
+        switch_assets.assert_not_called()
+        restore_database.assert_called_once_with({}, release=previous_release)
+        self.assertEqual(
+            events,
+            [
+                "stop-failed-candidate",
+                "stop-failed-worker",
+                f"restore:{previous_release}",
+                "rollback-runtime",
+                "drain-resumed",
+            ],
+        )
+        self.assertFalse(controller.in_progress_path.exists())
+
     def test_interrupted_data_change_restores_old_identity_database_and_runtime(self) -> None:
         manifest = self.build()
         production = self.root / "production"
@@ -4258,11 +4567,15 @@ class ReleaseControllerTests(unittest.TestCase):
             mock.patch.object(controller, "environment", return_value={}),
             mock.patch.object(controller, "_validate_provisioned_ready"),
             mock.patch.object(controller, "resume_worker") as resume_worker,
+            mock.patch.object(controller, "restore_database") as restore_database,
+            mock.patch.object(controller, "rollback_runtime") as rollback_runtime,
             mock.patch.object(controller, "drain") as drain,
         ):
             controller.recover_interrupted_deployment(marker)
 
         resume_worker.assert_called_once_with({})
+        restore_database.assert_not_called()
+        rollback_runtime.assert_not_called()
         drain.assert_called_once_with({}, False)
         self.assertFalse(controller.staging.exists())
         self.assertTrue(controller.release_dir.is_dir())
@@ -5274,15 +5587,56 @@ class ReleaseControllerTests(unittest.TestCase):
         manifest = self.build()
         controller = release_controller.ReleaseController(self.root / "production", manifest, "auto", False)
         controller.bootstrap = True
-        payload = {
-            "drain": {"enabled": True},
-            "active_jobs": {"monomer_md": 0, "online_knowledge": 0},
-            "active_total": 0,
-        }
-        completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))
-        with mock.patch.object(release_controller.subprocess, "run", return_value=completed) as run:
-            controller.wait_for_jobs({"APP_POSTGRES_DSN": "postgresql://fixture", "NEXPOLY_DRAIN_TIMEOUT_SECONDS": "1"})
-        command = run.call_args.args[0]
+        payloads = (
+            {
+                "drain": {"enabled": True},
+                "active_jobs": {
+                    "monomer_md": 0,
+                    "online_knowledge": 0,
+                    "monomer_dft": 0,
+                },
+                "active_total": 0,
+            },
+            {
+                "active_jobs_schema_version": 1,
+                "drain": {"enabled": True},
+                "active_jobs": {
+                    "monomer_md": 0,
+                    "online_knowledge": 0,
+                },
+                "active_total": 0,
+            },
+            {
+                "active_jobs_schema_version": 2,
+                "drain": {"enabled": True},
+                "active_jobs": {
+                    "monomer_md": 0,
+                    "online_knowledge": 0,
+                    "monomer_dft": 0,
+                },
+                "active_total": 0,
+            },
+        )
+        command = None
+        for payload in payloads:
+            completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))
+            with (
+                self.subTest(payload=payload),
+                mock.patch.object(
+                    release_controller.subprocess,
+                    "run",
+                    return_value=completed,
+                ) as run,
+            ):
+                controller.wait_for_jobs(
+                    {
+                        "APP_POSTGRES_DSN": "postgresql://fixture",
+                        "NEXPOLY_DRAIN_TIMEOUT_SECONDS": "1",
+                    }
+                )
+                command = run.call_args.args[0]
+
+        self.assertIsNotNone(command)
         self.assertIn("app.deployment_control_cli", command)
         self.assertNotIn("/internal/deployment/status", command)
         self.assertNotIn("--dsn", command)
@@ -6288,6 +6642,9 @@ class ReleaseControllerTests(unittest.TestCase):
             stack.enter_context(
                 mock.patch.object(controller, "candidate_asset_environment", return_value={})
             )
+            restore_database = stack.enter_context(
+                mock.patch.object(controller, "restore_database")
+            )
             stack.enter_context(
                 mock.patch.object(
                     controller,
@@ -6314,6 +6671,10 @@ class ReleaseControllerTests(unittest.TestCase):
                 controller.deploy()
 
         self.assertEqual(drain_calls, [True])
+        restore_database.assert_called_once_with(
+            mock.ANY,
+            release=controller.ops / "releases" / ("1" * 40),
+        )
         recover_worker.assert_not_called()
         marker = json.loads(controller.in_progress_path.read_text(encoding="utf-8"))
         self.assertEqual(marker["rollback"], "failed")
@@ -6659,6 +7020,40 @@ class ReleaseControllerTests(unittest.TestCase):
                     "active_total": 0,
                 },
                 {"monomer_md", "online_knowledge"},
+            )
+
+        persistent_v1 = {
+            "active_jobs_schema_version": 1,
+            "active_jobs": {
+                "monomer_md": 0,
+                "online_knowledge": 0,
+            },
+            "active_total": 0,
+        }
+        persistent_v2 = {
+            "active_jobs_schema_version": 2,
+            "active_jobs": {
+                "monomer_md": 0,
+                "online_knowledge": 0,
+                "monomer_dft": 0,
+            },
+            "active_total": 0,
+        }
+        for payload in (persistent_v1, persistent_v2):
+            with self.subTest(persistent_payload=payload):
+                self.assertEqual(
+                    release_controller.validated_persistent_active_total(
+                        payload,
+                        {"monomer_md", "online_knowledge", "monomer_dft"},
+                    ),
+                    0,
+                )
+        invalid_persistent_v1 = json.loads(json.dumps(persistent_v1))
+        invalid_persistent_v1["active_jobs"]["monomer_dft"] = 0
+        with self.assertRaisesRegex(release_controller.ReleaseError, "exact required"):
+            release_controller.validated_persistent_active_total(
+                invalid_persistent_v1,
+                {"monomer_md", "online_knowledge", "monomer_dft"},
             )
 
     def test_busy_worker_cannot_be_restarted_after_global_drain_gate(self) -> None:

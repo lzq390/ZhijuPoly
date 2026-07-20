@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "ordinary_ethanol",
+      "request": {"input": {"smiles": "CCO", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy", "charges", "forces"]}},
+      "expected": {"accepted": true, "input_type": "smiles", "canonical_smiles": "CCO", "formal_charge": 0, "effective_charge": 0, "electron_count": 26, "heavy_atom_count": 3, "atom_count": 9, "atomic_numbers": [6, 6, 8, 1, 1, 1, 1, 1, 1]}
+    },
+    {
+      "id": "charged_ammonium_inferred",
+      "request": {"input": {"smiles": "[NH4+]", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": true, "input_type": "smiles", "canonical_smiles": "[NH4+]", "formal_charge": 1, "effective_charge": 1, "electron_count": 10, "heavy_atom_count": 1, "atom_count": 5, "atomic_numbers": [7, 1, 1, 1, 1]}
+    },
+    {
+      "id": "inferred_charge_above_supported_range",
+      "request": {"input": {"smiles": "[C+6]", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": false, "error_code": "charge_out_of_range"}
+    },
+    {
+      "id": "psmiles_close_cyclopentane",
+      "request": {"input": {"smiles": "*CCCCC*", "net_charge": null, "multiplicity": 1, "psmiles_mode": "close"}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": true, "input_type": "psmiles_close", "canonical_smiles": "C1CCCC1", "formal_charge": 0, "effective_charge": 0, "electron_count": 40, "heavy_atom_count": 5, "atom_count": 15, "atomic_numbers": [6, 6, 6, 6, 6, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}
+    },
+    {
+      "id": "psmiles_cap_ethane",
+      "request": {"input": {"smiles": "*CC*", "net_charge": null, "multiplicity": 1, "psmiles_mode": "cap"}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": true, "input_type": "psmiles_cap", "canonical_smiles": "CC", "formal_charge": 0, "effective_charge": 0, "electron_count": 18, "heavy_atom_count": 2, "atom_count": 8, "atomic_numbers": [6, 6, 1, 1, 1, 1, 1, 1]}
+    },
+    {
+      "id": "psmiles_close_mismatched_bonds",
+      "request": {"input": {"smiles": "*=CC*", "net_charge": null, "multiplicity": 1, "psmiles_mode": "close"}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": false, "error_code": "invalid_psmiles"}
+    },
+    {
+      "id": "psmiles_attachment_degree_two",
+      "request": {"input": {"smiles": "C*CC*C", "net_charge": null, "multiplicity": 1, "psmiles_mode": "cap"}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": false, "error_code": "invalid_psmiles"}
+    },
+    {
+      "id": "psmiles_close_empty_after_processing",
+      "request": {"input": {"smiles": "**", "net_charge": null, "multiplicity": 1, "psmiles_mode": "close"}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": false, "error_code": "multi_fragment_input"}
+    },
+    {
+      "id": "disconnected_fragments",
+      "request": {"input": {"smiles": "CC.O", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": false, "error_code": "multi_fragment_input"}
+    },
+    {
+      "id": "ordinary_smiles_with_psmiles_mode",
+      "request": {"input": {"smiles": "CCO", "net_charge": null, "multiplicity": 1, "psmiles_mode": "cap"}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": false, "error_code": "invalid_psmiles_mode"}
+    },
+    {
+      "id": "nse_methyl_radical",
+      "request": {"input": {"smiles": "[CH3]", "net_charge": null, "multiplicity": 2, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2-nse", "conformer": {"seed": 7, "max_iterations": 500}, "single_point": {"properties": ["energy", "charges"]}},
+      "expected": {"accepted": true, "input_type": "smiles", "canonical_smiles": "[CH3]", "formal_charge": 0, "effective_charge": 0, "electron_count": 9, "heavy_atom_count": 1, "atom_count": 4, "atomic_numbers": [6, 1, 1, 1]}
+    },
+    {
+      "id": "palladium_model_domain",
+      "request": {"input": {"smiles": "[Pd]", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2-pd", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": true, "input_type": "smiles", "canonical_smiles": "[Pd]", "formal_charge": 0, "effective_charge": 0, "electron_count": 46, "heavy_atom_count": 1, "atom_count": 1, "atomic_numbers": [46]}
+    },
+    {
+      "id": "palladium_with_standard_model",
+      "request": {"input": {"smiles": "[Pd]", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": false, "error_code": "unsupported_element"}
+    },
+    {
+      "id": "rxn_neutral_formaldehyde",
+      "request": {"input": {"smiles": "C=O", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2-rxn", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy", "forces"]}},
+      "expected": {"accepted": true, "input_type": "smiles", "canonical_smiles": "C=O", "formal_charge": 0, "effective_charge": 0, "electron_count": 16, "heavy_atom_count": 2, "atom_count": 4, "atomic_numbers": [6, 8, 1, 1]}
+    },
+    {
+      "id": "rxn_rejects_charged_input",
+      "request": {"input": {"smiles": "[NH4+]", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2-rxn", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": false, "error_code": "unsupported_charge"}
+    },
+    {
+      "id": "hessian_total_atom_limit",
+      "request": {"input": {"smiles": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["hessian"]}},
+      "expected": {"accepted": false, "error_code": "hessian_molecule_too_large"}
+    },
+    {
+      "id": "total_atom_limit",
+      "request": {"input": {"smiles": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "net_charge": null, "multiplicity": 1, "psmiles_mode": null}, "calculation_type": "single_point", "model": "aimnet2", "conformer": {"seed": 1, "max_iterations": 500}, "single_point": {"properties": ["energy"]}},
+      "expected": {"accepted": false, "error_code": "molecule_too_large"}
+    }
+  ]
+}

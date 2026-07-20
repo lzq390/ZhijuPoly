@@ -7,17 +7,24 @@ from contextlib import asynccontextmanager
 from time import monotonic
 from typing import Any
 
+import anyio
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings, get_settings
 from app.deployment_drain_middleware import DeploymentDrainMiddleware
 from app.middleware import BrowserCrossSiteProtectionMiddleware
 from app.postgres_database import postgres_connection
-from app.postgres_preflight import preflight_blockers, run_preflight
+from app.postgres_preflight import (
+    SCHEMA_TARGET_STARTUP,
+    preflight_blockers,
+    run_preflight,
+)
 from app.routers.assistant import router as assistant_router
 from app.routers.conditional_generation import router as conditional_generation_router
 from app.routers.database_browser import router as database_browser_router
@@ -27,6 +34,11 @@ from app.routers.gpu_status import router as gpu_status_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.lab_data import router as lab_data_router
 from app.routers.md_demo import router as md_demo_router
+from app.routers.monomer_dft import (
+    MonomerDftPublicError,
+    monomer_dft_public_error_handler,
+    router as monomer_dft_router,
+)
 from app.routers.monomer_md import router as monomer_md_router
 from app.routers.monomer_polymerization import router as monomer_polymerization_router
 from app.routers.monomer_retrosynthesis import router as monomer_retrosynthesis_router
@@ -44,6 +56,13 @@ from app.services.image_recognition import (
     warmup_image_recognition_runtime,
 )
 from app.services.in_memory_jobs import BoundedInMemoryJobStore
+from app.services.monomer_dft_download_proxy import MonomerDftDownloadProxy
+from app.services.monomer_dft_reconciler import (
+    MonomerDftReadinessController,
+    MonomerDftReconciler,
+)
+from app.services.monomer_dft_repository import MonomerDftRepository
+from app.services.monomer_dft_worker_client import MonomerDftWorkerClient
 from app.services.monomer_retrosynthesis import (
     load_retrosynthesis_runtime,
     warmup_retrosynthesis_runtime,
@@ -56,6 +75,13 @@ from gpu_resource import GpuBrokerClient, ManagedGpuLease, mps_client_environmen
 
 logger = logging.getLogger(__name__)
 JOB_SHUTDOWN_GRACE_SECONDS = 35.0
+_MONOMER_DFT_API_PREFIX = "/api/v1/monomer-dft"
+
+
+def _is_monomer_dft_api_path(path: str) -> bool:
+    return path == _MONOMER_DFT_API_PREFIX or path.startswith(
+        f"{_MONOMER_DFT_API_PREFIX}/"
+    )
 
 
 async def health() -> dict[str, str]:
@@ -114,8 +140,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
             if residency_lease is not None:
                 residency_lease.assert_healthy()
+            if api_app.state.monomer_dft_readiness_controller is not None:
+                api_app.state.monomer_dft_readiness_controller.start()
             yield
         finally:
+            if api_app.state.monomer_dft_readiness_controller is not None:
+                await api_app.state.monomer_dft_readiness_controller.stop()
+            elif api_app.state.monomer_dft_reconciler is not None:
+                await api_app.state.monomer_dft_reconciler.stop()
+            if api_app.state.monomer_dft_worker_client is not None:
+                await api_app.state.monomer_dft_worker_client.close()
             await run_in_threadpool(_shutdown_in_process_job_managers, api_app)
             if residency_lease is not None:
                 # Models and their CUDA context remain resident until process
@@ -124,12 +158,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await run_in_threadpool(residency_lease.abandon)
 
     app = FastAPI(title="PolyProp API", version="0.1.0", lifespan=lifespan)
+    app.add_exception_handler(MonomerDftPublicError, monomer_dft_public_error_handler)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_envelope_handler(
+        request: Request,
+        exc: StarletteHTTPException,
+    ):
+        if _is_monomer_dft_api_path(request.url.path):
+            if exc.status_code == 404:
+                code = "route_not_found"
+                message = "monomer DFT route not found"
+            elif exc.status_code == 405:
+                code = "method_not_allowed"
+                message = "method not allowed for monomer DFT route"
+            else:
+                code = "http_error"
+                message = "monomer DFT request failed"
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={
+                    "code": code,
+                    "message": message,
+                    "retryable": False,
+                    "details": {},
+                },
+                headers=exc.headers,
+            )
+        return await http_exception_handler(request, exc)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_exception_handler(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
+        if _is_monomer_dft_api_path(request.url.path):
+            issues: list[dict[str, str]] = []
+            for error in exc.errors():
+                location = ".".join(
+                    str(item) for item in error.get("loc", ()) if item != "body"
+                )
+                issues.append(
+                    {
+                        "field": location[:256],
+                        "type": str(error.get("type") or "validation_error")[:128],
+                    }
+                )
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "code": "invalid_request",
+                    "message": "monomer DFT request validation failed",
+                    "retryable": False,
+                    "details": {"issues": issues[:100]},
+                },
+            )
         return JSONResponse(
             status_code=422,
             content={"detail": _json_safe_validation_error(exc.errors())},
@@ -165,6 +248,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_active_jobs=app_settings.polytao_max_active_jobs,
         store=app.state.in_memory_job_store,
     )
+    app.state.monomer_dft_repository = MonomerDftRepository(
+        app_settings.app_postgres_dsn
+    )
+    app.state.monomer_dft_validation_limiter = anyio.CapacityLimiter(
+        app_settings.monomer_dft_validation_concurrency
+    )
+    app.state.monomer_dft_download_proxy = MonomerDftDownloadProxy(
+        spool_root=app_settings.monomer_dft_download_spool_root,
+        max_concurrent=app_settings.monomer_dft_download_max_concurrent,
+    )
+    app.state.monomer_dft_runtime_enabled = bool(
+        app_settings.monomer_dft_submit_enabled
+        and app_settings.monomer_dft_worker_uds
+    )
+    app.state.monomer_dft_worker_client = None
+    app.state.monomer_dft_reconciler = None
+    app.state.monomer_dft_readiness_controller = None
+    if app.state.monomer_dft_runtime_enabled:
+        app.state.monomer_dft_worker_client = MonomerDftWorkerClient(
+            base_url=app_settings.monomer_dft_worker_base_url,
+            uds_path=app_settings.monomer_dft_worker_uds,
+            timeout_seconds=app_settings.monomer_dft_worker_timeout_seconds,
+            validation_limiter=app.state.monomer_dft_validation_limiter,
+        )
+        app.state.monomer_dft_reconciler = MonomerDftReconciler(
+            repository=app.state.monomer_dft_repository,
+            worker=app.state.monomer_dft_worker_client,
+            interval_seconds=app_settings.monomer_dft_reconcile_interval_seconds,
+            artifact_retention_days=app_settings.monomer_dft_artifact_retention_days,
+        )
+        app.state.monomer_dft_readiness_controller = MonomerDftReadinessController(
+            repository=app.state.monomer_dft_repository,
+            reconciler=app.state.monomer_dft_reconciler,
+            interval_seconds=app_settings.monomer_dft_reconcile_interval_seconds,
+        )
 
     app.add_middleware(
         CORSMiddleware,
@@ -188,6 +306,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(lab_data_router)
     app.include_router(md_demo_router)
     app.include_router(monomer_md_router)
+    app.include_router(monomer_dft_router)
     app.include_router(monomer_polymerization_router)
     app.include_router(monomer_retrosynthesis_router)
     app.include_router(online_knowledge_router)
@@ -354,7 +473,12 @@ def _shutdown_in_process_job_managers(
 
 def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None:
     try:
-        report = run_preflight(api_app.state.settings, mode="runtime", strict=True)
+        report = run_preflight(
+            api_app.state.settings,
+            mode="runtime",
+            strict=True,
+            schema_target=SCHEMA_TARGET_STARTUP,
+        )
         errors = preflight_blockers(report)
     except Exception as exc:
         errors = [f"database preflight failed: {type(exc).__name__}"]

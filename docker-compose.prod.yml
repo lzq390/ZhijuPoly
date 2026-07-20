@@ -33,6 +33,10 @@ x-production-environment: &production-environment
   MONOMER_MD_WORKER_BASE_URL: "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock"
   MONOMER_MD_WORKER_TIMEOUT_SECONDS: "30"
   MONOMER_MD_CANARY_STATE_DIR: "/app/monomer-md-canaries"
+  # Code delivery does not authorize production DFT execution. History and
+  # results remain readable, while no DFT Worker socket is mounted or dialed.
+  MONOMER_DFT_SUBMIT_ENABLED: "false"
+  MONOMER_DFT_WORKER_UDS: ""
 
 x-production-volumes: &production-volumes
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro

@@ -342,6 +342,402 @@ export type MonomerMdJobResponse = {
   artifacts?: MonomerMdArtifact[] | Record<string, MonomerMdArtifact | string | number | boolean | null>;
 };
 
+export type MonomerDftCalculationType = "single_point" | "optimization";
+export type MonomerDftModelName =
+  | "aimnet2"
+  | "aimnet2-2025"
+  | "aimnet2-b973c"
+  | "aimnet2-nse"
+  | "aimnet2-pd"
+  | "aimnet2-rxn";
+export type MonomerDftJobStatus =
+  | "pending"
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancel_requested"
+  | "cancelled";
+export type MonomerDftProperty = "energy" | "forces" | "charges" | "hessian" | "frequencies";
+export type MonomerDftProgressStage =
+  | "pending"
+  | "queued"
+  | "validating"
+  | "conformer"
+  | "single_point"
+  | "optimization"
+  | "hessian"
+  | "frequency"
+  | "artifacts"
+  | "running"
+  | "dispatch_retry"
+  | "dispatch_failed"
+  | "cancel_requested"
+  | "worker_failed"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type MonomerDftInput = {
+  smiles: string;
+  net_charge: number | null;
+  multiplicity: number;
+  psmiles_mode: "close" | "cap" | null;
+};
+
+export type MonomerDftConformerOptions = {
+  seed: number;
+  max_iterations: number;
+};
+
+export type MonomerDftSinglePointOptions = {
+  properties: MonomerDftProperty[];
+};
+
+export type MonomerDftPostOptimizationProperty = "hessian" | "frequencies";
+
+export type MonomerDftOptimizationOptions = {
+  fmax_eV_per_A: number;
+  max_steps: number;
+  post_optimization_properties: MonomerDftPostOptimizationProperty[];
+};
+
+type MonomerDftJobCreateRequestBase = {
+  input: MonomerDftInput;
+  model: MonomerDftModelName;
+  conformer: MonomerDftConformerOptions;
+};
+
+export type MonomerDftSinglePointRequest = MonomerDftJobCreateRequestBase & {
+  calculation_type: "single_point";
+  single_point: MonomerDftSinglePointOptions;
+  optimization?: never;
+};
+
+export type MonomerDftOptimizationRequest = MonomerDftJobCreateRequestBase & {
+  calculation_type: "optimization";
+  optimization: MonomerDftOptimizationOptions;
+  single_point?: never;
+};
+
+export type MonomerDftJobCreateRequest = MonomerDftSinglePointRequest | MonomerDftOptimizationRequest;
+
+export type MonomerDftModelCapability = {
+  id: MonomerDftModelName;
+  label: string;
+  description?: string | null;
+  available: boolean;
+  is_default?: boolean;
+  deprecated?: boolean;
+  deprecation_message?: string | null;
+  supported_calculation_types: MonomerDftCalculationType[];
+  supported_properties: MonomerDftProperty[];
+  supported_elements: string[];
+  supports_spin: boolean;
+  charge_min?: number;
+  charge_max?: number;
+};
+
+export type MonomerDftCapabilitiesResponse = {
+  enabled: boolean;
+  available: boolean;
+  schema_ready: boolean;
+  calculation_types: MonomerDftCalculationType[];
+  properties: MonomerDftProperty[];
+  default_model: MonomerDftModelName;
+  models: MonomerDftModelCapability[];
+  defaults: {
+    conformer: MonomerDftConformerOptions;
+    single_point: MonomerDftSinglePointOptions;
+    optimization: MonomerDftOptimizationOptions;
+  };
+  limits: {
+    max_atoms?: number;
+    max_heavy_atoms?: number;
+    max_hessian_atoms?: number;
+    max_optimization_steps: number;
+    min_optimization_steps?: number;
+    max_concurrent_jobs: number;
+    max_queued_jobs: number;
+    max_active_jobs: number;
+    [key: string]: number | undefined;
+  };
+  worker?: Record<string, unknown>;
+  message?: string | null;
+};
+
+export type MonomerDftServiceStatusResponse = {
+  enabled: boolean;
+  available: boolean;
+  schema_ready: boolean;
+  worker_status: string;
+  runtime_ready: boolean | null;
+  draining: boolean | null;
+  active_jobs: number;
+  max_active_jobs: number;
+  message: string;
+};
+
+export type MonomerDftVector3 = [number, number, number];
+
+export type MonomerDftAtom = {
+  index: number;
+  atomic_number: number;
+  element: string;
+  isotope_mass_number?: number | null;
+  atomic_mass_u?: number | null;
+  position_angstrom: MonomerDftVector3;
+  charge_e?: number | null;
+  force_ev_per_angstrom?: MonomerDftVector3 | null;
+};
+
+export type MonomerDftOptimizationStep = {
+  step: number;
+  energy_eV: number;
+  fmax_eV_per_A: number;
+};
+
+export type MonomerDftFrequencyResult = {
+  artifact_id: string;
+  values_cm_1: number[];
+  mode_count: number;
+  removed_rigid_modes: number;
+  expected_rigid_modes: number;
+  linear_molecule: boolean;
+  imaginary_threshold_cm_1: number;
+  imaginary_mode_count: number;
+  imaginary_values_cm_1: number[];
+  near_zero_mode_count: number;
+};
+
+export type MonomerDftHessianSummary = {
+  shape: [number, number];
+  symmetry_max_abs_eV_per_A2: number;
+  symmetry_relative_error: number;
+  symmetric_within_tolerance: boolean;
+  artifact_id: string;
+  units: string;
+};
+
+export type MonomerDftTiming = Record<string, number>;
+
+type MonomerDftProvenanceBase = Record<string, string | number | boolean | null | undefined> & {
+  aimnet_commit?: string | null;
+  aimnet_wheel_sha256?: string | null;
+  model_id?: string | null;
+  model_sha256?: string | null;
+  torch_version?: string | null;
+  cuda_version?: string | null;
+  warp_version?: string | null;
+  gpu_name?: string | null;
+  gpu_uuid?: string | null;
+  gpu_physical_device?: string | null;
+  gpu_logical_device?: string | null;
+  gpu_budget_mib?: number | null;
+  gpu_active_thread_percentage?: number | null;
+  gpu_preferred?: boolean | null;
+  execution_path?: "primary" | "overflow" | null;
+  broker_instance_id?: string | null;
+  lease_id?: string | null;
+  fencing_token?: number | null;
+  conformer_seed?: number | null;
+  rdkit_version?: string | null;
+  rdkit_force_field?: string | null;
+  mass_source?: string | null;
+};
+
+export type MonomerDftProvenance = MonomerDftProvenanceBase & {
+  rdkit_optimization_performed?: boolean | null;
+  rdkit_optimization_status?: number | null;
+};
+
+type MonomerDftProvenanceV1 = MonomerDftProvenance;
+
+type MonomerDftProvenanceV2 = MonomerDftProvenanceBase & {
+  rdkit_optimization_performed: boolean;
+  rdkit_optimization_status: number;
+  rdkit_version: string;
+  mass_source: string;
+  execution_path: "primary" | "overflow";
+  gpu_uuid: string;
+  gpu_budget_mib: number;
+  broker_instance_id: string;
+  lease_id: string;
+  fencing_token: number;
+};
+
+export type MonomerDftArtifact = {
+  artifact_id: string;
+  name: string;
+  media_type: string;
+  size_bytes: number;
+  sha256: string;
+  available: boolean;
+};
+
+export type MonomerDftResultWarning = { code: string; message: string };
+
+type MonomerDftResultAtomsV1 = {
+  count: number;
+  atomic_numbers: number[];
+  symbols: string[];
+};
+
+type MonomerDftResultAtomsV2 = MonomerDftResultAtomsV1 & {
+  /** 0 means natural abundance; positive values identify an explicit isotope. */
+  isotope_mass_numbers: number[];
+  atomic_masses_u: number[];
+};
+
+type MonomerDftResultRdkitV1 = {
+  seed: number;
+  force_field: string;
+  optimization_status: number;
+  optimization_performed?: boolean | null;
+  optimization_state?: "not_performed" | "converged" | "not_converged" | null;
+};
+
+type MonomerDftResultRdkitV2 = {
+  seed: number;
+  force_field: string;
+  optimization_status: number;
+  optimization_performed: boolean;
+  optimization_state: "not_performed" | "converged" | "not_converged";
+};
+
+type MonomerDftResultBase = {
+  calculation_type: MonomerDftCalculationType;
+  engine: "aimnet2" | string;
+  model: MonomerDftModelName;
+  input: {
+    input_type: "smiles" | "psmiles" | string;
+    canonical_smiles: string;
+    net_charge: number;
+    input_formal_charge: number;
+    multiplicity: number;
+    electron_count: number;
+  };
+  geometry: {
+    initial_coordinates_angstrom: MonomerDftVector3[];
+    final_coordinates_angstrom: MonomerDftVector3[];
+    units: "angstrom" | string;
+  };
+  properties: {
+    energy: { value_eV: number };
+    charges?: {
+      values_e: number[];
+      sum_e: number;
+      conservation_error_e: number;
+      conserved: boolean;
+    };
+    spin_charges?: { values_e: number[] };
+    forces?: {
+      values_eV_per_A: MonomerDftVector3[];
+      fmax_eV_per_A: number;
+    };
+    hessian?: MonomerDftHessianSummary;
+    frequencies?: MonomerDftFrequencyResult;
+  };
+  optimization: {
+    converged: boolean;
+    steps: number;
+    fmax_threshold_eV_per_A: number;
+    max_steps: number;
+    trajectory_artifact_id: string;
+    trace: MonomerDftOptimizationStep[];
+  } | null;
+  scientific_status: {
+    calculation_completed: boolean;
+    geometry_status: "converged" | "max_steps_reached" | "not_optimized" | string;
+    is_stationary: boolean;
+    minimum_assessment: "unassessed" | "not_converged" | "confirmed_minimum" | "nonminimum_or_saddle";
+    stationary_point?: "minimum" | "first_order_saddle" | "higher_order_saddle" | "not_evaluated" | "not_stationary" | string;
+    fmax_eV_per_A: number | null;
+  };
+  warnings: MonomerDftResultWarning[];
+  timings: MonomerDftTiming;
+};
+
+export type MonomerDftResult = MonomerDftResultBase & (
+  | {
+    schema_version: 1;
+    atoms: MonomerDftResultAtomsV1;
+    rdkit: MonomerDftResultRdkitV1;
+    provenance: MonomerDftProvenanceV1;
+  }
+  | {
+    schema_version: 2;
+    atoms: MonomerDftResultAtomsV2;
+    rdkit: MonomerDftResultRdkitV2;
+    provenance: MonomerDftProvenanceV2;
+  }
+);
+
+export type MonomerDftError = {
+  code: string;
+  message: string;
+  retryable: boolean;
+  details?: Record<string, unknown> | null;
+};
+
+export type MonomerDftArtifactsState = "available" | "delete_requested" | "deleted" | "none";
+
+export type MonomerDftJobResponse = {
+  job_id: string;
+  calculation_type: MonomerDftCalculationType;
+  status: MonomerDftJobStatus;
+  request: MonomerDftJobCreateRequest;
+  request_sha256: string;
+  attempt: number;
+  queue_position: number | null;
+  stage: MonomerDftProgressStage;
+  progress_percent: number;
+  scientific_status: string | null;
+  warnings: string[];
+  result?: MonomerDftResult | null;
+  timings: MonomerDftTiming;
+  provenance: MonomerDftProvenance;
+  error?: MonomerDftError | null;
+  artifacts: MonomerDftArtifact[];
+  artifacts_state: MonomerDftArtifactsState;
+  artifacts_deleted: boolean;
+  cancel_requested: boolean;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  idempotent_replay: boolean;
+};
+
+export type MonomerDftJobCreateResponse = MonomerDftJobResponse;
+
+export type MonomerDftJobListResponse = {
+  items: MonomerDftJobResponse[];
+  page: number;
+  page_size: number;
+  total: number;
+};
+
+export type MonomerDftJobListQuery = {
+  page: number;
+  page_size: number;
+  status?: MonomerDftJobStatus | "";
+  calculation_type?: MonomerDftCalculationType | "";
+};
+
+export type MonomerDftArtifactDeleteResponse = {
+  job_id: string;
+  deleted: boolean;
+  deleted_artifacts: number;
+  artifacts_state: MonomerDftArtifactsState;
+  message: string;
+};
+
+export type MonomerDftTrajectoryArtifact = {
+  units: { energy: string; fmax: string; coordinates: string; charges?: string };
+  frames: Array<MonomerDftOptimizationStep & { coordinates_angstrom: MonomerDftVector3[] }>;
+};
+
 export type StructureImageRecognitionResponse = {
   smiles: string;
   molfile: string | null;

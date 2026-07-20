@@ -118,12 +118,24 @@ def test_repository_migration_manifest_classifies_every_sql_file() -> None:
     assert kinds["0010_deployment_control"] == "expand"
     assert kinds["0011_monomer_md_demo_steps"] == "expand"
     assert kinds["0012_drop_polytao_jobs"] == "contract"
+    assert kinds["0013_monomer_dft_jobs"] == "expand"
     assert set(kinds) == {path.stem for path in MIGRATIONS_DIR.glob("*.sql")}
     assert {entry.manifest_schema_version for entry in entries} == {2}
-    assert {entry.epoch for entry in entries} == {1}
-    assert next(
+    assert {entry.epoch for entry in entries} == {1, 2}
+    contract = next(
         entry for entry in entries if entry.version == "0012_drop_polytao_jobs"
-    ).checksum == POLYTAO_CONTRACT_CHECKSUM
+    )
+    assert contract.checksum == POLYTAO_CONTRACT_CHECKSUM
+    dft = next(entry for entry in entries if entry.version == "0013_monomer_dft_jobs")
+    assert dft.kind == "expand"
+    assert dft.epoch == 2
+    assert dft.checksum == (
+        "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc"
+    )
+    assert [
+        (requirement.version, requirement.checksum)
+        for requirement in dft.requires_contracts
+    ] == [("0012_drop_polytao_jobs", POLYTAO_CONTRACT_CHECKSUM)]
 
 
 def test_manifest_rejects_unclassified_sql_migration(tmp_path: Path) -> None:

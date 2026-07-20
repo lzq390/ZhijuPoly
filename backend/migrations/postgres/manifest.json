@@ -84,6 +84,18 @@
       "epoch": 1,
       "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728",
       "requires_contracts": []
+    },
+    {
+      "version": "0013_monomer_dft_jobs",
+      "kind": "expand",
+      "epoch": 2,
+      "checksum": "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc",
+      "requires_contracts": [
+        {
+          "version": "0012_drop_polytao_jobs",
+          "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+        }
+      ]
     }
   ]
 }

@@ -1124,6 +1124,7 @@ class BootstrapPullDeployTests(unittest.TestCase):
                 "Publish and smoke immutable main images",
                 "bridge-validation",
                 "ci-gate",
+                "exact-B bridge compatibility",
             ],
         )
         sealed = {

@@ -1,0 +1,31 @@
+# Monomer DFT worker runtime, excluding AIMNet itself. AIMNet is installed separately
+# from the non-editable wheel pinned by aimnet-source.lock.json.
+#
+# Regenerate on Linux x86_64 with exactly uv 0.11.21:
+# uv pip compile workers/monomer_dft_worker/requirements.in \
+#   --python /usr/bin/python3.12 \
+#   --python-version 3.12 \
+#   --python-platform x86_64-unknown-linux-gnu \
+#   --torch-backend cu128 \
+#   --generate-hashes \
+#   --output-file workers/monomer_dft_worker/requirements.lock \
+#   --custom-compile-command 'uv 0.11.21; Python 3.12; Linux x86_64; torch backend cu128'
+
+# AIMNet runtime dependencies
+torch==2.9.1
+numpy==2.4.4
+warp-lang==1.11.0
+nvalchemi-toolkit-ops==0.3.1
+requests==2.33.1
+click==8.3.1
+pyyaml==6.0.3
+jinja2==3.1.6
+h5py==3.15.1
+
+# Molecular construction and ASE calculator integration
+ase==3.27.0
+rdkit==2026.3.3
+
+# Long-running Unix-domain-socket worker service
+fastapi==0.115.0
+uvicorn[standard]==0.32.0

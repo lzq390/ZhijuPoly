@@ -41,15 +41,48 @@ and a non-empty reason for every claim. Missing, malformed, oversized, unsafe,
 or policy-foreign inventory blocks start. MPS stop deliberately does not read
 the inventory, so a damaged admission file cannot prevent a safe shutdown.
 
-Static inventory is not treated as a substitute for live host discovery. On
-each short-cached admission snapshot the Broker queries running Docker
-containers (`DeviceRequests` and `NVIDIA_VISIBLE_DEVICES`), active user/system
-systemd service environments, and NVIDIA compute PIDs. A Docker or systemd
-query failure blocks allocation. A GPU visibility claim with no CUDA PID still
-blocks the card unless its registration ID, component, environment, Compose
-project/service, and exact UUID set match the managed allowlist. This prevents
-an idle, unlabelled Dev Backend DeviceRequest from being mistaken for free
-capacity. GPU3's current static block remains an additional independent gate.
+Static inventory is not treated as a substitute for live host discovery.
+Every admission takes an uncached initial NVIDIA-compute snapshot, queries
+running Docker containers (`DeviceRequests` and `NVIDIA_VISIBLE_DEVICES`) and
+active or transitioning user/system systemd service environments, then
+requires unchanged Docker, systemd, MPS and trailing NVIDIA authority before
+using the result. Docker, systemd, compute and MPS authority are therefore
+evaluated in the same live admission CAS; none is reused from an earlier
+request. A Docker or systemd query failure blocks allocation. A GPU visibility
+claim with no CUDA PID still blocks the card unless its registration ID,
+component, environment, Compose project/service, and exact UUID set match the
+managed allowlist. This prevents an idle, unlabelled Dev Backend DeviceRequest
+from being mistaken for free capacity. GPU3's current static block remains an
+additional independent gate.
+
+Systemd identities are scope-qualified (`user:<unit>` or `system:<unit>`) and
+bind the complete recursive `ControlGroup`, so a user unit cannot inherit the
+registration of a same-named system unit and `MainPID=0` does not hide child
+processes. UID 1001 processes are checked against their live environment;
+`Environment=`, stable `EnvironmentFile=`, `PassEnvironment=` manager values
+and final `UnsetEnvironment=` are also interpreted. The root system manager is
+the trusted host configuration boundary: an unrelated, unmarked cross-UID
+service is not rejected merely because UID 1001 cannot ptrace its environment.
+Independent global NVIDIA discovery still rejects the exact GPU as soon as any
+such process creates a compute context. This software inventory does not claim
+to replace a future root-managed `DevicePolicy=strict`/cgroup device fence.
+
+An NVIDIA PID is never exempted merely because its process name resembles an
+MPS server. The Broker queries `get_server_list` through that GPU's exact
+private control pipe and binds the singleton server to the stable control PID
+file, root-owned NVIDIA executables, four UID/GID identities, process start
+ticks, a shared non-root cgroup, the exact GPU UUID and pipe environment, and a
+second unchanged control-plane snapshot. Every reported client must name the
+same server and device. Missing or conflicting evidence leaves the PID
+unmanaged and blocks admission.
+
+UID/GID `1001:1001` is one trusted runtime principal, not a security boundary
+between the Broker, MPS daemon and pinned Workers. Private modes prevent access
+by other identities, while same-UID code can inherently address the Broker
+state and MPS paths; path/inode CAS detects accidental or persistent
+replacement but cannot prove absence of a malicious same-UID ABA swap. Any
+future untrusted Worker must first move to a separate identity and receive only
+the minimum socket/pipe access instead of the shared writable state root.
 
 ## Lease safety
 
@@ -103,16 +136,26 @@ automatic clear path. If the Broker cannot prove that an orphaned MPS client
 is gone, it retains the reservation.
 
 Cancellation, timeout, lease loss, and residual-child cleanup use NVIDIA's
-safe early-termination sequence plus cgroup-v2 containment. The Broker first
-freezes the dedicated lease cgroup, queries the selected card's MPS
-`ps` view, uses the host-namespace client PID reported there, and issues
-`terminate_client <server-pid> <host-client-pid>` for every client descended
-from the fenced lease owner. Only a `0`/`CUDA_SUCCESS` response permits
-`cgroup.kill`; the Broker then proves `cgroup.procs` empty before returning
-termination evidence. Evidence is regenerated for every cleanup attempt and
-is never reusable. Any freeze, query, termination, kill, or emptiness failure
-marks the lease suspect, keeps its capacity reserved, and persistently
-quarantines the GPU as runtime-corrupt.
+safe [client early-termination
+sequence](https://docs.nvidia.com/deploy/mps/latest/when-to-use-mps.html#client-early-termination)
+plus cgroup-v2 containment. The Broker first revalidates the dedicated
+lease-named scope while holding its allocation lock, queries the selected
+card's MPS `ps` view, uses the host-namespace client PID reported there, and
+issues `terminate_client <server-pid> <host-client-pid>` for every client
+owned by that scope. The client remains schedulable while MPS completes this
+request; freezing it first can block the control protocol. Only a
+`0`/`CUDA_SUCCESS` response permits the Broker to freeze the exact scope. It
+then queries MPS again while the workload is frozen, rejecting any surviving
+or newly connected client, before issuing `cgroup.kill` and proving
+`cgroup.procs` empty. Evidence is regenerated for every cleanup attempt and
+is never reusable. Any identity, query, termination, freeze, re-query, kill,
+or emptiness failure marks the lease suspect, keeps its capacity reserved,
+and persistently quarantines the GPU as runtime-corrupt.
+
+An MPS `ps` query has only two accepted idle responses: rc=0 with exactly
+empty stdout for a live server with no clients, or rc=0 with the single line
+`Server not found` before a server exists. A header-only response, whitespace,
+extra lines, nonzero exit, or any unparsable client row fails closed.
 
 Normal process exit is also fail-closed: release queries MPS again and refuses
 to delete a process-owning execution lease while any client remains in its
@@ -126,11 +169,13 @@ failure has the same retained lease/quarantine result, so release can never
 create unaccounted capacity. Similarly, an expired lease is retained only by
 its own exact MPS client, never by a peer component's client.
 
-The Broker refuses to start without a host-delegated cgroup-v2 root at
-`/sys/fs/cgroup/nexpoly-gpu-jobs`, owned by `1001:1001`, with writable
-`cgroup.procs` and `cgroup.subtree_control`. Provisioning this subtree is a
-root-authorized part of the later MPS maintenance window; the shipped unit
-does not create it and therefore fails closed if delegation is absent.
+The Broker refuses to start without the deploy user's live systemd user
+manager and exact cgroup-v2 identity. A governed Worker starts each executor
+as `nexpoly-gpu-job-<complete-lease-id>.scope` below
+`nexpoly-gpu-jobs.slice`; the Broker verifies the unit and scope identity and
+never writes `cgroup.procs` or moves a child across cgroup ownership
+boundaries. Missing user-bus, scope controls, or identity evidence fails
+closed.
 
 ## Application behavior
 
@@ -172,7 +217,8 @@ change must perform, and verify rollback for, the ordered transition:
    external reservation inventory;
 3. set `EXCLUSIVE_PROCESS` during the maintenance window (the shipped helper
    only verifies this mode; it never changes it);
-4. provision and delegate `/sys/fs/cgroup/nexpoly-gpu-jobs` to `1001:1001`;
+4. verify the deploy user's systemd user manager and transient
+   `nexpoly-gpu-jobs.slice` scope controls;
 5. start the card-specific MPS unit, then the Broker;
 6. start Backend and validate required preload and its active residency lease;
 7. enable MD governance, then separately enable the resident DFT executor;
@@ -182,13 +228,15 @@ Mixed Backend CUDA 11.8 and DFT CUDA 12.8 clients must pass a real test against
 the host Driver/CUDA MPS server. Failure blocks activation; it is not a reason
 to bypass the Broker or MPS.
 
-Docker governance is opt-in and must be rendered last. Backend uses
+Docker governance is opt-in and must be rendered last for Backend, using
 `docker-compose.gpu-governed.yml` while retaining its one policy-primary GPU.
-MD uses `docker-compose.monomer-md-worker.gpu-governed.prod.yml` (GPU1/2/3) or
-the Dev override (GPU1/3 only). These files add the exact managed labels, the
-private Broker/MPS state mount, and UID/GID `1001:1001`. They are absent from
-the normal production render, so this release's production runtime remains
-unchanged and Broker-disabled.
+Broker-governed MD is deliberately host-only: its executor is launched through
+an exact lease-named `systemd-run --user --scope`, then registered by PID,
+start ticks, UID, process group, cgroup and systemd unit. OCI Workers cannot
+securely create or control that host scope and must not bind the host user bus.
+The normal MD Compose file therefore hard-codes Broker-disabled, and the old
+governed MD Compose overrides are not shipped. Production remains unchanged
+and Broker-disabled until the separately authorized maintenance.
 
 The exact registered MD Docker DeviceRequest is a visibility declaration for
 its CPU-only idle supervisor, not an execution reservation. It therefore does

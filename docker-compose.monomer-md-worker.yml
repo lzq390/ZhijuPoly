@@ -24,8 +24,10 @@ services:
       MONOMER_MD_LEASE_SECONDS: "${MONOMER_MD_LEASE_SECONDS:-90}"
       MONOMER_MD_RECOVERY_RETRY_SECONDS: "${MONOMER_MD_RECOVERY_RETRY_SECONDS:-15}"
       MONOMER_MD_CUDA_VISIBLE_DEVICES: "${NEXPOLY_GPU_DEVICE:-2}"
-      # Host Broker/MPS remains opt-in until the authorized maintenance PR.
-      MONOMER_MD_GPU_BROKER_ENABLED: "${MONOMER_MD_GPU_BROKER_ENABLED:-false}"
+      # Broker-governed execution is host-systemd-only: a container cannot
+      # safely create or control host user scopes. This Compose path is
+      # permanently fail-closed and never binds the host user bus/cgroup.
+      MONOMER_MD_GPU_BROKER_ENABLED: "false"
       MONOMER_MD_GPU_BROKER_ENVIRONMENT: "${MONOMER_MD_GPU_BROKER_ENVIRONMENT:-prod}"
       MONOMER_MD_GPU_BROKER_SOCKET_PATH: "${MONOMER_MD_GPU_BROKER_SOCKET_PATH:-/run/user/1001/nexpoly-gpu/broker.sock}"
       MONOMER_MD_GPU_MPS_PIPE_ROOT: "${MONOMER_MD_GPU_MPS_PIPE_ROOT:-./.runtime/gpu-resource}"
