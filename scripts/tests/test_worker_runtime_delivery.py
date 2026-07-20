@@ -129,6 +129,49 @@ class ComposeWorkerRuntimeTests(unittest.TestCase):
             "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock",
         )
 
+    def test_development_frontend_external_bind_is_explicit_and_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            environment = os.environ.copy()
+            environment["NEXPOLY_ASSET_ROOT"] = str(Path(raw) / "assets")
+            default = self._render(
+                BASE_COMPOSE,
+                DEV_COMPOSE,
+                environment=environment,
+            )
+            environment.update(
+                {
+                    "NEXPOLY_DEV_FRONTEND_BIND_ADDRESS": "0.0.0.0",
+                    "NEXPOLY_DEV_ALLOWED_ORIGINS": "https://dev.example",
+                }
+            )
+            exposed = self._render(
+                BASE_COMPOSE,
+                DEV_COMPOSE,
+                environment=environment,
+            )
+
+        self.assertEqual(
+            default["services"]["frontend-dev"]["ports"][0]["host_ip"],
+            "127.0.0.1",
+        )
+        self.assertEqual(
+            default["services"]["backend"]["environment"]["ALLOWED_ORIGINS"],
+            "http://localhost:15173,http://127.0.0.1:15173",
+        )
+        self.assertEqual(
+            exposed["services"]["frontend-dev"]["ports"][0]["host_ip"],
+            "0.0.0.0",
+        )
+        self.assertEqual(
+            exposed["services"]["backend"]["environment"]["ALLOWED_ORIGINS"],
+            "https://dev.example",
+        )
+        for service in ("backend", "lab-postgres"):
+            self.assertEqual(
+                exposed["services"][service]["ports"][0]["host_ip"],
+                "127.0.0.1",
+            )
+
 
 class WorkerHostRuntimeTests(unittest.TestCase):
     def test_byteff2_runtime_asset_contract_is_identical_across_delivery_layers(
