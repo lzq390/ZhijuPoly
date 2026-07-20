@@ -96,6 +96,28 @@ class DevServerGpuScriptTests(unittest.TestCase):
         for index, block in enumerate(blocks):
             compile(block, f"dev_server_gpu.sh embedded Python block {index}", "exec")
 
+    def test_dev_worker_pythonpath_includes_repository_root(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'export PYTHONPATH="$ROOT_DIR:$BYTEFF2_ROOT:'
+            '$BYTEFF2_ROOT/submodules/bytemol${PYTHONPATH:+:$PYTHONPATH}"',
+            source,
+        )
+
+    def test_dev_worker_path_includes_frozen_base_environment(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'export PATH="$(dirname "$WORKER_PYTHON"):'
+            '$(dirname "$WORKER_BASE_PYTHON"):$PATH"',
+            source,
+        )
+
+    def test_asset_validation_delegates_schema_v2_to_authoritative_contract(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("from scripts.asset_release_contract import (", source)
+        self.assertIn("validate_schema_v2_release(", source)
+        self.assertIn('expected_digest=f"sha256:{release_root.name}"', source)
+
     def test_backend_build_uses_the_default_compose_builder(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn('DEV_PYPI_INDEX_URL="${NEXPOLY_DEV_PYPI_INDEX_URL:-https://pypi.org/simple}"', source)

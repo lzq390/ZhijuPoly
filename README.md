@@ -46,7 +46,7 @@ React 19 / Vite / Ketcher / 3Dmol
 | dev | `nexpoly_dev` | `127.0.0.1:15173` | `127.0.0.1:18000` | `127.0.0.1:15532` | `NEXPOLY_DEV_FRONTEND_PORT`、`NEXPOLY_DEV_BACKEND_PORT`、`NEXPOLY_DEV_POSTGRES_PORT` |
 | prod | `nexpoly` | `:9000` | Compose 内部 `:8000` | `127.0.0.1:55432` → 容器 `:5432` | `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` |
 
-dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开发配置。dev 端口可由表中的 `NEXPOLY_DEV_*_PORT` 变量覆盖；prod 前端和 PostgreSQL 宿主机端口可分别由 `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` 覆盖。未经明确授权，不得从 dev 流程启动、停止、迁移或探测 prod 服务。`9000` 和 `55432` 都只是 prod Compose 的默认值，不是识别 prod 的固定标志；端口被覆盖后仍须以 Compose 项目和解析配置判断环境。
+dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开发配置。dev 端口可由表中的 `NEXPOLY_DEV_*_PORT` 变量覆盖；只有在明确需要从其他机器访问时，才将 `NEXPOLY_DEV_FRONTEND_BIND_ADDRESS` 设为 `0.0.0.0`，并把实际外部 Origin 加入 `NEXPOLY_DEV_ALLOWED_ORIGINS`。该设置会同时公开前端及其 `/api` 代理，Backend 和 PostgreSQL 端口仍只绑定 loopback。prod 前端和 PostgreSQL 宿主机端口可分别由 `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` 覆盖。未经明确授权，不得从 dev 流程启动、停止、迁移或探测 prod 服务。`9000` 和 `55432` 都只是 prod Compose 的默认值，不是识别 prod 的固定标志；端口被覆盖后仍须以 Compose 项目和解析配置判断环境。
 
 `scripts/dev_server_gpu.sh` 只能用于已配置的 dev 工作区，不得在 prod 工作区执行；prod 操作统一遵循生产部署文档。
 
