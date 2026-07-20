@@ -672,13 +672,24 @@ start_stack() {
     fail "worker runtime is not ready"
   fi
 
-  local -a image_arguments=(--build)
+  local -a image_arguments=(--no-build)
   if [[ "${NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE:-}" == "final-main" ]]; then
     # Pull and execute the already-published immutable F images.  A final
     # acceptance must never rebuild them from a mutable checkout.
     compose pull migrate backend frontend || fail \
       "final-main immutable image pull failed"
-    image_arguments=(--no-build)
+  elif ! compose build backend frontend; then
+    # ``migrate`` and ``backend`` intentionally share one immutable image
+    # tag.  Building during ``compose up`` lets BuildKit race both service
+    # targets into that tag.  Materialize it once, then make every service
+    # consume only the completed images.
+    if [[ "$started_worker" == "true" ]]; then
+      "$WORKER_CTL" stop || true
+    elif [[ -n "$resumed_worker_instance_id" ]]; then
+      rollback_resumed_worker "$resumed_worker_instance_id" || \
+        log "failed to restore drain state after image build failure" >&2
+    fi
+    fail "DFT development images failed to build"
   fi
   if ! compose up --detach "${image_arguments[@]}" --remove-orphans; then
     compose down --remove-orphans || true

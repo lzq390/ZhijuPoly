@@ -896,6 +896,72 @@ start_stack
             self.assertTrue(marker.exists(), completed.stdout + completed.stderr)
             self.assertIn("worker runtime is not ready", completed.stderr)
 
+    def test_candidate_build_finishes_before_no_build_compose_up(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            calls = Path(temporary) / "compose-calls"
+            completed = _run_control_functions(
+                """
+assert_full_stack_gate() { :; }
+ensure_download_spool() { :; }
+worker_running() { return 0; }
+worker_request() {
+  printf '%s\n' '{"draining":false}'
+}
+assert_worker_ready() { :; }
+compose() {
+  printf '%s\n' "$*" >> "$CALLS"
+}
+NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE=candidate-tree
+start_stack
+""",
+                env={"CALLS": str(calls)},
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                completed.stdout + completed.stderr,
+            )
+            self.assertEqual(
+                calls.read_text(encoding="utf-8").splitlines(),
+                [
+                    "build backend frontend",
+                    "up --detach --no-build --remove-orphans",
+                ],
+            )
+
+    def test_candidate_build_failure_stops_new_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            calls = Path(temporary) / "worker-calls"
+            worker_control = Path(temporary) / "worker-control"
+            worker_control.write_text(
+                "#!/bin/sh\n"
+                'printf "%s\\n" "$1" >> "$CALLS"\n',
+                encoding="utf-8",
+            )
+            worker_control.chmod(0o700)
+            completed = _run_control_functions(
+                f"""
+assert_full_stack_gate() {{ :; }}
+ensure_download_spool() {{ :; }}
+worker_running() {{ return 1; }}
+assert_worker_ready() {{ :; }}
+compose() {{ return 1; }}
+WORKER_CTL={shlex.quote(str(worker_control))}
+NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE=candidate-tree
+start_stack
+""",
+                env={"CALLS": str(calls)},
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertEqual(
+                calls.read_text(encoding="utf-8").splitlines(),
+                ["start", "stop"],
+            )
+            self.assertIn(
+                "development images failed to build",
+                completed.stderr,
+            )
+
     def test_final_stop_redrains_replacement_and_uses_instance_fence(self) -> None:
         old_instance_id = "a" * 32
         new_instance_id = "b" * 32
