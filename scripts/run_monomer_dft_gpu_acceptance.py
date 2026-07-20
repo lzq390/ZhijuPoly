@@ -4171,8 +4171,7 @@ def _read_worker_process(runtime_root: Path) -> dict[str, Any]:
     identity = _process_identity(pid)
     _require(
         identity["process_start_ticks"] == expected_ticks
-        and Path(identity["cwd"]).resolve()
-        == (REPO_ROOT / "workers/monomer_dft_worker").resolve(),
+        and Path(identity["cwd"]).resolve() == REPO_ROOT.resolve(),
         "fresh Worker process escaped exact F",
     )
     return identity
