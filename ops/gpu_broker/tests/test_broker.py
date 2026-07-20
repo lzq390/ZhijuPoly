@@ -3569,7 +3569,7 @@ def test_systemd_gpu_declaration_requires_exact_managed_unit_registration() -> N
     assert unbound_guard(2, gpu2, (), _owner(), "md", "prod") is True
 
 
-def test_parented_dft_execution_accepts_only_its_live_residency_declarer(
+def test_parented_dft_execution_accepts_its_live_residency_process_tree(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3596,6 +3596,8 @@ def test_parented_dft_execution_accepts_only_its_live_residency_declarer(
     )
     owner = _owner()
     workload_pid = owner.pid
+    compiler_pid = 999_999_998
+    compiler_start_ticks = owner.process_start_ticks + 1
     control_group = scope_control_group(residency.lease_id, uid=1001)
     residency.status = "active"
     residency.workload_pid = workload_pid
@@ -3608,7 +3610,7 @@ def test_parented_dft_execution_accepts_only_its_live_residency_declarer(
             unit="user@1001.service",
             main_pid=workload_pid,
             control_group=user_manager_control_group(1001),
-            process_pids=frozenset({workload_pid}),
+            process_pids=frozenset({workload_pid, compiler_pid}),
             gpu_uuids=frozenset({residency.gpu_uuid}),
             active_gpu_uuids=frozenset({residency.gpu_uuid}),
             live_gpu_declarers=(
@@ -3618,13 +3620,37 @@ def test_parented_dft_execution_accepts_only_its_live_residency_declarer(
                     process_cgroup=control_group,
                     gpu_uuids=frozenset({residency.gpu_uuid}),
                 ),
+                SystemdGpuDeclarer(
+                    pid=compiler_pid,
+                    process_start_ticks=compiler_start_ticks,
+                    process_cgroup=control_group,
+                    gpu_uuids=frozenset({residency.gpu_uuid}),
+                ),
             ),
         )
     )
     processes[residency.gpu_uuid] = frozenset({workload_pid})
     monkeypatch.setattr(
         "ops.gpu_broker.server._read_unified_process_cgroup",
-        lambda pid: control_group if pid == workload_pid else "/foreign",
+        lambda pid: (
+            control_group
+            if pid in {workload_pid, compiler_pid}
+            else "/foreign"
+        ),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        lambda pid: {
+            workload_pid: owner.process_start_ticks,
+            compiler_pid: compiler_start_ticks,
+        }[pid],
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        lambda pid, ancestor: (
+            pid == ancestor
+            or (pid == compiler_pid and ancestor == workload_pid)
+        ),
     )
     execution = _acquire(
         broker,
@@ -3649,7 +3675,7 @@ def test_parented_dft_execution_accepts_only_its_live_residency_declarer(
         "start_ticks",
         "cgroup",
         "gpu_uuid",
-        "extra_declarer",
+        "unrelated_declarer",
         "static_declaration",
         "parent_lease",
         "lease_cgroup",
@@ -3694,16 +3720,24 @@ def test_dft_residency_declarer_mismatch_remains_external(
             gpu_uuids=frozenset({EXPECTED_GPU_UUIDS[3]}),
         )
     declarers = (declarer,)
-    if mismatch == "extra_declarer":
+    process_pids = {workload_pid}
+    unrelated_pid = 999_999_999
+    unrelated_start_ticks = owner.process_start_ticks + 1
+    if mismatch == "unrelated_declarer":
         declarers += (
-            replace(declarer, pid=999_999_999),
+            replace(
+                declarer,
+                pid=unrelated_pid,
+                process_start_ticks=unrelated_start_ticks,
+            ),
         )
+        process_pids.add(unrelated_pid)
     claim = SystemdGpuClaim(
         scope="system",
         unit="user@1001.service",
         main_pid=workload_pid,
         control_group=user_manager_control_group(1001),
-        process_pids=frozenset({workload_pid}),
+        process_pids=frozenset(process_pids),
         gpu_uuids=frozenset({lease.gpu_uuid}),
         static_gpu_uuids=(
             frozenset({lease.gpu_uuid})
@@ -3719,7 +3753,22 @@ def test_dft_residency_declarer_mismatch_remains_external(
         lease.status = "suspect"
     monkeypatch.setattr(
         "ops.gpu_broker.server._read_unified_process_cgroup",
-        lambda pid: control_group if pid == workload_pid else "/foreign",
+        lambda pid: (
+            control_group
+            if pid in process_pids
+            else "/foreign"
+        ),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        lambda pid: {
+            workload_pid: owner.process_start_ticks,
+            unrelated_pid: unrelated_start_ticks,
+        }.get(pid, 0),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        lambda pid, ancestor: pid == ancestor,
     )
     guard = ExternalGpuGuard(
         ExternalReservationPolicy(frozenset(), {}, {}),

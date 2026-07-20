@@ -2546,8 +2546,10 @@ class ExternalGpuGuard:
 
         The system manager reports the UID 1001 user manager as the ancestor
         claim, so its unit-level process set is intentionally too broad for
-        authorization.  Only the per-process live-environment declarer may be
-        matched to the exact residency scope and parent lease.
+        authorization.  Only identity-stable live-environment declarers in the
+        exact residency workload process tree may be matched to the parent
+        lease.  This includes compiler subprocesses spawned by the resident
+        executor after model warm-up.
         """
 
         broker_uid = 1001
@@ -2592,36 +2594,53 @@ class ExternalGpuGuard:
             or lease.workload_process_group_id != workload_pid
         ):
             return False
-        try:
-            expected_control_group = scope_control_group(
-                lease.lease_id,
-                uid=broker_uid,
-            )
-            process_start_ticks = read_process_start_ticks(workload_pid)
-            process_control_group = _read_unified_process_cgroup(workload_pid)
-        except (BrokerError, OSError, TypeError, ValueError):
-            return False
+        expected_control_group = scope_control_group(
+            lease.lease_id,
+            uid=broker_uid,
+        )
         target_declarers = tuple(
             declarer
             for declarer in claim.live_gpu_declarers
             if uuid in declarer.gpu_uuids
         )
+        expected_workload_declarer = SystemdGpuDeclarer(
+            pid=workload_pid,
+            process_start_ticks=lease.workload_process_start_ticks,
+            process_cgroup=expected_control_group,
+            gpu_uuids=frozenset({uuid}),
+        )
+        try:
+            declarers_are_exact_descendants = (
+                bool(target_declarers)
+                and len({declarer.pid for declarer in target_declarers})
+                == len(target_declarers)
+                and expected_workload_declarer in target_declarers
+                and all(
+                    declarer.pid in claim.process_pids
+                    and declarer.gpu_uuids == frozenset({uuid})
+                    and declarer.process_cgroup == expected_control_group
+                    and _pid_is_or_descends_from(
+                        declarer.pid,
+                        workload_pid,
+                    )
+                    and read_process_start_ticks(declarer.pid)
+                    == declarer.process_start_ticks
+                    and _read_unified_process_cgroup(declarer.pid)
+                    == expected_control_group
+                    for declarer in target_declarers
+                )
+            )
+        except (BrokerError, OSError, TypeError, ValueError):
+            return False
         return (
             claim.scope == "system"
             and claim.unit == f"user@{broker_uid}.service"
             and claim.control_group == user_manager_control_group(broker_uid)
+            and claim.gpu_uuids == frozenset({uuid})
             and not claim.static_gpu_uuids
-            and len(target_declarers) == 1
-            and target_declarers[0]
-            == SystemdGpuDeclarer(
-                pid=workload_pid,
-                process_start_ticks=lease.workload_process_start_ticks,
-                process_cgroup=expected_control_group,
-                gpu_uuids=frozenset({uuid}),
-            )
+            and claim.active_gpu_uuids == frozenset({uuid})
+            and declarers_are_exact_descendants
             and lease.workload_cgroup == f"0::{expected_control_group}"
-            and process_start_ticks == lease.workload_process_start_ticks
-            and process_control_group == expected_control_group
         )
 
     def _query_compute_processes(
