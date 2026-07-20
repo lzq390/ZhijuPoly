@@ -1,4 +1,5 @@
 x-dft-backend-environment: &dft-backend-environment
+  NVIDIA_VISIBLE_DEVICES: "none"
   STRUCTURED_DATA_BACKEND: postgres
   APP_POSTGRES_DSN: postgresql://nexpoly_dft_dev:${NEXPOLY_DFT_POSTGRES_PASSWORD:-nexpoly_dft_dev}@postgres:5432/nexpoly_dft_dev
   PI_REVERSE_BACKEND: postgres

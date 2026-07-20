@@ -625,6 +625,19 @@ class ComposeIsolationTests(unittest.TestCase):
             compose_source,
         )
 
+    def test_backend_and_migrate_explicitly_hide_all_gpus(self) -> None:
+        config = _compose_config()
+
+        for service_name in ("migrate", "backend"):
+            with self.subTest(service=service_name):
+                service = config["services"][service_name]
+                self.assertNotIn("gpus", service)
+                self.assertNotIn("deploy", service)
+                self.assertEqual(
+                    service["environment"]["NVIDIA_VISIBLE_DEVICES"],
+                    "none",
+                )
+
 
 class ControlScriptSafetyTests(unittest.TestCase):
     def test_host_runtime_and_real_environment_are_outside_the_build_context(self) -> None:
