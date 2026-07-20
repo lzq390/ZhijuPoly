@@ -51,7 +51,7 @@ PRODUCTION_BASELINE_RAW_GIT_AUTHORITY = {
     "content_bytes": 60_126,
     "inventory_sha256": (
         "sha256:"
-        "b5a551a9560f1ced694c0e3d282c7ea1ba955e9138725d2f7761a517c52967fb"
+        "c5de05bdd91d6f7c3230632aac6aa6b161a5de1b882ff302605ea181359ac75e"
     ),
 }
 PRODUCTION_BASELINE_SNAPSHOT = {
@@ -85,7 +85,7 @@ PRODUCTION_BASELINE_SNAPSHOT = {
     "git_authority_content_bytes": 60_126,
     "git_authority_sha256": (
         "sha256:"
-        "b5a551a9560f1ced694c0e3d282c7ea1ba955e9138725d2f7761a517c52967fb"
+        "c5de05bdd91d6f7c3230632aac6aa6b161a5de1b882ff302605ea181359ac75e"
     ),
     "git_config_sha256": (
         "sha256:"
@@ -3235,6 +3235,33 @@ def _metadata_fields(metadata: os.stat_result) -> tuple[bytes, ...]:
     )
 
 
+def _git_authority_directory_metadata_fields(
+    metadata: os.stat_result,
+) -> tuple[bytes, ...]:
+    """Return stable identity fields for an enumerated Git directory.
+
+    Git may create and remove an optional lock file during an otherwise
+    read-only command.  That changes the directory size and timestamps without
+    changing any selected authority file.  The inventory still enumerates the
+    directory twice and uses the complete metadata for its in-flight CAS, while
+    the sealed baseline records only stable directory identity and ownership.
+    Regular authority files continue to bind their complete metadata and
+    content digest.
+    """
+
+    return tuple(
+        str(value).encode("ascii")
+        for value in (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_nlink,
+            metadata.st_uid,
+            metadata.st_gid,
+        )
+    ) + (b"-", b"-", b"-")
+
+
 def _same_metadata(
     left: os.stat_result,
     right: os.stat_result,
@@ -3643,7 +3670,7 @@ def _production_git_authority_inventory() -> dict[str, Any]:
                     (
                         relative,
                         b"directory",
-                        *_metadata_fields(metadata),
+                        *_git_authority_directory_metadata_fields(metadata),
                         b"-",
                     )
                 )
@@ -3729,7 +3756,7 @@ def _production_git_authority_inventory() -> dict[str, Any]:
                 (
                     name,
                     b"directory",
-                    *_metadata_fields(metadata),
+                    *_git_authority_directory_metadata_fields(metadata),
                     b"-",
                 )
             )
@@ -3753,7 +3780,7 @@ def _production_git_authority_inventory() -> dict[str, Any]:
         (
             b".",
             b"git-directory",
-            *_metadata_fields(root_metadata),
+            *_git_authority_directory_metadata_fields(root_metadata),
             b"-",
         )
     )

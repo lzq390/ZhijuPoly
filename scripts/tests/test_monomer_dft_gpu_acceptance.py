@@ -987,6 +987,13 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
                 repository,
             ):
                 raw_authority = HARNESS._production_git_authority_inventory()
+                transient_lock = repository / ".git" / "index.lock"
+                transient_lock.write_bytes(b"non-authority transient")
+                transient_lock.unlink()
+                self.assertEqual(
+                    raw_authority,
+                    HARNESS._production_git_authority_inventory(),
+                )
             wildcard_snapshot = {
                 key: mock.ANY
                 for key in HARNESS.PRODUCTION_BASELINE_SNAPSHOT

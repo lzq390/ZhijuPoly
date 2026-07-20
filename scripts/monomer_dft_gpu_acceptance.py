@@ -65,7 +65,7 @@ PRODUCTION_BASELINE_SNAPSHOT = {
     "git_authority_content_bytes": 60_126,
     "git_authority_sha256": (
         "sha256:"
-        "b5a551a9560f1ced694c0e3d282c7ea1ba955e9138725d2f7761a517c52967fb"
+        "c5de05bdd91d6f7c3230632aac6aa6b161a5de1b882ff302605ea181359ac75e"
     ),
     "git_config_sha256": (
         "sha256:"
