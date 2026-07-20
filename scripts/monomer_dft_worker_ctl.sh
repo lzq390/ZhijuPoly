@@ -13,6 +13,8 @@ FORMAL_ENV_PARSER="$SCRIPT_DIR/monomer_dft_acceptance_env.py"
 FORMAL_ACCEPTANCE="${NEXPOLY_DFT_FORMAL_ACCEPTANCE:-0}"
 FORMAL_PROJECT_NAME="${NEXPOLY_DFT_PROJECT_NAME:-}"
 FORMAL_AUTHORITY_SHA="${NEXPOLY_DFT_AUTHORITY_SHA:-}"
+FORMAL_JOB_ROOT="${NEXPOLY_DFT_ACCEPTANCE_JOB_ROOT:-}"
+unset NEXPOLY_DFT_ACCEPTANCE_JOB_ROOT
 GPU_AUTHORITY_VALIDATOR="$REPO_ROOT/gpu_resource/authority.py"
 PID_FILE="$RUNTIME_ROOT/monomer-dft-worker.pid"
 LOG_FILE="$RUNTIME_ROOT/monomer-dft-worker.log"
@@ -375,7 +377,16 @@ configure_paths() {
   configure_formal_gpu_authority
   MONOMER_DFT_PYTHON="$(absolute_runtime_path "${MONOMER_DFT_PYTHON:-.runtime/venvs/monomer-dft-worker/bin/python}")"
   MONOMER_DFT_WORKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_WORKER_UDS:-.runtime/monomer-dft-worker-socket/worker.sock}")"
-  MONOMER_DFT_JOB_ROOT="$(absolute_runtime_path "${MONOMER_DFT_JOB_ROOT:-.runtime/monomer-dft-worker-runs}")"
+  if [[ "$FORMAL_ACCEPTANCE" == "1" ]]; then
+    [[ -n "$FORMAL_JOB_ROOT" && "$FORMAL_JOB_ROOT" == /* ]] || fail \
+      "formal acceptance requires an absolute run-scoped Worker job root"
+    MONOMER_DFT_JOB_ROOT="$FORMAL_JOB_ROOT"
+  else
+    [[ -z "$FORMAL_JOB_ROOT" ]] || fail \
+      "run-scoped Worker job root is restricted to formal acceptance"
+    MONOMER_DFT_JOB_ROOT="${MONOMER_DFT_JOB_ROOT:-.runtime/monomer-dft-worker-runs}"
+  fi
+  MONOMER_DFT_JOB_ROOT="$(absolute_runtime_path "$MONOMER_DFT_JOB_ROOT")"
   if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
     MONOMER_DFT_GPU_BROKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_GPU_BROKER_UDS:-.runtime/gpu-resource/broker.sock}")"
     MONOMER_DFT_GPU_MPS_PIPE_ROOT="$(absolute_runtime_path "${MONOMER_DFT_GPU_MPS_PIPE_ROOT:-.runtime/gpu-resource}")"
@@ -397,8 +408,28 @@ configure_paths() {
   assert_runtime_path WARP_CACHE_PATH "$WARP_CACHE_PATH"
   assert_runtime_path UV_CACHE_DIR "$UV_CACHE_DIR"
   assert_runtime_path AIMNET_SOURCE_DIR "$AIMNET_SOURCE_DIR"
-  [[ "$MONOMER_DFT_JOB_ROOT" == "$RUNTIME_ROOT/monomer-dft-worker-runs" ]] || fail \
-    "job root must use the fixed development runtime path"
+  if [[ "$FORMAL_ACCEPTANCE" == "1" ]]; then
+    local job_run_directory=""
+    job_run_directory="$(dirname -- "$MONOMER_DFT_JOB_ROOT")"
+    [[ "$(realpath -e -- "$MONOMER_DFT_JOB_ROOT")" == "$MONOMER_DFT_JOB_ROOT" &&
+      "$(basename -- "$MONOMER_DFT_JOB_ROOT")" == "worker-jobs" &&
+      "$(basename -- "$job_run_directory")" =~ ^gpu-acceptance-[0-9]{8}T[0-9]{6}Z-[1-9][0-9]*$ &&
+      "$(dirname -- "$job_run_directory")" == "$RUNTIME_ROOT/runs" ]] || fail \
+      "formal acceptance Worker job root is outside its exact run directory"
+    local private_directory=""
+    for private_directory in \
+      "$RUNTIME_ROOT" \
+      "$RUNTIME_ROOT/runs" \
+      "$job_run_directory" \
+      "$MONOMER_DFT_JOB_ROOT"; do
+      [[ -d "$private_directory" && ! -L "$private_directory" &&
+        "$(stat -c '%u:%a' "$private_directory")" == "$(id -u):700" ]] || fail \
+        "formal acceptance Worker job path is not owner-private: $private_directory"
+    done
+  else
+    [[ "$MONOMER_DFT_JOB_ROOT" == "$RUNTIME_ROOT/monomer-dft-worker-runs" ]] || fail \
+      "job root must use the fixed development runtime path"
+  fi
   if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
     [[ "$MONOMER_DFT_GPU_BROKER_UDS" == "$GPU_RUNTIME_ROOT/broker.sock" ]] || fail \
       "GPU Broker socket must use the current development worktree"

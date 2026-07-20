@@ -28,6 +28,9 @@ EXPECTED_GPU_UUIDS = {
 PRODUCTION_REPO_ROOT = pathlib.Path("/data/lzq/gith/nexpoly")
 EXPECTED_CUDA_RUNTIME = "12.8"
 EXPECTED_UV_VERSION = "0.11.21"
+FORMAL_ACCEPTANCE_RUN_RE = re.compile(
+    r"^gpu-acceptance-[0-9]{8}T[0-9]{6}Z-[1-9][0-9]*$"
+)
 EXPECTED_DIRECT_VERSIONS = {
     "torch": "2.9.1+cu128",
     "numpy": "2.4.4",
@@ -106,6 +109,14 @@ def effective_environment(
             "NEXPOLY_DFT_GPU3_MPS_PIPE_IDENTITY",
         )
     )
+    formal_acceptance = (
+        os.environ.get("NEXPOLY_DFT_FORMAL_ACCEPTANCE") == "1"
+    )
+    if formal_acceptance:
+        require(
+            authority_enabled,
+            "formal acceptance requires GPU descriptor authority",
+        )
     if not authority_enabled:
         require(
             not authority_names_present,
@@ -146,6 +157,14 @@ def effective_environment(
             ),
         }
     )
+    if formal_acceptance:
+        inherited_job_root = os.environ.get("MONOMER_DFT_JOB_ROOT", "")
+        effective["MONOMER_DFT_JOB_ROOT"] = str(
+            validate_formal_acceptance_job_root(
+                repo_root,
+                inherited_job_root,
+            )
+        )
     return effective, authority
 
 
@@ -255,6 +274,59 @@ def require_not_production_path(path: pathlib.Path, label: str) -> None:
         and not path.is_relative_to(PRODUCTION_REPO_ROOT),
         f"{label} must not reference the production repository",
     )
+
+
+def validate_formal_acceptance_job_root(
+    repo_root: pathlib.Path,
+    value: str,
+) -> pathlib.Path:
+    """Validate the unique journal root inherited from the formal harness."""
+
+    repo_root = require_development_repo_root(repo_root)
+    require(
+        os.environ.get("NEXPOLY_DFT_FORMAL_ACCEPTANCE") == "1"
+        and re.fullmatch(
+            r"nexpoly_dft_fresh_[a-z0-9][a-z0-9_-]{0,40}",
+            os.environ.get("NEXPOLY_DFT_PROJECT_NAME", ""),
+        )
+        is not None
+        and re.fullmatch(
+            r"[0-9a-f]{40}",
+            os.environ.get("NEXPOLY_DFT_AUTHORITY_SHA", ""),
+        )
+        is not None
+        and os.environ.get("NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY") == "1",
+        "formal acceptance Worker job root lacks exact run authority",
+    )
+    require(
+        bool(value) and pathlib.Path(value).is_absolute(),
+        "formal acceptance Worker job root must be absolute",
+    )
+    root = lexical_path(repo_root, value)
+    runtime = repo_root / ".runtime"
+    runs = runtime / "runs"
+    run_directory = root.parent
+    require(
+        str(root) == value
+        and root.name == "worker-jobs"
+        and FORMAL_ACCEPTANCE_RUN_RE.fullmatch(run_directory.name) is not None
+        and run_directory.parent == runs,
+        "formal acceptance Worker job root is outside its exact run directory",
+    )
+    for path in (runtime, runs, run_directory, root):
+        require(
+            path.is_dir()
+            and not path.is_symlink()
+            and path.resolve(strict=True) == path,
+            f"formal acceptance Worker job path is unsafe: {path}",
+        )
+        metadata = path.stat()
+        require(
+            metadata.st_uid == os.geteuid()
+            and stat.S_IMODE(metadata.st_mode) == 0o700,
+            f"formal acceptance Worker job path is not owner-private: {path}",
+        )
+    return root
 
 
 def canonical_distribution_name(name: str) -> str:
@@ -413,10 +485,23 @@ def validate_environment(
     )
     runtime = runtime_path.resolve(strict=True)
     require(runtime == runtime_path, f"development runtime resolved unexpectedly: {runtime}")
+    formal_acceptance = (
+        os.environ.get("NEXPOLY_DFT_FORMAL_ACCEPTANCE") == "1"
+    )
+    expected_job_root = runtime / "monomer-dft-worker-runs"
+    if formal_acceptance:
+        require(
+            formal_gpu_authority is not None,
+            "formal acceptance requires descriptor-bound GPU authority",
+        )
+        expected_job_root = validate_formal_acceptance_job_root(
+            repo_root,
+            values["MONOMER_DFT_JOB_ROOT"],
+        )
     expected_paths = {
         "MONOMER_DFT_PYTHON": runtime / "venvs/monomer-dft-worker/bin/python",
         "MONOMER_DFT_WORKER_UDS": runtime / "monomer-dft-worker-socket/worker.sock",
-        "MONOMER_DFT_JOB_ROOT": runtime / "monomer-dft-worker-runs",
+        "MONOMER_DFT_JOB_ROOT": expected_job_root,
         "AIMNET_CACHE_DIR": runtime / "aimnet-cache",
         "WARP_CACHE_PATH": runtime / "warp-cache",
         "UV_CACHE_DIR": runtime / "uv-cache",

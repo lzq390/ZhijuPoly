@@ -799,6 +799,11 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
         controller = SimpleNamespace(
             project_name="nexpoly_dft_fresh_smoke_order",
             authority_sha="a" * 40,
+            job_root=(
+                ROOT
+                / ".runtime/runs/"
+                "gpu-acceptance-20260720T000000Z-1234/worker-jobs"
+            ),
             _formal_gpu_authority_environment=lambda: {
                 "NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY": "1",
                 "NEXPOLY_DFT_GPU_AUTHORITY_PID": "123",
@@ -817,6 +822,10 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
             self.assertEqual(
                 os.environ["NEXPOLY_DFT_AUTHORITY_SHA"],
                 controller.authority_sha,
+            )
+            self.assertEqual(
+                os.environ["MONOMER_DFT_JOB_ROOT"],
+                str(controller.job_root),
             )
             self.assertEqual(
                 os.environ["NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY"],
@@ -838,6 +847,70 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
             result = HARNESS._prepare_formal_smoke_runtime(controller)
         self.assertTrue(result["formal_gpu_authority"])
         smoke.assert_called_once_with(ROOT)
+
+    def test_journal_lookup_accepts_only_one_run_scoped_root(self) -> None:
+        job_id = "123e4567-e89b-42d3-a456-426614174000"
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary)
+            runtime = repository / ".runtime"
+            runs = runtime / "runs"
+            run = runs / "gpu-acceptance-20260720T000000Z-1234"
+            job_root = run / "worker-jobs"
+            journal = job_root / job_id / ("a" * 64) / "journal.json"
+            journal.parent.mkdir(parents=True, mode=0o700)
+            journal.write_text("{}\n", encoding="utf-8")
+            shared_root = runtime / "monomer-dft-worker-runs"
+            shared_root.mkdir(mode=0o700)
+            for directory in (runtime, runs, run, job_root):
+                directory.chmod(0o700)
+            with mock.patch.object(HARNESS, "REPO_ROOT", repository):
+                self.assertEqual(
+                    HARNESS._journal_path(job_root, job_id),
+                    journal,
+                )
+                with self.assertRaisesRegex(
+                    HARNESS.AcceptanceHarnessError,
+                    "not scoped to one formal acceptance run",
+                ):
+                    HARNESS._journal_path(shared_root, job_id)
+
+    def test_fresh_worker_job_roots_are_isolated_per_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            runtime.chmod(0o700)
+            runs = runtime / "runs"
+            runs.mkdir(mode=0o700)
+            shared = runtime / "monomer-dft-worker-runs"
+            shared.mkdir(mode=0o700)
+            retained = shared / "retained-failed-journal"
+            retained.write_text("evidence\n", encoding="utf-8")
+            controllers = []
+            for pid in (1234, 5678):
+                run = (
+                    runs
+                    / f"gpu-acceptance-20260720T000000Z-{pid}"
+                )
+                run.mkdir(mode=0o700)
+                controller = HARNESS.FreshAcceptanceControl(
+                    runtime_root=runtime,
+                    run_directory=run,
+                    authority_sha=AUTHORITY["sha"],
+                    authority_tree=AUTHORITY["tree"],
+                    gpu3_mode="externally_fenced",
+                    stack_timeout=10.0,
+                    run_kind="candidate-tree",
+                    authority_images=None,
+                )
+                controller._prepare_job_root()
+                controllers.append(controller)
+            self.assertNotEqual(
+                controllers[0].job_root,
+                controllers[1].job_root,
+            )
+            self.assertTrue(
+                all(controller.job_root.is_dir() for controller in controllers)
+            )
+            self.assertEqual(retained.read_text(encoding="utf-8"), "evidence\n")
 
     def test_gpu1_direct_execution_is_unconditionally_rejected(self) -> None:
         with (
@@ -1233,47 +1306,59 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
             ),
             expected,
         )
-        with (
-            mock.patch.object(
-                HARNESS,
-                "_local_docker_environment",
-                return_value={},
-            ),
-            mock.patch.object(
-                HARNESS,
-                "_run",
-                return_value=subprocess.CompletedProcess(
-                    ("stack", "start"),
-                    0,
-                    "",
-                    "",
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary)
+            runtime = repository / ".runtime"
+            runs = runtime / "runs"
+            run = runs / "gpu-acceptance-20260720T000000Z-1234"
+            job_root = run / "worker-jobs"
+            job_root.mkdir(parents=True, mode=0o700)
+            runtime.chmod(0o700)
+            runs.chmod(0o700)
+            run.chmod(0o700)
+            with (
+                mock.patch.object(HARNESS, "REPO_ROOT", repository),
+                mock.patch.object(
+                    HARNESS,
+                    "_local_docker_environment",
+                    return_value={},
                 ),
-            ) as command,
-        ):
-            HARNESS._stack_command(
-                "start",
-                10.0,
-                project_name=project,
-                authority_sha=AUTHORITY["sha"],
-                run_kind="candidate-tree",
-                authority_images=None,
-                gpu_authority_environment={
-                    "NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY": "1",
-                    "NEXPOLY_DFT_GPU_AUTHORITY_PID": "123",
-                    "NEXPOLY_DFT_GPU_AUTHORITY_START_TICKS": "456",
-                    "NEXPOLY_DFT_GPU_AUTHORITY_ROOT": "/proc/123/fd/10",
-                    "NEXPOLY_DFT_GPU_AUTHORITY_ROOT_IDENTITY": "1:10",
-                    "NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY": (
-                        "/proc/123/fd/11"
+                mock.patch.object(
+                    HARNESS,
+                    "_run",
+                    return_value=subprocess.CompletedProcess(
+                        ("stack", "start"),
+                        0,
+                        "",
+                        "",
                     ),
-                    "NEXPOLY_DFT_GPU_RESERVATIONS_IDENTITY": "1:11",
-                    "NEXPOLY_DFT_GPU_RESERVATIONS_SHA256": "a" * 64,
-                    "NEXPOLY_DFT_GPU1_MPS_PIPE_AUTHORITY": (
-                        "/proc/123/fd/12"
-                    ),
-                    "NEXPOLY_DFT_GPU1_MPS_PIPE_IDENTITY": "1:12",
-                },
-            )
+                ) as command,
+            ):
+                HARNESS._stack_command(
+                    "start",
+                    10.0,
+                    project_name=project,
+                    authority_sha=AUTHORITY["sha"],
+                    run_kind="candidate-tree",
+                    authority_images=None,
+                    acceptance_job_root=job_root,
+                    gpu_authority_environment={
+                        "NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY": "1",
+                        "NEXPOLY_DFT_GPU_AUTHORITY_PID": "123",
+                        "NEXPOLY_DFT_GPU_AUTHORITY_START_TICKS": "456",
+                        "NEXPOLY_DFT_GPU_AUTHORITY_ROOT": "/proc/123/fd/10",
+                        "NEXPOLY_DFT_GPU_AUTHORITY_ROOT_IDENTITY": "1:10",
+                        "NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY": (
+                            "/proc/123/fd/11"
+                        ),
+                        "NEXPOLY_DFT_GPU_RESERVATIONS_IDENTITY": "1:11",
+                        "NEXPOLY_DFT_GPU_RESERVATIONS_SHA256": "a" * 64,
+                        "NEXPOLY_DFT_GPU1_MPS_PIPE_AUTHORITY": (
+                            "/proc/123/fd/12"
+                        ),
+                        "NEXPOLY_DFT_GPU1_MPS_PIPE_IDENTITY": "1:12",
+                    },
+                )
         environment = command.call_args.kwargs["env"]
         self.assertEqual(
             environment["NEXPOLY_DFT_BACKEND_IMAGE_REF"],
@@ -1287,11 +1372,17 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
             "nexpoly-dft-dev-backend:latest",
             environment.values(),
         )
+        self.assertEqual(
+            environment["NEXPOLY_DFT_ACCEPTANCE_JOB_ROOT"],
+            str(job_root),
+        )
 
     def test_candidate_image_cleanup_removes_only_this_run_tags(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            run = root / "runs"
+            runs = root / "runs"
+            runs.mkdir(mode=0o700)
+            run = runs / "gpu-acceptance-20260720T000000Z-1234"
             run.mkdir(mode=0o700)
             controller = HARNESS.FreshAcceptanceControl(
                 runtime_root=root,
@@ -1370,7 +1461,9 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
     def test_candidate_start_rejects_a_preexisting_unique_tag(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            run = root / "runs"
+            runs = root / "runs"
+            runs.mkdir(mode=0o700)
+            run = runs / "gpu-acceptance-20260720T000000Z-1234"
             run.mkdir(mode=0o700)
             controller = HARNESS.FreshAcceptanceControl(
                 runtime_root=root,
@@ -1424,7 +1517,9 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
         ):
             root = Path(temporary)
             root.chmod(0o700)
-            run = root / "runs"
+            runs = root / "runs"
+            runs.mkdir(mode=0o700)
+            run = runs / "gpu-acceptance-20260720T000000Z-1234"
             run.mkdir(mode=0o700)
             external = Path(external_temporary)
             sentinel = external / "sentinel"

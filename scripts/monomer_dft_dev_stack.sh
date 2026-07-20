@@ -17,6 +17,7 @@ ACCEPTANCE_AUTHORITY_SHA="${NEXPOLY_DFT_AUTHORITY_SHA:-}"
 ACCEPTANCE_IMAGE_MODE="${NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE:-}"
 ACCEPTANCE_BACKEND_IMAGE_REF="${NEXPOLY_DFT_BACKEND_IMAGE_REF:-}"
 ACCEPTANCE_WEB_IMAGE_REF="${NEXPOLY_DFT_WEB_IMAGE_REF:-}"
+ACCEPTANCE_JOB_ROOT="${NEXPOLY_DFT_ACCEPTANCE_JOB_ROOT:-}"
 MIGRATIONS_DIR="$REPO_ROOT/backend/migrations/postgres"
 DOWNLOAD_SPOOL_DIR="$REPO_ROOT/.runtime/monomer-dft-download-spool"
 FORMAL_ENV_KEY_COUNT=44
@@ -219,6 +220,8 @@ load_env() {
   local requested_image_mode="$ACCEPTANCE_IMAGE_MODE"
   local requested_backend_image_ref="$ACCEPTANCE_BACKEND_IMAGE_REF"
   local requested_web_image_ref="$ACCEPTANCE_WEB_IMAGE_REF"
+  local requested_job_root="$ACCEPTANCE_JOB_ROOT"
+  unset NEXPOLY_DFT_ACCEPTANCE_JOB_ROOT
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail "missing safe environment file: $ENV_FILE"
   [[ "$(stat -c '%u' "$ENV_FILE")" == "$(id -u)" ]] || fail "environment file must be owned by uid $(id -u)"
   [[ "$(stat -c '%a' "$ENV_FILE")" == "600" ]] || fail "environment file permissions must be 0600"
@@ -303,6 +306,35 @@ load_env() {
   [[ "$(stat -c '%u' "$REPO_ROOT/.runtime")" == "$(id -u)" ]] || fail \
     "runtime root must be owned by uid $(id -u)"
   chmod 700 -- "$REPO_ROOT/.runtime"
+  if [[ "$PROJECT_NAME" == nexpoly_dft_fresh_* ]]; then
+    [[ -n "$requested_job_root" && "$requested_job_root" == /* ]] || fail \
+      "fresh acceptance requires an absolute run-scoped Worker job root"
+    [[ "$(realpath -e -- "$requested_job_root")" == "$requested_job_root" ]] || fail \
+      "fresh acceptance Worker job root resolved unexpectedly"
+    local job_run_directory=""
+    job_run_directory="$(dirname -- "$requested_job_root")"
+    [[ "$(basename -- "$requested_job_root")" == "worker-jobs" &&
+      "$(basename -- "$job_run_directory")" =~ ^gpu-acceptance-[0-9]{8}T[0-9]{6}Z-[1-9][0-9]*$ &&
+      "$(dirname -- "$job_run_directory")" == "$REPO_ROOT/.runtime/runs" ]] || fail \
+      "fresh acceptance Worker job root is outside its exact run directory"
+    local private_directory=""
+    for private_directory in \
+      "$REPO_ROOT/.runtime" \
+      "$REPO_ROOT/.runtime/runs" \
+      "$job_run_directory" \
+      "$requested_job_root"; do
+      [[ -d "$private_directory" && ! -L "$private_directory" ]] || fail \
+        "fresh acceptance Worker job path must be a real directory: $private_directory"
+      [[ "$(stat -c '%u:%a' "$private_directory")" == "$(id -u):700" ]] || fail \
+        "fresh acceptance Worker job path must be owner-private: $private_directory"
+    done
+    MONOMER_DFT_JOB_ROOT="$requested_job_root"
+    NEXPOLY_DFT_ACCEPTANCE_JOB_ROOT="$requested_job_root"
+    export MONOMER_DFT_JOB_ROOT NEXPOLY_DFT_ACCEPTANCE_JOB_ROOT
+  else
+    [[ -z "$requested_job_root" ]] || fail \
+      "run-scoped Worker job root is restricted to formal acceptance"
+  fi
 
   MONOMER_DFT_WORKER_UDS="${MONOMER_DFT_WORKER_UDS:-.runtime/monomer-dft-worker-socket/worker.sock}"
   if [[ "$MONOMER_DFT_WORKER_UDS" != /* ]]; then

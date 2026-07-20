@@ -610,6 +610,12 @@ class FormalGpuAuthorityTests(unittest.TestCase):
                 "aimnet-source-archive",
             ):
                 (runtime / relative).mkdir(mode=0o700)
+            runs = runtime / "runs"
+            run = runs / "gpu-acceptance-20260720T000000Z-1234"
+            job_root = run / "worker-jobs"
+            job_root.mkdir(parents=True, mode=0o700)
+            for directory in (runtime, runs, run, job_root):
+                directory.chmod(0o700)
             model_source = fake_repo / "model-source"
             model_source.mkdir()
             values.update(
@@ -637,6 +643,7 @@ class FormalGpuAuthorityTests(unittest.TestCase):
                 }
             )
             environment = fixture.environment()
+            environment["MONOMER_DFT_JOB_ROOT"] = str(job_root)
             try:
                 with (
                     mock.patch.dict(
@@ -679,6 +686,10 @@ class FormalGpuAuthorityTests(unittest.TestCase):
                     environment[
                         "NEXPOLY_DFT_GPU_RESERVATIONS_AUTHORITY"
                     ],
+                )
+                self.assertEqual(
+                    resolved["MONOMER_DFT_JOB_ROOT"],
+                    str(job_root),
                 )
             finally:
                 fixture.close()

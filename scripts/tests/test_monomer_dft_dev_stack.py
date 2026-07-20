@@ -353,9 +353,15 @@ load_formal_env
                 fake_repo,
                 ENV_EXAMPLE.read_text(encoding="utf-8"),
             )
-            (
-                fake_repo / ".runtime" / "monomer-dft-worker-socket"
-            ).mkdir(parents=True, mode=0o700)
+            runtime = fake_repo / ".runtime"
+            worker_socket = runtime / "monomer-dft-worker-socket"
+            worker_socket.mkdir(parents=True, mode=0o700)
+            runs = runtime / "runs"
+            run = runs / "gpu-acceptance-20260720T000000Z-1234"
+            job_root = run / "worker-jobs"
+            job_root.mkdir(parents=True, mode=0o700)
+            for directory in (runtime, runs, run, job_root):
+                directory.chmod(0o700)
             project_name = "nexpoly_dft_fresh_formal_config"
             command = f"""
 export NEXPOLY_DFT_ACCEPTANCE_PROJECT_NAME={shlex.quote(project_name)}
@@ -363,6 +369,7 @@ export NEXPOLY_DFT_AUTHORITY_SHA={'a' * 40}
 export NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE=candidate-tree
 export NEXPOLY_DFT_BACKEND_IMAGE_REF=nexpoly-dft-acceptance-backend:{project_name}-{'a' * 40}
 export NEXPOLY_DFT_WEB_IMAGE_REF=nexpoly-dft-acceptance-web:{project_name}-{'a' * 40}
+export NEXPOLY_DFT_ACCEPTANCE_JOB_ROOT={shlex.quote(str(job_root))}
 export DOCKER_HOST=unix:///var/run/docker.sock
 source {shlex.quote(str(CONTROL_SCRIPT))}
 # This unit isolates the non-executing dotenv-to-Compose path. Descriptor
@@ -373,6 +380,7 @@ ENV_FILE={shlex.quote(str(env_file))}
 FORMAL_ENV_PARSER={shlex.quote(str(FORMAL_ENV_PARSER_PATH))}
 COMPOSE_FILE={shlex.quote(str(COMPOSE_FILE))}
 load_env
+[[ "$MONOMER_DFT_JOB_ROOT" == {shlex.quote(str(job_root))} ]]
 cd "$REPO_ROOT"
 compose config --format json
 """
@@ -732,6 +740,17 @@ class ControlScriptSafetyTests(unittest.TestCase):
                 "configure_paths",
                 "must be below",
             ),
+            (
+                "FORMAL_ACCEPTANCE=0; "
+                "FORMAL_JOB_ROOT=/tmp/gpu-acceptance-override/worker-jobs; "
+                "MONOMER_DFT_DEPLOYMENT=dev; "
+                "NEXPOLY_DFT_GPU_DEVICE=1; "
+                "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=3; "
+                "MONOMER_DFT_GPU_BROKER_ENABLED=1; "
+                "MONOMER_DFT_STANDALONE_GPU_SMOKE=0; "
+                "configure_paths",
+                "restricted to formal acceptance",
+            ),
         )
         for body, expected in cases:
             with self.subTest(body=body):
@@ -742,6 +761,60 @@ class ControlScriptSafetyTests(unittest.TestCase):
                     completed.stdout + completed.stderr,
                 )
                 self.assertIn(expected, completed.stderr)
+
+    def test_formal_worker_controller_preserves_run_scoped_job_root(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_repo = Path(temporary)
+            runtime = fake_repo / ".runtime"
+            runs = runtime / "runs"
+            run = runs / "gpu-acceptance-20260720T000000Z-1234"
+            job_root = run / "worker-jobs"
+            job_root.mkdir(parents=True, mode=0o700)
+            for directory in (runtime, runs, run, job_root):
+                directory.chmod(0o700)
+            command = f"""
+source {shlex.quote(str(WORKER_CONTROL_SCRIPT))}
+REPO_ROOT={shlex.quote(str(fake_repo))}
+RUNTIME_ROOT={shlex.quote(str(runtime))}
+GPU_RUNTIME_ROOT="$RUNTIME_ROOT/gpu-resource"
+FORMAL_ACCEPTANCE=1
+FORMAL_PROJECT_NAME=nexpoly_dft_fresh_worker_root
+FORMAL_AUTHORITY_SHA={'a' * 40}
+FORMAL_JOB_ROOT={shlex.quote(str(job_root))}
+NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY=1
+MONOMER_DFT_DEPLOYMENT=dev
+NEXPOLY_DFT_GPU_DEVICE=1
+NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=3
+MONOMER_DFT_GPU_BROKER_ENABLED=1
+MONOMER_DFT_STANDALONE_GPU_SMOKE=0
+configure_formal_gpu_authority() {{ :; }}
+initialize_runtime_root
+configure_paths
+printf '%s\\n' "$MONOMER_DFT_JOB_ROOT"
+"""
+            completed = subprocess.run(
+                ["/usr/bin/bash", "-c", command],
+                cwd=fake_repo,
+                env={
+                    "HOME": os.environ.get("HOME", "/tmp"),
+                    "LANG": "C.UTF-8",
+                    "PATH": (
+                        "/usr/local/sbin:/usr/local/bin:/usr/sbin:"
+                        "/usr/bin:/sbin:/bin"
+                    ),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+        self.assertEqual(completed.stdout.strip(), str(job_root))
 
     def test_delivery_scripts_have_no_production_execution_path(self) -> None:
         for relative in (

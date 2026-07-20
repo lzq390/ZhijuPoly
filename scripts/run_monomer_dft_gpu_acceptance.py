@@ -123,6 +123,9 @@ GPU_UUIDS = {
 }
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+ACCEPTANCE_RUN_RE = re.compile(
+    r"^gpu-acceptance-[0-9]{8}T[0-9]{6}Z-[1-9][0-9]*$"
+)
 MAX_HTTP_BYTES = 256 * 1024 * 1024
 BACKEND_BASE_URL = "http://127.0.0.1:28000/api/v1/monomer-dft"
 LOCAL_DOCKER_SOCKET = Path("/var/run/docker.sock")
@@ -759,11 +762,7 @@ def _canonical_job_id(value: object) -> str:
 
 def _journal_path(job_root: Path, job_id: str) -> Path:
     job_id = _canonical_job_id(job_id)
-    root = job_root.resolve()
-    _require(
-        root == (REPO_ROOT / ".runtime/monomer-dft-worker-runs").resolve(),
-        "DFT journal root escaped the current worktree",
-    )
+    root = _validated_acceptance_job_root(job_root)
     job_dir = root / job_id
     _require(
         job_dir.is_dir()
@@ -1408,6 +1407,51 @@ def _open_absolute_directory_chain(path: Path, name: str) -> int:
         raise AcceptanceHarnessError(
             f"{name} could not be opened through a symlink-free directory chain"
         ) from exc
+
+
+def _validated_acceptance_job_root(
+    job_root: Path,
+    *,
+    runtime_root: Path | None = None,
+) -> Path:
+    """Require one real, owner-private, run-scoped Worker journal root."""
+
+    runtime = runtime_root if runtime_root is not None else REPO_ROOT / ".runtime"
+    expected_runs = runtime / "runs"
+    root = Path(job_root)
+    run_directory = root.parent
+    _require(
+        root.name == "worker-jobs"
+        and ACCEPTANCE_RUN_RE.fullmatch(run_directory.name) is not None
+        and run_directory.parent == expected_runs,
+        "DFT journal root is not scoped to one formal acceptance run",
+    )
+    descriptors: list[int] = []
+    try:
+        for path, name in (
+            (runtime, "acceptance private runtime root"),
+            (expected_runs, "acceptance run root"),
+            (run_directory, "acceptance run directory"),
+            (root, "acceptance Worker journal root"),
+        ):
+            descriptor = _open_absolute_directory_chain(path, name)
+            descriptors.append(descriptor)
+            metadata = os.fstat(descriptor)
+            _require(
+                stat.S_ISDIR(metadata.st_mode)
+                and metadata.st_uid == os.geteuid()
+                and stat.S_IMODE(metadata.st_mode) == 0o700,
+                f"{name} is not owner-private",
+            )
+        resolved = root.resolve(strict=True)
+        _require(
+            resolved == root,
+            "DFT journal root resolved unexpectedly",
+        )
+        return resolved
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def _hash_model_descriptor(
@@ -3053,6 +3097,7 @@ def _stack_command(
     authority_sha: str,
     run_kind: str,
     authority_images: dict[str, Any] | None,
+    acceptance_job_root: Path,
     gpu_authority_environment: dict[str, str],
 ) -> None:
     _require(
@@ -3090,10 +3135,12 @@ def _stack_command(
         "fresh stack lacks complete GPU descriptor authority",
     )
     environment = _local_docker_environment()
+    job_root = _validated_acceptance_job_root(acceptance_job_root)
     overrides = {
         "NEXPOLY_DFT_ACCEPTANCE_PROJECT_NAME": project_name,
         "NEXPOLY_DFT_AUTHORITY_SHA": authority_sha,
         "NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE": run_kind,
+        "NEXPOLY_DFT_ACCEPTANCE_JOB_ROOT": str(job_root),
     }
     if run_kind == "final-main":
         _require(
@@ -4330,6 +4377,7 @@ class FreshAcceptanceControl:
     ) -> None:
         self.runtime_root = runtime_root
         self.run_directory = run_directory
+        self.job_root = run_directory / "worker-jobs"
         self.authority_sha = authority_sha
         self.authority_tree = authority_tree
         self.gpu3_mode = gpu3_mode
@@ -4369,6 +4417,80 @@ class FreshAcceptanceControl:
         self.mps_started: list[int] = []
         self.mps_attempted: list[int] = []
         self.cleanup_evidence: dict[str, Any] | None = None
+
+    def _prepare_job_root(self) -> None:
+        """Create one empty journal authority without following symlinks."""
+
+        _require(
+            self.job_root.parent == self.run_directory
+            and self.job_root.name == "worker-jobs",
+            "acceptance Worker journal root escaped its run directory",
+        )
+        _require(
+            self.run_directory.parent == self.runtime_root / "runs"
+            and ACCEPTANCE_RUN_RE.fullmatch(self.run_directory.name) is not None,
+            "acceptance Worker journal root is not scoped to its exact run",
+        )
+        parent_descriptors: list[int] = []
+        job_descriptor = -1
+        try:
+            for path, name in (
+                (self.runtime_root, "acceptance private runtime root"),
+                (self.runtime_root / "runs", "acceptance run root"),
+                (self.run_directory, "acceptance run directory"),
+            ):
+                descriptor = _open_absolute_directory_chain(path, name)
+                parent_descriptors.append(descriptor)
+                metadata = os.fstat(descriptor)
+                _require(
+                    stat.S_ISDIR(metadata.st_mode)
+                    and metadata.st_uid == os.geteuid()
+                    and stat.S_IMODE(metadata.st_mode) == 0o700,
+                    f"{name} is not owner-private",
+                )
+            run_descriptor = parent_descriptors[-1]
+            try:
+                os.stat(
+                    b"worker-jobs",
+                    dir_fd=run_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise AcceptanceHarnessError(
+                    "acceptance Worker journal root is unsafe"
+                ) from exc
+            else:
+                raise AcceptanceHarnessError(
+                    "acceptance refuses a preexisting Worker journal root"
+                )
+            os.mkdir(b"worker-jobs", mode=0o700, dir_fd=run_descriptor)
+            os.fsync(run_descriptor)
+            job_descriptor = os.open(
+                b"worker-jobs",
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | os.O_DIRECTORY
+                | os.O_NOFOLLOW,
+                dir_fd=run_descriptor,
+            )
+            metadata = os.fstat(job_descriptor)
+            _require(
+                stat.S_ISDIR(metadata.st_mode)
+                and metadata.st_uid == os.geteuid()
+                and stat.S_IMODE(metadata.st_mode) == 0o700,
+                "acceptance Worker journal root is not owner-private",
+            )
+        finally:
+            if job_descriptor >= 0:
+                os.close(job_descriptor)
+            for descriptor in reversed(parent_descriptors):
+                os.close(descriptor)
+        _validated_acceptance_job_root(
+            self.job_root,
+            runtime_root=self.runtime_root,
+        )
 
     def __del__(self) -> None:
         with contextlib.suppress(Exception):
@@ -4907,6 +5029,7 @@ class FreshAcceptanceControl:
         # This must precede every Docker/Broker/MPS observation.  The runtime
         # tree is ignored by Git, so repository cleanliness cannot establish
         # that a stale child is a real owner-private directory.
+        self._prepare_job_root()
         self._require_private_gpu_root(create=True)
         self._gpu_child_absent(
             "broker.sock",
@@ -5171,6 +5294,7 @@ class FreshAcceptanceControl:
             authority_sha=self.authority_sha,
             run_kind=self.run_kind,
             authority_images=self.authority_images,
+            acceptance_job_root=self.job_root,
             gpu_authority_environment=(
                 self._formal_gpu_authority_environment()
             ),
@@ -5235,6 +5359,7 @@ class FreshAcceptanceControl:
                     authority_sha=self.authority_sha,
                     run_kind=self.run_kind,
                     authority_images=self.authority_images,
+                    acceptance_job_root=self.job_root,
                     gpu_authority_environment=(
                         self._formal_gpu_authority_environment()
                     ),
@@ -5525,6 +5650,7 @@ def _prepare_formal_smoke_runtime(
             "NEXPOLY_DFT_FORMAL_ACCEPTANCE": "1",
             "NEXPOLY_DFT_PROJECT_NAME": controller.project_name,
             "NEXPOLY_DFT_AUTHORITY_SHA": controller.authority_sha,
+            "MONOMER_DFT_JOB_ROOT": str(controller.job_root),
             **controller._formal_gpu_authority_environment(),
         }
     )
@@ -5591,7 +5717,7 @@ def run_acceptance(args: argparse.Namespace) -> Path:
         preflight_result = _prepare_formal_smoke_runtime(controller)
         backend_evidence = run_backend_e2e(
             base_url=BACKEND_BASE_URL,
-            job_root=runtime_root / "monomer-dft-worker-runs",
+            job_root=controller.job_root,
             timeout_seconds=args.job_timeout,
         )
         e2e = backend_evidence["e2e"]
