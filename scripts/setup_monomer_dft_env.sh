@@ -367,6 +367,8 @@ fi
 
 readonly VENV_ROOT="$RUNTIME_ROOT/venvs/monomer-dft-worker"
 readonly VENV_PYTHON="$VENV_ROOT/bin/python"
+readonly TOOLS_ROOT="$RUNTIME_ROOT/tools"
+readonly RUNTIME_UV="$TOOLS_ROOT/uv"
 readonly WHEELHOUSE="$RUNTIME_ROOT/wheelhouse"
 readonly AIMNET_ARCHIVE_ROOT="$RUNTIME_ROOT/aimnet-source-archive"
 readonly AIMNET_ARCHIVE_EVIDENCE="$RUNTIME_ROOT/aimnet-source-archive.json"
@@ -384,7 +386,8 @@ readonly WORKER_UDS="$SOCKET_DIR/worker.sock"
 readonly REAL_ENV="$REPO_ROOT/.env.monomer-dft.dev"
 
 assert_no_symlink_components "$REPO_ROOT"
-for runtime_target in "$RUNTIME_ROOT" "$RUNTIME_ROOT/venvs" "$VENV_ROOT" "$WHEELHOUSE" \
+for runtime_target in "$RUNTIME_ROOT" "$RUNTIME_ROOT/venvs" "$VENV_ROOT" \
+  "$TOOLS_ROOT" "$RUNTIME_UV" "$WHEELHOUSE" \
   "$AIMNET_ARCHIVE_ROOT" "$AIMNET_ARCHIVE_EVIDENCE" "$AIMNET_CACHE" \
   "$WARP_CACHE" "$UV_CACHE" "$SOCKET_DIR" "$JOB_ROOT" "$SMOKE_RUN_ROOT" \
   "$GPU_RUNTIME_ROOT" "$DOWNLOAD_SPOOL_ROOT"; do
@@ -396,11 +399,11 @@ assert_runtime_target "$WORKER_UDS"
 assert_no_symlink_components "$REAL_ENV"
 [[ ! -e "$REAL_ENV" || ( -f "$REAL_ENV" && ! -L "$REAL_ENV" ) ]] || fail "local environment must be a regular non-symlink: $REAL_ENV"
 
-mkdir -p "$RUNTIME_ROOT/venvs" "$WHEELHOUSE" "$AIMNET_CACHE" "$WARP_CACHE" \
+mkdir -p "$RUNTIME_ROOT/venvs" "$TOOLS_ROOT" "$WHEELHOUSE" "$AIMNET_CACHE" "$WARP_CACHE" \
   "$UV_CACHE" "$SOCKET_DIR" "$JOB_ROOT" "$SMOKE_RUN_ROOT" "$GPU_RUNTIME_ROOT" \
   "$DOWNLOAD_SPOOL_ROOT"
 for private_directory in \
-  "$RUNTIME_ROOT" "$RUNTIME_ROOT/venvs" "$WHEELHOUSE" "$AIMNET_CACHE" \
+  "$RUNTIME_ROOT" "$RUNTIME_ROOT/venvs" "$TOOLS_ROOT" "$WHEELHOUSE" "$AIMNET_CACHE" \
   "$WARP_CACHE" "$UV_CACHE" "$SOCKET_DIR" "$JOB_ROOT" "$SMOKE_RUN_ROOT" \
   "$GPU_RUNTIME_ROOT" "$DOWNLOAD_SPOOL_ROOT"; do
   [[ -d "$private_directory" && ! -L "$private_directory" ]] \
@@ -667,6 +670,17 @@ assert_runtime_target "$VENV_ROOT"
   --no-deps \
   "$AIMNET_WHEEL"
 "$UV_BIN" pip check --python "$VENV_PYTHON"
+
+assert_runtime_target "$RUNTIME_UV"
+install -m 0500 -- "$UV_BIN" "$RUNTIME_UV"
+[[ -f "$RUNTIME_UV" && ! -L "$RUNTIME_UV" &&
+  "$(stat -c '%u:%g:%a:%h' "$RUNTIME_UV")" == \
+  "$(id -u):$(id -g):500:1" ]] \
+  || fail "private uv runtime tool is unsafe"
+RUNTIME_UV_VERSION="$("$RUNTIME_UV" --version | awk '{print $2}')"
+readonly RUNTIME_UV_VERSION
+[[ "$RUNTIME_UV_VERSION" == "$EXPECTED_UV_VERSION" ]] \
+  || fail "private uv runtime tool version mismatch"
 
 "$VENV_PYTHON" -I - "$SOURCE_LOCK" "$AIMNET_REGISTRY" <<'PY'
 import json

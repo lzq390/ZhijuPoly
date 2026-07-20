@@ -754,7 +754,22 @@ def validate_python_and_models(
 ) -> dict[str, Any]:
     require(sys.version_info[:2] == (3, 12), f"expected Python 3.12, found {sys.version.split()[0]}")
 
-    uv_version = run("uv", "--version").split()
+    runtime_uv = repo_root / ".runtime/tools/uv"
+    try:
+        uv_metadata = runtime_uv.lstat()
+    except OSError as exc:
+        raise PreflightError(
+            f"private uv runtime tool is unavailable: {runtime_uv}"
+        ) from exc
+    require(
+        stat.S_ISREG(uv_metadata.st_mode)
+        and uv_metadata.st_uid == os.geteuid()
+        and uv_metadata.st_gid == os.getegid()
+        and uv_metadata.st_nlink == 1
+        and stat.S_IMODE(uv_metadata.st_mode) == 0o500,
+        "private uv runtime tool is unsafe",
+    )
+    uv_version = run(str(runtime_uv), "--version").split()
     require(len(uv_version) >= 2 and uv_version[1] == EXPECTED_UV_VERSION, "uv version mismatch")
 
     versions = {name: importlib.metadata.version(name) for name in EXPECTED_DIRECT_VERSIONS}

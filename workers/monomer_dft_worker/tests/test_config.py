@@ -109,6 +109,10 @@ def test_broker_preflight_provenance_path_imports_no_cuda_stack(
     (aimnet_package / "__init__.py").write_text("", encoding="utf-8")
     (aimnet_package / "models.yaml").write_text("registry", encoding="utf-8")
     cache = repo / ".runtime/aimnet-cache"
+    runtime_uv = repo / ".runtime/tools/uv"
+    runtime_uv.parent.mkdir(parents=True)
+    runtime_uv.write_bytes(b"test uv")
+    runtime_uv.chmod(0o500)
     cache.mkdir(parents=True)
     models = []
     for index in range(6):
@@ -139,7 +143,15 @@ def test_broker_preflight_provenance_path_imports_no_cuda_stack(
 
     versions = dict(preflight.EXPECTED_DIRECT_VERSIONS)
     versions["aimnet"] = "0.0.test"
-    monkeypatch.setattr(preflight, "run", lambda *args: "uv 0.11.21" if args[0] == "uv" else "")
+    monkeypatch.setattr(
+        preflight,
+        "run",
+        lambda *args: (
+            "uv 0.11.21"
+            if Path(args[0]).name == "uv"
+            else ""
+        ),
+    )
     monkeypatch.setattr(preflight.importlib.metadata, "version", lambda name: versions[name])
     monkeypatch.setattr(preflight.importlib.metadata, "distribution", lambda _name: Distribution())
     monkeypatch.setattr(preflight, "validate_complete_lock", lambda *_args: {})
