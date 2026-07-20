@@ -858,8 +858,9 @@ def test_worker_uses_repository_shared_broker_client_contract(
     managed = Managed()
 
     class SharedClient:
-        def __init__(self, socket_path):
+        def __init__(self, socket_path, *, timeout_seconds):
             calls.append(("init", Path(socket_path)))
+            calls.append(("timeout_seconds", timeout_seconds))
 
         def acquire_managed(self, **kwargs):
             calls.append(("acquire_managed", kwargs))
@@ -904,6 +905,10 @@ def test_worker_uses_repository_shared_broker_client_contract(
     acquired = next(value for name, value in calls if name == "acquire_managed")
     request_id = acquired.pop("request_id")
     assert request_id.startswith("dft-")
+    assert (
+        "timeout_seconds",
+        12.0,
+    ) in calls
     assert acquired == {
         "kind": "residency",
         "placement": "preferred",

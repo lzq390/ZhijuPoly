@@ -46,7 +46,12 @@ from .broker import (
 
 
 MAX_REQUEST_BYTES = 64 * 1024
-DEFAULT_EXTERNAL_ADMISSION_TIMEOUT_SECONDS = 4.0
+# One allow decision performs two complete Docker/systemd CAS inventories,
+# two MPS authority audits and a trailing NVML read.  A populated user manager
+# can legitimately require about five seconds for that proof, so the deadline
+# must exceed the generic Broker client's transport timeout from older builds.
+DEFAULT_EXTERNAL_ADMISSION_TIMEOUT_SECONDS = 10.0
+MAX_EXTERNAL_ADMISSION_TIMEOUT_SECONDS = 30.0
 logger = logging.getLogger("nexpoly_gpu_broker")
 _LOCAL_INHERITED_FD_RE = re.compile(
     r"^/proc/(self|[1-9][0-9]*)/fd/([1-9][0-9]*)$"
@@ -2221,10 +2226,13 @@ class ExternalGpuGuard:
         if (
             isinstance(admission_timeout_seconds, bool)
             or not isinstance(admission_timeout_seconds, (int, float))
-            or not 0 < float(admission_timeout_seconds) < 5.0
+            or not 0
+            < float(admission_timeout_seconds)
+            <= MAX_EXTERNAL_ADMISSION_TIMEOUT_SECONDS
         ):
             raise ValueError(
-                "admission_timeout_seconds must be positive and below 5 seconds"
+                "admission_timeout_seconds must be positive and at most "
+                f"{MAX_EXTERNAL_ADMISSION_TIMEOUT_SECONDS:g} seconds"
             )
         self.policy = policy
         self._process_query = process_query

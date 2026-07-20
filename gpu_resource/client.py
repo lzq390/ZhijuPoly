@@ -292,7 +292,12 @@ def mps_client_environment(
 
 
 class GpuBrokerClient:
-    def __init__(self, socket_path: str | Path, *, timeout_seconds: float = 5.0) -> None:
+    def __init__(
+        self,
+        socket_path: str | Path,
+        *,
+        timeout_seconds: float = 12.0,
+    ) -> None:
         self.socket_path = Path(socket_path)
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")

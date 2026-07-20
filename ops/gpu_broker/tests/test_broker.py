@@ -35,6 +35,7 @@ from ops.gpu_broker.broker import (
     validate_gpu_inventory,
 )
 from ops.gpu_broker.server import (
+    DEFAULT_EXTERNAL_ADMISSION_TIMEOUT_SECONDS,
     DockerGpuClaim,
     ExternalGpuGuard,
     ExternalReservationPolicy,
@@ -62,6 +63,17 @@ def _owner() -> OwnerIdentity:
         pid=os.getpid(),
         process_start_ticks=read_process_start_ticks(os.getpid()),
         boot_id=read_boot_id(),
+    )
+
+
+def test_default_client_timeout_covers_external_admission_budget() -> None:
+    client = GpuBrokerClient("/not-opened")
+
+    assert DEFAULT_EXTERNAL_ADMISSION_TIMEOUT_SECONDS == 10.0
+    assert client.timeout_seconds == 12.0
+    assert (
+        client.timeout_seconds
+        > DEFAULT_EXTERNAL_ADMISSION_TIMEOUT_SECONDS
     )
 
 

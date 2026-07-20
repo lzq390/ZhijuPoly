@@ -27,7 +27,7 @@ from .config import (
 
 STABLE_ACQUIRE_COLLECTION_GRACE_SECONDS = 1.0
 STABLE_ACQUIRE_SCHEDULING_ALLOWANCE_SECONDS = 2.0
-DEFAULT_BROKER_CLIENT_TIMEOUT_SECONDS = 5.0
+DEFAULT_BROKER_CLIENT_TIMEOUT_SECONDS = 12.0
 
 # These codes are emitted only when HostGpuBroker.acquire has authoritatively
 # proved that this request owns no lease (or that its waiter was removed).
@@ -277,7 +277,10 @@ class SharedGpuBrokerAdapter:
             ) from exc
         self._error_type = GpuBrokerClientError
         self._mps_client_environment = mps_client_environment
-        self._client = SharedClient(uds)
+        self._client = SharedClient(
+            uds,
+            timeout_seconds=DEFAULT_BROKER_CLIENT_TIMEOUT_SECONDS,
+        )
         self.managed_placement = True
         self.environment = environment
         self.client_id = client_id
