@@ -123,6 +123,7 @@ readonly REQUIREMENTS_LOCK="$REPO_ROOT/workers/monomer_dft_worker/requirements.l
 readonly BUILD_REQUIREMENTS_LOCK="$REPO_ROOT/workers/monomer_dft_worker/build-requirements.lock"
 readonly SOURCE_LOCK="$REPO_ROOT/workers/monomer_dft_worker/aimnet-source.lock.json"
 readonly ENV_EXAMPLE="$REPO_ROOT/.env.monomer-dft.dev.example"
+readonly FORMAL_ENV_PARSER="$REPO_ROOT/scripts/monomer_dft_acceptance_env.py"
 readonly MIGRATION_MANIFEST="$REPO_ROOT/backend/migrations/postgres/manifest.json"
 readonly GPU_BROKER_CLIENT="$REPO_ROOT/gpu_resource/client.py"
 readonly GPU_GOVERNED_COMPOSE="$REPO_ROOT/docker-compose.gpu-governed.yml"
@@ -130,6 +131,7 @@ readonly GPU_GOVERNED_COMPOSE="$REPO_ROOT/docker-compose.gpu-governed.yml"
 [[ -f "$BUILD_REQUIREMENTS_LOCK" ]] || fail "missing tracked build dependency lock: $BUILD_REQUIREMENTS_LOCK"
 [[ -f "$SOURCE_LOCK" ]] || fail "missing tracked AIMNet lock: $SOURCE_LOCK"
 [[ -f "$ENV_EXAMPLE" ]] || fail "missing tracked environment example: $ENV_EXAMPLE"
+[[ -f "$FORMAL_ENV_PARSER" ]] || fail "missing formal environment parser: $FORMAL_ENV_PARSER"
 [[ -f "$MIGRATION_MANIFEST" ]] || fail "missing governed migration manifest: $MIGRATION_MANIFEST"
 [[ -f "$GPU_BROKER_CLIENT" ]] || fail "missing governed GPU Broker client: $GPU_BROKER_CLIENT"
 [[ -f "$GPU_GOVERNED_COMPOSE" ]] || fail "missing governed GPU Compose contract: $GPU_GOVERNED_COMPOSE"
@@ -138,6 +140,7 @@ for tracked_asset in \
   "$BUILD_REQUIREMENTS_LOCK" \
   "$SOURCE_LOCK" \
   "$ENV_EXAMPLE" \
+  "$FORMAL_ENV_PARSER" \
   "$MIGRATION_MANIFEST" \
   "$GPU_BROKER_CLIENT" \
   "$GPU_GOVERNED_COMPOSE"; do
@@ -778,39 +781,51 @@ done
 chmod 0555 "$AIMNET_CACHE"
 
 if [[ ! -e "$REAL_ENV" ]]; then
-  cat >"$REAL_ENV" <<EOF
-MONOMER_DFT_PYTHON=$VENV_PYTHON
-MONOMER_DFT_WORKER_UDS=$SOCKET_DIR/worker.sock
-MONOMER_DFT_JOB_ROOT=$JOB_ROOT
-MONOMER_DFT_MAX_CONCURRENT_JOBS=1
-MONOMER_DFT_DEPLOYMENT=dev
-NEXPOLY_DFT_GPU_DEVICE=1
-NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=3
-MONOMER_DFT_GPU_BUDGET_MIB=4096
-MONOMER_DFT_GPU_ACTIVE_THREAD_PERCENTAGE=50
-MONOMER_DFT_GPU_BROKER_ENABLED=1
-MONOMER_DFT_STANDALONE_GPU_SMOKE=0
-MONOMER_DFT_GPU_BROKER_UDS=$GPU_RUNTIME_ROOT/broker.sock
-MONOMER_DFT_GPU_MPS_PIPE_ROOT=$GPU_RUNTIME_ROOT
-MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS=$GPU_RUNTIME_ROOT/external-reservations.json
-MONOMER_DFT_DOWNLOAD_SPOOL_ROOT=/app/.runtime/monomer-dft-download-spool
-AIMNET_CACHE_DIR=$AIMNET_CACHE
-WARP_CACHE_PATH=$WARP_CACHE
-UV_CACHE_DIR=$UV_CACHE
-AIMNET_SOURCE_DIR=$AIMNET_ARCHIVE_ROOT
-AIMNET_MODEL_SOURCE_DIR=$SHARED_MODEL_CACHE
-AIMNET_SOURCE_LOCK=workers/monomer_dft_worker/aimnet-source.lock.json
-PYTHONNOUSERSITE=1
-PYTHONDONTWRITEBYTECODE=1
-CUDA_DEVICE_ORDER=PCI_BUS_ID
-PYTHONPATH=
-EOF
+  "$BOOTSTRAP_PYTHON" -I -S - \
+    "$ENV_EXAMPLE" "$REAL_ENV" "$SHARED_MODEL_CACHE" <<'PY'
+import os
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+model_source = sys.argv[3]
+lines = source.read_text(encoding="utf-8").splitlines()
+prefix = "AIMNET_MODEL_SOURCE_DIR="
+matches = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+if len(matches) != 1 or "\n" in model_source or "\r" in model_source:
+    raise SystemExit("tracked environment template is invalid")
+lines[matches[0]] = prefix + model_source
+payload = ("\n".join(lines) + "\n").encode("utf-8")
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+descriptor = os.open(destination, flags, 0o600)
+try:
+    offset = 0
+    while offset < len(payload):
+        offset += os.write(descriptor, payload[offset:])
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+parent = os.open(
+    destination.parent,
+    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+)
+try:
+    os.fsync(parent)
+finally:
+    os.close(parent)
+PY
   log "created local environment file $REAL_ENV"
 else
   log "preserving existing local environment file $REAL_ENV"
 fi
 assert_no_symlink_components "$REAL_ENV"
 chmod 0600 "$REAL_ENV"
+"$BOOTSTRAP_PYTHON" -I -S "$FORMAL_ENV_PARSER" \
+  --env-file "$REAL_ENV" >/dev/null \
+  || fail "local environment file does not satisfy the formal 44-key contract"
 
 "$BOOTSTRAP_PYTHON" -I - "$RUNTIME_ROOT" "$REAL_ENV" <<'PY'
 import os

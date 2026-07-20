@@ -778,7 +778,7 @@ class FormalGpuAuthorityTests(unittest.TestCase):
                     "  *--query-gpu=uuid,compute_mode*)\n"
                     "    printf '%s\\n' "
                     "'GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771, "
-                    "Exclusive_Process'\n"
+                    "Default'\n"
                     "    ;;\n"
                     "  *--query-compute-apps=*) exit 0 ;;\n"
                     "  *) exit 91 ;;\n"
@@ -797,6 +797,7 @@ class FormalGpuAuthorityTests(unittest.TestCase):
                     f"\"$CUDA_MPS_LOG_DIRECTORY\" > {marker}\n"
                     "  exit 0\n"
                     "fi\n"
+                    "test -d \"$CUDA_MPS_PIPE_DIRECTORY\"\n"
                     "cat >/dev/null\n"
                 ),
                 encoding="utf-8",
@@ -841,6 +842,7 @@ class FormalGpuAuthorityTests(unittest.TestCase):
                 "NEXPOLY_GPU_MPS_EXPECTED_ROOT": str(
                     fixture.gpu_root
                 ),
+                "NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE": "1",
             }
             try:
                 completed = subprocess.run(
@@ -874,8 +876,78 @@ class FormalGpuAuthorityTests(unittest.TestCase):
                     log_path,
                     f"/proc/self/fd/{fixture.log_fd}",
                 )
+                fake_nvidia.write_text(
+                    (
+                        "#!/usr/bin/env bash\n"
+                        "set -euo pipefail\n"
+                        "case \"$*\" in\n"
+                        "  *--query-gpu=uuid,compute_mode*)\n"
+                        "    printf '%s\\n' "
+                        "'GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771, "
+                        "Exclusive_Process'\n"
+                        "    ;;\n"
+                        "  *) exit 91 ;;\n"
+                        "esac\n"
+                    ),
+                    encoding="utf-8",
+                )
+                exclusive = subprocess.run(
+                    [str(fake_control), "start", "1"],
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    pass_fds=(
+                        fixture.root_fd,
+                        fixture.reservations_fd,
+                        fixture.slot_fd,
+                        fixture.pipe_fd,
+                        fixture.log_fd,
+                    ),
+                )
+                self.assertNotEqual(exclusive.returncode, 0)
+                self.assertIn(
+                    "must retain Default compute mode",
+                    exclusive.stderr,
+                )
             finally:
                 fixture.close()
+
+    def test_default_mode_override_requires_formal_authority_before_nvidia(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_repo = Path(temporary) / "repo"
+            fake_scripts = fake_repo / "scripts"
+            fake_scripts.mkdir(parents=True)
+            fake_control = fake_scripts / "gpu_mps_control.sh"
+            shutil.copy2(MPS_CONTROL, fake_control)
+            marker = Path(temporary) / "nvidia-called"
+            fake_bin = Path(temporary) / "bin"
+            fake_bin.mkdir()
+            fake_nvidia = fake_bin / "nvidia-smi"
+            fake_nvidia.write_text(
+                f"#!/usr/bin/env bash\n: > {marker}\nexit 99\n",
+                encoding="utf-8",
+            )
+            fake_nvidia.chmod(0o700)
+            completed = subprocess.run(
+                [str(fake_control), "start", "1"],
+                env={
+                    "HOME": os.environ.get("HOME", "/tmp"),
+                    "PATH": f"{fake_bin}:/usr/bin:/bin",
+                    "NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE": "1",
+                },
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "only by formal development descriptor authority",
+                completed.stderr,
+            )
+            self.assertFalse(marker.exists())
 
     def test_formal_mps_descriptor_authority_rejects_gpu2_before_nvidia(
         self,
@@ -928,6 +1000,7 @@ class FormalGpuAuthorityTests(unittest.TestCase):
                 "NEXPOLY_GPU_MPS_EXPECTED_ROOT": str(
                     fixture.gpu_root
                 ),
+                "NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE": "1",
             }
             try:
                 completed = subprocess.run(

@@ -4719,6 +4719,7 @@ class FreshAcceptanceControl:
                     _read_proc_start_ticks(self.authority_process_id)
                 ),
                 "NEXPOLY_GPU_MPS_EXPECTED_ROOT": str(self.gpu_root),
+                "NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE": "1",
             }
         )
 

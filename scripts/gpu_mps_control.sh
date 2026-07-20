@@ -42,7 +42,17 @@ descriptor_authority="${NEXPOLY_GPU_MPS_DESCRIPTOR_AUTHORITY:-0}"
 descriptor_authority_pid="${NEXPOLY_GPU_MPS_AUTHORITY_PID:-}"
 descriptor_authority_start_ticks="${NEXPOLY_GPU_MPS_AUTHORITY_START_TICKS:-}"
 descriptor_expected_root="${NEXPOLY_GPU_MPS_EXPECTED_ROOT:-}"
+require_default_mode="${NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE:-0}"
 broker_socket="${NEXPOLY_GPU_BROKER_SOCKET:-$state_root/broker.sock}"
+
+if [[ "$require_default_mode" != "0" && "$require_default_mode" != "1" ]]; then
+  echo "NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$require_default_mode" == "1" && "$descriptor_authority" != "1" ]]; then
+  echo "Default compute mode may be required only by formal development descriptor authority" >&2
+  exit 1
+fi
 
 if [[ "$descriptor_authority" == "1" ]]; then
   if [[ "$index" == "2" ]]; then
@@ -52,6 +62,11 @@ if [[ "$descriptor_authority" == "1" ]]; then
   if [[ "$REPO_ROOT" == "/data/lzq/gith/nexpoly" ||
     "$REPO_ROOT" == /data/lzq/gith/nexpoly/* ]]; then
     echo "formal development descriptor authority forbids the production repository" >&2
+    exit 1
+  fi
+  if [[ "$REPO_ROOT" == "/data/lzq/gith/nexpoly-runtime" ||
+    "$REPO_ROOT" == /data/lzq/gith/nexpoly-runtime/* ]]; then
+    echo "formal development descriptor authority forbids the production runtime" >&2
     exit 1
   fi
   [[ "$descriptor_authority_pid" =~ ^[1-9][0-9]*$ &&
@@ -163,10 +178,43 @@ else
   exit 1
 fi
 
+# Descriptor-authority paths are rewritten from the harness PID to self before
+# any nested control query. Export them here so the query can inherit the exact
+# pipe descriptor instead of the stale parent-PID spelling.
+export CUDA_VISIBLE_DEVICES
+export CUDA_MPS_PIPE_DIRECTORY
+export CUDA_MPS_LOG_DIRECTORY
+
 require_exact_idle_mps_inventory() {
   /usr/bin/python3 - <<'PY'
 import os
+import re
+import stat
 import subprocess
+
+pass_fds = ()
+if os.environ.get("NEXPOLY_GPU_MPS_DESCRIPTOR_AUTHORITY") == "1":
+    pipe_path = os.environ.get("CUDA_MPS_PIPE_DIRECTORY", "")
+    match = re.fullmatch(r"/proc/self/fd/([1-9][0-9]*)", pipe_path)
+    if match is None:
+        raise SystemExit("MPS client inventory descriptor authority is invalid")
+    pipe_descriptor = int(match.group(1))
+    if pipe_descriptor < 3:
+        raise SystemExit("MPS client inventory descriptor authority is unsafe")
+    try:
+        metadata = os.fstat(pipe_descriptor)
+    except OSError as exc:
+        raise SystemExit(
+            "MPS client inventory descriptor authority is unavailable"
+        ) from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_gid != os.getegid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise SystemExit("MPS client inventory descriptor authority is unsafe")
+    pass_fds = (pipe_descriptor,)
 
 try:
     completed = subprocess.run(
@@ -177,6 +225,7 @@ try:
         check=False,
         timeout=5,
         env=os.environ,
+        pass_fds=pass_fds,
     )
 except (OSError, subprocess.SubprocessError) as exc:
     raise SystemExit("MPS client inventory query failed") from exc
@@ -220,7 +269,19 @@ if [[ "$action" == "start" ]]; then
     echo "GPU$index UUID mismatch: expected $expected_uuid, got ${actual_uuid:-missing}" >&2
     exit 1
   fi
-  if [[ -n "${extra_field:-}" || "$compute_mode_word_1" != "EXCLUSIVE" || "$compute_mode_word_2" != "PROCESS" || -n "${compute_mode_extra:-}" ]]; then
+  exclusive_process_mode=0
+  default_mode=0
+  if [[ "$compute_mode_word_1" == "EXCLUSIVE" && "$compute_mode_word_2" == "PROCESS" && -z "${compute_mode_extra:-}" ]]; then
+    exclusive_process_mode=1
+  elif [[ "$compute_mode_word_1" == "DEFAULT" && -z "${compute_mode_word_2:-}" && -z "${compute_mode_extra:-}" ]]; then
+    default_mode=1
+  fi
+  if [[ "$require_default_mode" == "1" ]]; then
+    if [[ -n "${extra_field:-}" || "$default_mode" != "1" ]]; then
+      echo "GPU$index must retain Default compute mode under formal development authority" >&2
+      exit 1
+    fi
+  elif [[ -n "${extra_field:-}" || "$exclusive_process_mode" != "1" ]]; then
     echo "GPU$index must already be drained and set to EXCLUSIVE_PROCESS" >&2
     exit 1
   fi
@@ -277,9 +338,6 @@ PY
   fi
 fi
 
-export CUDA_VISIBLE_DEVICES
-export CUDA_MPS_PIPE_DIRECTORY
-export CUDA_MPS_LOG_DIRECTORY
 if [[ "$descriptor_authority" == "0" ]]; then
   install -d -m 0700 \
     "$state_root" \
@@ -289,8 +347,10 @@ if [[ "$descriptor_authority" == "0" ]]; then
 fi
 
 if [[ "$action" == "start" ]]; then
-  # Compute mode is intentionally not changed here.  The later production
-  # maintenance window must drain the card and set EXCLUSIVE_PROCESS first.
+  # Compute mode is intentionally not changed here. Production and ordinary
+  # controls require EXCLUSIVE_PROCESS. A descriptor-bound development
+  # acceptance may explicitly retain Default so governed development CUDA
+  # clients can coexist through the same owner-private MPS server.
   exec nvidia-cuda-mps-control -d
 fi
 
