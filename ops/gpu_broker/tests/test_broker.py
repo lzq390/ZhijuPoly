@@ -44,12 +44,16 @@ from ops.gpu_broker.server import (
     MpsClient,
     MpsRuntimeGuard,
     SystemdGpuClaim,
+    _read_systemd_environment_file,
+    _snapshot_systemd_process_cgroups,
     load_external_reservations,
     process_stable_descriptor_path,
     query_docker_gpu_claims,
     query_systemd_gpu_claims,
     resolve_workload_identity,
 )
+
+_DOCKER_STARTED_AT = "2026-07-19T06:00:00.123456789Z"
 
 
 def _owner() -> OwnerIdentity:
@@ -794,6 +798,20 @@ def test_external_reservation_inventory_blocks_gpu3(tmp_path: Path) -> None:
     inventory.chmod(0o600)
     assert load_external_reservations(inventory).blocked_gpu_uuids == {
         "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
+    }
+
+
+def test_repository_systemd_registrations_bind_the_real_manager_scopes() -> None:
+    repository = Path(__file__).resolve().parents[3]
+    policy = load_external_reservations(
+        repository / "ops/config/gpu-external-reservations.json"
+    )
+
+    assert set(policy.managed_systemd_claims) == {
+        "user:nexpoly-monomer-md-worker.service",
+        "system:nexpoly-gpu-mps@1.service",
+        "system:nexpoly-gpu-mps@2.service",
+        "system:nexpoly-gpu-mps@3.service",
     }
 
 
@@ -1976,6 +1994,600 @@ def test_external_guard_allows_owned_pid_and_blocks_unknown_cuda_pid(tmp_path: P
     assert unknown(lease.gpu_index, lease.gpu_uuid, (lease,), _owner(), "backend", "dev") is True
 
 
+def test_descriptor_broker_hard_fences_production_requests_and_gpu2(
+    tmp_path: Path,
+) -> None:
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        allow_descriptor_mps_authority=True,
+    )
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        gpu_runtime_healthy=lambda _index, _uuid: True,
+        gpu_externally_busy=guard,
+    )
+
+    dev = _acquire(
+        broker,
+        component="backend",
+        environment="dev",
+        kind="residency",
+    )
+    assert dev.gpu_index == 1
+    assert (
+        guard(
+            2,
+            EXPECTED_GPU_UUIDS[2],
+            (),
+            _owner(),
+            "dft",
+            "dev",
+        )
+        is True
+    )
+    assert (
+        guard(
+            1,
+            EXPECTED_GPU_UUIDS[1],
+            (),
+            _owner(),
+            "dft",
+            "prod",
+        )
+        is True
+    )
+    with pytest.raises(BrokerError) as error:
+        _acquire(
+            broker,
+            component="backend",
+            environment="prod",
+            kind="residency",
+        )
+    assert error.value.code == "gpu_capacity_unavailable"
+
+
+def test_external_guard_rechecks_live_compute_at_final_allow_edge() -> None:
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    snapshots = iter(({}, {}, {}, {gpu1: frozenset({91_001})}))
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: next(snapshots),
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        cache_seconds=60,
+    )
+
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is False
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is True
+
+
+def test_external_guard_rechecks_idle_docker_claim_at_final_allow_edge() -> None:
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    claim = DockerGpuClaim(
+        container_id="e" * 64,
+        init_pid=91_011,
+        started_at=_DOCKER_STARTED_AT,
+        restart_count=0,
+        registration_id=None,
+        component=None,
+        environment=None,
+        compose_project=None,
+        compose_service=None,
+        gpu_uuids=frozenset({gpu1}),
+    )
+    snapshots = iter(((), (claim,)))
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+        docker_claim_query=lambda: next(snapshots),
+        systemd_claim_query=lambda: (),
+    )
+
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is True
+
+
+def test_external_guard_rechecks_idle_systemd_claim_at_final_allow_edge() -> None:
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    claim = SystemdGpuClaim(
+        scope="user",
+        unit="late-worker.service",
+        main_pid=91_012,
+        control_group="/user.slice/late-worker.service",
+        process_pids=frozenset({91_012}),
+        gpu_uuids=frozenset({gpu1}),
+    )
+    snapshots = iter(((), (claim,)))
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: next(snapshots),
+    )
+
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is True
+
+
+def test_external_guard_rechecks_mps_clients_at_final_allow_edge() -> None:
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    unmanaged = iter((False, True))
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        unmanaged_mps_client_query=lambda *_args: next(unmanaged),
+        authorized_mps_server_pids=lambda *_args: frozenset(),
+    )
+
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is True
+
+
+def test_external_guard_rechecks_target_compute_after_final_mps_audit() -> None:
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    snapshots = iter(
+        (
+            {},
+            {},
+            {gpu1: frozenset({91_014})},
+        )
+    )
+    mps_audits = 0
+
+    def mps_clients(*_args) -> bool:
+        nonlocal mps_audits
+        mps_audits += 1
+        return False
+
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: next(snapshots),
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        unmanaged_mps_client_query=mps_clients,
+        authorized_mps_server_pids=lambda *_args: frozenset(),
+    )
+
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is True
+    assert mps_audits == 2
+
+
+def test_external_guard_shares_initial_inventory_across_one_candidate_search(
+    tmp_path: Path,
+) -> None:
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    calls = {"compute": 0, "docker": 0, "systemd": 0}
+    claim = DockerGpuClaim(
+        container_id="f" * 64,
+        init_pid=91_013,
+        started_at=_DOCKER_STARTED_AT,
+        restart_count=0,
+        registration_id=None,
+        component=None,
+        environment=None,
+        compose_project=None,
+        compose_service=None,
+        gpu_uuids=frozenset({gpu1}),
+    )
+
+    def compute():
+        calls["compute"] += 1
+        return {}
+
+    def docker():
+        calls["docker"] += 1
+        return (claim,)
+
+    def systemd():
+        calls["systemd"] += 1
+        return ()
+
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=compute,
+        docker_claim_query=docker,
+        systemd_claim_query=systemd,
+    )
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        gpu_runtime_healthy=lambda _index, _uuid: True,
+        gpu_externally_busy=guard,
+    )
+
+    lease = _acquire(
+        broker,
+        component="md",
+        environment="dev",
+        kind="execution",
+    )
+
+    assert lease.gpu_index == 3
+    assert calls == {"compute": 3, "docker": 2, "systemd": 2}
+
+
+def test_external_guard_parallelizes_default_docker_and_systemd_authorities(
+    monkeypatch,
+) -> None:
+    rendezvous = threading.Barrier(2, timeout=1)
+    first_docker_call = True
+    first_systemd_call = True
+
+    def docker_run(command, **_kwargs):
+        nonlocal first_docker_call
+        assert command[:3] == ["docker", "container", "ls"]
+        if first_docker_call:
+            first_docker_call = False
+            rendezvous.wait()
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    def systemd_run(command, **_kwargs):
+        nonlocal first_systemd_call
+        assert command[0] == "systemctl"
+        if first_systemd_call:
+            first_systemd_call = False
+            rendezvous.wait()
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setitem(
+        query_docker_gpu_claims.__kwdefaults__,
+        "run",
+        docker_run,
+    )
+    monkeypatch.setitem(
+        query_systemd_gpu_claims.__kwdefaults__,
+        "run",
+        systemd_run,
+    )
+    monkeypatch.setitem(
+        query_systemd_gpu_claims.__kwdefaults__,
+        "read_control_group_processes",
+        lambda _path: frozenset(),
+    )
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+    )
+
+    snapshot = guard._inventories()
+
+    assert snapshot.processes == {}
+    assert snapshot.docker_claims == ()
+    assert snapshot.systemd_claims == ()
+
+
+def test_external_guard_fails_closed_on_parallel_authority_failure(
+    monkeypatch,
+) -> None:
+    def docker_run(_command, **_kwargs):
+        raise OSError("Docker authority unavailable")
+
+    def systemd_run(command, **_kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setitem(
+        query_docker_gpu_claims.__kwdefaults__,
+        "run",
+        docker_run,
+    )
+    monkeypatch.setitem(
+        query_systemd_gpu_claims.__kwdefaults__,
+        "run",
+        systemd_run,
+    )
+    monkeypatch.setitem(
+        query_systemd_gpu_claims.__kwdefaults__,
+        "read_control_group_processes",
+        lambda _path: frozenset(),
+    )
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+    )
+
+    assert (
+        guard(
+            1,
+            EXPECTED_GPU_UUIDS[1],
+            (),
+            _owner(),
+            "backend",
+            "dev",
+        )
+        is True
+    )
+
+
+def test_admission_deadline_replies_before_client_timeout_without_lease(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    docker_done = threading.Event()
+    systemd_done = threading.Event()
+
+    def docker_run(command, **_kwargs):
+        time.sleep(0.25)
+        docker_done.set()
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    def systemd_run(command, **_kwargs):
+        time.sleep(0.25)
+        systemd_done.set()
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setitem(
+        query_docker_gpu_claims.__kwdefaults__,
+        "run",
+        docker_run,
+    )
+    monkeypatch.setitem(
+        query_systemd_gpu_claims.__kwdefaults__,
+        "run",
+        systemd_run,
+    )
+    monkeypatch.setitem(
+        query_systemd_gpu_claims.__kwdefaults__,
+        "read_control_group_processes",
+        lambda _path: frozenset(),
+    )
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+        admission_timeout_seconds=0.05,
+    )
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        gpu_externally_busy=guard,
+    )
+    socket_path = tmp_path / "socket" / "broker.sock"
+    server = GpuBrokerUnixServer(socket_path, broker)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = GpuBrokerClient(socket_path, timeout_seconds=0.5)
+        started = time.monotonic()
+        with pytest.raises(GpuBrokerClientError) as error:
+            client.acquire_managed(
+                kind="residency",
+                placement="preferred",
+                component="backend",
+                environment="dev",
+                client_id="deadline-client",
+                memory_mib=8192,
+                thread_percent=100,
+                wait_timeout_seconds=0,
+                request_id="deadline-client-request",
+            )
+        elapsed = time.monotonic() - started
+
+        assert error.value.code == "gpu_capacity_unavailable"
+        assert elapsed < client.timeout_seconds
+        assert broker.status()["leases"] == []
+        assert broker.status()["waiters"] == 0
+        persisted = json.loads(
+            (tmp_path / "state.json").read_text(encoding="utf-8")
+        )
+        assert persisted["leases"] == []
+        assert persisted["waiters"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        assert docker_done.wait(timeout=1)
+        assert systemd_done.wait(timeout=1)
+
+
+def test_parallel_authority_exception_does_not_wait_for_slow_peer(
+    monkeypatch,
+) -> None:
+    slow_peer_done = threading.Event()
+    slow_peer_started = threading.Event()
+
+    def docker_run(_command, **_kwargs):
+        assert slow_peer_started.wait(timeout=1)
+        raise OSError("Docker authority unavailable")
+
+    def systemd_run(command, **_kwargs):
+        slow_peer_started.set()
+        time.sleep(0.25)
+        slow_peer_done.set()
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setitem(
+        query_docker_gpu_claims.__kwdefaults__,
+        "run",
+        docker_run,
+    )
+    monkeypatch.setitem(
+        query_systemd_gpu_claims.__kwdefaults__,
+        "run",
+        systemd_run,
+    )
+    monkeypatch.setitem(
+        query_systemd_gpu_claims.__kwdefaults__,
+        "read_control_group_processes",
+        lambda _path: frozenset(),
+    )
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+        admission_timeout_seconds=0.2,
+    )
+
+    started = time.monotonic()
+    assert (
+        guard(
+            1,
+            EXPECTED_GPU_UUIDS[1],
+            (),
+            _owner(),
+            "backend",
+            "dev",
+        )
+        is True
+    )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.15
+    assert slow_peer_done.wait(timeout=1)
+
+
+def test_one_deadline_covers_two_inventories_mps_and_trailing_compute(
+    tmp_path: Path,
+) -> None:
+    now = [100.0]
+    calls = {
+        "compute": 0,
+        "docker": 0,
+        "systemd": 0,
+        "server": 0,
+        "unmanaged": 0,
+    }
+    seen_deadlines: list[float] = []
+
+    def monotonic() -> float:
+        return now[0]
+
+    def record(name: str, advance: float, result):
+        def callback(*_args, deadline):
+            calls[name] += 1
+            seen_deadlines.append(deadline)
+            now[0] += advance
+            return result
+
+        return callback
+
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=record("compute", 0.02, {}),
+        docker_claim_query=record("docker", 0.02, ()),
+        systemd_claim_query=record("systemd", 0.02, ()),
+        authorized_mps_server_pids=record(
+            "server",
+            0.01,
+            frozenset(),
+        ),
+        unmanaged_mps_client_query=record("unmanaged", 0.01, False),
+        admission_timeout_seconds=0.17,
+        monotonic=monotonic,
+    )
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        gpu_externally_busy=guard,
+    )
+
+    with pytest.raises(BrokerError) as error:
+        _acquire(
+            broker,
+            component="md",
+            environment="dev",
+            kind="execution",
+        )
+
+    assert error.value.code == "gpu_capacity_unavailable"
+    assert calls == {
+        "compute": 3,
+        "docker": 2,
+        "systemd": 2,
+        "server": 2,
+        "unmanaged": 2,
+    }
+    assert len(set(seen_deadlines)) == 1
+    assert broker.status()["leases"] == []
+    assert broker.status()["waiters"] == 0
+
+
+def test_external_admission_finalizer_fences_lease_insertion(
+    tmp_path: Path,
+) -> None:
+    class Admission:
+        def __call__(self, _index, _uuid):
+            return False
+
+        def finalize(self, _index, _uuid):
+            raise BrokerError(
+                "gpu_admission_timeout",
+                "deadline expired before lease insertion",
+            )
+
+    class Authority:
+        def begin_admission(self, **_kwargs):
+            return Admission()
+
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        gpu_externally_busy=Authority(),
+    )
+
+    with pytest.raises(BrokerError) as error:
+        _acquire(
+            broker,
+            component="backend",
+            environment="dev",
+            kind="residency",
+        )
+
+    assert error.value.code == "gpu_admission_timeout"
+    assert broker.status()["leases"] == []
+    assert broker.status()["waiters"] == 0
+    persisted = json.loads(
+        (tmp_path / "state.json").read_text(encoding="utf-8")
+    )
+    assert persisted["leases"] == []
+    assert persisted["waiters"] == []
+
+
+def test_external_guard_never_caches_idle_docker_device_requests() -> None:
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    claim = DockerGpuClaim(
+        container_id="a" * 64,
+        init_pid=91_002,
+        started_at=_DOCKER_STARTED_AT,
+        restart_count=0,
+        registration_id=None,
+        component=None,
+        environment=None,
+        compose_project=None,
+        compose_service=None,
+        gpu_uuids=frozenset({gpu1}),
+    )
+    snapshots = iter(((), (), (claim,)))
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+        docker_claim_query=lambda: next(snapshots),
+        systemd_claim_query=lambda: (),
+        cache_seconds=60,
+    )
+
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is False
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is True
+
+
+def test_external_guard_never_caches_idle_systemd_gpu_claims() -> None:
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    claim = SystemdGpuClaim(
+        scope="user",
+        unit="foreign-worker.service",
+        main_pid=91_003,
+        control_group="/user.slice/foreign-worker.service",
+        process_pids=frozenset({91_003}),
+        gpu_uuids=frozenset({gpu1}),
+    )
+    snapshots = iter(((), (), (claim,)))
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: next(snapshots),
+        cache_seconds=60,
+    )
+
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is False
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is True
+
+
 def test_external_guard_blocks_unowned_or_unqueryable_mps_client(tmp_path: Path) -> None:
     broker = HostGpuBroker(tmp_path / "state.json")
     lease = _acquire(broker, component="backend", environment="dev", kind="residency")
@@ -2008,6 +2620,449 @@ def test_external_guard_blocks_unowned_or_unqueryable_mps_client(tmp_path: Path)
     assert blocked(1, lease.gpu_uuid, (lease,), _owner(), "backend", "dev") is True
     assert seen == [(1, lease.gpu_uuid, (lease,))]
     assert unavailable(1, lease.gpu_uuid, (lease,), _owner(), "backend", "dev") is True
+
+
+def _exact_mps_authority(
+    tmp_path: Path,
+) -> tuple[MpsRuntimeGuard, dict[str, object]]:
+    control_pid = 31_301
+    server_pid = 42_402
+    gpu_uuid = EXPECTED_GPU_UUIDS[1]
+    pipe_directory = tmp_path / "mps-1" / "pipe"
+    pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
+    os.mkfifo(pipe_directory / "control", 0o600)
+    pid_file = pipe_directory / "nvidia-cuda-mps-control.pid"
+    pid_file.write_text(f"{control_pid}\n", encoding="ascii")
+    pid_file.chmod(0o600)
+
+    proc_root = tmp_path / "proc"
+    status_paths: dict[int, Path] = {}
+    executable_paths: dict[int, Path] = {}
+    trusted_executable = Path("/bin/true")
+    for pid in (control_pid, server_pid):
+        process_directory = proc_root / str(pid)
+        process_directory.mkdir(parents=True)
+        status_path = process_directory / "status"
+        status_path.write_text(
+            "Name:\tnvidia-cuda-mps\n"
+            "Uid:\t1001\t1001\t1001\t1001\n"
+            "Gid:\t1001\t1001\t1001\t1001\n",
+            encoding="ascii",
+        )
+        executable_path = process_directory / "exe"
+        executable_path.symlink_to(trusted_executable)
+        status_paths[pid] = status_path
+        executable_paths[pid] = executable_path
+
+    state: dict[str, object] = {
+        "control_pid": control_pid,
+        "server_pid": server_pid,
+        "gpu_uuid": gpu_uuid,
+        "pipe_directory": pipe_directory,
+        "pid_file": pid_file,
+        "status_paths": status_paths,
+        "executable_paths": executable_paths,
+        "server_list": f"{server_pid}\n",
+        "client_inventory": "",
+        "commands": [],
+        "run_argvs": [],
+        "run_envs": [],
+        "command_hook": None,
+        "environments": {
+            control_pid: {
+                "CUDA_VISIBLE_DEVICES": gpu_uuid,
+                "CUDA_MPS_PIPE_DIRECTORY": str(pipe_directory),
+            }
+        },
+        "cgroups": {
+            control_pid: "0::/user.slice/nexpoly-mps-test.scope",
+            server_pid: "0::/user.slice/nexpoly-mps-test.scope",
+        },
+        "ticks": {control_pid: 101, server_pid: 202},
+        "unstable_pid": None,
+        "tick_reads": {},
+    }
+
+    def run(command, **kwargs):
+        control_command = kwargs["input"].strip()
+        commands = state["commands"]
+        run_argvs = state["run_argvs"]
+        run_envs = state["run_envs"]
+        assert isinstance(commands, list)
+        assert isinstance(run_argvs, list)
+        assert isinstance(run_envs, list)
+        commands.append(control_command)
+        run_argvs.append(tuple(command))
+        run_envs.append(dict(kwargs["env"]))
+        command_hook = state["command_hook"]
+        if command_hook is not None:
+            assert callable(command_hook)
+            command_hook(control_command)
+        if control_command == "get_server_list":
+            stdout = state["server_list"]
+        elif control_command == "ps":
+            stdout = state["client_inventory"]
+        else:
+            raise AssertionError(f"unexpected MPS control command: {control_command}")
+        assert isinstance(stdout, str)
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    def read_environment(pid: int) -> dict[str, str]:
+        environments = state["environments"]
+        assert isinstance(environments, dict)
+        return dict(environments[pid])
+
+    def read_cgroup(pid: int) -> str:
+        cgroups = state["cgroups"]
+        assert isinstance(cgroups, dict)
+        return cgroups[pid]
+
+    def read_ticks(pid: int) -> int:
+        tick_reads = state["tick_reads"]
+        ticks = state["ticks"]
+        assert isinstance(tick_reads, dict)
+        assert isinstance(ticks, dict)
+        reads = tick_reads.get(pid, 0)
+        tick_reads[pid] = reads + 1
+        value = ticks[pid]
+        if state["unstable_pid"] == pid and reads % 2:
+            return value + 1
+        return value
+
+    guard = MpsRuntimeGuard(
+        tmp_path,
+        run=run,
+        control_executable=trusted_executable,
+        server_executable=trusted_executable,
+        proc_root=proc_root,
+        read_process_environment=read_environment,
+        read_process_cgroup=read_cgroup,
+        read_start_ticks=read_ticks,
+    )
+    return guard, state
+
+
+def test_external_guard_never_trusts_spoofed_mps_name_without_exact_authority(
+    tmp_path: Path,
+) -> None:
+    gpu_uuid = EXPECTED_GPU_UUIDS[1]
+    spoofed_pid = 91_001
+    spoofed_proc = tmp_path / "proc" / str(spoofed_pid)
+    spoofed_proc.mkdir(parents=True)
+    (spoofed_proc / "comm").write_text(
+        "nvidia-cuda-mps-server\n",
+        encoding="ascii",
+    )
+    (spoofed_proc / "status").write_text(
+        "Uid:\t1001\t1001\t1001\t1001\n",
+        encoding="ascii",
+    )
+    policy = ExternalReservationPolicy(frozenset(), {}, {})
+
+    no_authority = ExternalGpuGuard(
+        policy,
+        process_query=lambda: {gpu_uuid: frozenset({spoofed_pid})},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        cache_seconds=0,
+    )
+    unavailable_authority = ExternalGpuGuard(
+        policy,
+        process_query=lambda: {gpu_uuid: frozenset({spoofed_pid})},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        authorized_mps_server_pids=lambda *_args: (_ for _ in ()).throw(
+            BrokerError("mps_control_unavailable", "unavailable")
+        ),
+        cache_seconds=0,
+    )
+
+    assert no_authority(1, gpu_uuid, (), _owner(), "backend", "dev") is True
+    assert (
+        unavailable_authority(1, gpu_uuid, (), _owner(), "backend", "dev")
+        is True
+    )
+
+
+def test_exact_idle_mps_authority_is_the_only_server_process_exemption(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+
+    assert mps_guard.authorized_server_pids(1, gpu_uuid) == frozenset(
+        {server_pid}
+    )
+    assert state["commands"] == ["get_server_list", "ps", "get_server_list"]
+
+    external_guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {gpu_uuid: frozenset({server_pid})},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        unmanaged_mps_client_query=lambda *_args: False,
+        authorized_mps_server_pids=mps_guard.authorized_server_pids,
+        allow_descriptor_mps_authority=True,
+        cache_seconds=0,
+    )
+    assert (
+        external_guard(1, gpu_uuid, (), _owner(), "backend", "dev") is False
+    )
+
+
+def test_mps_control_queries_use_exact_executable_and_minimal_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}/attacker:/usr/bin")
+    monkeypatch.setenv("LD_PRELOAD", f"{tmp_path}/attacker.so")
+
+    mps_guard.authorized_server_pids(1, EXPECTED_GPU_UUIDS[1])
+
+    assert state["run_argvs"] == [
+        (str(mps_guard.control_executable),),
+        (str(mps_guard.control_executable),),
+        (str(mps_guard.control_executable),),
+    ]
+    assert state["run_envs"] == [
+        {
+            "LC_ALL": "C",
+            "CUDA_MPS_PIPE_DIRECTORY": str(mps_guard.pipe_directory(1)),
+        }
+    ] * 3
+
+
+def test_mps_runtime_rejects_relative_executable_authority(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="must be absolute"):
+        MpsRuntimeGuard(
+            tmp_path,
+            control_executable=Path("nvidia-cuda-mps-control"),
+        )
+
+
+def test_mps_authority_rejects_control_endpoint_replacement_during_audit(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    pipe_directory = state["pipe_directory"]
+    assert isinstance(pipe_directory, Path)
+
+    def replace_control(command: str) -> None:
+        if command != "ps":
+            return
+        control = pipe_directory / "control"
+        replacement = pipe_directory / "replacement-control"
+        os.mkfifo(replacement, 0o600)
+        control.unlink()
+        replacement.rename(control)
+
+    state["command_hook"] = replace_control
+
+    with pytest.raises(BrokerError, match="changed during audit") as error:
+        mps_guard.authorized_server_pids(1, EXPECTED_GPU_UUIDS[1])
+
+    assert error.value.code == "mps_control_unavailable"
+
+
+def test_mps_authority_rejects_hardlinked_control_endpoint(tmp_path: Path) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    pipe_directory = state["pipe_directory"]
+    assert isinstance(pipe_directory, Path)
+    os.link(pipe_directory / "control", tmp_path / "control-alias")
+
+    with pytest.raises(BrokerError, match="pipe authority is unavailable") as error:
+        mps_guard.authorized_server_pids(1, EXPECTED_GPU_UUIDS[1])
+
+    assert error.value.code == "mps_control_unavailable"
+
+
+def test_host_mps_authority_requires_exact_systemd_unit_binding(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    control_pid = state["control_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+    assert isinstance(control_pid, int)
+    policy_key = "system:nexpoly-gpu-mps@1.service"
+
+    unbound = ExternalGpuGuard(
+        ExternalReservationPolicy(
+            frozenset(),
+            {},
+            {policy_key: frozenset({gpu_uuid})},
+        ),
+        process_query=lambda: {gpu_uuid: frozenset({server_pid})},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        unmanaged_mps_client_query=lambda *_args: False,
+        authorized_mps_server_pids=mps_guard.authorized_server_pids,
+        cache_seconds=0,
+    )
+    assert unbound(1, gpu_uuid, (), _owner(), "backend", "dev") is True
+
+    claim = SystemdGpuClaim(
+        scope="system",
+        unit="nexpoly-gpu-mps@1.service",
+        main_pid=0,
+        control_group="/system.slice/nexpoly-gpu-mps@1.service",
+        process_pids=frozenset({control_pid, server_pid}),
+        gpu_uuids=frozenset({gpu_uuid}),
+    )
+    bound = ExternalGpuGuard(
+        unbound.policy,
+        process_query=lambda: {gpu_uuid: frozenset({server_pid})},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (claim,),
+        unmanaged_mps_client_query=lambda *_args: False,
+        authorized_mps_server_pids=mps_guard.authorized_server_pids,
+        cache_seconds=0,
+    )
+    assert bound(1, gpu_uuid, (), _owner(), "backend", "dev") is False
+
+
+@pytest.mark.parametrize(
+    "server_list",
+    (
+        "0\n",
+        "042402\n",
+        " 42402\n",
+        "42402 \n",
+        "not-a-pid\n",
+        "42402\n42402\n",
+    ),
+)
+def test_mps_server_authority_rejects_invalid_server_list(
+    tmp_path: Path,
+    server_list: str,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    state["server_list"] = server_list
+
+    with pytest.raises(BrokerError) as error:
+        mps_guard.authorized_server_pids(1, EXPECTED_GPU_UUIDS[1])
+
+    assert error.value.code == "mps_control_unavailable"
+
+
+def test_mps_server_authority_rejects_multiple_servers(tmp_path: Path) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    state["server_list"] = "42402\n42403\n"
+
+    with pytest.raises(BrokerError, match="multiple servers") as error:
+        mps_guard.authorized_server_pids(1, EXPECTED_GPU_UUIDS[1])
+
+    assert error.value.code == "mps_control_unavailable"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "pid_file",
+        "pid_file_mode",
+        "control_executable",
+        "server_executable",
+        "control_credentials",
+        "server_credentials",
+        "cgroup_mismatch",
+        "root_cgroup",
+        "visible_device",
+        "environment_pipe",
+        "pipe_mode",
+        "control_mode",
+        "start_ticks",
+        "client_server",
+        "client_device",
+    ),
+)
+def test_mps_server_authority_fails_closed_on_identity_mismatch(
+    tmp_path: Path,
+    fault: str,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    control_pid = state["control_pid"]
+    server_pid = state["server_pid"]
+    gpu_uuid = state["gpu_uuid"]
+    pid_file = state["pid_file"]
+    pipe_directory = state["pipe_directory"]
+    status_paths = state["status_paths"]
+    executable_paths = state["executable_paths"]
+    environments = state["environments"]
+    cgroups = state["cgroups"]
+    assert isinstance(control_pid, int)
+    assert isinstance(server_pid, int)
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(pid_file, Path)
+    assert isinstance(pipe_directory, Path)
+    assert isinstance(status_paths, dict)
+    assert isinstance(executable_paths, dict)
+    assert isinstance(environments, dict)
+    assert isinstance(cgroups, dict)
+
+    if fault == "pid_file":
+        pid_file.write_text("0\n", encoding="ascii")
+    elif fault == "pid_file_mode":
+        pid_file.chmod(0o622)
+    elif fault == "control_executable":
+        executable_paths[control_pid].unlink()
+        executable_paths[control_pid].symlink_to("/bin/false")
+    elif fault == "server_executable":
+        executable_paths[server_pid].unlink()
+        executable_paths[server_pid].symlink_to("/bin/false")
+    elif fault == "control_credentials":
+        status_paths[control_pid].write_text(
+            "Uid:\t1001\t1001\t1001\t1001\n"
+            "Gid:\t1001\t1001\t1001\t1002\n",
+            encoding="ascii",
+        )
+    elif fault == "server_credentials":
+        status_paths[server_pid].write_text(
+            "Uid:\t1001\t1001\t1001\t0\n"
+            "Gid:\t1001\t1001\t1001\t1001\n",
+            encoding="ascii",
+        )
+    elif fault == "cgroup_mismatch":
+        cgroups[server_pid] = "0::/user.slice/foreign.scope"
+    elif fault == "root_cgroup":
+        cgroups[control_pid] = "0::/"
+        cgroups[server_pid] = "0::/"
+    elif fault == "visible_device":
+        environments[control_pid]["CUDA_VISIBLE_DEVICES"] = EXPECTED_GPU_UUIDS[3]
+    elif fault == "environment_pipe":
+        foreign_pipe = tmp_path / "foreign-pipe"
+        foreign_pipe.mkdir()
+        environments[control_pid]["CUDA_MPS_PIPE_DIRECTORY"] = str(foreign_pipe)
+    elif fault == "pipe_mode":
+        pipe_directory.chmod(0o755)
+    elif fault == "control_mode":
+        (pipe_directory / "control").chmod(0o622)
+    elif fault == "start_ticks":
+        state["unstable_pid"] = server_pid
+    elif fault == "client_server":
+        state["client_inventory"] = (
+            "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+            f"51001 0 {server_pid + 1} {gpu_uuid} 4026531836 client\n"
+        )
+    elif fault == "client_device":
+        state["client_inventory"] = (
+            "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+            f"51001 0 {server_pid} {EXPECTED_GPU_UUIDS[3]} "
+            "4026531836 client\n"
+        )
+    else:
+        raise AssertionError(f"unhandled fault: {fault}")
+
+    with pytest.raises(BrokerError) as error:
+        mps_guard.authorized_server_pids(1, gpu_uuid)
+
+    assert error.value.code == "mps_control_unavailable"
 
 
 def test_mps_allocation_audit_rejects_unowned_and_wrong_device_clients(
@@ -2058,6 +3113,8 @@ def test_docker_device_claim_without_cuda_pid_still_blocks_gpu1() -> None:
     claim = DockerGpuClaim(
         container_id="a" * 64,
         init_pid=os.getpid(),
+        started_at=_DOCKER_STARTED_AT,
+        restart_count=0,
         registration_id=None,
         component=None,
         environment=None,
@@ -2089,7 +3146,12 @@ def test_docker_inspect_device_request_is_authoritative_over_image_all_env() -> 
         payload = [
             {
                 "Id": container_id,
-                "State": {"Running": True, "Pid": os.getpid()},
+                "State": {
+                    "Running": True,
+                    "Pid": os.getpid(),
+                    "StartedAt": _DOCKER_STARTED_AT,
+                },
+                "RestartCount": 0,
                 "Config": {
                     "Labels": {
                         "com.nexpoly.gpu.registration": "backend-dev",
@@ -2123,7 +3185,175 @@ def test_docker_inspect_device_request_is_authoritative_over_image_all_env() -> 
         "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771"
     }
     assert claims[0].registration_id == "backend-dev"
-    assert len(calls) == 2
+    assert len(calls) == 5
+
+
+def test_docker_inventory_rejects_container_added_during_list_cas() -> None:
+    first = "a" * 64
+    second = "b" * 64
+    list_calls = 0
+
+    def run(command, **_kwargs):
+        nonlocal list_calls
+        if command[2] == "ls":
+            list_calls += 1
+            stdout = first + "\n" if list_calls == 1 else first + "\n" + second + "\n"
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        payload = [
+            {
+                "Id": first,
+                "State": {
+                    "Running": True,
+                    "Pid": 101,
+                    "StartedAt": _DOCKER_STARTED_AT,
+                },
+                "RestartCount": 0,
+                "Config": {"Labels": {}, "Env": []},
+                "HostConfig": {
+                    "DeviceRequests": [
+                        {
+                            "Driver": "nvidia",
+                            "DeviceIDs": ["1"],
+                            "Capabilities": [["gpu"]],
+                            "Count": 0,
+                        }
+                    ]
+                },
+            }
+        ]
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(payload), stderr=""
+        )
+
+    with pytest.raises(BrokerError, match="changed during audit") as error:
+        query_docker_gpu_claims(run=run)
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+def test_docker_inventory_rejects_duplicate_inspect_identity() -> None:
+    first = "a" * 64
+    second = "b" * 64
+
+    def run(command, **_kwargs):
+        if command[2] == "ls":
+            return subprocess.CompletedProcess(
+                command, 0, stdout=first + "\n" + second + "\n", stderr=""
+            )
+        record = {
+            "Id": first,
+            "State": {
+                "Running": True,
+                "Pid": 101,
+                "StartedAt": _DOCKER_STARTED_AT,
+            },
+            "RestartCount": 0,
+            "Config": {"Labels": {}, "Env": []},
+            "HostConfig": {"DeviceRequests": []},
+        }
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps([record, record]), stderr=""
+        )
+
+    with pytest.raises(BrokerError, match="one-to-one") as error:
+        query_docker_gpu_claims(run=run)
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+def test_docker_inventory_rejects_inspect_fingerprint_change() -> None:
+    container_id = "a" * 64
+    inspect_calls = 0
+
+    def run(command, **_kwargs):
+        nonlocal inspect_calls
+        if command[2] == "ls":
+            return subprocess.CompletedProcess(
+                command, 0, stdout=container_id + "\n", stderr=""
+            )
+        inspect_calls += 1
+        payload = [
+            {
+                "Id": container_id,
+                "State": {
+                    "Running": True,
+                    "Pid": 100 + inspect_calls,
+                    "StartedAt": _DOCKER_STARTED_AT,
+                },
+                "RestartCount": 0,
+                "Config": {"Labels": {}, "Env": []},
+                "HostConfig": {
+                    "DeviceRequests": [
+                        {
+                            "Driver": "nvidia",
+                            "DeviceIDs": ["1"],
+                            "Capabilities": [["gpu"]],
+                            "Count": 0,
+                        }
+                    ]
+                },
+            }
+        ]
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(payload), stderr=""
+        )
+
+    with pytest.raises(BrokerError, match="fingerprint changed") as error:
+        query_docker_gpu_claims(run=run)
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+@pytest.mark.parametrize("changed_field", ("started_at", "restart_count"))
+def test_docker_inventory_rejects_same_pid_restart_identity_change(
+    changed_field: str,
+) -> None:
+    container_id = "a" * 64
+    inspect_calls = 0
+
+    def run(command, **_kwargs):
+        nonlocal inspect_calls
+        if command[2] == "ls":
+            return subprocess.CompletedProcess(
+                command, 0, stdout=container_id + "\n", stderr=""
+            )
+        inspect_calls += 1
+        started_at = _DOCKER_STARTED_AT
+        restart_count = 0
+        if inspect_calls == 2 and changed_field == "started_at":
+            started_at = "2026-07-19T06:00:01.123456789Z"
+        if inspect_calls == 2 and changed_field == "restart_count":
+            restart_count = 1
+        payload = [
+            {
+                "Id": container_id,
+                "State": {
+                    "Running": True,
+                    "Pid": 4242,
+                    "StartedAt": started_at,
+                },
+                "RestartCount": restart_count,
+                "Config": {"Labels": {}, "Env": []},
+                "HostConfig": {
+                    "DeviceRequests": [
+                        {
+                            "Driver": "nvidia",
+                            "DeviceIDs": ["1"],
+                            "Capabilities": [["gpu"]],
+                            "Count": 0,
+                        }
+                    ]
+                },
+            }
+        ]
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(payload), stderr=""
+        )
+
+    with pytest.raises(BrokerError, match="fingerprint changed") as error:
+        query_docker_gpu_claims(run=run)
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
 
 
 def test_exact_managed_docker_registration_allows_visibility_claim() -> None:
@@ -2138,6 +3368,8 @@ def test_exact_managed_docker_registration_allows_visibility_claim() -> None:
     claim = DockerGpuClaim(
         container_id="b" * 64,
         init_pid=os.getpid(),
+        started_at=_DOCKER_STARTED_AT,
+        restart_count=0,
         registration_id="backend-dev",
         component="backend",
         environment="dev",
@@ -2192,6 +3424,8 @@ def test_exact_idle_md_supervisor_claim_does_not_block_other_governed_component(
     claim = DockerGpuClaim(
         container_id="d" * 64,
         init_pid=999_999_999,
+        started_at=_DOCKER_STARTED_AT,
+        restart_count=0,
         registration_id="md-dev",
         component="md",
         environment="dev",
@@ -2252,8 +3486,11 @@ def test_exact_idle_md_supervisor_claim_does_not_block_other_governed_component(
 def test_systemd_gpu_declaration_requires_exact_managed_unit_registration() -> None:
     gpu2 = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
     claim = SystemdGpuClaim(
+        scope="user",
         unit="nexpoly-monomer-md-worker.service",
         main_pid=os.getpid(),
+        control_group="/user.slice/nexpoly-monomer-md-worker.service",
+        process_pids=frozenset({os.getpid()}),
         gpu_uuids=frozenset({gpu2}),
     )
     unknown = ExternalGpuGuard(
@@ -2267,7 +3504,7 @@ def test_systemd_gpu_declaration_requires_exact_managed_unit_registration() -> N
         ExternalReservationPolicy(
             frozenset(),
             {},
-            {claim.unit: claim.gpu_uuids},
+            {f"{claim.scope}:{claim.unit}": claim.gpu_uuids},
         ),
         process_query=lambda: {},
         docker_claim_query=lambda: (),
@@ -2278,7 +3515,11 @@ def test_systemd_gpu_declaration_requires_exact_managed_unit_registration() -> N
     assert unknown(2, gpu2, (), _owner(), "md", "prod") is True
     assert managed(2, gpu2, (), _owner(), "md", "prod") is False
 
-    unbound = replace(claim, main_pid=999_999_999)
+    unbound = replace(
+        claim,
+        main_pid=999_999_999,
+        process_pids=frozenset({999_999_999}),
+    )
     unbound_guard = ExternalGpuGuard(
         managed.policy,
         process_query=lambda: {},
@@ -2291,6 +3532,7 @@ def test_systemd_gpu_declaration_requires_exact_managed_unit_registration() -> N
 
 def test_systemd_claim_inventory_reads_active_unit_environment_in_batches() -> None:
     gpu2 = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+    control_group = "/user.slice/user-1001.slice/nexpoly-backend.service"
     calls: list[list[str]] = []
 
     def run(command, **_kwargs):
@@ -2300,7 +3542,11 @@ def test_systemd_claim_inventory_reads_active_unit_environment_in_batches() -> N
         elif "show" in command and "--user" in command:
             stdout = (
                 "Id=nexpoly-backend.service\n"
+                "ActiveState=active\n"
+                "SubState=running\n"
+                f"InvocationID={'1' * 32}\n"
                 "MainPID=1234\n"
+                f"ControlGroup={control_group}\n"
                 f'Environment="CUDA_VISIBLE_DEVICES={gpu2}"\n'
                 "EnvironmentFiles=\n"
             )
@@ -2311,22 +3557,929 @@ def test_systemd_claim_inventory_reads_active_unit_environment_in_batches() -> N
     claims = query_systemd_gpu_claims(
         run=run,
         read_process_environment=lambda _pid: {"CUDA_VISIBLE_DEVICES": gpu2},
+        read_control_group_processes=lambda path: (
+            frozenset({1234}) if path == control_group else frozenset()
+        ),
+        read_process_cgroup=lambda _pid: control_group,
+        read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        read_process_start_ticks=_stable_systemd_ticks,
     )
 
     assert claims == (
         SystemdGpuClaim(
+            scope="user",
             unit="nexpoly-backend.service",
             main_pid=1234,
+            control_group=control_group,
+            process_pids=frozenset({1234}),
             gpu_uuids=frozenset({gpu2}),
         ),
     )
-    assert len(calls) == 3
+    assert len(calls) == 6
+
+
+def _systemd_declaration_runner(declaration: str):
+    authority_defaults = {
+        "ActiveState": "active",
+        "SubState": "running",
+        "InvocationID": "1" * 32,
+    }
+    declared_names = {
+        line.split("=", 1)[0]
+        for line in declaration.splitlines()
+        if "=" in line
+    }
+    declaration = (
+        declaration.rstrip()
+        + "\n"
+        + "".join(
+            f"{name}={value}\n"
+            for name, value in authority_defaults.items()
+            if name not in declared_names
+        )
+    )
+
+    def run(command, **_kwargs):
+        if "list-units" in command and "--user" in command:
+            stdout = "nexpoly-worker.service loaded active running Worker\n"
+        elif "show" in command and "--user" in command:
+            stdout = declaration
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    return run
+
+
+class _ScopedSystemdRunner:
+    def __init__(
+        self,
+        declarations: dict[str, dict[str, str]],
+        *,
+        manager_environments: dict[str, dict[str, str]] | None = None,
+    ) -> None:
+        self.declarations = declarations
+        self.manager_environments = manager_environments or {}
+        self.calls: list[list[str]] = []
+
+    @staticmethod
+    def _scope(command: list[str]) -> str:
+        return "user" if "--user" in command else "system"
+
+    def __call__(self, command, **_kwargs):
+        self.calls.append(command)
+        scope = self._scope(command)
+        if "list-units" in command:
+            stdout = "".join(
+                f"{unit} loaded active running Test service\n"
+                for unit in sorted(self.declarations.get(scope, {}))
+            )
+        elif "show-environment" in command:
+            stdout = "".join(
+                f"{name}={value}\n"
+                for name, value in sorted(
+                    self.manager_environments.get(scope, {}).items()
+                )
+            )
+        elif "show" in command:
+            stdout = "\n\n".join(
+                self.declarations[scope][unit].rstrip()
+                for unit in sorted(self.declarations.get(scope, {}))
+            )
+            if stdout:
+                stdout += "\n"
+        else:
+            raise AssertionError(f"unexpected systemctl command: {command}")
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+
+def _systemd_properties(
+    unit: str,
+    *,
+    main_pid: int,
+    control_group: str,
+    active_state: str = "active",
+    sub_state: str = "running",
+    invocation_id: str = "1" * 32,
+    user: str = "",
+    environment: str = "",
+    environment_files: tuple[str, ...] = (),
+    pass_environment: str = "",
+    unset_environment: str = "",
+) -> str:
+    lines = [
+        f"Id={unit}",
+        f"ActiveState={active_state}",
+        f"SubState={sub_state}",
+        f"InvocationID={invocation_id}",
+        f"MainPID={main_pid}",
+        f"ControlGroup={control_group}",
+        f"User={user}",
+        f"Environment={environment}",
+        f"PassEnvironment={pass_environment}",
+        f"UnsetEnvironment={unset_environment}",
+    ]
+    lines.extend(f"EnvironmentFiles={value}" for value in environment_files)
+    return "\n".join(lines) + "\n"
+
+
+def _stable_systemd_ticks(pid: int) -> int:
+    return 100_000 + pid
+
+
+def test_systemd_inventory_includes_activating_units() -> None:
+    unit = "nexpoly-starting-worker.service"
+    control_group = f"/user.slice/user-1001.slice/{unit}"
+    pid = 3001
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+
+    def run(command, **_kwargs):
+        if "list-units" in command and "--user" in command:
+            assert "--state=active,activating,reloading,deactivating" in command
+            stdout = f"{unit} loaded activating start Test service\n"
+        elif "show" in command and "--user" in command:
+            stdout = _systemd_properties(
+                unit,
+                active_state="activating",
+                sub_state="start",
+                main_pid=pid,
+                control_group=control_group,
+                environment=f"CUDA_VISIBLE_DEVICES={gpu1}",
+            )
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    claims = query_systemd_gpu_claims(
+        run=run,
+        read_process_environment=lambda _pid: {"CUDA_VISIBLE_DEVICES": gpu1},
+        read_control_group_processes=lambda path: (
+            frozenset({pid}) if path == control_group else frozenset()
+        ),
+        read_process_cgroup=lambda _pid: control_group,
+        read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        read_process_start_ticks=_stable_systemd_ticks,
+    )
+
+    assert claims[0].unit == unit
+    assert claims[0].gpu_uuids == frozenset({gpu1})
+
+
+def test_systemd_inventory_rejects_cgroup_member_forked_during_audit() -> None:
+    unit = "nexpoly-forking-worker.service"
+    control_group = f"/user.slice/user-1001.slice/{unit}"
+    main_pid = 3011
+    child_pid = 3012
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    runner = _ScopedSystemdRunner(
+        {
+            "user": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=main_pid,
+                    control_group=control_group,
+                    environment=f"CUDA_VISIBLE_DEVICES={gpu1}",
+                )
+            }
+        }
+    )
+    membership_reads = 0
+
+    def members(path: str) -> frozenset[int]:
+        nonlocal membership_reads
+        assert path == control_group
+        membership_reads += 1
+        return (
+            frozenset({main_pid})
+            if membership_reads == 1
+            else frozenset({main_pid, child_pid})
+        )
+
+    with pytest.raises(BrokerError, match="membership changed") as error:
+        query_systemd_gpu_claims(
+            run=runner,
+            read_process_environment=lambda _pid: {
+                "CUDA_VISIBLE_DEVICES": gpu1
+            },
+            read_control_group_processes=members,
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=_stable_systemd_ticks,
+        )
+
+    assert membership_reads == 2
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+def test_systemd_inventory_rejects_invocation_change_during_audit() -> None:
+    unit = "nexpoly-restarting-worker.service"
+    control_group = f"/user.slice/user-1001.slice/{unit}"
+    pid = 3021
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    show_reads = 0
+
+    def run(command, **_kwargs):
+        nonlocal show_reads
+        if "list-units" in command and "--user" in command:
+            stdout = f"{unit} loaded active running Test service\n"
+        elif "show" in command and "--user" in command:
+            show_reads += 1
+            stdout = _systemd_properties(
+                unit,
+                main_pid=pid,
+                control_group=control_group,
+                invocation_id=("1" if show_reads == 1 else "2") * 32,
+                environment=f"CUDA_VISIBLE_DEVICES={gpu1}",
+            )
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    with pytest.raises(BrokerError, match="authority changed") as error:
+        query_systemd_gpu_claims(
+            run=run,
+            read_process_environment=lambda _pid: {
+                "CUDA_VISIBLE_DEVICES": gpu1
+            },
+            read_control_group_processes=lambda path: (
+                frozenset({pid}) if path == control_group else frozenset()
+            ),
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=_stable_systemd_ticks,
+        )
+
+    assert show_reads == 2
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+def test_systemd_process_snapshot_excludes_pid_reused_during_identity_read(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    pid = 1234
+    (proc_root / str(pid)).mkdir(parents=True)
+    ticks = iter((101, 202))
+
+    assert (
+        _snapshot_systemd_process_cgroups(
+            proc_root=proc_root,
+            read_process_cgroup=lambda _pid: "/user.slice/test.service",
+            read_process_start_ticks=lambda _pid: next(ticks),
+        )
+        == ()
+    )
+
+
+def test_systemd_inventory_skips_unmarked_unreadable_root_service() -> None:
+    unit = "modem-manager.service"
+    control_group = f"/system.slice/{unit}"
+    runner = _ScopedSystemdRunner(
+        {
+            "system": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=2647,
+                    control_group=control_group,
+                )
+            }
+        }
+    )
+    environment_reads: list[int] = []
+
+    def unreadable(pid: int) -> dict[str, str]:
+        environment_reads.append(pid)
+        raise PermissionError("cross-UID /proc access denied")
+
+    claims = query_systemd_gpu_claims(
+        run=runner,
+        read_process_environment=unreadable,
+        read_control_group_processes=lambda path: (
+            frozenset({2647}) if path == control_group else frozenset()
+        ),
+        compute_process_query=lambda: {},
+        read_process_cgroup=lambda _pid: control_group,
+        read_process_uids=lambda _pid: (0, 0, 0, 0),
+        read_process_start_ticks=_stable_systemd_ticks,
+    )
+
+    assert claims == ()
+    assert environment_reads == []
+
+
+@pytest.mark.parametrize("fault", ("start_ticks", "cgroup"))
+def test_systemd_inventory_rejects_process_identity_change_while_reading_env(
+    fault: str,
+) -> None:
+    unit = "nexpoly-worker.service"
+    control_group = f"/user.slice/user-1001.slice/{unit}"
+    pid = 3101
+    runner = _ScopedSystemdRunner(
+        {
+            "user": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=pid,
+                    control_group=control_group,
+                    environment=f"CUDA_VISIBLE_DEVICES={EXPECTED_GPU_UUIDS[1]}",
+                )
+            }
+        }
+    )
+    reads = {"ticks": 0, "cgroup": 0}
+
+    def read_ticks(_pid: int) -> int:
+        reads["ticks"] += 1
+        if fault == "start_ticks" and reads["ticks"] > 6:
+            return 202
+        return 101
+
+    def read_cgroup(_pid: int) -> str:
+        reads["cgroup"] += 1
+        if fault == "cgroup" and reads["cgroup"] > 3:
+            return "/user.slice/foreign.service"
+        return control_group
+
+    with pytest.raises(BrokerError, match="identity changed") as error:
+        query_systemd_gpu_claims(
+            run=runner,
+            read_process_environment=lambda _pid: {
+                "CUDA_VISIBLE_DEVICES": EXPECTED_GPU_UUIDS[1]
+            },
+            read_control_group_processes=lambda path: (
+                frozenset({pid}) if path == control_group else frozenset()
+            ),
+            compute_process_query=lambda: {},
+            read_process_cgroup=read_cgroup,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=read_ticks,
+        )
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+def test_systemd_inventory_rechecks_user_identity_after_system_scope_query() -> None:
+    unit = "nexpoly-worker.service"
+    control_group = f"/user.slice/user-1001.slice/{unit}"
+    pid = 3151
+    scoped_runner = _ScopedSystemdRunner(
+        {
+            "user": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=pid,
+                    control_group=control_group,
+                    environment=f"CUDA_VISIBLE_DEVICES={EXPECTED_GPU_UUIDS[1]}",
+                )
+            }
+        }
+    )
+    system_scope_started = False
+
+    def run(command, **kwargs):
+        nonlocal system_scope_started
+        completed = scoped_runner(command, **kwargs)
+        if "list-units" in command and "--user" not in command:
+            system_scope_started = True
+        return completed
+
+    with pytest.raises(BrokerError, match="changed during audit") as error:
+        query_systemd_gpu_claims(
+            run=run,
+            read_process_environment=lambda _pid: {
+                "CUDA_VISIBLE_DEVICES": EXPECTED_GPU_UUIDS[1]
+            },
+            read_control_group_processes=lambda path: (
+                frozenset({pid}) if path == control_group else frozenset()
+            ),
+            compute_process_query=lambda: {},
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=lambda _pid: (
+                202 if system_scope_started else 101
+            ),
+        )
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+def test_systemd_inventory_rejects_main_pid_outside_control_group() -> None:
+    unit = "nexpoly-worker.service"
+    control_group = f"/user.slice/user-1001.slice/{unit}"
+    main_pid = 3201
+    child_pid = 3202
+    runner = _ScopedSystemdRunner(
+        {
+            "user": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=main_pid,
+                    control_group=control_group,
+                    environment=f"CUDA_VISIBLE_DEVICES={EXPECTED_GPU_UUIDS[1]}",
+                )
+            }
+        }
+    )
+
+    with pytest.raises(BrokerError, match="MainPID is outside") as error:
+        query_systemd_gpu_claims(
+            run=runner,
+            read_process_environment=lambda _pid: {},
+            read_control_group_processes=lambda path: (
+                frozenset({child_pid}) if path == control_group else frozenset()
+            ),
+            compute_process_query=lambda: {},
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=_stable_systemd_ticks,
+        )
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+def test_systemd_inventory_rejects_positive_main_pid_without_control_group() -> None:
+    unit = "nexpoly-worker.service"
+    runner = _ScopedSystemdRunner(
+        {
+            "user": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=3301,
+                    control_group="",
+                    environment=f"CUDA_VISIBLE_DEVICES={EXPECTED_GPU_UUIDS[1]}",
+                )
+            }
+        }
+    )
+
+    with pytest.raises(BrokerError, match="MainPID is outside") as error:
+        query_systemd_gpu_claims(
+            run=runner,
+            read_process_environment=lambda _pid: {},
+            read_control_group_processes=lambda _path: frozenset(),
+            compute_process_query=lambda: {},
+            read_process_cgroup=lambda _pid: "/user.slice/foreign.service",
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=_stable_systemd_ticks,
+        )
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+def test_systemd_inventory_rejects_nvidia_pid_reuse_during_cgroup_binding() -> None:
+    unit = "root-gpu-worker.service"
+    control_group = f"/system.slice/{unit}"
+    pid = 3401
+    runner = _ScopedSystemdRunner(
+        {
+            "system": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=pid,
+                    control_group=control_group,
+                )
+            }
+        }
+    )
+    reads = 0
+
+    def read_ticks(_pid: int) -> int:
+        nonlocal reads
+        reads += 1
+        return 101 if reads <= 2 else 202
+
+    with pytest.raises(BrokerError, match="NVIDIA PID identity changed") as error:
+        query_systemd_gpu_claims(
+            run=runner,
+            read_process_environment=lambda _pid: {},
+            read_control_group_processes=lambda path: (
+                frozenset({pid}) if path == control_group else frozenset()
+            ),
+            compute_process_query=lambda: {
+                EXPECTED_GPU_UUIDS[1]: frozenset({pid})
+            },
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (0, 0, 0, 0),
+            read_process_start_ticks=read_ticks,
+        )
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+def test_systemd_inventory_keeps_same_named_user_and_system_units_distinct() -> None:
+    unit = "nexpoly-worker.service"
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    gpu3 = EXPECTED_GPU_UUIDS[3]
+    user_cgroup = f"/user.slice/user-1001.slice/{unit}"
+    system_cgroup = f"/system.slice/{unit}"
+    runner = _ScopedSystemdRunner(
+        {
+            "user": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=1101,
+                    control_group=user_cgroup,
+                    environment=f"CUDA_VISIBLE_DEVICES={gpu1}",
+                )
+            },
+            "system": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=2101,
+                    control_group=system_cgroup,
+                    environment=f"CUDA_VISIBLE_DEVICES={gpu3}",
+                )
+            },
+        }
+    )
+    process_sets = {
+        user_cgroup: frozenset({1101, 1102}),
+        system_cgroup: frozenset({2101}),
+    }
+    live_environments = {
+        1101: {"CUDA_VISIBLE_DEVICES": gpu1},
+        1102: {"CUDA_VISIBLE_DEVICES": gpu1},
+        2101: {"CUDA_VISIBLE_DEVICES": gpu3},
+    }
+
+    claims = query_systemd_gpu_claims(
+        run=runner,
+        read_process_environment=lambda pid: live_environments[pid],
+        read_control_group_processes=lambda path: process_sets[path],
+        compute_process_query=lambda: {},
+        read_process_cgroup=lambda pid: (
+            user_cgroup if pid in process_sets[user_cgroup] else system_cgroup
+        ),
+        read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        read_process_start_ticks=_stable_systemd_ticks,
+    )
+
+    assert claims == (
+        SystemdGpuClaim(
+            scope="system",
+            unit=unit,
+            main_pid=2101,
+            control_group=system_cgroup,
+            process_pids=frozenset({2101}),
+            gpu_uuids=frozenset({gpu3}),
+        ),
+        SystemdGpuClaim(
+            scope="user",
+            unit=unit,
+            main_pid=1101,
+            control_group=user_cgroup,
+            process_pids=frozenset({1101, 1102}),
+            gpu_uuids=frozenset({gpu1}),
+        ),
+    )
+    assert {
+        f"{claim.scope}:{claim.unit}" for claim in claims
+    } == {
+        f"system:{unit}",
+        f"user:{unit}",
+    }
+
+
+def test_systemd_mps_inventory_with_main_pid_zero_flows_into_guard() -> None:
+    unit = "nexpoly-gpu-mps@1.service"
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    control_group = f"/system.slice/{unit}"
+    server_pid = 4101
+    template_environment = (
+        "NEXPOLY_GPU_STATE_ROOT=/data/lzq/gith/nexpoly-runtime/state/gpu-resource "
+        "NEXPOLY_GPU_EXTERNAL_RESERVATIONS="
+        "/data/lzq/gith/nexpoly-runtime/state/gpu-resource/"
+        "external-reservations.json "
+        "XDG_RUNTIME_DIR=/run/user/1001"
+    )
+    runner = _ScopedSystemdRunner(
+        {
+            "system": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=0,
+                    control_group=control_group,
+                    user="1001",
+                    environment=template_environment,
+                )
+            }
+        }
+    )
+
+    claims = query_systemd_gpu_claims(
+        run=runner,
+        read_process_environment=lambda _pid: {},
+        read_control_group_processes=lambda path: (
+            frozenset({server_pid}) if path == control_group else frozenset()
+        ),
+        compute_process_query=lambda: {gpu1: frozenset({server_pid})},
+        read_process_cgroup=lambda pid: (
+            control_group if pid == server_pid else "/system.slice/other.service"
+        ),
+        read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        read_process_start_ticks=_stable_systemd_ticks,
+    )
+
+    assert claims == (
+        SystemdGpuClaim(
+            scope="system",
+            unit=unit,
+            main_pid=0,
+            control_group=control_group,
+            process_pids=frozenset({server_pid}),
+            gpu_uuids=frozenset({gpu1}),
+        ),
+    )
+
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(
+            frozenset(),
+            {},
+            {f"system:{unit}": frozenset({gpu1})},
+        ),
+        process_query=lambda: {gpu1: frozenset({server_pid})},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: claims,
+        unmanaged_mps_client_query=lambda *_args: False,
+        authorized_mps_server_pids=lambda index, uuid: (
+            frozenset({server_pid})
+            if (index, uuid) == (1, gpu1)
+            else frozenset()
+        ),
+        cache_seconds=0,
+    )
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is False
+
+
+@pytest.mark.parametrize(
+    ("unset_environment", "expected_gpu_uuids"),
+    [
+        ("", frozenset({EXPECTED_GPU_UUIDS[1]})),
+        ("CUDA_VISIBLE_DEVICES", frozenset()),
+        (f"CUDA_VISIBLE_DEVICES={EXPECTED_GPU_UUIDS[1]}", frozenset()),
+    ],
+)
+def test_systemd_inventory_applies_pass_then_unset_environment(
+    unset_environment: str,
+    expected_gpu_uuids: frozenset[str],
+) -> None:
+    unit = "nexpoly-pass-environment.service"
+    control_group = f"/system.slice/{unit}"
+    pid = 5101
+    runner = _ScopedSystemdRunner(
+        {
+            "system": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=pid,
+                    control_group=control_group,
+                    pass_environment="CUDA_VISIBLE_DEVICES",
+                    unset_environment=unset_environment,
+                )
+            }
+        },
+        manager_environments={
+            "system": {"CUDA_VISIBLE_DEVICES": EXPECTED_GPU_UUIDS[1]}
+        },
+    )
+
+    claims = query_systemd_gpu_claims(
+        run=runner,
+        read_process_environment=lambda _pid: (
+            {}
+            if unset_environment
+            else {"CUDA_VISIBLE_DEVICES": EXPECTED_GPU_UUIDS[1]}
+        ),
+        read_control_group_processes=lambda path: (
+            frozenset({pid}) if path == control_group else frozenset()
+        ),
+        compute_process_query=lambda: {},
+        read_process_cgroup=lambda _pid: control_group,
+        read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        read_process_start_ticks=_stable_systemd_ticks,
+    )
+
+    if expected_gpu_uuids:
+        assert claims == (
+            SystemdGpuClaim(
+                scope="system",
+                unit=unit,
+                main_pid=pid,
+                control_group=control_group,
+                process_pids=frozenset({pid}),
+                gpu_uuids=expected_gpu_uuids,
+            ),
+        )
+    else:
+        assert claims == ()
+
+
+def test_systemd_inventory_attributes_active_gpu_pid_to_its_exact_gpu() -> None:
+    unit = "root-gpu-worker.service"
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    gpu3 = EXPECTED_GPU_UUIDS[3]
+    control_group = f"/system.slice/{unit}"
+    worker_pid = 6101
+    unrelated_gpu_pid = 6102
+    runner = _ScopedSystemdRunner(
+        {
+            "system": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=worker_pid,
+                    control_group=control_group,
+                )
+            }
+        }
+    )
+
+    claims = query_systemd_gpu_claims(
+        run=runner,
+        read_process_environment=lambda _pid: (_ for _ in ()).throw(
+            PermissionError("root environment unreadable")
+        ),
+        read_control_group_processes=lambda path: (
+            frozenset({worker_pid}) if path == control_group else frozenset()
+        ),
+        compute_process_query=lambda: {
+            gpu1: frozenset({unrelated_gpu_pid}),
+            gpu3: frozenset({worker_pid}),
+        },
+        read_process_cgroup=lambda pid: (
+            control_group if pid == worker_pid else "/system.slice/other.service"
+        ),
+        read_process_uids=lambda _pid: (0, 0, 0, 0),
+        read_process_start_ticks=_stable_systemd_ticks,
+    )
+
+    assert claims == (
+        SystemdGpuClaim(
+            scope="system",
+            unit=unit,
+            main_pid=worker_pid,
+            control_group=control_group,
+            process_pids=frozenset({worker_pid}),
+            gpu_uuids=frozenset({gpu3}),
+        ),
+    )
+
+
+def test_systemd_active_pid_blocks_only_the_gpu_it_uses() -> None:
+    gpu1 = EXPECTED_GPU_UUIDS[1]
+    gpu3 = EXPECTED_GPU_UUIDS[3]
+    worker_pid = 6101
+    claim = SystemdGpuClaim(
+        scope="system",
+        unit="root-gpu-worker.service",
+        main_pid=worker_pid,
+        control_group="/system.slice/root-gpu-worker.service",
+        process_pids=frozenset({worker_pid}),
+        gpu_uuids=frozenset({gpu3}),
+    )
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {gpu3: frozenset({worker_pid})},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (claim,),
+        cache_seconds=0,
+    )
+
+    assert guard(1, gpu1, (), _owner(), "backend", "dev") is False
+    assert guard(3, gpu3, (), _owner(), "backend", "dev") is True
+
+
+def test_systemd_claim_inventory_accepts_omitted_empty_environment_files() -> None:
+    gpu2 = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+    control_group = "/user.slice/user-1001.slice/nexpoly-worker.service"
+    declaration = (
+        "MainPID=1234\n"
+        f"ControlGroup={control_group}\n"
+        f'Environment="CUDA_VISIBLE_DEVICES={gpu2}"\n'
+        "Id=nexpoly-worker.service\n"
+    )
+
+    claims = query_systemd_gpu_claims(
+        run=_systemd_declaration_runner(declaration),
+        read_process_environment=lambda _pid: {"CUDA_VISIBLE_DEVICES": gpu2},
+        read_control_group_processes=lambda path: (
+            frozenset({1234}) if path == control_group else frozenset()
+        ),
+        read_process_cgroup=lambda _pid: control_group,
+        read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        read_process_start_ticks=_stable_systemd_ticks,
+    )
+
+    assert claims == (
+        SystemdGpuClaim(
+            scope="user",
+            unit="nexpoly-worker.service",
+            main_pid=1234,
+            control_group=control_group,
+            process_pids=frozenset({1234}),
+            gpu_uuids=frozenset({gpu2}),
+        ),
+    )
+
+
+def test_systemd_claim_inventory_detects_gpu_declared_only_in_live_environment() -> None:
+    gpu3 = EXPECTED_GPU_UUIDS[3]
+    control_group = "/user.slice/user-1001.slice/nexpoly-worker.service"
+    declaration = (
+        "Id=nexpoly-worker.service\n"
+        "MainPID=1234\n"
+        f"ControlGroup={control_group}\n"
+        "Environment=LANG=C\n"
+        "EnvironmentFiles=\n"
+    )
+
+    claims = query_systemd_gpu_claims(
+        run=_systemd_declaration_runner(declaration),
+        read_process_environment=lambda _pid: {
+            "LANG": "C",
+            "NVIDIA_VISIBLE_DEVICES": gpu3,
+        },
+        read_control_group_processes=lambda path: (
+            frozenset({1234}) if path == control_group else frozenset()
+        ),
+        read_process_cgroup=lambda _pid: control_group,
+        read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        read_process_start_ticks=_stable_systemd_ticks,
+    )
+
+    assert claims == (
+        SystemdGpuClaim(
+            scope="user",
+            unit="nexpoly-worker.service",
+            main_pid=1234,
+            control_group=control_group,
+            process_pids=frozenset({1234}),
+            gpu_uuids=frozenset({gpu3}),
+        ),
+    )
+
+
+def test_systemd_claim_inventory_fails_closed_when_live_environment_is_unreadable() -> None:
+    control_group = "/user.slice/user-1001.slice/nexpoly-worker.service"
+    declaration = (
+        "Id=nexpoly-worker.service\n"
+        "MainPID=1234\n"
+        f"ControlGroup={control_group}\n"
+        "Environment=LANG=C\n"
+        "EnvironmentFiles=\n"
+    )
+
+    def unreadable(_pid: int) -> dict[str, str]:
+        raise PermissionError("denied")
+
+    with pytest.raises(BrokerError, match="cannot safely read live environment") as error:
+        query_systemd_gpu_claims(
+            run=_systemd_declaration_runner(declaration),
+            read_process_environment=unreadable,
+            read_control_group_processes=lambda path: (
+                frozenset({1234}) if path == control_group else frozenset()
+            ),
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=_stable_systemd_ticks,
+        )
+
+    assert error.value.code == "gpu_claim_inventory_unavailable"
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "Id=nexpoly-worker.service\nEnvironment=\n",
+        (
+            "Id=nexpoly-worker.service\nMainPID=1234\n"
+            "MainPID=1234\nEnvironment=\n"
+        ),
+        (
+            "Id=nexpoly-worker.service\nMainPID=1234\n"
+            "Environment=\nEnvironment=LANG=C\n"
+        ),
+        (
+            "Id=nexpoly-worker.service\nMainPID=1234\n"
+            "Environment=\nUnexpected=value\n"
+        ),
+    ],
+)
+def test_systemd_claim_inventory_rejects_missing_duplicate_or_unknown_fields(
+    declaration: str,
+) -> None:
+    with pytest.raises(BrokerError, match="systemd GPU declaration response"):
+        query_systemd_gpu_claims(
+            run=_systemd_declaration_runner(declaration),
+            read_process_environment=lambda _pid: {},
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        )
 
 
 def test_systemd_claim_inventory_reads_environment_files_and_live_process(
     tmp_path: Path,
 ) -> None:
     gpu1 = "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771"
+    control_group = "/user.slice/user-1001.slice/nexpoly-worker.service"
     environment_file = tmp_path / "worker.env"
     environment_file.write_text(
         f"CUDA_VISIBLE_DEVICES={gpu1}\n", encoding="utf-8"
@@ -2338,7 +4491,11 @@ def test_systemd_claim_inventory_reads_environment_files_and_live_process(
         elif "show" in command and "--user" in command:
             stdout = (
                 "Id=nexpoly-worker.service\n"
+                "ActiveState=active\n"
+                "SubState=running\n"
+                f"InvocationID={'1' * 32}\n"
                 f"MainPID={os.getpid()}\n"
+                f"ControlGroup={control_group}\n"
                 "Environment=\n"
                 f"EnvironmentFiles={environment_file} (ignore_errors=no)\n"
             )
@@ -2349,15 +4506,396 @@ def test_systemd_claim_inventory_reads_environment_files_and_live_process(
     claims = query_systemd_gpu_claims(
         run=run,
         read_process_environment=lambda _pid: {"CUDA_VISIBLE_DEVICES": gpu1},
+        read_control_group_processes=lambda path: (
+            frozenset({os.getpid()})
+            if path == control_group
+            else frozenset()
+        ),
+        read_process_cgroup=lambda _pid: control_group,
     )
 
     assert claims == (
         SystemdGpuClaim(
+            scope="user",
             unit="nexpoly-worker.service",
             main_pid=os.getpid(),
+            control_group=control_group,
+            process_pids=frozenset({os.getpid()}),
             gpu_uuids=frozenset({gpu1}),
         ),
     )
+
+
+def test_systemd_claim_inventory_reads_repeated_and_prefixed_optional_files(
+    tmp_path: Path,
+) -> None:
+    gpu1 = "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771"
+    control_group = "/user.slice/user-1001.slice/nexpoly-worker.service"
+    unrelated = tmp_path / "unrelated.env"
+    unrelated.write_text("LANG=C\n", encoding="utf-8")
+    worker = tmp_path / "worker.env"
+    worker.write_text(f"CUDA_VISIBLE_DEVICES={gpu1}\n", encoding="utf-8")
+    missing = tmp_path / "missing.env"
+    declaration = (
+        "Id=nexpoly-worker.service\n"
+        f"MainPID={os.getpid()}\n"
+        f"ControlGroup={control_group}\n"
+        "Environment=\n"
+        f"EnvironmentFiles={unrelated} (ignore_errors=no)\n"
+        f"EnvironmentFiles=-{worker} (ignore_errors=yes)\n"
+        f"EnvironmentFiles={missing} (ignore_errors=yes)\n"
+        f"EnvironmentFiles=-{missing} (ignore_errors=yes)\n"
+    )
+
+    claims = query_systemd_gpu_claims(
+        run=_systemd_declaration_runner(declaration),
+        read_process_environment=lambda _pid: {"CUDA_VISIBLE_DEVICES": gpu1},
+        read_control_group_processes=lambda path: (
+            frozenset({os.getpid()})
+            if path == control_group
+            else frozenset()
+        ),
+        read_process_cgroup=lambda _pid: control_group,
+    )
+
+    assert claims == (
+        SystemdGpuClaim(
+            scope="user",
+            unit="nexpoly-worker.service",
+            main_pid=os.getpid(),
+            control_group=control_group,
+            process_pids=frozenset({os.getpid()}),
+            gpu_uuids=frozenset({gpu1}),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "environment_files",
+    [
+        "relative.env (ignore_errors=no)",
+        "/missing/marker.env",
+        "-/missing/required.env (ignore_errors=no)",
+        "/missing/value.env (ignore_errors=maybe)",
+        "//ambiguous/path.env (ignore_errors=yes)",
+        "/missing/extra.env (ignore_errors=yes) trailing",
+    ],
+)
+def test_systemd_claim_inventory_rejects_ambiguous_environment_file_declarations(
+    environment_files: str,
+) -> None:
+    control_group = "/user.slice/user-1001.slice/nexpoly-worker.service"
+    declaration = (
+        "Id=nexpoly-worker.service\n"
+        "MainPID=1234\n"
+        f"ControlGroup={control_group}\n"
+        "Environment=\n"
+        f"EnvironmentFiles={environment_files}\n"
+    )
+
+    with pytest.raises(BrokerError, match="EnvironmentFiles declaration is invalid"):
+        query_systemd_gpu_claims(
+            run=_systemd_declaration_runner(declaration),
+            read_process_environment=lambda _pid: {},
+            read_control_group_processes=lambda path: (
+                frozenset({1234}) if path == control_group else frozenset()
+            ),
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=_stable_systemd_ticks,
+        )
+
+
+def test_systemd_claim_inventory_requires_nonoptional_environment_file(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing.env"
+    control_group = "/user.slice/user-1001.slice/nexpoly-worker.service"
+    declaration = (
+        "Id=nexpoly-worker.service\n"
+        "MainPID=1234\n"
+        f"ControlGroup={control_group}\n"
+        "Environment=\n"
+        f"EnvironmentFiles={missing} (ignore_errors=no)\n"
+    )
+
+    with pytest.raises(BrokerError, match="EnvironmentFile is unsafe"):
+        query_systemd_gpu_claims(
+            run=_systemd_declaration_runner(declaration),
+            read_process_environment=lambda _pid: {},
+            read_control_group_processes=lambda path: (
+                frozenset({1234}) if path == control_group else frozenset()
+            ),
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=_stable_systemd_ticks,
+        )
+
+
+def test_systemd_claim_inventory_does_not_ignore_existing_unsafe_optional_file(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "worker.env"
+    target.write_text("CUDA_VISIBLE_DEVICES=none\n", encoding="utf-8")
+    environment_file = tmp_path / "worker-link.env"
+    environment_file.symlink_to(target)
+    control_group = "/user.slice/user-1001.slice/nexpoly-worker.service"
+    declaration = (
+        "Id=nexpoly-worker.service\n"
+        "MainPID=1234\n"
+        f"ControlGroup={control_group}\n"
+        "Environment=\n"
+        f"EnvironmentFiles=-{environment_file} (ignore_errors=yes)\n"
+    )
+
+    with pytest.raises(BrokerError, match="EnvironmentFile is unsafe"):
+        query_systemd_gpu_claims(
+            run=_systemd_declaration_runner(declaration),
+            read_process_environment=lambda _pid: {},
+            read_control_group_processes=lambda path: (
+                frozenset({1234}) if path == control_group else frozenset()
+            ),
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=_stable_systemd_ticks,
+        )
+
+
+def test_systemd_environment_file_rejects_group_or_world_writable_input(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "worker.env"
+    environment_file.write_text("CUDA_VISIBLE_DEVICES=none\n", encoding="utf-8")
+    environment_file.chmod(0o660)
+
+    with pytest.raises(BrokerError, match="EnvironmentFile is unsafe"):
+        _read_systemd_environment_file(environment_file)
+
+
+def test_systemd_environment_file_rejects_hardlink_alias(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "worker.env"
+    environment_file.write_text("CUDA_VISIBLE_DEVICES=none\n", encoding="utf-8")
+    os.link(environment_file, tmp_path / "worker-alias.env")
+
+    with pytest.raises(BrokerError, match="EnvironmentFile is unsafe"):
+        _read_systemd_environment_file(environment_file)
+
+
+def test_systemd_environment_file_rejects_path_replacement_while_read(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    environment_file = tmp_path / "worker.env"
+    displaced = tmp_path / "worker.original.env"
+    environment_file.write_text("CUDA_VISIBLE_DEVICES=none\n", encoding="utf-8")
+    real_pread = os.pread
+
+    def replace_after_read(descriptor: int, size: int, offset: int) -> bytes:
+        raw = real_pread(descriptor, size, offset)
+        environment_file.rename(displaced)
+        environment_file.write_text(
+            "CUDA_VISIBLE_DEVICES=all\n",
+            encoding="utf-8",
+        )
+        return raw
+
+    monkeypatch.setattr(os, "pread", replace_after_read)
+
+    with pytest.raises(BrokerError, match="identity changed while read"):
+        _read_systemd_environment_file(environment_file)
+
+
+def _audit_activating_environment_file_after_mutation(
+    environment_file: Path,
+    mutate,
+    *,
+    optional: bool = False,
+    transitional: bool = False,
+    mutation_list_call: int = 2,
+) -> tuple[SystemdGpuClaim, ...]:
+    unit = "nexpoly-starting-env-worker.service"
+    control_group = f"/user.slice/user-1001.slice/{unit}"
+    declaration = _systemd_properties(
+        unit,
+        active_state="activating" if transitional else "active",
+        sub_state="start" if transitional else "running",
+        main_pid=0,
+        control_group=control_group,
+        environment_files=(
+            (
+                f"-{environment_file} (ignore_errors=yes)"
+                if optional
+                else f"{environment_file} (ignore_errors=no)"
+            ),
+        ),
+    )
+    user_list_calls = 0
+
+    def run(command, **_kwargs):
+        nonlocal user_list_calls
+        if "list-units" in command and "--user" in command:
+            user_list_calls += 1
+            if user_list_calls == mutation_list_call:
+                mutate()
+            if transitional:
+                stdout = f"{unit} loaded activating start Test service\n"
+            else:
+                stdout = f"{unit} loaded active running Test service\n"
+        elif "show" in command and "--user" in command:
+            stdout = declaration
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=stdout,
+            stderr="",
+        )
+
+    return query_systemd_gpu_claims(
+        compute_processes={},
+        run=run,
+        read_control_group_processes=lambda _path: frozenset(),
+        read_process_cgroup=lambda _pid: control_group,
+        read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        read_process_start_ticks=_stable_systemd_ticks,
+    )
+
+
+def test_systemd_environment_file_rejects_replacement_after_initial_read(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "worker.env"
+    displaced = tmp_path / "worker.original.env"
+    environment_file.write_text(
+        "CUDA_VISIBLE_DEVICES=none\n",
+        encoding="utf-8",
+    )
+    environment_file.chmod(0o600)
+
+    def replace_path() -> None:
+        environment_file.rename(displaced)
+        environment_file.write_text(
+            f"CUDA_VISIBLE_DEVICES={EXPECTED_GPU_UUIDS[1]}\n",
+            encoding="utf-8",
+        )
+        environment_file.chmod(0o600)
+
+    with pytest.raises(BrokerError, match="EnvironmentFile"):
+        _audit_activating_environment_file_after_mutation(
+            environment_file,
+            replace_path,
+        )
+
+
+def test_systemd_environment_file_rejects_same_inode_rewrite_after_read(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "worker.env"
+    environment_file.write_text(
+        "CUDA_VISIBLE_DEVICES=none\n",
+        encoding="utf-8",
+    )
+    environment_file.chmod(0o600)
+    original_inode = environment_file.stat().st_ino
+
+    def rewrite_content() -> None:
+        environment_file.write_text(
+            f"CUDA_VISIBLE_DEVICES={EXPECTED_GPU_UUIDS[1]}\n",
+            encoding="utf-8",
+        )
+        environment_file.chmod(0o600)
+        assert environment_file.stat().st_ino == original_inode
+
+    with pytest.raises(BrokerError, match="EnvironmentFile"):
+        _audit_activating_environment_file_after_mutation(
+            environment_file,
+            rewrite_content,
+        )
+
+
+def test_systemd_environment_file_rejects_path_identity_aba_after_read(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "worker.env"
+    original = tmp_path / "worker.original.env"
+    attacker = tmp_path / "worker.attacker.env"
+    environment_file.write_text(
+        "CUDA_VISIBLE_DEVICES=none\n",
+        encoding="utf-8",
+    )
+    environment_file.chmod(0o600)
+    original_identity = (
+        environment_file.stat().st_dev,
+        environment_file.stat().st_ino,
+    )
+
+    def replace_and_restore() -> None:
+        environment_file.rename(original)
+        attacker.write_text(
+            f"CUDA_VISIBLE_DEVICES={EXPECTED_GPU_UUIDS[1]}\n",
+            encoding="utf-8",
+        )
+        attacker.chmod(0o600)
+        attacker.rename(environment_file)
+        environment_file.unlink()
+        original.rename(environment_file)
+        assert (
+            environment_file.stat().st_dev,
+            environment_file.stat().st_ino,
+        ) == original_identity
+
+    with pytest.raises(BrokerError, match="EnvironmentFile"):
+        _audit_activating_environment_file_after_mutation(
+            environment_file,
+            replace_and_restore,
+            transitional=True,
+            mutation_list_call=1,
+        )
+
+
+def test_transitional_systemd_unit_with_environment_file_fails_closed(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "worker.env"
+    environment_file.write_text(
+        "CUDA_VISIBLE_DEVICES=none\n",
+        encoding="utf-8",
+    )
+    environment_file.chmod(0o600)
+
+    with pytest.raises(
+        BrokerError,
+        match="transitional systemd EnvironmentFile",
+    ):
+        _audit_activating_environment_file_after_mutation(
+            environment_file,
+            lambda: None,
+            transitional=True,
+            mutation_list_call=99,
+        )
+
+
+def test_systemd_optional_environment_file_rejects_creation_after_missing_snapshot(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "optional-worker.env"
+
+    def create_optional_file() -> None:
+        environment_file.write_text(
+            f"CUDA_VISIBLE_DEVICES={EXPECTED_GPU_UUIDS[1]}\n",
+            encoding="utf-8",
+        )
+        environment_file.chmod(0o600)
+
+    with pytest.raises(BrokerError, match="EnvironmentFile"):
+        _audit_activating_environment_file_after_mutation(
+            environment_file,
+            create_optional_file,
+            optional=True,
+        )
 
 
 def test_nonroot_uds_client_acquires_activates_heartbeats_and_releases(tmp_path: Path) -> None:

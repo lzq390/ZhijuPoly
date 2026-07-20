@@ -87,7 +87,7 @@ GPU_UUIDS = {
 }
 EXTERNAL_RESERVATIONS_SHA256 = (
     "sha256:"
-    "06e2f23078b181fc296181d241c139b5539b1aaaa4f25b601939c7e33a62a9e4"
+    "90f4b7fed8ee3b4d4f6f4b225adefd9a225e27bb2b21b9ea89e4652bfdf76569"
 )
 GPU3_BLOCKED_REASON = (
     "GPU3 has an unmanaged Docker DeviceRequest; remove only after host audit"

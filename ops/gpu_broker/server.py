@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
 import os
@@ -13,9 +14,12 @@ import struct
 import subprocess
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from gpu_resource.transient_scope import (
     SCOPE_SLICE,
@@ -42,9 +46,15 @@ from .broker import (
 
 
 MAX_REQUEST_BYTES = 64 * 1024
+DEFAULT_EXTERNAL_ADMISSION_TIMEOUT_SECONDS = 4.0
 logger = logging.getLogger("nexpoly_gpu_broker")
 _LOCAL_INHERITED_FD_RE = re.compile(
     r"^/proc/(self|[1-9][0-9]*)/fd/([1-9][0-9]*)$"
+)
+_DOCKER_STARTED_AT_RE = re.compile(
+    r"^(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
+    r"T(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}):(?P<second>[0-9]{2})"
+    r"(?:\.(?P<fraction>[0-9]{1,9}))?Z$"
 )
 
 
@@ -68,6 +78,8 @@ class ExternalReservationPolicy:
 class DockerGpuClaim:
     container_id: str
     init_pid: int
+    started_at: str
+    restart_count: int
     registration_id: str | None
     component: str | None
     environment: str | None
@@ -78,9 +90,150 @@ class DockerGpuClaim:
 
 @dataclass(frozen=True, slots=True)
 class SystemdGpuClaim:
+    scope: str
     unit: str
     main_pid: int
+    control_group: str
+    process_pids: frozenset[int]
     gpu_uuids: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _SystemdUnitAuthority:
+    unit: str
+    active_state: str
+    sub_state: str
+    invocation_id: str
+    main_pid: str
+    control_group: str
+    user: str
+    environment: str
+    environment_files: tuple[str, ...]
+    pass_environment: str
+    unset_environment: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SystemdEnvironmentFileSnapshot:
+    declared_path: str
+    declared_identity: tuple[int, int, int, int, int, int, int, int, int]
+    declared_parent_identity: tuple[int, int, int, int, int, int, int, int, int]
+    link_target: str | None
+    resolved_path: str
+    target_identity: tuple[int, int, int, int, int, int, int, int, int]
+    target_parent_identity: tuple[int, int, int, int, int, int, int, int, int]
+    content_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SystemdMissingEnvironmentFileSnapshot:
+    declared_path: str
+    declared_parent_identity: tuple[int, int, int, int, int, int, int, int, int]
+
+
+def _remaining_admission_seconds(
+    deadline: float | None,
+    *,
+    maximum: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> float | None:
+    if deadline is None:
+        return maximum
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise BrokerError(
+            "gpu_admission_timeout",
+            "external GPU admission deadline expired",
+        )
+    return remaining if maximum is None else min(maximum, remaining)
+
+
+def _ensure_admission_open(
+    deadline: float | None,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    _remaining_admission_seconds(deadline, monotonic=monotonic)
+
+
+def _deadline_bounded_run(
+    run: Callable[..., subprocess.CompletedProcess[str]],
+    *,
+    deadline: float | None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> Callable[..., subprocess.CompletedProcess[str]]:
+    if deadline is None:
+        return run
+
+    def bounded(
+        command: object,
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        configured_timeout = kwargs.get("timeout")
+        maximum = (
+            float(configured_timeout)
+            if isinstance(configured_timeout, (int, float))
+            and not isinstance(configured_timeout, bool)
+            else None
+        )
+        kwargs["timeout"] = _remaining_admission_seconds(
+            deadline,
+            maximum=maximum,
+            monotonic=monotonic,
+        )
+        completed = run(command, **kwargs)
+        _ensure_admission_open(deadline, monotonic=monotonic)
+        return completed
+
+    return bounded
+
+
+def _call_with_optional_deadline(
+    callback: Callable[..., Any],
+    *arguments: object,
+    deadline: float,
+    monotonic: Callable[[], float],
+) -> Any:
+    """Preserve old callback signatures while budgeting deadline-aware ones."""
+
+    _ensure_admission_open(deadline, monotonic=monotonic)
+    try:
+        parameters = inspect.signature(callback).parameters.values()
+    except (TypeError, ValueError):
+        supports_deadline = False
+    else:
+        supports_deadline = any(
+            parameter.name == "deadline"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+    result = (
+        callback(*arguments, deadline=deadline)
+        if supports_deadline
+        else callback(*arguments)
+    )
+    _ensure_admission_open(deadline, monotonic=monotonic)
+    return result
+
+
+def _validated_docker_started_at(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Docker StartedAt is invalid")
+    match = _DOCKER_STARTED_AT_RE.fullmatch(value)
+    if match is None:
+        raise ValueError("Docker StartedAt is invalid")
+    try:
+        datetime(
+            int(match["year"]),
+            int(match["month"]),
+            int(match["day"]),
+            int(match["hour"]),
+            int(match["minute"]),
+            int(match["second"]),
+        )
+    except ValueError as exc:
+        raise ValueError("Docker StartedAt is invalid") from exc
+    return value
 
 
 def query_gpu_inventory() -> dict[int, str]:
@@ -274,9 +427,14 @@ def load_external_reservations(path: Path) -> ExternalReservationPolicy:
             "external_inventory_unavailable", "managed_systemd_claims must be an object"
         )
     managed_systemd: dict[str, frozenset[str]] = {}
-    for unit, raw in raw_systemd.items():
+    for identity, raw in raw_systemd.items():
+        scope, separator, unit = (
+            identity.partition(":") if isinstance(identity, str) else ("", "", "")
+        )
         if (
-            not isinstance(unit, str)
+            scope not in {"user", "system"}
+            or separator != ":"
+            or not isinstance(unit, str)
             or not unit.endswith(".service")
             or not isinstance(raw, dict)
             or set(raw) != {"gpu_uuids", "reason"}
@@ -292,7 +450,7 @@ def load_external_reservations(path: Path) -> ExternalReservationPolicy:
             raise BrokerError(
                 "external_inventory_unavailable", "managed systemd registration is invalid"
             )
-        managed_systemd[unit] = frozenset(raw["gpu_uuids"])
+        managed_systemd[identity] = frozenset(raw["gpu_uuids"])
     return ExternalReservationPolicy(
         blocked_gpu_uuids=frozenset(blocked),
         managed_docker_claims=managed_docker,
@@ -300,121 +458,230 @@ def load_external_reservations(path: Path) -> ExternalReservationPolicy:
     )
 
 
-def query_docker_gpu_claims(*, run=subprocess.run) -> tuple[DockerGpuClaim, ...]:
-    try:
-        listed = run(
-            ["docker", "container", "ls", "--quiet", "--no-trunc"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        container_ids = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
-        if any(
-            len(container_id) != 64
-            or any(character not in "0123456789abcdef" for character in container_id)
-            for container_id in container_ids
-        ):
-            raise ValueError("invalid Docker container ID")
-        if not container_ids:
-            return ()
-        inspected = run(
-            ["docker", "container", "inspect", *container_ids],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        payload = json.loads(inspected.stdout)
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
-        raise BrokerError(
-            "gpu_claim_inventory_unavailable", "Docker GPU claim inventory failed"
-        ) from exc
-    if not isinstance(payload, list) or len(payload) != len(container_ids):
-        raise BrokerError(
-            "gpu_claim_inventory_unavailable", "Docker inspect inventory is incomplete"
-        )
-    claims: list[DockerGpuClaim] = []
-    seen_registrations: set[str] = set()
-    for raw in payload:
+def query_docker_gpu_claims(
+    *,
+    run=subprocess.run,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[DockerGpuClaim, ...]:
+    run = _deadline_bounded_run(
+        run,
+        deadline=deadline,
+        monotonic=monotonic,
+    )
+
+    def list_container_ids() -> tuple[str, ...]:
+        _ensure_admission_open(deadline, monotonic=monotonic)
         try:
-            container_id = raw["Id"]
-            state = raw["State"]
-            config = raw["Config"]
-            host_config = raw["HostConfig"]
-            if (
-                container_id not in container_ids
-                or state.get("Running") is not True
-                or isinstance(state.get("Pid"), bool)
-                or not isinstance(state.get("Pid"), int)
-                or state["Pid"] <= 0
-                or not isinstance(config.get("Labels") or {}, dict)
-                or not isinstance(config.get("Env") or [], list)
-                or not isinstance(host_config.get("DeviceRequests") or [], list)
-            ):
-                raise ValueError("invalid Docker inspect identity")
-            labels = config.get("Labels") or {}
-            device_request_claims: set[str] = set()
-            environment_claims: set[str] = set()
-            has_gpu_device_request = False
-            for request in host_config.get("DeviceRequests") or []:
-                if not isinstance(request, dict):
-                    raise ValueError("invalid Docker DeviceRequest")
-                capabilities = request.get("Capabilities") or []
-                is_gpu = request.get("Driver") == "nvidia" or any(
-                    isinstance(group, list) and "gpu" in group for group in capabilities
-                )
-                if not is_gpu:
-                    continue
-                has_gpu_device_request = True
-                device_ids = request.get("DeviceIDs") or []
-                if device_ids:
-                    device_request_claims.update(_resolve_gpu_claim_tokens(device_ids))
-                elif request.get("Count") not in {0, None}:
-                    device_request_claims.update(EXPECTED_GPU_UUIDS.values())
-            for environment_entry in config.get("Env") or []:
-                if not isinstance(environment_entry, str):
-                    raise ValueError("invalid Docker environment")
-                if not environment_entry.startswith("NVIDIA_VISIBLE_DEVICES="):
-                    continue
-                value = environment_entry.split("=", 1)[1].strip()
-                if value.lower() in {"", "none", "void"}:
-                    continue
-                if value.lower() == "all":
-                    environment_claims.update(EXPECTED_GPU_UUIDS.values())
-                else:
-                    environment_claims.update(_resolve_gpu_claim_tokens(value.split(",")))
-            claimed = (
-                device_request_claims
-                if has_gpu_device_request
-                else environment_claims
+            listed = run(
+                ["docker", "container", "ls", "--quiet", "--no-trunc"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
-            if not claimed:
-                continue
-            registration_id = labels.get("com.nexpoly.gpu.registration")
-            if registration_id is not None:
-                if not isinstance(registration_id, str) or not registration_id:
-                    raise ValueError("invalid managed registration label")
-                if registration_id in seen_registrations:
-                    raise ValueError("duplicate managed registration label")
-                seen_registrations.add(registration_id)
-            claims.append(
-                DockerGpuClaim(
-                    container_id=container_id,
-                    init_pid=state["Pid"],
-                    registration_id=registration_id,
-                    component=labels.get("com.nexpoly.gpu.component"),
-                    environment=labels.get("com.nexpoly.gpu.environment"),
-                    compose_project=labels.get("com.docker.compose.project"),
-                    compose_service=labels.get("com.docker.compose.service"),
-                    gpu_uuids=frozenset(claimed),
-                )
-            )
-        except (KeyError, TypeError, ValueError) as exc:
+        except (OSError, subprocess.SubprocessError) as exc:
             raise BrokerError(
-                "gpu_claim_inventory_unavailable", "Docker GPU claim is invalid"
+                "gpu_claim_inventory_unavailable",
+                "Docker GPU claim inventory failed",
             ) from exc
-    return tuple(claims)
+        container_ids = tuple(
+            line.strip() for line in listed.stdout.splitlines() if line.strip()
+        )
+        if (
+            len(container_ids) != len(set(container_ids))
+            or any(
+                len(container_id) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in container_id
+                )
+                for container_id in container_ids
+            )
+        ):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "Docker container inventory identity is invalid",
+            )
+        return tuple(sorted(container_ids))
+
+    def inspect_claims(
+        container_ids: tuple[str, ...],
+    ) -> tuple[DockerGpuClaim, ...]:
+        _ensure_admission_open(deadline, monotonic=monotonic)
+        try:
+            inspected = run(
+                ["docker", "container", "inspect", *container_ids],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            payload = json.loads(inspected.stdout)
+        except (
+            OSError,
+            ValueError,
+            json.JSONDecodeError,
+            subprocess.SubprocessError,
+        ) as exc:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "Docker GPU claim inventory failed",
+            ) from exc
+        if not isinstance(payload, list) or len(payload) != len(container_ids):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "Docker inspect inventory is incomplete",
+            )
+        expected_ids = set(container_ids)
+        seen_container_ids: set[str] = set()
+        seen_registrations: set[str] = set()
+        claims: list[DockerGpuClaim] = []
+        for raw in payload:
+            _ensure_admission_open(deadline, monotonic=monotonic)
+            try:
+                container_id = raw["Id"]
+                state = raw["State"]
+                restart_count = raw["RestartCount"]
+                config = raw["Config"]
+                host_config = raw["HostConfig"]
+                if (
+                    isinstance(container_id, str)
+                    and container_id in seen_container_ids
+                ):
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        "Docker inspect identities are not one-to-one with its list",
+                    )
+                if (
+                    not isinstance(container_id, str)
+                    or container_id not in expected_ids
+                    or state.get("Running") is not True
+                    or isinstance(state.get("Pid"), bool)
+                    or not isinstance(state.get("Pid"), int)
+                    or state["Pid"] <= 0
+                    or isinstance(restart_count, bool)
+                    or not isinstance(restart_count, int)
+                    or restart_count < 0
+                    or not isinstance(config.get("Labels") or {}, dict)
+                    or not isinstance(config.get("Env") or [], list)
+                    or not isinstance(
+                        host_config.get("DeviceRequests") or [], list
+                    )
+                ):
+                    raise ValueError("invalid Docker inspect identity")
+                seen_container_ids.add(container_id)
+                started_at = _validated_docker_started_at(
+                    state.get("StartedAt")
+                )
+                labels = config.get("Labels") or {}
+                device_request_claims: set[str] = set()
+                environment_claims: set[str] = set()
+                has_gpu_device_request = False
+                for request in host_config.get("DeviceRequests") or []:
+                    if not isinstance(request, dict):
+                        raise ValueError("invalid Docker DeviceRequest")
+                    capabilities = request.get("Capabilities") or []
+                    is_gpu = request.get("Driver") == "nvidia" or any(
+                        isinstance(group, list) and "gpu" in group
+                        for group in capabilities
+                    )
+                    if not is_gpu:
+                        continue
+                    has_gpu_device_request = True
+                    device_ids = request.get("DeviceIDs") or []
+                    if device_ids:
+                        device_request_claims.update(
+                            _resolve_gpu_claim_tokens(device_ids)
+                        )
+                    elif request.get("Count") not in {0, None}:
+                        device_request_claims.update(EXPECTED_GPU_UUIDS.values())
+                for environment_entry in config.get("Env") or []:
+                    if not isinstance(environment_entry, str):
+                        raise ValueError("invalid Docker environment")
+                    if not environment_entry.startswith(
+                        "NVIDIA_VISIBLE_DEVICES="
+                    ):
+                        continue
+                    value = environment_entry.split("=", 1)[1].strip()
+                    if value.lower() in {"", "none", "void"}:
+                        continue
+                    if value.lower() == "all":
+                        environment_claims.update(EXPECTED_GPU_UUIDS.values())
+                    else:
+                        environment_claims.update(
+                            _resolve_gpu_claim_tokens(value.split(","))
+                        )
+                claimed = (
+                    device_request_claims
+                    if has_gpu_device_request
+                    else environment_claims
+                )
+                if not claimed:
+                    continue
+                registration_id = labels.get("com.nexpoly.gpu.registration")
+                if registration_id is not None:
+                    if (
+                        not isinstance(registration_id, str)
+                        or not registration_id
+                    ):
+                        raise ValueError("invalid managed registration label")
+                    if registration_id in seen_registrations:
+                        raise ValueError("duplicate managed registration label")
+                    seen_registrations.add(registration_id)
+                claims.append(
+                    DockerGpuClaim(
+                        container_id=container_id,
+                        init_pid=state["Pid"],
+                        started_at=started_at,
+                        restart_count=restart_count,
+                        registration_id=registration_id,
+                        component=labels.get("com.nexpoly.gpu.component"),
+                        environment=labels.get("com.nexpoly.gpu.environment"),
+                        compose_project=labels.get("com.docker.compose.project"),
+                        compose_service=labels.get("com.docker.compose.service"),
+                        gpu_uuids=frozenset(claimed),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    "Docker GPU claim is invalid",
+                ) from exc
+        if seen_container_ids != expected_ids:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "Docker inspect identities are not one-to-one with its list",
+            )
+        return tuple(sorted(claims, key=lambda claim: claim.container_id))
+
+    initial_ids = list_container_ids()
+    if not initial_ids:
+        if list_container_ids() != initial_ids:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "Docker container inventory changed during audit",
+            )
+        return ()
+    initial_claims = inspect_claims(initial_ids)
+    middle_ids = list_container_ids()
+    if middle_ids != initial_ids:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "Docker container inventory changed during audit",
+        )
+    final_claims = inspect_claims(middle_ids)
+    if final_claims != initial_claims:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "Docker container fingerprint changed during audit",
+        )
+    if list_container_ids() != initial_ids:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "Docker container inventory changed during audit",
+        )
+    return final_claims
 
 
 def _resolve_gpu_claim_tokens(tokens: object) -> frozenset[str]:
@@ -460,17 +727,150 @@ def _read_process_environment(pid: int) -> dict[str, str]:
     return result
 
 
-def _read_systemd_environment_file(path: Path) -> dict[str, str]:
-    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+def _systemd_environment_file_snapshot(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        metadata.st_nlink,
+    )
+
+
+def _capture_systemd_environment_file(
+    path: Path,
+) -> tuple[dict[str, str], _SystemdEnvironmentFileSnapshot]:
+    """Read and fingerprint one stable, non-writable EnvironmentFile."""
+
+    if not path.is_absolute():
         raise BrokerError(
             "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is unsafe"
         )
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError) as exc:
+        declared_parent_before = path.parent.stat(follow_symlinks=False)
+        declared_before = path.lstat()
+    except OSError as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is unsafe"
+        ) from exc
+
+    read_path = path
+    link_target: str | None = None
+    if stat.S_ISLNK(declared_before.st_mode):
+        # Root-owned compatibility links (for example
+        # /etc/default/locale -> ../locale.conf) are valid systemd inputs.
+        # A workload-owned link is mutable declaration authority and is
+        # therefore rejected even when its current target appears safe.
+        if declared_before.st_uid != 0:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is unsafe"
+            )
+        try:
+            link_target = os.readlink(path)
+            read_path = path.resolve(strict=True)
+            target_before = read_path.stat(follow_symlinks=False)
+        except (OSError, RuntimeError) as exc:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is unsafe"
+            ) from exc
+        if (
+            not stat.S_ISREG(target_before.st_mode)
+            or target_before.st_uid != 0
+            or target_before.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is unsafe"
+            )
+    else:
+        target_before = declared_before
+    try:
+        target_parent_before = read_path.parent.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is unsafe"
+        ) from exc
+
+    if (
+        not stat.S_ISREG(target_before.st_mode)
+        or target_before.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or target_before.st_nlink != 1
+        or target_before.st_size > 1024 * 1024
+    ):
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is unsafe"
+        )
+
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            read_path,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        opened_before = os.fstat(descriptor)
+        if _systemd_environment_file_snapshot(
+            opened_before
+        ) != _systemd_environment_file_snapshot(target_before):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is unsafe"
+            )
+        raw = os.pread(descriptor, 1024 * 1024 + 1, 0)
+        opened_after = os.fstat(descriptor)
+        declared_parent_after = path.parent.stat(follow_symlinks=False)
+        declared_after = path.lstat()
+        target_parent_after = read_path.parent.stat(follow_symlinks=False)
+        if (
+            len(raw) != opened_before.st_size
+            or _systemd_environment_file_snapshot(opened_after)
+            != _systemd_environment_file_snapshot(opened_before)
+            or _systemd_environment_file_snapshot(declared_after)
+            != _systemd_environment_file_snapshot(declared_before)
+            or _systemd_environment_file_snapshot(declared_parent_after)
+            != _systemd_environment_file_snapshot(declared_parent_before)
+            or _systemd_environment_file_snapshot(target_parent_after)
+            != _systemd_environment_file_snapshot(target_parent_before)
+        ):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "systemd EnvironmentFile identity changed while read",
+            )
+        if link_target is None:
+            if _systemd_environment_file_snapshot(
+                declared_after
+            ) != _systemd_environment_file_snapshot(opened_after):
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    "systemd EnvironmentFile identity changed while read",
+                )
+        else:
+            resolved_after = path.resolve(strict=True)
+            target_after = resolved_after.stat(follow_symlinks=False)
+            if (
+                os.readlink(path) != link_target
+                or resolved_after != read_path
+                or _systemd_environment_file_snapshot(target_after)
+                != _systemd_environment_file_snapshot(opened_after)
+            ):
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    "systemd EnvironmentFile identity changed while read",
+                )
+        lines = raw.decode("utf-8").splitlines()
+    except BrokerError:
+        raise
+    except (OSError, RuntimeError, UnicodeError) as exc:
         raise BrokerError(
             "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is unreadable"
         ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
     result: dict[str, str] = {}
     for line in lines:
         stripped = line.strip()
@@ -493,203 +893,1112 @@ def _read_systemd_environment_file(path: Path) -> dict[str, str]:
                     "gpu_claim_inventory_unavailable", "systemd EnvironmentFile is invalid"
                 )
             result[name] = value
+    return (
+        result,
+        _SystemdEnvironmentFileSnapshot(
+            declared_path=str(path),
+            declared_identity=_systemd_environment_file_snapshot(
+                declared_before
+            ),
+            declared_parent_identity=_systemd_environment_file_snapshot(
+                declared_parent_before
+            ),
+            link_target=link_target,
+            resolved_path=str(read_path),
+            target_identity=_systemd_environment_file_snapshot(opened_after),
+            target_parent_identity=_systemd_environment_file_snapshot(
+                target_parent_after
+            ),
+            content_sha256=sha256(raw).hexdigest(),
+        ),
+    )
+
+
+def _read_systemd_environment_file(path: Path) -> dict[str, str]:
+    result, _snapshot = _capture_systemd_environment_file(path)
     return result
 
 
-def query_systemd_gpu_claims(
+def _capture_missing_systemd_environment_file(
+    path: Path,
+) -> _SystemdMissingEnvironmentFileSnapshot:
+    try:
+        parent_before = path.parent.stat(follow_symlinks=False)
+        path.lstat()
+    except FileNotFoundError:
+        try:
+            parent_after = path.parent.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "systemd optional EnvironmentFile authority is unavailable",
+            ) from exc
+        if _systemd_environment_file_snapshot(
+            parent_after
+        ) != _systemd_environment_file_snapshot(parent_before):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "systemd optional EnvironmentFile identity changed during audit",
+            )
+        return _SystemdMissingEnvironmentFileSnapshot(
+            declared_path=str(path),
+            declared_parent_identity=_systemd_environment_file_snapshot(
+                parent_after
+            ),
+        )
+    except OSError as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "systemd optional EnvironmentFile authority is unavailable",
+        ) from exc
+    raise BrokerError(
+        "gpu_claim_inventory_unavailable",
+        "systemd optional EnvironmentFile appeared during audit",
+    )
+
+
+def _read_unified_process_cgroup(pid: int) -> str:
+    try:
+        raw = Path(f"/proc/{pid}/cgroup").read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot read systemd cgroup for PID {pid}",
+        ) from exc
+    matches = [
+        line.split(":", 2)[2]
+        for line in raw.splitlines()
+        if line.startswith("0::") and len(line.split(":", 2)) == 3
+    ]
+    if len(matches) != 1:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "systemd process cgroup identity is invalid",
+        )
+    return matches[0]
+
+
+def _read_process_uids(pid: int) -> tuple[int, int, int, int]:
+    try:
+        status = Path(f"/proc/{pid}/status").read_text(encoding="ascii")
+        line = next(
+            item for item in status.splitlines() if item.startswith("Uid:")
+        )
+        values = tuple(int(value) for value in line.split(":", 1)[1].split())
+    except (OSError, UnicodeError, StopIteration, ValueError, IndexError) as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot read systemd process credentials for PID {pid}",
+        ) from exc
+    if len(values) != 4:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"systemd process credentials are invalid for PID {pid}",
+        )
+    return values[0], values[1], values[2], values[3]
+
+
+def _systemd_cgroup_contains(candidate: str, control_group: str) -> bool:
+    return (
+        candidate == control_group
+        or candidate.startswith(control_group.rstrip("/") + "/")
+    )
+
+
+def _read_control_group_processes(
+    control_group: str,
+    *,
+    read_process_cgroup=_read_unified_process_cgroup,
+) -> frozenset[int]:
+    if (
+        not control_group.startswith("/")
+        or control_group == "/"
+        or "\n" in control_group
+        or any(part in {"", ".", ".."} for part in control_group.split("/")[1:])
+    ):
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "systemd ControlGroup is invalid",
+        )
+    processes: set[int] = set()
+    try:
+        entries = tuple(Path("/proc").iterdir())
+    except OSError as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "cannot enumerate systemd cgroup processes",
+        ) from exc
+    for entry in entries:
+        if not entry.name.isdigit() or entry.name.startswith("0"):
+            continue
+        pid = int(entry.name)
+        try:
+            process_cgroup = read_process_cgroup(pid)
+        except BrokerError:
+            continue
+        if _systemd_cgroup_contains(process_cgroup, control_group):
+            processes.add(pid)
+    return frozenset(processes)
+
+
+def _snapshot_systemd_process_cgroups(
+    *,
+    proc_root: Path = Path("/proc"),
+    read_process_cgroup=_read_unified_process_cgroup,
+    read_process_start_ticks=read_process_start_ticks,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[tuple[int, int, str], ...]:
+    """Take one host PID/cgroup snapshot for the entire systemd inventory."""
+
+    _ensure_admission_open(deadline, monotonic=monotonic)
+    try:
+        entries = tuple(proc_root.iterdir())
+    except OSError as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "cannot enumerate systemd cgroup processes",
+        ) from exc
+    snapshot: list[tuple[int, int, str]] = []
+    for entry in entries:
+        _ensure_admission_open(deadline, monotonic=monotonic)
+        if not entry.name.isdigit() or entry.name.startswith("0"):
+            continue
+        pid = int(entry.name)
+        try:
+            start_before = read_process_start_ticks(pid)
+            control_group = read_process_cgroup(pid)
+            start_after = read_process_start_ticks(pid)
+        except BrokerError:
+            # Processes may exit between /proc enumeration and identity read.
+            continue
+        except Exception as exc:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "cannot identify systemd cgroup process",
+            ) from exc
+        if (
+            not isinstance(start_before, int)
+            or isinstance(start_before, bool)
+            or start_before <= 0
+            or not isinstance(start_after, int)
+            or isinstance(start_after, bool)
+            or start_after <= 0
+            or not isinstance(control_group, str)
+            or not control_group.startswith("/")
+        ):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "systemd process identity is invalid",
+            )
+        if start_before != start_after:
+            # A PID may legitimately be recycled during the global enumeration;
+            # it is excluded rather than attributed to either process.
+            continue
+        snapshot.append((pid, start_before, control_group))
+    _ensure_admission_open(deadline, monotonic=monotonic)
+    return tuple(snapshot)
+
+
+def _read_stable_systemd_process_identity(
+    pid: int,
+    *,
+    read_process_cgroup=_read_unified_process_cgroup,
+    read_process_start_ticks=read_process_start_ticks,
+) -> tuple[int, str]:
+    """Read one PID/cgroup identity without crossing PID reuse or migration."""
+
+    try:
+        start_before = read_process_start_ticks(pid)
+        control_group = read_process_cgroup(pid)
+        start_after = read_process_start_ticks(pid)
+    except BrokerError as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot identify systemd process PID {pid}",
+        ) from exc
+    except Exception as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot identify systemd process PID {pid}",
+        ) from exc
+    if (
+        not isinstance(start_before, int)
+        or isinstance(start_before, bool)
+        or start_before <= 0
+        or not isinstance(start_after, int)
+        or isinstance(start_after, bool)
+        or start_after <= 0
+        or start_before != start_after
+        or not isinstance(control_group, str)
+        or not control_group.startswith("/")
+    ):
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"systemd process identity changed for PID {pid}",
+        )
+    return start_before, control_group
+
+
+def _verify_systemd_process_identity(
+    pid: int,
+    expected_start_ticks: int,
+    expected_control_group: str,
+    *,
+    read_process_cgroup=_read_unified_process_cgroup,
+    read_process_start_ticks=read_process_start_ticks,
+) -> None:
+    current = _read_stable_systemd_process_identity(
+        pid,
+        read_process_cgroup=read_process_cgroup,
+        read_process_start_ticks=read_process_start_ticks,
+    )
+    if current != (expected_start_ticks, expected_control_group):
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"systemd process identity changed for PID {pid}",
+        )
+
+
+def _parse_systemd_environment(
+    raw: str,
+    *,
+    declaration: str,
+    require_values: bool,
+) -> tuple[str, ...]:
+    try:
+        entries = tuple(shlex.split(raw))
+    except ValueError as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"systemd {declaration} declaration is invalid",
+        ) from exc
+    for entry in entries:
+        name = entry.split("=", 1)[0]
+        if (
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+            or (require_values and "=" not in entry)
+        ):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                f"systemd {declaration} declaration is invalid",
+            )
+    return entries
+
+
+def _query_systemd_manager_environment(
+    prefix: list[str],
+    scope: str,
     *,
     run=subprocess.run,
-    read_process_environment=_read_process_environment,
-) -> tuple[SystemdGpuClaim, ...]:
-    """Inventory active user/system services that declare visible GPUs."""
+) -> dict[str, str]:
+    try:
+        completed = run(
+            [*prefix, "show-environment"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot query {scope} systemd manager environment",
+        ) from exc
+    if completed.returncode != 0:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot query {scope} systemd manager environment",
+        )
+    environment: dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        if "=" not in line:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "systemd manager environment is invalid",
+            )
+        name, value = line.split("=", 1)
+        if (
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+            or name in environment
+        ):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "systemd manager environment is invalid",
+            )
+        environment[name] = value
+    return environment
 
-    claims: dict[str, set[str]] = {}
-    main_pids: dict[str, int] = {}
-    for scope in ("user", "system"):
-        prefix = ["systemctl", "--user"] if scope == "user" else ["systemctl"]
-        try:
-            listed = run(
-                [
-                    *prefix,
-                    "list-units",
-                    "--type=service",
-                    "--state=running",
-                    "--no-legend",
-                    "--plain",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
+
+_AUDITED_SYSTEMD_ACTIVE_STATES = frozenset(
+    {"active", "activating", "reloading", "deactivating"}
+)
+
+
+def _query_systemd_unit_authorities(
+    scope: str,
+    *,
+    run=subprocess.run,
+) -> tuple[_SystemdUnitAuthority, ...]:
+    """Return one canonical list/show snapshot for a systemd manager."""
+
+    prefix = ["systemctl", "--user"] if scope == "user" else ["systemctl"]
+    try:
+        listed = run(
+            [
+                *prefix,
+                "list-units",
+                "--type=service",
+                "--state=active,activating,reloading,deactivating",
+                "--no-legend",
+                "--plain",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot query live {scope} systemd services",
+        ) from exc
+    if listed.returncode != 0:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot query live {scope} systemd services",
+        )
+    listed_states: dict[str, tuple[str, str]] = {}
+    for line in listed.stdout.splitlines():
+        if not line.strip():
+            continue
+        fields = line.split(None, 4)
+        if len(fields) < 4:
             raise BrokerError(
                 "gpu_claim_inventory_unavailable",
-                f"cannot query active {scope} systemd services",
-            ) from exc
-        if listed.returncode != 0:
+                "systemd service inventory is invalid",
+            )
+        unit, _load_state, active_state, sub_state = fields[:4]
+        if (
+            not unit.endswith(".service")
+            or unit in listed_states
+            or active_state not in _AUDITED_SYSTEMD_ACTIVE_STATES
+            or re.fullmatch(r"[A-Za-z0-9_.:@-]+", sub_state) is None
+        ):
             raise BrokerError(
                 "gpu_claim_inventory_unavailable",
-                f"cannot query active {scope} systemd services",
+                "systemd service inventory is invalid",
             )
-        units: set[str] = set()
-        for line in listed.stdout.splitlines():
-            if not line.strip():
-                continue
-            unit = line.split(None, 1)[0]
-            if not unit.endswith(".service"):
+        listed_states[unit] = (active_state, sub_state)
+    if not listed_states:
+        return ()
+    try:
+        shown = run(
+            [
+                *prefix,
+                "show",
+                "--property=Id",
+                "--property=ActiveState",
+                "--property=SubState",
+                "--property=InvocationID",
+                "--property=MainPID",
+                "--property=ControlGroup",
+                "--property=User",
+                "--property=Environment",
+                "--property=EnvironmentFiles",
+                "--property=PassEnvironment",
+                "--property=UnsetEnvironment",
+                *sorted(listed_states),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot query {scope} systemd GPU declarations",
+        ) from exc
+    if shown.returncode != 0:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            f"cannot query {scope} systemd GPU declarations",
+        )
+    blocks = [block for block in shown.stdout.strip().split("\n\n") if block]
+    if len(blocks) != len(listed_states):
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "systemd GPU declaration response is incomplete",
+        )
+    authorities: list[_SystemdUnitAuthority] = []
+    seen_units: set[str] = set()
+    required_scalar_names = {
+        "Id",
+        "ActiveState",
+        "SubState",
+        "InvocationID",
+        "MainPID",
+        "ControlGroup",
+    }
+    optional_scalar_names = {
+        "User",
+        "Environment",
+        "PassEnvironment",
+        "UnsetEnvironment",
+    }
+    for block in blocks:
+        scalar_properties: dict[str, str] = {}
+        environment_files: list[str] = []
+        for line in block.splitlines():
+            if "=" not in line:
                 raise BrokerError(
                     "gpu_claim_inventory_unavailable",
-                    "systemd service inventory is invalid",
+                    "systemd GPU declaration response is invalid",
                 )
-            units.add(unit)
-        if not units:
-            continue
-        try:
-            shown = run(
-                [
-                    *prefix,
-                    "show",
-                    "--property=Id",
-                    "--property=MainPID",
-                    "--property=Environment",
-                    "--property=EnvironmentFiles",
-                    *sorted(units),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise BrokerError(
-                "gpu_claim_inventory_unavailable",
-                f"cannot query {scope} systemd GPU declarations",
-            ) from exc
-        if shown.returncode != 0:
-            raise BrokerError(
-                "gpu_claim_inventory_unavailable",
-                f"cannot query {scope} systemd GPU declarations",
-            )
-        blocks = [block for block in shown.stdout.strip().split("\n\n") if block]
-        if len(blocks) != len(units):
+            name, value = line.split("=", 1)
+            if name == "EnvironmentFiles":
+                environment_files.append(value)
+            elif (
+                name not in required_scalar_names | optional_scalar_names
+                or name in scalar_properties
+            ):
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    "systemd GPU declaration response is invalid",
+                )
+            else:
+                scalar_properties[name] = value
+        if (
+            not required_scalar_names.issubset(scalar_properties)
+            or set(scalar_properties)
+            - required_scalar_names
+            - optional_scalar_names
+        ):
             raise BrokerError(
                 "gpu_claim_inventory_unavailable",
                 "systemd GPU declaration response is incomplete",
             )
-        seen_units: set[str] = set()
-        for block in blocks:
-            properties: dict[str, str] = {}
-            for line in block.splitlines():
-                if "=" not in line:
-                    raise BrokerError(
-                        "gpu_claim_inventory_unavailable",
-                        "systemd GPU declaration response is invalid",
-                    )
-                name, value = line.split("=", 1)
-                properties[name] = value
-            if set(properties) != {
-                "Id",
-                "MainPID",
-                "Environment",
-                "EnvironmentFiles",
-            }:
+        for name in optional_scalar_names:
+            scalar_properties.setdefault(name, "")
+        unit = scalar_properties["Id"]
+        active_state = scalar_properties["ActiveState"]
+        sub_state = scalar_properties["SubState"]
+        invocation_id = scalar_properties["InvocationID"]
+        if (
+            unit not in listed_states
+            or unit in seen_units
+            or listed_states[unit] != (active_state, sub_state)
+            or active_state not in _AUDITED_SYSTEMD_ACTIVE_STATES
+            or re.fullmatch(r"[A-Za-z0-9_.:@-]+", sub_state) is None
+            or re.fullmatch(r"[0-9a-f]{32}", invocation_id) is None
+        ):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "systemd GPU declaration identity is invalid",
+            )
+        seen_units.add(unit)
+        authorities.append(
+            _SystemdUnitAuthority(
+                unit=unit,
+                active_state=active_state,
+                sub_state=sub_state,
+                invocation_id=invocation_id,
+                main_pid=scalar_properties["MainPID"],
+                control_group=scalar_properties["ControlGroup"],
+                user=scalar_properties["User"],
+                environment=scalar_properties["Environment"],
+                environment_files=tuple(environment_files),
+                pass_environment=scalar_properties["PassEnvironment"],
+                unset_environment=scalar_properties["UnsetEnvironment"],
+            )
+        )
+    if seen_units != set(listed_states):
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "systemd GPU declaration response is incomplete",
+        )
+    return tuple(sorted(authorities, key=lambda authority: authority.unit))
+
+
+def query_systemd_gpu_claims(
+    *,
+    compute_processes: dict[str, frozenset[int]] | None = None,
+    run=subprocess.run,
+    read_process_environment=_read_process_environment,
+    read_control_group_processes=_read_control_group_processes,
+    compute_process_query=None,
+    read_process_cgroup=_read_unified_process_cgroup,
+    read_process_uids=_read_process_uids,
+    read_process_start_ticks=read_process_start_ticks,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[SystemdGpuClaim, ...]:
+    """Inventory GPU-visible services without reading unrelated root envs.
+
+    The system manager is an explicitly trusted root control plane.  Its
+    unmarked services are skipped unless an NVIDIA compute PID is already in
+    their cgroup.  User services are fully inspected because they share the
+    Broker UID.  Global NVIDIA and Docker inventories remain independent,
+    fail-closed admission gates in :class:`ExternalGpuGuard`.
+    """
+
+    run = _deadline_bounded_run(
+        run,
+        deadline=deadline,
+        monotonic=monotonic,
+    )
+    relevant_names = ("CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES")
+    if compute_processes is not None and compute_process_query is not None:
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "systemd NVIDIA process authority is ambiguous",
+        )
+    if compute_processes is None:
+        compute_processes = (
+            {} if compute_process_query is None else compute_process_query()
+        )
+    if not isinstance(compute_processes, dict) or any(
+        not isinstance(uuid, str)
+        or not isinstance(pids, frozenset)
+        or any(
+            not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+            for pid in pids
+        )
+        for uuid, pids in compute_processes.items()
+    ):
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "systemd NVIDIA process inventory is invalid",
+        )
+
+    process_cgroup_snapshot = (
+        _snapshot_systemd_process_cgroups(
+            read_process_cgroup=read_process_cgroup,
+            read_process_start_ticks=read_process_start_ticks,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
+        if read_control_group_processes is _read_control_group_processes
+        else None
+    )
+    claims: list[SystemdGpuClaim] = []
+    verified_process_identities: set[tuple[int, int, str]] = set()
+    authority_snapshots: dict[str, tuple[_SystemdUnitAuthority, ...]] = {}
+    manager_environment_snapshots: dict[str, dict[str, str]] = {}
+    environment_file_snapshots: list[
+        _SystemdEnvironmentFileSnapshot
+        | _SystemdMissingEnvironmentFileSnapshot
+    ] = []
+    observed_memberships: dict[
+        tuple[str, str, str], dict[int, tuple[int, str]]
+    ] = {}
+    for scope in ("user", "system"):
+        _ensure_admission_open(deadline, monotonic=monotonic)
+        prefix = ["systemctl", "--user"] if scope == "user" else ["systemctl"]
+        authorities = _query_systemd_unit_authorities(scope, run=run)
+        authority_snapshots[scope] = authorities
+        if not authorities:
+            continue
+        manager_environment: dict[str, str] | None = None
+        for authority in authorities:
+            _ensure_admission_open(deadline, monotonic=monotonic)
+            scalar_properties = {
+                "Id": authority.unit,
+                "MainPID": authority.main_pid,
+                "ControlGroup": authority.control_group,
+                "User": authority.user,
+                "Environment": authority.environment,
+                "PassEnvironment": authority.pass_environment,
+                "UnsetEnvironment": authority.unset_environment,
+            }
+            environment_files = list(authority.environment_files)
+            unit = scalar_properties["Id"]
+            if (
+                authority.active_state
+                in {"activating", "reloading", "deactivating"}
+                and environment_files
+            ):
+                # systemd may consume a mutable EnvironmentFile after this
+                # audit while MainPID is still zero or membership is changing.
+                # There is no stable execution identity to bind, so admission
+                # remains closed until the unit reaches a steady active state.
                 raise BrokerError(
                     "gpu_claim_inventory_unavailable",
-                    "systemd GPU declaration response is incomplete",
+                    "transitional systemd EnvironmentFile authority is unsafe",
                 )
-            unit = properties["Id"]
-            if unit not in units or unit in seen_units:
-                raise BrokerError(
-                    "gpu_claim_inventory_unavailable",
-                    "systemd GPU declaration identity is invalid",
-                )
-            seen_units.add(unit)
-            if not properties["MainPID"].isdigit():
+            if not scalar_properties["MainPID"].isdigit():
                 raise BrokerError(
                     "gpu_claim_inventory_unavailable", "systemd MainPID is invalid"
                 )
-            main_pid = int(properties["MainPID"])
-            main_pids[unit] = main_pid
-            try:
-                environment_entries = shlex.split(properties["Environment"])
-                environment_file_entries = shlex.split(
-                    properties["EnvironmentFiles"]
-                )
-            except ValueError as exc:
-                raise BrokerError(
-                    "gpu_claim_inventory_unavailable",
-                    "systemd Environment declaration is invalid",
-                ) from exc
-            configured: dict[str, str] = {}
-            for entry in environment_entries:
-                if "=" not in entry:
+            main_pid = int(scalar_properties["MainPID"])
+            control_group = scalar_properties["ControlGroup"]
+            if control_group:
+                if (
+                    not control_group.startswith("/")
+                    or control_group == "/"
+                    or "\n" in control_group
+                    or any(
+                        part in {"", ".", ".."}
+                        for part in control_group.split("/")[1:]
+                    )
+                ):
                     raise BrokerError(
                         "gpu_claim_inventory_unavailable",
-                        "systemd Environment declaration is invalid",
+                        "systemd ControlGroup is invalid",
                     )
-                name, value = entry.split("=", 1)
-                configured[name] = value
-            file_paths = [
-                entry.removeprefix("-")
-                for entry in environment_file_entries
-                if entry.startswith("/") or entry.startswith("-/")
-            ]
-            unparsed_file_tokens = [
-                entry
-                for entry in environment_file_entries
-                if not (
-                    entry.startswith("/")
-                    or entry.startswith("-/")
-                    or entry.startswith("(ignore_errors=")
-                )
-            ]
-            if unparsed_file_tokens:
-                raise BrokerError(
-                    "gpu_claim_inventory_unavailable",
-                    "systemd EnvironmentFiles declaration is invalid",
-                )
-            for path in file_paths:
-                configured.update(_read_systemd_environment_file(Path(path)))
-            relevant_names = ("CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES")
-            if not any(name in configured for name in relevant_names):
-                continue
-            if main_pid <= 0:
-                raise BrokerError(
-                    "gpu_claim_inventory_unavailable",
-                    "GPU-declaring systemd service has no live MainPID",
-                )
-            live_environment = read_process_environment(main_pid)
-            for name in relevant_names:
-                matches = [
-                    value.strip()
-                    for value in (
-                        configured.get(name),
-                        live_environment.get(name),
-                    )
-                    if value is not None
-                ]
-                for value in matches:
-                    if value.lower() in {"", "none", "void"}:
-                        continue
-                    if value.lower() == "all":
-                        claims.setdefault(unit, set()).update(
-                            EXPECTED_GPU_UUIDS.values()
-                        )
-                    else:
-                        try:
-                            claims.setdefault(unit, set()).update(
-                                _resolve_gpu_claim_tokens(value.split(","))
+                try:
+                    if process_cgroup_snapshot is not None:
+                        process_identities = {
+                            pid: (start_ticks, process_cgroup)
+                            for pid, start_ticks, process_cgroup in process_cgroup_snapshot
+                            if _systemd_cgroup_contains(
+                                process_cgroup, control_group
                             )
-                        except ValueError as exc:
+                        }
+                        process_pids = frozenset(process_identities)
+                    else:
+                        process_pids = read_control_group_processes(control_group)
+                        if (
+                            not isinstance(process_pids, frozenset)
+                            or any(
+                                not isinstance(pid, int)
+                                or isinstance(pid, bool)
+                                or pid <= 0
+                                for pid in process_pids
+                            )
+                        ):
                             raise BrokerError(
                                 "gpu_claim_inventory_unavailable",
-                                "systemd GPU declaration is outside governance",
-                            ) from exc
-    return tuple(
-        SystemdGpuClaim(unit=unit, main_pid=main_pids[unit], gpu_uuids=frozenset(uuids))
-        for unit, uuids in sorted(claims.items())
+                                "systemd cgroup process inventory is invalid",
+                            )
+                        process_identities = {}
+                        for pid in process_pids:
+                            identity = _read_stable_systemd_process_identity(
+                                pid,
+                                read_process_cgroup=read_process_cgroup,
+                                read_process_start_ticks=read_process_start_ticks,
+                            )
+                            if not _systemd_cgroup_contains(
+                                identity[1], control_group
+                            ):
+                                raise BrokerError(
+                                    "gpu_claim_inventory_unavailable",
+                                    "systemd cgroup process identity differs",
+                                )
+                            process_identities[pid] = identity
+                except BrokerError:
+                    raise
+                except Exception as exc:
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        "cannot enumerate systemd cgroup processes",
+                    ) from exc
+            else:
+                process_pids = (
+                    frozenset({main_pid}) if main_pid > 0 else frozenset()
+                )
+                process_identities: dict[int, tuple[int, str]] = {}
+
+            environment_entries = _parse_systemd_environment(
+                scalar_properties["Environment"],
+                declaration="Environment",
+                require_values=True,
+            )
+            pass_entries = _parse_systemd_environment(
+                scalar_properties["PassEnvironment"],
+                declaration="PassEnvironment",
+                require_values=False,
+            )
+            unset_entries = _parse_systemd_environment(
+                scalar_properties["UnsetEnvironment"],
+                declaration="UnsetEnvironment",
+                require_values=False,
+            )
+            pass_names = frozenset(entry.split("=", 1)[0] for entry in pass_entries)
+            if pass_names.intersection(relevant_names):
+                if manager_environment is None:
+                    manager_environment = _query_systemd_manager_environment(
+                        prefix,
+                        scope,
+                        run=run,
+                    )
+                    manager_environment_snapshots[scope] = dict(
+                        manager_environment
+                    )
+            configured: dict[str, str] = {
+                name: value
+                for name in pass_names
+                if manager_environment is not None
+                and (value := manager_environment.get(name)) is not None
+            }
+            for entry in environment_entries:
+                name, value = entry.split("=", 1)
+                configured[name] = value
+            for declaration in environment_files:
+                if not declaration:
+                    continue
+                try:
+                    file_tokens = shlex.split(declaration)
+                except ValueError as exc:
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        "systemd EnvironmentFiles declaration is invalid",
+                    ) from exc
+                if (
+                    len(file_tokens) != 2
+                    or file_tokens[1]
+                    not in {"(ignore_errors=yes)", "(ignore_errors=no)"}
+                ):
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        "systemd EnvironmentFiles declaration is invalid",
+                    )
+                raw_path = file_tokens[0]
+                prefixed_optional = raw_path.startswith("-/")
+                if prefixed_optional:
+                    raw_path = raw_path[1:]
+                ignore_missing = file_tokens[1] == "(ignore_errors=yes)"
+                if (
+                    not raw_path.startswith("/")
+                    or raw_path.startswith("//")
+                    or (prefixed_optional and not ignore_missing)
+                ):
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        "systemd EnvironmentFiles declaration is invalid",
+                    )
+                environment_path = Path(raw_path)
+                if ignore_missing:
+                    try:
+                        environment_path.lstat()
+                    except FileNotFoundError:
+                        environment_file_snapshots.append(
+                            _capture_missing_systemd_environment_file(
+                                environment_path
+                            )
+                        )
+                        continue
+                    except OSError as exc:
+                        raise BrokerError(
+                            "gpu_claim_inventory_unavailable",
+                            "systemd EnvironmentFile is unsafe",
+                        ) from exc
+                file_environment, file_snapshot = (
+                    _capture_systemd_environment_file(environment_path)
+                )
+                configured.update(file_environment)
+                environment_file_snapshots.append(file_snapshot)
+            for entry in unset_entries:
+                if "=" in entry:
+                    name, value = entry.split("=", 1)
+                    if configured.get(name) == value:
+                        configured.pop(name, None)
+                else:
+                    configured.pop(entry, None)
+
+            active_uuids: set[str] = set()
+            for uuid, pids in compute_processes.items():
+                if uuid not in EXPECTED_GPU_UUIDS.values():
+                    continue
+                for pid in pids:
+                    process_identity = _read_stable_systemd_process_identity(
+                        pid,
+                        read_process_cgroup=read_process_cgroup,
+                        read_process_start_ticks=read_process_start_ticks,
+                    )
+                    process_cgroup = process_identity[1]
+                    if control_group and _systemd_cgroup_contains(
+                        process_cgroup,
+                        control_group,
+                    ):
+                        if process_identities.get(pid) != process_identity:
+                            raise BrokerError(
+                                "gpu_claim_inventory_unavailable",
+                                "NVIDIA PID identity changed during systemd inventory",
+                            )
+                        active_uuids.add(uuid)
+                        break
+
+            statically_relevant = bool(
+                set(configured).intersection(relevant_names)
+                or pass_names.intersection(relevant_names)
+            )
+            if scope == "system" and not statically_relevant and not active_uuids:
+                # Root/systemd is the trusted host configuration boundary.
+                # An unrelated root process is not ptrace-readable by UID1001;
+                # global nvidia-smi still catches it the instant it owns a GPU.
+                continue
+            if control_group:
+                observed_memberships[(scope, unit, control_group)] = dict(
+                    process_identities
+                )
+
+            if main_pid > 0:
+                if not control_group or main_pid not in process_identities:
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        "systemd MainPID is outside its ControlGroup",
+                    )
+                expected_main_identity = process_identities[main_pid]
+                _verify_systemd_process_identity(
+                    main_pid,
+                    expected_main_identity[0],
+                    expected_main_identity[1],
+                    read_process_cgroup=read_process_cgroup,
+                    read_process_start_ticks=read_process_start_ticks,
+                )
+
+            live_environments: list[dict[str, str]] = []
+            for pid in sorted(process_pids):
+                _ensure_admission_open(deadline, monotonic=monotonic)
+                expected_identity = process_identities.get(pid)
+                if expected_identity is None:
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        f"systemd process identity is missing for PID {pid}",
+                    )
+                _verify_systemd_process_identity(
+                    pid,
+                    expected_identity[0],
+                    expected_identity[1],
+                    read_process_cgroup=read_process_cgroup,
+                    read_process_start_ticks=read_process_start_ticks,
+                )
+                try:
+                    process_uids = read_process_uids(pid)
+                except BrokerError:
+                    raise
+                except Exception as exc:
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        f"cannot read systemd process credentials for PID {pid}",
+                    ) from exc
+                if process_uids != (1001, 1001, 1001, 1001):
+                    # A user service may contain a narrowly privileged helper
+                    # (for example fusermount). Root remains part of the
+                    # trusted host boundary; nvidia-smi independently catches
+                    # any such process once it owns a GPU.
+                    _verify_systemd_process_identity(
+                        pid,
+                        expected_identity[0],
+                        expected_identity[1],
+                        read_process_cgroup=read_process_cgroup,
+                        read_process_start_ticks=read_process_start_ticks,
+                    )
+                    continue
+                try:
+                    environment = read_process_environment(pid)
+                    if not isinstance(environment, dict) or any(
+                        not isinstance(name, str)
+                        or not name
+                        or not isinstance(value, str)
+                        for name, value in environment.items()
+                    ):
+                        raise ValueError("live environment is invalid")
+                except BrokerError as exc:
+                    if scope == "system" and (statically_relevant or active_uuids):
+                        continue
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        f"cannot safely read live environment for systemd PID {pid}",
+                    ) from exc
+                except Exception as exc:
+                    if scope == "system" and (statically_relevant or active_uuids):
+                        # Static declarations and exact NVIDIA PID attribution
+                        # are sufficient to block/authorize this GPU without
+                        # ptrace access to a cross-UID root process.
+                        continue
+                    raise BrokerError(
+                        "gpu_claim_inventory_unavailable",
+                        f"cannot safely read live environment for systemd PID {pid}",
+                    ) from exc
+                _verify_systemd_process_identity(
+                    pid,
+                    expected_identity[0],
+                    expected_identity[1],
+                    read_process_cgroup=read_process_cgroup,
+                    read_process_start_ticks=read_process_start_ticks,
+                )
+                live_environments.append(environment)
+
+            gpu_uuids = set(active_uuids)
+            for environment in (configured, *live_environments):
+                for name in relevant_names:
+                    value = environment.get(name)
+                    if value is None:
+                        continue
+                    normalized = value.strip()
+                    if normalized.lower() in {"", "none", "void"}:
+                        continue
+                    if normalized.lower() == "all":
+                        gpu_uuids.update(EXPECTED_GPU_UUIDS.values())
+                        continue
+                    try:
+                        gpu_uuids.update(
+                            _resolve_gpu_claim_tokens(normalized.split(","))
+                        )
+                    except ValueError as exc:
+                        raise BrokerError(
+                            "gpu_claim_inventory_unavailable",
+                            "systemd GPU declaration is outside governance",
+                        ) from exc
+            for pid, (start_ticks, process_cgroup) in sorted(
+                process_identities.items()
+            ):
+                _verify_systemd_process_identity(
+                    pid,
+                    start_ticks,
+                    process_cgroup,
+                    read_process_cgroup=read_process_cgroup,
+                    read_process_start_ticks=read_process_start_ticks,
+                )
+                verified_process_identities.add(
+                    (pid, start_ticks, process_cgroup)
+                )
+            if gpu_uuids:
+                claims.append(
+                    SystemdGpuClaim(
+                        scope=scope,
+                        unit=unit,
+                        main_pid=main_pid,
+                        control_group=control_group,
+                        process_pids=process_pids,
+                        gpu_uuids=frozenset(gpu_uuids),
+                    )
+                )
+    # Bind the list/show control-plane identity before accepting the process
+    # evidence. InvocationID closes same-name unit restarts while ActiveState
+    # and SubState keep activating/reloading services inside the audit.
+    for scope in ("user", "system"):
+        _ensure_admission_open(deadline, monotonic=monotonic)
+        current_authorities = _query_systemd_unit_authorities(scope, run=run)
+        if current_authorities != authority_snapshots[scope]:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                f"{scope} systemd unit authority changed during audit",
+            )
+        if scope in manager_environment_snapshots:
+            prefix = (
+                ["systemctl", "--user"] if scope == "user" else ["systemctl"]
+            )
+            if _query_systemd_manager_environment(
+                prefix,
+                scope,
+                run=run,
+            ) != manager_environment_snapshots[scope]:
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    f"{scope} systemd manager environment changed during audit",
+                )
+
+    final_process_cgroup_snapshot = (
+        _snapshot_systemd_process_cgroups(
+            read_process_cgroup=read_process_cgroup,
+            read_process_start_ticks=read_process_start_ticks,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
+        if process_cgroup_snapshot is not None
+        else None
     )
+    for (scope, unit, control_group), expected_identities in sorted(
+        observed_memberships.items()
+    ):
+        _ensure_admission_open(deadline, monotonic=monotonic)
+        if final_process_cgroup_snapshot is not None:
+            current_identities = {
+                pid: (start_ticks, process_cgroup)
+                for pid, start_ticks, process_cgroup in final_process_cgroup_snapshot
+                if _systemd_cgroup_contains(process_cgroup, control_group)
+            }
+        else:
+            try:
+                current_pids = read_control_group_processes(control_group)
+            except BrokerError:
+                raise
+            except Exception as exc:
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    "cannot enumerate systemd cgroup processes",
+                ) from exc
+            if (
+                not isinstance(current_pids, frozenset)
+                or any(
+                    not isinstance(pid, int)
+                    or isinstance(pid, bool)
+                    or pid <= 0
+                    for pid in current_pids
+                )
+            ):
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    "systemd cgroup process inventory is invalid",
+                )
+            current_identities = {
+                pid: _read_stable_systemd_process_identity(
+                    pid,
+                    read_process_cgroup=read_process_cgroup,
+                    read_process_start_ticks=read_process_start_ticks,
+                )
+                for pid in current_pids
+            }
+            if any(
+                not _systemd_cgroup_contains(identity[1], control_group)
+                for identity in current_identities.values()
+            ):
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    "systemd cgroup process identity differs",
+                )
+        if current_identities != expected_identities:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                f"{scope} systemd unit {unit} membership changed during audit",
+            )
+
+    # User inventory runs before system inventory. Revalidate every enumerated
+    # identity after both control-plane and membership CAS checks.
+    for pid, start_ticks, process_cgroup in sorted(verified_process_identities):
+        _ensure_admission_open(deadline, monotonic=monotonic)
+        _verify_systemd_process_identity(
+            pid,
+            start_ticks,
+            process_cgroup,
+            read_process_cgroup=read_process_cgroup,
+            read_process_start_ticks=read_process_start_ticks,
+        )
+    # EnvironmentFiles are mutable authorities independent of systemd's
+    # EnvironmentFiles= path string. Re-open them only after unit, manager,
+    # membership and process-identity CAS checks so an activating MainPID=0
+    # service cannot change its future GPU visibility inside that window.
+    for expected_snapshot in environment_file_snapshots:
+        _ensure_admission_open(deadline, monotonic=monotonic)
+        if isinstance(
+            expected_snapshot,
+            _SystemdMissingEnvironmentFileSnapshot,
+        ):
+            current_missing_snapshot = (
+                _capture_missing_systemd_environment_file(
+                    Path(expected_snapshot.declared_path)
+                )
+            )
+            if current_missing_snapshot != expected_snapshot:
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    "systemd optional EnvironmentFile identity changed during audit",
+                )
+            continue
+        _environment, current_snapshot = _capture_systemd_environment_file(
+            Path(expected_snapshot.declared_path)
+        )
+        if current_snapshot != expected_snapshot:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "systemd EnvironmentFile identity changed during audit",
+            )
+    _ensure_admission_open(deadline, monotonic=monotonic)
+    return tuple(sorted(claims, key=lambda claim: (claim.scope, claim.unit)))
 
 
 def validate_policy_document(path: Path) -> None:
@@ -717,9 +2026,19 @@ def validate_policy_document(path: Path) -> None:
         )
 
 
-def query_compute_processes() -> dict[str, frozenset[int]]:
+def query_compute_processes(
+    *,
+    run=subprocess.run,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> dict[str, frozenset[int]]:
+    run = _deadline_bounded_run(
+        run,
+        deadline=deadline,
+        monotonic=monotonic,
+    )
     try:
-        completed = subprocess.run(
+        completed = run(
             [
                 "nvidia-smi",
                 "--query-compute-apps=gpu_uuid,pid",
@@ -737,6 +2056,7 @@ def query_compute_processes() -> dict[str, frozenset[int]]:
         ) from exc
     processes: dict[str, set[int]] = {}
     for line in completed.stdout.splitlines():
+        _ensure_admission_open(deadline, monotonic=monotonic)
         if not line.strip():
             continue
         fields = [field.strip() for field in line.split(",")]
@@ -755,8 +2075,88 @@ def query_compute_processes() -> dict[str, frozenset[int]]:
     return {uuid: frozenset(pids) for uuid, pids in processes.items()}
 
 
+@dataclass(frozen=True, slots=True)
+class _ExternalInventorySnapshot:
+    processes: dict[str, frozenset[int]]
+    docker_claims: tuple[DockerGpuClaim, ...]
+    systemd_claims: tuple[SystemdGpuClaim, ...]
+
+    def target_fingerprint(
+        self,
+        uuid: str,
+    ) -> tuple[
+        frozenset[int],
+        tuple[DockerGpuClaim, ...],
+        tuple[SystemdGpuClaim, ...],
+    ]:
+        return (
+            self.processes.get(uuid, frozenset()),
+            tuple(
+                claim
+                for claim in self.docker_claims
+                if uuid in claim.gpu_uuids
+            ),
+            tuple(
+                claim
+                for claim in self.systemd_claims
+                if uuid in claim.gpu_uuids
+            ),
+        )
+
+
+class _ExternalGpuAdmission:
+    """One request-local inventory shared by its ordered GPU candidates."""
+
+    def __init__(
+        self,
+        guard: "ExternalGpuGuard",
+        *,
+        leases: tuple[Lease, ...],
+        owner: OwnerIdentity,
+        component: str,
+        environment: str,
+    ) -> None:
+        self.guard = guard
+        self.leases = leases
+        self.owner = owner
+        self.component = component
+        self.environment = environment
+        self.deadline = (
+            guard._monotonic() + guard._admission_timeout_seconds
+        )
+        self._initial: _ExternalInventorySnapshot | None = None
+        self._inventory_failed = False
+
+    def initial_inventory(self) -> _ExternalInventorySnapshot:
+        if self._inventory_failed:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "initial external GPU inventory is unavailable",
+            )
+        if self._initial is None:
+            try:
+                self._initial = self.guard._inventories(
+                    deadline=self.deadline
+                )
+            except Exception:
+                self._inventory_failed = True
+                raise
+        return self._initial
+
+    def __call__(self, index: int, uuid: str) -> bool:
+        return self.guard._candidate_busy(self, index, uuid)
+
+    def finalize(self, _index: int, _uuid: str) -> None:
+        """Fence lease insertion to the same request-local deadline."""
+
+        _ensure_admission_open(
+            self.deadline,
+            monotonic=self.guard._monotonic,
+        )
+
+
 class ExternalGpuGuard:
-    """Blocks statically registered claims and unowned live CUDA processes."""
+    """Blocks static claims and live clients using request-local CAS audits."""
 
     def __init__(
         self,
@@ -766,19 +2166,52 @@ class ExternalGpuGuard:
         docker_claim_query=query_docker_gpu_claims,
         systemd_claim_query=query_systemd_gpu_claims,
         unmanaged_mps_client_query=None,
-        cache_seconds: float = 0.2,
+        authorized_mps_server_pids=None,
+        allow_descriptor_mps_authority: bool = False,
+        cache_seconds: float = 0.0,
+        admission_timeout_seconds: float = (
+            DEFAULT_EXTERNAL_ADMISSION_TIMEOUT_SECONDS
+        ),
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
+        if (
+            isinstance(admission_timeout_seconds, bool)
+            or not isinstance(admission_timeout_seconds, (int, float))
+            or not 0 < float(admission_timeout_seconds) < 5.0
+        ):
+            raise ValueError(
+                "admission_timeout_seconds must be positive and below 5 seconds"
+            )
         self.policy = policy
         self._process_query = process_query
         self._docker_claim_query = docker_claim_query
         self._systemd_claim_query = systemd_claim_query
         self._unmanaged_mps_client_query = unmanaged_mps_client_query
-        self._cache_seconds = cache_seconds
-        self._lock = threading.Lock()
-        self._cached_at = 0.0
-        self._cached: dict[str, frozenset[int]] | None = None
-        self._cached_docker_claims: tuple[DockerGpuClaim, ...] | None = None
-        self._cached_systemd_claims: tuple[SystemdGpuClaim, ...] | None = None
+        self._authorized_mps_server_pids = authorized_mps_server_pids
+        self._allow_descriptor_mps_authority = allow_descriptor_mps_authority
+        self._admission_timeout_seconds = float(
+            admission_timeout_seconds
+        )
+        self._monotonic = monotonic
+        # Kept as a source-compatible constructor argument. Inventories are
+        # shared only by one HostGpuBroker candidate search, never by TTL.
+        _ = cache_seconds
+
+    def begin_admission(
+        self,
+        *,
+        leases: tuple[Lease, ...],
+        owner: OwnerIdentity,
+        component: str,
+        environment: str,
+    ) -> _ExternalGpuAdmission:
+        return _ExternalGpuAdmission(
+            self,
+            leases=leases,
+            owner=owner,
+            component=component,
+            environment=environment,
+        )
 
     def __call__(
         self,
@@ -789,19 +2222,164 @@ class ExternalGpuGuard:
         component: str,
         environment: str,
     ) -> bool:
+        # Direct callers receive an isolated one-candidate audit.
+        return self.begin_admission(
+            leases=leases,
+            owner=owner,
+            component=component,
+            environment=environment,
+        )(_index, uuid)
+
+    def _candidate_busy(
+        self,
+        admission: _ExternalGpuAdmission,
+        index: int,
+        uuid: str,
+    ) -> bool:
+        # An inherited descriptor root is the development/acceptance authority.
+        # It must never be usable as a production control plane, nor may it
+        # authorize the production-only GPU2.
+        if self._allow_descriptor_mps_authority and (
+            admission.environment != "dev" or index == 2
+        ):
+            return True
         if uuid in self.policy.blocked_gpu_uuids:
             return True
         try:
-            processes, docker_claims, systemd_claims = self._inventories()
-            if (
-                self._unmanaged_mps_client_query is not None
-                and self._unmanaged_mps_client_query(_index, uuid, leases)
+            initial = admission.initial_inventory()
+            initial_mps, initial_unmanaged = self._mps_audit(
+                index,
+                uuid,
+                admission.leases,
+                deadline=admission.deadline,
+            )
+            if initial_unmanaged or self._snapshot_blocks_candidate(
+                initial,
+                index=index,
+                uuid=uuid,
+                leases=admission.leases,
+                owner=admission.owner,
+                component=admission.component,
+                environment=admission.environment,
+                authorized_mps_servers=initial_mps,
             ):
                 return True
+
+            # Only a candidate that appears free pays for the final snapshot.
+            # Docker and systemd each perform their own internal CAS; comparing
+            # the target fingerprint here binds them to the initial request-local
+            # inventory. MPS is re-audited last because a client does not change
+            # the shared server PID reported by NVML.
+            final = self._inventories(deadline=admission.deadline)
+            final_mps, final_unmanaged = self._mps_audit(
+                index,
+                uuid,
+                admission.leases,
+                deadline=admission.deadline,
+            )
+            if (
+                final_unmanaged
+                or final_mps != initial_mps
+                or final.target_fingerprint(uuid)
+                != initial.target_fingerprint(uuid)
+            ):
+                return True
+            if self._snapshot_blocks_candidate(
+                final,
+                index=index,
+                uuid=uuid,
+                leases=admission.leases,
+                owner=admission.owner,
+                component=admission.component,
+                environment=admission.environment,
+                authorized_mps_servers=final_mps,
+            ):
+                return True
+
+            # Docker/systemd and the final MPS audit take time after the
+            # snapshot's first nvidia-smi query. Re-read the target immediately
+            # before allowing it so a direct CUDA process appearing inside that
+            # window cannot inherit the lease. A same-UID MPS client can still
+            # race its path-based audit; UID 1001 is the documented trust
+            # boundary for that residual.
+            trailing_processes = self._query_compute_processes(
+                deadline=admission.deadline
+            )
+            busy = trailing_processes.get(
+                uuid,
+                frozenset(),
+            ) != final.processes.get(uuid, frozenset())
+            if not busy:
+                admission.finalize(index, uuid)
+            return busy
         except Exception:
-            # Allocation fails closed if host process visibility is lost.
+            # Allocation fails closed if any authority snapshot is unavailable.
             return True
-        for claim in docker_claims:
+
+    def _mps_audit(
+        self,
+        index: int,
+        uuid: str,
+        leases: tuple[Lease, ...],
+        *,
+        deadline: float,
+    ) -> tuple[frozenset[int], bool]:
+        authorized = (
+            frozenset()
+            if self._authorized_mps_server_pids is None
+            else _call_with_optional_deadline(
+                self._authorized_mps_server_pids,
+                index,
+                uuid,
+                deadline=deadline,
+                monotonic=self._monotonic,
+            )
+        )
+        if (
+            not isinstance(authorized, frozenset)
+            or any(
+                not isinstance(pid, int)
+                or isinstance(pid, bool)
+                or pid <= 0
+                for pid in authorized
+            )
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS server authority returned an invalid identity set",
+            )
+        unmanaged = (
+            False
+            if self._unmanaged_mps_client_query is None
+            else _call_with_optional_deadline(
+                self._unmanaged_mps_client_query,
+                index,
+                uuid,
+                leases,
+                deadline=deadline,
+                monotonic=self._monotonic,
+            )
+        )
+        if not isinstance(unmanaged, bool):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS client authority returned an invalid result",
+            )
+        return authorized, unmanaged
+
+    def _snapshot_blocks_candidate(
+        self,
+        snapshot: _ExternalInventorySnapshot,
+        *,
+        index: int,
+        uuid: str,
+        leases: tuple[Lease, ...],
+        owner: OwnerIdentity,
+        component: str,
+        environment: str,
+        authorized_mps_servers: frozenset[int],
+    ) -> bool:
+        for claim in snapshot.docker_claims:
             if uuid not in claim.gpu_uuids:
                 continue
             registration = self.policy.managed_docker_claims.get(
@@ -831,64 +2409,207 @@ class ExternalGpuGuard:
                 _pid_is_or_descends_from(candidate, claim.init_pid)
                 for candidate in eligible_owners
             ):
-                # The managed MD container is a CPU-only supervisor while it
-                # is idle.  Its exact immutable DeviceRequest may expose every
-                # policy candidate without owning capacity; per-job execution
-                # leases own all CUDA/MPS clients.  Unknown or mismatched
-                # registrations still fail above, and the process/MPS audits
-                # below reject a supervisor that creates a CUDA client without
-                # such a live lease.  No other component receives this narrow
-                # declaration-only exception.
+                # The exact managed MD container is an idle CPU supervisor.
                 if registration.component != "md":
                     return True
-        for claim in systemd_claims:
+
+        systemd_authorized_mps_servers: set[int] = set()
+        for claim in snapshot.systemd_claims:
             if uuid not in claim.gpu_uuids:
                 continue
-            if self.policy.managed_systemd_claims.get(claim.unit) != claim.gpu_uuids:
+            identity = f"{claim.scope}:{claim.unit}"
+            if self.policy.managed_systemd_claims.get(identity) != claim.gpu_uuids:
                 return True
+            exact_mps_identity = f"system:nexpoly-gpu-mps@{index}.service"
+            if (
+                identity == exact_mps_identity
+                and claim.gpu_uuids == frozenset({uuid})
+                and authorized_mps_servers
+                and authorized_mps_servers.issubset(claim.process_pids)
+            ):
+                systemd_authorized_mps_servers.update(
+                    authorized_mps_servers
+                )
+                continue
             eligible_owners = [
-                lease.owner_pid
-                for lease in leases
-                if lease.gpu_uuid == uuid
+                lease.owner_pid for lease in leases if lease.gpu_uuid == uuid
             ]
             eligible_owners.append(owner.pid)
             if not any(
-                _pid_is_or_descends_from(candidate, claim.main_pid)
+                candidate in claim.process_pids
+                or (
+                    claim.main_pid > 0
+                    and _pid_is_or_descends_from(candidate, claim.main_pid)
+                )
                 for candidate in eligible_owners
             ):
                 return True
+
         owners = [lease.owner_pid for lease in leases if lease.gpu_uuid == uuid]
-        for pid in processes.get(uuid, frozenset()):
-            if _is_mps_server(pid):
-                continue
+        for pid in snapshot.processes.get(uuid, frozenset()):
+            if pid in authorized_mps_servers:
+                if (
+                    self._allow_descriptor_mps_authority
+                    or pid in systemd_authorized_mps_servers
+                ):
+                    continue
+                return True
             if not any(_pid_is_or_descends_from(pid, owner) for owner in owners):
                 return True
         return False
 
+    def _query_compute_processes(
+        self,
+        *,
+        deadline: float,
+    ) -> dict[str, frozenset[int]]:
+        if self._process_query is query_compute_processes:
+            processes = self._process_query(
+                deadline=deadline,
+                monotonic=self._monotonic,
+            )
+        else:
+            processes = _call_with_optional_deadline(
+                self._process_query,
+                deadline=deadline,
+                monotonic=self._monotonic,
+            )
+        if not isinstance(processes, dict) or any(
+            not isinstance(uuid, str)
+            or not isinstance(pids, frozenset)
+            or any(
+                not isinstance(pid, int)
+                or isinstance(pid, bool)
+                or pid <= 0
+                for pid in pids
+            )
+            for uuid, pids in processes.items()
+        ):
+            raise BrokerError(
+                "gpu_process_inventory_unavailable",
+                "compute process inventory is invalid",
+            )
+        return dict(processes)
+
     def _inventories(
         self,
-    ) -> tuple[
-        dict[str, frozenset[int]],
-        tuple[DockerGpuClaim, ...],
-        tuple[SystemdGpuClaim, ...],
-    ]:
-        with self._lock:
-            now = time.monotonic()
-            if (
-                self._cached is None
-                or self._cached_docker_claims is None
-                or self._cached_systemd_claims is None
-                or now - self._cached_at > self._cache_seconds
-            ):
-                self._cached = self._process_query()
-                self._cached_docker_claims = self._docker_claim_query()
-                self._cached_systemd_claims = self._systemd_claim_query()
-                self._cached_at = now
-            return (
-                self._cached,
-                self._cached_docker_claims,
-                self._cached_systemd_claims,
+        *,
+        deadline: float | None = None,
+    ) -> _ExternalInventorySnapshot:
+        # A request receives one initial snapshot; a potentially allowed target
+        # receives a second, independently linearized snapshot.
+        if deadline is None:
+            deadline = (
+                self._monotonic() + self._admission_timeout_seconds
             )
+        processes = self._query_compute_processes(deadline=deadline)
+        if (
+            self._docker_claim_query is query_docker_gpu_claims
+            and self._systemd_claim_query is query_systemd_gpu_claims
+        ):
+            # The default read-only authorities are independent after the
+            # compute snapshot is fixed. Overlap their subprocess-heavy CAS
+            # audits so the full allow path retains client-deadline margin.
+            # Injected authorities stay serial for a deterministic contract.
+            executor = ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix="gpu-authority",
+            )
+            authority_futures = []
+            try:
+                docker_future = executor.submit(
+                    self._docker_claim_query,
+                    deadline=deadline,
+                    monotonic=self._monotonic,
+                )
+                authority_futures.append(docker_future)
+                systemd_future = executor.submit(
+                    self._systemd_claim_query,
+                    compute_processes=processes,
+                    deadline=deadline,
+                    monotonic=self._monotonic,
+                )
+                authority_futures.append(systemd_future)
+                pending = {docker_future, systemd_future}
+                while pending:
+                    remaining = _remaining_admission_seconds(
+                        deadline,
+                        monotonic=self._monotonic,
+                    )
+                    completed, pending = wait(
+                        pending,
+                        timeout=remaining,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    if not completed:
+                        raise BrokerError(
+                            "gpu_admission_timeout",
+                            "external GPU authority deadline expired",
+                        )
+                    for completed_future in completed:
+                        completed_future.result()
+                docker_claims = docker_future.result()
+                systemd_claims = systemd_future.result()
+            finally:
+                for future in authority_futures:
+                    future.cancel()
+                executor.shutdown(wait=False, cancel_futures=True)
+        else:
+            docker_claims = _call_with_optional_deadline(
+                self._docker_claim_query,
+                deadline=deadline,
+                monotonic=self._monotonic,
+            )
+            if self._systemd_claim_query is query_systemd_gpu_claims:
+                systemd_claims = self._systemd_claim_query(
+                    compute_processes=processes,
+                    deadline=deadline,
+                    monotonic=self._monotonic,
+                )
+            else:
+                systemd_claims = _call_with_optional_deadline(
+                    self._systemd_claim_query,
+                    deadline=deadline,
+                    monotonic=self._monotonic,
+                )
+        if (
+            not isinstance(docker_claims, tuple)
+            or any(not isinstance(claim, DockerGpuClaim) for claim in docker_claims)
+            or len({claim.container_id for claim in docker_claims})
+            != len(docker_claims)
+        ):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "Docker GPU claim inventory is invalid",
+            )
+        docker_claims = tuple(
+            sorted(docker_claims, key=lambda claim: claim.container_id)
+        )
+        if (
+            not isinstance(systemd_claims, tuple)
+            or any(
+                not isinstance(claim, SystemdGpuClaim)
+                for claim in systemd_claims
+            )
+            or len({(claim.scope, claim.unit) for claim in systemd_claims})
+            != len(systemd_claims)
+        ):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "systemd GPU claim inventory is invalid",
+            )
+        systemd_claims = tuple(
+            sorted(
+                systemd_claims,
+                key=lambda claim: (claim.scope, claim.unit),
+            )
+        )
+        _ensure_admission_open(deadline, monotonic=self._monotonic)
+        return _ExternalInventorySnapshot(
+            processes=processes,
+            docker_claims=docker_claims,
+            systemd_claims=systemd_claims,
+        )
 
 
 def _pid_is_or_descends_from(pid: int, owner_pid: int) -> bool:
@@ -1630,25 +3351,6 @@ class JobCgroupController:
         return matches[0]
 
 
-def _is_mps_server(pid: int) -> bool:
-    try:
-        comm = Path(f"/proc/{pid}/comm").read_text(encoding="ascii").strip().lower()
-        status = Path(f"/proc/{pid}/status").read_text(encoding="ascii")
-    except OSError:
-        return False
-    uid_line = next(
-        (line for line in status.splitlines() if line.startswith("Uid:")),
-        None,
-    )
-    if uid_line is None:
-        return False
-    try:
-        real_uid = int(uid_line.split(":", 1)[1].split()[0])
-    except (ValueError, IndexError):
-        return False
-    return "nvidia-cuda-mps" in comm and real_uid == 1001
-
-
 class MpsRuntimeGuard:
     """Fail-closed readiness and orphan-client checks for per-GPU MPS pipes."""
 
@@ -1656,29 +3358,403 @@ class MpsRuntimeGuard:
         self,
         state_root: Path,
         *,
-        command: str = "nvidia-cuda-mps-control",
         run=subprocess.run,
+        control_executable: Path = Path("/usr/bin/nvidia-cuda-mps-control"),
+        server_executable: Path = Path("/usr/bin/nvidia-cuda-mps-server"),
+        proc_root: Path = Path("/proc"),
+        read_process_environment=_read_process_environment,
+        read_process_cgroup=_read_cgroup,
+        read_start_ticks=read_process_start_ticks,
     ) -> None:
+        if (
+            not control_executable.is_absolute()
+            or not server_executable.is_absolute()
+        ):
+            raise ValueError("MPS executable authority paths must be absolute")
         self.state_root = state_root
-        self.command = command
         self._run = run
+        self.control_executable = control_executable
+        self.server_executable = server_executable
+        self.proc_root = proc_root
+        self._read_process_environment = read_process_environment
+        self._read_process_cgroup = read_process_cgroup
+        self._read_start_ticks = read_start_ticks
+
+    @property
+    def descriptor_authority(self) -> bool:
+        """Whether the Broker owns an inherited, process-local state root."""
+
+        match = re.fullmatch(
+            rf"/proc/{os.getpid()}/fd/([1-9][0-9]*)",
+            str(self.state_root),
+        )
+        if match is None:
+            return False
+        descriptor = int(match.group(1))
+        if descriptor <= 2:
+            return False
+        try:
+            opened = os.fstat(descriptor)
+            reached = self.state_root.stat()
+        except OSError:
+            return False
+        return (
+            stat.S_ISDIR(opened.st_mode)
+            and opened.st_uid == 1001
+            and opened.st_gid == 1001
+            and stat.S_IMODE(opened.st_mode) == 0o700
+            and (reached.st_dev, reached.st_ino)
+            == (opened.st_dev, opened.st_ino)
+        )
 
     def __call__(self, index: int, uuid: str) -> bool:
         if EXPECTED_GPU_UUIDS.get(index) != uuid:
             return False
+        return self._pipe_ready(self.pipe_directory(index))
+
+    def authorized_server_pids(
+        self,
+        index: int,
+        uuid: str,
+        *,
+        deadline: float | None = None,
+    ) -> frozenset[int]:
+        """Return only the server owned by this exact MPS control authority.
+
+        NVIDIA attributes MPS clients to the shared server in NVML.  Therefore
+        a server PID may be exempted from the global process gate only after
+        the private pipe, control daemon, root-owned executables, cgroup, GPU
+        binding and two control-plane snapshots all agree.
+        """
+
+        _ensure_admission_open(deadline)
+        if not self(index, uuid):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS pipe authority is unavailable",
+            )
         pipe_directory = self.pipe_directory(index)
-        if pipe_directory.is_symlink() or not pipe_directory.is_dir():
-            return False
+        pipe_before = self._pipe_identity(pipe_directory)
+        first_servers = self._server_list(index, deadline=deadline)
+        if not first_servers:
+            return frozenset()
+        if len(first_servers) != 1:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control authority reported multiple servers",
+            )
+        server_pid = next(iter(first_servers))
+        control_pid = self._control_pid(pipe_directory)
+        control_cgroup = self._validate_process_identity(
+            control_pid,
+            self.control_executable,
+            kind="control",
+        )
+        server_cgroup = self._validate_process_identity(
+            server_pid,
+            self.server_executable,
+            kind="server",
+        )
+        if (
+            control_cgroup != server_cgroup
+            or not _cgroup_has_scoped_path(control_cgroup)
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control and server cgroup authority differs",
+        )
         try:
-            pipe_stat = pipe_directory.stat()
+            control_environment = self._read_process_environment(control_pid)
+            reported_pipe = self._resolve_process_authority_path(
+                control_environment["CUDA_MPS_PIPE_DIRECTORY"],
+                control_pid,
+            )
+            expected_pipe = pipe_directory.resolve(strict=True)
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control environment authority is unavailable",
+            ) from exc
+        if (
+            not isinstance(control_environment, dict)
+            or control_environment.get("CUDA_VISIBLE_DEVICES") != uuid
+            or reported_pipe != expected_pipe
+            or self._pipe_identity(reported_pipe) != pipe_before
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control environment authority differs",
+            )
+        clients = self._query_clients(index, deadline=deadline)
+        if any(
+            client.server_pid != server_pid
+            or not self._device_matches(client.device_uuid, uuid)
+            for client in clients
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS client inventory differs from server authority",
+            )
+        if (
+            self._server_list(index, deadline=deadline) != first_servers
+            or self._control_pid(pipe_directory) != control_pid
+            or self._pipe_identity(pipe_directory) != pipe_before
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS server authority changed during audit",
+            )
+        # Re-read process identity after all control queries to close PID reuse
+        # and executable/cgroup replacement during the snapshot.
+        if (
+            self._validate_process_identity(
+                control_pid,
+                self.control_executable,
+                kind="control",
+            )
+            != control_cgroup
+            or self._validate_process_identity(
+                server_pid,
+                self.server_executable,
+                kind="server",
+            )
+            != server_cgroup
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS process authority changed during audit",
+            )
+        _ensure_admission_open(deadline)
+        return first_servers
+
+    @staticmethod
+    def _resolve_process_authority_path(raw: str, pid: int) -> Path:
+        if not isinstance(raw, str) or not raw.startswith("/"):
+            raise ValueError("MPS process authority path is invalid")
+        self_prefix = "/proc/self/"
+        exact_prefix = f"/proc/{pid}/"
+        if raw.startswith(self_prefix):
+            raw = exact_prefix + raw.removeprefix(self_prefix)
+        elif raw.startswith("/proc/") and not raw.startswith(exact_prefix):
+            raise ValueError("MPS process authority belongs to another process")
+        return Path(raw).resolve(strict=True)
+
+    @staticmethod
+    def _pipe_identity(
+        pipe_directory: Path,
+    ) -> tuple[
+        tuple[int, int, int, int, int],
+        tuple[int, int, int, int, int],
+    ]:
+        try:
+            pipe_stat = pipe_directory.lstat()
             control_stat = (pipe_directory / "control").lstat()
-        except OSError:
+        except OSError as exc:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS pipe identity is unsafe",
+            ) from exc
+        if (
+            not stat.S_ISDIR(pipe_stat.st_mode)
+            or stat.S_ISLNK(pipe_stat.st_mode)
+            or pipe_stat.st_uid != 1001
+            or pipe_stat.st_gid != 1001
+            or stat.S_IMODE(pipe_stat.st_mode) != 0o700
+            or stat.S_ISLNK(control_stat.st_mode)
+            or not (
+                stat.S_ISSOCK(control_stat.st_mode)
+                or stat.S_ISFIFO(control_stat.st_mode)
+            )
+            or control_stat.st_nlink != 1
+            or control_stat.st_uid != 1001
+            or control_stat.st_gid != 1001
+            or stat.S_IMODE(control_stat.st_mode) & 0o022
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS pipe identity is unsafe",
+            )
+        # This CAS rejects persistent replacement and aliasing. NVIDIA's
+        # control CLI accepts only a pathname, not an already-open endpoint, so
+        # a malicious same-UID process could still perform an ABA swap entirely
+        # inside one command. UID1001 is therefore the explicit local trust
+        # boundary; workload namespaces must not receive writable authority over
+        # this directory.
+        return (
+            (
+                pipe_stat.st_dev,
+                pipe_stat.st_ino,
+                stat.S_IFMT(pipe_stat.st_mode) | stat.S_IMODE(pipe_stat.st_mode),
+                pipe_stat.st_uid,
+                pipe_stat.st_gid,
+            ),
+            (
+                control_stat.st_dev,
+                control_stat.st_ino,
+                stat.S_IFMT(control_stat.st_mode)
+                | stat.S_IMODE(control_stat.st_mode),
+                control_stat.st_uid,
+                control_stat.st_gid,
+            ),
+        )
+
+    @classmethod
+    def _pipe_ready(cls, pipe_directory: Path) -> bool:
+        try:
+            cls._pipe_identity(pipe_directory)
+        except BrokerError:
             return False
-        if pipe_stat.st_uid != 1001 or control_stat.st_uid != 1001:
-            return False
-        if stat.S_ISLNK(control_stat.st_mode):
-            return False
-        return stat.S_ISSOCK(control_stat.st_mode) or stat.S_ISFIFO(control_stat.st_mode)
+        return True
+
+    def _control_pid(self, pipe_directory: Path) -> int:
+        path = pipe_directory / "nvidia-cuda-mps-control.pid"
+        descriptor = -1
+        try:
+            declared_before = path.lstat()
+            if (
+                stat.S_ISLNK(declared_before.st_mode)
+                or not stat.S_ISREG(declared_before.st_mode)
+                or declared_before.st_nlink != 1
+                or declared_before.st_uid != 1001
+                or declared_before.st_gid != 1001
+                or stat.S_IMODE(declared_before.st_mode) & 0o022
+                or declared_before.st_size > 32
+            ):
+                raise OSError("unsafe MPS control PID file")
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            opened_before = os.fstat(descriptor)
+            raw = os.pread(descriptor, 33, 0)
+            opened_after = os.fstat(descriptor)
+            declared_after = path.lstat()
+            snapshots = (
+                declared_before,
+                opened_before,
+                opened_after,
+                declared_after,
+            )
+            identities = {
+                (
+                    item.st_dev,
+                    item.st_ino,
+                    item.st_mode,
+                    item.st_uid,
+                    item.st_gid,
+                    item.st_nlink,
+                    item.st_size,
+                    item.st_mtime_ns,
+                    item.st_ctime_ns,
+                )
+                for item in snapshots
+            }
+            if len(identities) != 1:
+                raise OSError("MPS control PID file changed")
+            value = raw.decode("ascii")
+            if not re.fullmatch(r"[1-9][0-9]*\n?", value):
+                raise ValueError("invalid MPS control PID")
+            pid = int(value.strip())
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control PID authority is unavailable",
+            ) from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        return pid
+
+    def _server_list(
+        self,
+        index: int,
+        *,
+        deadline: float | None = None,
+    ) -> frozenset[int]:
+        output = self._run_control(
+            index,
+            "get_server_list",
+            deadline=deadline,
+        )
+        if output == "":
+            return frozenset()
+        if output.endswith("\n"):
+            body = output[:-1]
+        else:
+            body = output
+        lines = body.split("\n")
+        if (
+            not lines
+            or any(re.fullmatch(r"[1-9][0-9]*", line) is None for line in lines)
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS server list is invalid",
+            )
+        pids = frozenset(int(line) for line in lines)
+        if len(pids) != len(lines):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS server list is duplicated",
+            )
+        return pids
+
+    def _validate_process_identity(
+        self,
+        pid: int,
+        executable: Path,
+        *,
+        kind: str,
+    ) -> str:
+        try:
+            start_before = self._read_start_ticks(pid)
+            status = (self.proc_root / str(pid) / "status").read_text(
+                encoding="ascii"
+            )
+            expected_lstat = executable.lstat()
+            expected_stat = executable.stat()
+            actual_stat = (self.proc_root / str(pid) / "exe").stat()
+            cgroup = self._read_process_cgroup(pid)
+            start_after = self._read_start_ticks(pid)
+        except (OSError, UnicodeError, BrokerError) as exc:
+            raise BrokerError(
+                "mps_control_unavailable",
+                f"MPS {kind} process authority is unavailable",
+            ) from exc
+        identities: dict[str, tuple[int, ...]] = {}
+        for name in ("Uid", "Gid"):
+            line = next(
+                (item for item in status.splitlines() if item.startswith(f"{name}:")),
+                None,
+            )
+            try:
+                values = tuple(
+                    int(value) for value in line.split(":", 1)[1].split()
+                )
+            except (AttributeError, IndexError, ValueError) as exc:
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    f"MPS {kind} process credentials are invalid",
+                ) from exc
+            identities[name] = values
+        if (
+            identities["Uid"] != (1001, 1001, 1001, 1001)
+            or identities["Gid"] != (1001, 1001, 1001, 1001)
+            or start_before != start_after
+            or not isinstance(start_before, int)
+            or isinstance(start_before, bool)
+            or start_before <= 0
+            or stat.S_ISLNK(expected_lstat.st_mode)
+            or not stat.S_ISREG(expected_stat.st_mode)
+            or expected_stat.st_uid != 0
+            or expected_stat.st_gid != 0
+            or expected_stat.st_nlink != 1
+            or stat.S_IMODE(expected_stat.st_mode) & 0o022
+            or (actual_stat.st_dev, actual_stat.st_ino)
+            != (expected_stat.st_dev, expected_stat.st_ino)
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                f"MPS {kind} process authority differs",
+            )
+        return cgroup
 
     def orphan_client_alive(self, lease: Lease) -> bool:
         # If the control channel has disappeared, the Broker cannot prove that
@@ -1712,15 +3788,18 @@ class MpsRuntimeGuard:
         index: int,
         uuid: str,
         leases: tuple[Lease, ...],
+        *,
+        deadline: float | None = None,
     ) -> bool:
         """Return true when MPS reports a client outside all live reservations."""
 
+        _ensure_admission_open(deadline)
         if not self(index, uuid):
             raise BrokerError(
                 "mps_control_unavailable",
                 "GPU MPS control channel is unavailable during allocation audit",
             )
-        clients = self._query_clients(index)
+        clients = self._query_clients(index, deadline=deadline)
         for client in clients:
             if not self._device_matches(client.device_uuid, uuid):
                 raise BrokerError(
@@ -1733,6 +3812,7 @@ class MpsRuntimeGuard:
                 for lease in leases
             ):
                 return True
+        _ensure_admission_open(deadline)
         return False
 
     def lease_client_alive_after_grace(
@@ -1894,8 +3974,13 @@ class MpsRuntimeGuard:
     def pipe_directory(self, index: int) -> Path:
         return self.state_root / f"mps-{index}" / "pipe"
 
-    def _query_clients(self, index: int) -> tuple["MpsClient", ...]:
-        output = self._run_control(index, "ps")
+    def _query_clients(
+        self,
+        index: int,
+        *,
+        deadline: float | None = None,
+    ) -> tuple["MpsClient", ...]:
+        output = self._run_control(index, "ps", deadline=deadline)
         # NVIDIA MPS has two observed, exact no-client responses: an empty
         # stdout while a server is alive with zero clients, and a single
         # ``Server not found`` line when no server has been created yet.
@@ -1952,18 +4037,26 @@ class MpsRuntimeGuard:
             and expected_uuid.startswith(reported_uuid)
         )
 
-    def _run_control(self, index: int, command: str) -> str:
-        env = os.environ.copy()
+    def _run_control(
+        self,
+        index: int,
+        command: str,
+        *,
+        deadline: float | None = None,
+    ) -> str:
         try:
             completed = self._run(
-                [self.command],
+                [str(self.control_executable)],
                 input=command + "\n",
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=_remaining_admission_seconds(
+                    deadline,
+                    maximum=5.0,
+                ),
                 env={
-                    **env,
+                    "LC_ALL": "C",
                     "CUDA_MPS_PIPE_DIRECTORY": str(
                         self.pipe_directory(index)
                     ),
@@ -1977,6 +4070,7 @@ class MpsRuntimeGuard:
             or len(completed.stdout) > 1024 * 1024
         ):
             raise BrokerError("mps_control_unavailable", "MPS control query failed")
+        _ensure_admission_open(deadline)
         return completed.stdout
 
 
@@ -2244,6 +4338,8 @@ def main() -> int:
     external_guard = ExternalGpuGuard(
         external_policy,
         unmanaged_mps_client_query=mps_guard.unmanaged_client_alive,
+        authorized_mps_server_pids=mps_guard.authorized_server_pids,
+        allow_descriptor_mps_authority=mps_guard.descriptor_authority,
     )
     broker = HostGpuBroker(
         args.state,

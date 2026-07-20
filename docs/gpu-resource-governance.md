@@ -41,15 +41,48 @@ and a non-empty reason for every claim. Missing, malformed, oversized, unsafe,
 or policy-foreign inventory blocks start. MPS stop deliberately does not read
 the inventory, so a damaged admission file cannot prevent a safe shutdown.
 
-Static inventory is not treated as a substitute for live host discovery. On
-each short-cached admission snapshot the Broker queries running Docker
-containers (`DeviceRequests` and `NVIDIA_VISIBLE_DEVICES`), active user/system
-systemd service environments, and NVIDIA compute PIDs. A Docker or systemd
-query failure blocks allocation. A GPU visibility claim with no CUDA PID still
-blocks the card unless its registration ID, component, environment, Compose
-project/service, and exact UUID set match the managed allowlist. This prevents
-an idle, unlabelled Dev Backend DeviceRequest from being mistaken for free
-capacity. GPU3's current static block remains an additional independent gate.
+Static inventory is not treated as a substitute for live host discovery.
+Every admission takes an uncached initial NVIDIA-compute snapshot, queries
+running Docker containers (`DeviceRequests` and `NVIDIA_VISIBLE_DEVICES`) and
+active or transitioning user/system systemd service environments, then
+requires unchanged Docker, systemd, MPS and trailing NVIDIA authority before
+using the result. Docker, systemd, compute and MPS authority are therefore
+evaluated in the same live admission CAS; none is reused from an earlier
+request. A Docker or systemd query failure blocks allocation. A GPU visibility
+claim with no CUDA PID still blocks the card unless its registration ID,
+component, environment, Compose project/service, and exact UUID set match the
+managed allowlist. This prevents an idle, unlabelled Dev Backend DeviceRequest
+from being mistaken for free capacity. GPU3's current static block remains an
+additional independent gate.
+
+Systemd identities are scope-qualified (`user:<unit>` or `system:<unit>`) and
+bind the complete recursive `ControlGroup`, so a user unit cannot inherit the
+registration of a same-named system unit and `MainPID=0` does not hide child
+processes. UID 1001 processes are checked against their live environment;
+`Environment=`, stable `EnvironmentFile=`, `PassEnvironment=` manager values
+and final `UnsetEnvironment=` are also interpreted. The root system manager is
+the trusted host configuration boundary: an unrelated, unmarked cross-UID
+service is not rejected merely because UID 1001 cannot ptrace its environment.
+Independent global NVIDIA discovery still rejects the exact GPU as soon as any
+such process creates a compute context. This software inventory does not claim
+to replace a future root-managed `DevicePolicy=strict`/cgroup device fence.
+
+An NVIDIA PID is never exempted merely because its process name resembles an
+MPS server. The Broker queries `get_server_list` through that GPU's exact
+private control pipe and binds the singleton server to the stable control PID
+file, root-owned NVIDIA executables, four UID/GID identities, process start
+ticks, a shared non-root cgroup, the exact GPU UUID and pipe environment, and a
+second unchanged control-plane snapshot. Every reported client must name the
+same server and device. Missing or conflicting evidence leaves the PID
+unmanaged and blocks admission.
+
+UID/GID `1001:1001` is one trusted runtime principal, not a security boundary
+between the Broker, MPS daemon and pinned Workers. Private modes prevent access
+by other identities, while same-UID code can inherently address the Broker
+state and MPS paths; path/inode CAS detects accidental or persistent
+replacement but cannot prove absence of a malicious same-UID ABA swap. Any
+future untrusted Worker must first move to a separate identity and receive only
+the minimum socket/pipe access instead of the shared writable state root.
 
 ## Lease safety
 

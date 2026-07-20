@@ -1095,6 +1095,26 @@ class HostGpuBroker:
             reserved_memory = memory_mib
 
         live_leases = tuple(self._leases.values())
+        begin_external_admission = getattr(
+            self._gpu_externally_busy,
+            "begin_admission",
+            None,
+        )
+        external_admission = (
+            begin_external_admission(
+                leases=live_leases,
+                owner=owner,
+                component=component,
+                environment=environment,
+            )
+            if callable(begin_external_admission)
+            else None
+        )
+        if external_admission is not None and not callable(external_admission):
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "external GPU admission authority is invalid",
+            )
         for position, index in enumerate(candidate_indices):
             uuid = EXPECTED_GPU_UUIDS[index]
             if uuid in self._quarantined_gpus:
@@ -1106,14 +1126,19 @@ class HostGpuBroker:
                 continue
             if not self._gpu_runtime_healthy(index, uuid):
                 continue
-            if self._gpu_externally_busy(
-                index,
-                uuid,
-                live_leases,
-                owner,
-                component,
-                environment,
-            ):
+            externally_busy = (
+                external_admission(index, uuid)
+                if external_admission is not None
+                else self._gpu_externally_busy(
+                    index,
+                    uuid,
+                    live_leases,
+                    owner,
+                    component,
+                    environment,
+                )
+            )
+            if externally_busy:
                 continue
             used = sum(
                 lease.memory_mib
@@ -1122,6 +1147,21 @@ class HostGpuBroker:
             )
             if used + reserved_memory > GPU_TOTAL_BUDGET_MIB:
                 continue
+            finalize_external_admission = (
+                getattr(external_admission, "finalize", None)
+                if external_admission is not None
+                else None
+            )
+            if (
+                finalize_external_admission is not None
+                and not callable(finalize_external_admission)
+            ):
+                raise BrokerError(
+                    "gpu_claim_inventory_unavailable",
+                    "external GPU admission finalizer is invalid",
+                )
+            if callable(finalize_external_admission):
+                finalize_external_admission(index, uuid)
             now = self._now()
             lease = Lease(
                 lease_id=uuid4().hex,
