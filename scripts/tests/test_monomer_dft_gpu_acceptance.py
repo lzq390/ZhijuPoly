@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import socket
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -1968,6 +1969,10 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
             (slot / "log").mkdir(mode=0o700)
             control_path = slot / "pipe/control"
             os.mkfifo(control_path)
+            broker_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            broker_socket.bind(str(gpu_root / "broker.sock"))
+            broker_socket.close()
+            (gpu_root / "broker.sock").chmod(0o600)
             controller = HARNESS.FreshAcceptanceControl(
                 runtime_root=root,
                 run_directory=run,
@@ -2006,7 +2011,6 @@ class GpuAcceptanceHarnessCpuTests(unittest.TestCase):
                 nonlocal volume_present
                 if command[0].endswith("gpu_mps_control.sh"):
                     events.append("mps-stop")
-                    control_path.unlink()
                     return subprocess.CompletedProcess(command, 0, "", "")
                 if command[1:3] == ("volume", "inspect"):
                     return subprocess.CompletedProcess(

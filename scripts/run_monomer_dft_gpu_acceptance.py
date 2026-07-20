@@ -4687,6 +4687,98 @@ class FreshAcceptanceControl:
             os.close(descriptor)
         del self.mps_descriptors[index]
 
+    def _collect_private_mps_control_artifacts(self, index: int) -> None:
+        """Collect only bounded NVIDIA IPC residue after an idle `quit`."""
+
+        descriptors = self.mps_descriptors.get(index)
+        _require(
+            isinstance(descriptors, dict),
+            f"GPU{index} MPS cleanup lacks descriptor authority",
+        )
+        pipe_descriptor = descriptors["pipe"]
+        entries = sorted(os.listdir(pipe_descriptor))
+        allowed = {"control", "control_lock", "control_privileged"}
+        _require(
+            set(entries) <= allowed,
+            f"GPU{index} MPS pipe retained unexpected entries after stop",
+        )
+        for name in entries:
+            metadata = os.stat(
+                os.fsencode(name),
+                dir_fd=pipe_descriptor,
+                follow_symlinks=False,
+            )
+            mode = stat.S_IMODE(metadata.st_mode)
+            common_safe = (
+                metadata.st_uid == os.geteuid()
+                and metadata.st_gid == os.getegid()
+                and metadata.st_nlink == 1
+                and metadata.st_size <= 4096
+            )
+            if name == "control":
+                safe = (
+                    common_safe
+                    and (
+                        stat.S_ISFIFO(metadata.st_mode)
+                        or stat.S_ISSOCK(metadata.st_mode)
+                    )
+                    and mode in {0o600, 0o640, 0o644, 0o660, 0o666}
+                )
+            elif name == "control_privileged":
+                safe = (
+                    common_safe
+                    and stat.S_ISSOCK(metadata.st_mode)
+                    and mode == 0o700
+                )
+            else:
+                safe = (
+                    common_safe
+                    and stat.S_ISREG(metadata.st_mode)
+                    and mode in {0o600, 0o640, 0o644, 0o660, 0o666}
+                )
+            _require(
+                safe,
+                f"GPU{index} MPS pipe residue is unsafe: {name}",
+            )
+            os.unlink(os.fsencode(name), dir_fd=pipe_descriptor)
+        os.fsync(pipe_descriptor)
+        _require(
+            os.listdir(pipe_descriptor) == [],
+            f"GPU{index} MPS pipe residue survived exact cleanup",
+        )
+
+    def _collect_private_broker_socket(self) -> None:
+        """Remove the exact fresh socket only after its Broker has exited."""
+
+        _require(
+            self.broker_process is not None
+            and self.broker_process.poll() is not None,
+            "fresh Broker socket cannot be collected while its process is live",
+        )
+        self._require_private_gpu_root(create=False)
+        try:
+            metadata = os.stat(
+                b"broker.sock",
+                dir_fd=self.gpu_root_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return
+        _require(
+            stat.S_ISSOCK(metadata.st_mode)
+            and metadata.st_uid == os.geteuid()
+            and metadata.st_gid == os.getegid()
+            and metadata.st_nlink == 1
+            and stat.S_IMODE(metadata.st_mode) == 0o600,
+            "fresh Broker socket residue is unsafe",
+        )
+        os.unlink(b"broker.sock", dir_fd=self.gpu_root_descriptor)
+        os.fsync(self.gpu_root_descriptor)
+        self._gpu_child_absent(
+            "broker.sock",
+            "fresh Broker socket survived exact cleanup",
+        )
+
     def _mps_environment(self, index: int) -> dict[str, str]:
         self._require_private_gpu_root(create=False)
         _require(
@@ -5311,10 +5403,7 @@ class FreshAcceptanceControl:
                         result.returncode == 0,
                         f"GPU{index} MPS stop failed: {result.stderr[-1000:]}",
                     )
-                    _require(
-                        not control_path.exists() and not control_path.is_symlink(),
-                        f"GPU{index} MPS control channel survived stop",
-                    )
+                    self._collect_private_mps_control_artifacts(index)
                     self._remove_private_mps_tree(index)
                     stopped.append(index)
                 except Exception as exc:  # noqa: BLE001
@@ -5340,6 +5429,7 @@ class FreshAcceptanceControl:
                         "cleanup was not proven"
                     )
                 else:
+                    self._collect_private_broker_socket()
                     broker_stopped = (
                         not self._gpu_authority_path("broker.sock").exists()
                         and not self._gpu_authority_path(

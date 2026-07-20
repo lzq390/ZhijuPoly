@@ -495,11 +495,23 @@ assert_full_stack_gate() {
 
   git -C "$REPO_ROOT" show-ref --verify --quiet refs/remotes/origin/main || fail \
     "origin/main is unavailable; fetch and rebase before opening the full-stack gate"
-  git -C "$REPO_ROOT" show-ref --verify --quiet refs/heads/main || fail \
-    "local main is unavailable"
-  [[ "$(git -C "$REPO_ROOT" rev-parse refs/heads/main)" == \
-    "$(git -C "$REPO_ROOT" rev-parse refs/remotes/origin/main)" ]] || fail \
-    "local main must match origin/main before opening the full-stack gate"
+  if [[ "${NEXPOLY_DFT_FORMAL_ACCEPTANCE:-0}" == "1" ]]; then
+    [[ "${NEXPOLY_DFT_AUTHORITY_SHA:-}" =~ ^[0-9a-f]{40}$ &&
+      "$(git -C "$REPO_ROOT" rev-parse HEAD)" == \
+      "$NEXPOLY_DFT_AUTHORITY_SHA" ]] || fail \
+      "formal acceptance HEAD must match its exact authority SHA"
+    if [[ "${NEXPOLY_DFT_ACCEPTANCE_IMAGE_MODE:-}" == "final-main" ]]; then
+      [[ "$(git -C "$REPO_ROOT" rev-parse HEAD)" == \
+        "$(git -C "$REPO_ROOT" rev-parse refs/remotes/origin/main)" ]] || fail \
+        "final-main acceptance must run at exact origin/main"
+    fi
+  else
+    git -C "$REPO_ROOT" show-ref --verify --quiet refs/heads/main || fail \
+      "local main is unavailable"
+    [[ "$(git -C "$REPO_ROOT" rev-parse refs/heads/main)" == \
+      "$(git -C "$REPO_ROOT" rev-parse refs/remotes/origin/main)" ]] || fail \
+      "local main must match origin/main before opening the full-stack gate"
+  fi
   git -C "$REPO_ROOT" merge-base --is-ancestor refs/remotes/origin/main HEAD || fail \
     "DFT branch is not rebased onto origin/main"
 
