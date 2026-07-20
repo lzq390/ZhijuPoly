@@ -189,6 +189,19 @@ class MonomerDftEnvironmentSetupTests(unittest.TestCase):
             aimnet.parent.mkdir(mode=0o700)
             environment = os.environ.copy()
             environment.pop("PYTHONPATH", None)
+            fake_bin = root / "bin"
+            fake_bin.mkdir(mode=0o700)
+            fake_uv = fake_bin / "uv"
+            fake_uv.write_text(
+                "#!/usr/bin/env bash\n"
+                "[[ \"${1:-}\" == \"--version\" ]] || exit 2\n"
+                "printf 'uv 0.11.21\\n'\n",
+                encoding="utf-8",
+            )
+            fake_uv.chmod(0o700)
+            environment["PATH"] = (
+                f"{fake_bin}:{environment.get('PATH', '/usr/bin:/bin')}"
+            )
             git_environment = self._commit_environment(environment)
             setup_script = clone / "scripts" / "setup_monomer_dft_env.sh"
             shutil.copy2(

@@ -32,9 +32,13 @@ class WorkerEnvironmentTests(unittest.TestCase):
         self.path.chmod(mode)
 
     def run_helper(self, *args: str) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment.pop("XDG_RUNTIME_DIR", None)
+        environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
         return subprocess.run(
             [sys.executable, str(HELPER_PATH), *args],
             cwd=REPOSITORY_ROOT,
+            env=environment,
             capture_output=True,
             text=True,
             check=False,

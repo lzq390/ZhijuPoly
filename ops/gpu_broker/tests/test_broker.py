@@ -1892,7 +1892,13 @@ def test_registered_workload_rejects_descendant_or_pgid_outside_its_cgroup(
 
     guard = MpsRuntimeGuard(tmp_path, run=run)
     broker = HostGpuBroker(tmp_path / "state.json")
-    lease = _acquire(broker, component="md", environment="dev", kind="execution")
+    lease = _acquire(
+        broker,
+        component="md",
+        environment="dev",
+        kind="execution",
+        wait=5,
+    )
     lease.workload_pid = 123_456
     lease.workload_process_start_ticks = 111
     lease.workload_process_group_id = 777

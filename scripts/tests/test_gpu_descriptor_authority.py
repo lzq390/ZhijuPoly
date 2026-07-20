@@ -589,9 +589,13 @@ class FormalGpuAuthorityTests(unittest.TestCase):
                 RESERVATIONS,
                 config_path / "gpu-external-reservations.json",
             )
-            values = preflight.load_env_file(
-                ROOT / ".env.monomer-dft.dev.example"
+            private_env = fake_repo / ".env.monomer-dft.dev"
+            shutil.copy2(
+                ROOT / ".env.monomer-dft.dev.example",
+                private_env,
             )
+            private_env.chmod(0o600)
+            values = preflight.load_env_file(private_env)
             python_path = (
                 runtime / "venvs/monomer-dft-worker/bin/python"
             )

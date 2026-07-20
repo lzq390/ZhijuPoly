@@ -63,21 +63,27 @@ def _run_worker_control_functions(body: str) -> subprocess.CompletedProcess[str]
     )
 
 
-def _compose_config(project_name: str = "nexpoly_dft_dev") -> dict:
+def _compose_config(
+    project_name: str = "nexpoly_dft_dev",
+    *,
+    normalize: bool = True,
+) -> dict:
+    command = [
+        "docker",
+        "compose",
+        "--project-name",
+        project_name,
+        "--env-file",
+        str(ENV_EXAMPLE),
+        "--file",
+        str(COMPOSE_FILE),
+        "config",
+    ]
+    if not normalize:
+        command.append("--no-normalize")
+    command.extend(("--format", "json"))
     completed = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "--project-name",
-            project_name,
-            "--env-file",
-            str(ENV_EXAMPLE),
-            "--file",
-            str(COMPOSE_FILE),
-            "config",
-            "--format",
-            "json",
-        ],
+        command,
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
@@ -579,12 +585,6 @@ class ComposeIsolationTests(unittest.TestCase):
                 "read_only", False
             )
         )
-        for volume in volumes.values():
-            self.assertEqual(
-                volume.get("bind", {}).get("create_host_path"),
-                False,
-            )
-
         environment = backend["environment"]
         for name in (
             "MODEL_ENABLED",
@@ -604,6 +604,15 @@ class ComposeIsolationTests(unittest.TestCase):
             environment["MONOMER_DFT_DOWNLOAD_SPOOL_ROOT"],
             "/app/.runtime/monomer-dft-download-spool",
         )
+        source_backend = _compose_config(normalize=False)["services"]["backend"]
+        source_volumes = {
+            volume["target"]: volume for volume in source_backend["volumes"]
+        }
+        for volume in source_volumes.values():
+            self.assertIs(
+                volume.get("bind", {}).get("create_host_path"),
+                False,
+            )
 
 
 class ControlScriptSafetyTests(unittest.TestCase):
