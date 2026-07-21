@@ -295,6 +295,7 @@ class WorkerSettings:
     gpu_external_reservations: Path | None = None
     download_spool_root: Path | None = None
     executor_process: bool = False
+    gpu1_only_session: bool = False
 
     def __post_init__(self) -> None:
         code_root = REPO_ROOT.resolve(strict=False)
@@ -314,8 +315,13 @@ class WorkerSettings:
             raise ValueError("physical GPU must be 1 or 3; GPU 0 and GPU 2 are forbidden")
         if not self.executor_process and self.physical_gpu != "1":
             raise ValueError("dev supervisor primary GPU must be physical GPU 1")
-        if self.overflow_gpu_devices != ("3",):
-            raise ValueError("dev overflow GPUs must be exactly physical GPU 3")
+        expected_overflow = () if self.gpu1_only_session else ("3",)
+        if self.overflow_gpu_devices != expected_overflow:
+            raise ValueError(
+                "GPU1-only sessions must not configure an overflow GPU"
+                if self.gpu1_only_session
+                else "dev overflow GPUs must be exactly physical GPU 3"
+            )
         if self.logical_device != "cuda:0":
             raise ValueError("executor logical device must remain cuda:0")
 
@@ -451,12 +457,19 @@ def load_settings() -> WorkerSettings:
     physical_gpu = _gpu_index("NEXPOLY_DFT_GPU_DEVICE", "1")
     overflow_gpu_devices = _gpu_list(
         "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES",
-        "3",
+        "" if os.getenv("NEXPOLY_DEV_GPU1_ONLY_SESSION", "0").strip() == "1" else "3",
         primary=physical_gpu,
     )
-    expected_overflow = ("3",)
+    gpu1_only_session = os.getenv("NEXPOLY_DEV_GPU1_ONLY_SESSION", "0").strip()
+    if gpu1_only_session not in {"0", "1"}:
+        raise ValueError("NEXPOLY_DEV_GPU1_ONLY_SESSION must be 0 or 1")
+    expected_overflow = () if gpu1_only_session == "1" else ("3",)
     if overflow_gpu_devices != expected_overflow:
-        raise ValueError("dev overflow GPUs must be exactly 3")
+        raise ValueError(
+            "dev overflow GPUs must be empty in a GPU1-only session"
+            if gpu1_only_session == "1"
+            else "dev overflow GPUs must be exactly 3"
+        )
 
     # The HTTP supervisor is deliberately CUDA-blind. Only the executor child
     # receives CUDA_VISIBLE_DEVICES, before importing Torch/Warp/AIMNet.
@@ -592,4 +605,5 @@ def load_settings() -> WorkerSettings:
         gpu_external_reservations=external_reservations,
         download_spool_root=download_spool_root,
         executor_process=executor_process,
+        gpu1_only_session=gpu1_only_session == "1",
     )

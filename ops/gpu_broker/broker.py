@@ -39,6 +39,16 @@ DEVICE_POLICY = {
     ("dev", "dft"): (1, 3),
     ("dev", "md"): (1, 3),
 }
+if os.environ.get("NEXPOLY_GPU1_ONLY_SESSION") == "1":
+    # Process-local restriction used only by the opt-in development
+    # controller.  The repository policy and production candidates remain
+    # untouched, while this Broker process cannot place any dev lease on GPU3.
+    DEVICE_POLICY = {
+        **DEVICE_POLICY,
+        ("dev", "backend"): (1,),
+        ("dev", "dft"): (1,),
+        ("dev", "md"): (1,),
+    }
 
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")

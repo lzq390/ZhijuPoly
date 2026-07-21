@@ -1,0 +1,39 @@
+# Explicit GPU1 session overlay. The ordinary development stack is CPU-only;
+# render this file last only while the descriptor-authority session is live.
+services:
+  backend:
+    user: "1001:1001"
+    environment:
+      MODEL_ENABLED: "true"
+      OCSR_ENABLED: "true"
+      OCSR_DEVICE: "cuda"
+      GEN_MODEL_ENABLED: "true"
+      GEN_DEVICE: "cuda"
+      RETRO_MODEL_ENABLED: "true"
+      RETRO_DEVICE: "cuda"
+      POLYTAO_ENABLED: "${POLYTAO_ENABLED:-true}"
+      POLYTAO_DEVICE: "cuda"
+      MONOMER_MD_SUBMIT_ENABLED: "${MONOMER_MD_SUBMIT_ENABLED:-true}"
+      MONOMER_DFT_SUBMIT_ENABLED: "${MONOMER_DFT_SUBMIT_ENABLED:-true}"
+      GPU_BROKER_ENABLED: "true"
+      GPU_BROKER_SOCKET_PATH: "/app/.runtime/gpu-resource/broker.sock"
+      GPU_MPS_PIPE_ROOT: "/app/.runtime/gpu-resource"
+      GPU_BROKER_ENVIRONMENT: "dev"
+    labels:
+      com.nexpoly.gpu.registration: backend-dev
+      com.nexpoly.gpu.component: backend
+      com.nexpoly.gpu.environment: dev
+      com.nexpoly.gpu.session-id: "${NEXPOLY_DEV_GPU_SESSION_ID:?set exact controller session identity}"
+    volumes:
+      - type: bind
+        source: ${NEXPOLY_GPU_STATE_ROOT:?set NEXPOLY_GPU_STATE_ROOT to the worktree-private GPU session root}
+        target: /app/.runtime/gpu-resource
+        read_only: true
+        bind:
+          create_host_path: false
+    gpus: !override
+      - driver: nvidia
+        device_ids:
+          - "1"
+        capabilities:
+          - gpu

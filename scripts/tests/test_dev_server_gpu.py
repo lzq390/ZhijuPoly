@@ -12,6 +12,7 @@ import unittest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPOSITORY_ROOT / "scripts" / "dev_server_gpu.sh"
 DEV_COMPOSE = REPOSITORY_ROOT / "docker-compose.dev.yml"
+BACKEND_DOCKERFILE = REPOSITORY_ROOT / "Dockerfile"
 DEV_ENV_EXAMPLE = REPOSITORY_ROOT / ".env.dev.example"
 DEV_BUILDKIT_CONFIG = REPOSITORY_ROOT / "ops" / "config" / "buildkitd.dev.toml"
 
@@ -134,6 +135,38 @@ class DevServerGpuScriptTests(unittest.TestCase):
         self.assertNotIn("DEV_BUILDKIT", source)
         self.assertNotIn("DEV_BUILDX", source)
         self.assertIn('docker image inspect "$DEV_BACKEND_IMAGE" >/dev/null', source)
+        build_start = source.index("build_backend_image() {")
+        build_end = source.index("\n}\n", build_start)
+        self.assertIn("assert_clean_candidate", source[build_start:build_end])
+        drift_start = source.index("verify_backend_drift() {")
+        drift_end = source.index("\n}\n", drift_start)
+        self.assertIn("assert_clean_candidate", source[drift_start:drift_end])
+        self.assertIn("git ls-files --others --exclude-standard", source)
+
+    def test_backend_tests_use_a_dedicated_locked_image_and_full_discovery(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        compose = DEV_COMPOSE.read_text(encoding="utf-8")
+        dockerfile = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
+
+        self.assertIn("FROM backend-base AS backend-test", dockerfile)
+        self.assertIn("COPY backend/requirements-ci.lock", dockerfile)
+        self.assertIn("FROM backend-base AS runtime", dockerfile)
+        self.assertIn("backend-test:", compose)
+        self.assertIn("target: backend-test", compose)
+
+        branch = source[
+            source.index("  test-backend)"):source.index("  build-frontend)")
+        ]
+        self.assertIn("test_backend", branch)
+        test_function = source[
+            source.index("test_backend() ("):source.index("smoke_static()")
+        ]
+        self.assertIn("--profile test up -d backend-test-postgres", test_function)
+        self.assertIn("build --builder default backend-test", test_function)
+        self.assertIn("run --rm --no-deps backend-test", test_function)
+        self.assertIn("python -m pytest /app/backend/tests", test_function)
+        self.assertIn("rm -sf backend-test-postgres", test_function)
+        self.assertNotIn("tests/test_", branch)
 
     def test_ordinary_up_never_auto_applies_the_contract(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -182,6 +215,17 @@ class DevServerGpuScriptTests(unittest.TestCase):
             "docker system prune",
         ):
             self.assertNotIn(destructive_command, source)
+
+    def test_gpu_session_device_is_literal_gpu1_and_env_override_is_rejected(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        overlay = (REPOSITORY_ROOT / "docker-compose.dev-gpu-session.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('[[ "${NEXPOLY_DEV_GPU_DEVICE:-1}" == "1" ]]', source)
+        self.assertIn('export NEXPOLY_DEV_GPU_DEVICE=1', source)
+        self.assertIn('GPU_SESSION_PYTHON="/usr/bin/python3"', source)
+        self.assertIn('- "1"', overlay)
+        self.assertNotIn("NEXPOLY_DEV_GPU_DEVICE", overlay)
 
     def test_canary_state_is_dev_private_and_fenced_from_production(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")

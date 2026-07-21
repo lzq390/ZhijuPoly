@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.main import create_app
+from app.main import _build_gpu_runtime_registry, create_app
 from app.routers import query as query_router_module
 from app.routers.gpu_status import router as gpu_status_router
 from app.services.gpu_runtime_registry import (
@@ -29,6 +29,92 @@ def _wait_until(predicate, *, timeout: float = 2.0) -> None:
         if __import__("time").monotonic() >= deadline:
             raise AssertionError("condition was not met before timeout")
         sleep(0.01)
+
+
+def test_inference_session_runs_admission_guard_for_every_call() -> None:
+    events: list[str] = []
+    runtime = object()
+    registry = GpuRuntimeRegistry(
+        admission_guard=lambda: events.append("guard"),
+    )
+    registry.register(
+        "ocsr",
+        enabled=True,
+        loader=lambda: events.append("load") or runtime,
+    )
+
+    with registry.inference_session("ocsr", timeout_seconds=1) as first:
+        assert first is runtime
+    with registry.inference_session("ocsr", timeout_seconds=1) as second:
+        assert second is runtime
+
+    assert events == ["guard", "load", "guard"]
+
+
+def test_failed_admission_guard_skips_loader_and_releases_capacity() -> None:
+    allow = False
+    load_calls = 0
+
+    def guard() -> None:
+        if not allow:
+            raise RuntimeError("residency fenced")
+
+    def loader() -> object:
+        nonlocal load_calls
+        load_calls += 1
+        return object()
+
+    registry = GpuRuntimeRegistry(
+        max_concurrent_inferences=1,
+        max_waiting_inferences=0,
+        admission_guard=guard,
+    )
+    registry.register("ocsr", enabled=True, loader=loader)
+
+    with pytest.raises(RuntimeError, match="residency fenced"):
+        with registry.inference_session("ocsr", timeout_seconds=0):
+            pass
+    assert load_calls == 0
+    assert registry.active_inferences == 0
+    assert registry.waiting_inferences == 0
+
+    allow = True
+    with registry.inference_session("ocsr", timeout_seconds=0):
+        pass
+    assert load_calls == 1
+
+
+def test_main_registry_guard_requires_and_rechecks_healthy_residency() -> None:
+    settings = Settings(
+        gpu_broker_enabled=True,
+        ocsr_enabled=True,
+        gen_model_enabled=False,
+        retro_model_enabled=False,
+        polytao_enabled=False,
+        model_enabled=False,
+    )
+    app = FastAPI()
+    app.state.backend_gpu_residency_lease = None
+    registry = _build_gpu_runtime_registry(app, settings)
+    registry._entries["ocsr"].loader = object
+
+    with pytest.raises(RuntimeError, match="active Backend residency"):
+        with registry.inference_session("ocsr", timeout_seconds=0):
+            pass
+
+    calls = 0
+
+    class Lease:
+        def confirm_current(self) -> None:
+            nonlocal calls
+            calls += 1
+
+    app.state.backend_gpu_residency_lease = Lease()
+    with registry.inference_session("ocsr", timeout_seconds=0):
+        pass
+    with registry.inference_session("ocsr", timeout_seconds=0):
+        pass
+    assert calls == 2
 
 
 def test_registry_preloads_enabled_models_in_registration_order() -> None:

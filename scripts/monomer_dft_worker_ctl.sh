@@ -330,6 +330,9 @@ secure_socket_permissions() {
 
 load_env() {
   local required="$1"
+  local session_mode="${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}"
+  local session_id="${NEXPOLY_DEV_GPU_SESSION_ID:-}"
+  local session_version="${MONOMER_DFT_WORKER_VERSION:-}"
   [[ ! -L "$ENV_FILE" ]] || fail "environment file must not be a symlink: $ENV_FILE"
   if [[ ! -f "$ENV_FILE" ]]; then
     [[ "$required" == "false" ]] && return 0
@@ -347,6 +350,18 @@ load_env() {
     source "$ENV_FILE"
     set +a
   fi
+  if [[ "$session_mode" == "1" ]]; then
+    # The controller's exact GPU1-only authority is stricter than the general
+    # dev dotenv (which may still describe the audited GPU3 overflow path).
+    NEXPOLY_DEV_GPU1_ONLY_SESSION=1
+    NEXPOLY_DEV_GPU_SESSION_ID="$session_id"
+    NEXPOLY_DFT_GPU_DEVICE=1
+    NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=""
+    MONOMER_DFT_WORKER_VERSION="$session_version"
+    export NEXPOLY_DEV_GPU1_ONLY_SESSION NEXPOLY_DEV_GPU_SESSION_ID
+    export NEXPOLY_DFT_GPU_DEVICE NEXPOLY_DFT_OVERFLOW_GPU_DEVICES
+    export MONOMER_DFT_WORKER_VERSION
+  fi
 }
 
 validate_dev_selection() {
@@ -354,8 +369,17 @@ validate_dev_selection() {
     "MONOMER_DFT_DEPLOYMENT must be exactly dev; production mode is forbidden"
   [[ "${NEXPOLY_DFT_GPU_DEVICE:-1}" == "1" ]] || fail \
     "development primary GPU must be physical GPU 1; GPUs 0 and 2 are forbidden"
-  [[ "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}" == "3" ]] || fail \
-    "development overflow GPU must be physical GPU 3 only; GPUs 0 and 2 are forbidden"
+  [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" =~ ^[01]$ ]] || fail \
+    "NEXPOLY_DEV_GPU1_ONLY_SESSION must be 0 or 1"
+  if [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]]; then
+    [[ "${NEXPOLY_DEV_GPU_SESSION_ID:-}" =~ ^[0-9a-f]{32}$ ]] || fail \
+      "GPU1-only development sessions require an exact controller session identity"
+    [[ -z "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-}" ]] || fail \
+      "GPU1-only development sessions forbid every overflow GPU"
+  else
+    [[ "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}" == "3" ]] || fail \
+      "development overflow GPU must be physical GPU 3 only; GPUs 0 and 2 are forbidden"
+  fi
   [[ "${MONOMER_DFT_GPU_BROKER_ENABLED:-1}" =~ ^[01]$ ]] || fail \
     "MONOMER_DFT_GPU_BROKER_ENABLED must be 0 or 1"
   [[ "${MONOMER_DFT_STANDALONE_GPU_SMOKE:-0}" =~ ^[01]$ ]] || fail \
@@ -369,7 +393,11 @@ validate_dev_selection() {
   fi
   export MONOMER_DFT_DEPLOYMENT=dev
   export NEXPOLY_DFT_GPU_DEVICE=1
-  export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=3
+  if [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]]; then
+    export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=""
+  else
+    export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=3
+  fi
 }
 
 configure_paths() {
@@ -788,9 +816,11 @@ start_worker() {
     MONOMER_DFT_FATAL_RESTART_RESET_SECONDS="${MONOMER_DFT_FATAL_RESTART_RESET_SECONDS:-300}" \
     MONOMER_DFT_WORKER_VERSION="${MONOMER_DFT_WORKER_VERSION:-0.1.0}" \
     MONOMER_DFT_WORKER_INSTANCE="$REPO_ROOT" \
+    NEXPOLY_DEV_GPU_SESSION_ID="${NEXPOLY_DEV_GPU_SESSION_ID:-}" \
     MONOMER_DFT_DEPLOYMENT=dev \
+    NEXPOLY_DEV_GPU1_ONLY_SESSION="${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" \
     NEXPOLY_DFT_GPU_DEVICE=1 \
-    NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=3 \
+    NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="$NEXPOLY_DFT_OVERFLOW_GPU_DEVICES" \
     MONOMER_DFT_GPU_BROKER_ENABLED="${MONOMER_DFT_GPU_BROKER_ENABLED:-1}" \
     MONOMER_DFT_STANDALONE_GPU_SMOKE="${MONOMER_DFT_STANDALONE_GPU_SMOKE:-0}" \
     MONOMER_DFT_GPU_BROKER_UDS="$MONOMER_DFT_GPU_BROKER_UDS" \

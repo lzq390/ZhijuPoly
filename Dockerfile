@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime@sha256:2428b92ebbaeceba5572b98c18c8a94e43162bead6e88588ad54471147c58a20
+FROM pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime@sha256:2428b92ebbaeceba5572b98c18c8a94e43162bead6e88588ad54471147c58a20 AS backend-base
 
 ARG PYPI_INDEX_URL="https://pypi.org/simple"
 ARG PYPI_MIRROR_URL="https://pypi.org/simple"
@@ -69,14 +69,23 @@ RUN mkdir -p /app/model \
     && chown -R 1001:1001 /app
 
 ARG SOURCE_REVISION="unknown"
+ARG SOURCE_TREE="unknown"
+ARG DEPENDENCY_LOCK_SHA256="unknown"
+ARG BUILD_CONFIG_SHA256="unknown"
 ARG SOURCE_URL="https://github.com/lzq390/ZhijuPoly"
 ARG VERSION="dev"
 
 LABEL org.opencontainers.image.source="$SOURCE_URL" \
       org.opencontainers.image.revision="$SOURCE_REVISION" \
+      com.nexpoly.source.tree="$SOURCE_TREE" \
+      com.nexpoly.backend.dependency-lock="$DEPENDENCY_LOCK_SHA256" \
+      com.nexpoly.backend.build-config="$BUILD_CONFIG_SHA256" \
       org.opencontainers.image.version="$VERSION"
 
-ENV BUILD_REVISION=${SOURCE_REVISION}
+ENV BUILD_REVISION=${SOURCE_REVISION} \
+    BUILD_SOURCE_TREE=${SOURCE_TREE} \
+    BUILD_DEPENDENCY_LOCK_SHA256=${DEPENDENCY_LOCK_SHA256} \
+    BUILD_CONFIG_SHA256=${BUILD_CONFIG_SHA256}
 
 WORKDIR /app/backend
 ENV PYTHONPATH=/app
@@ -84,3 +93,23 @@ USER 1001:1001
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--timeout-graceful-shutdown", "40"]
+
+# Development and CI tests deliberately use a separate image target.  The
+# runtime image remains free of pytest while the test target is still built
+# from the exact same locked runtime and source tree.
+FROM backend-base AS backend-test
+
+USER root
+COPY backend/requirements-ci.lock /tmp/requirements-ci.lock
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --only-binary=:all: --require-hashes \
+        --retries 10 \
+        --timeout 120 \
+        --index-url "$PYPI_INDEX_URL" \
+        --extra-index-url "$PYPI_MIRROR_URL" \
+        -r /tmp/requirements-ci.lock
+USER 1001:1001
+
+CMD ["python", "-m", "pytest", "tests"]
+
+FROM backend-base AS runtime

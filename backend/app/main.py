@@ -71,6 +71,7 @@ from app.services.polytao_jobs import PolytaoJobManager
 from app.services.polytao_runtime import BackendPolytaoRuntime
 from app.services.monomer_md_repository import mark_expired_unclaimed_monomer_md_jobs_failed_postgres
 from app.services.reverse_design_jobs import ReverseDesignJobManager
+from app.services.structure_similarity_index import StructureSimilarityIndex
 from gpu_resource import GpuBrokerClient, ManagedGpuLease, mps_client_environment
 
 logger = logging.getLogger(__name__)
@@ -220,6 +221,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.state.settings = app_settings
     app.state.postgres_connection_factory = postgres_connection
+    app.state.structure_similarity_index = StructureSimilarityIndex()
     app.state.inflight_api_writes = InflightApiWriteTracker()
     # In lazy/development mode startup database checks are allowed to fail
     # without taking unrelated APIs offline.
@@ -396,10 +398,22 @@ def _acquire_backend_gpu_residency(settings: Settings) -> ManagedGpuLease:
 
 
 def _build_gpu_runtime_registry(app: FastAPI, settings: Settings) -> GpuRuntimeRegistry:
+    def assert_gpu_admission() -> None:
+        if not settings.gpu_broker_enabled:
+            return
+        residency = getattr(app.state, "backend_gpu_residency_lease", None)
+        if residency is None:
+            raise RuntimeError("GPU inference requires an active Backend residency lease")
+        # A cached heartbeat can be stale for one heartbeat interval.  Every
+        # inference admission therefore crosses the Broker fencing boundary
+        # synchronously before any runtime is loaded or executed.
+        residency.confirm_current()
+
     registry = GpuRuntimeRegistry(
         preload_mode=settings.gpu_preload_mode,
         max_concurrent_inferences=settings.gpu_max_concurrent_inferences,
         max_waiting_inferences=settings.gpu_max_waiting_inferences,
+        admission_guard=assert_gpu_admission,
     )
     registry.register(
         "ocsr",
