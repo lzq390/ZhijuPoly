@@ -2047,10 +2047,33 @@ def query_systemd_gpu_claims(
 
 
 def validate_policy_document(path: Path) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise BrokerError("invalid_policy", "GPU policy document is missing or unsafe")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        descriptor_match = re.fullmatch(
+            rf"/proc/{os.getpid()}/fd/([1-9][0-9]*)",
+            str(path),
+        )
+        if descriptor_match is not None:
+            descriptor = int(descriptor_match.group(1))
+            if descriptor <= 2:
+                raise OSError("policy descriptor is reserved")
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_gid != os.getegid()
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_size > 64 * 1024
+            ):
+                raise OSError("policy descriptor metadata is unsafe")
+            raw = os.pread(descriptor, metadata.st_size + 1, 0)
+            if len(raw) != metadata.st_size:
+                raise OSError("policy descriptor changed during read")
+            payload = json.loads(raw.decode("utf-8"))
+        else:
+            if path.is_symlink() or not path.is_file():
+                raise OSError("policy path is missing or unsafe")
+            payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise BrokerError("invalid_policy", "GPU policy document is unreadable") from exc
     expected = {
@@ -4591,6 +4614,7 @@ def main() -> int:
     args.mps_state_root = process_stable_descriptor_path(
         args.mps_state_root
     )
+    args.policy = process_stable_descriptor_path(args.policy)
     validate_policy_document(args.policy)
     validate_gpu_inventory(query_gpu_inventory())
     mps_guard = MpsRuntimeGuard(args.mps_state_root)

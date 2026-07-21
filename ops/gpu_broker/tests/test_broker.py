@@ -53,6 +53,7 @@ from ops.gpu_broker.server import (
     query_docker_gpu_claims,
     query_systemd_gpu_claims,
     resolve_workload_identity,
+    validate_policy_document,
 )
 
 _DOCKER_STARTED_AT = "2026-07-19T06:00:00.123456789Z"
@@ -121,6 +122,36 @@ def test_process_stable_descriptor_path_survives_child_close_fds(
         assert completed.stdout.strip() == "bound"
         ordinary = tmp_path / "ordinary"
         assert process_stable_descriptor_path(ordinary) == ordinary
+    finally:
+        os.close(descriptor)
+
+
+def test_policy_validation_accepts_private_process_descriptor(tmp_path: Path) -> None:
+    source = Path(__file__).resolve().parents[2] / "config" / "gpu-broker-policy.json"
+    policy = tmp_path / "gpu-policy.json"
+    policy.write_bytes(source.read_bytes())
+    policy.chmod(0o600)
+    descriptor = os.open(policy, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        stable = process_stable_descriptor_path(Path(f"/proc/self/fd/{descriptor}"))
+        validate_policy_document(stable)
+    finally:
+        os.close(descriptor)
+
+
+def test_policy_validation_rejects_non_private_process_descriptor(
+    tmp_path: Path,
+) -> None:
+    source = Path(__file__).resolve().parents[2] / "config" / "gpu-broker-policy.json"
+    policy = tmp_path / "gpu-policy.json"
+    policy.write_bytes(source.read_bytes())
+    policy.chmod(0o640)
+    descriptor = os.open(policy, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        stable = process_stable_descriptor_path(Path(f"/proc/self/fd/{descriptor}"))
+        with pytest.raises(BrokerError) as error:
+            validate_policy_document(stable)
+        assert error.value.code == "invalid_policy"
     finally:
         os.close(descriptor)
 
