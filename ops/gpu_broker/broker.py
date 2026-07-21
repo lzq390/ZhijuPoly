@@ -278,6 +278,13 @@ class HostGpuBroker:
         self.instance_id = uuid4().hex
         self._condition = threading.Condition(threading.RLock())
         self._leases: dict[str, Lease] = {}
+        # This process-local tombstone is intentionally limited to the latest
+        # explicit, guarded release.  It lets an inventory client prove that
+        # one exact transient scope which disappeared during an audit belonged
+        # to the single Broker generation transition it observed.  Reconciled
+        # or failed releases never populate it, and a Broker restart changes
+        # instance_id so stale tombstones are never trusted.
+        self._last_released_lease: Lease | None = None
         self._quarantined_gpus: dict[str, dict[str, object]] = {}
         self._waiters: dict[str, _Waiter] = {}
         self._next_wait_sequence = 1
@@ -723,8 +730,14 @@ class HostGpuBroker:
                         "gpu_runtime_unhealthy",
                         "isolated workload cgroup cleanup failed; lease retained",
                     ) from exc
+            # Snapshot rather than retain the object returned by acquire();
+            # in-process callers must not be able to mutate tombstone proof.
+            released_snapshot = Lease(**lease.public_dict())
             del self._leases[lease_id]
             self._persist_locked()
+            # A failed state commit is not an explicit successful release and
+            # therefore must never create authority for an audit retry.
+            self._last_released_lease = released_snapshot
             self._condition.notify_all()
 
     def _fail_release_closed_locked(self, lease: Lease) -> None:
@@ -900,6 +913,16 @@ class HostGpuBroker:
             return {
                 "schema_version": 1,
                 "broker_instance_id": self.instance_id,
+                # Monotonic within the persisted Broker authority.  Including
+                # the next token lets inventory clients detect an acquire +
+                # release ABA even when the visible lease list is identical
+                # before and after their host snapshot.
+                "next_fencing_token": self._next_fencing_token,
+                "last_released_lease": (
+                    None
+                    if self._last_released_lease is None
+                    else self._last_released_lease.public_dict()
+                ),
                 "boot_id": self._boot_id,
                 "draining": self._draining,
                 "gpu_total_budget_mib": GPU_TOTAL_BUDGET_MIB,

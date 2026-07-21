@@ -125,6 +125,46 @@ class SystemdGpuClaim:
     live_gpu_declarers: tuple[SystemdGpuDeclarer, ...] = ()
 
 
+class SystemdProcessDisappeared(BrokerError):
+    """A previously stable PID vanished during systemd identity revalidation."""
+
+    def __init__(
+        self,
+        pid: int,
+        expected_start_ticks: int,
+        expected_control_group: str,
+    ) -> None:
+        super().__init__(
+            "gpu_claim_inventory_changed",
+            f"systemd process PID {pid} disappeared during audit",
+        )
+        self.pid = pid
+        self.expected_start_ticks = expected_start_ticks
+        self.expected_control_group = expected_control_group
+
+
+class SystemdMembershipChanged(BrokerError):
+    """A systemd unit's complete PID identity membership changed mid-audit."""
+
+    def __init__(
+        self,
+        scope: str,
+        unit: str,
+        control_group: str,
+        expected_identities: tuple[tuple[int, int, str], ...],
+        current_identities: tuple[tuple[int, int, str], ...],
+    ) -> None:
+        super().__init__(
+            "gpu_claim_inventory_changed",
+            f"{scope} systemd unit {unit} membership changed during audit",
+        )
+        self.scope = scope
+        self.unit = unit
+        self.control_group = control_group
+        self.expected_identities = tuple(sorted(expected_identities))
+        self.current_identities = tuple(sorted(current_identities))
+
+
 @dataclass(frozen=True, slots=True)
 class _SystemdUnitAuthority:
     unit: str
@@ -1188,11 +1228,25 @@ def _verify_systemd_process_identity(
     read_process_cgroup=_read_unified_process_cgroup,
     read_process_start_ticks=read_process_start_ticks,
 ) -> None:
-    current = _read_stable_systemd_process_identity(
-        pid,
-        read_process_cgroup=read_process_cgroup,
-        read_process_start_ticks=read_process_start_ticks,
-    )
+    try:
+        current = _read_stable_systemd_process_identity(
+            pid,
+            read_process_cgroup=read_process_cgroup,
+            read_process_start_ticks=read_process_start_ticks,
+        )
+    except BrokerError as exc:
+        cause: BaseException | None = exc
+        while cause is not None and not isinstance(
+            cause, (FileNotFoundError, ProcessLookupError)
+        ):
+            cause = cause.__cause__
+        if cause is None:
+            raise
+        raise SystemdProcessDisappeared(
+            pid,
+            expected_start_ticks,
+            expected_control_group,
+        ) from exc
     if current != (expected_start_ticks, expected_control_group):
         raise BrokerError(
             "gpu_claim_inventory_unavailable",
@@ -1522,6 +1576,10 @@ def query_systemd_gpu_claims(
         if read_control_group_processes is _read_control_group_processes
         else None
     )
+    captured_process_identities = {
+        pid: (start_ticks, process_cgroup)
+        for pid, start_ticks, process_cgroup in process_cgroup_snapshot or ()
+    }
     claims: list[SystemdGpuClaim] = []
     verified_process_identities: set[tuple[int, int, str]] = set()
     authority_snapshots: dict[str, tuple[_SystemdUnitAuthority, ...]] = {}
@@ -1742,11 +1800,22 @@ def query_systemd_gpu_claims(
                 if uuid not in EXPECTED_GPU_UUIDS.values():
                     continue
                 for pid in pids:
-                    process_identity = _read_stable_systemd_process_identity(
-                        pid,
-                        read_process_cgroup=read_process_cgroup,
-                        read_process_start_ticks=read_process_start_ticks,
-                    )
+                    captured_identity = captured_process_identities.get(pid)
+                    if captured_identity is None:
+                        process_identity = _read_stable_systemd_process_identity(
+                            pid,
+                            read_process_cgroup=read_process_cgroup,
+                            read_process_start_ticks=read_process_start_ticks,
+                        )
+                    else:
+                        _verify_systemd_process_identity(
+                            pid,
+                            captured_identity[0],
+                            captured_identity[1],
+                            read_process_cgroup=read_process_cgroup,
+                            read_process_start_ticks=read_process_start_ticks,
+                        )
+                        process_identity = captured_identity
                     process_cgroup = process_identity[1]
                     if control_group and _systemd_cgroup_contains(
                         process_cgroup,
@@ -2021,9 +2090,22 @@ def query_systemd_gpu_claims(
                     "systemd cgroup process identity differs",
                 )
         if current_identities != expected_identities:
-            raise BrokerError(
-                "gpu_claim_inventory_changed",
-                f"{scope} systemd unit {unit} membership changed during audit",
+            raise SystemdMembershipChanged(
+                scope,
+                unit,
+                control_group,
+                tuple(
+                    (pid, start_ticks, process_cgroup)
+                    for pid, (start_ticks, process_cgroup) in sorted(
+                        expected_identities.items()
+                    )
+                ),
+                tuple(
+                    (pid, start_ticks, process_cgroup)
+                    for pid, (start_ticks, process_cgroup) in sorted(
+                        current_identities.items()
+                    )
+                ),
             )
 
     # User inventory runs before system inventory. Revalidate every enumerated

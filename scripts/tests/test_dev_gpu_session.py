@@ -88,6 +88,88 @@ def dft_residency_record(
     ).public_dict()
 
 
+def md_execution_record(
+    *,
+    lease_id: str = "e2" * 16,
+    fencing_token: int = 2,
+    workload_pid: int = 76740,
+    workload_start_ticks: int = 789,
+) -> dict[str, object]:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.broker import Lease
+
+    control_group = scope_control_group(lease_id, uid=1001)
+    return Lease(
+        lease_id=lease_id,
+        fencing_token=fencing_token,
+        broker_instance_id="broker",
+        request_id="md:dev:runtime-probe",
+        kind="execution",
+        placement="any",
+        component="md",
+        environment="dev",
+        client_id="md-dev",
+        gpu_index=1,
+        gpu_uuid=session.GPU_UUID,
+        memory_mib=8192,
+        thread_percent=50,
+        owner_pid=workload_pid,
+        owner_process_start_ticks=workload_start_ticks,
+        owner_boot_id="boot",
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        created_at=1.0,
+        heartbeat_at=2.0,
+        workload_pid=workload_pid,
+        workload_process_start_ticks=workload_start_ticks,
+        workload_process_group_id=workload_pid,
+        workload_cgroup=f"0::{control_group}",
+    ).public_dict()
+
+
+def dft_membership_error(
+    *,
+    scope: str = "system",
+    expected: tuple[tuple[int, int, str], ...] | None = None,
+    current: tuple[tuple[int, int, str], ...] | None = None,
+    unit: str | None = None,
+    control_group: str | None = None,
+) -> Exception:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        scope_unit_name,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.server import SystemdMembershipChanged
+
+    dft_cgroup = scope_control_group("d1" * 16, uid=1001)
+    manager_cgroup = user_manager_control_group(1001)
+    resolved_unit = (
+        "user@1001.service"
+        if scope == "system"
+        else scope_unit_name("d1" * 16)
+    )
+    resolved_control_group = (
+        manager_cgroup if scope == "system" else dft_cgroup
+    )
+    stable_cgroup = manager_cgroup if scope == "system" else dft_cgroup
+    if expected is None:
+        expected = (
+            (7000, 100, stable_cgroup),
+            (8124, 457, dft_cgroup),
+        )
+    if current is None:
+        current = ((7000, 100, stable_cgroup),)
+    return SystemdMembershipChanged(
+        scope,
+        resolved_unit if unit is None else unit,
+        resolved_control_group if control_group is None else control_group,
+        expected,
+        current,
+    )
+
+
 def backend_residency_record(*, status: str = "active") -> dict[str, object]:
     from ops.gpu_broker.broker import Lease
 
@@ -668,7 +750,12 @@ def test_audit_marks_unleased_private_mps_client_foreign(tmp_path, monkeypatch) 
     controller = session.SessionController(run, "a" * 40, "b" * 40)
     controller.dft_warmup_open = False
     client = SimpleNamespace(
-        status=lambda: {"broker_instance_id": "b", "draining": False, "leases": []}
+        status=lambda: {
+            "broker_instance_id": "b",
+            "next_fencing_token": 1,
+            "draining": False,
+            "leases": [],
+        }
     )
     monkeypatch.setattr(
         session,
@@ -1024,7 +1111,12 @@ def test_mps_control_is_hard_pinned_to_gpu1(tmp_path, monkeypatch) -> None:
 
 
 def test_broker_snapshot_retries_across_a_legitimate_lease_transition() -> None:
-    empty = {"broker_instance_id": "broker", "draining": False, "leases": []}
+    empty = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "draining": False,
+        "leases": [],
+    }
     lease = {
         "lease_id": "lease-1",
         "fencing_token": 1,
@@ -1033,7 +1125,7 @@ def test_broker_snapshot_retries_across_a_legitimate_lease_transition() -> None:
         "workload_pid": 88,
         "status": "active",
     }
-    active = {**empty, "leases": [lease]}
+    active = {**empty, "next_fencing_token": 2, "leases": [lease]}
     statuses = iter((empty, active, active, active))
     client = SimpleNamespace(status=lambda: next(statuses))
     snapshots = iter((empty_snapshot(), session.TargetSnapshot((88,), (), ())))
@@ -1044,6 +1136,771 @@ def test_broker_snapshot_retries_across_a_legitimate_lease_transition() -> None:
 
     assert status == active
     assert snapshot.process_pids == (88,)
+
+
+def test_broker_snapshot_retries_acquire_release_aba_after_inventory_error() -> None:
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+    from gpu_resource.transient_scope import scope_control_group
+
+    dft_lease = dft_residency_record()
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    issued = md_execution_record()
+    heartbeating_dft_lease = {**dft_lease, "heartbeat_at": 7.0}
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "last_released_lease": issued,
+        "leases": [heartbeating_dft_lease],
+    }
+    statuses = iter((before, after, after, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SystemdProcessDisappeared(
+                76743,
+                790,
+                scope_control_group(issued["lease_id"], uid=1001),
+            )
+        return empty_snapshot()
+
+    status, snapshot = session.consistent_broker_snapshot(client, collect)
+
+    assert status == after
+    assert snapshot == empty_snapshot()
+    assert calls == 2
+
+
+def test_broker_snapshot_retries_new_md_lease_visible_before_release() -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    active = {
+        **before,
+        "next_fencing_token": 3,
+        "leases": [{**dft_lease, "heartbeat_at": 7.0}, md_lease],
+    }
+    released = {
+        **active,
+        "last_released_lease": md_lease,
+        "leases": [{**dft_lease, "heartbeat_at": 8.0}],
+    }
+    statuses = iter((before, active, active, released, released, released))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SystemdProcessDisappeared(
+                156657,
+                790,
+                scope_control_group(md_lease["lease_id"], uid=1001),
+            )
+        return empty_snapshot()
+
+    status, snapshot = session.consistent_broker_snapshot(client, collect)
+
+    assert status == released
+    assert snapshot == empty_snapshot()
+    assert calls == 3
+
+
+@pytest.mark.parametrize("direction", ("enter", "exit", "both"))
+def test_broker_snapshot_retries_structured_md_membership_aba(
+    direction: str,
+) -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.server import SystemdMembershipChanged
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    md_cgroup = scope_control_group(md_lease["lease_id"], uid=1001)
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    active = {
+        **before,
+        "next_fencing_token": 3,
+        "leases": [{**dft_lease, "heartbeat_at": 7.0}, md_lease],
+    }
+    released = {
+        **active,
+        "last_released_lease": md_lease,
+        "leases": [{**dft_lease, "heartbeat_at": 8.0}],
+    }
+    statuses = iter((before, active, active, released, released, released))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    calls = 0
+    manager_cgroup = user_manager_control_group(1001)
+    stable = (7000, 100, manager_cgroup)
+    expected = (stable, (193345, 790, md_cgroup))
+    current = (stable,)
+    if direction == "enter":
+        expected, current = current, expected
+    elif direction == "both":
+        current = (stable, (193346, 791, md_cgroup))
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SystemdMembershipChanged(
+                "system",
+                "user@1001.service",
+                manager_cgroup,
+                expected,
+                current,
+            )
+        return empty_snapshot()
+
+    status, snapshot = session.consistent_broker_snapshot(client, collect)
+
+    assert status == released
+    assert snapshot == empty_snapshot()
+    assert calls == 3
+
+
+def test_broker_snapshot_retries_released_md_membership_aba() -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.server import SystemdMembershipChanged
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    md_cgroup = scope_control_group(md_lease["lease_id"], uid=1001)
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "last_released_lease": md_lease,
+        "leases": [{**dft_lease, "heartbeat_at": 7.0}],
+    }
+    statuses = iter((before, after, after, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    calls = 0
+    manager_cgroup = user_manager_control_group(1001)
+    stable = (7000, 100, manager_cgroup)
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SystemdMembershipChanged(
+                "system",
+                "user@1001.service",
+                manager_cgroup,
+                (stable, (193345, 790, md_cgroup)),
+                (stable,),
+            )
+        return empty_snapshot()
+
+    status, snapshot = session.consistent_broker_snapshot(client, collect)
+
+    assert status == after
+    assert snapshot == empty_snapshot()
+    assert calls == 2
+
+
+def test_broker_snapshot_retries_visible_md_release() -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    active = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 3,
+        "draining": False,
+        "quarantined_gpus": {},
+        "last_released_lease": None,
+        "leases": [dft_lease, md_lease],
+    }
+    released = {
+        **active,
+        "last_released_lease": md_lease,
+        "leases": [{**dft_lease, "heartbeat_at": 7.0}],
+    }
+    statuses = iter((active, released, released, released))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SystemdProcessDisappeared(
+                156657,
+                790,
+                scope_control_group(md_lease["lease_id"], uid=1001),
+            )
+        return empty_snapshot()
+
+    status, snapshot = session.consistent_broker_snapshot(client, collect)
+
+    assert status == released
+    assert snapshot == empty_snapshot()
+    assert calls == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "stale_tombstone",
+        "tombstone_live_collision",
+        "wrong_tombstone_instance",
+        "invalid_tombstone_token",
+        "existing_lease_change",
+        "multiple_removals",
+    ),
+)
+def test_visible_md_release_rejects_nonexclusive_transition(
+    mutation: str,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    active = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 3,
+        "draining": False,
+        "quarantined_gpus": {},
+        "last_released_lease": None,
+        "leases": [dft_lease, md_lease],
+    }
+    released = {
+        **active,
+        "last_released_lease": md_lease,
+        "leases": [{**dft_lease, "heartbeat_at": 7.0}],
+    }
+    if mutation == "stale_tombstone":
+        active["last_released_lease"] = {**md_lease, "heartbeat_at": 1.0}
+    elif mutation == "tombstone_live_collision":
+        released["last_released_lease"] = dft_lease
+    elif mutation == "wrong_tombstone_instance":
+        released["last_released_lease"] = {
+            **md_lease,
+            "broker_instance_id": "other-broker",
+        }
+    elif mutation == "invalid_tombstone_token":
+        released["last_released_lease"] = {
+            **md_lease,
+            "fencing_token": 3,
+        }
+    elif mutation == "existing_lease_change":
+        released["leases"] = [
+            {
+                **dft_lease,
+                "heartbeat_at": 7.0,
+                "request_id": "dft:dev:changed",
+            }
+        ]
+    else:
+        extra = md_execution_record(
+            lease_id="f3" * 16,
+            fencing_token=3,
+            workload_pid=156658,
+            workload_start_ticks=791,
+        )
+        active.update(next_fencing_token=4, leases=[dft_lease, md_lease, extra])
+        released["next_fencing_token"] = 4
+
+    statuses = iter((active, released))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    error = SystemdProcessDisappeared(
+        156657,
+        790,
+        scope_control_group(md_lease["lease_id"], uid=1001),
+    )
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise error
+
+    with pytest.raises(SystemdProcessDisappeared) as raised:
+        session.consistent_broker_snapshot(client, collect)
+
+    assert raised.value is error
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "foreign",
+        "pid_reuse",
+        "wrong_unit",
+        "malformed_cgroup",
+        "outside_unchanged",
+        "unchanged",
+    ),
+)
+def test_md_transition_never_hides_unproven_membership_churn(fault: str) -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.server import SystemdMembershipChanged
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    md_cgroup = scope_control_group(md_lease["lease_id"], uid=1001)
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    active = {
+        **before,
+        "next_fencing_token": 3,
+        "leases": [dft_lease, md_lease],
+    }
+    statuses = iter((before, active))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    expected = ((193345, 790, md_cgroup),)
+    current: tuple[tuple[int, int, str], ...] = ()
+    unit = "user@1001.service"
+    if fault == "foreign":
+        expected += ((90001, 123, "/user.slice/foreign.scope"),)
+    elif fault == "pid_reuse":
+        current = ((193345, 791, md_cgroup),)
+    elif fault == "wrong_unit":
+        unit = "foreign.service"
+    elif fault == "malformed_cgroup":
+        expected = ((193345, 790, f"{md_cgroup}/../foreign.scope"),)
+    elif fault == "outside_unchanged":
+        outside = (90001, 123, "/system.slice/foreign.service")
+        expected = (*expected, outside)
+        current = (outside,)
+    else:
+        current = expected
+
+    with pytest.raises(SystemdMembershipChanged, match="membership changed"):
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(
+                SystemdMembershipChanged(
+                    "system",
+                    unit,
+                    user_manager_control_group(1001),
+                    expected,
+                    current,
+                )
+            ),
+        )
+
+
+def test_visible_md_transition_remains_bounded_by_authority_attempts() -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    active = {
+        **before,
+        "next_fencing_token": 3,
+        "leases": [dft_lease, md_lease],
+    }
+    statuses = iter((before, active))
+    client = SimpleNamespace(status=lambda: next(statuses))
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="authority changed throughout",
+    ):
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(
+                SystemdProcessDisappeared(
+                    156657,
+                    790,
+                    scope_control_group(md_lease["lease_id"], uid=1001),
+                )
+            ),
+            attempts=1,
+        )
+
+
+def test_visible_md_issue_never_hides_an_unrelated_live_lease_change() -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "leases": [md_lease],
+    }
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise SystemdProcessDisappeared(
+            156657,
+            790,
+            scope_control_group(md_lease["lease_id"], uid=1001),
+        )
+
+    with pytest.raises(SystemdProcessDisappeared, match="disappeared during audit"):
+        session.consistent_broker_snapshot(client, collect)
+
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("broker_instance_id", "other-broker"),
+        ("request_id", "changed-request"),
+        ("memory_mib", 8192),
+        ("thread_percent", 99),
+        ("created_at", 99.0),
+        ("mps_terminated_client_pids", [999]),
+        ("mps_termination_at", 3.0),
+    ),
+)
+def test_visible_md_issue_allows_only_existing_lease_heartbeat_change(
+    field: str,
+    value: object,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    dft_lease = dft_residency_record()
+    changed_dft = {**dft_lease, "heartbeat_at": 7.0, field: value}
+    md_lease = md_execution_record()
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "leases": [changed_dft, md_lease],
+    }
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise SystemdProcessDisappeared(
+            156657,
+            790,
+            scope_control_group(md_lease["lease_id"], uid=1001),
+        )
+
+    with pytest.raises(SystemdProcessDisappeared, match="disappeared during audit"):
+        session.consistent_broker_snapshot(client, collect)
+
+    assert calls == 1
+
+
+def test_visible_md_issue_never_attributes_a_foreign_cgroup() -> None:
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    dft_lease = dft_residency_record()
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "leases": [dft_lease, md_execution_record()],
+    }
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+
+    with pytest.raises(SystemdProcessDisappeared, match="disappeared during audit"):
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(
+                SystemdProcessDisappeared(
+                    90001,
+                    123,
+                    "/user.slice/foreign.scope",
+                )
+            ),
+        )
+
+
+@pytest.mark.parametrize("duplicate_field", ("lease_id", "fencing_token"))
+def test_visible_md_issue_rejects_duplicate_lease_authority(
+    duplicate_field: str,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    duplicate = (
+        dict(md_lease)
+        if duplicate_field == "lease_id"
+        else md_execution_record(
+            lease_id="f3" * 16,
+            fencing_token=int(md_lease["fencing_token"]),
+            workload_pid=156658,
+            workload_start_ticks=791,
+        )
+    )
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "leases": [dft_lease, md_lease, duplicate],
+    }
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+
+    with pytest.raises(SystemdProcessDisappeared, match="disappeared during audit"):
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(
+                SystemdProcessDisappeared(
+                    156657,
+                    790,
+                    scope_control_group(md_lease["lease_id"], uid=1001),
+                )
+            ),
+        )
+
+
+@pytest.mark.parametrize("mutation", ("generation", "instance", "drain", "quarantine", "non_exact"))
+def test_visible_md_issue_rejects_noncanonical_transition(mutation: str) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "leases": [dft_lease, md_lease],
+    }
+    if mutation == "generation":
+        second = md_execution_record(
+            lease_id="f3" * 16,
+            fencing_token=3,
+            workload_pid=156658,
+            workload_start_ticks=791,
+        )
+        after.update(next_fencing_token=4, leases=[dft_lease, md_lease, second])
+    elif mutation == "instance":
+        after["broker_instance_id"] = "other-broker"
+    elif mutation == "drain":
+        after["draining"] = True
+    elif mutation == "quarantine":
+        after["quarantined_gpus"] = {session.GPU_UUID: {"reason": "gpu_xid"}}
+    else:
+        after["leases"] = [dft_lease, {**md_lease, "placement": "preferred"}]
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+
+    with pytest.raises(SystemdProcessDisappeared, match="disappeared during audit"):
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(
+                SystemdProcessDisappeared(
+                    156657,
+                    790,
+                    scope_control_group(md_lease["lease_id"], uid=1001),
+                )
+            ),
+        )
+
+
+def test_broker_snapshot_never_hides_generic_foreign_error_during_aba() -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "last_released_lease": md_execution_record(),
+    }
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "cannot identify foreign systemd process PID 90001",
+        )
+
+    with pytest.raises(BrokerError, match="foreign systemd process"):
+        session.consistent_broker_snapshot(client, collect)
+
+    assert calls == 1
+
+
+def test_broker_snapshot_never_attributes_foreign_scope_to_matching_md_aba() -> None:
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "last_released_lease": md_execution_record(),
+    }
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise SystemdProcessDisappeared(
+            90001,
+            123,
+            "/user.slice/foreign.scope",
+        )
+
+    with pytest.raises(SystemdProcessDisappeared, match="disappeared during audit"):
+        session.consistent_broker_snapshot(client, collect)
+
+    assert calls == 1
+
+
+def test_broker_snapshot_resamples_successful_acquire_release_aba() -> None:
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "last_released_lease": md_execution_record(),
+    }
+    statuses = iter((before, after, after, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    snapshots = iter(
+        (
+            session.TargetSnapshot((76743,), (), ()),
+            empty_snapshot(),
+        )
+    )
+
+    status, snapshot = session.consistent_broker_snapshot(
+        client,
+        lambda: next(snapshots),
+    )
+
+    assert status == after
+    assert snapshot == empty_snapshot()
+
+
+@pytest.mark.parametrize("generation", (None, True, 0, "2"))
+def test_broker_authority_token_rejects_invalid_generation(generation: object) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [],
+    }
+    if generation is not None:
+        status["next_fencing_token"] = generation
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="invalid fencing authority generation",
+    ):
+        session.broker_authority_token(status)
 
 
 @pytest.mark.parametrize(
@@ -1075,6 +1932,7 @@ def test_broker_authority_token_binds_exact_dft_matcher_fields(field: str) -> No
     lease = dft_residency_record()
     before = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [lease],
     }
@@ -1087,11 +1945,11 @@ def test_broker_authority_token_binds_exact_dft_matcher_fields(field: str) -> No
     )
 
 
-def test_broker_snapshot_resamples_exact_dft_membership_churn() -> None:
-    from ops.gpu_broker.broker import BrokerError
-
+@pytest.mark.parametrize("scope", ("system", "user"))
+def test_broker_snapshot_resamples_exact_dft_membership_churn(scope: str) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1102,10 +1960,7 @@ def test_broker_snapshot_resamples_exact_dft_membership_churn() -> None:
         nonlocal calls
         calls += 1
         if calls <= 2:
-            raise BrokerError(
-                "gpu_claim_inventory_changed",
-                "system systemd unit user@1001.service membership changed during audit",
-            )
+            raise dft_membership_error(scope=scope)
         return empty_snapshot()
 
     observed_status, snapshot = session.consistent_broker_snapshot(
@@ -1120,10 +1975,9 @@ def test_broker_snapshot_resamples_exact_dft_membership_churn() -> None:
 
 
 def test_broker_snapshot_fails_closed_after_bounded_dft_churn() -> None:
-    from ops.gpu_broker.broker import BrokerError
-
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1133,10 +1987,7 @@ def test_broker_snapshot_fails_closed_after_bounded_dft_churn() -> None:
     def collect() -> session.TargetSnapshot:
         nonlocal calls
         calls += 1
-        raise BrokerError(
-            "gpu_claim_inventory_changed",
-            "system systemd unit user@1001.service membership changed during audit",
-        )
+        raise dft_membership_error()
 
     with pytest.raises(
         session.DevGpuSessionError,
@@ -1152,10 +2003,9 @@ def test_broker_snapshot_fails_closed_after_bounded_dft_churn() -> None:
 
 
 def test_broker_snapshot_fails_closed_at_dft_churn_deadline() -> None:
-    from ops.gpu_broker.broker import BrokerError
-
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1165,10 +2015,7 @@ def test_broker_snapshot_fails_closed_at_dft_churn_deadline() -> None:
     def collect() -> session.TargetSnapshot:
         nonlocal calls
         calls += 1
-        raise BrokerError(
-            "gpu_claim_inventory_changed",
-            "system systemd unit user@1001.service membership changed during audit",
-        )
+        raise dft_membership_error()
 
     ticks = iter((0.0, 13.0))
     with pytest.raises(
@@ -1191,6 +2038,7 @@ def test_broker_snapshot_never_retries_unknown_membership_churn() -> None:
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1206,6 +2054,102 @@ def test_broker_snapshot_never_retries_unknown_membership_churn() -> None:
         )
 
     with pytest.raises(BrokerError, match="foreign.service"):
+        session.consistent_broker_snapshot(client, collect)
+
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "generic",
+        "foreign",
+        "mixed",
+        "pid_reuse",
+        "wrong_control_group",
+        "wrong_unit",
+        "malformed_cgroup",
+        "prefix_collision",
+        "duplicate_pid",
+        "outside_unchanged",
+        "empty_delta",
+    ),
+)
+def test_broker_snapshot_never_retries_unproven_dft_membership_churn(
+    fault: str,
+) -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.broker import BrokerError
+
+    dft_cgroup = scope_control_group("d1" * 16, uid=1001)
+    manager_cgroup = user_manager_control_group(1001)
+    stable = (7000, 100, manager_cgroup)
+    exact = (8124, 457, dft_cgroup)
+    foreign = (90001, 123, f"{manager_cgroup}/foreign.scope")
+    error: Exception
+    if fault == "generic":
+        error = BrokerError(
+            "gpu_claim_inventory_changed",
+            "system systemd unit user@1001.service membership changed during audit",
+        )
+    elif fault == "foreign":
+        error = dft_membership_error(expected=(stable, foreign), current=(stable,))
+    elif fault == "mixed":
+        error = dft_membership_error(
+            expected=(stable, exact, foreign),
+            current=(stable,),
+        )
+    elif fault == "pid_reuse":
+        error = dft_membership_error(
+            expected=(stable, exact),
+            current=(stable, (8124, 458, dft_cgroup)),
+        )
+    elif fault == "wrong_control_group":
+        error = dft_membership_error(control_group=dft_cgroup)
+    elif fault == "wrong_unit":
+        error = dft_membership_error(unit="foreign.service")
+    elif fault == "malformed_cgroup":
+        error = dft_membership_error(
+            expected=(stable, (8124, 457, f"{dft_cgroup}/../foreign.scope")),
+            current=(stable,),
+        )
+    elif fault == "prefix_collision":
+        error = dft_membership_error(
+            expected=(stable, (8124, 457, f"{dft_cgroup}-foreign.scope")),
+            current=(stable,),
+        )
+    elif fault == "duplicate_pid":
+        error = dft_membership_error(
+            expected=(stable, exact, (8124, 458, dft_cgroup)),
+            current=(stable,),
+        )
+    elif fault == "outside_unchanged":
+        outside = (90002, 124, "/system.slice/foreign.service")
+        error = dft_membership_error(
+            expected=(stable, outside, exact),
+            current=(stable, outside),
+        )
+    else:
+        error = dft_membership_error(expected=(stable,), current=(stable,))
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise error
+
+    with pytest.raises(BrokerError, match="membership changed"):
         session.consistent_broker_snapshot(client, collect)
 
     assert calls == 1
@@ -1229,10 +2173,9 @@ def test_gpu1_default_compute_mode_inventory_is_strict() -> None:
 
 
 def test_exact_dft_churn_inner_budget_survives_more_than_three_transitions() -> None:
-    from ops.gpu_broker.broker import BrokerError
-
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1244,10 +2187,7 @@ def test_exact_dft_churn_inner_budget_survives_more_than_three_transitions() -> 
         nonlocal calls
         calls += 1
         if calls <= 5:
-            raise BrokerError(
-                "gpu_claim_inventory_changed",
-                "system systemd unit user@1001.service membership changed during audit",
-            )
+            raise dft_membership_error()
         return empty_snapshot()
 
     observed, snapshot = session.consistent_broker_snapshot(
@@ -1273,6 +2213,7 @@ def test_fast_dft_guard_accepts_stable_exact_children_only(
     controller = session.SessionController(run, "a" * 40, "b" * 40)
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1314,6 +2255,7 @@ def test_fast_dft_guard_accepts_exact_lazy_server_and_client_transition(
     controller = session.SessionController(run, "a" * 40, "b" * 40)
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1359,6 +2301,7 @@ def test_fast_dft_guard_never_retroactively_exempts_reused_server_pid(
     controller = session.SessionController(run, "a" * 40, "b" * 40)
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1404,6 +2347,7 @@ def test_fast_dft_guard_fails_closed_for_foreign_authority(
     controller = session.SessionController(run, "a" * 40, "b" * 40)
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1445,6 +2389,7 @@ def test_fast_dft_guard_rejects_duplicate_lease_and_90_second_expiry(
     controller = session.SessionController(run, "a" * 40, "b" * 40)
     duplicate = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [
             dft_residency_record(),
@@ -1459,6 +2404,7 @@ def test_fast_dft_guard_rejects_duplicate_lease_and_90_second_expiry(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1498,6 +2444,7 @@ def test_warmup_retries_only_internal_mps_membership_cas_until_success(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1544,6 +2491,7 @@ def test_warmup_never_retries_unproven_or_expired_mps_churn(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": (
             [] if failure == "foreign" else [dft_residency_record()]
@@ -1576,6 +2524,7 @@ def test_full_audit_seals_only_one_live_exact_dft_residency(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1645,6 +2594,7 @@ def test_full_audit_never_seals_without_real_dft_cuda_residency(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1682,6 +2632,7 @@ def test_full_audit_never_retroactively_authorizes_reused_mps_server_pid(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1773,6 +2724,7 @@ def test_full_audit_never_seals_missing_or_stale_dft_root(
     controller.dft_stabilization_generation = 1
     empty_status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [],
     }
@@ -1814,6 +2766,7 @@ def test_stabilization_signal_mid_audit_requires_the_next_full_generation(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -1867,6 +2820,7 @@ def test_activation_signal_mid_audit_cannot_authorize_that_generation(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [],
     }
@@ -1900,6 +2854,7 @@ def test_trailing_audit_recomputes_backend_identity_authority(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [backend_residency_record()],
     }
@@ -1955,6 +2910,7 @@ def test_trailing_audit_rejects_new_static_systemd_gpu_claim(
     )
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [],
     }
@@ -1973,6 +2929,229 @@ def test_trailing_audit_rejects_new_static_systemd_gpu_claim(
     assert reasons == ("foreign systemd claim: user:foreign-gpu.service",)
 
 
+@pytest.mark.parametrize("error_kind", ("process", "membership"))
+@pytest.mark.parametrize("transition_shape", ("aba", "active_release"))
+def test_trailing_audit_resamples_exact_md_scope_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_kind: str,
+    transition_shape: str,
+) -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker import server
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    md_cgroup = scope_control_group(md_lease["lease_id"], uid=1001)
+    idle = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease],
+    }
+    active = {
+        **idle,
+        "next_fencing_token": 3,
+        "leases": [dft_lease, md_lease],
+    }
+    before = idle if transition_shape == "aba" else active
+    after = {
+        **active,
+        "last_released_lease": md_lease,
+        "leases": [{**dft_lease, "heartbeat_at": 7.0}],
+    }
+    if error_kind == "process":
+        inventory_error: Exception = server.SystemdProcessDisappeared(
+            290593,
+            790,
+            md_cgroup,
+        )
+    else:
+        manager_cgroup = user_manager_control_group(1001)
+        inventory_error = server.SystemdMembershipChanged(
+            "system",
+            "user@1001.service",
+            manager_cgroup,
+            (
+                (7000, 100, manager_cgroup),
+                (290593, 790, md_cgroup),
+            ),
+            ((7000, 100, manager_cgroup),),
+        )
+
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    client = patch_full_audit_runtime(monkeypatch, controller, before)
+    rounds = 0
+    systemd_reads = 0
+
+    def status():
+        return before if rounds == 0 else after
+
+    client.status = status
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        rounds += 1
+        return (before if rounds == 1 else after), empty_snapshot()
+
+    def trailing_systemd(**_kwargs):
+        nonlocal systemd_reads
+        systemd_reads += 1
+        if systemd_reads == 1:
+            raise inventory_error
+        return ()
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert rounds == 2
+    assert systemd_reads == 2
+
+
+def test_trailing_audit_exact_md_releases_keep_three_round_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker import server
+
+    dft_lease = dft_residency_record()
+    tombstone: dict[str, object] | None = None
+    transitions: list[
+        tuple[dict[str, object], dict[str, object], Exception]
+    ] = []
+    for index, fencing_token in enumerate((2, 3, 4), start=1):
+        md_lease = md_execution_record(
+            lease_id=f"{index + 1:02x}" * 16,
+            fencing_token=fencing_token,
+            workload_pid=290590 + index,
+            workload_start_ticks=790 + index,
+        )
+        active = {
+            "broker_instance_id": "broker",
+            "next_fencing_token": fencing_token + 1,
+            "draining": False,
+            "quarantined_gpus": {},
+            "last_released_lease": tombstone,
+            "leases": [dft_lease, md_lease],
+        }
+        released = {
+            **active,
+            "last_released_lease": md_lease,
+            "leases": [{**dft_lease, "heartbeat_at": 7.0 + index}],
+        }
+        transitions.append(
+            (
+                active,
+                released,
+                server.SystemdProcessDisappeared(
+                    290590 + index,
+                    790 + index,
+                    scope_control_group(md_lease["lease_id"], uid=1001),
+                ),
+            )
+        )
+        tombstone = md_lease
+
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        transitions[0][0],
+    )
+    round_index = -1
+    systemd_reads = 0
+
+    def collect(_client, **_kwargs):
+        nonlocal round_index
+        round_index += 1
+        return transitions[round_index][0], empty_snapshot()
+
+    statuses = iter(
+        item
+        for before, after, _error in transitions
+        for item in (before, after)
+    )
+
+    def status():
+        return next(statuses)
+
+    def trailing_systemd(**_kwargs):
+        nonlocal systemd_reads
+        systemd_reads += 1
+        raise transitions[round_index][2]
+
+    client.status = status
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="authority changed throughout trailing full audits",
+    ):
+        controller._audit(client)
+
+    assert round_index + 1 == session.FULL_AUDIT_ATTEMPTS
+    assert systemd_reads == session.FULL_AUDIT_ATTEMPTS
+
+
+def test_trailing_audit_propagates_unowned_process_disappearance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_residency_record()],
+    }
+    after = {
+        **before,
+        "next_fencing_token": 3,
+        "last_released_lease": md_execution_record(),
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(monkeypatch, controller, before)
+    statuses = iter((before, after))
+    client.status = lambda: next(statuses)
+    error = server.SystemdProcessDisappeared(
+        90001,
+        123,
+        "/user.slice/user-1001.slice/user@1001.service/foreign.scope",
+    )
+    monkeypatch.setattr(
+        server,
+        "query_systemd_gpu_claims",
+        lambda **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(server.SystemdProcessDisappeared) as raised:
+        controller._audit(client)
+
+    assert raised.value is error
+
+
 def test_exact_trailing_dft_systemd_churn_uses_warmup_budget_beyond_three_rounds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1981,6 +3160,7 @@ def test_exact_trailing_dft_systemd_churn_uses_warmup_budget_beyond_three_rounds
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2054,6 +3234,7 @@ def test_full_audit_retries_exact_mps_client_membership_change(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2103,6 +3284,7 @@ def test_full_audit_retries_exact_lazy_mps_server_growth(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2144,6 +3326,145 @@ def test_full_audit_retries_exact_lazy_mps_server_growth(
     assert controller.last_mps_authority == after
 
 
+def test_full_audit_discards_broker_change_after_initial_mps_seal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    empty = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    resident = {
+        **empty,
+        "next_fencing_token": 2,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    control_only = mps_snapshot(
+        declarers=frozenset({mps_declarer(7000)})
+    )
+    resident_authority = dft_resident_authority()
+    captured = dft_broad_snapshot(
+        monkeypatch,
+        resident,
+        resident_authority,
+        session.TargetSnapshot((7001, 8123), (), ()),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        resident,
+        snapshot=captured,
+        authority=resident_authority,
+        trailing_compute=frozenset({7001, 8123}),
+        trailing_systemd=captured.systemd_claims,
+    )
+    broker_reads = 0
+    rounds = 0
+    mps_reads = 0
+
+    def status():
+        nonlocal broker_reads
+        broker_reads += 1
+        return empty if broker_reads == 1 else resident
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        rounds += 1
+        return resident, captured
+
+    def authority():
+        nonlocal mps_reads
+        mps_reads += 1
+        # The production seal performs this Broker read before the MPS read.
+        # Keep the old authority for the first sealed generation, then expose
+        # the resident authority only after the next outer Broker seal.  An
+        # implementation without that seal therefore cannot self-heal through
+        # the pre-existing lazy-MPS-growth retry path.
+        return control_only if broker_reads <= 1 else resident_authority
+
+    client.status = status
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(controller, "_mps_authority", authority)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert rounds == 2
+    assert broker_reads > 1
+    assert controller.full_audit_generation == 1
+    assert controller.last_mps_authority == resident_authority
+
+
+def test_initial_mps_broker_seal_change_keeps_three_round_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transitions = tuple(
+        (
+            {
+                "broker_instance_id": "broker",
+                "next_fencing_token": generation,
+                "draining": False,
+                "quarantined_gpus": {},
+                "leases": [],
+            },
+            {
+                "broker_instance_id": "broker",
+                "next_fencing_token": generation + 1,
+                "draining": False,
+                "quarantined_gpus": {},
+                "leases": [],
+            },
+        )
+        for generation in (1, 2, 3)
+    )
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        transitions[0][0],
+    )
+    rounds = 0
+    mps_reads = 0
+
+    def status():
+        return transitions[rounds][0]
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        after = transitions[rounds][1]
+        rounds += 1
+        return after, empty_snapshot()
+
+    def authority():
+        nonlocal mps_reads
+        mps_reads += 1
+        return mps_snapshot()
+
+    client.status = status
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(controller, "_mps_authority", authority)
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="authority changed throughout trailing full audits",
+    ):
+        controller._audit(client)
+
+    assert rounds == session.FULL_AUDIT_ATTEMPTS
+    # Every mismatched initial seal must abandon the round before a second MPS
+    # read or any host-inventory classification can occur.
+    assert mps_reads == session.FULL_AUDIT_ATTEMPTS
+
+
 def test_full_audit_accepts_dft_claim_with_mps_in_sibling_login_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2152,6 +3473,7 @@ def test_full_audit_accepts_dft_claim_with_mps_in_sibling_login_scope(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2218,6 +3540,7 @@ def test_full_audit_discards_lazy_server_that_appeared_after_captured_inventory(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2294,6 +3617,7 @@ def test_trailing_full_audit_retries_exact_lazy_mps_server_growth(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2372,6 +3696,7 @@ def test_trailing_full_audit_retries_lazy_server_between_nvml_seals(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2464,6 +3789,7 @@ def test_trailing_lazy_server_seal_growth_never_hides_foreign_evidence(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2540,6 +3866,7 @@ def test_trailing_lazy_growth_rejects_unsealed_untrusted_dft_pid(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2632,6 +3959,7 @@ def test_exact_lazy_mps_server_growth_rejects_ambiguous_authority(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2790,6 +4118,7 @@ def test_exact_lazy_mps_server_growth_never_hides_captured_foreign_evidence(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2947,6 +4276,7 @@ def test_full_audit_retries_more_than_three_exact_mps_client_additions(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3010,6 +4340,7 @@ def test_full_audit_never_extends_unknown_mps_client_growth(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3054,6 +4385,7 @@ def test_full_audit_keeps_short_budget_for_exact_mps_client_inventory_lag(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3103,6 +4435,7 @@ def test_exact_mps_growth_never_hides_initial_foreign_evidence(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3148,6 +4481,7 @@ def test_exact_mps_growth_never_hides_dft_warmup_docker_evidence(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3196,6 +4530,7 @@ def test_exact_trailing_growth_never_hides_foreign_or_static_systemd_evidence(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3261,6 +4596,7 @@ def test_full_audit_retries_exact_nvml_growth_across_systemd_inventory(
 
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3327,6 +4663,7 @@ def test_full_audit_retries_more_than_three_exact_nvml_additions(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3382,6 +4719,7 @@ def test_full_audit_rejects_stable_unknown_mps_client(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3418,6 +4756,7 @@ def test_warmup_full_audit_strictly_rejects_initial_and_trailing_docker(
 ) -> None:
     status = {
         "broker_instance_id": "broker",
+        "next_fencing_token": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3469,8 +4808,16 @@ def test_steady_full_audit_retains_the_12_second_churn_boundary(
 
     monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
     monkeypatch.setattr(controller, "_mps_authority", mps_snapshot)
+    client = SimpleNamespace(
+        status=lambda: {
+            "broker_instance_id": "broker",
+            "next_fencing_token": 1,
+            "draining": False,
+            "leases": [],
+        }
+    )
     with pytest.raises(RuntimeError, match="argument capture"):
-        controller._audit(SimpleNamespace())
+        controller._audit(client)
 
     assert observed["membership_churn_retries"] == 8
     assert observed["membership_churn_timeout_seconds"] == 12.0

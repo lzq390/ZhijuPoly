@@ -47,6 +47,9 @@ from ops.gpu_broker.server import (
     MpsRuntimeGuard,
     SystemdGpuClaim,
     SystemdGpuDeclarer,
+    SystemdMembershipChanged,
+    SystemdProcessDisappeared,
+    _verify_systemd_process_identity,
     _read_systemd_environment_file,
     _snapshot_systemd_process_cgroups,
     claim_is_exact_dev_gpu1_host_workloads_scope,
@@ -503,6 +506,145 @@ def test_fixed_budgets_allow_20480_mib_colocation_and_overflow(tmp_path: Path) -
     assert broker.status()["usage_mib"]["2"] == 20_480
     assert overflow.gpu_index == 1
     assert all(lease["gpu_index"] != 0 for lease in broker.status()["leases"])
+
+
+def test_status_fencing_token_detects_acquire_release_aba(tmp_path: Path) -> None:
+    broker = HostGpuBroker(tmp_path / "state.json")
+    before = broker.status()
+
+    lease = _acquire(
+        broker,
+        component="backend",
+        environment="prod",
+        kind="residency",
+    )
+    during = broker.status()
+    broker.release(lease.lease_id, lease.fencing_token, owner=_owner())
+    after = broker.status()
+
+    assert before["leases"] == after["leases"] == []
+    assert before["next_fencing_token"] == 1
+    assert during["next_fencing_token"] == 2
+    assert after["next_fencing_token"] == 2
+    assert during["last_released_lease"] is None
+    assert after["last_released_lease"] == lease.public_dict()
+
+
+def test_failed_release_never_creates_a_release_tombstone(tmp_path: Path) -> None:
+    broker = HostGpuBroker(tmp_path / "state.json")
+    residency = _acquire(
+        broker,
+        component="dft",
+        environment="prod",
+        kind="residency",
+        placement="preferred",
+    )
+    _acquire(
+        broker,
+        component="dft",
+        environment="prod",
+        kind="execution",
+        placement="preferred",
+        parent_lease_id=residency.lease_id,
+    )
+
+    with pytest.raises(BrokerError) as error:
+        broker.release(
+            residency.lease_id,
+            residency.fencing_token,
+            owner=_owner(),
+        )
+
+    assert error.value.code == "lease_has_children"
+    assert broker.status()["last_released_lease"] is None
+
+
+def test_failed_release_state_commit_never_creates_a_tombstone(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    broker = HostGpuBroker(tmp_path / "state.json")
+    lease = _acquire(
+        broker,
+        component="backend",
+        environment="prod",
+        kind="residency",
+    )
+
+    def fail_commit() -> None:
+        raise OSError("disk failure")
+
+    monkeypatch.setattr(broker, "_persist_locked", fail_commit)
+    with pytest.raises(OSError, match="disk failure"):
+        broker.release(lease.lease_id, lease.fencing_token, owner=_owner())
+
+    assert broker.status()["last_released_lease"] is None
+
+
+def test_reconcile_never_creates_a_release_tombstone(tmp_path: Path) -> None:
+    now = [1.0]
+    alive = [True]
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        heartbeat_timeout_seconds=1,
+        now=lambda: now[0],
+        process_alive=lambda _owner: alive[0],
+    )
+    _acquire(
+        broker,
+        component="backend",
+        environment="dev",
+        kind="residency",
+    )
+
+    now[0] = 3.0
+    alive[0] = False
+    status = broker.status()
+
+    assert status["leases"] == []
+    assert status["last_released_lease"] is None
+
+
+def test_systemd_verify_structures_only_a_vanished_process() -> None:
+    def vanished(_pid: int) -> int:
+        try:
+            raise FileNotFoundError("gone")
+        except FileNotFoundError as exc:
+            raise BrokerError("owner_process_unavailable", "gone") from exc
+
+    with pytest.raises(SystemdProcessDisappeared) as error:
+        _verify_systemd_process_identity(
+            76743,
+            790,
+            "/user.slice/exact.scope",
+            read_process_start_ticks=vanished,
+            read_process_cgroup=lambda _pid: "/user.slice/exact.scope",
+        )
+
+    assert error.value.code == "gpu_claim_inventory_changed"
+    assert error.value.pid == 76743
+    assert error.value.expected_start_ticks == 790
+    assert error.value.expected_control_group == "/user.slice/exact.scope"
+
+
+def test_systemd_verify_keeps_permission_failure_unstructured() -> None:
+    def denied(_pid: int) -> int:
+        try:
+            raise PermissionError("denied")
+        except PermissionError as exc:
+            raise BrokerError("owner_process_unavailable", "denied") from exc
+
+    with pytest.raises(BrokerError, match="cannot identify systemd process") as error:
+        _verify_systemd_process_identity(
+            90001,
+            790,
+            "/user.slice/foreign.scope",
+            read_process_start_ticks=denied,
+            read_process_cgroup=lambda _pid: "/user.slice/foreign.scope",
+        )
+
+    assert not isinstance(error.value, SystemdProcessDisappeared)
+    assert error.value.code == "gpu_claim_inventory_unavailable"
 
 
 def test_budget_and_device_policy_are_not_client_overridable(tmp_path: Path) -> None:
@@ -5721,6 +5863,57 @@ def test_systemd_inventory_rejects_process_identity_change_while_reading_env(
     assert error.value.code == "gpu_claim_inventory_unavailable"
 
 
+def test_systemd_inventory_structures_captured_nvidia_pid_disappearance(
+    monkeypatch,
+) -> None:
+    from ops.gpu_broker import server as broker_server
+
+    lease_id = "e2" * 16
+    unit = "user@1001.service"
+    manager_control_group = user_manager_control_group(1001)
+    control_group = scope_control_group(lease_id, uid=1001)
+    pid = 76743
+    start_ticks = 790
+    runner = _ScopedSystemdRunner(
+        {
+            "system": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=0,
+                    control_group=manager_control_group,
+                )
+            }
+        }
+    )
+    monkeypatch.setattr(
+        broker_server,
+        "_snapshot_systemd_process_cgroups",
+        lambda **_kwargs: ((pid, start_ticks, control_group),),
+    )
+
+    def vanished(_pid: int) -> int:
+        try:
+            raise FileNotFoundError("gone")
+        except FileNotFoundError as exc:
+            raise BrokerError("owner_process_unavailable", "gone") from exc
+
+    with pytest.raises(SystemdProcessDisappeared) as error:
+        query_systemd_gpu_claims(
+            compute_processes={EXPECTED_GPU_UUIDS[1]: frozenset({pid})},
+            run=runner,
+            read_process_environment=lambda _pid: {
+                "CUDA_VISIBLE_DEVICES": EXPECTED_GPU_UUIDS[1]
+            },
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=vanished,
+        )
+
+    assert error.value.pid == pid
+    assert error.value.expected_start_ticks == start_ticks
+    assert error.value.expected_control_group == control_group
+
+
 def test_systemd_inventory_rechecks_user_identity_after_system_scope_query() -> None:
     unit = "nexpoly-worker.service"
     control_group = f"/user.slice/user-1001.slice/{unit}"
@@ -5764,6 +5957,12 @@ def test_systemd_inventory_rechecks_user_identity_after_system_scope_query() -> 
         )
 
     assert error.value.code == "gpu_claim_inventory_changed"
+    assert isinstance(error.value, SystemdMembershipChanged)
+    assert error.value.scope == "user"
+    assert error.value.unit == unit
+    assert error.value.control_group == control_group
+    assert error.value.expected_identities == ((pid, 101, control_group),)
+    assert error.value.current_identities == ((pid, 202, control_group),)
 
 
 def test_systemd_inventory_rejects_main_pid_outside_control_group() -> None:

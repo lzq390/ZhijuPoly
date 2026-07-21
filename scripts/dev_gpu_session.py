@@ -492,6 +492,15 @@ def drain_on_contamination(
 def broker_authority_token(status: dict[str, Any]) -> tuple[Any, ...]:
     """Identity relevant to matching a host snapshot to Broker ownership."""
 
+    next_fencing_token = status.get("next_fencing_token")
+    if (
+        isinstance(next_fencing_token, bool)
+        or not isinstance(next_fencing_token, int)
+        or next_fencing_token < 1
+    ):
+        raise DevGpuSessionError(
+            "Broker returned an invalid fencing authority generation"
+        )
     leases = status.get("leases")
     if not isinstance(leases, list):
         raise DevGpuSessionError("Broker returned an invalid lease inventory")
@@ -526,6 +535,7 @@ def broker_authority_token(status: dict[str, Any]) -> tuple[Any, ...]:
         )
     return (
         status.get("broker_instance_id"),
+        next_fencing_token,
         status.get("draining"),
         tuple(sorted(normalized, key=repr)),
     )
@@ -587,10 +597,111 @@ def _exact_backend_docker_workload_pids(
     )
 
 
-_SYSTEMD_MEMBERSHIP_CHURN_RE = re.compile(
-    r"^(user|system) systemd unit ([A-Za-z0-9_.:@-]+) "
-    r"membership changed during audit$"
-)
+def _canonical_systemd_control_group(value: object) -> str | None:
+    """Validate a cgroup-v2 path without resolving ambiguous components."""
+
+    if (
+        not isinstance(value, str)
+        or not value.startswith("/")
+        or value == "/"
+        or value.endswith("/")
+        or "//" in value
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        or any(part in {"", ".", ".."} for part in value.split("/")[1:])
+    ):
+        return None
+    return value
+
+
+def _canonical_systemd_identity_map(
+    identities: object,
+) -> dict[int, tuple[int, str]] | None:
+    """Decode complete PID identities without normalizing hostile cgroups."""
+
+    if not isinstance(identities, tuple):
+        return None
+    result: dict[int, tuple[int, str]] = {}
+    for identity in identities:
+        if (
+            not isinstance(identity, tuple)
+            or len(identity) != 3
+            or not isinstance(identity[0], int)
+            or isinstance(identity[0], bool)
+            or identity[0] <= 0
+            or not isinstance(identity[1], int)
+            or isinstance(identity[1], bool)
+            or identity[1] <= 0
+            or identity[0] in result
+        ):
+            return None
+        process_cgroup = _canonical_systemd_control_group(identity[2])
+        if process_cgroup is None:
+            return None
+        result[identity[0]] = identity[1], process_cgroup
+    return result
+
+
+def _structured_membership_delta_within(
+    error: Exception,
+    *,
+    scope: str,
+    unit: str,
+    unit_cgroup: str,
+    workload_cgroup: str,
+) -> bool:
+    """Accept only a nonempty, identity-stable delta inside one workload."""
+
+    from ops.gpu_broker.server import (
+        SystemdMembershipChanged,
+        _systemd_cgroup_contains,
+    )
+
+    if (
+        _canonical_systemd_control_group(unit_cgroup) != unit_cgroup
+        or _canonical_systemd_control_group(workload_cgroup) != workload_cgroup
+        or not _systemd_cgroup_contains(workload_cgroup, unit_cgroup)
+        or not isinstance(error, SystemdMembershipChanged)
+        or error.code != "gpu_claim_inventory_changed"
+        or error.scope != scope
+        or error.unit != unit
+        or error.control_group != unit_cgroup
+    ):
+        return False
+    expected_identities = _canonical_systemd_identity_map(
+        error.expected_identities
+    )
+    current_identities = _canonical_systemd_identity_map(
+        error.current_identities
+    )
+    if expected_identities is None or current_identities is None:
+        return False
+    if any(
+        not _systemd_cgroup_contains(process_cgroup, unit_cgroup)
+        for _start_ticks, process_cgroup in (
+            *expected_identities.values(),
+            *current_identities.values(),
+        )
+    ):
+        return False
+    if any(
+        expected_identities[pid] != current_identities[pid]
+        for pid in expected_identities.keys() & current_identities.keys()
+    ):
+        # PID reuse or a cgroup move is never ordinary membership churn.
+        return False
+    changed_identities = tuple(
+        (pid, *identity)
+        for membership, other in (
+            (expected_identities, current_identities),
+            (current_identities, expected_identities),
+        )
+        for pid, identity in membership.items()
+        if pid not in other
+    )
+    return bool(changed_identities) and all(
+        _systemd_cgroup_contains(process_cgroup, workload_cgroup)
+        for _pid, _start_ticks, process_cgroup in changed_identities
+    )
 
 
 def _is_exact_dft_membership_churn(
@@ -599,25 +710,281 @@ def _is_exact_dft_membership_churn(
 ) -> bool:
     """Limit transient retries to the exact active DFT residency ancestry."""
 
-    from ops.gpu_broker.broker import BrokerError
-    from gpu_resource.transient_scope import scope_unit_name
+    from gpu_resource.transient_scope import (
+        scope_unit_name,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.server import (
+        SystemdMembershipChanged,
+        exact_dft_residency_scope_authority,
+    )
 
     if (
-        not isinstance(error, BrokerError)
-        or error.code != "gpu_claim_inventory_changed"
+        not isinstance(error, SystemdMembershipChanged)
         or status.get("draining") is not False
     ):
-        return False
-    matched = _SYSTEMD_MEMBERSHIP_CHURN_RE.fullmatch(str(error))
-    if matched is None:
         return False
     leases = _exact_dft_residency_leases(status)
     if len(leases) != 1:
         return False
-    scope, unit = matched.groups()
-    if scope == "system":
-        return unit == "user@1001.service"
-    return any(unit == scope_unit_name(lease.lease_id) for lease in leases)
+    lease = leases[0]
+    authority = exact_dft_residency_scope_authority(
+        lease,
+        index=GPU_INDEX,
+        uuid=GPU_UUID,
+    )
+    if authority is None:
+        return False
+    workload_cgroup = authority[2]
+    if error.scope == "system":
+        return _structured_membership_delta_within(
+            error,
+            scope="system",
+            unit="user@1001.service",
+            unit_cgroup=user_manager_control_group(1001),
+            workload_cgroup=workload_cgroup,
+        )
+    if error.scope == "user":
+        return _structured_membership_delta_within(
+            error,
+            scope="user",
+            unit=scope_unit_name(lease.lease_id),
+            unit_cgroup=workload_cgroup,
+            workload_cgroup=workload_cgroup,
+        )
+    return False
+
+
+def _is_exact_managed_scope_membership_transition(
+    error: Exception,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> bool:
+    """Prove an exact PID membership delta belongs to one lease transition."""
+
+    from ops.gpu_broker.broker import Lease
+    from ops.gpu_broker.server import (
+        SystemdMembershipChanged,
+        SystemdProcessDisappeared,
+        _exact_dev_gpu1_host_scope_authority,
+    )
+    from gpu_resource.transient_scope import user_manager_control_group
+
+    if not isinstance(
+        error,
+        (SystemdProcessDisappeared, SystemdMembershipChanged),
+    ):
+        return False
+    before_instance = before.get("broker_instance_id")
+    if (
+        not isinstance(before_instance, str)
+        or not before_instance
+        or after.get("broker_instance_id") != before_instance
+        or before.get("draining") is not False
+        or after.get("draining") is not False
+        or before.get("quarantined_gpus") != {}
+        or after.get("quarantined_gpus") != {}
+    ):
+        return False
+    before_generation = before.get("next_fencing_token")
+    after_generation = after.get("next_fencing_token")
+    if (
+        isinstance(before_generation, bool)
+        or not isinstance(before_generation, int)
+        or isinstance(after_generation, bool)
+        or not isinstance(after_generation, int)
+        or after_generation not in (before_generation, before_generation + 1)
+    ):
+        return False
+    try:
+        before_leases = _canonical_broker_leases(before)
+        after_leases = _canonical_broker_leases(after)
+    except DevGpuSessionError:
+        return False
+    if any(
+        len({getattr(item, field) for item in leases}) != len(leases)
+        for leases in (before_leases, after_leases)
+        for field in ("lease_id", "fencing_token")
+    ):
+        return False
+
+    def live_authority(leases: tuple[Lease, ...]) -> tuple[str, ...]:
+        # Heartbeats may legitimately advance while the systemd inventory is
+        # running.  Every other canonical field remains ownership authority,
+        # including budgets, request identity and MPS termination state.
+        normalized: list[str] = []
+        for item in leases:
+            record = item.public_dict()
+            record.pop("heartbeat_at")
+            normalized.append(
+                json.dumps(record, sort_keys=True, separators=(",", ":"))
+            )
+        return tuple(sorted(normalized))
+
+    def released_tombstone(
+        status: dict[str, Any],
+        leases: tuple[Lease, ...],
+        generation: int,
+    ) -> tuple[dict[str, Any] | None, Lease | None]:
+        record = status.get("last_released_lease")
+        if record is None:
+            return None, None
+        if not isinstance(record, dict):
+            raise ValueError("released lease tombstone is not an object")
+        try:
+            lease = Lease(**record)
+        except (TypeError, ValueError):
+            raise ValueError("released lease tombstone is not canonical") from None
+        if lease.public_dict() != record:
+            raise ValueError("released lease tombstone is not canonical")
+        if (
+            lease.broker_instance_id != before_instance
+            or isinstance(lease.fencing_token, bool)
+            or not isinstance(lease.fencing_token, int)
+            or lease.fencing_token <= 0
+            or lease.fencing_token >= generation
+            or any(
+                live.lease_id == lease.lease_id
+                or live.fencing_token == lease.fencing_token
+                for live in leases
+            )
+        ):
+            raise ValueError("released lease tombstone collides with live authority")
+        return record, lease
+
+    try:
+        before_record, before_released = released_tombstone(
+            before,
+            before_leases,
+            before_generation,
+        )
+        record, released_candidate = released_tombstone(
+            after,
+            after_leases,
+            after_generation,
+        )
+    except ValueError:
+        return False
+
+    tombstone_advanced = (
+        released_candidate is not None
+        and (
+            before_released is None
+            or (
+                before_released.lease_id != released_candidate.lease_id
+                and before_released.fencing_token
+                != released_candidate.fencing_token
+            )
+        )
+    )
+
+    candidate: Lease | None = None
+    if (
+        after_generation == before_generation + 1
+        and before_record == record
+    ):
+        issued = [
+            item
+            for item in after_leases
+            if item.fencing_token == before_generation
+            and all(
+                existing.lease_id != item.lease_id
+                and existing.fencing_token != item.fencing_token
+                for existing in before_leases
+            )
+        ]
+        if len(issued) == 1:
+            issued_candidate = issued[0]
+            after_without_issue = tuple(
+                item
+                for item in after_leases
+                if item.lease_id != issued_candidate.lease_id
+            )
+            if live_authority(before_leases) == live_authority(
+                after_without_issue
+            ):
+                candidate = issued_candidate
+
+    if (
+        candidate is None
+        and after_generation == before_generation + 1
+        and tombstone_advanced
+        and released_candidate is not None
+    ):
+        if (
+            released_candidate.fencing_token == before_generation
+            and all(
+                item.lease_id != released_candidate.lease_id
+                and item.fencing_token != released_candidate.fencing_token
+                for item in (*before_leases, *after_leases)
+            )
+            and live_authority(before_leases) == live_authority(after_leases)
+        ):
+            candidate = released_candidate
+
+    if (
+        candidate is None
+        and after_generation == before_generation
+        and tombstone_advanced
+        and released_candidate is not None
+    ):
+        released_matches = tuple(
+            item
+            for item in before_leases
+            if item.lease_id == released_candidate.lease_id
+            and item.fencing_token == released_candidate.fencing_token
+        )
+        if len(released_matches) == 1:
+            visible_candidate = released_matches[0]
+            before_without_release = tuple(
+                item
+                for item in before_leases
+                if item.lease_id != visible_candidate.lease_id
+            )
+            if (
+                all(
+                    item.lease_id != visible_candidate.lease_id
+                    and item.fencing_token != visible_candidate.fencing_token
+                    for item in after_leases
+                )
+                and visible_candidate.fencing_token < before_generation
+                and live_authority((visible_candidate,))
+                == live_authority((released_candidate,))
+                and live_authority(before_without_release)
+                == live_authority(after_leases)
+            ):
+                candidate = visible_candidate
+
+    if candidate is None:
+        return False
+    if candidate.broker_instance_id != before_instance:
+        return False
+    authority = _exact_dev_gpu1_host_scope_authority(
+        candidate,
+        index=GPU_INDEX,
+        uuid=GPU_UUID,
+    )
+    if authority is None:
+        return False
+    expected_scope_cgroup = authority[3]
+    if isinstance(error, SystemdProcessDisappeared):
+        return (
+            isinstance(error.pid, int)
+            and not isinstance(error.pid, bool)
+            and error.pid > 0
+            and isinstance(error.expected_start_ticks, int)
+            and not isinstance(error.expected_start_ticks, bool)
+            and error.expected_start_ticks > 0
+            and error.expected_control_group == expected_scope_cgroup
+        )
+
+    return _structured_membership_delta_within(
+        error,
+        scope="system",
+        unit="user@1001.service",
+        unit_cgroup=user_manager_control_group(1001),
+        workload_cgroup=expected_scope_cgroup,
+    )
 
 
 def consistent_broker_snapshot(
@@ -654,14 +1021,24 @@ def consistent_broker_snapshot(
     audit_started = monotonic()
     while authority_changes < attempts:
         before = client.status()
+        before_authority = broker_authority_token(before)
         try:
             snapshot = collector()
         except Exception as exc:
             after = client.status()
-            if broker_authority_token(before) != broker_authority_token(after):
+            after_authority = broker_authority_token(after)
+            if (
+                before_authority != after_authority
+                and _is_exact_managed_scope_membership_transition(
+                    exc, before, after
+                )
+            ):
                 authority_changes += 1
                 continue
-            if _is_exact_dft_membership_churn(exc, after):
+            if (
+                before_authority == after_authority
+                and _is_exact_dft_membership_churn(exc, after)
+            ):
                 if (
                     churn_retries >= membership_churn_retries
                     or monotonic() - audit_started
@@ -682,7 +1059,7 @@ def consistent_broker_snapshot(
                 continue
             raise
         after = client.status()
-        if broker_authority_token(before) == broker_authority_token(after):
+        if before_authority == broker_authority_token(after):
             return after, snapshot
         authority_changes += 1
     raise DevGpuSessionError("Broker authority changed throughout the host audit")
@@ -1660,6 +2037,7 @@ class SessionController:
                 # The MPS identity must enclose the whole host inventory.  A
                 # server that appears only after NVML/systemd were sampled may
                 # reuse a foreign PID and must never retroactively authorize it.
+                enclosing_broker_token = broker_authority_token(client.status())
                 mps_before = self._mps_authority_for_audit(client)
                 status, snapshot = consistent_broker_snapshot(
                     client,
@@ -1667,6 +2045,10 @@ class SessionController:
                     membership_churn_timeout_seconds=churn_timeout,
                     membership_churn_guard=fast_guard,
                 )
+                if broker_authority_token(status) != enclosing_broker_token:
+                    raise _AuditRoundChanged(
+                        "Broker authority changed after the initial MPS seal"
+                    )
                 if (
                     self.dft_warmup_open
                     and self.dft_churn_started_at is not None
@@ -1856,6 +2238,8 @@ class SessionController:
                     )
 
                 from ops.gpu_broker.server import (
+                    SystemdMembershipChanged,
+                    SystemdProcessDisappeared,
                     query_compute_processes,
                     query_docker_gpu_claims,
                     query_systemd_gpu_claims,
@@ -1873,13 +2257,29 @@ class SessionController:
                     for claim in query_docker_gpu_claims()
                     if GPU_UUID in claim.gpu_uuids
                 )
-                trailing_systemd = tuple(
-                    claim
-                    for claim in query_systemd_gpu_claims(
-                        compute_processes=trailing_process_map,
+                try:
+                    trailing_systemd = tuple(
+                        claim
+                        for claim in query_systemd_gpu_claims(
+                            compute_processes=trailing_process_map,
+                        )
+                        if GPU_UUID in claim.gpu_uuids
                     )
-                    if GPU_UUID in claim.gpu_uuids
-                )
+                except (
+                    SystemdProcessDisappeared,
+                    SystemdMembershipChanged,
+                ) as exc:
+                    transition_status = client.status()
+                    if _is_exact_managed_scope_membership_transition(
+                        exc,
+                        status,
+                        transition_status,
+                    ):
+                        raise _AuditRoundChanged(
+                            "one exact managed scope changed during the "
+                            "trailing systemd audit"
+                        ) from exc
+                    raise
                 sealed_process_map = query_compute_processes()
                 sealed_compute = frozenset(
                     sealed_process_map.get(GPU_UUID, frozenset())
