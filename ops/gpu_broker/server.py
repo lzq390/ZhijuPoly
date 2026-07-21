@@ -4252,11 +4252,21 @@ class JobCgroupController:
                 "workload_identity_mismatch",
                 "transient GPU scope is not active with a live workload",
             )
-        if (
+        workload_identity_missing = (
             lease.workload_pid is None
             or lease.workload_process_start_ticks is None
             or lease.workload_process_group_id is None
-            or pids != {lease.workload_pid}
+        )
+        exact_root_membership = (
+            not workload_identity_missing and pids == {lease.workload_pid}
+        )
+        exact_dft_descendant_membership = (
+            not workload_identity_missing
+            and not exact_root_membership
+            and self._is_exact_dft_descendant_membership(lease, pids)
+        )
+        if workload_identity_missing or not (
+            exact_root_membership or exact_dft_descendant_membership
         ):
             self._log_workload_revalidation_failure(
                 lease,
@@ -4280,7 +4290,60 @@ class JobCgroupController:
                 broker_error_code=exc.code,
             )
             raise
+        if exact_dft_descendant_membership:
+            try:
+                membership_after = self._scope_pids(target)
+            except BrokerError as exc:
+                self._log_workload_revalidation_failure(
+                    lease,
+                    check="scope_membership",
+                    broker_error_code=exc.code,
+                )
+                raise
+            if membership_after != pids:
+                self._log_workload_revalidation_failure(
+                    lease,
+                    check="scope_membership",
+                    broker_error_code="workload_identity_mismatch",
+                )
+                raise BrokerError(
+                    "workload_identity_mismatch",
+                    "active transient GPU scope membership changed during validation",
+                )
         return target
+
+    @staticmethod
+    def _is_exact_dft_descendant_membership(
+        lease: Lease,
+        pids: set[int],
+    ) -> bool:
+        workload_pid = lease.workload_pid
+        expected_uuid = EXPECTED_GPU_UUIDS.get(lease.gpu_index)
+        if (
+            isinstance(workload_pid, bool)
+            or not isinstance(workload_pid, int)
+            or workload_pid <= 0
+            or workload_pid not in pids
+            or expected_uuid is None
+            or lease.gpu_uuid != expected_uuid
+        ):
+            return False
+        authority = exact_dft_residency_scope_authority(
+            lease,
+            index=lease.gpu_index,
+            uuid=expected_uuid,
+        )
+        if authority is None or authority[0] != workload_pid:
+            return False
+        return all(
+            process_is_exact_dft_residency_descendant(
+                pid,
+                lease,
+                index=lease.gpu_index,
+                uuid=expected_uuid,
+            )
+            for pid in sorted(pids)
+        )
 
     @staticmethod
     def _log_workload_revalidation_failure(

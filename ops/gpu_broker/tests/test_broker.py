@@ -2128,6 +2128,192 @@ def test_job_cgroup_controller_logs_only_controlled_revalidation_check(
     ]
 
 
+def test_job_cgroup_controller_accepts_stable_exact_dft_descendants_for_teardown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller, lease, scope_path, _systemd, processes = _scope_controller(
+        tmp_path,
+        lease_id="e" * 32,
+    )
+    root_pid = next(iter(processes))
+    start_ticks, group_id, uids = processes[root_pid]
+    lease.kind = "residency"
+    lease.placement = "preferred"
+    lease.component = "dft"
+    lease.environment = "dev"
+    lease.client_id = "dft-dev-worker"
+    lease.memory_mib = 4096
+    resolved = controller.resolve_and_assign(
+        lease,
+        root_pid,
+        start_ticks,
+        group_id,
+    )
+    lease.workload_pid = root_pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = resolved[3]
+
+    compiler_pid = root_pid + 1
+    processes[compiler_pid] = (start_ticks + 1, root_pid, uids)
+    (scope_path / "cgroup.procs").write_text(
+        f"{root_pid}\n{compiler_pid}\n",
+        encoding="ascii",
+    )
+    validations: list[int] = []
+
+    def validate_descendant(pid, candidate, *, index, uuid):
+        assert candidate is lease
+        assert index == 1
+        assert uuid == EXPECTED_GPU_UUIDS[1]
+        validations.append(pid)
+        return pid in {root_pid, compiler_pid}
+
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.process_is_exact_dft_residency_descendant",
+        validate_descendant,
+    )
+
+    controller.validate_active(lease)
+    assert controller.freeze(lease) == f"{lease.lease_id}:88888"
+    controller.kill(lease)
+
+    assert validations == sorted((root_pid, compiler_pid)) * 3
+    assert (scope_path / "cgroup.freeze").read_text(encoding="ascii") == "1"
+    assert (scope_path / "cgroup.kill").read_text(encoding="ascii") == "1"
+
+
+@pytest.mark.parametrize(
+    "lease_shape",
+    ("md_execution", "dft_execution", "prod_dft_residency"),
+)
+def test_job_cgroup_controller_keeps_non_dev_dft_membership_singleton(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lease_shape: str,
+) -> None:
+    controller, lease, scope_path, _systemd, processes = _scope_controller(
+        tmp_path,
+        lease_id="e1" * 16,
+    )
+    root_pid = next(iter(processes))
+    start_ticks, group_id, uids = processes[root_pid]
+    if lease_shape == "dft_execution":
+        lease.component = "dft"
+        lease.kind = "execution"
+    elif lease_shape == "prod_dft_residency":
+        lease.component = "dft"
+        lease.kind = "residency"
+        lease.environment = "prod"
+    resolved = controller.resolve_and_assign(
+        lease,
+        root_pid,
+        start_ticks,
+        group_id,
+    )
+    lease.workload_pid = root_pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = resolved[3]
+    child_pid = root_pid + 1
+    processes[child_pid] = (start_ticks + 1, root_pid, uids)
+    (scope_path / "cgroup.procs").write_text(
+        f"{root_pid}\n{child_pid}\n",
+        encoding="ascii",
+    )
+    descendant_checks: list[int] = []
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.process_is_exact_dft_residency_descendant",
+        lambda pid, *_args, **_kwargs: descendant_checks.append(pid) or True,
+    )
+
+    with pytest.raises(BrokerError, match="workload identity differs") as error:
+        controller.validate_active(lease)
+
+    assert error.value.code == "workload_identity_mismatch"
+    assert descendant_checks == []
+
+
+@pytest.mark.parametrize("membership_change", ("grow", "shrink"))
+def test_job_cgroup_controller_rejects_dft_descendant_membership_cas_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    membership_change: str,
+) -> None:
+    controller, lease, _scope_path, _systemd, processes = _scope_controller(
+        tmp_path,
+        lease_id="e2" * 16,
+    )
+    root_pid = next(iter(processes))
+    start_ticks, group_id, _uids = processes[root_pid]
+    lease.kind = "residency"
+    lease.placement = "preferred"
+    lease.component = "dft"
+    lease.environment = "dev"
+    lease.client_id = "dft-dev-worker"
+    lease.memory_mib = 4096
+    resolved = controller.resolve_and_assign(
+        lease,
+        root_pid,
+        start_ticks,
+        group_id,
+    )
+    lease.workload_pid = root_pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = resolved[3]
+    compiler_pid = root_pid + 1
+    before = {root_pid, compiler_pid}
+    after = (
+        {root_pid, compiler_pid, compiler_pid + 1}
+        if membership_change == "grow"
+        else {root_pid}
+    )
+    inventories = iter((before, after))
+    controller._scope_pids = lambda _target: next(inventories)
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.process_is_exact_dft_residency_descendant",
+        lambda pid, *_args, **_kwargs: pid in before,
+    )
+
+    with pytest.raises(BrokerError, match="membership changed") as error:
+        controller.validate_active(lease)
+
+    assert error.value.code == "workload_identity_mismatch"
+
+
+def test_job_cgroup_controller_keeps_dft_registration_membership_singleton(
+    tmp_path: Path,
+) -> None:
+    controller, lease, scope_path, _systemd, processes = _scope_controller(
+        tmp_path,
+        lease_id="e3" * 16,
+    )
+    root_pid = next(iter(processes))
+    start_ticks, group_id, uids = processes[root_pid]
+    lease.kind = "residency"
+    lease.placement = "preferred"
+    lease.component = "dft"
+    lease.environment = "dev"
+    compiler_pid = root_pid + 1
+    processes[compiler_pid] = (start_ticks + 1, root_pid, uids)
+    (scope_path / "cgroup.procs").write_text(
+        f"{root_pid}\n{compiler_pid}\n",
+        encoding="ascii",
+    )
+
+    with pytest.raises(BrokerError, match="foreign or reused") as error:
+        controller.resolve_and_assign(
+            lease,
+            root_pid,
+            start_ticks,
+            group_id,
+        )
+
+    assert error.value.code == "workload_identity_mismatch"
+
+
 def test_job_cgroup_controller_restart_accepts_only_collected_dead_scope(
     tmp_path: Path,
 ) -> None:
@@ -5375,11 +5561,16 @@ def test_exact_dft_descendant_revalidates_root_child_and_ancestry(
 @pytest.mark.parametrize(
     "invalid_identity",
     (
+        "root-start",
+        "root-uid",
+        "root-cgroup",
         "root-pgid",
+        "root-start-race",
         "child-pgid",
         "child-uid",
         "child-cgroup",
         "child-start",
+        "not-descendant",
         "ancestry-race",
     ),
 )
@@ -5397,6 +5588,14 @@ def test_exact_dft_descendant_rejects_identity_and_ancestry_races(
 
     def start_ticks(pid: int) -> int:
         start_reads[pid] += 1
+        if invalid_identity == "root-start" and pid == root_pid:
+            return 455
+        if (
+            invalid_identity == "root-start-race"
+            and pid == root_pid
+            and start_reads[pid] == 2
+        ):
+            return 457
         if (
             invalid_identity == "child-start"
             and pid == child_pid
@@ -5406,11 +5605,15 @@ def test_exact_dft_descendant_rejects_identity_and_ancestry_races(
         return 456 if pid == root_pid else 789
 
     def uids(pid: int) -> tuple[int, int, int, int]:
+        if invalid_identity == "root-uid" and pid == root_pid:
+            return (1001, 1001, 0, 1001)
         if invalid_identity == "child-uid" and pid == child_pid:
             return (1001, 1001, 0, 1001)
         return (1001, 1001, 1001, 1001)
 
     def cgroup(pid: int) -> str:
+        if invalid_identity == "root-cgroup" and pid == root_pid:
+            return "/foreign"
         if invalid_identity == "child-cgroup" and pid == child_pid:
             return "/foreign"
         return control_group
@@ -5425,6 +5628,8 @@ def test_exact_dft_descendant_rejects_identity_and_ancestry_races(
     def descends(_pid: int, _ancestor: int) -> bool:
         nonlocal ancestry_reads
         ancestry_reads += 1
+        if invalid_identity == "not-descendant":
+            return False
         return not (
             invalid_identity == "ancestry-race" and ancestry_reads == 2
         )
