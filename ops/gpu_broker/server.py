@@ -4213,7 +4213,15 @@ class JobCgroupController:
         return target
 
     def _active_scope_path(self, lease: Lease) -> Path:
-        self._require_bound_scope(lease)
+        try:
+            self._require_bound_scope(lease)
+        except BrokerError as exc:
+            self._log_workload_revalidation_failure(
+                lease,
+                check="lease_scope_binding",
+                broker_error_code=exc.code,
+            )
+            raise
         target = self._existing_scope_path(lease)
         unit = self._scope_unit(lease)
         expected = {
@@ -4224,7 +4232,22 @@ class JobCgroupController:
             "Slice": SCOPE_SLICE,
         }
         pids = self._scope_pids(target)
-        if self._unit_status(unit) != expected or not pids:
+        if self._unit_status(unit) != expected:
+            self._log_workload_revalidation_failure(
+                lease,
+                check="scope_unit_state",
+                broker_error_code="workload_identity_mismatch",
+            )
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "transient GPU scope is not active with a live workload",
+            )
+        if not pids:
+            self._log_workload_revalidation_failure(
+                lease,
+                check="scope_membership",
+                broker_error_code="workload_identity_mismatch",
+            )
             raise BrokerError(
                 "workload_identity_mismatch",
                 "transient GPU scope is not active with a live workload",
@@ -4235,16 +4258,45 @@ class JobCgroupController:
             or lease.workload_process_group_id is None
             or pids != {lease.workload_pid}
         ):
+            self._log_workload_revalidation_failure(
+                lease,
+                check="scope_membership",
+                broker_error_code="workload_identity_mismatch",
+            )
             raise BrokerError(
                 "workload_identity_mismatch",
                 "active transient GPU scope workload identity differs",
             )
-        self._require_process_identity(
-            lease.workload_pid,
-            lease.workload_process_start_ticks,
-            lease.workload_process_group_id,
-        )
+        try:
+            self._require_process_identity(
+                lease.workload_pid,
+                lease.workload_process_start_ticks,
+                lease.workload_process_group_id,
+            )
+        except BrokerError as exc:
+            self._log_workload_revalidation_failure(
+                lease,
+                check="process_identity",
+                broker_error_code=exc.code,
+            )
+            raise
         return target
+
+    @staticmethod
+    def _log_workload_revalidation_failure(
+        lease: Lease,
+        *,
+        check: str,
+        broker_error_code: str,
+    ) -> None:
+        logger.error(
+            "gpu_workload_revalidation_failed lease_id=%s fencing_token=%d "
+            "check=%s broker_error_code=%s",
+            lease.lease_id,
+            lease.fencing_token,
+            check,
+            broker_error_code,
+        )
 
     def _require_bound_scope(self, lease: Lease) -> None:
         expected = self._expected_control_group(lease)

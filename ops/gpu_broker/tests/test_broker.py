@@ -2062,6 +2062,72 @@ def test_job_cgroup_controller_rejects_active_pid_replacement_after_registration
     assert (scope_path / "cgroup.kill").read_text(encoding="ascii") == ""
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected_check", "expected_code"),
+    (
+        ("lease_scope_binding", "lease_scope_binding", "workload_identity_mismatch"),
+        ("scope_unit_state", "scope_unit_state", "workload_identity_mismatch"),
+        ("scope_membership", "scope_membership", "workload_identity_mismatch"),
+        ("process_identity", "process_identity", "workload_identity_mismatch"),
+    ),
+)
+def test_job_cgroup_controller_logs_only_controlled_revalidation_check(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    mutation: str,
+    expected_check: str,
+    expected_code: str,
+) -> None:
+    controller, lease, scope_path, systemd, processes = _scope_controller(
+        tmp_path,
+        lease_id="d" * 32,
+    )
+    pid = next(iter(processes))
+    start_ticks, group_id, uids = processes[pid]
+    resolved = controller.resolve_and_assign(
+        lease,
+        pid,
+        start_ticks,
+        group_id,
+    )
+    lease.workload_pid = pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = resolved[3]
+
+    if mutation == "lease_scope_binding":
+        lease.workload_cgroup = "0::/wrong.scope"
+    elif mutation == "scope_unit_state":
+        systemd.overrides["ActiveState"] = "deactivating"
+    elif mutation == "scope_membership":
+        replacement = pid + 1
+        processes[replacement] = (start_ticks + 1, replacement, uids)
+        (scope_path / "cgroup.procs").write_text(
+            f"{pid}\n{replacement}\n",
+            encoding="ascii",
+        )
+    elif mutation == "process_identity":
+        processes[pid] = (start_ticks + 1, group_id, uids)
+    else:  # pragma: no cover - parameter list is the fixed check allowlist.
+        raise AssertionError(mutation)
+
+    with caplog.at_level(logging.ERROR, logger="nexpoly_gpu_broker"):
+        with pytest.raises(BrokerError) as error:
+            controller.validate_active(lease)
+
+    assert error.value.code == expected_code
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("gpu_workload_revalidation_failed ")
+    ]
+    assert messages == [
+        "gpu_workload_revalidation_failed "
+        f"lease_id={lease.lease_id} fencing_token={lease.fencing_token} "
+        f"check={expected_check} broker_error_code={expected_code}"
+    ]
+
+
 def test_job_cgroup_controller_restart_accepts_only_collected_dead_scope(
     tmp_path: Path,
 ) -> None:
