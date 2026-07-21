@@ -179,6 +179,22 @@ class DevServerGpuScriptTests(unittest.TestCase):
         self.assertIn("run_dev_migrations", up_branch)
         self.assertNotIn("run_dev_contract_migration", up_branch)
 
+    def test_ordinary_up_precreates_owner_private_worker_mounts(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        case = source[source.index('case "${1:-up}" in'):]
+        up_branch = case[case.index("  up)"):case.index("  stop)")]
+
+        self.assertIn("prepare_worker_runtime_directories", up_branch)
+        self.assertIn("prepare_dft_runtime_directories", up_branch)
+        self.assertLess(
+            up_branch.index("prepare_worker_runtime_directories"),
+            up_branch.index("build_backend_image"),
+        )
+        self.assertLess(
+            up_branch.index("prepare_dft_runtime_directories"),
+            up_branch.index("build_backend_image"),
+        )
+
     def test_explicit_contract_command_archives_full_database_and_removed_table(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         start = source.index("run_dev_contract_migration() {")

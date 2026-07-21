@@ -1819,6 +1819,7 @@ case "${1:-up}" in
       'import json, sys; value=json.load(sys.stdin); assert value.get("status") == "stopped", "use gpu-session-down before ordinary up"'
     validate_asset_release
     prepare_canary_state_directory
+    prepare_worker_runtime_directories
     prepare_dft_runtime_directories
     build_backend_image
     "${COMPOSE[@]}" up -d lab-postgres
