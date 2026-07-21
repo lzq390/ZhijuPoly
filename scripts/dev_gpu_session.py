@@ -758,8 +758,11 @@ class SessionController:
         return parse_mps_client_inventory(completed.stdout)
 
     @staticmethod
-    def _managed_workload_pids(status: dict[str, Any]) -> frozenset[int]:
+    def _managed_workload_pids(
+        status: dict[str, Any], snapshot: TargetSnapshot
+    ) -> frozenset[int]:
         result: set[int] = set()
+        root_scopes: list[tuple[str, str, int]] = []
         for lease in status.get("leases", []):
             if not isinstance(lease, dict) or lease.get("gpu_uuid") != GPU_UUID:
                 continue
@@ -767,6 +770,33 @@ class SessionController:
                 value = lease.get(key)
                 if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                     result.add(value)
+            lease_id = lease.get("lease_id")
+            workload_pid = lease.get("workload_pid")
+            workload_cgroup = lease.get("workload_cgroup")
+            if (
+                lease.get("parent_lease_id") is None
+                and lease.get("status") == "active"
+                and isinstance(lease_id, str)
+                and re.fullmatch(r"[0-9a-f]{32}", lease_id) is not None
+                and isinstance(workload_pid, int)
+                and not isinstance(workload_pid, bool)
+                and workload_pid > 0
+                and isinstance(workload_cgroup, str)
+                and workload_cgroup.startswith("0::/")
+            ):
+                root_scopes.append((lease_id, workload_cgroup, workload_pid))
+        for claim in snapshot.systemd_claims:
+            for lease_id, workload_cgroup, workload_pid in root_scopes:
+                if (
+                    claim.scope == "user"
+                    and claim.unit == f"nexpoly-gpu-job-{lease_id}.scope"
+                    and f"0::{claim.control_group}" == workload_cgroup
+                    and claim.main_pid == workload_pid
+                    and claim.gpu_uuids == frozenset({GPU_UUID})
+                    and workload_pid in claim.process_pids
+                ):
+                    result.update(claim.process_pids)
+                    break
         return frozenset(result)
 
     def _cleanup_owned_tree(self) -> None:
@@ -850,7 +880,7 @@ class SessionController:
     def _audit(self, client: Any) -> tuple[dict[str, Any], TargetSnapshot, tuple[str, ...]]:
         started = time.monotonic()
         status, snapshot = consistent_broker_snapshot(client)
-        managed = self._managed_workload_pids(status)
+        managed = self._managed_workload_pids(status, snapshot)
         reasons = foreign_gpu1_reasons(
             snapshot,
             authorized_mps_pids=self._authorized_mps(),

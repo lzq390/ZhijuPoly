@@ -201,6 +201,85 @@ def test_audit_marks_unleased_private_mps_client_foreign(tmp_path, monkeypatch) 
     assert reasons == ("unknown private MPS client PID(s): 8123",)
 
 
+def test_exact_registered_scope_descendants_are_managed() -> None:
+    lease_id = "a1" * 16
+    workload_pid = 8123
+    child_pid = 8456
+    control_group = (
+        "/user.slice/user-1001.slice/user@1001.service/nexpoly.slice/"
+        "nexpoly-gpu.slice/nexpoly-gpu-jobs.slice/"
+        f"nexpoly-gpu-job-{lease_id}.scope"
+    )
+    claim = SimpleNamespace(
+        scope="user",
+        unit=f"nexpoly-gpu-job-{lease_id}.scope",
+        main_pid=workload_pid,
+        control_group=control_group,
+        process_pids=frozenset({workload_pid, child_pid}),
+        gpu_uuids=frozenset({session.GPU_UUID}),
+    )
+    snapshot = session.TargetSnapshot((workload_pid,), (), (claim,))
+    status = {
+        "leases": [
+            {
+                "lease_id": lease_id,
+                "parent_lease_id": None,
+                "status": "active",
+                "gpu_uuid": session.GPU_UUID,
+                "owner_pid": 8001,
+                "workload_pid": workload_pid,
+                "workload_cgroup": f"0::{control_group}",
+            }
+        ]
+    }
+
+    managed = session.SessionController._managed_workload_pids(status, snapshot)
+
+    assert managed == frozenset({8001, workload_pid, child_pid})
+    assert session.foreign_gpu1_reasons(
+        snapshot,
+        authorized_mps_pids=frozenset(),
+        managed_workload_pids=managed,
+    ) == ()
+
+
+def test_scope_descendants_remain_foreign_when_control_group_identity_differs() -> None:
+    lease_id = "a1" * 16
+    workload_pid = 8123
+    child_pid = 8456
+    claim = SimpleNamespace(
+        scope="user",
+        unit=f"nexpoly-gpu-job-{lease_id}.scope",
+        main_pid=workload_pid,
+        control_group="/user.slice/forged.scope",
+        process_pids=frozenset({workload_pid, child_pid}),
+        gpu_uuids=frozenset({session.GPU_UUID}),
+    )
+    snapshot = session.TargetSnapshot((workload_pid,), (), (claim,))
+    status = {
+        "leases": [
+            {
+                "lease_id": lease_id,
+                "parent_lease_id": None,
+                "status": "active",
+                "gpu_uuid": session.GPU_UUID,
+                "owner_pid": 8001,
+                "workload_pid": workload_pid,
+                "workload_cgroup": "0::/user.slice/exact.scope",
+            }
+        ]
+    }
+
+    managed = session.SessionController._managed_workload_pids(status, snapshot)
+
+    assert child_pid not in managed
+    assert session.foreign_gpu1_reasons(
+        snapshot,
+        authorized_mps_pids=frozenset(),
+        managed_workload_pids=managed,
+    ) == (f"foreign systemd claim: user:nexpoly-gpu-job-{lease_id}.scope",)
+
+
 def test_fixed_controller_python_has_required_pidfd_contract() -> None:
     completed = subprocess.run(
         [
