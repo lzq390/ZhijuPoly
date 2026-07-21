@@ -349,6 +349,7 @@ class DevServerGpuScriptTests(unittest.TestCase):
         worker_up = source[worker_start:source.index("\n}\n\nworker_stop()", worker_start)]
         self.assertLess(worker_up.index("validate_asset_release"), worker_up.index("worker_health"))
         self.assertLess(worker_up.index("worker_verify_venv"), worker_up.index("worker_health"))
+        self.assertIn("export MONOMER_MD_GPU_SCOPE_LAUNCHER=systemd-user-scope", worker_up)
         self.assertIn("MONOMER_MD_DEV_WORKER_BASE_PYTHON=", env_example)
         self.assertIn("MONOMER_MD_DEV_WORKER_BASE_PYTHON_IDENTITY_SHA256=sha256:", env_example)
 

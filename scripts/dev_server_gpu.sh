@@ -933,6 +933,7 @@ worker_up() {
       export MONOMER_MD_GPU_BROKER_SOCKET_PATH="$ROOT_DIR/.runtime/gpu-resource/broker.sock"
       export MONOMER_MD_GPU_MPS_PIPE_ROOT="$ROOT_DIR/.runtime/gpu-resource"
       export MONOMER_MD_GPU_BROKER_WAIT_TIMEOUT_SECONDS=45
+      export MONOMER_MD_GPU_SCOPE_LAUNCHER=systemd-user-scope
     else
       export MONOMER_MD_GPU_BROKER_ENABLED=false
     fi
