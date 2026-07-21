@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -90,6 +91,17 @@ def test_child_broker_descriptor_authority_is_process_local() -> None:
     )
     with pytest.raises(session.DevGpuSessionError, match="descriptor authority"):
         session.SessionController._child_authority_path(2)
+
+
+def test_controller_safe_environment_binds_local_user_manager() -> None:
+    controller = object.__new__(session.SessionController)
+    environment = controller._safe_env()
+    runtime_directory = f"/run/user/{os.geteuid()}"
+
+    assert environment["XDG_RUNTIME_DIR"] == runtime_directory
+    assert environment["DBUS_SESSION_BUS_ADDRESS"] == (
+        f"unix:path={runtime_directory}/bus"
+    )
 
 
 def test_inventory_filters_gpu3_and_never_treats_polyprop_as_gpu1(monkeypatch) -> None:

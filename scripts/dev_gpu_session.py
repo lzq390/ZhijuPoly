@@ -614,7 +614,9 @@ class SessionController:
         self.log_fd = self._open_directory(self.slot_fd, "log", create=True)
 
     def _safe_env(self, **extra: str) -> dict[str, str]:
+        runtime_directory = f"/run/user/{os.geteuid()}"
         environment = {
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime_directory}/bus",
             "HOME": os.environ.get("HOME", str(RUNTIME_ROOT / "home")),
             "LANG": os.environ.get("LANG", "C.UTF-8"),
             "LOGNAME": os.environ.get("LOGNAME", "devuser"),
@@ -623,6 +625,7 @@ class SessionController:
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONPATH": str(REPO_ROOT),
             "USER": os.environ.get("USER", "devuser"),
+            "XDG_RUNTIME_DIR": runtime_directory,
         }
         environment.update(extra)
         return environment
