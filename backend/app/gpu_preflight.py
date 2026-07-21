@@ -56,7 +56,11 @@ def _required_directory(path: Path, errors: list[str]) -> None:
         errors.append(f"required model asset directory is missing or invalid: {path}")
 
 
-def inspect_configured_runtime(settings: Settings) -> dict[str, Any]:
+def inspect_configured_runtime(
+    settings: Settings,
+    *,
+    require_cuda: bool = True,
+) -> dict[str, Any]:
     errors: list[str] = []
     process_concurrency = os.getenv("WEB_CONCURRENCY", "1")
     uvicorn_workers = os.getenv("UVICORN_WORKERS", "1")
@@ -105,7 +109,7 @@ def inspect_configured_runtime(settings: Settings) -> dict[str, Any]:
         # calling any CUDA API here would create an unleased MPS client.  CUDA
         # readiness is therefore proven only by the main-process status API.
         cuda["inspection"] = "deferred_to_lease_owner"
-    else:
+    elif require_cuda:
         try:
             import torch
 
@@ -139,6 +143,8 @@ def inspect_configured_runtime(settings: Settings) -> dict[str, Any]:
                     errors.append(f"GPU must be an RTX 4090, found {name}")
         except Exception as exc:
             errors.append(f"CUDA runtime inspection failed: {exc}")
+    else:
+        cuda["inspection"] = "disabled_by_policy"
 
     models = {
         "ocsr": settings.ocsr_enabled,
@@ -184,6 +190,29 @@ def inspect_configured_runtime(settings: Settings) -> dict[str, Any]:
         "models": {name: {"enabled": enabled} for name, enabled in models.items()},
         "errors": errors,
     }
+
+
+def inspect_disabled_runtime(settings: Settings) -> dict[str, Any]:
+    report = inspect_configured_runtime(settings, require_cuda=False)
+    errors = report["errors"]
+    enabled_models = [
+        name
+        for name, state in report["models"].items()
+        if state.get("enabled")
+    ]
+    if bool(getattr(settings, "model_enabled", False)):
+        enabled_models.append("property_prediction")
+    if enabled_models:
+        errors.append(
+            "CPU-only runtime requires all model entry points disabled: "
+            + ", ".join(sorted(enabled_models))
+        )
+    if bool(getattr(settings, "gpu_broker_enabled", False)):
+        errors.append("CPU-only runtime requires GPU Broker disabled")
+    if settings.gpu_preload_mode != "lazy":
+        errors.append("CPU-only runtime requires GPU_PRELOAD_MODE=lazy")
+    report["status"] = "disabled" if not errors else "not_disabled"
+    return report
 
 
 def verify_serialized_assets(settings: Settings) -> dict[str, Any]:
@@ -265,13 +294,21 @@ def inspect_ready_runtime(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate the unified backend GPU runtime.")
-    parser.add_argument("--mode", choices=("configured", "ready"), default="configured")
+    parser.add_argument(
+        "--mode",
+        choices=("disabled", "configured", "ready"),
+        default="configured",
+    )
     parser.add_argument("--status-url", default=DEFAULT_STATUS_URL)
     parser.add_argument("--verify-serialized-assets", action="store_true")
     args = parser.parse_args(argv)
 
     settings = Settings()
-    report = inspect_configured_runtime(settings)
+    report = (
+        inspect_disabled_runtime(settings)
+        if args.mode == "disabled"
+        else inspect_configured_runtime(settings)
+    )
     try:
         if args.verify_serialized_assets:
             report["serialized_assets"] = verify_serialized_assets(settings)
@@ -285,7 +322,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "ready" and "registry" in report:
         report["status"] = "ready"
     elif report["errors"]:
-        report["status"] = "not_ready" if args.mode == "ready" else "not_configured"
+        report["status"] = {
+            "disabled": "not_disabled",
+            "configured": "not_configured",
+            "ready": "not_ready",
+        }[args.mode]
     print(json.dumps(report, indent=2, sort_keys=True))
     return 1 if report["errors"] else 0
 

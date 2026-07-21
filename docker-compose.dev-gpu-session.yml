@@ -19,6 +19,17 @@ services:
       GPU_BROKER_SOCKET_PATH: "/app/.runtime/gpu-resource/broker.sock"
       GPU_MPS_PIPE_ROOT: "/app/.runtime/gpu-resource"
       GPU_BROKER_ENVIRONMENT: "dev"
+    healthcheck: !override
+      test:
+        - CMD-SHELL
+        - >-
+          python -m app.postgres_preflight --strict >/tmp/nexpoly-postgres-preflight.json &&
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()" &&
+          python -m app.gpu_preflight --mode configured >/tmp/nexpoly-gpu-preflight.json
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
     labels:
       com.nexpoly.gpu.registration: backend-dev
       com.nexpoly.gpu.component: backend

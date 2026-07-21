@@ -59,6 +59,74 @@ def _install_fake_torch(monkeypatch, *, capability: tuple[int, int] = (8, 9)) ->
     monkeypatch.setitem(sys.modules, "torch", torch)
 
 
+def _disabled_settings(tmp_path: Path) -> SimpleNamespace:
+    settings = _configured_settings(tmp_path)
+    settings.model_enabled = False
+    settings.ocsr_enabled = False
+    settings.gen_model_enabled = False
+    settings.retro_model_enabled = False
+    settings.polytao_enabled = False
+    settings.gpu_broker_enabled = False
+    settings.gpu_preload_mode = "lazy"
+    return settings
+
+
+def test_disabled_preflight_validates_cpu_policy_without_importing_cuda(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    settings = _disabled_settings(tmp_path)
+    monkeypatch.setattr(
+        gpu_preflight,
+        "_distribution_version",
+        lambda name: gpu_preflight.EXPECTED_VERSIONS[name],
+    )
+    monkeypatch.setattr(gpu_preflight, "_import_runtime_dependency", lambda _name: object())
+
+    report = gpu_preflight.inspect_disabled_runtime(settings)
+
+    assert report["status"] == "disabled"
+    assert report["errors"] == []
+    assert report["cuda"] == {
+        "available": False,
+        "runtime": None,
+        "device": None,
+        "managed_by_broker": False,
+        "inspection": "disabled_by_policy",
+    }
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "message"),
+    [
+        ("gen_model_enabled", True, "conditional_generation"),
+        ("model_enabled", True, "property_prediction"),
+        ("gpu_broker_enabled", True, "GPU Broker disabled"),
+        ("gpu_preload_mode", "required", "GPU_PRELOAD_MODE=lazy"),
+    ],
+)
+def test_disabled_preflight_rejects_gpu_configuration_drift(
+    tmp_path,
+    monkeypatch,
+    attribute,
+    value,
+    message,
+) -> None:
+    settings = _disabled_settings(tmp_path)
+    setattr(settings, attribute, value)
+    monkeypatch.setattr(
+        gpu_preflight,
+        "_distribution_version",
+        lambda name: gpu_preflight.EXPECTED_VERSIONS[name],
+    )
+    monkeypatch.setattr(gpu_preflight, "_import_runtime_dependency", lambda _name: object())
+
+    report = gpu_preflight.inspect_disabled_runtime(settings)
+
+    assert report["status"] == "not_disabled"
+    assert any(message in error for error in report["errors"])
+
+
 def test_configured_preflight_checks_exact_runtime_and_assets(tmp_path, monkeypatch) -> None:
     settings = _configured_settings(tmp_path)
     _install_fake_torch(monkeypatch)

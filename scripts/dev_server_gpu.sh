@@ -645,7 +645,7 @@ wait_backend_configured() {
     fi
     sleep 1
   done
-  echo "Timed out waiting for configured backend GPU preflight." >&2
+  echo "Timed out waiting for the CPU-only development backend preflight." >&2
   "${COMPOSE[@]}" logs --tail=120 backend >&2 || true
   return 1
 }
@@ -696,6 +696,12 @@ verify_backend_drift() {
   }
   docker exec "$container_id" python -c \
     "import os; expected={'WEB_CONCURRENCY':'1','GPU_PRELOAD_MODE':'lazy','GPU_MAX_CONCURRENT_INFERENCES':'1','GPU_MAX_WAITING_INFERENCES':'8','GPU_SYNC_QUEUE_TIMEOUT_SECONDS':'30','GPU_ASYNC_QUEUE_TIMEOUT_SECONDS':'600','MODEL_ENABLED':'false','OCSR_ENABLED':'false','OCSR_DEVICE':'cpu','GEN_MODEL_ENABLED':'false','GEN_DEVICE':'cpu','GEN_JOB_WORKERS':'1','GEN_MAX_ACTIVE_JOBS':'8','RETRO_MODEL_ENABLED':'false','RETRO_DEVICE':'cpu','POLYTAO_ENABLED':'false','POLYTAO_DEVICE':'cpu','POLYTAO_JOB_THREADS':'1','POLYTAO_MAX_ACTIVE_JOBS':'1','MONOMER_MD_SUBMIT_ENABLED':'false','MONOMER_DFT_SUBMIT_ENABLED':'false'}; actual={key:os.getenv(key) for key in expected}; assert actual == expected, actual"
+  docker inspect "$container_id" | python3 -c '
+import json, sys
+container = json.load(sys.stdin)[0]
+if container["HostConfig"].get("DeviceRequests"):
+    raise SystemExit("CPU-only development backend must not have a GPU DeviceRequest")
+'
 }
 
 require_worker_venv_config() {
@@ -1578,7 +1584,7 @@ smoke_static() {
 }
 
 smoke() {
-  local endpoint session_payload session_state
+  local endpoint session_payload session_state gpu_preflight_mode
   for endpoint in \
     /health \
     /api/v1/database-browser/datasets/summary \
@@ -1598,9 +1604,11 @@ smoke() {
   case "$session_state" in
     stopped)
       verify_backend_drift
+      gpu_preflight_mode=disabled
       ;;
     ready)
       gpu_session_status >/dev/null
+      gpu_preflight_mode=configured
       ;;
     *)
       echo "Development smoke refuses controller state: $session_state" >&2
@@ -1609,7 +1617,7 @@ smoke() {
   esac
   local container_id
   container_id="$("${COMPOSE[@]}" ps -q backend)"
-  docker exec "$container_id" python -m app.gpu_preflight --mode configured --verify-serialized-assets >/tmp/nexpoly-dev-gpu-preflight.json
+  docker exec "$container_id" python -m app.gpu_preflight --mode "$gpu_preflight_mode" --verify-serialized-assets >/tmp/nexpoly-dev-gpu-preflight.json
 
   python3 - "$FRONTEND_URL" <<'PY'
 import json
@@ -1837,12 +1845,13 @@ case "${1:-up}" in
     ;;
   preflight)
     "${COMPOSE[@]}" exec -T backend python -m app.postgres_preflight --mode runtime --strict
-    "${COMPOSE[@]}" exec -T backend python -m app.gpu_preflight --mode configured --verify-serialized-assets
     preflight_session_payload="$($GPU_SESSION_PYTHON -I "$GPU_SESSION_CONTROLLER" status)"
     preflight_session_state="$(printf '%s' "$preflight_session_payload" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status", "invalid"))')"
     if [[ "$preflight_session_state" == "stopped" ]]; then
+      "${COMPOSE[@]}" exec -T backend python -m app.gpu_preflight --mode disabled --verify-serialized-assets
       verify_backend_drift
     elif [[ "$preflight_session_state" == "ready" ]]; then
+      "${COMPOSE[@]}" exec -T backend python -m app.gpu_preflight --mode configured --verify-serialized-assets
       gpu_session_status >/dev/null
     else
       echo "Development preflight refuses controller state: $preflight_session_state" >&2
