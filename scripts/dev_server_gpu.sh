@@ -695,7 +695,7 @@ verify_backend_drift() {
     return 1
   }
   docker exec "$container_id" python -c \
-    "import os; expected={'WEB_CONCURRENCY':'1','GPU_PRELOAD_MODE':'lazy','GPU_MAX_CONCURRENT_INFERENCES':'1','GPU_MAX_WAITING_INFERENCES':'8','GPU_SYNC_QUEUE_TIMEOUT_SECONDS':'30','GPU_ASYNC_QUEUE_TIMEOUT_SECONDS':'600','MODEL_ENABLED':'false','OCSR_ENABLED':'false','OCSR_DEVICE':'cpu','GEN_MODEL_ENABLED':'false','GEN_DEVICE':'cpu','GEN_JOB_WORKERS':'1','GEN_MAX_ACTIVE_JOBS':'8','RETRO_MODEL_ENABLED':'false','RETRO_DEVICE':'cpu','POLYTAO_ENABLED':'false','POLYTAO_DEVICE':'cpu','POLYTAO_JOB_THREADS':'1','POLYTAO_MAX_ACTIVE_JOBS':'1','MONOMER_MD_SUBMIT_ENABLED':'false','MONOMER_DFT_SUBMIT_ENABLED':'false'}; actual={key:os.getenv(key) for key in expected}; assert actual == expected, actual"
+    "import os; expected={'WEB_CONCURRENCY':'1','NVIDIA_VISIBLE_DEVICES':'none','GPU_PRELOAD_MODE':'lazy','GPU_MAX_CONCURRENT_INFERENCES':'1','GPU_MAX_WAITING_INFERENCES':'8','GPU_SYNC_QUEUE_TIMEOUT_SECONDS':'30','GPU_ASYNC_QUEUE_TIMEOUT_SECONDS':'600','MODEL_ENABLED':'false','OCSR_ENABLED':'false','OCSR_DEVICE':'cpu','GEN_MODEL_ENABLED':'false','GEN_DEVICE':'cpu','GEN_JOB_WORKERS':'1','GEN_MAX_ACTIVE_JOBS':'8','RETRO_MODEL_ENABLED':'false','RETRO_DEVICE':'cpu','POLYTAO_ENABLED':'false','POLYTAO_DEVICE':'cpu','POLYTAO_JOB_THREADS':'1','POLYTAO_MAX_ACTIVE_JOBS':'1','MONOMER_MD_SUBMIT_ENABLED':'false','MONOMER_DFT_SUBMIT_ENABLED':'false'}; actual={key:os.getenv(key) for key in expected}; assert actual == expected, actual"
   docker inspect "$container_id" | python3 -c '
 import json, sys
 container = json.load(sys.stdin)[0]
@@ -1322,7 +1322,7 @@ PY
   rm -f "$inspect_file"
   trap - RETURN
   docker exec "$container_id" python -c \
-    "import os; expected={'MODEL_ENABLED':'true','OCSR_ENABLED':'true','OCSR_DEVICE':'cuda','GEN_MODEL_ENABLED':'true','GEN_DEVICE':'cuda','RETRO_MODEL_ENABLED':'true','RETRO_DEVICE':'cuda','POLYTAO_ENABLED':'true','POLYTAO_DEVICE':'cuda','MONOMER_MD_SUBMIT_ENABLED':'true','MONOMER_DFT_SUBMIT_ENABLED':'true','GPU_BROKER_ENABLED':'true','GPU_BROKER_SOCKET_PATH':'/app/.runtime/gpu-resource/broker.sock','GPU_MPS_PIPE_ROOT':'/app/.runtime/gpu-resource'}; actual={key:os.getenv(key) for key in expected}; assert actual == expected, actual"
+    "import os; expected={'NVIDIA_VISIBLE_DEVICES':'1','MODEL_ENABLED':'true','OCSR_ENABLED':'true','OCSR_DEVICE':'cuda','GEN_MODEL_ENABLED':'true','GEN_DEVICE':'cuda','RETRO_MODEL_ENABLED':'true','RETRO_DEVICE':'cuda','POLYTAO_ENABLED':'true','POLYTAO_DEVICE':'cuda','MONOMER_MD_SUBMIT_ENABLED':'true','MONOMER_DFT_SUBMIT_ENABLED':'true','GPU_BROKER_ENABLED':'true','GPU_BROKER_SOCKET_PATH':'/app/.runtime/gpu-resource/broker.sock','GPU_MPS_PIPE_ROOT':'/app/.runtime/gpu-resource'}; actual={key:os.getenv(key) for key in expected}; assert actual == expected, actual"
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c \
     'import json, sys; value=json.load(sys.stdin); assert value.get("status") == sys.argv[3] and value.get("gpu3_untouched") is True and value.get("contaminated") is False and value.get("source_sha") == sys.argv[1] and value.get("source_tree") == sys.argv[2] and value.get("session_id") == sys.argv[4], value' \
     "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" "$expected_controller_status" "$NEXPOLY_DEV_GPU_SESSION_ID"

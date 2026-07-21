@@ -241,6 +241,13 @@ class DevServerGpuScriptTests(unittest.TestCase):
         self.assertIn('export NEXPOLY_DEV_GPU_DEVICE=1', source)
         self.assertIn('GPU_SESSION_PYTHON="/usr/bin/python3"', source)
         self.assertIn('- "1"', overlay)
+        self.assertIn(
+            'NVIDIA_VISIBLE_DEVICES: "none"',
+            DEV_COMPOSE.read_text(encoding="utf-8"),
+        )
+        self.assertIn('NVIDIA_VISIBLE_DEVICES: "1"', overlay)
+        self.assertIn("'NVIDIA_VISIBLE_DEVICES':'none'", source)
+        self.assertIn("'NVIDIA_VISIBLE_DEVICES':'1'", source)
         self.assertNotIn("NEXPOLY_DEV_GPU_DEVICE", overlay)
 
     def test_canary_state_is_dev_private_and_fenced_from_production(self) -> None:
