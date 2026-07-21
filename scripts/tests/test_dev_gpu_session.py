@@ -22,6 +22,45 @@ def empty_snapshot() -> session.TargetSnapshot:
     return session.TargetSnapshot((), (), ())
 
 
+def dft_residency_record(
+    *,
+    lease_id: str = "d1" * 16,
+    workload_pid: int = 8123,
+    workload_start_ticks: int = 456,
+) -> dict[str, object]:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.broker import Lease
+
+    control_group = scope_control_group(lease_id, uid=1001)
+    return Lease(
+        lease_id=lease_id,
+        fencing_token=1,
+        broker_instance_id="broker",
+        request_id="dft:dev:residency",
+        kind="residency",
+        placement="preferred",
+        component="dft",
+        environment="dev",
+        client_id="dft-dev",
+        gpu_index=1,
+        gpu_uuid=session.GPU_UUID,
+        memory_mib=4096,
+        thread_percent=50,
+        owner_pid=workload_pid,
+        owner_process_start_ticks=workload_start_ticks,
+        owner_boot_id="boot",
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        created_at=1.0,
+        heartbeat_at=2.0,
+        workload_pid=workload_pid,
+        workload_process_start_ticks=workload_start_ticks,
+        workload_process_group_id=workload_pid,
+        workload_cgroup=f"0::{control_group}",
+    ).public_dict()
+
+
 def test_dry_run_from_foreign_cwd_has_no_runtime_side_effects(tmp_path: Path) -> None:
     before = session.CONTROLLER_RECORD.exists()
     completed = subprocess.run(
@@ -219,19 +258,18 @@ def test_exact_registered_scope_descendants_are_managed() -> None:
         gpu_uuids=frozenset({session.GPU_UUID}),
     )
     snapshot = session.TargetSnapshot((workload_pid,), (), (claim,))
-    status = {
-        "leases": [
-            {
-                "lease_id": lease_id,
-                "parent_lease_id": None,
-                "status": "active",
-                "gpu_uuid": session.GPU_UUID,
-                "owner_pid": 8001,
-                "workload_pid": workload_pid,
-                "workload_cgroup": f"0::{control_group}",
-            }
-        ]
-    }
+    lease = dft_residency_record(
+        lease_id=lease_id,
+        workload_pid=workload_pid,
+    )
+    lease.update(
+        component="md",
+        kind="execution",
+        placement="any",
+        owner_pid=8001,
+        workload_cgroup=f"0::{control_group}",
+    )
+    status = {"leases": [lease]}
 
     managed = session.SessionController._managed_workload_pids(status, snapshot)
 
@@ -256,19 +294,18 @@ def test_scope_descendants_remain_foreign_when_control_group_identity_differs() 
         gpu_uuids=frozenset({session.GPU_UUID}),
     )
     snapshot = session.TargetSnapshot((workload_pid,), (), (claim,))
-    status = {
-        "leases": [
-            {
-                "lease_id": lease_id,
-                "parent_lease_id": None,
-                "status": "active",
-                "gpu_uuid": session.GPU_UUID,
-                "owner_pid": 8001,
-                "workload_pid": workload_pid,
-                "workload_cgroup": "0::/user.slice/exact.scope",
-            }
-        ]
-    }
+    lease = dft_residency_record(
+        lease_id=lease_id,
+        workload_pid=workload_pid,
+    )
+    lease.update(
+        component="md",
+        kind="execution",
+        placement="any",
+        owner_pid=8001,
+        workload_cgroup="0::/user.slice/exact.scope",
+    )
+    status = {"leases": [lease]}
 
     managed = session.SessionController._managed_workload_pids(status, snapshot)
 
@@ -278,6 +315,89 @@ def test_scope_descendants_remain_foreign_when_control_group_identity_differs() 
         authorized_mps_pids=frozenset(),
         managed_workload_pids=managed,
     ) == (f"foreign systemd claim: user:nexpoly-gpu-job-{lease_id}.scope",)
+
+
+def test_exact_dft_user_manager_claim_authorizes_only_residency_declarers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    workload_pid = 8123
+    compiler_pid = 8456
+    unrelated_cpu_pid = 8999
+    workload_start_ticks = 456
+    compiler_start_ticks = 789
+    lease = dft_residency_record(
+        workload_pid=workload_pid,
+        workload_start_ticks=workload_start_ticks,
+    )
+    control_group = str(lease["workload_cgroup"])[3:]
+    claim = server.SystemdGpuClaim(
+        scope="system",
+        unit="user@1001.service",
+        main_pid=7001,
+        control_group=server.user_manager_control_group(1001),
+        process_pids=frozenset(
+            {workload_pid, compiler_pid, unrelated_cpu_pid}
+        ),
+        gpu_uuids=frozenset({session.GPU_UUID}),
+        active_gpu_uuids=frozenset({session.GPU_UUID}),
+        live_gpu_declarers=(
+            server.SystemdGpuDeclarer(
+                pid=workload_pid,
+                process_start_ticks=workload_start_ticks,
+                process_cgroup=control_group,
+                gpu_uuids=frozenset({session.GPU_UUID}),
+            ),
+            server.SystemdGpuDeclarer(
+                pid=compiler_pid,
+                process_start_ticks=compiler_start_ticks,
+                process_cgroup=control_group,
+                gpu_uuids=frozenset({session.GPU_UUID}),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "read_process_start_ticks",
+        lambda pid: {
+            workload_pid: workload_start_ticks,
+            compiler_pid: compiler_start_ticks,
+        }[pid],
+    )
+    monkeypatch.setattr(
+        server,
+        "_read_unified_process_cgroup",
+        lambda pid: control_group if pid in {workload_pid, compiler_pid} else "/foreign",
+    )
+    monkeypatch.setattr(
+        server,
+        "_pid_is_or_descends_from",
+        lambda pid, ancestor: pid == ancestor
+        or (pid == compiler_pid and ancestor == workload_pid),
+    )
+    snapshot = session.TargetSnapshot(
+        (workload_pid, compiler_pid),
+        (),
+        (claim,),
+    )
+    status = {"leases": [lease]}
+
+    managed, managed_claims = (
+        session.SessionController._managed_workload_authority(status, snapshot)
+    )
+
+    assert managed == frozenset({workload_pid, compiler_pid})
+    assert unrelated_cpu_pid not in managed
+    assert managed_claims == frozenset(
+        {("system", "user@1001.service", claim.control_group)}
+    )
+    assert session.foreign_gpu1_reasons(
+        snapshot,
+        authorized_mps_pids=frozenset(),
+        managed_workload_pids=managed,
+        managed_systemd_claims=managed_claims,
+    ) == ()
 
 
 def test_fixed_controller_python_has_required_pidfd_contract() -> None:
@@ -400,6 +520,171 @@ def test_broker_snapshot_retries_across_a_legitimate_lease_transition() -> None:
 
     assert status == active
     assert snapshot.process_pids == (88,)
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "lease_id",
+        "fencing_token",
+        "kind",
+        "placement",
+        "preferred",
+        "component",
+        "environment",
+        "client_id",
+        "gpu_index",
+        "gpu_uuid",
+        "parent_lease_id",
+        "status",
+        "mps_termination_status",
+        "owner_pid",
+        "owner_process_start_ticks",
+        "owner_boot_id",
+        "workload_pid",
+        "workload_process_start_ticks",
+        "workload_process_group_id",
+        "workload_cgroup",
+    ),
+)
+def test_broker_authority_token_binds_exact_dft_matcher_fields(field: str) -> None:
+    lease = dft_residency_record()
+    before = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [lease],
+    }
+    changed_lease = dict(lease)
+    changed_lease[field] = "changed"
+    after = {**before, "leases": [changed_lease]}
+
+    assert session.broker_authority_token(before) != session.broker_authority_token(
+        after
+    )
+
+
+def test_broker_snapshot_resamples_exact_dft_membership_churn() -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise BrokerError(
+                "gpu_claim_inventory_changed",
+                "system systemd unit user@1001.service membership changed during audit",
+            )
+        return empty_snapshot()
+
+    observed_status, snapshot = session.consistent_broker_snapshot(
+        client,
+        collect,
+        membership_churn_retries=2,
+    )
+
+    assert observed_status == status
+    assert snapshot == empty_snapshot()
+    assert calls == 3
+
+
+def test_broker_snapshot_fails_closed_after_bounded_dft_churn() -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise BrokerError(
+            "gpu_claim_inventory_changed",
+            "system systemd unit user@1001.service membership changed during audit",
+        )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="exact DFT residency membership remained unstable",
+    ):
+        session.consistent_broker_snapshot(
+            client,
+            collect,
+            membership_churn_retries=1,
+        )
+
+    assert calls == 2
+
+
+def test_broker_snapshot_fails_closed_at_dft_churn_deadline() -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise BrokerError(
+            "gpu_claim_inventory_changed",
+            "system systemd unit user@1001.service membership changed during audit",
+        )
+
+    ticks = iter((0.0, 13.0))
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="exact DFT residency membership remained unstable",
+    ):
+        session.consistent_broker_snapshot(
+            client,
+            collect,
+            membership_churn_retries=8,
+            membership_churn_timeout_seconds=12.0,
+            monotonic=lambda: next(ticks),
+        )
+
+    assert calls == 1
+
+
+def test_broker_snapshot_never_retries_unknown_membership_churn() -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise BrokerError(
+            "gpu_claim_inventory_changed",
+            "system systemd unit foreign.service membership changed during audit",
+        )
+
+    with pytest.raises(BrokerError, match="foreign.service"):
+        session.consistent_broker_snapshot(client, collect)
+
+    assert calls == 1
 
 
 def test_automatic_recovery_restores_cpu_before_waiting_for_mps_cleanup(

@@ -48,6 +48,7 @@ from ops.gpu_broker.server import (
     SystemdGpuDeclarer,
     _read_systemd_environment_file,
     _snapshot_systemd_process_cgroups,
+    claim_is_exact_dft_residency_scope,
     load_external_reservations,
     process_stable_descriptor_path,
     query_docker_gpu_claims,
@@ -3719,6 +3720,12 @@ def test_parented_dft_execution_accepts_its_live_residency_process_tree(
             or (pid == compiler_pid and ancestor == workload_pid)
         ),
     )
+    assert claim_is_exact_dft_residency_scope(
+        claims[0],
+        index=residency.gpu_index,
+        uuid=residency.gpu_uuid,
+        lease=residency,
+    ) is True
     execution = _acquire(
         broker,
         component="dft",
@@ -4114,7 +4121,7 @@ def test_systemd_inventory_rejects_cgroup_member_forked_during_audit() -> None:
         )
 
     assert membership_reads == 2
-    assert error.value.code == "gpu_claim_inventory_unavailable"
+    assert error.value.code == "gpu_claim_inventory_changed"
 
 
 def test_systemd_inventory_rejects_invocation_change_during_audit() -> None:
@@ -4306,7 +4313,7 @@ def test_systemd_inventory_rechecks_user_identity_after_system_scope_query() -> 
             ),
         )
 
-    assert error.value.code == "gpu_claim_inventory_unavailable"
+    assert error.value.code == "gpu_claim_inventory_changed"
 
 
 def test_systemd_inventory_rejects_main_pid_outside_control_group() -> None:

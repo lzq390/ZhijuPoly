@@ -1999,7 +1999,7 @@ def query_systemd_gpu_claims(
                 )
         if current_identities != expected_identities:
             raise BrokerError(
-                "gpu_claim_inventory_unavailable",
+                "gpu_claim_inventory_changed",
                 f"{scope} systemd unit {unit} membership changed during audit",
             )
 
@@ -2226,6 +2226,133 @@ class _ExternalGpuAdmission:
             self.deadline,
             monotonic=self.guard._monotonic,
         )
+
+
+def exact_dft_residency_scope_authority(
+    lease: Lease,
+    *,
+    index: int,
+    uuid: str,
+) -> tuple[int, int, str] | None:
+    """Return the exact active DFT residency workload identity, if any.
+
+    This is deliberately narrower than a generic managed lease check.  The
+    development DFT executor is the only workload whose compiler descendants
+    legitimately make the UID user-manager claim dynamic while a session is
+    running.
+    """
+
+    broker_uid = 1001
+    if (
+        os.geteuid() != broker_uid
+        or lease.kind != "residency"
+        or lease.placement != "preferred"
+        or lease.preferred is not True
+        or lease.component != "dft"
+        or lease.environment != "dev"
+        or not isinstance(lease.client_id, str)
+        or not lease.client_id
+        or lease.gpu_index != index
+        or lease.gpu_uuid != uuid
+        or lease.parent_lease_id is not None
+        or lease.status != "active"
+        or lease.mps_termination_status != "none"
+    ):
+        return None
+    workload_pid = lease.workload_pid
+    workload_start_ticks = lease.workload_process_start_ticks
+    workload_process_group_id = lease.workload_process_group_id
+    if (
+        isinstance(workload_pid, bool)
+        or not isinstance(workload_pid, int)
+        or isinstance(workload_start_ticks, bool)
+        or not isinstance(workload_start_ticks, int)
+        or isinstance(workload_process_group_id, bool)
+        or not isinstance(workload_process_group_id, int)
+        or workload_pid <= 0
+        or workload_start_ticks <= 0
+        or workload_process_group_id <= 0
+        or workload_process_group_id != workload_pid
+    ):
+        return None
+    try:
+        expected_control_group = scope_control_group(
+            lease.lease_id,
+            uid=broker_uid,
+        )
+    except (TypeError, ValueError):
+        return None
+    if lease.workload_cgroup != f"0::{expected_control_group}":
+        return None
+    return workload_pid, workload_start_ticks, expected_control_group
+
+
+def claim_is_exact_dft_residency_scope(
+    claim: SystemdGpuClaim,
+    *,
+    index: int,
+    uuid: str,
+    lease: Lease,
+) -> bool:
+    """Recognize only the GPU declarers in one exact DFT residency scope.
+
+    systemd reports the UID user manager as the system-level ancestor claim.
+    Its complete process set is intentionally not trusted.  Authorization is
+    limited to identity-stable GPU declarers that are live descendants of the
+    Broker-registered workload in its exact transient cgroup.
+    """
+
+    authority = exact_dft_residency_scope_authority(
+        lease,
+        index=index,
+        uuid=uuid,
+    )
+    if authority is None:
+        return False
+    workload_pid, workload_start_ticks, expected_control_group = authority
+    target_declarers = tuple(
+        declarer
+        for declarer in claim.live_gpu_declarers
+        if uuid in declarer.gpu_uuids
+    )
+    expected_workload_declarer = SystemdGpuDeclarer(
+        pid=workload_pid,
+        process_start_ticks=workload_start_ticks,
+        process_cgroup=expected_control_group,
+        gpu_uuids=frozenset({uuid}),
+    )
+    try:
+        declarers_are_exact_descendants = (
+            bool(target_declarers)
+            and len({declarer.pid for declarer in target_declarers})
+            == len(target_declarers)
+            and expected_workload_declarer in target_declarers
+            and all(
+                declarer.pid in claim.process_pids
+                and declarer.gpu_uuids == frozenset({uuid})
+                and declarer.process_cgroup == expected_control_group
+                and _pid_is_or_descends_from(
+                    declarer.pid,
+                    workload_pid,
+                )
+                and read_process_start_ticks(declarer.pid)
+                == declarer.process_start_ticks
+                and _read_unified_process_cgroup(declarer.pid)
+                == expected_control_group
+                for declarer in target_declarers
+            )
+        )
+    except (BrokerError, OSError, TypeError, ValueError):
+        return False
+    return (
+        claim.scope == "system"
+        and claim.unit == "user@1001.service"
+        and claim.control_group == user_manager_control_group(1001)
+        and claim.gpu_uuids == frozenset({uuid})
+        and not claim.static_gpu_uuids
+        and claim.active_gpu_uuids == frozenset({uuid})
+        and declarers_are_exact_descendants
+    )
 
 
 class ExternalGpuGuard:
@@ -2584,13 +2711,11 @@ class ExternalGpuGuard:
         executor after model warm-up.
         """
 
-        broker_uid = 1001
         if (
             component != "dft"
             or environment != "dev"
             or client_id is None
             or parent_lease_id is None
-            or os.geteuid() != broker_uid
         ):
             return False
         candidates = tuple(
@@ -2614,65 +2739,11 @@ class ExternalGpuGuard:
         )
         if len(candidates) != 1:
             return False
-        lease = candidates[0]
-        workload_pid = lease.workload_pid
-        if (
-            workload_pid is None
-            or lease.workload_process_start_ticks is None
-            or lease.workload_process_group_id is None
-            or workload_pid <= 0
-            or lease.workload_process_start_ticks <= 0
-            or lease.workload_process_group_id <= 0
-            or lease.workload_process_group_id != workload_pid
-        ):
-            return False
-        expected_control_group = scope_control_group(
-            lease.lease_id,
-            uid=broker_uid,
-        )
-        target_declarers = tuple(
-            declarer
-            for declarer in claim.live_gpu_declarers
-            if uuid in declarer.gpu_uuids
-        )
-        expected_workload_declarer = SystemdGpuDeclarer(
-            pid=workload_pid,
-            process_start_ticks=lease.workload_process_start_ticks,
-            process_cgroup=expected_control_group,
-            gpu_uuids=frozenset({uuid}),
-        )
-        try:
-            declarers_are_exact_descendants = (
-                bool(target_declarers)
-                and len({declarer.pid for declarer in target_declarers})
-                == len(target_declarers)
-                and expected_workload_declarer in target_declarers
-                and all(
-                    declarer.pid in claim.process_pids
-                    and declarer.gpu_uuids == frozenset({uuid})
-                    and declarer.process_cgroup == expected_control_group
-                    and _pid_is_or_descends_from(
-                        declarer.pid,
-                        workload_pid,
-                    )
-                    and read_process_start_ticks(declarer.pid)
-                    == declarer.process_start_ticks
-                    and _read_unified_process_cgroup(declarer.pid)
-                    == expected_control_group
-                    for declarer in target_declarers
-                )
-            )
-        except (BrokerError, OSError, TypeError, ValueError):
-            return False
-        return (
-            claim.scope == "system"
-            and claim.unit == f"user@{broker_uid}.service"
-            and claim.control_group == user_manager_control_group(broker_uid)
-            and claim.gpu_uuids == frozenset({uuid})
-            and not claim.static_gpu_uuids
-            and claim.active_gpu_uuids == frozenset({uuid})
-            and declarers_are_exact_descendants
-            and lease.workload_cgroup == f"0::{expected_control_group}"
+        return claim_is_exact_dft_residency_scope(
+            claim,
+            index=index,
+            uuid=uuid,
+            lease=candidates[0],
         )
 
     def _query_compute_processes(

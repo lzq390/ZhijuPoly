@@ -325,6 +325,7 @@ def foreign_gpu1_reasons(
     *,
     authorized_mps_pids: frozenset[int],
     managed_workload_pids: frozenset[int] = frozenset(),
+    managed_systemd_claims: frozenset[tuple[str, str, str]] = frozenset(),
 ) -> tuple[str, ...]:
     """Return contamination evidence; GPU3 never participates in this snapshot."""
 
@@ -344,6 +345,9 @@ def foreign_gpu1_reasons(
         ):
             reasons.append(f"foreign Docker claim: {claim.container_id[:12]}")
     for claim in snapshot.systemd_claims:
+        claim_identity = (claim.scope, claim.unit, claim.control_group)
+        if claim_identity in managed_systemd_claims:
+            continue
         if not claim.process_pids or not claim.process_pids <= allowed_processes:
             reasons.append(f"foreign systemd claim: {claim.scope}:{claim.unit}")
     return tuple(reasons)
@@ -374,22 +378,34 @@ def broker_authority_token(status: dict[str, Any]) -> tuple[Any, ...]:
     leases = status.get("leases")
     if not isinstance(leases, list):
         raise DevGpuSessionError("Broker returned an invalid lease inventory")
+    authority_fields = (
+        "lease_id",
+        "fencing_token",
+        "kind",
+        "placement",
+        "preferred",
+        "component",
+        "environment",
+        "client_id",
+        "gpu_index",
+        "gpu_uuid",
+        "parent_lease_id",
+        "status",
+        "mps_termination_status",
+        "owner_pid",
+        "owner_process_start_ticks",
+        "owner_boot_id",
+        "workload_pid",
+        "workload_process_start_ticks",
+        "workload_process_group_id",
+        "workload_cgroup",
+    )
     normalized: list[tuple[Any, ...]] = []
     for lease in leases:
         if not isinstance(lease, dict):
             raise DevGpuSessionError("Broker returned an invalid lease record")
         normalized.append(
-            tuple(
-                lease.get(key)
-                for key in (
-                    "lease_id",
-                    "fencing_token",
-                    "gpu_uuid",
-                    "owner_pid",
-                    "workload_pid",
-                    "status",
-                )
-            )
+            tuple((key in lease, lease.get(key)) for key in authority_fields)
         )
     return (
         status.get("broker_instance_id"),
@@ -398,22 +414,121 @@ def broker_authority_token(status: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _exact_dft_residency_leases(status: dict[str, Any]) -> tuple[Any, ...]:
+    """Decode only exact active GPU1 DFT residency records from Broker status."""
+
+    from ops.gpu_broker.broker import Lease
+    from ops.gpu_broker.server import exact_dft_residency_scope_authority
+
+    records = status.get("leases")
+    if not isinstance(records, list):
+        raise DevGpuSessionError("Broker returned an invalid lease inventory")
+    result: list[Lease] = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise DevGpuSessionError("Broker returned an invalid lease record")
+        try:
+            lease = Lease(**record)
+        except (TypeError, ValueError) as exc:
+            raise DevGpuSessionError(
+                "Broker returned an undecodable lease record"
+            ) from exc
+        if lease.public_dict() != record:
+            raise DevGpuSessionError("Broker lease record is not canonical")
+        if exact_dft_residency_scope_authority(
+            lease,
+            index=GPU_INDEX,
+            uuid=GPU_UUID,
+        ) is not None:
+            result.append(lease)
+    return tuple(result)
+
+
+_SYSTEMD_MEMBERSHIP_CHURN_RE = re.compile(
+    r"^(user|system) systemd unit ([A-Za-z0-9_.:@-]+) "
+    r"membership changed during audit$"
+)
+
+
+def _is_exact_dft_membership_churn(
+    error: Exception,
+    status: dict[str, Any],
+) -> bool:
+    """Limit transient retries to the exact active DFT residency ancestry."""
+
+    from ops.gpu_broker.broker import BrokerError
+    from gpu_resource.transient_scope import scope_unit_name
+
+    if (
+        not isinstance(error, BrokerError)
+        or error.code != "gpu_claim_inventory_changed"
+        or status.get("draining") is not False
+    ):
+        return False
+    matched = _SYSTEMD_MEMBERSHIP_CHURN_RE.fullmatch(str(error))
+    if matched is None:
+        return False
+    leases = _exact_dft_residency_leases(status)
+    if not leases:
+        return False
+    scope, unit = matched.groups()
+    if scope == "system":
+        return unit == "user@1001.service"
+    return any(unit == scope_unit_name(lease.lease_id) for lease in leases)
+
+
 def consistent_broker_snapshot(
     client: Any,
     collector: Callable[[], TargetSnapshot] = collect_target_snapshot,
     *,
     attempts: int = 3,
+    membership_churn_retries: int = 8,
+    membership_churn_timeout_seconds: float = 12.0,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> tuple[dict[str, Any], TargetSnapshot]:
     """Bind an expensive host inventory between two stable Broker reads."""
 
     if attempts < 1:
         raise ValueError("attempts must be positive")
-    for _ in range(attempts):
+    if membership_churn_retries < 0:
+        raise ValueError("membership_churn_retries must not be negative")
+    if (
+        isinstance(membership_churn_timeout_seconds, bool)
+        or not isinstance(membership_churn_timeout_seconds, (int, float))
+        or not 0 < float(membership_churn_timeout_seconds) <= 30.0
+    ):
+        raise ValueError(
+            "membership_churn_timeout_seconds must be positive and at most 30 seconds"
+        )
+    authority_changes = 0
+    churn_retries = 0
+    audit_started = monotonic()
+    while authority_changes < attempts:
         before = client.status()
-        snapshot = collector()
+        try:
+            snapshot = collector()
+        except Exception as exc:
+            after = client.status()
+            if broker_authority_token(before) != broker_authority_token(after):
+                authority_changes += 1
+                continue
+            if _is_exact_dft_membership_churn(exc, after):
+                if (
+                    churn_retries >= membership_churn_retries
+                    or monotonic() - audit_started
+                    >= float(membership_churn_timeout_seconds)
+                ):
+                    raise DevGpuSessionError(
+                        "exact DFT residency membership remained unstable "
+                        "throughout the host audit"
+                    ) from exc
+                churn_retries += 1
+                continue
+            raise
         after = client.status()
         if broker_authority_token(before) == broker_authority_token(after):
             return after, snapshot
+        authority_changes += 1
     raise DevGpuSessionError("Broker authority changed throughout the host audit")
 
 
@@ -758,11 +873,15 @@ class SessionController:
         return parse_mps_client_inventory(completed.stdout)
 
     @staticmethod
-    def _managed_workload_pids(
+    def _managed_workload_authority(
         status: dict[str, Any], snapshot: TargetSnapshot
-    ) -> frozenset[int]:
+    ) -> tuple[frozenset[int], frozenset[tuple[str, str, str]]]:
+        from ops.gpu_broker.server import claim_is_exact_dft_residency_scope
+
         result: set[int] = set()
+        managed_systemd_claims: set[tuple[str, str, str]] = set()
         root_scopes: list[tuple[str, str, int]] = []
+        dft_residency_leases = _exact_dft_residency_leases(status)
         for lease in status.get("leases", []):
             if not isinstance(lease, dict) or lease.get("gpu_uuid") != GPU_UUID:
                 continue
@@ -797,7 +916,30 @@ class SessionController:
                 ):
                     result.update(claim.process_pids)
                     break
-        return frozenset(result)
+        for claim in snapshot.systemd_claims:
+            for lease in dft_residency_leases:
+                if claim_is_exact_dft_residency_scope(
+                    claim,
+                    index=GPU_INDEX,
+                    uuid=GPU_UUID,
+                    lease=lease,
+                ):
+                    managed_systemd_claims.add(
+                        (claim.scope, claim.unit, claim.control_group)
+                    )
+                    result.update(
+                        declarer.pid
+                        for declarer in claim.live_gpu_declarers
+                        if declarer.gpu_uuids == frozenset({GPU_UUID})
+                    )
+                    break
+        return frozenset(result), frozenset(managed_systemd_claims)
+
+    @staticmethod
+    def _managed_workload_pids(
+        status: dict[str, Any], snapshot: TargetSnapshot
+    ) -> frozenset[int]:
+        return SessionController._managed_workload_authority(status, snapshot)[0]
 
     def _cleanup_owned_tree(self) -> None:
         for descriptor, kind in ((self.pipe_fd, "pipe"), (self.log_fd, "log")):
@@ -880,11 +1022,15 @@ class SessionController:
     def _audit(self, client: Any) -> tuple[dict[str, Any], TargetSnapshot, tuple[str, ...]]:
         started = time.monotonic()
         status, snapshot = consistent_broker_snapshot(client)
-        managed = self._managed_workload_pids(status, snapshot)
+        managed, managed_systemd_claims = self._managed_workload_authority(
+            status,
+            snapshot,
+        )
         reasons = foreign_gpu1_reasons(
             snapshot,
             authorized_mps_pids=self._authorized_mps(),
             managed_workload_pids=managed,
+            managed_systemd_claims=managed_systemd_claims,
         )
         unknown_mps_clients = self._mps_client_pids() - managed
         if unknown_mps_clients:
