@@ -110,6 +110,25 @@ def test_mps_context_is_terminated_before_any_posix_signal(monkeypatch) -> None:
     assert lease.failed_closed is False
 
 
+def test_completed_fenced_process_defers_empty_scope_proof_to_lease_release(
+    monkeypatch,
+) -> None:
+    events: list[object] = []
+    monkeypatch.setattr(process_control, "_process_group_alive", lambda _pid: False)
+    lease = _Lease(events)
+
+    asyncio.run(
+        process_control.terminate_process_group(
+            _Process(),  # type: ignore[arg-type]
+            process_already_waited=True,
+            execution_lease=lease,  # type: ignore[arg-type]
+        )
+    )
+
+    assert events == []
+    assert lease.failed_closed is False
+
+
 def test_mps_termination_failure_sends_no_signal_and_never_releases(monkeypatch) -> None:
     events: list[object] = []
     monkeypatch.setattr(process_control, "_process_group_alive", lambda _pid: True)

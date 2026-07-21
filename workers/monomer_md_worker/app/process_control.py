@@ -260,7 +260,14 @@ async def _terminate_process_group(
     process_already_waited: bool = False,
     execution_lease: ManagedGpuLease | None = None,
 ) -> None:
-    if execution_lease is not None:
+    group_alive = _process_group_alive(process.pid)
+    # A normally completed scope may already be collected by systemd.  Its
+    # subsequent lease release still requires both an empty MPS inventory and
+    # an empty or safely disappeared exact cgroup; live groups take the
+    # stronger freeze/terminate path below.
+    if execution_lease is not None and (
+        not process_already_waited or group_alive
+    ):
         try:
             # The dedicated cgroup, not the original PGID, is authoritative:
             # launchers may exit or descendants may call setsid().  Broker
@@ -272,7 +279,6 @@ async def _terminate_process_group(
             raise
     loop = asyncio.get_running_loop()
     termination_deadline = loop.time() + MAX_TERMINATION_GRACE_SECONDS
-    group_alive = _process_group_alive(process.pid)
     if group_alive:
         try:
             os.killpg(process.pid, signal.SIGTERM)
