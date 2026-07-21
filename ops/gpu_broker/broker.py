@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -10,6 +11,9 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 from uuid import uuid4
+
+
+logger = logging.getLogger("nexpoly_gpu_broker")
 
 
 GPU_TOTAL_BUDGET_MIB = 20_736
@@ -804,6 +808,7 @@ class HostGpuBroker:
                     "workload_identity_unavailable",
                     "execution workload must be registered before termination",
                 )
+            failure_stage = "control_availability"
             try:
                 if (
                     self._validate_workload is None
@@ -831,7 +836,9 @@ class HostGpuBroker:
                 # Holding the Broker lock prevents a new lease, while the
                 # later freeze and second MPS query close the in-process
                 # reconnect race.
+                failure_stage = "workload_revalidation"
                 self._validate_workload(lease)
+                failure_stage = "mps_client_termination"
                 client_pids = self._terminate_mps_clients(lease)
                 if (
                     not isinstance(client_pids, tuple)
@@ -845,24 +852,39 @@ class HostGpuBroker:
                         "mps_termination_failed",
                         "MPS termination evidence is invalid",
                     )
+                failure_stage = "workload_freeze"
                 freeze_token = self._freeze_workload(lease)
                 if not isinstance(freeze_token, str) or not freeze_token:
                     raise BrokerError(
                         "workload_control_unavailable",
                         "dedicated cgroup freeze evidence is invalid",
                     )
+                failure_stage = "post_freeze_mps_audit"
                 if self._mps_clients_alive(lease):
                     raise BrokerError(
                         "mps_termination_failed",
                         "an MPS client appeared or survived after workload freeze",
                     )
+                failure_stage = "workload_kill"
                 self._kill_workload(lease)
+                failure_stage = "workload_empty"
                 if not self._workload_empty(lease):
                     raise BrokerError(
                         "workload_termination_failed",
                         "dedicated workload cgroup did not become empty",
                     )
             except Exception as exc:
+                broker_error_code = (
+                    exc.code if isinstance(exc, BrokerError) else "unexpected_exception"
+                )
+                logger.error(
+                    "gpu_process_termination_proof_failed lease_id=%s "
+                    "fencing_token=%d stage=%s broker_error_code=%s",
+                    lease.lease_id,
+                    lease.fencing_token,
+                    failure_stage,
+                    broker_error_code,
+                )
                 lease.mps_termination_status = "failed"
                 lease.status = "suspect"
                 self._quarantined_gpus[lease.gpu_uuid] = {

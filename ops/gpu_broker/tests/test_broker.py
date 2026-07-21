@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -1337,6 +1338,80 @@ def test_scope_revalidation_failure_prevents_mps_termination(
     assert error.value.code == "gpu_runtime_unhealthy"
     assert terminated is False
     assert lease.gpu_uuid in broker.status()["quarantined_gpus"]
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "failure_code"),
+    (
+        ("control_availability", "workload_control_unavailable"),
+        ("workload_revalidation", "workload_identity_mismatch"),
+        ("mps_client_termination", "mps_termination_failed"),
+        ("workload_freeze", "workload_control_unavailable"),
+        ("post_freeze_mps_audit", "mps_control_unavailable"),
+        ("workload_kill", "workload_termination_failed"),
+        ("workload_empty", "workload_control_unavailable"),
+    ),
+)
+def test_process_termination_failure_logs_only_controlled_stage_and_code(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    failure_stage: str,
+    failure_code: str,
+) -> None:
+    secret_message = "must-not-appear-in-the-broker-log"
+
+    def fail(_lease):
+        raise BrokerError(failure_code, secret_message)
+
+    controls = {
+        "validate_workload": lambda _lease: None,
+        "terminate_mps_clients": lambda _lease: (),
+        "freeze_workload": lambda lease: f"freeze:{lease.lease_id}",
+        "mps_clients_alive": lambda _lease: False,
+        "kill_workload": lambda _lease: None,
+        "workload_empty": lambda _lease: True,
+    }
+    callback_by_stage = {
+        "workload_revalidation": "validate_workload",
+        "mps_client_termination": "terminate_mps_clients",
+        "workload_freeze": "freeze_workload",
+        "post_freeze_mps_audit": "mps_clients_alive",
+        "workload_kill": "kill_workload",
+        "workload_empty": "workload_empty",
+    }
+    if failure_stage == "control_availability":
+        controls["validate_workload"] = None
+    else:
+        controls[callback_by_stage[failure_stage]] = fail
+
+    broker = HostGpuBroker(tmp_path / "state.json", **controls)
+    lease = _acquire(broker, component="dft", environment="dev", kind="residency")
+    broker.activate(lease.lease_id, lease.fencing_token, owner=_owner())
+    _bind_test_workload(lease)
+
+    with caplog.at_level(logging.ERROR, logger="nexpoly_gpu_broker"):
+        with pytest.raises(BrokerError) as error:
+            broker.prepare_process_termination(
+                lease.lease_id,
+                lease.fencing_token,
+                owner=_owner(),
+            )
+
+    assert error.value.code == "gpu_runtime_unhealthy"
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("gpu_process_termination_proof_failed ")
+    ]
+    assert messages == [
+        "gpu_process_termination_proof_failed "
+        f"lease_id={lease.lease_id} fencing_token={lease.fencing_token} "
+        f"stage={failure_stage} broker_error_code={failure_code}"
+    ]
+    assert secret_message not in caplog.text
+    status = broker.status()
+    assert status["leases"][0]["status"] == "suspect"
+    assert lease.gpu_uuid in status["quarantined_gpus"]
 
 
 def test_mps_guard_uses_host_ps_pid_and_waits_for_cuda_success(tmp_path: Path) -> None:
