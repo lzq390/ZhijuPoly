@@ -328,7 +328,11 @@ def test_systemd_scope_exec_preserves_pid_gate_fds_environment_and_stdout(
             [
                 sys.executable,
                 "-c",
-                "import os; print(f'target:{os.getpid()}', flush=True)",
+                (
+                    "import os; "
+                    "print(f'target:{os.getpid()}:{os.environ[\"XDG_RUNTIME_DIR\"]}:'"
+                    "f'{os.environ[\"DBUS_SESSION_BUS_ADDRESS\"]}', flush=True)"
+                ),
             ],
             execution_lease=Lease(),  # type: ignore[arg-type]
             scope_command_builder=lambda exact_lease_id, command: (
@@ -340,13 +344,21 @@ def test_systemd_scope_exec_preserves_pid_gate_fds_environment_and_stdout(
             ),
             scope_membership_waiter=_identity_scope_membership,
             stdout=asyncio.subprocess.PIPE,
+            env={
+                **os.environ,
+                "XDG_RUNTIME_DIR": "/tmp/forged-runtime",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/forged-bus",
+            },
         )
         stdout, _stderr = await process.communicate()
         return process.pid, stdout
 
     pid, stdout = asyncio.run(scenario())
     assert registered == [pid]
-    assert stdout == f"target:{pid}\n".encode()
+    user_runtime = f"/run/user/{os.geteuid()}"
+    assert stdout == (
+        f"target:{pid}:{user_runtime}:unix:path={user_runtime}/bus\n".encode()
+    )
     arguments = arguments_path.read_text(encoding="utf-8").splitlines()
     assert arguments[:10] == [
         "--user",

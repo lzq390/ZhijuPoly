@@ -795,8 +795,17 @@ worker_assert_process_identity() {
 }
 
 worker_health_payload() {
-  [[ -S "$WORKER_SOCKET" ]] || return 1
+  [[ -S "$WORKER_SOCKET" && ! -L "$WORKER_SOCKET" ]] || return 1
+  [[ "$(stat -c '%u:%a' "$WORKER_SOCKET")" == "$(id -u):600" ]] || return 1
   curl --max-time 30 --unix-socket "$WORKER_SOCKET" -fsS http://localhost/health
+}
+
+worker_secure_socket() {
+  [[ -S "$WORKER_SOCKET" && ! -L "$WORKER_SOCKET" ]] || return 1
+  [[ "$(stat -c '%u' "$WORKER_SOCKET")" == "$(id -u)" ]] || return 1
+  chmod 600 -- "$WORKER_SOCKET" || return 1
+  [[ -S "$WORKER_SOCKET" && ! -L "$WORKER_SOCKET" ]] || return 1
+  [[ "$(stat -c '%u:%a' "$WORKER_SOCKET")" == "$(id -u):600" ]]
 }
 
 worker_health_validate() {
@@ -988,6 +997,13 @@ worker_up() {
   fi
 
   for _ in $(seq 1 45); do
+    if [[ -e "$WORKER_SOCKET" || -L "$WORKER_SOCKET" ]]; then
+      if ! worker_secure_socket; then
+        echo "Dev monomer MD worker created an unsafe socket." >&2
+        worker_cleanup_failed_launch "$spawn_pid" || true
+        return 1
+      fi
+    fi
     if worker_instance="$(worker_health_validate prebind 2>/dev/null)"; then
       if ! worker_process_record bind-instance --instance-id "$worker_instance" >/dev/null \
         || ! worker_assert_process_identity \

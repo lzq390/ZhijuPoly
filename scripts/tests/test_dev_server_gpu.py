@@ -347,6 +347,8 @@ class DevServerGpuScriptTests(unittest.TestCase):
         self.assertIn("worker_assert_process_identity", source)
         self.assertIn("worker_cleanup_failed_launch()", source)
         self.assertIn("worker_process_record collect-dead", source)
+        self.assertIn("worker_secure_socket()", source)
+        self.assertIn("stat -c '%u:%a'", source)
         worker_start = source.index("worker_up() {")
         worker_up = source[worker_start:source.index("\n}\n\nworker_stop()", worker_start)]
         self.assertLess(worker_up.index("validate_asset_release"), worker_up.index("worker_health"))

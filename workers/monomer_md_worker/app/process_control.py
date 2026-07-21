@@ -68,6 +68,9 @@ async def create_fenced_subprocess_exec(
         )
     gate_reader, gate_writer = os.pipe()
     env = dict(kwargs.pop("env", os.environ))
+    user_runtime = f"/run/user/{os.geteuid()}"
+    env["XDG_RUNTIME_DIR"] = user_runtime
+    env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={user_runtime}/bus"
     repository_root = Path(__file__).resolve().parents[3]
     exec_gate = repository_root / "gpu_resource" / "exec_gate.py"
     if not exec_gate.is_file() or exec_gate.is_symlink():
