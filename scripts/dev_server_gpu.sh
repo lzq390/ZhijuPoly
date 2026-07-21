@@ -867,6 +867,32 @@ worker_active_jobs() {
     "$expected_instance"
 }
 
+worker_cleanup_failed_launch() {
+  local spawn_pid="$1" collected=false
+  if worker_process_record verify >/dev/null 2>&1; then
+    worker_process_record terminate >/dev/null || return 1
+  fi
+  for _ in $(seq 1 20); do
+    if worker_process_record collect-dead >/dev/null 2>&1; then
+      collected=true
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$collected" != "true" ]]; then
+    echo "Refusing to collect the failed MD Worker launch without exact dead-process evidence." >&2
+    return 1
+  fi
+  wait "$spawn_pid" 2>/dev/null || true
+  if [[ -e "$WORKER_SOCKET" || -L "$WORKER_SOCKET" ]]; then
+    [[ -S "$WORKER_SOCKET" && ! -L "$WORKER_SOCKET" ]] || {
+      echo "Refusing to collect an unsafe failed-launch Worker socket." >&2
+      return 1
+    }
+    rm -f -- "$WORKER_SOCKET"
+  fi
+}
+
 worker_up() {
   if [[ "$WORKER_ENABLED" != "true" ]]; then
     echo "Dev monomer MD worker is disabled by MONOMER_MD_DEV_WORKER_ENABLED=$WORKER_ENABLED"
@@ -963,21 +989,26 @@ worker_up() {
 
   for _ in $(seq 1 45); do
     if worker_instance="$(worker_health_validate prebind 2>/dev/null)"; then
-      worker_process_record bind-instance --instance-id "$worker_instance" >/dev/null
-      worker_assert_process_identity
-      worker_health
+      if ! worker_process_record bind-instance --instance-id "$worker_instance" >/dev/null \
+        || ! worker_assert_process_identity \
+        || ! worker_health; then
+        worker_cleanup_failed_launch "$spawn_pid" || true
+        return 1
+      fi
       echo "Dev monomer MD worker is healthy on $WORKER_SOCKET"
       return 0
     fi
     if ! worker_launch_is_running; then
       echo "Dev monomer MD worker exited during startup." >&2
       tail -n 40 "$WORKER_LOG_FILE" >&2 || true
+      worker_cleanup_failed_launch "$spawn_pid" || true
       return 1
     fi
     sleep 1
   done
   echo "Timed out waiting for the dev monomer MD worker." >&2
   tail -n 40 "$WORKER_LOG_FILE" >&2 || true
+  worker_cleanup_failed_launch "$spawn_pid" || true
   return 1
 }
 

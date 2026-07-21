@@ -345,6 +345,8 @@ class DevServerGpuScriptTests(unittest.TestCase):
         self.assertIn("  worker-venv)", source)
         self.assertIn("worker_verify_venv", source)
         self.assertIn("worker_assert_process_identity", source)
+        self.assertIn("worker_cleanup_failed_launch()", source)
+        self.assertIn("worker_process_record collect-dead", source)
         worker_start = source.index("worker_up() {")
         worker_up = source[worker_start:source.index("\n}\n\nworker_stop()", worker_start)]
         self.assertLess(worker_up.index("validate_asset_release"), worker_up.index("worker_health"))

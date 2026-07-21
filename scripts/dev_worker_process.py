@@ -234,6 +234,78 @@ def verify_record(
     return record
 
 
+def collect_dead_record(
+    path: Path,
+    *,
+    python: Path,
+    socket: Path,
+    source_sha: str,
+    source_tree: str,
+    worker_lock_sha256: str,
+    session_id: str,
+    proc_root: Path = Path("/proc"),
+) -> dict[str, Any]:
+    """Remove an exact managed record only after its recorded process is gone."""
+    record = load_record(path)
+    expected = {
+        "python": str(_safe_absolute(python, "managed Worker Python")),
+        "socket": str(_safe_absolute(socket, "managed Worker socket")),
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "worker_lock_sha256": worker_lock_sha256,
+        "session_id": session_id,
+    }
+    if any(record.get(key) != value for key, value in expected.items()):
+        raise WorkerProcessRecordError(
+            "managed Worker process record differs from this source/runtime"
+        )
+    exact = [str(python), "-m", "uvicorn", "app.main:app", "--uds", str(socket)]
+    if record["argv"] != exact or record["argv"][0] != record["python"]:
+        raise WorkerProcessRecordError(
+            "managed Worker command is not the exact Uvicorn launch"
+        )
+
+    process_dir = proc_root / str(record["pid"])
+    if process_dir.exists():
+        try:
+            live_ticks = process_start_ticks(record["pid"], proc_root=proc_root)
+        except WorkerProcessRecordError:
+            if process_dir.exists():
+                raise
+        else:
+            if live_ticks == record["start_ticks"]:
+                try:
+                    live_argv = process_argv(record["pid"], proc_root=proc_root)
+                except WorkerProcessRecordError:
+                    if process_dir.exists():
+                        raise
+                else:
+                    if live_argv != record["argv"]:
+                        raise WorkerProcessRecordError(
+                            "managed Worker command changed while collecting its record"
+                        )
+                    raise WorkerProcessRecordError(
+                        "managed Worker process is still running"
+                    )
+
+    if load_record(path) != record:
+        raise WorkerProcessRecordError(
+            "managed Worker process record changed while collecting it"
+        )
+    try:
+        path.unlink()
+        directory_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except OSError as exc:
+        raise WorkerProcessRecordError(
+            "managed Worker dead process record could not be collected"
+        ) from exc
+    return record
+
+
 def bind_instance(path: Path, instance_id: str, **verify_kwargs: Any) -> dict[str, Any]:
     if INSTANCE_RE.fullmatch(instance_id) is None:
         raise WorkerProcessRecordError("managed Worker instance identity is invalid")
@@ -249,7 +321,8 @@ def bind_instance(path: Path, instance_id: str, **verify_kwargs: Any) -> dict[st
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=("create", "verify", "bind-instance", "terminate")
+        "command",
+        choices=("create", "verify", "bind-instance", "terminate", "collect-dead"),
     )
     parser.add_argument("--record", type=Path, required=True)
     parser.add_argument("--python", type=Path, required=True)
@@ -302,6 +375,8 @@ def main(argv: list[str] | None = None) -> int:
                 require_instance=False,
                 **common,
             )
+        elif args.command == "collect-dead":
+            result = collect_dead_record(args.record, **common)
         else:
             result = verify_record(
                 args.record,

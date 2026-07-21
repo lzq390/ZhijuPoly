@@ -114,3 +114,70 @@ def test_plain_pid_and_broad_mode_are_not_accepted(tmp_path: Path) -> None:
     os.chmod(record, 0o644)
     with pytest.raises(process_record.WorkerProcessRecordError, match="unsafe"):
         process_record.load_record(record)
+
+
+def test_collect_dead_record_requires_exact_identity_and_a_dead_process(
+    tmp_path: Path,
+) -> None:
+    pid, python, socket, record, argv, proc_root = _fixture(tmp_path)
+    common = {
+        "python": python,
+        "socket": socket,
+        "source_sha": "a" * 40,
+        "source_tree": "b" * 40,
+        "worker_lock_sha256": "sha256:" + "c" * 64,
+        "session_id": "e" * 32,
+        "proc_root": proc_root,
+    }
+    created = process_record.create_record(
+        record,
+        pid=pid,
+        expected_argv=argv,
+        **common,
+    )
+
+    with pytest.raises(process_record.WorkerProcessRecordError, match="still running"):
+        process_record.collect_dead_record(record, **common)
+    assert record.exists()
+
+    with pytest.raises(process_record.WorkerProcessRecordError, match="source/runtime"):
+        process_record.collect_dead_record(
+            record,
+            **{**common, "source_sha": "d" * 40},
+        )
+    assert record.exists()
+
+    for child in (proc_root / str(pid)).iterdir():
+        child.unlink()
+    (proc_root / str(pid)).rmdir()
+    assert process_record.collect_dead_record(record, **common) == created
+    assert not record.exists()
+
+
+def test_collect_dead_record_accepts_pid_reuse_without_touching_the_new_process(
+    tmp_path: Path,
+) -> None:
+    pid, python, socket, record, argv, proc_root = _fixture(tmp_path)
+    common = {
+        "python": python,
+        "socket": socket,
+        "source_sha": "a" * 40,
+        "source_tree": "b" * 40,
+        "worker_lock_sha256": "sha256:" + "c" * 64,
+        "session_id": "e" * 32,
+        "proc_root": proc_root,
+    }
+    process_record.create_record(record, pid=pid, expected_argv=argv, **common)
+    fields = ["S", *(["0"] * 18), "987655", "0"]
+    (proc_root / str(pid) / "stat").write_text(
+        f"{pid} (unrelated) " + " ".join(fields) + "\n",
+        encoding="ascii",
+    )
+    (proc_root / str(pid) / "cmdline").write_bytes(
+        b"/usr/bin/python3\0unrelated.py\0"
+    )
+
+    process_record.collect_dead_record(record, **common)
+
+    assert not record.exists()
+    assert (proc_root / str(pid) / "stat").exists()
