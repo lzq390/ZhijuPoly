@@ -1640,7 +1640,12 @@ def post(path, payload, timeout=60):
 
 exact = post(
     "/api/v1/query/smiles",
-    {"smiles": "CCO", "match_mode": "structure", "similarity_threshold": 1, "top_k": 1},
+    {
+        "smiles": "**C1=C(O)C(=N*)CC=C1*",
+        "match_mode": "structure",
+        "similarity_threshold": 1,
+        "top_k": 1,
+    },
 )
 if exact.get("total") != 1 or exact["results"][0].get("similarity_score") != 1:
     raise SystemExit("exact structure-query smoke did not honor threshold/top_k")
