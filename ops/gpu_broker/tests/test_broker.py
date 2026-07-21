@@ -3637,18 +3637,23 @@ def test_systemd_gpu_declaration_requires_exact_managed_unit_registration() -> N
     assert unbound_guard(2, gpu2, (), _owner(), "md", "prod") is True
 
 
-def test_parented_dft_execution_accepts_its_live_residency_process_tree(
+def test_md_and_parented_dft_admissions_accept_live_dft_residency_tree(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     claims: list[SystemdGpuClaim] = []
     processes: dict[str, frozenset[int]] = {}
+    mps_state = {"unmanaged": False}
     guard = ExternalGpuGuard(
-        ExternalReservationPolicy(frozenset(), {}, {}),
+        ExternalReservationPolicy(
+            frozenset({EXPECTED_GPU_UUIDS[3]}),
+            {},
+            {},
+        ),
         process_query=lambda: processes,
         docker_claim_query=lambda: (),
         systemd_claim_query=lambda: tuple(claims),
-        unmanaged_mps_client_query=lambda *_args: False,
+        unmanaged_mps_client_query=lambda *_args: mps_state["unmanaged"],
         cache_seconds=0,
     )
     broker = HostGpuBroker(
@@ -3726,6 +3731,41 @@ def test_parented_dft_execution_accepts_its_live_residency_process_tree(
         uuid=residency.gpu_uuid,
         lease=residency,
     ) is True
+    md_execution = _acquire(
+        broker,
+        component="md",
+        environment="dev",
+        kind="execution",
+    )
+    assert md_execution.gpu_index == residency.gpu_index
+    broker.release(
+        md_execution.lease_id,
+        md_execution.fencing_token,
+        owner=owner,
+    )
+    foreign_pid = 999_999_997
+    processes[residency.gpu_uuid] = frozenset(
+        {workload_pid, foreign_pid}
+    )
+    with pytest.raises(BrokerError) as foreign_error:
+        _acquire(
+            broker,
+            component="md",
+            environment="dev",
+            kind="execution",
+        )
+    assert foreign_error.value.code == "gpu_capacity_unavailable"
+    processes[residency.gpu_uuid] = frozenset({workload_pid})
+    mps_state["unmanaged"] = True
+    with pytest.raises(BrokerError) as mps_error:
+        _acquire(
+            broker,
+            component="md",
+            environment="dev",
+            kind="execution",
+        )
+    assert mps_error.value.code == "gpu_capacity_unavailable"
+    mps_state["unmanaged"] = False
     execution = _acquire(
         broker,
         component="dft",
@@ -3751,12 +3791,17 @@ def test_parented_dft_execution_accepts_its_live_residency_process_tree(
         "gpu_uuid",
         "unrelated_declarer",
         "static_declaration",
-        "parent_lease",
+        "duplicate_residency",
         "lease_cgroup",
+        "lease_kind",
+        "lease_mps_terminated",
+        "lease_pgid",
+        "lease_placement",
+        "lease_preferred",
         "lease_status",
     ),
 )
-def test_dft_residency_declarer_mismatch_remains_external(
+def test_md_admission_keeps_mismatched_dft_residency_claim_external(
     tmp_path: Path,
     monkeypatch,
     mismatch: str,
@@ -3823,6 +3868,16 @@ def test_dft_residency_declarer_mismatch_remains_external(
     )
     if mismatch == "lease_cgroup":
         lease.workload_cgroup = "0::/foreign.scope"
+    elif mismatch == "lease_kind":
+        lease.kind = "execution"
+    elif mismatch == "lease_mps_terminated":
+        lease.mps_termination_status = "safe"
+    elif mismatch == "lease_pgid":
+        lease.workload_process_group_id = workload_pid + 1
+    elif mismatch == "lease_placement":
+        lease.placement = "overflow"
+    elif mismatch == "lease_preferred":
+        lease.preferred = False
     elif mismatch == "lease_status":
         lease.status = "suspect"
     monkeypatch.setattr(
@@ -3854,21 +3909,29 @@ def test_dft_residency_declarer_mismatch_remains_external(
         unmanaged_mps_client_query=lambda *_args: False,
         cache_seconds=0,
     )
+    leases = (lease,)
+    if mismatch == "duplicate_residency":
+        duplicate_id = "e" * 32
+        leases = (
+            lease,
+            replace(
+                lease,
+                lease_id=duplicate_id,
+                workload_cgroup=(
+                    f"0::{scope_control_group(duplicate_id, uid=1001)}"
+                ),
+            ),
+        )
 
     assert (
         guard(
             lease.gpu_index,
             lease.gpu_uuid,
-            (lease,),
+            leases,
             owner,
-            "dft",
+            "md",
             "dev",
-            client_id=lease.client_id,
-            parent_lease_id=(
-                "f" * 32
-                if mismatch == "parent_lease"
-                else lease.lease_id
-            ),
+            client_id="md-dev",
         )
         is True
     )

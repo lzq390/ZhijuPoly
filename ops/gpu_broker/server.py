@@ -2473,8 +2473,6 @@ class ExternalGpuGuard:
                 owner=admission.owner,
                 component=admission.component,
                 environment=admission.environment,
-                client_id=admission.client_id,
-                parent_lease_id=admission.parent_lease_id,
                 authorized_mps_servers=initial_mps,
             ):
                 return True
@@ -2506,8 +2504,6 @@ class ExternalGpuGuard:
                 owner=admission.owner,
                 component=admission.component,
                 environment=admission.environment,
-                client_id=admission.client_id,
-                parent_lease_id=admission.parent_lease_id,
                 authorized_mps_servers=final_mps,
             ):
                 return True
@@ -2593,8 +2589,6 @@ class ExternalGpuGuard:
         owner: OwnerIdentity,
         component: str,
         environment: str,
-        client_id: str | None,
-        parent_lease_id: str | None,
         authorized_mps_servers: frozenset[int],
     ) -> bool:
         for claim in snapshot.docker_claims:
@@ -2635,16 +2629,11 @@ class ExternalGpuGuard:
         for claim in snapshot.systemd_claims:
             if uuid not in claim.gpu_uuids:
                 continue
-            if self._claim_is_current_dft_residency_scope(
+            if self._claim_is_unique_dft_residency_scope(
                 claim,
                 index=index,
                 uuid=uuid,
                 leases=leases,
-                owner=owner,
-                component=component,
-                environment=environment,
-                client_id=client_id,
-                parent_lease_id=parent_lease_id,
             ):
                 continue
             identity = f"{claim.scope}:{claim.unit}"
@@ -2689,53 +2678,32 @@ class ExternalGpuGuard:
         return False
 
     @staticmethod
-    def _claim_is_current_dft_residency_scope(
+    def _claim_is_unique_dft_residency_scope(
         claim: SystemdGpuClaim,
         *,
         index: int,
         uuid: str,
         leases: tuple[Lease, ...],
-        owner: OwnerIdentity,
-        component: str,
-        environment: str,
-        client_id: str | None,
-        parent_lease_id: str | None,
     ) -> bool:
-        """Recognize one exact live declarer behind a parented DFT attempt.
+        """Recognize the one exact active DFT residency already under Broker control.
 
         The system manager reports the UID 1001 user manager as the ancestor
         claim, so its unit-level process set is intentionally too broad for
         authorization.  Only identity-stable live-environment declarers in the
-        exact residency workload process tree may be matched to the parent
-        lease.  This includes compiler subprocesses spawned by the resident
-        executor after model warm-up.
+        exact residency workload process tree may be matched to the unique
+        active lease.  The authority belongs to the existing Broker lease, not
+        to the component making the next governed admission request.
         """
 
-        if (
-            component != "dft"
-            or environment != "dev"
-            or client_id is None
-            or parent_lease_id is None
-        ):
-            return False
         candidates = tuple(
             lease
             for lease in leases
-            if lease.lease_id == parent_lease_id
-            if lease.kind == "residency"
-            and lease.placement == "preferred"
-            and lease.preferred is True
-            and lease.component == component
-            and lease.environment == environment
-            and lease.client_id == client_id
-            and lease.gpu_index == index
-            and lease.gpu_uuid == uuid
-            and lease.parent_lease_id is None
-            and lease.status == "active"
-            and lease.mps_termination_status == "none"
-            and lease.owner_pid == owner.pid
-            and lease.owner_process_start_ticks == owner.process_start_ticks
-            and lease.owner_boot_id == owner.boot_id
+            if exact_dft_residency_scope_authority(
+                lease,
+                index=index,
+                uuid=uuid,
+            )
+            is not None
         )
         if len(candidates) != 1:
             return False
