@@ -250,6 +250,31 @@ class DevServerGpuScriptTests(unittest.TestCase):
         self.assertIn("'NVIDIA_VISIBLE_DEVICES':'1'", source)
         self.assertNotIn("NEXPOLY_DEV_GPU_DEVICE", overlay)
 
+    def test_gpu_session_activation_is_ordered_after_real_dft_residency(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("gpu_session_up() {")
+        body = source[start:source.index("\n}\n\ngpu_session_status()", start)]
+        ordered_markers = (
+            "dft_worker_ctl start",
+            'dft_health="$(curl',
+            'dft_worker_session_record bind "$dft_health"',
+            "stabilize --execute",
+            "worker_up",
+            '"${GPU_COMPOSE[@]}" up -d --no-deps --force-recreate backend',
+            "wait_gpu_backend_configured",
+            "write_gpu_session_activation_manifest",
+            "activate --execute",
+        )
+        positions = [body.index(marker) for marker in ordered_markers]
+        self.assertEqual(positions, sorted(positions))
+
+        down_start = source.index("gpu_session_down() {")
+        down_body = source[
+            down_start:
+            source.index("\n}\n\ngpu_session_stop_owned_internal()", down_start)
+        ]
+        self.assertIn('"stabilizing"', down_body)
+
     def test_canary_state_is_dev_private_and_fenced_from_production(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         compose = DEV_COMPOSE.read_text(encoding="utf-8")

@@ -42,14 +42,18 @@ from ops.gpu_broker.server import (
     GpuBrokerUnixServer,
     JobCgroupController,
     ManagedDockerClaim,
+    MpsAuthoritySnapshot,
     MpsClient,
     MpsRuntimeGuard,
     SystemdGpuClaim,
     SystemdGpuDeclarer,
     _read_systemd_environment_file,
     _snapshot_systemd_process_cgroups,
+    claim_is_exact_dev_gpu1_host_workloads_scope,
     claim_is_exact_dft_residency_scope,
+    exact_dev_gpu1_backend_docker_workload_pids,
     load_external_reservations,
+    process_is_exact_dft_residency_descendant,
     process_stable_descriptor_path,
     query_docker_gpu_claims,
     query_systemd_gpu_claims,
@@ -241,6 +245,23 @@ def test_broker_main_loads_an_inherited_reservation_descriptor(
             process.communicate(timeout=5)
         os.close(inventory_descriptor)
         os.close(root_descriptor)
+
+
+def test_broker_main_uses_composite_mps_authority_only_for_descriptors() -> None:
+    source = (
+        Path(__file__).resolve().parents[1] / "server.py"
+    ).read_text(encoding="utf-8")
+    branch = source[
+        source.index("descriptor_mps_authority ="):
+        source.index("external_guard = ExternalGpuGuard(")
+    ]
+
+    assert '{"mps_authority_query": mps_guard.authority_snapshot}' in branch
+    assert "if descriptor_mps_authority" in branch
+    assert (
+        '{"authorized_mps_server_pids": '
+        "mps_guard.authorized_server_pids}"
+    ) in branch
 
 
 @pytest.mark.parametrize(
@@ -2214,7 +2235,7 @@ def test_external_guard_rechecks_mps_clients_at_final_allow_edge() -> None:
     assert guard(1, gpu1, (), _owner(), "backend", "dev") is True
 
 
-def test_external_guard_rechecks_target_compute_after_final_mps_audit() -> None:
+def test_external_guard_blocks_late_compute_before_final_mps_recheck() -> None:
     gpu1 = EXPECTED_GPU_UUIDS[1]
     snapshots = iter(
         (
@@ -2240,7 +2261,9 @@ def test_external_guard_rechecks_target_compute_after_final_mps_audit() -> None:
     )
 
     assert guard(1, gpu1, (), _owner(), "backend", "dev") is True
-    assert mps_audits == 2
+    # A changed trailing NVML snapshot is already a conclusive busy result;
+    # no second MPS query is needed to authorize or clean up anything.
+    assert mps_audits == 1
 
 
 def test_external_guard_shares_initial_inventory_across_one_candidate_search(
@@ -2705,10 +2728,22 @@ def test_external_guard_blocks_unowned_or_unqueryable_mps_client(tmp_path: Path)
         ),
         cache_seconds=0,
     )
+    changing = ExternalGpuGuard(
+        policy,
+        process_query=lambda: {},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        mps_authority_query=lambda *_args: (_ for _ in ()).throw(
+            BrokerError("mps_authority_changed", "lazy server appeared")
+        ),
+        allow_descriptor_mps_authority=True,
+        cache_seconds=0,
+    )
 
     assert blocked(1, lease.gpu_uuid, (lease,), _owner(), "backend", "dev") is True
     assert seen == [(1, lease.gpu_uuid, (lease,))]
     assert unavailable(1, lease.gpu_uuid, (lease,), _owner(), "backend", "dev") is True
+    assert changing(1, lease.gpu_uuid, (lease,), _owner(), "backend", "dev") is True
 
 
 def _exact_mps_authority(
@@ -2728,7 +2763,8 @@ def _exact_mps_authority(
     proc_root = tmp_path / "proc"
     status_paths: dict[int, Path] = {}
     executable_paths: dict[int, Path] = {}
-    trusted_executable = Path("/bin/true")
+    control_executable = Path("/bin/true")
+    server_executable = Path("/bin/false")
     for pid in (control_pid, server_pid):
         process_directory = proc_root / str(pid)
         process_directory.mkdir(parents=True)
@@ -2740,7 +2776,9 @@ def _exact_mps_authority(
             encoding="ascii",
         )
         executable_path = process_directory / "exe"
-        executable_path.symlink_to(trusted_executable)
+        executable_path.symlink_to(
+            control_executable if pid == control_pid else server_executable
+        )
         status_paths[pid] = status_path
         executable_paths[pid] = executable_path
 
@@ -2762,7 +2800,11 @@ def _exact_mps_authority(
             control_pid: {
                 "CUDA_VISIBLE_DEVICES": gpu_uuid,
                 "CUDA_MPS_PIPE_DIRECTORY": str(pipe_directory),
-            }
+            },
+            server_pid: {
+                "CUDA_VISIBLE_DEVICES": gpu_uuid,
+                "CUDA_MPS_PIPE_DIRECTORY": str(pipe_directory),
+            },
         },
         "cgroups": {
             control_pid: "0::/user.slice/nexpoly-mps-test.scope",
@@ -2822,8 +2864,8 @@ def _exact_mps_authority(
     guard = MpsRuntimeGuard(
         tmp_path,
         run=run,
-        control_executable=trusted_executable,
-        server_executable=trusted_executable,
+        control_executable=control_executable,
+        server_executable=server_executable,
         proc_root=proc_root,
         read_process_environment=read_environment,
         read_process_cgroup=read_cgroup,
@@ -2886,7 +2928,13 @@ def test_exact_idle_mps_authority_is_the_only_server_process_exemption(
     assert mps_guard.authorized_server_pids(1, gpu_uuid) == frozenset(
         {server_pid}
     )
-    assert state["commands"] == ["get_server_list", "ps", "get_server_list"]
+    assert state["commands"] == [
+        "get_server_list",
+        "ps",
+        "get_server_list",
+        "ps",
+        "get_server_list",
+    ]
 
     external_guard = ExternalGpuGuard(
         ExternalReservationPolicy(frozenset(), {}, {}),
@@ -2903,6 +2951,209 @@ def test_exact_idle_mps_authority_is_the_only_server_process_exemption(
     )
 
 
+def test_mps_authority_accepts_control_only_before_lazy_server_creation(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    control_pid = state["control_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(control_pid, int)
+    state["server_list"] = ""
+    state["client_inventory"] = ""
+
+    authority = mps_guard.authority_snapshot(1, gpu_uuid)
+
+    assert authority.server_pids == frozenset()
+    assert authority.clients == frozenset()
+    assert {item.pid for item in authority.gpu_declarers} == {control_pid}
+
+
+def test_mps_authority_reports_lazy_server_cas_then_succeeds(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+    state["server_list"] = ""
+
+    def create_server_during_first_client_query(command: str) -> None:
+        if command != "ps":
+            return
+        state["server_list"] = f"{server_pid}\n"
+        state["client_inventory"] = (
+            "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+            f"51001 0 {server_pid} {gpu_uuid} 4026531836 client\n"
+        )
+        state["command_hook"] = None
+
+    state["command_hook"] = create_server_during_first_client_query
+
+    with pytest.raises(BrokerError) as error:
+        mps_guard.authority_snapshot(1, gpu_uuid)
+    assert error.value.code == "mps_authority_changed"
+
+    authority = mps_guard.authority_snapshot(1, gpu_uuid)
+    assert authority.server_pids == frozenset({server_pid})
+    assert {client.client_pid for client in authority.clients} == {51001}
+
+
+@pytest.mark.parametrize("membership_loss", ("server", "client"))
+def test_mps_authority_never_classifies_membership_loss_as_warmup_churn(
+    tmp_path: Path,
+    membership_loss: str,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+    state["client_inventory"] = (
+        "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+        f"51001 0 {server_pid} {gpu_uuid} 4026531836 client\n"
+    )
+    ps_calls = 0
+
+    def remove_membership(command: str) -> None:
+        nonlocal ps_calls
+        if command != "ps":
+            return
+        ps_calls += 1
+        if membership_loss == "server" and ps_calls == 1:
+            state["server_list"] = ""
+            state["client_inventory"] = ""
+        elif membership_loss == "client" and ps_calls == 2:
+            state["client_inventory"] = ""
+
+    state["command_hook"] = remove_membership
+
+    with pytest.raises(BrokerError) as error:
+        mps_guard.authority_snapshot(1, gpu_uuid)
+
+    assert error.value.code == "mps_control_unavailable"
+
+
+def test_mps_authority_reports_strict_client_growth_as_warmup_churn(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+    ps_calls = 0
+
+    def add_client(command: str) -> None:
+        nonlocal ps_calls
+        if command != "ps":
+            return
+        ps_calls += 1
+        if ps_calls == 2:
+            state["client_inventory"] = (
+                "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+                f"51001 0 {server_pid} {gpu_uuid} 4026531836 client\n"
+            )
+            state["command_hook"] = None
+
+    state["command_hook"] = add_client
+
+    with pytest.raises(BrokerError) as error:
+        mps_guard.authority_snapshot(1, gpu_uuid)
+    assert error.value.code == "mps_authority_changed"
+
+    assert {client.client_pid for client in mps_guard.authority_snapshot(
+        1,
+        gpu_uuid,
+    ).clients} == {51001}
+
+
+@pytest.mark.parametrize("fault", ("environment", "cgroup", "start_ticks"))
+def test_control_only_mps_authority_rejects_identity_drift(
+    tmp_path: Path,
+    fault: str,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    control_pid = state["control_pid"]
+    environments = state["environments"]
+    cgroups = state["cgroups"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(control_pid, int)
+    assert isinstance(environments, dict)
+    assert isinstance(cgroups, dict)
+    state["server_list"] = ""
+    state["client_inventory"] = ""
+    if fault == "start_ticks":
+        state["unstable_pid"] = control_pid
+    else:
+        def mutate_after_initial_identity(command: str) -> None:
+            if command != "ps":
+                return
+            if fault == "environment":
+                environments[control_pid]["CUDA_VISIBLE_DEVICES"] = (
+                    EXPECTED_GPU_UUIDS[3]
+                )
+            else:
+                cgroups[control_pid] = "0::/user.slice/foreign.scope"
+
+        state["command_hook"] = mutate_after_initial_identity
+
+    with pytest.raises(BrokerError) as error:
+        mps_guard.authority_snapshot(1, gpu_uuid)
+
+    assert error.value.code == "mps_control_unavailable"
+
+
+def test_descriptor_mps_authority_accepts_abbreviated_client_uuid(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+    abbreviated_uuid = gpu_uuid[:18]
+    state["client_inventory"] = (
+        "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+        f"51001 0 {server_pid} {abbreviated_uuid} 4026531836 client\n"
+    )
+    tmp_path.chmod(0o700)
+    descriptor = os.open(
+        tmp_path,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    try:
+        mps_guard.state_root = Path(f"/proc/{os.getpid()}/fd/{descriptor}")
+        authority = mps_guard.authority_snapshot(1, gpu_uuid)
+        assert authority.descriptor_authority is True
+        assert {client.device_uuid for client in authority.clients} == {
+            abbreviated_uuid
+        }
+
+        external_guard = ExternalGpuGuard(
+            ExternalReservationPolicy(frozenset(), {}, {}),
+            process_query=lambda: {gpu_uuid: frozenset({server_pid})},
+            docker_claim_query=lambda: (),
+            systemd_claim_query=lambda: (),
+            unmanaged_mps_client_query=lambda *_args: False,
+            mps_authority_query=mps_guard.authority_snapshot,
+            allow_descriptor_mps_authority=True,
+            cache_seconds=0,
+        )
+        assert external_guard(
+            1,
+            gpu_uuid,
+            (),
+            _owner(),
+            "backend",
+            "dev",
+        ) is False
+    finally:
+        os.close(descriptor)
+
+
 def test_mps_control_queries_use_exact_executable_and_minimal_environment(
     tmp_path: Path,
     monkeypatch,
@@ -2917,13 +3168,15 @@ def test_mps_control_queries_use_exact_executable_and_minimal_environment(
         (str(mps_guard.control_executable),),
         (str(mps_guard.control_executable),),
         (str(mps_guard.control_executable),),
+        (str(mps_guard.control_executable),),
+        (str(mps_guard.control_executable),),
     ]
     assert state["run_envs"] == [
         {
             "LC_ALL": "C",
             "CUDA_MPS_PIPE_DIRECTORY": str(mps_guard.pipe_directory(1)),
         }
-    ] * 3
+    ] * 5
 
 
 def test_mps_runtime_rejects_relative_executable_authority(tmp_path: Path) -> None:
@@ -3121,7 +3374,7 @@ def test_mps_server_authority_fails_closed_on_identity_mismatch(
         executable_paths[control_pid].symlink_to("/bin/false")
     elif fault == "server_executable":
         executable_paths[server_pid].unlink()
-        executable_paths[server_pid].symlink_to("/bin/false")
+        executable_paths[server_pid].symlink_to("/bin/true")
     elif fault == "control_credentials":
         status_paths[control_pid].write_text(
             "Uid:\t1001\t1001\t1001\t1001\n"
@@ -3719,6 +3972,14 @@ def test_md_and_parented_dft_admissions_accept_live_dft_residency_tree(
         }[pid],
     )
     monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.os.getpgid",
+        lambda _pid: workload_pid,
+    )
+    monkeypatch.setattr(
         "ops.gpu_broker.server._pid_is_or_descends_from",
         lambda pid, ancestor: (
             pid == ancestor
@@ -3780,6 +4041,1040 @@ def test_md_and_parented_dft_admissions_accept_live_dft_residency_tree(
     status = broker.status()
     assert status["usage_mib"][str(residency.gpu_index)] == residency.memory_mib
     assert status["waiters"] == 0
+
+
+def _strict_dft_residency_lease() -> Lease:
+    lease_id = "d1" * 16
+    workload_pid = 8123
+    control_group = scope_control_group(lease_id, uid=1001)
+    return Lease(
+        lease_id=lease_id,
+        fencing_token=1,
+        broker_instance_id="broker",
+        request_id="dft:dev:residency",
+        kind="residency",
+        placement="preferred",
+        component="dft",
+        environment="dev",
+        client_id="dft-dev",
+        gpu_index=1,
+        gpu_uuid=EXPECTED_GPU_UUIDS[1],
+        memory_mib=4096,
+        thread_percent=50,
+        owner_pid=workload_pid,
+        owner_process_start_ticks=456,
+        owner_boot_id="boot",
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        created_at=1.0,
+        heartbeat_at=2.0,
+        workload_pid=workload_pid,
+        workload_process_start_ticks=456,
+        workload_process_group_id=workload_pid,
+        workload_cgroup=f"0::{control_group}",
+    )
+
+
+def _mixed_dft_mps_user_manager_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Lease, SystemdGpuClaim, MpsAuthoritySnapshot]:
+    lease = _strict_dft_residency_lease()
+    root_pid = lease.workload_pid
+    assert root_pid is not None
+    compiler_pid = 8456
+    control_pid = 7001
+    server_pid = 7002
+    dft_cgroup = str(lease.workload_cgroup)[3:]
+    mps_cgroup = "/user.slice/user-1001.slice/nexpoly-mps.scope"
+    declarers = (
+        SystemdGpuDeclarer(
+            pid=root_pid,
+            process_start_ticks=456,
+            process_cgroup=dft_cgroup,
+            gpu_uuids=frozenset({lease.gpu_uuid}),
+        ),
+        SystemdGpuDeclarer(
+            pid=compiler_pid,
+            process_start_ticks=789,
+            process_cgroup=dft_cgroup,
+            gpu_uuids=frozenset({lease.gpu_uuid}),
+        ),
+        SystemdGpuDeclarer(
+            pid=control_pid,
+            process_start_ticks=101,
+            process_cgroup=mps_cgroup,
+            gpu_uuids=frozenset({lease.gpu_uuid}),
+        ),
+        SystemdGpuDeclarer(
+            pid=server_pid,
+            process_start_ticks=202,
+            process_cgroup=mps_cgroup,
+            gpu_uuids=frozenset({lease.gpu_uuid}),
+        ),
+    )
+    claim = SystemdGpuClaim(
+        scope="system",
+        unit="user@1001.service",
+        main_pid=7000,
+        control_group=user_manager_control_group(1001),
+        process_pids=frozenset(item.pid for item in declarers),
+        gpu_uuids=frozenset({lease.gpu_uuid}),
+        active_gpu_uuids=frozenset({lease.gpu_uuid}),
+        live_gpu_declarers=declarers,
+    )
+    authority = MpsAuthoritySnapshot(
+        server_pids=frozenset({server_pid}),
+        gpu_declarers=frozenset(declarers[2:]),
+        clients=frozenset(),
+        descriptor_authority=True,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        lambda pid: {root_pid: 456, compiler_pid: 789}[pid],
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_boot_id",
+        lambda: "boot",
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.os.getpgid",
+        lambda _pid: root_pid,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda pid: dft_cgroup if pid in {root_pid, compiler_pid} else mps_cgroup,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        lambda pid, ancestor: pid == ancestor
+        or (pid == compiler_pid and ancestor == root_pid),
+    )
+    return lease, claim, authority
+
+
+def _strict_md_execution_lease() -> Lease:
+    lease_id = "a2" * 16
+    workload_pid = 9123
+    control_group = scope_control_group(lease_id, uid=1001)
+    return Lease(
+        lease_id=lease_id,
+        fencing_token=2,
+        broker_instance_id="broker",
+        request_id="md:dev:execution",
+        kind="execution",
+        placement="any",
+        component="md",
+        environment="dev",
+        client_id="md-dev",
+        gpu_index=1,
+        gpu_uuid=EXPECTED_GPU_UUIDS[1],
+        memory_mib=8192,
+        thread_percent=50,
+        owner_pid=9001,
+        owner_process_start_ticks=321,
+        owner_boot_id="boot",
+        preferred=True,
+        parent_lease_id=None,
+        status="active",
+        created_at=1.0,
+        heartbeat_at=2.0,
+        workload_pid=workload_pid,
+        workload_process_start_ticks=654,
+        workload_process_group_id=workload_pid,
+        workload_cgroup=f"0::{control_group}",
+    )
+
+
+def _mixed_dft_md_mps_user_manager_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[tuple[Lease, Lease], SystemdGpuClaim, MpsAuthoritySnapshot]:
+    dft = _strict_dft_residency_lease()
+    md = _strict_md_execution_lease()
+    dft_root = int(dft.workload_pid or 0)
+    md_root = int(md.workload_pid or 0)
+    starts = {
+        dft_root: int(dft.workload_process_start_ticks or 0),
+        8456: 789,
+        md.owner_pid: md.owner_process_start_ticks,
+        md_root: int(md.workload_process_start_ticks or 0),
+        9456: 987,
+    }
+    cgroups = {
+        dft_root: str(dft.workload_cgroup)[3:],
+        8456: str(dft.workload_cgroup)[3:],
+        md_root: str(md.workload_cgroup)[3:],
+        9456: str(md.workload_cgroup)[3:],
+    }
+    roots = {
+        dft_root: dft_root,
+        8456: dft_root,
+        md_root: md_root,
+        9456: md_root,
+    }
+    workload_declarers = tuple(
+        SystemdGpuDeclarer(
+            pid=pid,
+            process_start_ticks=starts[pid],
+            process_cgroup=cgroups[pid],
+            gpu_uuids=frozenset({dft.gpu_uuid}),
+        )
+        for pid in (dft_root, 8456, md_root, 9456)
+    )
+    mps_cgroup = "/user.slice/user-1001.slice/nexpoly-mps.scope"
+    mps_declarers = (
+        SystemdGpuDeclarer(
+            pid=7001,
+            process_start_ticks=101,
+            process_cgroup=mps_cgroup,
+            gpu_uuids=frozenset({dft.gpu_uuid}),
+        ),
+        SystemdGpuDeclarer(
+            pid=7002,
+            process_start_ticks=202,
+            process_cgroup=mps_cgroup,
+            gpu_uuids=frozenset({dft.gpu_uuid}),
+        ),
+    )
+    declarers = (*workload_declarers, *mps_declarers)
+    claim = SystemdGpuClaim(
+        scope="system",
+        unit="user@1001.service",
+        main_pid=7000,
+        control_group=user_manager_control_group(1001),
+        process_pids=frozenset(
+            {*(declarer.pid for declarer in declarers), 9998}
+        ),
+        gpu_uuids=frozenset({dft.gpu_uuid}),
+        active_gpu_uuids=frozenset({dft.gpu_uuid}),
+        live_gpu_declarers=declarers,
+    )
+    authority = MpsAuthoritySnapshot(
+        server_pids=frozenset({7002}),
+        gpu_declarers=frozenset(mps_declarers),
+        clients=frozenset(),
+        descriptor_authority=True,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        lambda pid: starts[pid],
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_boot_id",
+        lambda: "boot",
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda pid: cgroups[pid],
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.os.getpgid",
+        lambda pid: roots[pid],
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        lambda pid, ancestor: roots.get(pid) == ancestor,
+    )
+    return (dft, md), claim, authority
+
+
+def test_exact_broad_claim_accepts_complete_dft_mps_md_partition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=leases,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is True
+
+
+def test_exact_broad_claim_accepts_only_exact_parented_dft_inheritance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    dft, md = leases
+    child = replace(
+        dft,
+        lease_id="c3" * 16,
+        fencing_token=3,
+        request_id="dft:dev:resident-execution",
+        kind="execution",
+        parent_lease_id=dft.lease_id,
+    )
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=(dft, md, child),
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is True
+    child.workload_process_start_ticks = 999
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=(dft, md, child),
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is False
+
+
+@pytest.mark.parametrize("fault", ("boot", "start", "uid"))
+def test_exact_broad_claim_rejects_lease_owner_identity_drift(
+    fault: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    md = leases[1]
+    if fault == "boot":
+        md.owner_boot_id = "replacement-boot"
+    elif fault == "start":
+        md.owner_process_start_ticks += 1
+    else:
+        monkeypatch.setattr(
+            "ops.gpu_broker.server._read_process_uids",
+            lambda pid: (
+                (1001, 1001, 0, 1001)
+                if pid == md.owner_pid
+                else (1001, 1001, 1001, 1001)
+            ),
+        )
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=leases,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is False
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "extra",
+        "missing-md-root",
+        "missing-mps",
+        "mps-overlap",
+        "md-kind",
+        "md-placement",
+        "md-parent",
+        "md-component",
+        "md-environment",
+        "md-status",
+        "md-termination",
+        "md-gpu",
+        "duplicate-root",
+        "backend-user-manager",
+        "dft-overflow-root",
+        "parented-dft-new-root",
+    ),
+)
+def test_exact_broad_claim_rejects_incomplete_or_ineligible_partition(
+    fault: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    dft, md = leases
+    md_root = int(md.workload_pid or 0)
+    if fault == "extra":
+        extra = SystemdGpuDeclarer(
+            pid=9999,
+            process_start_ticks=303,
+            process_cgroup="/foreign.scope",
+            gpu_uuids=frozenset({md.gpu_uuid}),
+        )
+        claim = replace(
+            claim,
+            process_pids=claim.process_pids | {extra.pid},
+            live_gpu_declarers=(*claim.live_gpu_declarers, extra),
+        )
+    elif fault == "missing-md-root":
+        claim = replace(
+            claim,
+            live_gpu_declarers=tuple(
+                item for item in claim.live_gpu_declarers if item.pid != md_root
+            ),
+        )
+    elif fault == "missing-mps":
+        missing = next(iter(authority.gpu_declarers))
+        claim = replace(
+            claim,
+            live_gpu_declarers=tuple(
+                item for item in claim.live_gpu_declarers if item != missing
+            ),
+        )
+    elif fault == "mps-overlap":
+        md_declarer = next(
+            item for item in claim.live_gpu_declarers if item.pid == md_root
+        )
+        authority = replace(
+            authority,
+            gpu_declarers=authority.gpu_declarers | {md_declarer},
+        )
+    elif fault == "md-kind":
+        md.kind = "residency"
+    elif fault == "md-placement":
+        md.placement = "preferred"
+    elif fault == "md-parent":
+        md.parent_lease_id = dft.lease_id
+    elif fault == "md-component":
+        md.component = "backend"
+    elif fault == "md-environment":
+        md.environment = "prod"
+    elif fault == "md-status":
+        md.status = "suspect"
+    elif fault == "md-termination":
+        md.mps_termination_status = "safe"
+    elif fault == "md-gpu":
+        md.gpu_index = 3
+        md.gpu_uuid = EXPECTED_GPU_UUIDS[3]
+    elif fault == "duplicate-root":
+        leases = (dft, md, replace(md))
+    elif fault == "backend-user-manager":
+        md.kind = "residency"
+        md.placement = "preferred"
+        md.component = "backend"
+        md.memory_mib = 8192
+        md.thread_percent = 100
+    elif fault == "dft-overflow-root":
+        md.kind = "execution"
+        md.placement = "overflow"
+        md.component = "dft"
+        md.memory_mib = 4096
+        md.preferred = False
+    elif fault == "parented-dft-new-root":
+        md.kind = "execution"
+        md.placement = "preferred"
+        md.component = "dft"
+        md.memory_mib = 4096
+        md.parent_lease_id = dft.lease_id
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=leases,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is False
+
+
+@pytest.mark.parametrize("fault", ("pid-reuse", "cgroup", "pgid", "uid"))
+def test_exact_broad_claim_rejects_live_md_identity_races(
+    fault: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    md = leases[1]
+    md_root = int(md.workload_pid or 0)
+    md_child = 9456
+    start_reads = 0
+
+    original_start = {
+        md.owner_pid: md.owner_process_start_ticks,
+        md_root: 654,
+        md_child: 987,
+        8123: 456,
+        8456: 789,
+    }
+
+    def start_ticks(pid: int) -> int:
+        nonlocal start_reads
+        if pid == md_child:
+            start_reads += 1
+            if fault == "pid-reuse" and start_reads >= 2:
+                return 988
+        return original_start[pid]
+
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        start_ticks,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda pid: (
+            (1001, 1001, 0, 1001)
+            if fault == "uid" and pid == md_child
+            else (1001, 1001, 1001, 1001)
+        ),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda pid: (
+            "/foreign.scope"
+            if fault == "cgroup" and pid == md_child
+            else (
+                str(md.workload_cgroup)[3:]
+                if pid in {md_root, md_child}
+                else str(leases[0].workload_cgroup)[3:]
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.os.getpgid",
+        lambda pid: (
+            md_root + 1
+            if fault == "pgid" and pid == md_child
+            else (md_root if pid in {md_root, md_child} else 8123)
+        ),
+    )
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=leases,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is False
+
+
+def test_exact_dft_broad_claim_accepts_only_atomic_mps_declarers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease, claim, authority = _mixed_dft_mps_user_manager_claim(monkeypatch)
+
+    assert claim_is_exact_dft_residency_scope(
+        claim,
+        index=1,
+        uuid=lease.gpu_uuid,
+        lease=lease,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is True
+
+    missing_server = replace(
+        claim,
+        live_gpu_declarers=tuple(
+            declarer
+            for declarer in claim.live_gpu_declarers
+            if declarer.pid not in authority.server_pids
+        ),
+    )
+    assert claim_is_exact_dft_residency_scope(
+        missing_server,
+        index=1,
+        uuid=lease.gpu_uuid,
+        lease=lease,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is False
+
+    forged = SystemdGpuDeclarer(
+        pid=9999,
+        process_start_ticks=303,
+        process_cgroup="/user.slice/forged.scope",
+        gpu_uuids=frozenset({lease.gpu_uuid}),
+    )
+    with_extra = replace(
+        claim,
+        process_pids=claim.process_pids | {forged.pid},
+        live_gpu_declarers=(*claim.live_gpu_declarers, forged),
+    )
+    assert claim_is_exact_dft_residency_scope(
+        with_extra,
+        index=1,
+        uuid=lease.gpu_uuid,
+        lease=lease,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is False
+
+
+def test_legacy_exact_dft_broad_claim_retains_dev_gpu3_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _strict_dft_residency_lease()
+    lease.gpu_index = 3
+    lease.gpu_uuid = EXPECTED_GPU_UUIDS[3]
+    root_pid = int(lease.workload_pid or 0)
+    control_group = str(lease.workload_cgroup)[3:]
+    declarer = SystemdGpuDeclarer(
+        pid=root_pid,
+        process_start_ticks=int(lease.workload_process_start_ticks or 0),
+        process_cgroup=control_group,
+        gpu_uuids=frozenset({lease.gpu_uuid}),
+    )
+    claim = SystemdGpuClaim(
+        scope="system",
+        unit="user@1001.service",
+        main_pid=root_pid,
+        control_group=user_manager_control_group(1001),
+        process_pids=frozenset({root_pid}),
+        gpu_uuids=frozenset({lease.gpu_uuid}),
+        active_gpu_uuids=frozenset({lease.gpu_uuid}),
+        live_gpu_declarers=(declarer,),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        lambda _pid: int(lease.workload_process_start_ticks or 0),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda _pid: control_group,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        lambda pid, ancestor: pid == ancestor == root_pid,
+    )
+
+    assert claim_is_exact_dft_residency_scope(
+        claim,
+        index=3,
+        uuid=lease.gpu_uuid,
+        lease=lease,
+    ) is True
+    assert claim_is_exact_dft_residency_scope(
+        replace(claim, static_gpu_uuids=frozenset({lease.gpu_uuid})),
+        index=3,
+        uuid=lease.gpu_uuid,
+        lease=lease,
+    ) is False
+
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {lease.gpu_uuid: frozenset({root_pid})},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (claim,),
+        unmanaged_mps_client_query=lambda *_args: False,
+        cache_seconds=0,
+    )
+    assert guard(
+        3,
+        lease.gpu_uuid,
+        (lease,),
+        _owner(),
+        "md",
+        "dev",
+    ) is False
+
+
+def test_external_guard_admits_md_beside_mixed_dft_and_mps_broad_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease, claim, authority = _mixed_dft_mps_user_manager_claim(monkeypatch)
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {
+            lease.gpu_uuid: authority.server_pids,
+        },
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (claim,),
+        unmanaged_mps_client_query=lambda *_args: False,
+        mps_authority_query=lambda *_args: authority,
+        allow_descriptor_mps_authority=True,
+        cache_seconds=0,
+    )
+
+    assert guard(
+        1,
+        lease.gpu_uuid,
+        (lease,),
+        _owner(),
+        "md",
+        "dev",
+    ) is False
+
+
+@pytest.mark.parametrize("registered_client", (True, False))
+def test_descriptor_nvml_workload_requires_exact_mps_client_membership(
+    registered_client: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    md_pid = int(leases[1].workload_pid or 0)
+    authority = replace(
+        authority,
+        clients=(
+            frozenset(
+                {
+                    MpsClient(
+                        client_pid=md_pid,
+                        client_id=1,
+                        server_pid=7002,
+                        device_uuid=EXPECTED_GPU_UUIDS[1],
+                        namespace_id=1,
+                        command="gmx",
+                    )
+                }
+            )
+            if registered_client
+            else frozenset()
+        ),
+    )
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {
+            EXPECTED_GPU_UUIDS[1]: frozenset({7002, md_pid}),
+        },
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (claim,),
+        unmanaged_mps_client_query=lambda *_args: False,
+        mps_authority_query=lambda *_args: authority,
+        allow_descriptor_mps_authority=True,
+        cache_seconds=0,
+    )
+
+    assert guard(
+        1,
+        EXPECTED_GPU_UUIDS[1],
+        leases,
+        _owner(),
+        "md",
+        "dev",
+    ) is (not registered_client)
+
+
+def test_descriptor_snapshot_without_explicit_opt_in_cannot_expand_user_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {
+            EXPECTED_GPU_UUIDS[1]: authority.server_pids,
+        },
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (claim,),
+        unmanaged_mps_client_query=lambda *_args: False,
+        mps_authority_query=lambda *_args: authority,
+        allow_descriptor_mps_authority=False,
+        cache_seconds=0,
+    )
+
+    assert guard(
+        1,
+        EXPECTED_GPU_UUIDS[1],
+        leases,
+        _owner(),
+        "md",
+        "dev",
+    ) is True
+
+
+def _strict_backend_docker_authority() -> tuple[Lease, DockerGpuClaim]:
+    pid = 6101
+    return (
+        Lease(
+            lease_id="b1" * 16,
+            fencing_token=4,
+            broker_instance_id="broker",
+            request_id="backend:dev:residency",
+            kind="residency",
+            placement="preferred",
+            component="backend",
+            environment="dev",
+            client_id="backend-dev",
+            gpu_index=1,
+            gpu_uuid=EXPECTED_GPU_UUIDS[1],
+            memory_mib=8192,
+            thread_percent=100,
+            owner_pid=pid,
+            owner_process_start_ticks=333,
+            owner_boot_id="boot",
+            preferred=True,
+            parent_lease_id=None,
+            status="active",
+            created_at=1.0,
+            heartbeat_at=2.0,
+            workload_pid=pid,
+            workload_process_start_ticks=333,
+            workload_process_group_id=pid,
+            workload_cgroup="0::/docker/backend.scope",
+        ),
+        DockerGpuClaim(
+            container_id="b" * 64,
+            init_pid=pid,
+            started_at=_DOCKER_STARTED_AT,
+            restart_count=0,
+            registration_id="backend-dev",
+            component="backend",
+            environment="dev",
+            compose_project="nexpoly_dev",
+            compose_service="backend",
+            gpu_uuids=frozenset({EXPECTED_GPU_UUIDS[1]}),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (None, "boot", "start-race", "cgroup", "reserved", "suspect", "owner"),
+)
+def test_backend_docker_authority_is_exact_and_identity_stable(
+    fault: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease, claim = _strict_backend_docker_authority()
+    reads = 0
+    if fault == "boot":
+        lease.owner_boot_id = "stale"
+    elif fault in {"reserved", "suspect"}:
+        lease.status = fault
+    elif fault == "owner":
+        lease.owner_pid += 1
+
+    def start_ticks(_pid: int) -> int:
+        nonlocal reads
+        reads += 1
+        return 334 if fault == "start-race" and reads >= 2 else 333
+
+    monkeypatch.setattr("ops.gpu_broker.server.read_boot_id", lambda: "boot")
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        start_ticks,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda _pid: (
+            "/foreign.scope"
+            if fault == "cgroup"
+            else "/docker/backend.scope"
+        ),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.os.getpgid",
+        lambda _pid: 6101,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        lambda pid, ancestor: pid == ancestor == 6101,
+    )
+
+    observed = exact_dev_gpu1_backend_docker_workload_pids(
+        (lease,),
+        (claim,),
+    )
+    assert observed == (
+        frozenset({6101}) if fault is None else frozenset()
+    )
+
+
+@pytest.mark.parametrize("identity_fault", ("start_ticks", "cgroup"))
+def test_external_guard_never_retroactively_authorizes_reused_mps_server_pid(
+    identity_fault: str,
+) -> None:
+    gpu_uuid = EXPECTED_GPU_UUIDS[1]
+    control = SystemdGpuDeclarer(
+        pid=7001,
+        process_start_ticks=101,
+        process_cgroup="/user.slice/nexpoly-mps.scope",
+        gpu_uuids=frozenset({gpu_uuid}),
+    )
+    original_server = SystemdGpuDeclarer(
+        pid=7002,
+        process_start_ticks=202,
+        process_cgroup="/user.slice/nexpoly-mps.scope",
+        gpu_uuids=frozenset({gpu_uuid}),
+    )
+    replacement_server = replace(
+        original_server,
+        **(
+            {"process_start_ticks": 999}
+            if identity_fault == "start_ticks"
+            else {"process_cgroup": "/user.slice/foreign.scope"}
+        ),
+    )
+    original = MpsAuthoritySnapshot(
+        server_pids=frozenset({original_server.pid}),
+        gpu_declarers=frozenset({control, original_server}),
+        clients=frozenset(),
+        descriptor_authority=True,
+    )
+    replacement = replace(
+        original,
+        gpu_declarers=frozenset({control, replacement_server}),
+    )
+    current_authority = [original]
+    process_calls = 0
+    authority_calls = 0
+
+    def processes():
+        nonlocal process_calls
+        process_calls += 1
+        if process_calls == 1:
+            # NVML retained PID 7002 while its process identity changed.
+            current_authority[0] = replacement
+        return {gpu_uuid: frozenset({original_server.pid})}
+
+    def mps_authority(*_args):
+        nonlocal authority_calls
+        authority_calls += 1
+        return current_authority[0]
+
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=processes,
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (),
+        unmanaged_mps_client_query=lambda *_args: False,
+        mps_authority_query=mps_authority,
+        allow_descriptor_mps_authority=True,
+        cache_seconds=0,
+    )
+
+    assert guard(
+        1,
+        gpu_uuid,
+        (),
+        _owner(),
+        "backend",
+        "dev",
+    ) is True
+    assert process_calls == 3
+    assert authority_calls == 2
+
+
+def test_exact_dft_descendant_revalidates_root_child_and_ancestry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _strict_dft_residency_lease()
+    root_pid = lease.workload_pid
+    assert root_pid is not None
+    child_pid = 8456
+    control_group = str(lease.workload_cgroup)[3:]
+    ancestry_calls = 0
+
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        lambda pid: {root_pid: 456, child_pid: 789}[pid],
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda _pid: control_group,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.os.getpgid",
+        lambda _pid: root_pid,
+    )
+
+    def descends(pid: int, ancestor: int) -> bool:
+        nonlocal ancestry_calls
+        ancestry_calls += 1
+        return pid == child_pid and ancestor == root_pid
+
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        descends,
+    )
+
+    assert process_is_exact_dft_residency_descendant(
+        child_pid,
+        lease,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+    ) is True
+    assert ancestry_calls == 2
+
+
+@pytest.mark.parametrize(
+    "invalid_identity",
+    (
+        "root-pgid",
+        "child-pgid",
+        "child-uid",
+        "child-cgroup",
+        "child-start",
+        "ancestry-race",
+    ),
+)
+def test_exact_dft_descendant_rejects_identity_and_ancestry_races(
+    invalid_identity: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _strict_dft_residency_lease()
+    root_pid = lease.workload_pid
+    assert root_pid is not None
+    child_pid = 8456
+    control_group = str(lease.workload_cgroup)[3:]
+    start_reads = {root_pid: 0, child_pid: 0}
+    ancestry_reads = 0
+
+    def start_ticks(pid: int) -> int:
+        start_reads[pid] += 1
+        if (
+            invalid_identity == "child-start"
+            and pid == child_pid
+            and start_reads[pid] == 2
+        ):
+            return 790
+        return 456 if pid == root_pid else 789
+
+    def uids(pid: int) -> tuple[int, int, int, int]:
+        if invalid_identity == "child-uid" and pid == child_pid:
+            return (1001, 1001, 0, 1001)
+        return (1001, 1001, 1001, 1001)
+
+    def cgroup(pid: int) -> str:
+        if invalid_identity == "child-cgroup" and pid == child_pid:
+            return "/foreign"
+        return control_group
+
+    def pgid(pid: int) -> int:
+        if invalid_identity == "root-pgid" and pid == root_pid:
+            return root_pid + 1
+        if invalid_identity == "child-pgid" and pid == child_pid:
+            return root_pid + 1
+        return root_pid
+
+    def descends(_pid: int, _ancestor: int) -> bool:
+        nonlocal ancestry_reads
+        ancestry_reads += 1
+        return not (
+            invalid_identity == "ancestry-race" and ancestry_reads == 2
+        )
+
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        start_ticks,
+    )
+    monkeypatch.setattr("ops.gpu_broker.server._read_process_uids", uids)
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        cgroup,
+    )
+    monkeypatch.setattr("ops.gpu_broker.server.os.getpgid", pgid)
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        descends,
+    )
+
+    assert process_is_exact_dft_residency_descendant(
+        child_pid,
+        lease,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+    ) is False
 
 
 @pytest.mark.parametrize(

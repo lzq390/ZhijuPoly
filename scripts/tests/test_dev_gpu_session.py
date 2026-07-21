@@ -22,6 +22,33 @@ def empty_snapshot() -> session.TargetSnapshot:
     return session.TargetSnapshot((), (), ())
 
 
+def mps_snapshot(
+    *,
+    server_pids: frozenset[int] = frozenset(),
+    client_pids: frozenset[int] = frozenset(),
+    declarers: frozenset[object] = frozenset(),
+) -> object:
+    from ops.gpu_broker.server import MpsAuthoritySnapshot, MpsClient
+
+    server_pid = next(iter(server_pids), 7001)
+    return MpsAuthoritySnapshot(
+        server_pids=server_pids,
+        gpu_declarers=declarers,
+        clients=frozenset(
+            MpsClient(
+                client_pid=pid,
+                client_id=index,
+                server_pid=server_pid,
+                device_uuid=session.GPU_UUID,
+                namespace_id=1,
+                command="python",
+            )
+            for index, pid in enumerate(sorted(client_pids))
+        ),
+        descriptor_authority=True,
+    )
+
+
 def dft_residency_record(
     *,
     lease_id: str = "d1" * 16,
@@ -59,6 +86,324 @@ def dft_residency_record(
         workload_process_group_id=workload_pid,
         workload_cgroup=f"0::{control_group}",
     ).public_dict()
+
+
+def backend_residency_record(*, status: str = "active") -> dict[str, object]:
+    from ops.gpu_broker.broker import Lease
+
+    pid = 6101
+    return Lease(
+        lease_id="b1" * 16,
+        fencing_token=4,
+        broker_instance_id="broker",
+        request_id="backend:dev:residency",
+        kind="residency",
+        placement="preferred",
+        component="backend",
+        environment="dev",
+        client_id="backend-dev",
+        gpu_index=1,
+        gpu_uuid=session.GPU_UUID,
+        memory_mib=8192,
+        thread_percent=100,
+        owner_pid=pid,
+        owner_process_start_ticks=333,
+        owner_boot_id="boot",
+        preferred=True,
+        parent_lease_id=None,
+        status=status,
+        created_at=1.0,
+        heartbeat_at=2.0,
+        workload_pid=pid,
+        workload_process_start_ticks=333,
+        workload_process_group_id=pid,
+        workload_cgroup="0::/docker/backend.scope",
+    ).public_dict()
+
+
+def backend_docker_claim() -> object:
+    from ops.gpu_broker.server import DockerGpuClaim
+
+    return DockerGpuClaim(
+        container_id="b" * 64,
+        init_pid=6101,
+        started_at="2026-07-19T06:00:00.123456789Z",
+        restart_count=0,
+        registration_id="backend-dev",
+        component="backend",
+        environment="dev",
+        compose_project="nexpoly_dev",
+        compose_service="backend",
+        gpu_uuids=frozenset({session.GPU_UUID}),
+    )
+
+
+def patch_backend_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    start_ticks: object = 333,
+) -> None:
+    from ops.gpu_broker import server
+
+    monkeypatch.setattr(server, "read_boot_id", lambda: "boot")
+    monkeypatch.setattr(
+        server,
+        "read_process_start_ticks",
+        start_ticks if callable(start_ticks) else lambda _pid: start_ticks,
+    )
+    monkeypatch.setattr(
+        server,
+        "_read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(server.os, "getpgid", lambda _pid: 6101)
+    monkeypatch.setattr(
+        server,
+        "_read_unified_process_cgroup",
+        lambda _pid: "/docker/backend.scope",
+    )
+    monkeypatch.setattr(
+        server,
+        "_pid_is_or_descends_from",
+        lambda pid, ancestor: pid == ancestor == 6101,
+    )
+
+
+def mps_declarer(pid: int, start_ticks: int = 100) -> object:
+    from ops.gpu_broker.server import SystemdGpuDeclarer
+
+    return SystemdGpuDeclarer(
+        pid=pid,
+        process_start_ticks=start_ticks,
+        process_cgroup="/user.slice/user-1001.slice/nexpoly-mps.scope",
+        gpu_uuids=frozenset({session.GPU_UUID}),
+    )
+
+
+def patch_fast_guard_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    controller: session.SessionController,
+    *,
+    authorities: tuple[object, object],
+    compute: tuple[frozenset[int], frozenset[int]],
+    docker: tuple[tuple[object, ...], tuple[object, ...]] = ((), ()),
+    exact_pids: frozenset[int] = frozenset({8123}),
+    compute_declarers: tuple[
+        dict[int, object], dict[int, object]
+    ] | None = None,
+) -> None:
+    from ops.gpu_broker import server
+
+    authority_reads = iter(authorities)
+    compute_reads = iter(compute)
+    docker_reads = iter(docker)
+    if compute_declarers is None:
+        known_declarers = {
+            declarer.pid: declarer
+            for authority in authorities
+            for declarer in authority.gpu_declarers
+        }
+        compute_declarers = (
+            {
+                pid: known_declarers[pid]
+                for pid in compute[0]
+                if pid in known_declarers
+            },
+            {
+                pid: known_declarers[pid]
+                for pid in compute[1]
+                if pid in known_declarers
+            },
+        )
+    declarer_reads = iter(compute_declarers)
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority",
+        lambda: next(authority_reads),
+    )
+    monkeypatch.setattr(
+        server,
+        "query_gpu_inventory",
+        lambda: {session.GPU_INDEX: session.GPU_UUID},
+    )
+    monkeypatch.setattr(
+        server,
+        "query_compute_processes",
+        lambda: {session.GPU_UUID: next(compute_reads)},
+    )
+    monkeypatch.setattr(
+        session,
+        "capture_compute_process_declarers",
+        lambda pids: {
+            pid: declarer
+            for pid, declarer in next(declarer_reads).items()
+            if pid in pids
+        },
+    )
+    monkeypatch.setattr(
+        server,
+        "query_docker_gpu_claims",
+        lambda: next(docker_reads),
+    )
+    monkeypatch.setattr(
+        server,
+        "process_is_exact_dft_residency_descendant",
+        lambda pid, *_args, **_kwargs: pid in exact_pids,
+    )
+    monkeypatch.setattr(
+        session,
+        "require_gpu1_default_compute_mode",
+        lambda: None,
+    )
+
+
+def patch_full_audit_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    controller: session.SessionController,
+    status: dict[str, object],
+    *,
+    snapshot: session.TargetSnapshot | None = None,
+    authority: object | None = None,
+    trailing_compute: frozenset[int] = frozenset(),
+    trailing_docker: tuple[object, ...] = (),
+    trailing_systemd: tuple[object, ...] | None = None,
+) -> SimpleNamespace:
+    from ops.gpu_broker import server
+
+    if snapshot is None:
+        snapshot = empty_snapshot()
+    if authority is None:
+        authority = mps_snapshot()
+    snapshot = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        authority,
+        snapshot,
+    )
+    if trailing_systemd is None:
+        trailing_systemd = snapshot.systemd_claims
+    monkeypatch.setattr(
+        session,
+        "consistent_broker_snapshot",
+        lambda _client, **_kwargs: (status, snapshot),
+    )
+    monkeypatch.setattr(controller, "_mps_authority", lambda: authority)
+    monkeypatch.setattr(
+        server,
+        "query_compute_processes",
+        lambda: {session.GPU_UUID: trailing_compute},
+    )
+    monkeypatch.setattr(
+        server,
+        "query_docker_gpu_claims",
+        lambda: trailing_docker,
+    )
+    monkeypatch.setattr(
+        server,
+        "query_systemd_gpu_claims",
+        lambda **_kwargs: trailing_systemd,
+    )
+    monkeypatch.setattr(
+        session,
+        "require_gpu1_default_compute_mode",
+        lambda: None,
+    )
+    return SimpleNamespace(status=lambda: status)
+
+
+def dft_resident_authority(
+    *,
+    server_pid: int = 7001,
+    workload_pid: int = 8123,
+) -> object:
+    return mps_snapshot(
+        server_pids=frozenset({server_pid}),
+        client_pids=frozenset({workload_pid}),
+        declarers=frozenset(
+            {mps_declarer(7000), mps_declarer(server_pid, 101)}
+        ),
+    )
+
+
+def dft_broad_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    status: dict[str, object],
+    authority: object,
+    snapshot: session.TargetSnapshot,
+) -> session.TargetSnapshot:
+    """Model the real system user-manager DFT/MPS claim for audit tests."""
+
+    from ops.gpu_broker import server
+
+    if snapshot.systemd_claims:
+        return snapshot
+    records = status.get("leases")
+    if not isinstance(records, list):
+        return snapshot
+    matches = [
+        record
+        for record in records
+        if isinstance(record, dict)
+        and record.get("component") == "dft"
+        and record.get("kind") == "residency"
+        and record.get("status") == "active"
+    ]
+    if len(matches) != 1:
+        return snapshot
+    lease = matches[0]
+    root_pid = int(lease["workload_pid"])
+    root_start = int(lease["workload_process_start_ticks"])
+    control_group = str(lease["workload_cgroup"])[3:]
+    root = server.SystemdGpuDeclarer(
+        pid=root_pid,
+        process_start_ticks=root_start,
+        process_cgroup=control_group,
+        gpu_uuids=frozenset({session.GPU_UUID}),
+    )
+    mps_declarers = tuple(authority.gpu_declarers)
+    claim = server.SystemdGpuClaim(
+        scope="system",
+        unit="user@1001.service",
+        main_pid=7000,
+        control_group=server.user_manager_control_group(1001),
+        process_pids=frozenset(
+            {root_pid, *(item.pid for item in mps_declarers), 8999}
+        ),
+        gpu_uuids=frozenset({session.GPU_UUID}),
+        active_gpu_uuids=frozenset({session.GPU_UUID}),
+        live_gpu_declarers=(root, *mps_declarers),
+    )
+    monkeypatch.setattr(server, "read_boot_id", lambda: str(lease["owner_boot_id"]))
+    monkeypatch.setattr(
+        server,
+        "read_process_start_ticks",
+        lambda pid: (
+            int(lease["owner_process_start_ticks"])
+            if pid == int(lease["owner_pid"])
+            else root_start
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "_read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(server.os, "getpgid", lambda _pid: root_pid)
+    monkeypatch.setattr(
+        server,
+        "_read_unified_process_cgroup",
+        lambda pid: control_group if pid == root_pid else "/mps.scope",
+    )
+    monkeypatch.setattr(
+        server,
+        "_pid_is_or_descends_from",
+        lambda pid, ancestor: pid == root_pid == ancestor,
+    )
+    return session.TargetSnapshot(
+        snapshot.process_pids,
+        snapshot.docker_claims,
+        (claim,),
+    )
 
 
 def test_dry_run_from_foreign_cwd_has_no_runtime_side_effects(tmp_path: Path) -> None:
@@ -224,23 +569,27 @@ def test_audit_marks_unleased_private_mps_client_foreign(tmp_path, monkeypatch) 
     run = tmp_path / ("run-" + "d" * 32)
     run.mkdir()
     controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
     client = SimpleNamespace(
         status=lambda: {"broker_instance_id": "b", "draining": False, "leases": []}
     )
     monkeypatch.setattr(
         session,
         "consistent_broker_snapshot",
-        lambda _client: (client.status(), empty_snapshot()),
+        lambda _client, **_kwargs: (client.status(), empty_snapshot()),
     )
-    monkeypatch.setattr(controller, "_authorized_mps", lambda: frozenset({7001}))
-    monkeypatch.setattr(controller, "_mps_client_pids", lambda: frozenset({8123}))
+    authority = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({8123}),
+    )
+    monkeypatch.setattr(controller, "_mps_authority", lambda: authority)
 
     _status, _snapshot, reasons = controller._audit(client)
 
     assert reasons == ("unknown private MPS client PID(s): 8123",)
 
 
-def test_exact_registered_scope_descendants_are_managed() -> None:
+def test_direct_user_scope_does_not_expand_managed_workload_authority() -> None:
     lease_id = "a1" * 16
     workload_pid = 8123
     child_pid = 8456
@@ -273,12 +622,15 @@ def test_exact_registered_scope_descendants_are_managed() -> None:
 
     managed = session.SessionController._managed_workload_pids(status, snapshot)
 
-    assert managed == frozenset({8001, workload_pid, child_pid})
+    assert managed == frozenset()
     assert session.foreign_gpu1_reasons(
         snapshot,
         authorized_mps_pids=frozenset(),
         managed_workload_pids=managed,
-    ) == ()
+    ) == (
+        f"foreign CUDA PID(s): {workload_pid}",
+        f"foreign systemd claim: user:nexpoly-gpu-job-{lease_id}.scope",
+    )
 
 
 def test_scope_descendants_remain_foreign_when_control_group_identity_differs() -> None:
@@ -314,7 +666,10 @@ def test_scope_descendants_remain_foreign_when_control_group_identity_differs() 
         snapshot,
         authorized_mps_pids=frozenset(),
         managed_workload_pids=managed,
-    ) == (f"foreign systemd claim: user:nexpoly-gpu-job-{lease_id}.scope",)
+    ) == (
+        f"foreign CUDA PID(s): {workload_pid}",
+        f"foreign systemd claim: user:nexpoly-gpu-job-{lease_id}.scope",
+    )
 
 
 def test_exact_dft_user_manager_claim_authorizes_only_residency_declarers(
@@ -365,6 +720,13 @@ def test_exact_dft_user_manager_claim_authorizes_only_residency_declarers(
             compiler_pid: compiler_start_ticks,
         }[pid],
     )
+    monkeypatch.setattr(server, "read_boot_id", lambda: "boot")
+    monkeypatch.setattr(
+        server,
+        "_read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(server.os, "getpgid", lambda _pid: workload_pid)
     monkeypatch.setattr(
         server,
         "_read_unified_process_cgroup",
@@ -383,20 +745,85 @@ def test_exact_dft_user_manager_claim_authorizes_only_residency_declarers(
     )
     status = {"leases": [lease]}
 
-    managed, managed_claims = (
+    managed_nvml, managed_clients, managed_claims = (
         session.SessionController._managed_workload_authority(status, snapshot)
     )
 
-    assert managed == frozenset({workload_pid, compiler_pid})
-    assert unrelated_cpu_pid not in managed
+    assert managed_nvml == frozenset()
+    assert managed_clients == frozenset({workload_pid, compiler_pid})
+    assert unrelated_cpu_pid not in managed_clients
     assert managed_claims == frozenset(
         {("system", "user@1001.service", claim.control_group)}
     )
     assert session.foreign_gpu1_reasons(
         snapshot,
         authorized_mps_pids=frozenset(),
-        managed_workload_pids=managed,
+        managed_workload_pids=managed_nvml,
         managed_systemd_claims=managed_claims,
+    ) == (f"foreign CUDA PID(s): {workload_pid},{compiler_pid}",)
+
+    mps_nvml, mps_clients, _claims = (
+        session.SessionController._managed_workload_authority(
+            status,
+            snapshot,
+            authorized_mps_client_pids=frozenset(
+                {workload_pid, compiler_pid}
+            ),
+        )
+    )
+    assert mps_nvml == mps_clients == frozenset(
+        {workload_pid, compiler_pid}
+    )
+
+
+@pytest.mark.parametrize("fault", ("reserved", "suspect", "owner"))
+def test_controller_rejects_nonactive_backend_lease_even_without_cuda_pid(
+    fault: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = backend_residency_record(
+        status=fault if fault in {"reserved", "suspect"} else "active"
+    )
+    if fault == "owner":
+        record["owner_pid"] = 6102
+    status = {"leases": [record]}
+    snapshot = session.TargetSnapshot((), (backend_docker_claim(),), ())
+    patch_backend_identity(monkeypatch)
+
+    with pytest.raises(session.DevGpuSessionError, match="exact active Docker"):
+        session.SessionController._managed_workload_authority(status, snapshot)
+
+
+def test_controller_backend_authority_requires_mps_client_for_nvml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {"leases": [backend_residency_record()]}
+    claim = backend_docker_claim()
+    snapshot = session.TargetSnapshot((6101,), (claim,), ())
+    patch_backend_identity(monkeypatch)
+
+    direct_nvml, managed_clients, _claims = (
+        session.SessionController._managed_workload_authority(status, snapshot)
+    )
+    assert direct_nvml == frozenset()
+    assert managed_clients == frozenset({6101})
+    mps_nvml, mps_clients, _claims = (
+        session.SessionController._managed_workload_authority(
+            status,
+            snapshot,
+            authorized_mps_client_pids=frozenset({6101}),
+        )
+    )
+    assert mps_nvml == mps_clients == frozenset({6101})
+
+    idle = session.TargetSnapshot((), (claim,), ())
+    assert session.SessionController._managed_workload_authority(
+        {"leases": []},
+        idle,
+    ) == (frozenset(), frozenset(), frozenset())
+    assert session.foreign_gpu1_reasons(
+        idle,
+        authorized_mps_pids=frozenset(),
     ) == ()
 
 
@@ -687,6 +1114,1119 @@ def test_broker_snapshot_never_retries_unknown_membership_churn() -> None:
     assert calls == 1
 
 
+def test_gpu1_default_compute_mode_inventory_is_strict() -> None:
+    def result(stdout: str) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    session.require_gpu1_default_compute_mode(
+        run=lambda *_args, **_kwargs: result(
+            f"{session.GPU_UUID}, Default\n"
+        )
+    )
+    with pytest.raises(session.DevGpuSessionError, match="Default compute mode"):
+        session.require_gpu1_default_compute_mode(
+            run=lambda *_args, **_kwargs: result(
+                f"{session.GPU_UUID}, Exclusive_Process\n"
+            )
+        )
+
+
+def test_exact_dft_churn_inner_budget_survives_more_than_three_transitions() -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    calls = 0
+    guarded: list[dict[str, object]] = []
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls <= 5:
+            raise BrokerError(
+                "gpu_claim_inventory_changed",
+                "system systemd unit user@1001.service membership changed during audit",
+            )
+        return empty_snapshot()
+
+    observed, snapshot = session.consistent_broker_snapshot(
+        client,
+        collect,
+        membership_churn_retries=6,
+        membership_churn_timeout_seconds=90,
+        membership_churn_guard=lambda value: guarded.append(value) or True,
+    )
+
+    assert observed == status
+    assert snapshot == empty_snapshot()
+    assert calls == 6
+    assert guarded == [status] * 5
+
+
+def test_fast_dft_guard_accepts_stable_exact_children_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    authority = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({8123}),
+        declarers=frozenset(
+            {mps_declarer(7000), mps_declarer(7001, 101)}
+        ),
+    )
+    patch_fast_guard_runtime(
+        monkeypatch,
+        controller,
+        authorities=(authority, authority),
+        compute=(frozenset({7001, 8123}), frozenset({7001, 8123})),
+    )
+    states: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        controller,
+        "_state",
+        lambda value, **extra: states.append((value, extra)),
+    )
+
+    assert controller._fast_dft_churn_guard(
+        SimpleNamespace(status=lambda: status),
+        status,
+    ) is True
+    assert controller.fast_audit_sequence == 1
+    assert states[-1][0] == "stabilizing"
+    assert states[-1][1]["mps_membership_changed"] is False
+
+
+def test_fast_dft_guard_accepts_exact_lazy_server_and_client_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    control = mps_declarer(7000)
+    before = mps_snapshot(declarers=frozenset({control}))
+    after = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({8123}),
+        declarers=frozenset({control, mps_declarer(7001, 101)}),
+    )
+    # The lazy server can enter NVML after the first authority snapshot.  The
+    # second exact authority is allowed to explain only that one PID.
+    patch_fast_guard_runtime(
+        monkeypatch,
+        controller,
+        authorities=(before, after),
+        compute=(frozenset({7001}), frozenset({7001, 8123})),
+    )
+    states: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        controller,
+        "_state",
+        lambda _value, **extra: states.append(extra),
+    )
+
+    assert controller._fast_dft_churn_guard(
+        SimpleNamespace(status=lambda: status),
+        status,
+    ) is True
+    assert states[-1]["mps_membership_changed"] is True
+
+
+@pytest.mark.parametrize("identity_fault", ("start_ticks", "cgroup"))
+def test_fast_dft_guard_never_retroactively_exempts_reused_server_pid(
+    identity_fault: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    control = mps_declarer(7000)
+    server = mps_declarer(7001, 101)
+    before = mps_snapshot(declarers=frozenset({control}))
+    after = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({8123}),
+        declarers=frozenset({control, server}),
+    )
+    reused_server = (
+        mps_declarer(7001, 999)
+        if identity_fault == "start_ticks"
+        else replace(server, process_cgroup="/user.slice/foreign.scope")
+    )
+    patch_fast_guard_runtime(
+        monkeypatch,
+        controller,
+        authorities=(before, after),
+        compute=(frozenset({7001}), frozenset({7001, 8123})),
+        compute_declarers=(
+            {7001: reused_server},
+            {7001: server},
+        ),
+    )
+
+    with pytest.raises(session.DevGpuSessionError, match="foreign PID 7001"):
+        controller._fast_dft_churn_guard(
+            SimpleNamespace(status=lambda: status),
+            status,
+        )
+
+
+@pytest.mark.parametrize("foreign_source", ("compute", "mps", "docker"))
+def test_fast_dft_guard_fails_closed_for_foreign_authority(
+    foreign_source: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    client_pids = frozenset({9999}) if foreign_source == "mps" else frozenset()
+    authority = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=client_pids,
+        declarers=frozenset(
+            {mps_declarer(7000), mps_declarer(7001, 101)}
+        ),
+    )
+    compute = (
+        frozenset({7001, 9999})
+        if foreign_source == "compute"
+        else frozenset({7001})
+    )
+    claim = SimpleNamespace(gpu_uuids=frozenset({session.GPU_UUID}))
+    docker = ((claim,), (claim,)) if foreign_source == "docker" else ((), ())
+    patch_fast_guard_runtime(
+        monkeypatch,
+        controller,
+        authorities=(authority, authority),
+        compute=(compute, compute),
+        docker=docker,
+    )
+
+    with pytest.raises(session.DevGpuSessionError):
+        controller._fast_dft_churn_guard(
+            SimpleNamespace(status=lambda: status),
+            status,
+        )
+
+
+def test_fast_dft_guard_rejects_duplicate_lease_and_90_second_expiry(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    duplicate = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [
+            dft_residency_record(),
+            dft_residency_record(lease_id="d2" * 16),
+        ],
+    }
+    with pytest.raises(session.DevGpuSessionError, match="one exact"):
+        controller._fast_dft_churn_guard(
+            SimpleNamespace(status=lambda: duplicate),
+            duplicate,
+        )
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    controller.dft_churn_started_at = (
+        session.time.monotonic()
+        - session.DFT_WARMUP_CHURN_TIMEOUT_SECONDS
+        - 0.1
+    )
+    with pytest.raises(session.DevGpuSessionError, match="within 90 seconds"):
+        controller._fast_dft_churn_guard(
+            SimpleNamespace(status=lambda: status),
+            status,
+        )
+
+
+def test_warmup_retries_only_internal_mps_membership_cas_until_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    authority = dft_resident_authority()
+    calls = 0
+
+    def snapshot():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise BrokerError(
+                "mps_authority_changed",
+                "lazy server appeared",
+            )
+        return authority
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    states: list[str] = []
+    monkeypatch.setattr(controller, "_mps_authority", snapshot)
+    monkeypatch.setattr(
+        controller,
+        "_state",
+        lambda value, **_extra: states.append(value),
+    )
+    monkeypatch.setattr(session.time, "sleep", lambda _seconds: None)
+
+    assert controller._mps_authority_for_audit(
+        SimpleNamespace(status=lambda: status)
+    ) == authority
+    assert calls == 2
+    assert states == ["stabilizing"]
+
+
+@pytest.mark.parametrize("failure", ("identity", "foreign", "expired"))
+def test_warmup_never_retries_unproven_or_expired_mps_churn(
+    failure: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    calls = 0
+
+    def snapshot():
+        nonlocal calls
+        calls += 1
+        raise BrokerError(
+            (
+                "mps_control_unavailable"
+                if failure == "identity"
+                else "mps_authority_changed"
+            ),
+            "unstable MPS authority",
+        )
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": (
+            [] if failure == "foreign" else [dft_residency_record()]
+        ),
+    }
+    if failure == "expired":
+        controller.dft_churn_started_at = (
+            session.time.monotonic()
+            - session.DFT_WARMUP_CHURN_TIMEOUT_SECONDS
+            - 0.1
+        )
+    monkeypatch.setattr(controller, "_mps_authority", snapshot)
+    monkeypatch.setattr(session.time, "sleep", lambda _seconds: None)
+
+    expected = (
+        session.DevGpuSessionError
+        if failure in {"foreign", "expired"}
+        else BrokerError
+    )
+    with pytest.raises(expected):
+        controller._mps_authority_for_audit(
+            SimpleNamespace(status=lambda: status)
+        )
+    assert calls == 1
+
+
+def test_full_audit_seals_only_one_live_exact_dft_residency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_stabilization_generation = 1
+    authority = dft_resident_authority()
+    resident_snapshot = session.TargetSnapshot((7001,), (), ())
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=resident_snapshot,
+        authority=authority,
+        trailing_compute=frozenset({7001}),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_exact_dft_descendants",
+        lambda _status, pids: pids == frozenset({8123}),
+    )
+
+    controller._audit(client)
+
+    assert controller.dft_stabilized is True
+    assert controller.dft_warmup_open is False
+    assert controller.full_audit_generation == 1
+    assert controller.last_audit_stabilization_generation == 1
+
+
+@pytest.mark.parametrize(
+    ("authority", "snapshot", "trailing_compute", "message"),
+    (
+        (
+            mps_snapshot(declarers=frozenset({mps_declarer(7000)})),
+            empty_snapshot(),
+            frozenset(),
+            "lacks one descriptor-owned MPS server",
+        ),
+        (
+            mps_snapshot(
+                server_pids=frozenset({7001}),
+                declarers=frozenset(
+                    {mps_declarer(7000), mps_declarer(7001, 101)}
+                ),
+            ),
+            session.TargetSnapshot((7001,), (), ()),
+            frozenset({7001}),
+            "root lacks an active private MPS client",
+        ),
+        (
+            dft_resident_authority(),
+            empty_snapshot(),
+            frozenset(),
+            "server is absent from the stable NVML inventory",
+        ),
+    ),
+)
+def test_full_audit_never_seals_without_real_dft_cuda_residency(
+    authority: object,
+    snapshot: session.TargetSnapshot,
+    trailing_compute: frozenset[int],
+    message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_stabilization_generation = 1
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=snapshot,
+        authority=authority,
+        trailing_compute=trailing_compute,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_exact_dft_descendants",
+        lambda _status, pids: pids == frozenset({8123}),
+    )
+
+    with pytest.raises(session.DevGpuSessionError, match=message):
+        controller._audit(client)
+
+    assert controller.dft_stabilized is False
+
+
+@pytest.mark.parametrize("identity_fault", ("start_ticks", "cgroup"))
+def test_full_audit_never_retroactively_authorizes_reused_mps_server_pid(
+    identity_fault: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_stabilization_generation = 1
+    original = dft_resident_authority()
+    original_server = next(
+        item for item in original.gpu_declarers if item.pid == 7001
+    )
+    replacement_server = replace(
+        original_server,
+        **(
+            {"process_start_ticks": 999}
+            if identity_fault == "start_ticks"
+            else {"process_cgroup": "/user.slice/foreign.scope"}
+        ),
+    )
+    replacement = replace(
+        original,
+        gpu_declarers=frozenset(
+            replacement_server if item.pid == 7001 else item
+            for item in original.gpu_declarers
+        ),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=session.TargetSnapshot((7001,), (), ()),
+        authority=original,
+        trailing_compute=frozenset({7001}),
+    )
+    current_authority = [original]
+    inventory_calls = 0
+
+    def collect(_client, **_kwargs):
+        nonlocal inventory_calls
+        inventory_calls += 1
+        # The old server dies after the enclosing authority read and its PID is
+        # immediately reused by a different server identity before NVML.
+        current_authority[0] = replacement
+        return status, dft_broad_snapshot(
+            monkeypatch,
+            status,
+            current_authority[0],
+            session.TargetSnapshot((7001,), (), ()),
+        )
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority",
+        lambda: current_authority[0],
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.query_systemd_gpu_claims",
+        lambda **_kwargs: dft_broad_snapshot(
+            monkeypatch,
+            status,
+            current_authority[0],
+            session.TargetSnapshot((7001,), (), ()),
+        ).systemd_claims,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_exact_dft_descendants",
+        lambda _status, pids: pids == frozenset({8123}),
+    )
+
+    controller._audit(client)
+
+    # The changed round was discarded.  Stabilization used only a second host
+    # inventory fully enclosed by the replacement server identity.
+    assert inventory_calls == 2
+    assert controller.dft_stabilized is True
+    assert controller.last_mps_authority == replacement
+
+
+def test_full_audit_never_seals_missing_or_stale_dft_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_stabilization_generation = 1
+    empty_status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [],
+    }
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        empty_status,
+    )
+    with pytest.raises(session.DevGpuSessionError, match="one exact"):
+        controller._audit(client)
+
+    stale_status = {
+        **empty_status,
+        "leases": [dft_residency_record()],
+    }
+    stale = session.SessionController(run, "a" * 40, "b" * 40)
+    stale.dft_stabilization_generation = 1
+    authority = dft_resident_authority()
+    stale_client = patch_full_audit_runtime(
+        monkeypatch,
+        stale,
+        stale_status,
+        snapshot=session.TargetSnapshot((7001,), (), ()),
+        authority=authority,
+        trailing_compute=frozenset({7001}),
+    )
+    monkeypatch.setattr(
+        stale,
+        "_exact_dft_descendants",
+        lambda _status, _pids: False,
+    )
+    with pytest.raises(session.DevGpuSessionError, match="root died"):
+        stale._audit(stale_client)
+
+
+def test_stabilization_signal_mid_audit_requires_the_next_full_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    authority = dft_resident_authority()
+    resident_snapshot = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        authority,
+        session.TargetSnapshot((7001,), (), ()),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=resident_snapshot,
+        authority=authority,
+        trailing_compute=frozenset({7001}),
+    )
+    first = True
+
+    def collect(_client, **_kwargs):
+        nonlocal first
+        if first:
+            first = False
+            controller.dft_stabilization_generation += 1
+        return status, resident_snapshot
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(
+        controller,
+        "_exact_dft_descendants",
+        lambda _status, _pids: True,
+    )
+
+    controller._audit(client)
+    assert controller.dft_stabilized is False
+    assert controller.last_audit_stabilization_generation == 0
+
+    controller._audit(client)
+    assert controller.dft_stabilized is True
+    assert controller.last_audit_stabilization_generation == 1
+    assert controller.full_audit_generation == 2
+
+
+def test_activation_signal_mid_audit_cannot_authorize_that_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    first = True
+
+    def collect(_client, **_kwargs):
+        nonlocal first
+        if first:
+            first = False
+            controller.activation_generation += 1
+        return status, empty_snapshot()
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+
+    controller._audit(client)
+    assert controller.last_audit_activation_generation == 0
+    controller._audit(client)
+    assert controller.last_audit_activation_generation == 1
+    assert controller.full_audit_generation == 2
+
+
+def test_trailing_audit_recomputes_backend_identity_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [backend_residency_record()],
+    }
+    claim = backend_docker_claim()
+    snapshot = session.TargetSnapshot((6101, 7001), (claim,), ())
+    authority = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({6101}),
+        declarers=frozenset(
+            {mps_declarer(7000), mps_declarer(7001, 101)}
+        ),
+    )
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=snapshot,
+        authority=authority,
+        trailing_compute=frozenset({6101, 7001}),
+        trailing_docker=(claim,),
+    )
+    reads = 0
+
+    def changing_start(_pid: int) -> int:
+        nonlocal reads
+        reads += 1
+        return 333 if reads <= 2 else 334
+
+    patch_backend_identity(monkeypatch, start_ticks=changing_start)
+
+    with pytest.raises(session.DevGpuSessionError, match="exact active Docker"):
+        controller._audit(client)
+
+
+def test_trailing_audit_rejects_new_static_systemd_gpu_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    foreign = server.SystemdGpuClaim(
+        scope="user",
+        unit="foreign-gpu.service",
+        main_pid=9901,
+        control_group="/user.slice/foreign-gpu.service",
+        process_pids=frozenset({9901}),
+        gpu_uuids=frozenset({session.GPU_UUID}),
+        static_gpu_uuids=frozenset({session.GPU_UUID}),
+    )
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        trailing_systemd=(foreign,),
+    )
+
+    _status, _snapshot, reasons = controller._audit(client)
+    assert reasons == ("foreign systemd claim: user:foreign-gpu.service",)
+
+
+def test_exact_trailing_dft_systemd_churn_uses_warmup_budget_beyond_three_rounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+
+    def claim(version: int) -> object:
+        return server.SystemdGpuClaim(
+            scope="system",
+            unit="user@1001.service",
+            main_pid=7000,
+            control_group=server.user_manager_control_group(1001),
+            process_pids=frozenset({8123}),
+            gpu_uuids=frozenset({session.GPU_UUID}),
+            active_gpu_uuids=frozenset({session.GPU_UUID}),
+            live_gpu_declarers=(
+                server.SystemdGpuDeclarer(
+                    pid=8123,
+                    process_start_ticks=version,
+                    process_cgroup="/dft.scope",
+                    gpu_uuids=frozenset({session.GPU_UUID}),
+                ),
+            ),
+        )
+
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    rounds = 0
+    fast_rounds: list[int] = []
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        rounds += 1
+        return status, session.TargetSnapshot((), (), (claim(rounds),))
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(
+        server,
+        "query_systemd_gpu_claims",
+        lambda **_kwargs: (
+            claim(rounds + 100) if rounds <= 4 else claim(rounds),
+        ),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_managed_workload_authority",
+        lambda _status, snapshot, *_args: (
+            frozenset(),
+            frozenset(),
+            frozenset(
+                (item.scope, item.unit, item.control_group)
+                for item in snapshot.systemd_claims
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda _client, _status: fast_rounds.append(rounds) or True,
+    )
+
+    _status, _snapshot, reasons = controller._audit(client)
+    assert reasons == ()
+    assert rounds == 5
+    assert fast_rounds == [1, 2, 3, 4]
+
+
+def test_full_audit_retries_exact_mps_client_membership_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    control = mps_declarer(7000)
+    server = mps_declarer(7001, 101)
+    before = mps_snapshot(
+        server_pids=frozenset({7001}),
+        declarers=frozenset({control, server}),
+    )
+    after = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({8123}),
+        declarers=frozenset({control, server}),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=session.TargetSnapshot((8123,), (), ()),
+        authority=before,
+        trailing_compute=frozenset({8123}),
+    )
+    authorities = iter((before, after, after, after, after))
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority",
+        lambda: next(authorities),
+    )
+
+    controller._audit(client)
+
+    assert controller.full_audit_generation == 1
+    assert controller.last_mps_authority == after
+
+
+def test_full_audit_rejects_stable_unknown_mps_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    authority = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({9999}),
+        declarers=frozenset(
+            {mps_declarer(7000), mps_declarer(7001, 101)}
+        ),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        authority=authority,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_exact_dft_descendants",
+        lambda _status, _pids: False,
+    )
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ("unknown private MPS client PID(s): 9999",)
+
+
+def test_warmup_full_audit_strictly_rejects_initial_and_trailing_docker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    claim = SimpleNamespace(
+        container_id="a" * 64,
+        registration_id="backend-dev",
+        component="backend",
+        environment="dev",
+        compose_project="nexpoly_dev",
+        compose_service="backend",
+        gpu_uuids=frozenset({session.GPU_UUID}),
+    )
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    initial = session.SessionController(run, "a" * 40, "b" * 40)
+    initial_client = patch_full_audit_runtime(
+        monkeypatch,
+        initial,
+        status,
+        snapshot=session.TargetSnapshot((), (claim,), ()),
+    )
+    _status, _snapshot, reasons = initial._audit(initial_client)
+    assert "Docker declared GPU1 during DFT-only stabilization" in reasons
+
+    trailing = session.SessionController(run, "a" * 40, "b" * 40)
+    trailing_client = patch_full_audit_runtime(
+        monkeypatch,
+        trailing,
+        status,
+        trailing_docker=(claim,),
+    )
+    _status, _snapshot, reasons = trailing._audit(trailing_client)
+    assert "Docker declared GPU1 during DFT-only stabilization" in reasons
+
+
+def test_steady_full_audit_retains_the_12_second_churn_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    observed: dict[str, object] = {}
+
+    def collect(_client, **kwargs):
+        observed.update(kwargs)
+        raise RuntimeError("stop after argument capture")
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(controller, "_mps_authority", mps_snapshot)
+    with pytest.raises(RuntimeError, match="argument capture"):
+        controller._audit(SimpleNamespace())
+
+    assert observed["membership_churn_retries"] == 8
+    assert observed["membership_churn_timeout_seconds"] == 12.0
+    assert observed["membership_churn_guard"] is None
+
+
+def test_stabilize_command_waits_for_matching_post_signal_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "d" * 32
+    record = {
+        "pid": 123,
+        "start_ticks": 456,
+        "session_id": session_id,
+        "run_directory": str(tmp_path),
+    }
+    baseline = {
+        "status": "plane-ready",
+        "audit_mode": "full",
+        "dft_stabilized": False,
+        "activation_generation": 0,
+        "full_audit_generation": 3,
+        "dft_stabilization_generation": 0,
+        "last_audit_stabilization_generation": 0,
+    }
+    stale = {
+        **baseline,
+        "dft_stabilized": True,
+        "full_audit_generation": 4,
+        "dft_stabilization_generation": 1,
+    }
+    accepted = {
+        **stale,
+        "last_audit_stabilization_generation": 1,
+    }
+    states = iter((baseline, stale, accepted))
+    signals: list[int] = []
+    ticks = iter((0.0, 1.0, 2.0))
+    monkeypatch.setattr(session, "_controller_record", lambda: record)
+    monkeypatch.setattr(session, "status", lambda: next(states))
+    monkeypatch.setattr(
+        session.os,
+        "pidfd_open",
+        lambda _pid: 9,
+        raising=False,
+    )
+    monkeypatch.setattr(session.os, "close", lambda _fd: None)
+    monkeypatch.setattr(
+        session.signal,
+        "pidfd_send_signal",
+        lambda _fd, value: signals.append(value),
+        raising=False,
+    )
+    monkeypatch.setattr(session.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(session.time, "sleep", lambda _seconds: None)
+
+    result = session.stabilize_execute(session_id)
+
+    assert result == accepted
+    assert signals == [session.signal.SIGUSR2]
+
+
+def test_activate_command_waits_for_matching_post_signal_full_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "d" * 32
+    source_sha = "a" * 40
+    source_tree = "b" * 40
+    record = {
+        "pid": 123,
+        "start_ticks": 456,
+        "session_id": session_id,
+        "run_directory": str(tmp_path),
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+    }
+    baseline = {
+        "status": "plane-ready",
+        "audit_mode": "full",
+        "dft_stabilized": True,
+        "activation_generation": 0,
+        "last_audit_activation_generation": 0,
+        "full_audit_generation": 7,
+    }
+    stale = {
+        **baseline,
+        "status": "ready",
+        "activation_generation": 1,
+        "full_audit_generation": 8,
+    }
+    accepted = {**stale, "last_audit_activation_generation": 1}
+    states = iter((baseline, stale, accepted))
+    worker = {
+        "session_id": session_id,
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "worker_lock_sha256": "sha256:" + "c" * 64,
+    }
+    manifest = {
+        "schema_version": 1,
+        "session_id": session_id,
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "backend_container_id": "d" * 64,
+        "backend_image_id": "sha256:" + "e" * 64,
+        "backend_config_hash": "f" * 64,
+        "md_process": worker,
+        "dft_process": worker,
+    }
+    signals: list[int] = []
+    ticks = iter((0.0, 1.0, 2.0))
+    monkeypatch.setattr(session, "_controller_record", lambda: record)
+    monkeypatch.setattr(session, "status", lambda: next(states))
+    monkeypatch.setattr(session, "_load_private_json", lambda _path: manifest)
+    monkeypatch.setattr(
+        session.os,
+        "pidfd_open",
+        lambda _pid: 9,
+        raising=False,
+    )
+    monkeypatch.setattr(session.os, "close", lambda _fd: None)
+    monkeypatch.setattr(
+        session.signal,
+        "pidfd_send_signal",
+        lambda _fd, value: signals.append(value),
+        raising=False,
+    )
+    monkeypatch.setattr(session.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(session.time, "sleep", lambda _seconds: None)
+
+    result = session.activate_execute(session_id)
+
+    assert result == accepted
+    assert signals == [session.signal.SIGUSR1]
+
+
 def test_automatic_recovery_restores_cpu_before_waiting_for_mps_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -721,11 +2261,15 @@ def test_ready_is_published_only_after_explicit_activation(
     run = tmp_path / ("run-" + "d" * 32)
     run.mkdir()
     controller = session.SessionController(run, "a" * 40, "b" * 40)
-    controller.activation_requested = True
+    controller.activation_generation = 1
+    controller.last_audit_activation_generation = 1
+    controller.dft_stabilized = True
+    controller.last_mps_authority = mps_snapshot(
+        server_pids=frozenset({101})
+    )
     controller.gpu3_guard = {"guard": "same"}
     states: list[str] = []
     monkeypatch.setattr(controller, "_audit", lambda _client: ({}, empty_snapshot(), ()))
-    monkeypatch.setattr(controller, "_authorized_mps", lambda: frozenset({101}))
     monkeypatch.setattr(controller, "_cleanup", lambda _client: True)
     monkeypatch.setattr(controller, "_remove_controller_record", lambda: None)
     monkeypatch.setattr(session, "read_gpu3_guard_fingerprint", lambda: {"guard": "same"})

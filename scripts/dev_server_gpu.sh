@@ -1519,6 +1519,8 @@ gpu_session_up() {
   dft_worker_ctl start
   dft_health="$(curl --max-time 10 --unix-socket "$DFT_WORKER_SOCKET_DIR/worker.sock" -fsS http://localhost/health)"
   dft_worker_session_record bind "$dft_health" >/dev/null
+  "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" stabilize --execute \
+    --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" >/dev/null
   worker_up
   NEXPOLY_DEV_CONFIG_HASH="$(compute_gpu_backend_config_hash)"
   export NEXPOLY_DEV_CONFIG_HASH
@@ -1562,7 +1564,7 @@ gpu_session_down() {
   fi
   local payload
   payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)"
-  NEXPOLY_DEV_GPU_SESSION_ID="$(printf '%s' "$payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin); session=value.get("session_id"); assert value.get("status") in {"ready","plane-ready","contaminated","audit-failed","isolation-waiting","cleanup-blocked"} and isinstance(session,str) and re.fullmatch(r"[0-9a-f]{32}", session), value; print(session)')"
+  NEXPOLY_DEV_GPU_SESSION_ID="$(printf '%s' "$payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin); session=value.get("session_id"); assert value.get("status") in {"ready","plane-ready","stabilizing","contaminated","audit-failed","isolation-waiting","cleanup-blocked"} and isinstance(session,str) and re.fullmatch(r"[0-9a-f]{32}", session), value; print(session)')"
   export NEXPOLY_DEV_GPU_SESSION_ID
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" drain --execute >/dev/null
   gpu_backend_stop_exact_session

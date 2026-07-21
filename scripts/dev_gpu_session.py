@@ -38,10 +38,21 @@ GPU_UUID = "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771"
 GPU3_UUID = "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
 POLYPROP_CONTAINER = "polyprop-backend-gpu-1"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+DFT_WARMUP_CHURN_TIMEOUT_SECONDS = 90.0
+STEADY_CHURN_TIMEOUT_SECONDS = 12.0
+FULL_AUDIT_ATTEMPTS = 3
 
 
 class DevGpuSessionError(RuntimeError):
     """The session cannot safely proceed."""
+
+
+class _AuditRoundChanged(DevGpuSessionError):
+    """A bounded audit round lost its CAS identity and must be discarded."""
+
+
+class _ExactDftTrailingChurn(_AuditRoundChanged):
+    """A separately proven DFT-warmup transition may use the 90s budget."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +60,38 @@ class TargetSnapshot:
     process_pids: tuple[int, ...]
     docker_claims: tuple[Any, ...]
     systemd_claims: tuple[Any, ...]
+
+
+def require_gpu1_default_compute_mode(
+    *,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> None:
+    """Fresh, strict GPU1 UUID/compute-mode proof for every controller audit."""
+
+    try:
+        completed = run(
+            (
+                "nvidia-smi",
+                "--query-gpu=uuid,compute_mode",
+                "--format=csv,noheader,nounits",
+                "-i",
+                str(GPU_INDEX),
+            ),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise DevGpuSessionError("GPU1 compute-mode inventory failed") from exc
+    rows = [row.strip() for row in completed.stdout.splitlines() if row.strip()]
+    if len(rows) != 1:
+        raise DevGpuSessionError("GPU1 compute-mode inventory is invalid")
+    fields = [field.strip() for field in rows[0].split(",")]
+    normalized_mode = " ".join(fields[1].replace("_", " ").upper().split()) if len(fields) == 2 else ""
+    if fields[:1] != [GPU_UUID] or normalized_mode != "DEFAULT":
+        raise DevGpuSessionError("GPU1 must retain its exact UUID and Default compute mode")
 
 
 def parse_mps_client_inventory(output: bytes) -> frozenset[int]:
@@ -184,6 +227,7 @@ def collect_target_snapshot() -> TargetSnapshot:
     inventory = query_gpu_inventory()
     if inventory.get(GPU_INDEX) != GPU_UUID:
         raise DevGpuSessionError("physical GPU1 identity differs from policy")
+    require_gpu1_default_compute_mode()
     processes = query_compute_processes()
     docker_claims = tuple(
         claim for claim in query_docker_gpu_claims() if GPU_UUID in claim.gpu_uuids
@@ -198,6 +242,44 @@ def collect_target_snapshot() -> TargetSnapshot:
         docker_claims=docker_claims,
         systemd_claims=systemd_claims,
     )
+
+
+def capture_compute_process_declarers(
+    pids: frozenset[int],
+) -> dict[int, Any]:
+    """Best-effort stable identities adjacent to one NVML process snapshot."""
+
+    from ops.gpu_broker.server import (
+        SystemdGpuDeclarer,
+        _read_process_uids,
+        _read_unified_process_cgroup,
+    )
+    from ops.gpu_broker.broker import read_process_start_ticks
+
+    result: dict[int, Any] = {}
+    for pid in pids:
+        try:
+            before = (
+                read_process_start_ticks(pid),
+                _read_process_uids(pid),
+                _read_unified_process_cgroup(pid),
+            )
+            after = (
+                read_process_start_ticks(pid),
+                _read_process_uids(pid),
+                _read_unified_process_cgroup(pid),
+            )
+        except Exception:
+            continue
+        if before != after or before[1] != (1001, 1001, 1001, 1001):
+            continue
+        result[pid] = SystemdGpuDeclarer(
+            pid=pid,
+            process_start_ticks=before[0],
+            process_cgroup=before[2],
+            gpu_uuids=frozenset({GPU_UUID}),
+        )
+    return result
 
 
 def read_gpu3_guard_fingerprint(
@@ -292,6 +374,17 @@ def _claim_fingerprint(claim: Any) -> tuple[Any, ...]:
         tuple(sorted(claim.gpu_uuids)),
         tuple(sorted(claim.static_gpu_uuids)),
         tuple(sorted(claim.active_gpu_uuids)),
+        tuple(
+            sorted(
+                (
+                    declarer.pid,
+                    declarer.process_start_ticks,
+                    declarer.process_cgroup,
+                    tuple(sorted(declarer.gpu_uuids)),
+                )
+                for declarer in claim.live_gpu_declarers
+            )
+        ),
     )
 
 
@@ -414,11 +507,10 @@ def broker_authority_token(status: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _exact_dft_residency_leases(status: dict[str, Any]) -> tuple[Any, ...]:
-    """Decode only exact active GPU1 DFT residency records from Broker status."""
+def _canonical_broker_leases(status: dict[str, Any]) -> tuple[Any, ...]:
+    """Decode the complete Broker inventory without trusting partial records."""
 
     from ops.gpu_broker.broker import Lease
-    from ops.gpu_broker.server import exact_dft_residency_scope_authority
 
     records = status.get("leases")
     if not isinstance(records, list):
@@ -435,6 +527,17 @@ def _exact_dft_residency_leases(status: dict[str, Any]) -> tuple[Any, ...]:
             ) from exc
         if lease.public_dict() != record:
             raise DevGpuSessionError("Broker lease record is not canonical")
+        result.append(lease)
+    return tuple(result)
+
+
+def _exact_dft_residency_leases(status: dict[str, Any]) -> tuple[Any, ...]:
+    """Decode only exact active GPU1 DFT residency records from Broker status."""
+
+    from ops.gpu_broker.server import exact_dft_residency_scope_authority
+
+    result = []
+    for lease in _canonical_broker_leases(status):
         if exact_dft_residency_scope_authority(
             lease,
             index=GPU_INDEX,
@@ -442,6 +545,22 @@ def _exact_dft_residency_leases(status: dict[str, Any]) -> tuple[Any, ...]:
         ) is not None:
             result.append(lease)
     return tuple(result)
+
+
+def _exact_backend_docker_workload_pids(
+    leases: tuple[Any, ...],
+    snapshot: TargetSnapshot,
+) -> frozenset[int]:
+    """Bind the Backend allowlist to one active lease and Docker identity."""
+
+    from ops.gpu_broker.server import (
+        exact_dev_gpu1_backend_docker_workload_pids,
+    )
+
+    return exact_dev_gpu1_backend_docker_workload_pids(
+        leases,
+        snapshot.docker_claims,
+    )
 
 
 _SYSTEMD_MEMBERSHIP_CHURN_RE = re.compile(
@@ -469,7 +588,7 @@ def _is_exact_dft_membership_churn(
     if matched is None:
         return False
     leases = _exact_dft_residency_leases(status)
-    if not leases:
+    if len(leases) != 1:
         return False
     scope, unit = matched.groups()
     if scope == "system":
@@ -483,7 +602,8 @@ def consistent_broker_snapshot(
     *,
     attempts: int = 3,
     membership_churn_retries: int = 8,
-    membership_churn_timeout_seconds: float = 12.0,
+    membership_churn_timeout_seconds: float = STEADY_CHURN_TIMEOUT_SECONDS,
+    membership_churn_guard: Callable[[dict[str, Any]], bool] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> tuple[dict[str, Any], TargetSnapshot]:
     """Bind an expensive host inventory between two stable Broker reads."""
@@ -495,10 +615,15 @@ def consistent_broker_snapshot(
     if (
         isinstance(membership_churn_timeout_seconds, bool)
         or not isinstance(membership_churn_timeout_seconds, (int, float))
-        or not 0 < float(membership_churn_timeout_seconds) <= 30.0
+        or not 0 < float(membership_churn_timeout_seconds)
+        <= (
+            DFT_WARMUP_CHURN_TIMEOUT_SECONDS
+            if membership_churn_guard is not None
+            else 30.0
+        )
     ):
         raise ValueError(
-            "membership_churn_timeout_seconds must be positive and at most 30 seconds"
+            "membership_churn_timeout_seconds exceeds its bounded audit window"
         )
     authority_changes = 0
     churn_retries = 0
@@ -521,6 +646,13 @@ def consistent_broker_snapshot(
                     raise DevGpuSessionError(
                         "exact DFT residency membership remained unstable "
                         "throughout the host audit"
+                    ) from exc
+                if (
+                    membership_churn_guard is not None
+                    and not membership_churn_guard(after)
+                ):
+                    raise DevGpuSessionError(
+                        "exact DFT membership guard did not prove isolation"
                     ) from exc
                 churn_retries += 1
                 continue
@@ -586,7 +718,11 @@ class SessionController:
         self.broker: subprocess.Popen[bytes] | None = None
         self.broker_log: Any = None
         self.stop_requested = False
-        self.activation_requested = False
+        self.activation_generation = 0
+        self.dft_stabilization_generation = 0
+        self.dft_stabilized = False
+        self.dft_warmup_open = True
+        self.dft_churn_started_at: float | None = None
         self.automatic_recovery = False
         self.plane_ready_published = False
         self.plane_cleaned = False
@@ -594,7 +730,13 @@ class SessionController:
         self.cpu_restored = False
         self.mps_started = False
         self.audit_sequence = 0
+        self.fast_audit_sequence = 0
+        self.full_audit_generation = 0
+        self.audit_mode = "full"
+        self.last_audit_activation_generation = 0
+        self.last_audit_stabilization_generation = 0
         self.last_audit_duration = 0.0
+        self.last_mps_authority: Any | None = None
         self.gpu3_guard: dict[str, Any] | None = None
 
     def _state(self, status: str, **extra: Any) -> None:
@@ -613,6 +755,18 @@ class SessionController:
                 "gpu_uuid": GPU_UUID,
                 "gpu3_untouched": True,
                 "gpu3_guard": self.gpu3_guard,
+                "audit_mode": self.audit_mode,
+                "full_audit_generation": self.full_audit_generation,
+                "fast_audit_sequence": self.fast_audit_sequence,
+                "activation_generation": self.activation_generation,
+                "dft_stabilization_generation": self.dft_stabilization_generation,
+                "last_audit_activation_generation": (
+                    self.last_audit_activation_generation
+                ),
+                "last_audit_stabilization_generation": (
+                    self.last_audit_stabilization_generation
+                ),
+                "dft_stabilized": self.dft_stabilized,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 **extra,
             },
@@ -843,103 +997,143 @@ class SessionController:
                 f"GPU1 MPS {action} failed: {completed.stderr[-1000:]}"
             )
 
-    def _authorized_mps(self) -> frozenset[int]:
+    def _mps_authority(self) -> Any:
         from ops.gpu_broker.server import MpsRuntimeGuard
 
-        return MpsRuntimeGuard(self._authority_path(self.root_fd)).authorized_server_pids(
-            GPU_INDEX, GPU_UUID
+        authority = MpsRuntimeGuard(
+            self._authority_path(self.root_fd)
+        ).authority_snapshot(GPU_INDEX, GPU_UUID)
+        if authority.descriptor_authority is not True:
+            raise DevGpuSessionError(
+                "MPS authority lost its descriptor-bound root"
+            )
+        return authority
+
+    def _mps_authority_for_audit(self, client: Any) -> Any:
+        """Retry only a proven lazy MPS membership CAS during DFT warmup."""
+
+        from ops.gpu_broker.broker import BrokerError
+
+        published = False
+        while True:
+            try:
+                return self._mps_authority()
+            except BrokerError as exc:
+                if (
+                    exc.code != "mps_authority_changed"
+                    or not self.dft_warmup_open
+                    or self.dft_stabilized
+                    or self.activation_generation != 0
+                ):
+                    raise
+                status = client.status()
+                if status.get("draining") is not False:
+                    raise
+                self._only_exact_dft_residency(status)
+                now = time.monotonic()
+                if self.dft_churn_started_at is None:
+                    self.dft_churn_started_at = now
+                if (
+                    now - self.dft_churn_started_at
+                    >= DFT_WARMUP_CHURN_TIMEOUT_SECONDS
+                ):
+                    raise DevGpuSessionError(
+                        "exact DFT residency did not stabilize within 90 seconds"
+                    ) from exc
+                if not published:
+                    self.audit_mode = "fast"
+                    self._state(
+                        "stabilizing",
+                        contaminated=False,
+                        broker_draining=False,
+                        mps_authority_churn=True,
+                    )
+                    published = True
+                time.sleep(0.05)
+
+    @staticmethod
+    def _mps_authority_core(authority: Any) -> tuple[Any, ...]:
+        return (
+            authority.server_pids,
+            authority.gpu_declarers,
+            authority.descriptor_authority,
         )
 
-    def _mps_client_pids(self) -> frozenset[int]:
-        completed = subprocess.run(
-            ("nvidia-cuda-mps-control",),
-            input=b"ps\n",
-            cwd=REPO_ROOT,
-            env=self._mps_env(),
-            pass_fds=(
-                self.root_fd,
-                self.reservations_fd,
-                self.slot_fd,
-                self.pipe_fd,
-                self.log_fd,
-            ),
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=5,
+    @staticmethod
+    def _mps_control_declarers(authority: Any) -> frozenset[Any]:
+        return frozenset(
+            declarer
+            for declarer in authority.gpu_declarers
+            if declarer.pid not in authority.server_pids
         )
-        if completed.returncode != 0 or completed.stderr:
-            raise DevGpuSessionError("MPS client inventory query failed")
-        return parse_mps_client_inventory(completed.stdout)
+
+    @staticmethod
+    def _mps_server_declarers(authority: Any) -> dict[int, Any]:
+        return {
+            declarer.pid: declarer
+            for declarer in authority.gpu_declarers
+            if declarer.pid in authority.server_pids
+        }
 
     @staticmethod
     def _managed_workload_authority(
-        status: dict[str, Any], snapshot: TargetSnapshot
-    ) -> tuple[frozenset[int], frozenset[tuple[str, str, str]]]:
-        from ops.gpu_broker.server import claim_is_exact_dft_residency_scope
+        status: dict[str, Any],
+        snapshot: TargetSnapshot,
+        authorized_mps_declarers: frozenset[Any] = frozenset(),
+        authorized_mps_client_pids: frozenset[int] = frozenset(),
+    ) -> tuple[
+        frozenset[int],
+        frozenset[int],
+        frozenset[tuple[str, str, str]],
+    ]:
+        from ops.gpu_broker.server import (
+            claim_is_exact_dev_gpu1_host_workloads_scope,
+        )
 
-        result: set[int] = set()
+        leases = _canonical_broker_leases(status)
+        backend_leases = tuple(
+            lease
+            for lease in leases
+            if lease.gpu_index == GPU_INDEX
+            and lease.gpu_uuid == GPU_UUID
+            and lease.component == "backend"
+        )
+        backend_pids = _exact_backend_docker_workload_pids(leases, snapshot)
+        if backend_leases and not backend_pids:
+            raise DevGpuSessionError(
+                "GPU1 Backend lease lacks exact active Docker workload authority"
+            )
+        managed_client_pids = set(backend_pids)
         managed_systemd_claims: set[tuple[str, str, str]] = set()
-        root_scopes: list[tuple[str, str, int]] = []
-        dft_residency_leases = _exact_dft_residency_leases(status)
-        for lease in status.get("leases", []):
-            if not isinstance(lease, dict) or lease.get("gpu_uuid") != GPU_UUID:
-                continue
-            for key in ("owner_pid", "workload_pid"):
-                value = lease.get(key)
-                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-                    result.add(value)
-            lease_id = lease.get("lease_id")
-            workload_pid = lease.get("workload_pid")
-            workload_cgroup = lease.get("workload_cgroup")
-            if (
-                lease.get("parent_lease_id") is None
-                and lease.get("status") == "active"
-                and isinstance(lease_id, str)
-                and re.fullmatch(r"[0-9a-f]{32}", lease_id) is not None
-                and isinstance(workload_pid, int)
-                and not isinstance(workload_pid, bool)
-                and workload_pid > 0
-                and isinstance(workload_cgroup, str)
-                and workload_cgroup.startswith("0::/")
+        for claim in snapshot.systemd_claims:
+            if claim_is_exact_dev_gpu1_host_workloads_scope(
+                claim,
+                index=GPU_INDEX,
+                uuid=GPU_UUID,
+                leases=leases,
+                authorized_mps_declarers=authorized_mps_declarers,
             ):
-                root_scopes.append((lease_id, workload_cgroup, workload_pid))
-        for claim in snapshot.systemd_claims:
-            for lease_id, workload_cgroup, workload_pid in root_scopes:
-                if (
-                    claim.scope == "user"
-                    and claim.unit == f"nexpoly-gpu-job-{lease_id}.scope"
-                    and f"0::{claim.control_group}" == workload_cgroup
-                    and claim.main_pid == workload_pid
-                    and claim.gpu_uuids == frozenset({GPU_UUID})
-                    and workload_pid in claim.process_pids
-                ):
-                    result.update(claim.process_pids)
-                    break
-        for claim in snapshot.systemd_claims:
-            for lease in dft_residency_leases:
-                if claim_is_exact_dft_residency_scope(
-                    claim,
-                    index=GPU_INDEX,
-                    uuid=GPU_UUID,
-                    lease=lease,
-                ):
-                    managed_systemd_claims.add(
-                        (claim.scope, claim.unit, claim.control_group)
-                    )
-                    result.update(
-                        declarer.pid
-                        for declarer in claim.live_gpu_declarers
-                        if declarer.gpu_uuids == frozenset({GPU_UUID})
-                    )
-                    break
-        return frozenset(result), frozenset(managed_systemd_claims)
+                managed_systemd_claims.add(
+                    (claim.scope, claim.unit, claim.control_group)
+                )
+                managed_client_pids.update(
+                    declarer.pid
+                    for declarer in claim.live_gpu_declarers
+                    if declarer not in authorized_mps_declarers
+                    and declarer.gpu_uuids == frozenset({GPU_UUID})
+                )
+        exact_client_pids = frozenset(managed_client_pids)
+        return (
+            exact_client_pids & authorized_mps_client_pids,
+            exact_client_pids,
+            frozenset(managed_systemd_claims),
+        )
 
     @staticmethod
     def _managed_workload_pids(
         status: dict[str, Any], snapshot: TargetSnapshot
     ) -> frozenset[int]:
-        return SessionController._managed_workload_authority(status, snapshot)[0]
+        return SessionController._managed_workload_authority(status, snapshot)[1]
 
     def _cleanup_owned_tree(self) -> None:
         for descriptor, kind in ((self.pipe_fd, "pipe"), (self.log_fd, "log")):
@@ -1019,29 +1213,554 @@ class SessionController:
         if record.get("pid") == os.getpid() and record.get("session_id") == self.session_id:
             CONTROLLER_RECORD.unlink()
 
+    @staticmethod
+    def _only_exact_dft_residency(status: dict[str, Any]) -> Any:
+        leases = _exact_dft_residency_leases(status)
+        if len(leases) != 1:
+            raise DevGpuSessionError(
+                "DFT stabilization requires one exact residency lease"
+            )
+        lease = leases[0]
+        if status.get("leases") != [lease.public_dict()]:
+            raise DevGpuSessionError(
+                "DFT stabilization encountered another Broker lease"
+            )
+        return lease
+
+    @staticmethod
+    def _exact_dft_descendants(
+        status: dict[str, Any],
+        pids: frozenset[int],
+    ) -> bool:
+        from ops.gpu_broker.server import (
+            process_is_exact_dft_residency_descendant,
+        )
+
+        try:
+            lease = SessionController._only_exact_dft_residency(status)
+        except DevGpuSessionError:
+            return False
+        return all(
+            process_is_exact_dft_residency_descendant(
+                pid,
+                lease,
+                index=GPU_INDEX,
+                uuid=GPU_UUID,
+            )
+            for pid in pids
+        )
+
+    def _fast_dft_churn_guard(
+        self,
+        client: Any,
+        status: dict[str, Any],
+    ) -> bool:
+        """Prove isolation during exact DFT-only systemd membership churn.
+
+        A successful fast proof never means ready.  It only permits another
+        attempt at the unchanged, authoritative full audit.
+        """
+
+        from ops.gpu_broker.server import (
+            EXPECTED_GPU_UUIDS,
+            process_is_exact_dft_residency_descendant,
+            query_compute_processes,
+            query_docker_gpu_claims,
+            query_gpu_inventory,
+        )
+
+        if (
+            not self.dft_warmup_open
+            or self.dft_stabilized
+            or self.activation_generation != 0
+        ):
+            raise DevGpuSessionError(
+                "exact DFT churn occurred outside the DFT stabilization phase"
+            )
+        now = time.monotonic()
+        if self.dft_churn_started_at is None:
+            self.dft_churn_started_at = now
+        if (
+            now - self.dft_churn_started_at
+            >= DFT_WARMUP_CHURN_TIMEOUT_SECONDS
+        ):
+            raise DevGpuSessionError(
+                "exact DFT residency did not stabilize within 90 seconds"
+            )
+        lease = self._only_exact_dft_residency(status)
+        expected_token = broker_authority_token(status)
+        before = client.status()
+        if broker_authority_token(before) != expected_token:
+            raise _AuditRoundChanged(
+                "Broker authority changed before the DFT fast audit"
+            )
+        if (
+            EXPECTED_GPU_UUIDS.get(GPU_INDEX) != GPU_UUID
+            or query_gpu_inventory().get(GPU_INDEX) != GPU_UUID
+        ):
+            raise DevGpuSessionError("physical GPU1 identity changed")
+        require_gpu1_default_compute_mode()
+
+        mps_before = self._mps_authority_for_audit(client)
+        authorized_before = mps_before.server_pids
+        compute_before = frozenset(
+            query_compute_processes().get(GPU_UUID, frozenset())
+        )
+        compute_before_declarers = capture_compute_process_declarers(
+            compute_before
+        )
+        docker_before = tuple(
+            claim
+            for claim in query_docker_gpu_claims()
+            if GPU_UUID in claim.gpu_uuids
+        )
+        clients_before = frozenset(
+            client.client_pid for client in mps_before.clients
+        )
+
+        if len(authorized_before) > 1:
+            raise DevGpuSessionError(
+                "DFT fast audit found multiple descriptor-owned MPS servers"
+            )
+        if docker_before:
+            raise DevGpuSessionError(
+                "Docker declared GPU1 during DFT-only stabilization"
+            )
+
+        compute_after = frozenset(
+            query_compute_processes().get(GPU_UUID, frozenset())
+        )
+        compute_after_declarers = capture_compute_process_declarers(
+            compute_after
+        )
+        docker_after = tuple(
+            claim
+            for claim in query_docker_gpu_claims()
+            if GPU_UUID in claim.gpu_uuids
+        )
+        mps_after = self._mps_authority_for_audit(client)
+        authorized_after = mps_after.server_pids
+        clients_after = frozenset(
+            client.client_pid for client in mps_after.clients
+        )
+
+        if docker_after:
+            raise DevGpuSessionError(
+                "Docker declared GPU1 during DFT-only stabilization"
+            )
+        core_before = self._mps_authority_core(mps_before)
+        core_after = self._mps_authority_core(mps_after)
+        lazy_server_appeared = (
+            core_after != core_before
+            and self._mps_control_declarers(mps_before)
+            == self._mps_control_declarers(mps_after)
+            and len(self._mps_control_declarers(mps_before)) == 1
+            and not authorized_before
+            and len(authorized_after) == 1
+            and not mps_before.clients
+        )
+        server_declarers_before = self._mps_server_declarers(mps_before)
+        server_declarers_after = self._mps_server_declarers(mps_after)
+        verified_before_servers = frozenset(
+            pid
+            for pid in authorized_before & compute_before
+            if compute_before_declarers.get(pid)
+            == server_declarers_before.get(pid)
+        )
+        verified_after_servers = frozenset(
+            pid
+            for pid in authorized_after & compute_after
+            if compute_after_declarers.get(pid)
+            == server_declarers_after.get(pid)
+        )
+        verified_lazy_before_servers = frozenset(
+            pid
+            for pid in authorized_after & compute_before
+            if lazy_server_appeared
+            and compute_before_declarers.get(pid)
+            == server_declarers_after.get(pid)
+        )
+        observed_before = (
+            compute_before
+            - verified_before_servers
+            - verified_lazy_before_servers
+        ) | clients_before
+        observed_after = (
+            compute_after - verified_after_servers
+        ) | clients_after
+        for pid in observed_before | observed_after:
+            if not process_is_exact_dft_residency_descendant(
+                pid,
+                lease,
+                index=GPU_INDEX,
+                uuid=GPU_UUID,
+            ):
+                raise DevGpuSessionError(
+                    f"foreign PID {pid} appeared during DFT stabilization"
+                )
+        known_mps_churn = False
+        if core_after != core_before:
+            if lazy_server_appeared:
+                known_mps_churn = True
+            else:
+                raise DevGpuSessionError(
+                    "descriptor-owned MPS authority changed during DFT audit"
+                )
+        if mps_after.clients != mps_before.clients:
+            if mps_before.clients < mps_after.clients:
+                known_mps_churn = True
+            else:
+                raise DevGpuSessionError(
+                    "MPS client identity disappeared or changed during DFT audit"
+                )
+        # Revalidate the root even when NVML and MPS report no DFT children.
+        if not process_is_exact_dft_residency_descendant(
+            lease.workload_pid,
+            lease,
+            index=GPU_INDEX,
+            uuid=GPU_UUID,
+        ):
+            raise DevGpuSessionError("DFT residency root identity changed")
+        if query_gpu_inventory().get(GPU_INDEX) != GPU_UUID:
+            raise DevGpuSessionError("physical GPU1 identity changed")
+        require_gpu1_default_compute_mode()
+        final = client.status()
+        if broker_authority_token(final) != expected_token:
+            raise _AuditRoundChanged(
+                "Broker authority changed during the DFT fast audit"
+            )
+
+        self.fast_audit_sequence += 1
+        self.audit_mode = "fast"
+        self._state(
+            "stabilizing",
+            contaminated=False,
+            broker_draining=False,
+            authorized_mps_pids=sorted(authorized_after),
+            dft_churn_elapsed_seconds=round(
+                time.monotonic() - self.dft_churn_started_at,
+                3,
+            ),
+            mps_membership_changed=known_mps_churn,
+        )
+        return True
+
     def _audit(self, client: Any) -> tuple[dict[str, Any], TargetSnapshot, tuple[str, ...]]:
         started = time.monotonic()
-        status, snapshot = consistent_broker_snapshot(client)
-        managed, managed_systemd_claims = self._managed_workload_authority(
-            status,
-            snapshot,
+        audit_attempts = (
+            2048 if self.dft_warmup_open else FULL_AUDIT_ATTEMPTS
         )
-        reasons = foreign_gpu1_reasons(
-            snapshot,
-            authorized_mps_pids=self._authorized_mps(),
-            managed_workload_pids=managed,
-            managed_systemd_claims=managed_systemd_claims,
-        )
-        unknown_mps_clients = self._mps_client_pids() - managed
-        if unknown_mps_clients:
-            reasons = (
-                *reasons,
-                "unknown private MPS client PID(s): "
-                + ",".join(map(str, sorted(unknown_mps_clients))),
-            )
-        self.audit_sequence += 1
-        self.last_audit_duration = time.monotonic() - started
-        return status, snapshot, reasons
+        for round_index in range(audit_attempts):
+            captured_activation = self.activation_generation
+            captured_stabilization = self.dft_stabilization_generation
+            fast_guard = None
+            churn_retries = 8
+            churn_timeout = STEADY_CHURN_TIMEOUT_SECONDS
+            if self.dft_warmup_open:
+                fast_guard = lambda status: self._fast_dft_churn_guard(
+                    client,
+                    status,
+                )
+                churn_retries = 2048
+                churn_timeout = DFT_WARMUP_CHURN_TIMEOUT_SECONDS
+            try:
+                # The MPS identity must enclose the whole host inventory.  A
+                # server that appears only after NVML/systemd were sampled may
+                # reuse a foreign PID and must never retroactively authorize it.
+                mps_before = self._mps_authority_for_audit(client)
+                status, snapshot = consistent_broker_snapshot(
+                    client,
+                    membership_churn_retries=churn_retries,
+                    membership_churn_timeout_seconds=churn_timeout,
+                    membership_churn_guard=fast_guard,
+                )
+                if (
+                    self.dft_warmup_open
+                    and self.dft_churn_started_at is not None
+                    and time.monotonic() - self.dft_churn_started_at
+                    >= DFT_WARMUP_CHURN_TIMEOUT_SECONDS
+                ):
+                    raise DevGpuSessionError(
+                        "exact DFT residency did not stabilize within 90 seconds"
+                    )
+                expected_token = broker_authority_token(status)
+                mps_after_inventory = self._mps_authority_for_audit(client)
+                if mps_after_inventory != mps_before:
+                    raise _AuditRoundChanged(
+                        "MPS authority changed across the full host inventory"
+                    )
+                authorized_before = mps_before.server_pids
+                clients_before = frozenset(
+                    client.client_pid for client in mps_before.clients
+                )
+                (
+                    managed_nvml,
+                    managed_clients,
+                    managed_systemd_claims,
+                ) = self._managed_workload_authority(
+                    status,
+                    snapshot,
+                    mps_before.gpu_declarers,
+                    clients_before,
+                )
+                if len(authorized_before) > 1:
+                    raise DevGpuSessionError(
+                        "full audit found multiple descriptor-owned MPS servers"
+                    )
+                if self.dft_warmup_open and snapshot.docker_claims:
+                    reasons = (
+                        "Docker declared GPU1 during DFT-only stabilization",
+                    )
+                else:
+                    reasons = ()
+                reasons = (
+                    *reasons,
+                    *foreign_gpu1_reasons(
+                        snapshot,
+                        authorized_mps_pids=authorized_before,
+                        managed_workload_pids=managed_nvml,
+                        managed_systemd_claims=managed_systemd_claims,
+                    ),
+                )
+                unknown_mps_clients = clients_before - managed_clients
+                if unknown_mps_clients:
+                    if (
+                        self.dft_warmup_open
+                        and self._exact_dft_descendants(
+                            status,
+                            unknown_mps_clients,
+                        )
+                    ):
+                        raise _AuditRoundChanged(
+                            "known DFT MPS membership changed after full inventory"
+                        )
+                    else:
+                        reasons = (
+                            *reasons,
+                            "unknown private MPS client PID(s): "
+                            + ",".join(map(str, sorted(unknown_mps_clients))),
+                        )
+                if reasons:
+                    self.audit_sequence += 1
+                    self.audit_mode = "full"
+                    self.last_audit_duration = time.monotonic() - started
+                    return status, snapshot, reasons
+
+                from ops.gpu_broker.server import (
+                    query_compute_processes,
+                    query_docker_gpu_claims,
+                    query_systemd_gpu_claims,
+                )
+
+                trailing_process_map = query_compute_processes()
+                trailing_docker = tuple(
+                    claim
+                    for claim in query_docker_gpu_claims()
+                    if GPU_UUID in claim.gpu_uuids
+                )
+                trailing_systemd = tuple(
+                    claim
+                    for claim in query_systemd_gpu_claims(
+                        compute_processes=trailing_process_map,
+                    )
+                    if GPU_UUID in claim.gpu_uuids
+                )
+                sealed_process_map = query_compute_processes()
+                if sealed_process_map.get(
+                    GPU_UUID,
+                    frozenset(),
+                ) != trailing_process_map.get(GPU_UUID, frozenset()):
+                    raise _AuditRoundChanged(
+                        "GPU1 NVML membership changed across trailing systemd audit"
+                    )
+                trailing_compute = frozenset(
+                    sealed_process_map.get(GPU_UUID, frozenset())
+                )
+                mps_after = self._mps_authority_for_audit(client)
+                authorized_after = mps_after.server_pids
+                clients_after = frozenset(
+                    client.client_pid for client in mps_after.clients
+                )
+                require_gpu1_default_compute_mode()
+                final_status = client.status()
+                if broker_authority_token(final_status) != expected_token:
+                    raise _AuditRoundChanged(
+                        "Broker authority changed during trailing full audit"
+                    )
+                if mps_after != mps_before:
+                    raise _AuditRoundChanged(
+                        "MPS authority changed across the trailing full audit"
+                    )
+
+                initial_compute = frozenset(snapshot.process_pids)
+                added_processes = (
+                    (trailing_compute - initial_compute)
+                    | (clients_after - clients_before)
+                ) - authorized_after
+                additions_are_exact_dft = (
+                    bool(added_processes)
+                    and self.dft_warmup_open
+                    and self._exact_dft_descendants(
+                        status,
+                        added_processes,
+                    )
+                )
+                trailing_snapshot = TargetSnapshot(
+                    tuple(sorted(trailing_compute)),
+                    trailing_docker,
+                    trailing_systemd,
+                )
+                systemd_changed = tuple(
+                    _claim_fingerprint(claim)
+                    for claim in snapshot.systemd_claims
+                ) != tuple(
+                    _claim_fingerprint(claim)
+                    for claim in trailing_systemd
+                )
+                (
+                    trailing_managed_nvml,
+                    trailing_managed_clients,
+                    trailing_managed_systemd_claims,
+                ) = self._managed_workload_authority(
+                    final_status,
+                    trailing_snapshot,
+                    mps_after.gpu_declarers,
+                    clients_after,
+                )
+                if systemd_changed:
+                    changed_reasons = foreign_gpu1_reasons(
+                        trailing_snapshot,
+                        authorized_mps_pids=authorized_after,
+                        managed_workload_pids=trailing_managed_nvml,
+                        managed_systemd_claims=(
+                            trailing_managed_systemd_claims
+                        ),
+                    )
+                    if changed_reasons:
+                        self.audit_sequence += 1
+                        self.audit_mode = "full"
+                        self.last_audit_duration = time.monotonic() - started
+                        return status, snapshot, changed_reasons
+                    if self.dft_warmup_open:
+                        self._fast_dft_churn_guard(client, final_status)
+                        raise _ExactDftTrailingChurn(
+                            "exact DFT systemd claims changed during trailing audit"
+                        )
+                    raise _AuditRoundChanged(
+                        "GPU1 systemd claims changed during trailing full audit"
+                    )
+                trailing_reasons = foreign_gpu1_reasons(
+                    trailing_snapshot,
+                    authorized_mps_pids=authorized_after,
+                    managed_workload_pids=(
+                        trailing_managed_nvml | added_processes
+                        if additions_are_exact_dft
+                        else trailing_managed_nvml
+                    ),
+                    managed_systemd_claims=trailing_managed_systemd_claims,
+                )
+                if self.dft_warmup_open and trailing_docker:
+                    trailing_reasons = (
+                        "Docker declared GPU1 during DFT-only stabilization",
+                        *trailing_reasons,
+                    )
+                unknown_trailing_clients = (
+                    clients_after - trailing_managed_clients
+                )
+                if additions_are_exact_dft:
+                    unknown_trailing_clients -= added_processes
+                if unknown_trailing_clients:
+                    trailing_reasons = (
+                        *trailing_reasons,
+                        "unknown private MPS client PID(s): "
+                        + ",".join(
+                            map(str, sorted(unknown_trailing_clients))
+                        ),
+                    )
+                if trailing_reasons:
+                    self.audit_sequence += 1
+                    self.audit_mode = "full"
+                    self.last_audit_duration = time.monotonic() - started
+                    return status, snapshot, trailing_reasons
+
+                docker_changed = tuple(
+                    _claim_fingerprint(claim) for claim in snapshot.docker_claims
+                ) != tuple(
+                    _claim_fingerprint(claim) for claim in trailing_docker
+                )
+                if (
+                    initial_compute != trailing_compute
+                    or docker_changed
+                ):
+                    raise _AuditRoundChanged(
+                        "GPU1 membership changed during trailing full audit"
+                    )
+
+                if (
+                    captured_stabilization > 0
+                    and captured_stabilization
+                    == self.dft_stabilization_generation
+                ):
+                    sealing_lease = self._only_exact_dft_residency(final_status)
+                    if len(authorized_after) != 1:
+                        raise DevGpuSessionError(
+                            "DFT stabilization lacks one descriptor-owned MPS server"
+                        )
+                    sealing_server_pid = next(iter(authorized_after))
+                    if sealing_lease.workload_pid not in clients_after:
+                        raise DevGpuSessionError(
+                            "DFT residency root lacks an active private MPS client"
+                        )
+                    if (
+                        sealing_server_pid not in initial_compute
+                        or sealing_server_pid not in trailing_compute
+                    ):
+                        raise DevGpuSessionError(
+                            "DFT MPS server is absent from the stable NVML inventory"
+                        )
+                    if not self._exact_dft_descendants(
+                        final_status,
+                        frozenset({sealing_lease.workload_pid}),
+                    ):
+                        raise DevGpuSessionError(
+                            "DFT residency root died or changed before stabilization"
+                        )
+                previous_mask = signal.pthread_sigmask(
+                    signal.SIG_BLOCK,
+                    {signal.SIGUSR1, signal.SIGUSR2},
+                )
+                try:
+                    self.audit_sequence += 1
+                    self.full_audit_generation += 1
+                    self.audit_mode = "full"
+                    self.last_mps_authority = mps_after
+                    self.last_audit_activation_generation = captured_activation
+                    self.last_audit_stabilization_generation = captured_stabilization
+                    if (
+                        captured_stabilization > 0
+                        and captured_stabilization
+                        == self.dft_stabilization_generation
+                    ):
+                        self.dft_stabilized = True
+                        self.dft_warmup_open = False
+                        self.dft_churn_started_at = None
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+                self.last_audit_duration = time.monotonic() - started
+                return final_status, snapshot, ()
+            except _ExactDftTrailingChurn:
+                if round_index + 1 >= audit_attempts:
+                    raise DevGpuSessionError(
+                        "exact DFT residency did not stabilize within 90 seconds"
+                    )
+                continue
+            except _AuditRoundChanged:
+                if round_index + 1 >= FULL_AUDIT_ATTEMPTS:
+                    raise DevGpuSessionError(
+                        "GPU1 authority changed throughout trailing full audits"
+                    )
+                continue
+        raise AssertionError("bounded full audit loop did not terminate")
 
     def _recovery_command(self, command: str) -> bool:
         completed = subprocess.run(
@@ -1124,6 +1843,10 @@ class SessionController:
 
             try:
                 _status, _snapshot, reasons = self._audit(client)
+                if not reasons and self.last_mps_authority is None:
+                    raise DevGpuSessionError(
+                        "full audit did not retain its exact MPS authority"
+                    )
             except Exception as exc:
                 # Inventory uncertainty is itself fail-closed, but never a
                 # naked controller exit that would strand Broker/MPS state.
@@ -1154,15 +1877,33 @@ class SessionController:
                 self.automatic_recovery = True
                 self.stop_requested = True
                 continue
-            phase = "ready" if self.activation_requested else "plane-ready"
-            self._state(
-                phase,
-                authorized_mps_pids=sorted(self._authorized_mps()),
-                contaminated=False,
-                audit_sequence=self.audit_sequence,
-                audit_duration_seconds=round(self.last_audit_duration, 3),
-                audit_heartbeat_monotonic=time.monotonic(),
+            previous_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK,
+                {signal.SIGUSR1, signal.SIGUSR2},
             )
+            try:
+                activation_audited = (
+                    self.dft_stabilized
+                    and self.activation_generation > 0
+                    and self.last_audit_activation_generation
+                    == self.activation_generation
+                )
+                phase = "ready" if activation_audited else "plane-ready"
+                self._state(
+                    phase,
+                    authorized_mps_pids=sorted(
+                        self.last_mps_authority.server_pids
+                    ),
+                    contaminated=False,
+                    audit_sequence=self.audit_sequence,
+                    audit_duration_seconds=round(
+                        self.last_audit_duration,
+                        3,
+                    ),
+                    audit_heartbeat_monotonic=time.monotonic(),
+                )
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             next_audit += 1.0
             delay = next_audit - time.monotonic()
             if delay > 0:
@@ -1197,7 +1938,14 @@ class SessionController:
         )
         signal.signal(signal.SIGTERM, lambda *_args: setattr(self, "stop_requested", True))
         signal.signal(signal.SIGINT, lambda *_args: setattr(self, "stop_requested", True))
-        signal.signal(signal.SIGUSR1, lambda *_args: setattr(self, "activation_requested", True))
+        def request_activation(*_args: Any) -> None:
+            self.activation_generation += 1
+
+        def request_dft_stabilization(*_args: Any) -> None:
+            self.dft_stabilization_generation += 1
+
+        signal.signal(signal.SIGUSR1, request_activation)
+        signal.signal(signal.SIGUSR2, request_dft_stabilization)
         client: Any | None = None
         try:
             self._state("auditing")
@@ -1218,12 +1966,25 @@ class SessionController:
             # components.  Any later unexpected controller failure must use
             # exact-session recovery even when activation was not yet sent.
             self.plane_ready_published = True
-            self._state(
-                "plane-ready",
-                authorized_mps_pids=sorted(self._authorized_mps()),
-                contaminated=False,
-                audit_sequence=self.audit_sequence,
+            previous_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK,
+                {signal.SIGUSR1, signal.SIGUSR2},
             )
+            try:
+                if self.last_mps_authority is None:
+                    raise DevGpuSessionError(
+                        "startup audit did not retain its MPS authority"
+                    )
+                self._state(
+                    "plane-ready",
+                    authorized_mps_pids=sorted(
+                        self.last_mps_authority.server_pids
+                    ),
+                    contaminated=False,
+                    audit_sequence=self.audit_sequence,
+                )
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             return self._serve_loop(client)
         except Exception as exc:
             try:
@@ -1384,6 +2145,82 @@ def down_execute() -> dict[str, Any]:
     raise DevGpuSessionError("timed out waiting for GPU session cleanup")
 
 
+def _state_generation(state: dict[str, Any], key: str) -> int:
+    value = state.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise DevGpuSessionError(f"controller {key} is invalid")
+    return value
+
+
+def stabilize_execute(session_id: str) -> dict[str, Any]:
+    """Seal DFT warmup only after a post-request authoritative full audit."""
+
+    if re.fullmatch(r"[0-9a-f]{32}", session_id) is None:
+        raise DevGpuSessionError("stabilization requires an exact session identity")
+    record = _controller_record()
+    if record.get("session_id") != session_id:
+        raise DevGpuSessionError("stabilization session identity differs")
+    current = status()
+    if (
+        current.get("dft_stabilized") is True
+        and current.get("status") == "plane-ready"
+        and current.get("audit_mode") == "full"
+    ):
+        return current
+    if current.get("status") not in {"plane-ready", "stabilizing"}:
+        raise DevGpuSessionError("controller plane is not stabilizing DFT")
+    if _state_generation(current, "activation_generation") != 0:
+        raise DevGpuSessionError("DFT must stabilize before activation")
+    baseline_full = _state_generation(current, "full_audit_generation")
+    baseline_request = _state_generation(
+        current,
+        "dft_stabilization_generation",
+    )
+    pid = record["pid"]
+    descriptor = os.pidfd_open(pid)
+    try:
+        if _controller_record() != record:
+            raise DevGpuSessionError(
+                "controller identity changed before DFT stabilization"
+            )
+        signal.pidfd_send_signal(descriptor, signal.SIGUSR2)
+    finally:
+        os.close(descriptor)
+    deadline = time.monotonic() + DFT_WARMUP_CHURN_TIMEOUT_SECONDS + 15.0
+    while time.monotonic() < deadline:
+        current = status()
+        if (
+            current.get("status") == "plane-ready"
+            and current.get("audit_mode") == "full"
+            and current.get("dft_stabilized") is True
+            and _state_generation(current, "full_audit_generation")
+            > baseline_full
+            and _state_generation(current, "dft_stabilization_generation")
+            > baseline_request
+            and _state_generation(
+                current,
+                "last_audit_stabilization_generation",
+            )
+            == _state_generation(
+                current,
+                "dft_stabilization_generation",
+            )
+        ):
+            return current
+        if current.get("status") not in {
+            "plane-ready",
+            "stabilizing",
+            "auditing",
+        }:
+            raise DevGpuSessionError(
+                f"DFT stabilization ended as {current.get('status')}"
+            )
+        time.sleep(0.1)
+    raise DevGpuSessionError(
+        "timed out waiting for a post-DFT full controller audit"
+    )
+
+
 def activate_execute(session_id: str) -> dict[str, Any]:
     if re.fullmatch(r"[0-9a-f]{32}", session_id) is None:
         raise DevGpuSessionError("activation requires an exact session identity")
@@ -1391,8 +2228,14 @@ def activate_execute(session_id: str) -> dict[str, Any]:
     if record.get("session_id") != session_id:
         raise DevGpuSessionError("activation session identity differs")
     current = status()
-    if current.get("status") != "plane-ready":
+    if (
+        current.get("status") != "plane-ready"
+        or current.get("audit_mode") != "full"
+        or current.get("dft_stabilized") is not True
+    ):
         raise DevGpuSessionError("controller plane is not awaiting activation")
+    baseline_full = _state_generation(current, "full_audit_generation")
+    baseline_activation = _state_generation(current, "activation_generation")
     manifest_path = Path(record["run_directory"]) / "activation-manifest.json"
     manifest = _load_private_json(manifest_path)
     if (
@@ -1434,9 +2277,25 @@ def activate_execute(session_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         current = status()
-        if current.get("status") == "ready":
+        if (
+            current.get("status") == "ready"
+            and current.get("audit_mode") == "full"
+            and _state_generation(current, "full_audit_generation")
+            > baseline_full
+            and _state_generation(current, "activation_generation")
+            > baseline_activation
+            and _state_generation(
+                current,
+                "last_audit_activation_generation",
+            )
+            == _state_generation(current, "activation_generation")
+        ):
             return current
-        if current.get("status") not in {"plane-ready", "auditing"}:
+        if current.get("status") not in {
+            "plane-ready",
+            "auditing",
+            "ready",
+        }:
             raise DevGpuSessionError(
                 f"controller activation ended as {current.get('status')}"
             )
@@ -1457,7 +2316,8 @@ def drain_execute() -> dict[str, Any]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=("up", "status", "down", "drain", "activate", "serve")
+        "command",
+        choices=("up", "status", "down", "drain", "stabilize", "activate", "serve"),
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--execute", action="store_true")
@@ -1483,6 +2343,10 @@ def main(argv: list[str] | None = None) -> int:
             result = down_execute()
         elif args.command == "drain":
             result = drain_execute()
+        elif args.command == "stabilize":
+            if args.session_id is None:
+                raise DevGpuSessionError("stabilize requires --session-id")
+            result = stabilize_execute(args.session_id)
         elif args.command == "activate":
             if args.session_id is None:
                 raise DevGpuSessionError("activate requires --session-id")
