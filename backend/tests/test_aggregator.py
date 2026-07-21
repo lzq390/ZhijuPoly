@@ -59,8 +59,22 @@ def test_load_polymer_results_batches_rows(postgres_dsn: str) -> None:
             """,
             (1, 2),
         ).fetchall()
-        results = load_polymer_results_postgres(connection, polymer_rows, {1: 1.0})
+
+        class CountingConnection:
+            def __init__(self, wrapped) -> None:
+                self.wrapped = wrapped
+                self.executions: list[tuple[str, object]] = []
+
+            def execute(self, query: str, params):
+                self.executions.append((query, params))
+                return self.wrapped.execute(query, params)
+
+        counting_connection = CountingConnection(connection)
+        results = load_polymer_results_postgres(counting_connection, polymer_rows, {1: 1.0})
 
     assert len(results) == 2
     assert results[0].similarity_score == 1.0
     assert results[1].similarity_score is None
+    assert len(counting_connection.executions) == 1
+    assert "polymer_id = ANY" in counting_connection.executions[0][0]
+    assert counting_connection.executions[0][1] == ([1, 2],)

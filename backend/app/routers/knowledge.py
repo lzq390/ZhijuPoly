@@ -3,6 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from app.models import KnowledgeDocumentResult, KnowledgeSearchRequest, KnowledgeSearchResponse
 from app.postgres_database import PostgresUnavailableError
@@ -24,8 +25,15 @@ async def search_knowledge(
     request_body: KnowledgeSearchRequest,
     request: Request,
 ) -> KnowledgeSearchResponse:
+    return await run_in_threadpool(_search_knowledge_sync, request_body, request.app)
+
+
+def _search_knowledge_sync(
+    request_body: KnowledgeSearchRequest,
+    app,
+) -> KnowledgeSearchResponse:
     started_at = perf_counter()
-    settings = request.app.state.settings
+    settings = app.state.settings
     search_terms = normalize_search_terms(request_body.query, request_body.terms)
     page_size = request_body.page_size or request_body.top_k
     offset = (request_body.page - 1) * page_size
@@ -34,7 +42,7 @@ async def search_knowledge(
         raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
 
     try:
-        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+        with app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
             total, rows = search_knowledge_documents_postgres(
                 connection,
                 request_body.query,

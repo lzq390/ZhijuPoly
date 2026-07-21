@@ -1,19 +1,44 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import get_ident
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from app.config import Settings
 from app.main import create_app
+from app.models import (
+    MonomerPolymerizationRequest,
+    MonomerPolymerizationResponse,
+    MonomerPolymerizationStatusResponse,
+)
+from app.routers import monomer_polymerization as monomer_polymerization_routes
+from app.routers.monomer_polymerization import (
+    monomer_polymerization,
+    monomer_polymerization_status,
+)
 from app.utils.exceptions import ModelArtifactError
 
 
 REQUIRED_SECOND_MONOMER_TARGETS = ("polyimide", "polyester", "polyamide", "polyurethane")
 OPTIONAL_SECOND_MONOMER_TARGETS = ("polyolefin", "polyether", "polyoxazolidone", "all")
+
+
+def make_request(app) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [],
+            "query_string": b"",
+            "app": app,
+        }
+    )
 
 
 def _settings(tmp_path: Path, *, smipoly_enabled: bool = True) -> Settings:
@@ -38,6 +63,61 @@ def test_monomer_polymerization_status_reports_disabled_service(tmp_path: Path) 
     assert data["available"] is False
     assert data["default_target_class"] == "polyimide"
     assert data["target_requirements"]["polyimide"]["monomer_b_required"] is True
+
+
+@pytest.mark.asyncio
+async def test_monomer_polymerization_routes_run_sync_services_off_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(_settings(tmp_path))
+    event_loop_thread = get_ident()
+    status_threads: list[int] = []
+    polymerization_threads: list[int] = []
+
+    def fake_status(enabled: bool) -> MonomerPolymerizationStatusResponse:
+        status_threads.append(get_ident())
+        return MonomerPolymerizationStatusResponse(
+            enabled=enabled,
+            available=True,
+            message="available",
+        )
+
+    def fake_polymerization(
+        request_body: MonomerPolymerizationRequest,
+    ) -> MonomerPolymerizationResponse:
+        polymerization_threads.append(get_ident())
+        return MonomerPolymerizationResponse(
+            target_class=request_body.target_class,
+            query_time_ms=0.0,
+            total=0,
+        )
+
+    monkeypatch.setattr(
+        monomer_polymerization_routes,
+        "get_monomer_polymerization_status",
+        fake_status,
+    )
+    monkeypatch.setattr(
+        monomer_polymerization_routes,
+        "run_monomer_polymerization",
+        fake_polymerization,
+    )
+
+    status_response = await monomer_polymerization_status(make_request(app))
+    result_response = await monomer_polymerization(
+        MonomerPolymerizationRequest(
+            monomer_a_smiles="CCO",
+            monomer_b_smiles="CCN",
+            target_class="polyimide",
+        ),
+        make_request(app),
+    )
+
+    assert status_response.available is True
+    assert result_response.total == 0
+    assert status_threads and status_threads[0] != event_loop_thread
+    assert polymerization_threads and polymerization_threads[0] != event_loop_thread
 
 
 def test_monomer_polymerization_post_reports_disabled_service(tmp_path: Path) -> None:
