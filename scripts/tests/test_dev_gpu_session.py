@@ -104,6 +104,22 @@ def test_controller_safe_environment_binds_local_user_manager() -> None:
     )
 
 
+def test_controller_mps_inventory_uses_descriptor_bound_cuda_paths() -> None:
+    controller = object.__new__(session.SessionController)
+    controller.root_fd = 7
+    controller.reservations_fd = 8
+    controller.pipe_fd = 9
+    controller.log_fd = 10
+    controller.slot_fd = 11
+
+    environment = controller._mps_env()
+
+    authority = f"/proc/{os.getpid()}/fd"
+    assert environment["CUDA_VISIBLE_DEVICES"] == session.GPU_UUID
+    assert environment["CUDA_MPS_PIPE_DIRECTORY"] == f"{authority}/9"
+    assert environment["CUDA_MPS_LOG_DIRECTORY"] == f"{authority}/10"
+
+
 def test_inventory_filters_gpu3_and_never_treats_polyprop_as_gpu1(monkeypatch) -> None:
     import ops.gpu_broker.server as broker
 

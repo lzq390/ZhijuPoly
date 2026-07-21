@@ -684,15 +684,20 @@ class SessionController:
 
     def _mps_env(self) -> dict[str, str]:
         root = self._authority_path(self.root_fd)
+        pipe = self._authority_path(self.pipe_fd)
+        log = self._authority_path(self.log_fd)
         return self._safe_env(
+            CUDA_MPS_LOG_DIRECTORY=str(log),
+            CUDA_MPS_PIPE_DIRECTORY=str(pipe),
+            CUDA_VISIBLE_DEVICES=GPU_UUID,
             NEXPOLY_GPU_STATE_ROOT=str(root),
             NEXPOLY_GPU_EXTERNAL_RESERVATIONS=str(
                 self._authority_path(self.reservations_fd)
             ),
             NEXPOLY_GPU_BROKER_SOCKET=str(root / "broker.sock"),
             NEXPOLY_GPU_MPS_SLOT_DIRECTORY=str(self._authority_path(self.slot_fd)),
-            NEXPOLY_GPU_MPS_PIPE_DIRECTORY=str(self._authority_path(self.pipe_fd)),
-            NEXPOLY_GPU_MPS_LOG_DIRECTORY=str(self._authority_path(self.log_fd)),
+            NEXPOLY_GPU_MPS_PIPE_DIRECTORY=str(pipe),
+            NEXPOLY_GPU_MPS_LOG_DIRECTORY=str(log),
             NEXPOLY_GPU_MPS_DESCRIPTOR_AUTHORITY="1",
             NEXPOLY_GPU_MPS_AUTHORITY_PID=str(os.getpid()),
             NEXPOLY_GPU_MPS_AUTHORITY_START_TICKS=str(process_start_ticks(os.getpid())),
