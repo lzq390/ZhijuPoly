@@ -19,6 +19,7 @@ import {
   MonomerMdStatusLoader,
   monomerMdStatusLoadError
 } from "./monomerMdStatusLoader";
+import { isAbortError, pollJobWithBackoff } from "./jobPolling";
 
 type MonomerMdSimulationState = {
   isLoading: boolean;
@@ -66,10 +67,6 @@ export function getMonomerMdJobResult(job: MonomerMdJobResponse | null): Monomer
     };
   }
   return null;
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -123,6 +120,7 @@ export function useMonomerMdSimulation() {
     artifactDeleteError: null
   });
   const pollTokenRef = useRef(0);
+  const pollAbortRef = useRef<AbortController | null>(null);
   const statusLoaderRef = useRef<MonomerMdStatusLoader | null>(null);
   if (statusLoaderRef.current === null) {
     statusLoaderRef.current = new MonomerMdStatusLoader(fetchMonomerMdStatus, fetchMonomerMdProtocols);
@@ -175,6 +173,8 @@ export function useMonomerMdSimulation() {
     void refreshStatus();
     return () => {
       pollTokenRef.current += 1;
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
       statusLoaderRef.current?.cancel();
     };
   }, [refreshStatus]);
@@ -206,26 +206,36 @@ export function useMonomerMdSimulation() {
     };
   }, [refreshStatus, state.serviceStatus?.busy, state.serviceStatus?.draining]);
 
-  async function pollJob(jobId: string, token: number) {
-    while (pollTokenRef.current === token) {
-      const job = await fetchMonomerMdJob(jobId);
-      if (pollTokenRef.current !== token) {
-        return;
+  async function pollJob(jobId: string, token: number, controller: AbortController) {
+    await pollJobWithBackoff({
+      signal: controller.signal,
+      fetchJob: (signal) => fetchMonomerMdJob(jobId, signal),
+      isTerminal: (job) => TERMINAL_STATUSES.has(job.status),
+      intervalMs: POLL_INTERVAL_MS,
+      onExpired: () => {
+        if (pollTokenRef.current === token && !controller.signal.aborted) {
+          setState((current) => ({
+            ...current,
+            isLoading: false,
+            error: "单体 MD 任务不存在或已过期，请重新提交。"
+          }));
+        }
+      },
+      onJob: (job) => {
+        if (pollTokenRef.current !== token || controller.signal.aborted) {
+          return;
+        }
+        const result = getMonomerMdJobResult(job);
+        const isTerminal = TERMINAL_STATUSES.has(job.status);
+        setState((current) => ({
+          ...current,
+          isLoading: !isTerminal,
+          error: job.status === "failed" || job.status === "cancelled" ? jobErrorMessage(job) : null,
+          data: result ?? current.data,
+          job
+        }));
       }
-      const result = getMonomerMdJobResult(job);
-      const isTerminal = TERMINAL_STATUSES.has(job.status);
-      setState((current) => ({
-        ...current,
-        isLoading: !isTerminal,
-        error: job.status === "failed" || job.status === "cancelled" ? jobErrorMessage(job) : null,
-        data: result ?? current.data,
-        job
-      }));
-      if (isTerminal) {
-        return;
-      }
-      await delay(POLL_INTERVAL_MS);
-    }
+    });
   }
 
   async function submit(nextSmiles = smiles) {
@@ -246,22 +256,25 @@ export function useMonomerMdSimulation() {
     } else {
       payload = { smiles: normalizedSmiles };
     }
+    pollAbortRef.current?.abort();
     const token = pollTokenRef.current + 1;
     pollTokenRef.current = token;
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
     setSmiles(normalizedSmiles);
     setState((current) => ({ ...current, isLoading: true, error: null, artifactDeleteError: null, data: null, job: null }));
     try {
-      const createdJob = await createMonomerMdJob(payload);
-      if (pollTokenRef.current !== token) {
+      const createdJob = await createMonomerMdJob(payload, controller.signal);
+      if (pollTokenRef.current !== token || controller.signal.aborted) {
         return;
       }
       setState((current) => ({
         ...current,
         job: { job_id: createdJob.job_id, status: createdJob.status, smiles: normalizedSmiles, protocol: runMode === "formal" ? selectedProtocol : "DensityDemo", run_mode: runMode }
       }));
-      await pollJob(createdJob.job_id, token);
+      await pollJob(createdJob.job_id, token, controller);
     } catch (error) {
-      if (pollTokenRef.current !== token) {
+      if (pollTokenRef.current !== token || controller.signal.aborted || isAbortError(error)) {
         return;
       }
       setState((current) => ({
@@ -269,11 +282,17 @@ export function useMonomerMdSimulation() {
         isLoading: false,
         error: error instanceof Error ? error.message : "提交单体 MD 模拟失败。"
       }));
+    } finally {
+      if (pollAbortRef.current === controller) {
+        pollAbortRef.current = null;
+      }
     }
   }
 
   function reset() {
     pollTokenRef.current += 1;
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
     setState((current) => ({ ...current, isLoading: false, error: null, data: null, job: null }));
   }
 

@@ -1,4 +1,4 @@
-import { ArrowLeft, Atom, LoaderCircle, Microscope, Sparkles, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Atom, LoaderCircle, Microscope, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
 import { StructurePreview3D } from "./StructurePreview3D";
 import { StructureSvg } from "./StructureSvg";
 import { CurrentStructurePanel, MissingStructurePanel } from "./StructureWorkbenchPage";
@@ -6,13 +6,12 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useConditionalGeneration } from "../hooks/useConditionalGeneration";
-import { fetchConditionalGenerationTgStatus } from "../services/api";
+import { useConditionalGenerationStatus } from "../hooks/useConditionalGenerationStatus";
 import type {
   ConditionalGenerationCandidate,
   ConditionalGenerationTgRequest,
-  ConditionalGenerationTgStatusResponse,
   StructureWorkspaceContext
 } from "../types";
 
@@ -85,32 +84,7 @@ export function ConditionalGenerationPage({ structure, onEditStructure, onBackHo
   const smiles = structure.smiles;
   const generation = useConditionalGeneration();
   const [structureError, setStructureError] = useState<string | null>(null);
-  const [serviceStatus, setServiceStatus] = useState<ConditionalGenerationTgStatusResponse | null>(null);
-  const [serviceStatusError, setServiceStatusError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    fetchConditionalGenerationTgStatus()
-      .then((status) => {
-        if (!isMounted) {
-          return;
-        }
-        setServiceStatus(status);
-        setServiceStatusError(null);
-      })
-      .catch((error) => {
-        if (!isMounted) {
-          return;
-        }
-        setServiceStatus(null);
-        setServiceStatusError(error instanceof Error ? error.message : "Failed to check generation service.");
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  const { serviceStatus, serviceStatusError, isStatusLoading, refreshStatus } = useConditionalGenerationStatus();
 
   function updateRequest(partial: Partial<ConditionalGenerationTgRequest>) {
     generation.setRequest({
@@ -317,9 +291,9 @@ export function ConditionalGenerationPage({ structure, onEditStructure, onBackHo
               </div>
 
               {serviceStatus && !serviceStatus.available ? (
-                <div className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+                <div className="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
                   <TriangleAlert className="mt-0.5 h-4 w-4 flex-none" />
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="font-semibold">{serviceStatus.message}</div>
                     {serviceStatus.missing_artifacts.length ? (
                       <div className="mt-1 break-all font-mono-ui text-xs">
@@ -327,12 +301,20 @@ export function ConditionalGenerationPage({ structure, onEditStructure, onBackHo
                       </div>
                     ) : null}
                   </div>
+                  <Button type="button" variant="outline" className="h-9 px-3 text-xs" onClick={() => void refreshStatus()} disabled={isStatusLoading}>
+                    <RefreshCw className={`mr-2 h-3.5 w-3.5 ${isStatusLoading ? "animate-spin" : ""}`} />
+                    Recheck
+                  </Button>
                 </div>
               ) : null}
               {serviceStatusError ? (
-                <div className="flex gap-3 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
                   <TriangleAlert className="mt-0.5 h-4 w-4 flex-none" />
-                  <span>{serviceStatusError}</span>
+                  <span className="min-w-0 flex-1">{serviceStatusError}</span>
+                  <Button type="button" variant="outline" className="h-9 px-3 text-xs" onClick={() => void refreshStatus()} disabled={isStatusLoading}>
+                    <RefreshCw className={`mr-2 h-3.5 w-3.5 ${isStatusLoading ? "animate-spin" : ""}`} />
+                    Retry
+                  </Button>
                 </div>
               ) : null}
 
@@ -340,11 +322,13 @@ export function ConditionalGenerationPage({ structure, onEditStructure, onBackHo
                 <div className="text-sm leading-6 text-mutedForeground">
                   {generation.job
                     ? `${generation.job.status} | attempts ${generation.job.attempts} | accepted ${generation.job.accepted_count}`
-                    : canSubmit
-                      ? "Structure and ΔTg settings are ready."
-                      : serviceStatus && !serviceStatus.available
-                        ? "Generation model artifacts are not available."
-                      : "Enter a seed structure and valid ΔTg settings."}
+                    : isStatusLoading
+                      ? "Checking generation service availability..."
+                      : canSubmit
+                        ? "Structure and ΔTg settings are ready."
+                        : serviceStatus && !serviceStatus.available
+                          ? "Generation model artifacts are not available."
+                          : "Enter a seed structure and valid ΔTg settings."}
                 </div>
                 <Button type="button" className="min-h-[44px] min-w-[190px]" onClick={handleSubmit} disabled={!canSubmit}>
                   {generation.isLoading ? (
