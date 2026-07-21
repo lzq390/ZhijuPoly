@@ -42,6 +42,7 @@ DFT_WARMUP_CHURN_TIMEOUT_SECONDS = 90.0
 STEADY_CHURN_TIMEOUT_SECONDS = 12.0
 FULL_AUDIT_ATTEMPTS = 3
 PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS = 8
+LATE_SESSION_OWNED_STOP_ATTEMPTS = 8
 
 
 class DevGpuSessionError(RuntimeError):
@@ -1129,6 +1130,7 @@ class SessionController:
         self.plane_ready_published = False
         self.plane_cleaned = False
         self.owned_components_stopped = False
+        self.late_session_owned_stop_attempts = 0
         self.cpu_restored = False
         self.mps_started = False
         self.audit_sequence = 0
@@ -1633,12 +1635,131 @@ class SessionController:
         os.rmdir("log", dir_fd=self.slot_fd)
         os.rmdir("mps-1", dir_fd=self.root_fd)
 
+    def _exact_session_owned_late_dft_lease(
+        self,
+        status: dict[str, Any],
+    ) -> tuple[str, int] | None:
+        """Bind a late DFT lease to this exact controller session.
+
+        A residency lease can become visible after the first stop-owned sweep
+        but before the Worker publishes its socket/session record.  Broker
+        scope authority alone is not a session identity, so require the sole
+        lease's stable owner and workload plus the inherited, GPU1-only
+        session environment before another fenced shell sweep is allowed.
+        """
+
+        from ops.gpu_broker.broker import (
+            OwnerIdentity,
+            process_identity_alive,
+            read_boot_id,
+        )
+        from ops.gpu_broker.server import (
+            _read_process_environment,
+            exact_dft_residency_scope_authority,
+            process_is_exact_dft_residency_descendant,
+        )
+
+        if status.get("draining") is not True:
+            return None
+        try:
+            leases = _canonical_broker_leases(status)
+        except (DevGpuSessionError, TypeError, ValueError):
+            return None
+        if len(leases) != 1:
+            return None
+        lease = leases[0]
+        authority = exact_dft_residency_scope_authority(
+            lease,
+            index=GPU_INDEX,
+            uuid=GPU_UUID,
+        )
+        if authority is None or status.get("leases") != [lease.public_dict()]:
+            return None
+        workload_pid = authority[0]
+        if lease.owner_pid == workload_pid:
+            return None
+        try:
+            boot_id = read_boot_id()
+            owner = OwnerIdentity(
+                pid=lease.owner_pid,
+                process_start_ticks=lease.owner_process_start_ticks,
+                boot_id=lease.owner_boot_id,
+            )
+
+            def identities_are_live() -> bool:
+                return (
+                    lease.owner_boot_id == boot_id
+                    and process_identity_alive(owner, current_boot_id=boot_id)
+                    and process_is_exact_dft_residency_descendant(
+                        workload_pid,
+                        lease,
+                        index=GPU_INDEX,
+                        uuid=GPU_UUID,
+                    )
+                )
+
+            if not identities_are_live():
+                return None
+            owner_environment = _read_process_environment(lease.owner_pid)
+            workload_environment = _read_process_environment(workload_pid)
+            common_environment = {
+                "MONOMER_DFT_DEPLOYMENT": "dev",
+                "NEXPOLY_DEV_GPU1_ONLY_SESSION": "1",
+                "NEXPOLY_DEV_GPU_SESSION_ID": self.session_id,
+                "NEXPOLY_DFT_GPU_DEVICE": str(GPU_INDEX),
+                "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES": "",
+            }
+            workload_only_environment = {
+                "MONOMER_DFT_EXECUTOR_PROCESS": "1",
+                "NEXPOLY_DFT_EXECUTOR_GPU_DEVICE": str(GPU_INDEX),
+                "NEXPOLY_DFT_EXECUTOR_GPU_UUID": GPU_UUID,
+            }
+            if any(
+                owner_environment.get(name) != value
+                or workload_environment.get(name) != value
+                for name, value in common_environment.items()
+            ) or any(
+                workload_environment.get(name) != value
+                for name, value in workload_only_environment.items()
+            ):
+                return None
+            if not identities_are_live():
+                return None
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+        return lease.lease_id, lease.fencing_token
+
+    def _retry_late_session_owned_stop(self, status: dict[str, Any]) -> bool:
+        """Retry only a proven late session-owned DFT lease, with a hard cap."""
+
+        if (
+            not self.automatic_recovery
+            or not self.owned_components_stopped
+            or self.late_session_owned_stop_attempts
+            >= LATE_SESSION_OWNED_STOP_ATTEMPTS
+        ):
+            return False
+        identity = self._exact_session_owned_late_dft_lease(status)
+        if identity is None:
+            return False
+        self.late_session_owned_stop_attempts += 1
+        succeeded = self._recovery_command("gpu-session-stop-owned-internal")
+        if succeeded:
+            self._state(
+                "isolation-waiting",
+                contaminated=True,
+                reason="late exact session-owned DFT lease required another stop sweep",
+            )
+        return True
+
     def _cleanup(self, client: Any) -> bool:
         drained = client.set_draining(True)
         if any(
             isinstance(lease, dict) and lease.get("gpu_uuid") == GPU_UUID
             for lease in drained.get("leases", [])
         ):
+            if self._retry_late_session_owned_stop(drained):
+                return False
             self._state("cleanup-blocked", reason="NexPoly GPU1 leases are still active")
             return False
         if self.mps_started:

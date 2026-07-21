@@ -5220,6 +5220,295 @@ def test_automatic_recovery_restores_cpu_before_waiting_for_mps_cleanup(
     ]
 
 
+def _late_dft_status(
+    monkeypatch: pytest.MonkeyPatch,
+    controller: session.SessionController,
+    *,
+    owner_session_id: str | None = None,
+    workload_session_id: str | None = None,
+) -> dict[str, object]:
+    from ops.gpu_broker import broker, server
+
+    lease = dft_residency_record()
+    lease.update(
+        owner_pid=7000,
+        owner_process_start_ticks=123,
+        owner_boot_id="boot",
+    )
+    owner_environment = {
+        "MONOMER_DFT_DEPLOYMENT": "dev",
+        "NEXPOLY_DEV_GPU1_ONLY_SESSION": "1",
+        "NEXPOLY_DEV_GPU_SESSION_ID": (
+            controller.session_id
+            if owner_session_id is None
+            else owner_session_id
+        ),
+        "NEXPOLY_DFT_GPU_DEVICE": "1",
+        "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES": "",
+    }
+    workload_environment = {
+        **owner_environment,
+        "NEXPOLY_DEV_GPU_SESSION_ID": (
+            controller.session_id
+            if workload_session_id is None
+            else workload_session_id
+        ),
+    }
+    environments = {
+        7000: owner_environment,
+        8123: {
+            **workload_environment,
+            "MONOMER_DFT_EXECUTOR_PROCESS": "1",
+            "NEXPOLY_DFT_EXECUTOR_GPU_DEVICE": "1",
+            "NEXPOLY_DFT_EXECUTOR_GPU_UUID": session.GPU_UUID,
+        },
+    }
+    monkeypatch.setattr(broker, "read_boot_id", lambda: "boot")
+    monkeypatch.setattr(
+        broker,
+        "process_identity_alive",
+        lambda owner, *, current_boot_id: (
+            owner.pid == 7000
+            and owner.process_start_ticks == 123
+            and owner.boot_id == current_boot_id == "boot"
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "process_is_exact_dft_residency_descendant",
+        lambda pid, _lease, *, index, uuid: (
+            pid == 8123 and index == 1 and uuid == session.GPU_UUID
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "_read_process_environment",
+        lambda pid: dict(environments[pid]),
+    )
+    return {"draining": True, "leases": [lease]}
+
+
+def test_late_dft_recovery_binds_owner_and_workload_to_exact_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    status = _late_dft_status(monkeypatch, controller)
+
+    assert controller._exact_session_owned_late_dft_lease(status) == (
+        "d1" * 16,
+        1,
+    )
+
+
+@pytest.mark.parametrize(
+    "residue",
+    ("foreign-owner", "foreign-workload", "mixed-inventory", "unknown-lease"),
+)
+def test_late_recovery_keeps_foreign_or_unknown_lease_isolated(
+    residue: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.automatic_recovery = True
+    controller.owned_components_stopped = True
+    if residue == "foreign-owner":
+        status = _late_dft_status(
+            monkeypatch,
+            controller,
+            owner_session_id="e" * 32,
+        )
+    elif residue == "foreign-workload":
+        status = _late_dft_status(
+            monkeypatch,
+            controller,
+            workload_session_id="e" * 32,
+        )
+    elif residue == "mixed-inventory":
+        status = _late_dft_status(monkeypatch, controller)
+        status["leases"] = [*status["leases"], md_execution_record()]
+    else:
+        status = {"draining": True, "leases": [md_execution_record()]}
+    states: list[str] = []
+    monkeypatch.setattr(
+        controller,
+        "_recovery_command",
+        lambda _command: pytest.fail("foreign/unknown residue must not be stopped"),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_state",
+        lambda value, **_kwargs: states.append(value),
+    )
+
+    assert controller._cleanup(
+        SimpleNamespace(set_draining=lambda _value: status)
+    ) is False
+    assert controller.late_session_owned_stop_attempts == 0
+    assert states == ["cleanup-blocked"]
+
+
+def test_failed_late_exact_dft_stop_sweeps_remain_isolation_waiting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.automatic_recovery = True
+    controller.owned_components_stopped = True
+    states: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        controller,
+        "_exact_session_owned_late_dft_lease",
+        lambda _status: ("d1" * 16, 1),
+    )
+    monkeypatch.setattr(
+        session.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="late Worker identity is not ready",
+        ),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_state",
+        lambda value, **kwargs: states.append((value, kwargs)),
+    )
+
+    assert controller._retry_late_session_owned_stop({}) is True
+    assert controller._retry_late_session_owned_stop({}) is True
+    assert controller.late_session_owned_stop_attempts == 2
+    assert [value for value, _extra in states] == [
+        "isolation-waiting",
+        "isolation-waiting",
+    ]
+    assert all(
+        extra == {
+            "contaminated": True,
+            "recovery_command": "gpu-session-stop-owned-internal",
+            "recovery_error": "late Worker identity is not ready",
+        }
+        for _value, extra in states
+    )
+
+
+def test_automatic_recovery_rescans_and_stops_late_exact_dft_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.stop_requested = True
+    controller.automatic_recovery = True
+    controller.gpu3_guard = {"guard": "same"}
+    controller.broker = SimpleNamespace(terminate=lambda: None, wait=lambda timeout: 0)
+    late_lease_active = True
+    commands: list[str] = []
+    states: list[str] = []
+    broker_status_calls = 0
+
+    def recover(command: str) -> bool:
+        nonlocal late_lease_active
+        commands.append(command)
+        if command == "gpu-session-stop-owned-internal" and commands.count(command) == 2:
+            late_lease_active = False
+        return True
+
+    def set_draining(_value: bool) -> dict[str, object]:
+        nonlocal broker_status_calls
+        broker_status_calls += 1
+        if broker_status_calls > 3:
+            raise AssertionError("late owned recovery did not converge")
+        return {
+            "draining": True,
+            "leases": (
+                [{"gpu_uuid": session.GPU_UUID}]
+                if late_lease_active
+                else []
+            ),
+        }
+
+    monkeypatch.setattr(controller, "_recovery_command", recover)
+    monkeypatch.setattr(
+        controller,
+        "_exact_session_owned_late_dft_lease",
+        lambda status: ("d1" * 16, 1) if status["leases"] else None,
+    )
+    monkeypatch.setattr(controller, "_cleanup_owned_tree", lambda: None)
+    monkeypatch.setattr(
+        controller,
+        "_state",
+        lambda value, **_kwargs: states.append(value),
+    )
+    monkeypatch.setattr(controller, "_remove_controller_record", lambda: None)
+    monkeypatch.setattr(session, "GPU_ROOT", tmp_path / "gpu-resource")
+    monkeypatch.setattr(session, "read_gpu3_guard_fingerprint", lambda: {"guard": "same"})
+    monkeypatch.setattr(session.time, "sleep", lambda _seconds: None)
+
+    assert controller._serve_loop(SimpleNamespace(set_draining=set_draining)) == 0
+    assert commands == [
+        "gpu-session-stop-owned-internal",
+        "gpu-session-restore-cpu-internal",
+        "gpu-session-stop-owned-internal",
+    ]
+    assert controller.late_session_owned_stop_attempts == 1
+    assert states[-1] == "recovered"
+
+
+@pytest.mark.parametrize("command_succeeds", (True, False))
+def test_late_exact_dft_stop_retries_are_bounded(
+    command_succeeds: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.automatic_recovery = True
+    controller.owned_components_stopped = True
+    status = {
+        "draining": True,
+        "leases": [{"gpu_uuid": session.GPU_UUID}],
+    }
+    commands: list[str] = []
+    states: list[str] = []
+    monkeypatch.setattr(
+        controller,
+        "_exact_session_owned_late_dft_lease",
+        lambda _status: ("d1" * 16, 1),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_recovery_command",
+        lambda command: commands.append(command) or command_succeeds,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_state",
+        lambda value, **_kwargs: states.append(value),
+    )
+    client = SimpleNamespace(set_draining=lambda _value: status)
+
+    results = [
+        controller._cleanup(client)
+        for _ in range(session.LATE_SESSION_OWNED_STOP_ATTEMPTS + 2)
+    ]
+
+    assert results == [False] * (session.LATE_SESSION_OWNED_STOP_ATTEMPTS + 2)
+    assert commands == ["gpu-session-stop-owned-internal"] * 8
+    assert controller.late_session_owned_stop_attempts == 8
+    assert states[-2:] == ["cleanup-blocked", "cleanup-blocked"]
+
+
 def test_ready_is_published_only_after_explicit_activation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
