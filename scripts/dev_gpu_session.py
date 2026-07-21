@@ -41,6 +41,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DFT_WARMUP_CHURN_TIMEOUT_SECONDS = 90.0
 STEADY_CHURN_TIMEOUT_SECONDS = 12.0
 FULL_AUDIT_ATTEMPTS = 3
+PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS = 8
 
 
 class DevGpuSessionError(RuntimeError):
@@ -2017,8 +2018,22 @@ class SessionController:
 
     def _audit(self, client: Any) -> tuple[dict[str, Any], TargetSnapshot, tuple[str, ...]]:
         started = time.monotonic()
+        preactivation_rollout = (
+            self.plane_ready_published
+            and self.dft_stabilized
+            and self.activation_generation == 0
+        )
+        # MD runtime-probe acquire/release and Backend residency activation can
+        # span several complete host inventories.  These extra attempts only
+        # discard changed rounds; the unchanged full classifier still decides
+        # whether any captured GPU authority is allowed.
+        authority_change_attempts = (
+            PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS
+            if preactivation_rollout
+            else FULL_AUDIT_ATTEMPTS
+        )
         audit_attempts = (
-            2048 if self.dft_warmup_open else FULL_AUDIT_ATTEMPTS
+            2048 if self.dft_warmup_open else authority_change_attempts
         )
         for round_index in range(audit_attempts):
             captured_activation = self.activation_generation
@@ -2672,7 +2687,7 @@ class SessionController:
                     )
                 continue
             except _AuditRoundChanged:
-                if round_index + 1 >= FULL_AUDIT_ATTEMPTS:
+                if round_index + 1 >= authority_change_attempts:
                     raise DevGpuSessionError(
                         "GPU1 authority changed throughout trailing full audits"
                     )

@@ -3401,9 +3401,26 @@ def test_full_audit_discards_broker_change_after_initial_mps_seal(
     assert controller.last_mps_authority == resident_authority
 
 
+@pytest.mark.parametrize(
+    (
+        "plane_ready_published",
+        "dft_stabilized",
+        "activation_generation",
+        "dft_warmup_open",
+    ),
+    (
+        (False, False, 0, True),
+        (False, True, 0, False),
+        (True, True, 1, False),
+    ),
+)
 def test_initial_mps_broker_seal_change_keeps_three_round_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    plane_ready_published: bool,
+    dft_stabilized: bool,
+    activation_generation: int,
+    dft_warmup_open: bool,
 ) -> None:
     transitions = tuple(
         (
@@ -3427,6 +3444,10 @@ def test_initial_mps_broker_seal_change_keeps_three_round_budget(
     run = tmp_path / ("run-" + "d" * 32)
     run.mkdir()
     controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = plane_ready_published
+    controller.dft_stabilized = dft_stabilized
+    controller.activation_generation = activation_generation
+    controller.dft_warmup_open = dft_warmup_open
     client = patch_full_audit_runtime(
         monkeypatch,
         controller,
@@ -3463,6 +3484,149 @@ def test_initial_mps_broker_seal_change_keeps_three_round_budget(
     # Every mismatched initial seal must abandon the round before a second MPS
     # read or any host-inventory classification can occur.
     assert mps_reads == session.FULL_AUDIT_ATTEMPTS
+
+
+def test_preactivation_rollout_commits_after_three_broker_seal_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    statuses = tuple(
+        {
+            "broker_instance_id": "broker",
+            "next_fencing_token": generation,
+            "draining": False,
+            "quarantined_gpus": {},
+            "leases": [],
+        }
+        for generation in (1, 2, 3, 4)
+    )
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = True
+    controller.dft_stabilized = True
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        statuses[0],
+    )
+    rounds = 0
+
+    def status():
+        return statuses[min(rounds, len(statuses) - 1)]
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        after = statuses[min(rounds + 1, len(statuses) - 1)]
+        rounds += 1
+        return after, empty_snapshot()
+
+    client.status = status
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert rounds == 4
+    assert controller.full_audit_generation == 1
+
+
+def test_preactivation_rollout_broker_seal_changes_are_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rollout_attempts = 8
+    statuses = tuple(
+        {
+            "broker_instance_id": "broker",
+            "next_fencing_token": generation,
+            "draining": False,
+            "quarantined_gpus": {},
+            "leases": [],
+        }
+        for generation in range(1, rollout_attempts + 2)
+    )
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = True
+    controller.dft_stabilized = True
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        statuses[0],
+    )
+    rounds = 0
+    mps_reads = 0
+
+    def status():
+        return statuses[rounds]
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        rounds += 1
+        return statuses[rounds], empty_snapshot()
+
+    def authority():
+        nonlocal mps_reads
+        mps_reads += 1
+        return mps_snapshot()
+
+    client.status = status
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(controller, "_mps_authority", authority)
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="authority changed throughout trailing full audits",
+    ):
+        controller._audit(client)
+
+    assert session.PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS == rollout_attempts
+    assert rounds == rollout_attempts
+    assert mps_reads == rollout_attempts
+
+
+def test_preactivation_rollout_returns_stable_foreign_evidence_immediately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    foreign_pid = 99001
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = True
+    controller.dft_stabilized = True
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=session.TargetSnapshot((foreign_pid,), (), ()),
+    )
+    rounds = 0
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        rounds += 1
+        return status, session.TargetSnapshot((foreign_pid,), (), ())
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == (f"foreign CUDA PID(s): {foreign_pid}",)
+    assert rounds == 1
+    assert controller.full_audit_generation == 0
 
 
 def test_full_audit_accepts_dft_claim_with_mps_in_sibling_login_scope(
