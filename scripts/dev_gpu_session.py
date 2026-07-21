@@ -1250,6 +1250,38 @@ class SessionController:
             for pid in pids
         )
 
+    def _exact_dft_mps_client_growth(
+        self,
+        status: dict[str, Any],
+        before: Any,
+        after: Any,
+    ) -> bool:
+        """Prove a monotonic private-MPS client addition is exact DFT warmup.
+
+        A disappearing or replaced client is deliberately not retryable: its
+        former process identity can no longer be proven from the trailing
+        snapshot.  The unchanged descriptor-bound control/server identity and
+        every newly visible client PID must still bind to the sole DFT
+        residency ancestry.
+        """
+
+        if (
+            not self.dft_warmup_open
+            or self.dft_stabilized
+            or self.activation_generation != 0
+            or self._mps_authority_core(before)
+            != self._mps_authority_core(after)
+            or not before.clients < after.clients
+        ):
+            return False
+        added_pids = frozenset(
+            client.client_pid for client in after.clients - before.clients
+        )
+        return bool(added_pids) and self._exact_dft_descendants(
+            status,
+            added_pids,
+        )
+
     def _fast_dft_churn_guard(
         self,
         client: Any,
@@ -1485,13 +1517,14 @@ class SessionController:
                     )
                 expected_token = broker_authority_token(status)
                 mps_after_inventory = self._mps_authority_for_audit(client)
-                if mps_after_inventory != mps_before:
-                    raise _AuditRoundChanged(
-                        "MPS authority changed across the full host inventory"
-                    )
+                mps_inventory_changed = mps_after_inventory != mps_before
                 authorized_before = mps_before.server_pids
                 clients_before = frozenset(
                     client.client_pid for client in mps_before.clients
+                )
+                observed_initial_clients = clients_before | frozenset(
+                    client.client_pid
+                    for client in mps_after_inventory.clients
                 )
                 (
                     managed_nvml,
@@ -1501,7 +1534,7 @@ class SessionController:
                     status,
                     snapshot,
                     mps_before.gpu_declarers,
-                    clients_before,
+                    observed_initial_clients,
                 )
                 if len(authorized_before) > 1:
                     raise DevGpuSessionError(
@@ -1522,19 +1555,17 @@ class SessionController:
                         managed_systemd_claims=managed_systemd_claims,
                     ),
                 )
-                unknown_mps_clients = clients_before - managed_clients
+                unknown_mps_clients = (
+                    observed_initial_clients - managed_clients
+                )
                 if unknown_mps_clients:
-                    if (
+                    if not (
                         self.dft_warmup_open
                         and self._exact_dft_descendants(
                             status,
                             unknown_mps_clients,
                         )
                     ):
-                        raise _AuditRoundChanged(
-                            "known DFT MPS membership changed after full inventory"
-                        )
-                    else:
                         reasons = (
                             *reasons,
                             "unknown private MPS client PID(s): "
@@ -1545,6 +1576,25 @@ class SessionController:
                     self.audit_mode = "full"
                     self.last_audit_duration = time.monotonic() - started
                     return status, snapshot, reasons
+                if mps_inventory_changed:
+                    if self._exact_dft_mps_client_growth(
+                        status,
+                        mps_before,
+                        mps_after_inventory,
+                    ):
+                        self._fast_dft_churn_guard(client, status)
+                        raise _ExactDftTrailingChurn(
+                            "exact DFT MPS clients grew across the full inventory"
+                        )
+                    raise _AuditRoundChanged(
+                        "MPS authority changed across the full host inventory"
+                    )
+                if unknown_mps_clients:
+                    # A stable client omitted from the full systemd inventory
+                    # is uncertainty, not monotonic warmup growth.
+                    raise _AuditRoundChanged(
+                        "known DFT MPS membership changed after full inventory"
+                    )
 
                 from ops.gpu_broker.server import (
                     query_compute_processes,
@@ -1565,17 +1615,15 @@ class SessionController:
                     )
                     if GPU_UUID in claim.gpu_uuids
                 )
+                unsealed_compute = frozenset(
+                    trailing_process_map.get(GPU_UUID, frozenset())
+                )
                 sealed_process_map = query_compute_processes()
-                if sealed_process_map.get(
-                    GPU_UUID,
-                    frozenset(),
-                ) != trailing_process_map.get(GPU_UUID, frozenset()):
-                    raise _AuditRoundChanged(
-                        "GPU1 NVML membership changed across trailing systemd audit"
-                    )
-                trailing_compute = frozenset(
+                sealed_compute = frozenset(
                     sealed_process_map.get(GPU_UUID, frozenset())
                 )
+                sealed_membership_changed = sealed_compute != unsealed_compute
+                trailing_compute = sealed_compute
                 mps_after = self._mps_authority_for_audit(client)
                 authorized_after = mps_after.server_pids
                 clients_after = frozenset(
@@ -1587,14 +1635,14 @@ class SessionController:
                     raise _AuditRoundChanged(
                         "Broker authority changed during trailing full audit"
                     )
-                if mps_after != mps_before:
-                    raise _AuditRoundChanged(
-                        "MPS authority changed across the trailing full audit"
-                    )
+                trailing_mps_changed = mps_after != mps_before
 
                 initial_compute = frozenset(snapshot.process_pids)
+                observed_trailing_compute = (
+                    unsealed_compute | sealed_compute
+                )
                 added_processes = (
-                    (trailing_compute - initial_compute)
+                    (observed_trailing_compute - initial_compute)
                     | (clients_after - clients_before)
                 ) - authorized_after
                 additions_are_exact_dft = (
@@ -1606,7 +1654,7 @@ class SessionController:
                     )
                 )
                 trailing_snapshot = TargetSnapshot(
-                    tuple(sorted(trailing_compute)),
+                    tuple(sorted(observed_trailing_compute)),
                     trailing_docker,
                     trailing_systemd,
                 )
@@ -1627,28 +1675,6 @@ class SessionController:
                     mps_after.gpu_declarers,
                     clients_after,
                 )
-                if systemd_changed:
-                    changed_reasons = foreign_gpu1_reasons(
-                        trailing_snapshot,
-                        authorized_mps_pids=authorized_after,
-                        managed_workload_pids=trailing_managed_nvml,
-                        managed_systemd_claims=(
-                            trailing_managed_systemd_claims
-                        ),
-                    )
-                    if changed_reasons:
-                        self.audit_sequence += 1
-                        self.audit_mode = "full"
-                        self.last_audit_duration = time.monotonic() - started
-                        return status, snapshot, changed_reasons
-                    if self.dft_warmup_open:
-                        self._fast_dft_churn_guard(client, final_status)
-                        raise _ExactDftTrailingChurn(
-                            "exact DFT systemd claims changed during trailing audit"
-                        )
-                    raise _AuditRoundChanged(
-                        "GPU1 systemd claims changed during trailing full audit"
-                    )
                 trailing_reasons = foreign_gpu1_reasons(
                     trailing_snapshot,
                     authorized_mps_pids=authorized_after,
@@ -1688,10 +1714,58 @@ class SessionController:
                 ) != tuple(
                     _claim_fingerprint(claim) for claim in trailing_docker
                 )
+                if sealed_membership_changed:
+                    sealed_additions = sealed_compute - unsealed_compute
+                    if (
+                        unsealed_compute < sealed_compute
+                        and self.dft_warmup_open
+                        and self._exact_dft_descendants(
+                            final_status,
+                            sealed_additions,
+                        )
+                    ):
+                        self._fast_dft_churn_guard(client, final_status)
+                        raise _ExactDftTrailingChurn(
+                            "exact DFT NVML membership grew across systemd audit"
+                        )
+                    raise _AuditRoundChanged(
+                        "GPU1 NVML membership changed across trailing systemd audit"
+                    )
+                if trailing_mps_changed:
+                    if self._exact_dft_mps_client_growth(
+                        final_status,
+                        mps_before,
+                        mps_after,
+                    ):
+                        self._fast_dft_churn_guard(client, final_status)
+                        raise _ExactDftTrailingChurn(
+                            "exact DFT MPS clients grew across the trailing audit"
+                        )
+                    raise _AuditRoundChanged(
+                        "MPS authority changed across the trailing full audit"
+                    )
+                if systemd_changed:
+                    if self.dft_warmup_open:
+                        self._fast_dft_churn_guard(client, final_status)
+                        raise _ExactDftTrailingChurn(
+                            "exact DFT systemd claims changed during trailing audit"
+                        )
+                    raise _AuditRoundChanged(
+                        "GPU1 systemd claims changed during trailing full audit"
+                    )
                 if (
                     initial_compute != trailing_compute
                     or docker_changed
                 ):
+                    if (
+                        not docker_changed
+                        and initial_compute < trailing_compute
+                        and additions_are_exact_dft
+                    ):
+                        self._fast_dft_churn_guard(client, final_status)
+                        raise _ExactDftTrailingChurn(
+                            "exact DFT NVML membership grew during trailing audit"
+                        )
                     raise _AuditRoundChanged(
                         "GPU1 membership changed during trailing full audit"
                     )
@@ -2140,7 +2214,12 @@ def down_execute() -> dict[str, Any]:
             return {"schema_version": 1, "status": "stopped", "gpu_index": 1}
         current = status()
         if current.get("status") == "cleanup-blocked":
-            raise DevGpuSessionError("GPU session cleanup is blocked by active NexPoly leases")
+            # The controller deliberately keeps retrying while an exact owned
+            # Worker releases its lease.  Waiting preserves that graceful
+            # teardown path; foreign/unknown clients remain isolated by the
+            # controller and can never be signalled here.
+            time.sleep(0.25)
+            continue
         time.sleep(0.25)
     raise DevGpuSessionError("timed out waiting for GPU session cleanup")
 

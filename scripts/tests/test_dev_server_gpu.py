@@ -274,6 +274,29 @@ class DevServerGpuScriptTests(unittest.TestCase):
             source.index("\n}\n\ngpu_session_stop_owned_internal()", down_start)
         ]
         self.assertIn('"stabilizing"', down_body)
+        self.assertIn('if [[ "$state" == "stopped" ]]', down_body)
+        self.assertIn("verify_gpu_session_stopped_runtime", down_body)
+        self.assertLess(
+            down_body.index('if [[ "$state" == "stopped" ]]'),
+            down_body.index("NEXPOLY_DEV_GPU_SESSION_ID="),
+        )
+
+        stopped_start = source.index("verify_gpu_session_stopped_runtime() {")
+        stopped_body = source[
+            stopped_start:source.index("\n}\n\ngpu_session_status()", stopped_start)
+        ]
+        self.assertIn("verify_backend_drift", stopped_body)
+        for marker in (
+            ".runtime/gpu-session/controller.json",
+            ".runtime/gpu-resource/broker.sock",
+            ".runtime/gpu-resource/mps-1",
+            '"$WORKER_PID_FILE"',
+            '"$WORKER_SOCKET"',
+            '"$DFT_WORKER_SESSION_RECORD"',
+            ".runtime/monomer-dft-worker.pid",
+            '"$DFT_WORKER_SOCKET_DIR/worker.sock"',
+        ):
+            self.assertIn(marker, stopped_body)
 
     def test_canary_state_is_dev_private_and_fenced_from_production(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")

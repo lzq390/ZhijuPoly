@@ -1536,6 +1536,25 @@ gpu_session_up() {
   echo "Development GPU1 session is ready; GPU3 was not modified."
 }
 
+verify_gpu_session_stopped_runtime() {
+  verify_backend_drift
+  local path
+  for path in \
+    "$ROOT_DIR/.runtime/gpu-session/controller.json" \
+    "$ROOT_DIR/.runtime/gpu-resource/broker.sock" \
+    "$ROOT_DIR/.runtime/gpu-resource/mps-1" \
+    "$WORKER_PID_FILE" \
+    "$WORKER_SOCKET" \
+    "$DFT_WORKER_SESSION_RECORD" \
+    "$ROOT_DIR/.runtime/monomer-dft-worker.pid" \
+    "$DFT_WORKER_SOCKET_DIR/worker.sock"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      echo "Stopped GPU session retains an owned runtime path: $path" >&2
+      return 1
+    fi
+  done
+}
+
 gpu_session_status() {
   local payload state
   payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)"
@@ -1552,6 +1571,8 @@ gpu_session_status() {
     local dft_health
     dft_health="$(curl --max-time 10 --unix-socket "$DFT_WORKER_SOCKET_DIR/worker.sock" -fsS http://localhost/health)"
     dft_worker_session_record verify "$dft_health" >/dev/null
+  elif [[ "$state" == "stopped" ]]; then
+    verify_gpu_session_stopped_runtime
   elif [[ "$state" != "stopped" ]]; then
     return 1
   fi
@@ -1562,8 +1583,14 @@ gpu_session_down() {
     "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --dry-run
     return 0
   fi
-  local payload
+  local payload state
   payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)"
+  state="$(printf '%s' "$payload" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status", "invalid"))')"
+  if [[ "$state" == "stopped" ]]; then
+    verify_gpu_session_stopped_runtime
+    echo "Development backend is already in CPU-only idle mode."
+    return 0
+  fi
   NEXPOLY_DEV_GPU_SESSION_ID="$(printf '%s' "$payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin); session=value.get("session_id"); assert value.get("status") in {"ready","plane-ready","stabilizing","contaminated","audit-failed","isolation-waiting","cleanup-blocked"} and isinstance(session,str) and re.fullmatch(r"[0-9a-f]{32}", session), value; print(session)')"
   export NEXPOLY_DEV_GPU_SESSION_ID
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" drain --execute >/dev/null
@@ -1905,7 +1932,7 @@ case "${1:-up}" in
     preflight_session_state="$(printf '%s' "$preflight_session_payload" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status", "invalid"))')"
     if [[ "$preflight_session_state" == "stopped" ]]; then
       "${COMPOSE[@]}" exec -T backend python -m app.gpu_preflight --mode disabled --verify-serialized-assets
-      verify_backend_drift
+      verify_gpu_session_stopped_runtime
     elif [[ "$preflight_session_state" == "ready" ]]; then
       "${COMPOSE[@]}" exec -T backend python -m app.gpu_preflight --mode configured --verify-serialized-assets
       gpu_session_status >/dev/null
