@@ -60,6 +60,7 @@ class TargetSnapshot:
     process_pids: tuple[int, ...]
     docker_claims: tuple[Any, ...]
     systemd_claims: tuple[Any, ...]
+    process_declarers: tuple[Any, ...] = ()
 
 
 def require_gpu1_default_compute_mode(
@@ -229,6 +230,8 @@ def collect_target_snapshot() -> TargetSnapshot:
         raise DevGpuSessionError("physical GPU1 identity differs from policy")
     require_gpu1_default_compute_mode()
     processes = query_compute_processes()
+    target_processes = frozenset(processes.get(GPU_UUID, frozenset()))
+    process_declarers = capture_compute_process_declarers(target_processes)
     docker_claims = tuple(
         claim for claim in query_docker_gpu_claims() if GPU_UUID in claim.gpu_uuids
     )
@@ -238,9 +241,19 @@ def collect_target_snapshot() -> TargetSnapshot:
         if GPU_UUID in claim.gpu_uuids
     )
     return TargetSnapshot(
-        process_pids=tuple(sorted(processes.get(GPU_UUID, frozenset()))),
+        process_pids=tuple(sorted(target_processes)),
         docker_claims=docker_claims,
         systemd_claims=systemd_claims,
+        process_declarers=tuple(
+            sorted(
+                process_declarers.values(),
+                key=lambda declarer: (
+                    declarer.pid,
+                    declarer.process_start_ticks,
+                    declarer.process_cgroup,
+                ),
+            )
+        ),
     )
 
 
@@ -393,6 +406,17 @@ def snapshot_fingerprint(snapshot: TargetSnapshot) -> tuple[Any, ...]:
         snapshot.process_pids,
         tuple(_claim_fingerprint(claim) for claim in snapshot.docker_claims),
         tuple(_claim_fingerprint(claim) for claim in snapshot.systemd_claims),
+        tuple(
+            sorted(
+                (
+                    declarer.pid,
+                    declarer.process_start_ticks,
+                    declarer.process_cgroup,
+                    tuple(sorted(declarer.gpu_uuids)),
+                )
+                for declarer in snapshot.process_declarers
+            )
+        ),
     )
 
 
@@ -1076,6 +1100,33 @@ class SessionController:
         }
 
     @staticmethod
+    def _captured_pids_match_expected_declarers(
+        authorized_pids: frozenset[int],
+        process_pids: frozenset[int],
+        process_declarers: tuple[Any, ...],
+        expected_declarers: frozenset[Any],
+    ) -> bool:
+        """Never authorize a captured NVML PID using a later reused identity."""
+
+        for pid in authorized_pids & process_pids:
+            try:
+                captured = frozenset(
+                    declarer
+                    for declarer in process_declarers
+                    if declarer.pid == pid
+                )
+                expected = frozenset(
+                    declarer
+                    for declarer in expected_declarers
+                    if declarer.pid == pid
+                )
+            except (AttributeError, TypeError):
+                return False
+            if len(captured) != 1 or captured != expected:
+                return False
+        return True
+
+    @staticmethod
     def _managed_workload_authority(
         status: dict[str, Any],
         snapshot: TargetSnapshot,
@@ -1280,6 +1331,69 @@ class SessionController:
         return bool(added_pids) and self._exact_dft_descendants(
             status,
             added_pids,
+        )
+
+    def _exact_dft_lazy_mps_server_growth(
+        self,
+        status: dict[str, Any],
+        before: Any,
+        after: Any,
+    ) -> bool:
+        """Prove the one allowed descriptor-owned lazy MPS server transition.
+
+        CUDA MPS starts its server on the first client connection.  The
+        descriptor-bound control identity must remain unchanged, exactly one
+        server may appear, and every client already visible in the later
+        snapshot must belong to the sole DFT residency.  This proof only
+        selects the authority used to classify the already captured host
+        inventory; a fresh fast audit is still required before retrying.
+        """
+
+        from ops.gpu_broker.server import MpsRuntimeGuard
+
+        if (
+            not self.dft_warmup_open
+            or self.dft_stabilized
+            or self.activation_generation != 0
+            or before.descriptor_authority is not True
+            or after.descriptor_authority is not True
+            or before.server_pids
+            or len(after.server_pids) != 1
+            or before.clients
+        ):
+            return False
+        control_before = self._mps_control_declarers(before)
+        control_after = self._mps_control_declarers(after)
+        if control_before != control_after or len(control_before) != 1:
+            return False
+        server_pid = next(iter(after.server_pids))
+        server_declarers = self._mps_server_declarers(after)
+        if (
+            set(server_declarers) != {server_pid}
+            or before.gpu_declarers != control_before
+            or after.gpu_declarers
+            != control_after | frozenset(server_declarers.values())
+            or any(
+                client.server_pid != server_pid
+                or not MpsRuntimeGuard._device_matches(
+                    client.device_uuid,
+                    GPU_UUID,
+                )
+                for client in after.clients
+            )
+        ):
+            return False
+        try:
+            lease = self._only_exact_dft_residency(status)
+        except DevGpuSessionError:
+            return False
+        client_pids = frozenset(
+            client.client_pid for client in after.clients
+        )
+        exact_pids = client_pids or frozenset({lease.workload_pid})
+        return self._exact_dft_descendants(
+            status,
+            exact_pids,
         )
 
     def _fast_dft_churn_guard(
@@ -1518,7 +1632,14 @@ class SessionController:
                 expected_token = broker_authority_token(status)
                 mps_after_inventory = self._mps_authority_for_audit(client)
                 mps_inventory_changed = mps_after_inventory != mps_before
-                authorized_before = mps_before.server_pids
+                exact_lazy_server_growth = (
+                    mps_inventory_changed
+                    and self._exact_dft_lazy_mps_server_growth(
+                        status,
+                        mps_before,
+                        mps_after_inventory,
+                    )
+                )
                 clients_before = frozenset(
                     client.client_pid for client in mps_before.clients
                 )
@@ -1526,57 +1647,142 @@ class SessionController:
                     client.client_pid
                     for client in mps_after_inventory.clients
                 )
-                (
-                    managed_nvml,
-                    managed_clients,
-                    managed_systemd_claims,
-                ) = self._managed_workload_authority(
-                    status,
-                    snapshot,
-                    mps_before.gpu_declarers,
-                    observed_initial_clients,
-                )
-                if len(authorized_before) > 1:
-                    raise DevGpuSessionError(
-                        "full audit found multiple descriptor-owned MPS servers"
-                    )
-                if self.dft_warmup_open and snapshot.docker_claims:
-                    reasons = (
-                        "Docker declared GPU1 during DFT-only stabilization",
-                    )
-                else:
-                    reasons = ()
-                reasons = (
-                    *reasons,
-                    *foreign_gpu1_reasons(
+
+                def classify_initial_inventory(authority: Any) -> tuple[
+                    frozenset[int],
+                    frozenset[int],
+                    frozenset[tuple[str, str, str]],
+                    tuple[str, ...],
+                    frozenset[int],
+                ]:
+                    (
+                        classified_nvml,
+                        classified_clients,
+                        classified_systemd_claims,
+                    ) = self._managed_workload_authority(
+                        status,
                         snapshot,
-                        authorized_mps_pids=authorized_before,
-                        managed_workload_pids=managed_nvml,
-                        managed_systemd_claims=managed_systemd_claims,
-                    ),
-                )
-                unknown_mps_clients = (
-                    observed_initial_clients - managed_clients
-                )
-                if unknown_mps_clients:
-                    if not (
+                        authority.gpu_declarers,
+                        observed_initial_clients,
+                    )
+                    classified_expected_declarers = (
+                        authority.gpu_declarers
+                        | frozenset(
+                            declarer
+                            for claim in snapshot.systemd_claims
+                            if (
+                                claim.scope,
+                                claim.unit,
+                                claim.control_group,
+                            )
+                            in classified_systemd_claims
+                            for declarer in claim.live_gpu_declarers
+                        )
+                    )
+                    classified_identity_is_stable = (
+                        self._captured_pids_match_expected_declarers(
+                            authority.server_pids | classified_nvml,
+                            frozenset(snapshot.process_pids),
+                            snapshot.process_declarers,
+                            classified_expected_declarers,
+                        )
+                    )
+                    classified_reasons: tuple[str, ...] = ()
+                    if self.dft_warmup_open and snapshot.docker_claims:
+                        classified_reasons = (
+                            "Docker declared GPU1 during DFT-only stabilization",
+                        )
+                    classified_reasons = (
+                        *classified_reasons,
+                        *foreign_gpu1_reasons(
+                            snapshot,
+                            authorized_mps_pids=authority.server_pids,
+                            managed_workload_pids=classified_nvml,
+                            managed_systemd_claims=classified_systemd_claims,
+                        ),
+                    )
+                    if (
+                        self.dft_warmup_open
+                        and not classified_identity_is_stable
+                    ):
+                        classified_reasons = (
+                            *classified_reasons,
+                            "managed GPU1 process identity changed after NVML capture",
+                        )
+                    classified_unknown_clients = (
+                        observed_initial_clients - classified_clients
+                    )
+                    if classified_unknown_clients and not (
                         self.dft_warmup_open
                         and self._exact_dft_descendants(
                             status,
-                            unknown_mps_clients,
+                            classified_unknown_clients,
                         )
                     ):
-                        reasons = (
-                            *reasons,
+                        classified_reasons = (
+                            *classified_reasons,
                             "unknown private MPS client PID(s): "
-                            + ",".join(map(str, sorted(unknown_mps_clients))),
+                            + ",".join(
+                                map(str, sorted(classified_unknown_clients))
+                            ),
                         )
+                    return (
+                        classified_nvml,
+                        classified_clients,
+                        classified_systemd_claims,
+                        classified_reasons,
+                        classified_unknown_clients,
+                    )
+
+                inventory_authority = mps_before
+                initial_classification = classify_initial_inventory(
+                    inventory_authority
+                )
+                reasons = initial_classification[3]
+                unknown_mps_clients = initial_classification[4]
+                if exact_lazy_server_growth and reasons:
+                    after_classification = classify_initial_inventory(
+                        mps_after_inventory
+                    )
+                    lazy_server_declarers = frozenset(
+                        self._mps_server_declarers(
+                            mps_after_inventory
+                        ).values()
+                    )
+                    after_managed_systemd_claims = after_classification[2]
+                    lazy_server_bound_to_managed_claim = (
+                        bool(lazy_server_declarers)
+                        and any(
+                            (
+                                claim.scope,
+                                claim.unit,
+                                claim.control_group,
+                            )
+                            in after_managed_systemd_claims
+                            and mps_after_inventory.gpu_declarers
+                            <= frozenset(claim.live_gpu_declarers)
+                            for claim in snapshot.systemd_claims
+                        )
+                    )
+                    if lazy_server_bound_to_managed_claim:
+                        inventory_authority = mps_after_inventory
+                        reasons = after_classification[3]
+                        unknown_mps_clients = after_classification[4]
+                if len(inventory_authority.server_pids) > 1:
+                    raise DevGpuSessionError(
+                        "full audit found multiple descriptor-owned MPS servers"
+                    )
                 if reasons:
                     self.audit_sequence += 1
                     self.audit_mode = "full"
                     self.last_audit_duration = time.monotonic() - started
                     return status, snapshot, reasons
                 if mps_inventory_changed:
+                    if exact_lazy_server_growth:
+                        self._fast_dft_churn_guard(client, status)
+                        raise _ExactDftTrailingChurn(
+                            "exact DFT MPS server appeared across the full inventory"
+                        )
                     if self._exact_dft_mps_client_growth(
                         status,
                         mps_before,
@@ -1603,6 +1809,12 @@ class SessionController:
                 )
 
                 trailing_process_map = query_compute_processes()
+                unsealed_compute = frozenset(
+                    trailing_process_map.get(GPU_UUID, frozenset())
+                )
+                unsealed_process_declarers = (
+                    capture_compute_process_declarers(unsealed_compute)
+                )
                 trailing_docker = tuple(
                     claim
                     for claim in query_docker_gpu_claims()
@@ -1615,14 +1827,14 @@ class SessionController:
                     )
                     if GPU_UUID in claim.gpu_uuids
                 )
-                unsealed_compute = frozenset(
-                    trailing_process_map.get(GPU_UUID, frozenset())
-                )
                 sealed_process_map = query_compute_processes()
                 sealed_compute = frozenset(
                     sealed_process_map.get(GPU_UUID, frozenset())
                 )
                 sealed_membership_changed = sealed_compute != unsealed_compute
+                sealed_process_declarers = capture_compute_process_declarers(
+                    sealed_compute
+                )
                 trailing_compute = sealed_compute
                 mps_after = self._mps_authority_for_audit(client)
                 authorized_after = mps_after.server_pids
@@ -1636,27 +1848,38 @@ class SessionController:
                         "Broker authority changed during trailing full audit"
                     )
                 trailing_mps_changed = mps_after != mps_before
+                exact_trailing_lazy_server_growth = (
+                    trailing_mps_changed
+                    and self._exact_dft_lazy_mps_server_growth(
+                        final_status,
+                        mps_before,
+                        mps_after,
+                    )
+                )
 
                 initial_compute = frozenset(snapshot.process_pids)
                 observed_trailing_compute = (
                     unsealed_compute | sealed_compute
                 )
-                added_processes = (
-                    (observed_trailing_compute - initial_compute)
-                    | (clients_after - clients_before)
-                ) - authorized_after
-                additions_are_exact_dft = (
-                    bool(added_processes)
-                    and self.dft_warmup_open
-                    and self._exact_dft_descendants(
-                        status,
-                        added_processes,
-                    )
-                )
                 trailing_snapshot = TargetSnapshot(
                     tuple(sorted(observed_trailing_compute)),
                     trailing_docker,
                     trailing_systemd,
+                    tuple(
+                        sorted(
+                            frozenset(
+                                (
+                                    *unsealed_process_declarers.values(),
+                                    *sealed_process_declarers.values(),
+                                )
+                            ),
+                            key=lambda declarer: (
+                                declarer.pid,
+                                declarer.process_start_ticks,
+                                declarer.process_cgroup,
+                            ),
+                        )
+                    ),
                 )
                 systemd_changed = tuple(
                     _claim_fingerprint(claim)
@@ -1665,44 +1888,182 @@ class SessionController:
                     _claim_fingerprint(claim)
                     for claim in trailing_systemd
                 )
-                (
-                    trailing_managed_nvml,
-                    trailing_managed_clients,
-                    trailing_managed_systemd_claims,
-                ) = self._managed_workload_authority(
-                    final_status,
-                    trailing_snapshot,
-                    mps_after.gpu_declarers,
-                    clients_after,
+                after_server_declarers = self._mps_server_declarers(mps_after)
+                verified_lazy_server_pids = frozenset(
+                    pid
+                    for pid in authorized_after
+                    & (sealed_compute - unsealed_compute)
+                    if exact_trailing_lazy_server_growth
+                    and sealed_process_declarers.get(pid)
+                    == after_server_declarers.get(pid)
                 )
-                trailing_reasons = foreign_gpu1_reasons(
-                    trailing_snapshot,
-                    authorized_mps_pids=authorized_after,
-                    managed_workload_pids=(
-                        trailing_managed_nvml | added_processes
-                        if additions_are_exact_dft
-                        else trailing_managed_nvml
-                    ),
-                    managed_systemd_claims=trailing_managed_systemd_claims,
-                )
-                if self.dft_warmup_open and trailing_docker:
-                    trailing_reasons = (
-                        "Docker declared GPU1 during DFT-only stabilization",
-                        *trailing_reasons,
+
+                def classify_trailing_inventory(
+                    authority: Any,
+                    extra_authorized_mps_pids: frozenset[int] = frozenset(),
+                    extra_authorized_mps_declarers: frozenset[Any] = frozenset(),
+                ) -> tuple[
+                    frozenset[int],
+                    bool,
+                    frozenset[tuple[str, str, str]],
+                    tuple[str, ...],
+                    frozenset[int],
+                ]:
+                    classified_authorized_pids = (
+                        authority.server_pids | extra_authorized_mps_pids
                     )
-                unknown_trailing_clients = (
-                    clients_after - trailing_managed_clients
-                )
-                if additions_are_exact_dft:
-                    unknown_trailing_clients -= added_processes
-                if unknown_trailing_clients:
-                    trailing_reasons = (
-                        *trailing_reasons,
-                        "unknown private MPS client PID(s): "
-                        + ",".join(
-                            map(str, sorted(unknown_trailing_clients))
+                    classified_additions = (
+                        (observed_trailing_compute - initial_compute)
+                        | (clients_after - clients_before)
+                    ) - classified_authorized_pids
+                    classified_additions_are_exact = (
+                        bool(classified_additions)
+                        and self.dft_warmup_open
+                        and self._exact_dft_descendants(
+                            final_status,
+                            classified_additions,
+                        )
+                    )
+                    (
+                        classified_managed_nvml,
+                        classified_managed_clients,
+                        classified_managed_systemd_claims,
+                    ) = self._managed_workload_authority(
+                        final_status,
+                        trailing_snapshot,
+                        authority.gpu_declarers,
+                        clients_after,
+                    )
+                    classified_expected_declarers = (
+                        authority.gpu_declarers
+                        | extra_authorized_mps_declarers
+                        | frozenset(
+                            declarer
+                            for claim in trailing_systemd
+                            if (
+                                claim.scope,
+                                claim.unit,
+                                claim.control_group,
+                            )
+                            in classified_managed_systemd_claims
+                            for declarer in claim.live_gpu_declarers
+                        )
+                    )
+                    classified_allowed_pids = (
+                        classified_authorized_pids | classified_managed_nvml
+                    )
+                    if classified_additions_are_exact:
+                        classified_allowed_pids |= classified_additions
+                        expected_pids = frozenset(
+                            declarer.pid
+                            for declarer in classified_expected_declarers
+                        )
+                        missing_addition_declarers = (
+                            classified_additions - expected_pids
+                        )
+                        classified_expected_declarers |= frozenset(
+                            capture_compute_process_declarers(
+                                missing_addition_declarers
+                            ).values()
+                        )
+                    classified_identity_is_stable = (
+                        self._captured_pids_match_expected_declarers(
+                            classified_allowed_pids,
+                            unsealed_compute,
+                            tuple(unsealed_process_declarers.values()),
+                            classified_expected_declarers,
+                        )
+                        and self._captured_pids_match_expected_declarers(
+                            classified_allowed_pids,
+                            sealed_compute,
+                            tuple(sealed_process_declarers.values()),
+                            classified_expected_declarers,
+                        )
+                    )
+                    classified_reasons = foreign_gpu1_reasons(
+                        trailing_snapshot,
+                        authorized_mps_pids=classified_authorized_pids,
+                        managed_workload_pids=(
+                            classified_managed_nvml | classified_additions
+                            if classified_additions_are_exact
+                            else classified_managed_nvml
+                        ),
+                        managed_systemd_claims=(
+                            classified_managed_systemd_claims
                         ),
                     )
+                    if self.dft_warmup_open and trailing_docker:
+                        classified_reasons = (
+                            "Docker declared GPU1 during DFT-only stabilization",
+                            *classified_reasons,
+                        )
+                    if (
+                        self.dft_warmup_open
+                        and not classified_identity_is_stable
+                    ):
+                        classified_reasons = (
+                            *classified_reasons,
+                            "managed GPU1 process identity changed after NVML capture",
+                        )
+                    classified_unknown_clients = (
+                        clients_after - classified_managed_clients
+                    )
+                    if classified_additions_are_exact:
+                        classified_unknown_clients -= classified_additions
+                    if classified_unknown_clients:
+                        classified_reasons = (
+                            *classified_reasons,
+                            "unknown private MPS client PID(s): "
+                            + ",".join(
+                                map(str, sorted(classified_unknown_clients))
+                            ),
+                        )
+                    return (
+                        classified_additions,
+                        classified_additions_are_exact,
+                        classified_managed_systemd_claims,
+                        classified_reasons,
+                        classified_unknown_clients,
+                    )
+
+                if exact_trailing_lazy_server_growth:
+                    trailing_classification = classify_trailing_inventory(
+                        mps_before,
+                        verified_lazy_server_pids,
+                        frozenset(
+                            after_server_declarers[pid]
+                            for pid in verified_lazy_server_pids
+                        ),
+                    )
+                    if trailing_classification[3]:
+                        after_classification = classify_trailing_inventory(
+                            mps_after
+                        )
+                        after_managed_systemd_claims = after_classification[2]
+                        after_declarers_bound_to_managed_claim = any(
+                            (
+                                claim.scope,
+                                claim.unit,
+                                claim.control_group,
+                            )
+                            in after_managed_systemd_claims
+                            and mps_after.gpu_declarers
+                            <= frozenset(claim.live_gpu_declarers)
+                            for claim in trailing_systemd
+                        )
+                        if after_declarers_bound_to_managed_claim:
+                            trailing_classification = after_classification
+                else:
+                    trailing_classification = classify_trailing_inventory(
+                        mps_after
+                    )
+                (
+                    added_processes,
+                    additions_are_exact_dft,
+                    _trailing_managed_systemd_claims,
+                    trailing_reasons,
+                    _unknown_trailing_clients,
+                ) = trailing_classification
                 if trailing_reasons:
                     self.audit_sequence += 1
                     self.audit_mode = "full"
@@ -1716,22 +2077,45 @@ class SessionController:
                 )
                 if sealed_membership_changed:
                     sealed_additions = sealed_compute - unsealed_compute
+                    sealed_lazy_dft_additions = (
+                        sealed_additions - verified_lazy_server_pids
+                    )
+                    sealed_exact_lazy_growth = (
+                        unsealed_compute < sealed_compute
+                        and exact_trailing_lazy_server_growth
+                        and verified_lazy_server_pids == authorized_after
+                        and (
+                            not sealed_lazy_dft_additions
+                            or self._exact_dft_descendants(
+                                final_status,
+                                sealed_lazy_dft_additions,
+                            )
+                        )
+                    )
                     if (
                         unsealed_compute < sealed_compute
                         and self.dft_warmup_open
-                        and self._exact_dft_descendants(
-                            final_status,
-                            sealed_additions,
+                        and (
+                            sealed_exact_lazy_growth
+                            or self._exact_dft_descendants(
+                                final_status,
+                                sealed_additions,
+                            )
                         )
                     ):
                         self._fast_dft_churn_guard(client, final_status)
                         raise _ExactDftTrailingChurn(
-                            "exact DFT NVML membership grew across systemd audit"
+                            "exact DFT/MPS NVML membership grew across systemd audit"
                         )
                     raise _AuditRoundChanged(
                         "GPU1 NVML membership changed across trailing systemd audit"
                     )
                 if trailing_mps_changed:
+                    if exact_trailing_lazy_server_growth:
+                        self._fast_dft_churn_guard(client, final_status)
+                        raise _ExactDftTrailingChurn(
+                            "exact DFT MPS server appeared across the trailing audit"
+                        )
                     if self._exact_dft_mps_client_growth(
                         final_status,
                         mps_before,
