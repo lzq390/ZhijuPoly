@@ -84,6 +84,14 @@ def test_double_audit_fails_closed_for_unknown_gpu1_authority(snapshot) -> None:
     assert calls == 2
 
 
+def test_child_broker_descriptor_authority_is_process_local() -> None:
+    assert session.SessionController._child_authority_path(7) == Path(
+        "/proc/self/fd/7"
+    )
+    with pytest.raises(session.DevGpuSessionError, match="descriptor authority"):
+        session.SessionController._child_authority_path(2)
+
+
 def test_inventory_filters_gpu3_and_never_treats_polyprop_as_gpu1(monkeypatch) -> None:
     import ops.gpu_broker.server as broker
 

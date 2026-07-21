@@ -528,6 +528,16 @@ class SessionController:
     def _authority_path(self, descriptor: int) -> Path:
         return Path(f"/proc/{os.getpid()}/fd/{descriptor}")
 
+    @staticmethod
+    def _child_authority_path(descriptor: int) -> Path:
+        if (
+            isinstance(descriptor, bool)
+            or not isinstance(descriptor, int)
+            or descriptor <= 2
+        ):
+            raise DevGpuSessionError("child descriptor authority is invalid")
+        return Path(f"/proc/self/fd/{descriptor}")
+
     def _prepare_descriptors(self) -> None:
         _private_directory(GPU_ROOT, create=True)
         self.root_fd = os.open(
@@ -618,8 +628,8 @@ class SessionController:
         return environment
 
     def _start_broker(self) -> Any:
-        root = self._authority_path(self.root_fd)
-        reservations = self._authority_path(self.reservations_fd)
+        root = self._child_authority_path(self.root_fd)
+        reservations = self._child_authority_path(self.reservations_fd)
         descriptor = os.open(
             self.broker_log_path,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -638,7 +648,7 @@ class SessionController:
             "--state",
             str(self.broker_state),
             "--policy",
-            str(self._authority_path(self.policy_fd)),
+            str(self._child_authority_path(self.policy_fd)),
             "--external-reservations",
             str(reservations),
             "--mps-state-root",
