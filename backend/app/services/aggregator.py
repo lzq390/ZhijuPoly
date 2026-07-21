@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from functools import lru_cache
 from typing import Any
 
 from app.models import PolymerResult, PropertyGroups, PropertyItem
@@ -15,6 +16,13 @@ CATEGORY_MAP = {
     "Optical": "optical",
     "Others": "other",
 }
+
+
+@lru_cache(maxsize=4096)
+def _generate_2d_svg_cached(smiles: str) -> str | None:
+    """Reuse deterministic depictions across warm similarity queries."""
+
+    return generate_2d_svg(smiles)
 
 
 def fetch_property_rows_postgres(connection: Any, polymer_id: int) -> list[Any]:
@@ -111,7 +119,7 @@ def build_polymer_result(
         smiles=polymer_row["smiles"],
         canonical_smiles=polymer_row["canonical_smiles"],
         similarity_score=similarity_score,
-        structure_svg=generate_2d_svg(source_smiles),
+        structure_svg=_generate_2d_svg_cached(source_smiles),
         matched_property_name=polymer_row["matched_property_name"] if "matched_property_name" in polymer_keys else None,
         matched_property_value=polymer_row["matched_property_value"] if "matched_property_value" in polymer_keys else None,
         matched_property_unit=polymer_row["matched_property_unit"] if "matched_property_unit" in polymer_keys else None,

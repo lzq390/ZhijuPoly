@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from app.postgres_database import postgres_connection
+from app.services import aggregator
 from app.services.aggregator import (
+    _generate_2d_svg_cached,
     build_polymer_result,
     fetch_property_rows_postgres,
     group_properties,
@@ -78,3 +80,36 @@ def test_load_polymer_results_batches_rows(postgres_dsn: str) -> None:
     assert len(counting_connection.executions) == 1
     assert "polymer_id = ANY" in counting_connection.executions[0][0]
     assert counting_connection.executions[0][1] == ([1, 2],)
+
+
+def test_build_polymer_result_reuses_cached_structure_svg(
+    postgres_dsn: str,
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_generate_2d_svg(smiles: str) -> str:
+        calls.append(smiles)
+        return f"<svg>{smiles}</svg>"
+
+    monkeypatch.setattr(aggregator, "generate_2d_svg", fake_generate_2d_svg)
+    _generate_2d_svg_cached.cache_clear()
+    try:
+        with postgres_connection(postgres_dsn) as connection:
+            polymer_row = connection.execute(
+                """
+                SELECT polymer_id, polymer_name, smiles, canonical_smiles, rdkit_parse_ok
+                FROM core.polymers
+                WHERE polymer_id = %s
+                """,
+                (1,),
+            ).fetchone()
+            property_rows = fetch_property_rows_postgres(connection, 1)
+
+        first = build_polymer_result(polymer_row, property_rows)
+        second = build_polymer_result(polymer_row, property_rows)
+
+        assert first.structure_svg == second.structure_svg
+        assert calls == [polymer_row["canonical_smiles"]]
+    finally:
+        _generate_2d_svg_cached.cache_clear()
