@@ -102,3 +102,4 @@ nexpoly-release-*.tar.gz
 /.venv-monomer-md-worker/
 /.venv-monomer-md-worker.staging-*/
 /.venv-monomer-md-worker.previous-*/
+/docs/plan/

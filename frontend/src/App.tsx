@@ -12,7 +12,7 @@ import {
   Sparkles
 } from "lucide-react";
 import { AppShell, type AppShellModuleGroup } from "./components/AppShell";
-import { AssistantHomePage } from "./components/AssistantHomePage";
+import { AgentWorkspaceHomePage } from "./components/AgentWorkspaceHomePage";
 import { ConditionalGenerationPage } from "./components/ConditionalGenerationPage";
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
@@ -34,7 +34,6 @@ import { useQuery } from "./hooks/useQuery";
 import { standardizeSmiles } from "./services/api";
 import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
 import {
-  type AssistantModuleContext,
   type KnowledgeNavigationRequest,
   type PredictableProperty,
   type StructureWorkspaceContext
@@ -688,15 +687,6 @@ export default function App() {
       ]
     }
   ];
-  const assistantModules: AssistantModuleContext[] = moduleGroups.flatMap((group) =>
-    group.items.map((item) => ({
-      id: item.id,
-      title: item.label,
-      route: item.route,
-      group: group.title,
-      description: item.description
-    }))
-  );
   const isFullBleedModule =
     activeModule === "explorer" ||
     activeModule === "databaseQuery" ||
@@ -719,12 +709,7 @@ export default function App() {
       onOpenHome={() => navigate({ module: "home", datasetKey: null })}
     >
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
-        <AssistantHomePage
-          activeModule={activeModule}
-          modules={assistantModules}
-          moduleGroups={moduleGroups}
-          onOpenModule={openModuleById}
-        />
+        <AgentWorkspaceHomePage />
       </div>
 
       {activeModule === "databaseQuery" ? (
