@@ -6,7 +6,6 @@ import contextlib
 import hashlib
 import os
 import select
-import signal
 import socket
 import subprocess
 import threading
@@ -426,7 +425,21 @@ class SubprocessExecutor:
                     stream.close()
                     self.stream = None
                 return
-            if not force and process.poll() is None and stream is not None:
+            if process.poll() is None and prepare_termination is not None:
+                # A registered GPU executor must remain stable while the Broker
+                # revalidates its exact scope, terminates its MPS clients,
+                # freezes the scope, and cgroup-kills only that owned workload.
+                # Asking the child to shut itself down first would race those
+                # checks with CUDA-context and systemd-scope teardown.
+                prepare_termination()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=2.0)
+                if process.poll() is None:
+                    raise GpuTerminationUnsafe(
+                        "executor process remained live after Broker-prepared "
+                        "termination"
+                    )
+            elif not force and process.poll() is None and stream is not None:
                 with contextlib.suppress(Exception):
                     send_frame(stream, protocol_message("shutdown"))
                     ready, _, _ = select.select([stream], [], [], 2.0)
@@ -435,44 +448,10 @@ class SubprocessExecutor:
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=3.0)
             if process.poll() is None:
-                if prepare_termination is None:
-                    raise GpuTerminationUnsafe(
-                        "executor is still live and MPS termination was not prepared"
-                    )
-                # The Broker must terminate/confirm every MPS client before the
-                # Worker sends even the first signal to this process group.
-                prepare_termination()
-                # prepare_process_termination is authoritative and normally
-                # freezes and cgroup-kills the workload itself. Reap first; a
-                # missing process group after that proof is expected success,
-                # not evidence of an unsafe cleanup.
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=0.2)
-                if process.poll() is None:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(process.pid, signal.SIGTERM)
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=3.0)
-                if process.poll() is None:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(process.pid, signal.SIGKILL)
-                    with contextlib.suppress(subprocess.TimeoutExpired):
-                        process.wait(timeout=2.0)
-                if process.poll() is None:
-                    raise GpuTerminationUnsafe(
-                        "executor process did not exit after prepared termination"
-                    )
-                deadline = time.monotonic() + 2.0
-                while True:
-                    try:
-                        os.killpg(process.pid, 0)
-                    except ProcessLookupError:
-                        break
-                    if time.monotonic() >= deadline:
-                        raise GpuTerminationUnsafe(
-                            "executor process group still exists after termination"
-                        )
-                    time.sleep(0.02)
+                raise GpuTerminationUnsafe(
+                    "executor is still live and Broker-prepared termination "
+                    "was unavailable"
+                )
             else:
                 with contextlib.suppress(Exception):
                     process.wait(timeout=0)
