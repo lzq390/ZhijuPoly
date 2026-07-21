@@ -137,6 +137,8 @@ jobs:
           bash -n scripts/deploy_server.sh
           mapfile -t unittest_files < <(
             find scripts/tests -maxdepth 1 -type f -name 'test_*.py' \
+              ! -name 'test_dev_gpu_session.py' \
+              ! -name 'test_dev_worker_process.py' \
               ! -name 'test_monomer_md_worker_launcher.py' \
               ! -name 'test_worker_slot_runtime.py' -print | sort
           )
@@ -323,8 +325,6 @@ jobs:
           cache-dependency-path: |
             workers/monomer_md_worker/requirements-ci.lock
             workers/monomer_md_worker/requirements.lock
-      - name: Install locked Worker dependencies
-        run: python -m pip install --require-hashes -r workers/monomer_md_worker/requirements-ci.lock
       - name: Rebuild the production Worker runtime lock from empty
         run: |
           set -euo pipefail
@@ -335,13 +335,40 @@ jobs:
               --require-hashes --only-binary=:all: \
               -r workers/monomer_md_worker/requirements.lock
           "$runtime_venv/bin/python" -m pip check
+      - name: Prepare the exact development Worker test runtime
+        run: |
+          set -euo pipefail
+          base_python="$(command -v python)"
+          base_identity="$(
+            python scripts/prepare_dev_worker_venv.py identity \
+              --base-python "$base_python" |
+              python -c 'import json,sys; print(json.load(sys.stdin)["identity_sha256"])'
+          )"
+          python scripts/prepare_dev_worker_venv.py prepare \
+            --target "$GITHUB_WORKSPACE/.venv-monomer-md-worker" \
+            --lock "$GITHUB_WORKSPACE/workers/monomer_md_worker/requirements.lock" \
+            --pid-file "$RUNNER_TEMP/monomer-md-worker.pid" \
+            --socket "$RUNNER_TEMP/monomer-md-worker.sock" \
+            --base-python "$base_python" \
+            --expected-base-identity "$base_identity"
+          worker_python="$GITHUB_WORKSPACE/.venv-monomer-md-worker/bin/python"
+          "$worker_python" -m pip install --require-hashes \
+            -r workers/monomer_md_worker/requirements-ci.lock
+          python scripts/prepare_dev_worker_venv.py verify \
+            --target "$GITHUB_WORKSPACE/.venv-monomer-md-worker" \
+            --lock "$GITHUB_WORKSPACE/workers/monomer_md_worker/requirements.lock" \
+            --base-python "$base_python" \
+            --expected-base-identity "$base_identity"
       - name: Run Worker tests
         run: |
-          python -m pytest workers/monomer_md_worker/tests
-          python -m pytest ops/gpu_broker/tests
-          python -m pytest \
+          worker_python="$GITHUB_WORKSPACE/.venv-monomer-md-worker/bin/python"
+          "$worker_python" -m pytest -p no:cacheprovider \
+            workers/monomer_md_worker/tests \
+            ops/gpu_broker/tests \
             scripts/tests/test_monomer_md_worker_launcher.py \
-            scripts/tests/test_worker_slot_runtime.py
+            scripts/tests/test_worker_slot_runtime.py \
+            scripts/tests/test_dev_gpu_session.py \
+            scripts/tests/test_dev_worker_process.py
 
   dft-worker-tests:
     name: Monomer-DFT Worker tests
