@@ -1453,6 +1453,55 @@ PY
 
 GPU_SESSION_ROLLBACK_ARMED=false
 
+gpu_session_controller_status_fields() {
+  python3 -c '
+import json
+import re
+import sys
+
+value = json.load(sys.stdin)
+state = value.get("status")
+if not isinstance(state, str) or re.fullmatch(r"[a-z][a-z0-9-]{0,63}", state) is None:
+    raise SystemExit("controller rollback status is invalid")
+session_id = value.get("session_id", "")
+if state == "stopped":
+    if session_id not in {"", None}:
+        raise SystemExit("stopped controller status retained a session identity")
+    session_id = ""
+elif not isinstance(session_id, str) or re.fullmatch(r"[0-9a-f]{32}", session_id) is None:
+    raise SystemExit("live controller rollback status lacks an exact session identity")
+print(state + "\t" + session_id)
+'
+}
+
+gpu_session_controller_owns_recovery() {
+  case "$1" in
+    startup-failed|contaminated|audit-failed|isolation-waiting|cleanup-blocked|gpu3-drift|recovered)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+gpu_session_controller_finish_recovery() {
+  local payload="" parsed=""
+  if "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --execute >/dev/null 2>&1; then
+    return 0
+  fi
+  # A timeout while a valid controller remains alive never transfers authority
+  # back to the ERR trap.  Recovery may be quarantined until an unknown MPS
+  # client exits naturally, so concurrent shell cleanup would violate fencing.
+  if payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status 2>/dev/null)" &&
+    parsed="$(printf '%s' "$payload" | gpu_session_controller_status_fields 2>/dev/null)"; then
+    echo "GPU session controller remains the recovery authority; shell fallback is suppressed." >&2
+    return 0
+  fi
+  # Only a dead or invalid controller transfers recovery back to the shell.
+  return 1
+}
+
 gpu_backend_stop_exact_session() {
   local container_id label
   [[ "${NEXPOLY_DEV_GPU_SESSION_ID:-}" =~ ^[0-9a-f]{32}$ ]] || {
@@ -1470,14 +1519,67 @@ gpu_backend_stop_exact_session() {
 }
 
 gpu_session_up_rollback() {
-  local original_status=$? payload="" session_id=""
+  local original_status=$? payload="" parsed="" state="" reported_session_id=""
+  local session_id="${NEXPOLY_DEV_GPU_SESSION_ID:-}"
+  local controller_owns_recovery=false
   trap - ERR
   set +e
   if [[ "$GPU_SESSION_ROLLBACK_ARMED" == "true" ]]; then
-    payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status 2>/dev/null)"
-    session_id="$(printf '%s' "$payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin).get("session_id", ""); print(value if isinstance(value,str) and re.fullmatch(r"[0-9a-f]{32}", value) else "")' 2>/dev/null)"
+    [[ "$session_id" =~ ^[0-9a-f]{32}$ ]] || session_id=""
+    if payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status 2>/dev/null)" &&
+      parsed="$(printf '%s' "$payload" | gpu_session_controller_status_fields 2>/dev/null)"; then
+      state="${parsed%%$'\t'*}"
+      reported_session_id="${parsed#*$'\t'}"
+      if [[ -n "$session_id" && -n "$reported_session_id" &&
+        "$session_id" != "$reported_session_id" ]]; then
+        echo "GPU session rollback refuses a different live controller session." >&2
+        set -e
+        return "$original_status"
+      fi
+      [[ -z "$reported_session_id" ]] || session_id="$reported_session_id"
+      if gpu_session_controller_owns_recovery "$state"; then
+        controller_owns_recovery=true
+      fi
+    fi
     [[ -z "$session_id" ]] || export NEXPOLY_DEV_GPU_SESSION_ID="$session_id"
+
+    if [[ "$controller_owns_recovery" == "true" ]]; then
+      if gpu_session_controller_finish_recovery; then
+        set -e
+        return "$original_status"
+      fi
+    fi
+
     "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" drain --execute >/dev/null 2>&1
+    # drain can itself trigger automatic recovery.  Re-read controller state
+    # before any shell-owned stop/restore so a plane-ready -> contaminated
+    # transition cannot create two concurrent recovery owners.
+    controller_owns_recovery=false
+    payload=""
+    parsed=""
+    state=""
+    reported_session_id=""
+    if payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status 2>/dev/null)" &&
+      parsed="$(printf '%s' "$payload" | gpu_session_controller_status_fields 2>/dev/null)"; then
+      state="${parsed%%$'\t'*}"
+      reported_session_id="${parsed#*$'\t'}"
+      if [[ -n "$session_id" && -n "$reported_session_id" &&
+        "$session_id" != "$reported_session_id" ]]; then
+        echo "GPU session rollback refuses a different live controller session." >&2
+        set -e
+        return "$original_status"
+      fi
+      [[ -z "$reported_session_id" ]] || session_id="$reported_session_id"
+      [[ -z "$session_id" ]] || export NEXPOLY_DEV_GPU_SESSION_ID="$session_id"
+      if gpu_session_controller_owns_recovery "$state"; then
+        controller_owns_recovery=true
+      fi
+    fi
+    if [[ "$controller_owns_recovery" == "true" ]] &&
+      gpu_session_controller_finish_recovery; then
+      set -e
+      return "$original_status"
+    fi
     if [[ -n "$session_id" ]]; then
       NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1 gpu_session_stop_owned_internal
       NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1 gpu_session_restore_cpu_internal

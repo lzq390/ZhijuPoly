@@ -18,6 +18,76 @@ DEV_BUILDKIT_CONFIG = REPOSITORY_ROOT / "ops" / "config" / "buildkitd.dev.toml"
 
 
 class DevServerGpuScriptTests(unittest.TestCase):
+    def _shell_function_source(self, name: str) -> str:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index(f"{name}() {{")
+        end = source.index("\n}\n", start) + len("\n}\n")
+        return source[start:end]
+
+    def _run_gpu_up_rollback(
+        self,
+        *,
+        controller_source: str,
+        session_id: str = "a" * 32,
+    ) -> tuple[subprocess.CompletedProcess[str], list[str], list[str]]:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            controller = root / "controller"
+            controller.write_text(controller_source, encoding="utf-8")
+            controller.chmod(0o700)
+            controller_log = root / "controller.log"
+            fallback_log = root / "fallback.log"
+            harness = f"""
+set -u
+GPU_SESSION_PYTHON="$1"
+GPU_SESSION_CONTROLLER="ignored-controller-path"
+GPU_SESSION_ROLLBACK_ARMED=true
+NEXPOLY_DEV_GPU_SESSION_ID="$2"
+export FAKE_CONTROLLER_LOG="$3"
+FALLBACK_LOG="$4"
+
+{self._shell_function_source("gpu_session_controller_status_fields")}
+{self._shell_function_source("gpu_session_controller_owns_recovery")}
+{self._shell_function_source("gpu_session_controller_finish_recovery")}
+{self._shell_function_source("gpu_session_up_rollback")}
+
+gpu_session_stop_owned_internal() {{
+  printf '%s\n' stop-owned >> "$FALLBACK_LOG"
+}}
+gpu_session_restore_cpu_internal() {{
+  printf '%s\n' restore-cpu >> "$FALLBACK_LOG"
+}}
+
+set +e
+false
+gpu_session_up_rollback
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "rollback-harness",
+                    str(controller),
+                    session_id,
+                    str(controller_log),
+                    str(fallback_log),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            controller_calls = (
+                controller_log.read_text(encoding="utf-8").splitlines()
+                if controller_log.exists()
+                else []
+            )
+            fallback_calls = (
+                fallback_log.read_text(encoding="utf-8").splitlines()
+                if fallback_log.exists()
+                else []
+            )
+        return completed, controller_calls, fallback_calls
+
     def _asset_verifier_source(self) -> str:
         lines = SCRIPT.read_text(encoding="utf-8").splitlines()
         marker = 'python3 - "$NEXPOLY_ASSET_ROOT" "$manifest" <<\'PY\''
@@ -297,6 +367,173 @@ class DevServerGpuScriptTests(unittest.TestCase):
             '"$DFT_WORKER_SOCKET_DIR/worker.sock"',
         ):
             self.assertIn(marker, stopped_body)
+
+    def test_gpu_up_rollback_defers_to_live_controller_automatic_recovery(self) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  printf '%s\\n' '{"status":"contaminated","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  exit 0
+fi
+if [[ "$*" == *" down --execute" ]]; then
+  exit 0
+fi
+exit 9
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, [])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
+    def test_gpu_up_rollback_keeps_exact_shell_fallback_if_controller_is_dead(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+exit 7
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, ["stop-owned", "restore-cpu"])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path drain --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
+    def test_gpu_up_rollback_rechecks_controller_ownership_after_drain(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  status_count="$(grep -c ' status$' "$FAKE_CONTROLLER_LOG")"
+  if [[ "$status_count" == "1" ]]; then
+    printf '%s\\n' '{"status":"plane-ready","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  else
+    printf '%s\\n' '{"status":"contaminated","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  fi
+  exit 0
+fi
+if [[ "$*" == *" drain --execute" || "$*" == *" down --execute" ]]; then
+  exit 0
+fi
+exit 9
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, [])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path drain --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
+    def test_gpu_up_rollback_keeps_shell_fallback_if_controller_never_takes_over(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  printf '%s\\n' '{"status":"plane-ready","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  exit 0
+fi
+if [[ "$*" == *" drain --execute" || "$*" == *" down --execute" ]]; then
+  exit 0
+fi
+exit 9
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, ["stop-owned", "restore-cpu"])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path drain --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
+    def test_gpu_up_rollback_never_takes_over_after_live_controller_wait_timeout(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  printf '%s\\n' '{"status":"cleanup-blocked","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  exit 0
+fi
+exit 8
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, [])
+        self.assertIn("remains the recovery authority", completed.stderr)
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+                "-I ignored-controller-path status",
+            ],
+        )
+
+    def test_gpu_up_rollback_takes_over_only_after_recovery_controller_dies(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  status_count="$(grep -c ' status$' "$FAKE_CONTROLLER_LOG")"
+  if [[ "$status_count" == "1" ]]; then
+    printf '%s\\n' '{"status":"audit-failed","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+    exit 0
+  fi
+fi
+exit 7
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, ["stop-owned", "restore-cpu"])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path drain --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
 
     def test_canary_state_is_dev_private_and_fenced_from_production(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
