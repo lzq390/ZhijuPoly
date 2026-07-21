@@ -3326,6 +3326,207 @@ def test_full_audit_retries_exact_lazy_mps_server_growth(
     assert controller.last_mps_authority == after
 
 
+@pytest.mark.parametrize(
+    ("server_cgroup", "foreign_pid", "expected_reason"),
+    (
+        (
+            "/user.slice/user-1001.slice/user@1001.service/mps.scope",
+            None,
+            "foreign CUDA PID(s): 7001",
+        ),
+        (
+            "/user.slice/user-1001.slice/session-33690.scope",
+            9999,
+            "9999",
+        ),
+    ),
+)
+def test_initial_unclaimed_lazy_server_stays_foreign_when_not_sole_sibling(
+    server_cgroup: str,
+    foreign_pid: int | None,
+    expected_reason: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    control = mps_declarer(7000)
+    server = replace(
+        mps_declarer(7001, 101),
+        process_cgroup=server_cgroup,
+    )
+    before = mps_snapshot(declarers=frozenset({control}))
+    after = mps_snapshot(
+        server_pids=frozenset({7001}),
+        declarers=frozenset({control, server}),
+    )
+    process_pids = (7001,) if foreign_pid is None else (7001, foreign_pid)
+    captured = session.TargetSnapshot(
+        process_pids,
+        (),
+        (),
+        (server,),
+    )
+    authorities = iter((before, after))
+    client = SimpleNamespace(status=lambda: status)
+    monkeypatch.setattr(
+        session,
+        "consistent_broker_snapshot",
+        lambda _client, **_kwargs: (status, captured),
+    )
+    monkeypatch.setattr(controller, "_mps_authority", lambda: next(authorities))
+    monkeypatch.setattr(
+        controller,
+        "_exact_dft_descendants",
+        lambda _status, pids: pids == frozenset({8123}),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda *_args: pytest.fail("foreign evidence must not receive a retry"),
+    )
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert any(expected_reason in reason for reason in reasons)
+    assert controller.full_audit_generation == 0
+
+
+def test_initial_unclaimed_lazy_server_login_sibling_requires_fast_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    control = mps_declarer(7000)
+    server = replace(
+        mps_declarer(7001, 101),
+        process_cgroup="/user.slice/user-1001.slice/session-33690.scope",
+    )
+    before = mps_snapshot(declarers=frozenset({control}))
+    after = mps_snapshot(
+        server_pids=frozenset({7001}),
+        declarers=frozenset({control, server}),
+    )
+    captured = session.TargetSnapshot((7001,), (), (), (server,))
+    authorities = iter((before, after))
+    client = SimpleNamespace(status=lambda: status)
+    guarded: list[int] = []
+    monkeypatch.setattr(
+        session,
+        "consistent_broker_snapshot",
+        lambda _client, **_kwargs: (status, captured),
+    )
+    monkeypatch.setattr(controller, "_mps_authority", lambda: next(authorities))
+    monkeypatch.setattr(
+        controller,
+        "_exact_dft_descendants",
+        lambda _status, pids: pids == frozenset({8123}),
+    )
+
+    def guard(_client, _status):
+        guarded.append(1)
+        raise RuntimeError("fast guard required before retry")
+
+    monkeypatch.setattr(controller, "_fast_dft_churn_guard", guard)
+
+    with pytest.raises(RuntimeError, match="fast guard required before retry"):
+        controller._audit(client)
+
+    assert guarded == [1]
+    assert controller.full_audit_generation == 0
+
+
+def test_trailing_unclaimed_lazy_server_login_sibling_requires_fast_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+    from ops.gpu_broker import server as broker_server
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    control = mps_declarer(7000)
+    server = replace(
+        mps_declarer(7001, 101),
+        process_cgroup="/user.slice/user-1001.slice/session-33690.scope",
+    )
+    before = mps_snapshot(declarers=frozenset({control}))
+    after = mps_snapshot(
+        server_pids=frozenset({7001}),
+        declarers=frozenset({control, server}),
+    )
+    authorities = iter((before, before, after))
+    compute = iter((frozenset({7001}), frozenset({7001})))
+    client = SimpleNamespace(status=lambda: status)
+    guarded: list[int] = []
+    monkeypatch.setattr(
+        session,
+        "consistent_broker_snapshot",
+        lambda _client, **_kwargs: (status, empty_snapshot()),
+    )
+    monkeypatch.setattr(controller, "_mps_authority", lambda: next(authorities))
+    monkeypatch.setattr(
+        broker_server,
+        "query_compute_processes",
+        lambda: {session.GPU_UUID: next(compute)},
+    )
+    monkeypatch.setattr(broker_server, "query_docker_gpu_claims", lambda: ())
+    monkeypatch.setattr(
+        broker_server,
+        "query_systemd_gpu_claims",
+        lambda **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        session,
+        "capture_compute_process_declarers",
+        lambda pids: {7001: server} if 7001 in pids else {},
+    )
+    monkeypatch.setattr(session, "require_gpu1_default_compute_mode", lambda: None)
+    monkeypatch.setattr(
+        controller,
+        "_exact_dft_descendants",
+        lambda _status, pids: pids == frozenset({8123}),
+    )
+
+    def guard(_client, _status):
+        guarded.append(1)
+        raise RuntimeError("fast guard required before retry")
+
+    monkeypatch.setattr(controller, "_fast_dft_churn_guard", guard)
+
+    with pytest.raises(RuntimeError, match="fast guard required before retry"):
+        controller._audit(client)
+
+    assert guarded == [1]
+    assert controller.full_audit_generation == 0
+
+
 def test_full_audit_discards_broker_change_after_initial_mps_seal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

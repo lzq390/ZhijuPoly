@@ -1554,6 +1554,34 @@ class SessionController:
         return claim_declarers <= live_declarers
 
     @staticmethod
+    def _mps_server_declarers_are_user_manager_siblings(
+        server_declarers: frozenset[Any],
+    ) -> bool:
+        """Prove descriptor-owned servers live beside, not inside, user@.service."""
+
+        from gpu_resource.transient_scope import user_manager_control_group
+        from ops.gpu_broker.server import _systemd_cgroup_contains
+
+        manager_control_group = user_manager_control_group(1001)
+        user_slice_control_group = manager_control_group.rsplit("/", 1)[0]
+        try:
+            return bool(server_declarers) and all(
+                _canonical_systemd_control_group(declarer.process_cgroup)
+                == declarer.process_cgroup
+                and _systemd_cgroup_contains(
+                    declarer.process_cgroup,
+                    user_slice_control_group,
+                )
+                and not _systemd_cgroup_contains(
+                    declarer.process_cgroup,
+                    manager_control_group,
+                )
+                for declarer in server_declarers
+            )
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    @staticmethod
     def _managed_workload_authority(
         status: dict[str, Any],
         snapshot: TargetSnapshot,
@@ -2335,7 +2363,16 @@ class SessionController:
                             for claim in snapshot.systemd_claims
                         )
                     )
-                    if lazy_server_bound_to_managed_claim:
+                    lazy_server_is_unclaimed_sibling = (
+                        not after_classification[3]
+                        and self._mps_server_declarers_are_user_manager_siblings(
+                            lazy_server_declarers
+                        )
+                    )
+                    if (
+                        lazy_server_bound_to_managed_claim
+                        or lazy_server_is_unclaimed_sibling
+                    ):
                         inventory_authority = mps_after_inventory
                         reasons = after_classification[3]
                         unknown_mps_clients = after_classification[4]
@@ -2646,7 +2683,16 @@ class SessionController:
                             )
                             for claim in trailing_systemd
                         )
-                        if after_declarers_bound_to_managed_claim:
+                        after_server_is_unclaimed_sibling = (
+                            not after_classification[3]
+                            and self._mps_server_declarers_are_user_manager_siblings(
+                                frozenset(after_server_declarers.values())
+                            )
+                        )
+                        if (
+                            after_declarers_bound_to_managed_claim
+                            or after_server_is_unclaimed_sibling
+                        ):
                             trailing_classification = after_classification
                 else:
                     trailing_classification = classify_trailing_inventory(
