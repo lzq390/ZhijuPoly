@@ -312,6 +312,7 @@ def patch_full_audit_runtime(
         declarer.pid: declarer
         for declarer in (
             *authority.gpu_declarers,
+            *snapshot.process_declarers,
             *(
                 declarer
                 for claim in (*snapshot.systemd_claims, *trailing_systemd)
@@ -380,12 +381,20 @@ def dft_broad_snapshot(
         process_cgroup=control_group,
         gpu_uuids=frozenset({session.GPU_UUID}),
     )
-    mps_declarers = tuple(authority.gpu_declarers)
+    manager_control_group = server.user_manager_control_group(1001)
+    mps_declarers = tuple(
+        declarer
+        for declarer in authority.gpu_declarers
+        if server._systemd_cgroup_contains(
+            declarer.process_cgroup,
+            manager_control_group,
+        )
+    )
     claim = server.SystemdGpuClaim(
         scope="system",
         unit="user@1001.service",
         main_pid=7000,
-        control_group=server.user_manager_control_group(1001),
+        control_group=manager_control_group,
         process_pids=frozenset(
             {root_pid, *(item.pid for item in mps_declarers), 8999}
         ),
@@ -421,7 +430,7 @@ def dft_broad_snapshot(
     )
     known_process_declarers = {
         declarer.pid: declarer
-        for declarer in (root, *mps_declarers)
+        for declarer in (root, *authority.gpu_declarers)
     }
     process_declarers = snapshot.process_declarers or tuple(
         known_process_declarers[pid]
@@ -1746,11 +1755,11 @@ def test_full_audit_never_retroactively_authorizes_reused_mps_server_pid(
 
     _status, _snapshot, reasons = controller._audit(client)
 
-    # A server identity replacement already present in the captured systemd
-    # inventory is contamination evidence, not a retryable DFT client growth.
+    # A server identity replacement already present in the adjacent process
+    # inventory is contamination evidence, not retryable DFT client growth.
     assert inventory_calls == 1
     assert reasons
-    assert any("systemd" in reason for reason in reasons)
+    assert any("7001" in reason for reason in reasons)
     assert controller.dft_stabilized is False
 
 
@@ -2135,6 +2144,72 @@ def test_full_audit_retries_exact_lazy_mps_server_growth(
     assert controller.last_mps_authority == after
 
 
+def test_full_audit_accepts_dft_claim_with_mps_in_sibling_login_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    status = {
+        "broker_instance_id": "broker",
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    before = mps_snapshot(declarers=frozenset({mps_declarer(7000)}))
+    after = dft_resident_authority()
+    captured = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        after,
+        session.TargetSnapshot((8123,), (), ()),
+    )
+    mps_pids = frozenset(declarer.pid for declarer in after.gpu_declarers)
+    claim = captured.systemd_claims[0]
+    captured = session.TargetSnapshot(
+        captured.process_pids,
+        captured.docker_claims,
+        (
+            replace(
+                claim,
+                process_pids=claim.process_pids - mps_pids,
+                live_gpu_declarers=tuple(
+                    declarer
+                    for declarer in claim.live_gpu_declarers
+                    if declarer.pid not in mps_pids
+                ),
+            ),
+        ),
+        captured.process_declarers,
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=captured,
+        authority=before,
+        trailing_compute=frozenset({8123}),
+        trailing_systemd=captured.systemd_claims,
+    )
+    authorities = iter((before, after, after, after, after))
+    guarded: list[int] = []
+    monkeypatch.setattr(controller, "_mps_authority", lambda: next(authorities))
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda _client, _status: guarded.append(1) or True,
+    )
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert guarded == [1]
+    assert controller.full_audit_generation == 1
+    assert controller.last_mps_authority == after
+
+
 def test_full_audit_discards_lazy_server_that_appeared_after_captured_inventory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2191,6 +2266,18 @@ def test_full_audit_discards_lazy_server_that_appeared_after_captured_inventory(
         "query_systemd_gpu_claims",
         lambda **_kwargs: stable.systemd_claims,
     )
+    stable_declarers = {
+        declarer.pid: declarer for declarer in stable.process_declarers
+    }
+    monkeypatch.setattr(
+        session,
+        "capture_compute_process_declarers",
+        lambda pids: {
+            pid: stable_declarers[pid]
+            for pid in pids
+            if pid in stable_declarers
+        },
+    )
 
     _status, _snapshot, reasons = controller._audit(client)
 
@@ -2241,7 +2328,7 @@ def test_trailing_full_audit_retries_exact_lazy_mps_server_growth(
     guarded: list[int] = []
     captured_declarers = {
         declarer.pid: declarer
-        for declarer in trailing.systemd_claims[0].live_gpu_declarers
+        for declarer in trailing.process_declarers
     }
     monkeypatch.setattr(
         session,
@@ -2325,7 +2412,7 @@ def test_trailing_full_audit_retries_lazy_server_between_nvml_seals(
     systemd_claims = iter((initial.systemd_claims, stable.systemd_claims))
     captured_declarers = {
         declarer.pid: declarer
-        for declarer in stable.systemd_claims[0].live_gpu_declarers
+        for declarer in stable.process_declarers
     }
     guarded: list[int] = []
     monkeypatch.setattr(
@@ -2528,7 +2615,13 @@ def test_trailing_lazy_growth_rejects_unsealed_untrusted_dft_pid(
 
     _status, _snapshot, reasons = controller._audit(client)
 
-    assert "managed GPU1 process identity changed after NVML capture" in reasons
+    assert any(
+        reason.startswith(
+            "managed GPU1 process identity changed after NVML capture: PID(s) "
+        )
+        and "8123" in reason
+        for reason in reasons
+    )
 
 
 def test_exact_lazy_mps_server_growth_rejects_ambiguous_authority(
@@ -2669,7 +2762,10 @@ def test_exact_lazy_mps_server_growth_rejects_ambiguous_authority(
         ("systemd", "foreign systemd claim: user:foreign-gpu.service"),
         ("mps", "unknown private MPS client PID(s):"),
         ("unbound_server", "foreign CUDA PID(s): 7001"),
-        ("reused_server", "foreign systemd claim: system:user@1001.service"),
+        (
+            "reused_server",
+            "managed GPU1 process identity changed after NVML capture",
+        ),
         (
             "nvml_reuse",
             "managed GPU1 process identity changed after NVML capture",
@@ -2712,6 +2808,24 @@ def test_exact_lazy_mps_server_growth_never_hides_captured_foreign_evidence(
         if foreign_source == "mps"
         else dft_resident_authority()
     )
+    if foreign_source == "unbound_server":
+        from dataclasses import replace
+
+        manager_cgroup = server.user_manager_control_group(1001) + "/mps.scope"
+        before = replace(
+            before,
+            gpu_declarers=frozenset(
+                replace(declarer, process_cgroup=manager_cgroup)
+                for declarer in before.gpu_declarers
+            ),
+        )
+        after = replace(
+            after,
+            gpu_declarers=frozenset(
+                replace(declarer, process_cgroup=manager_cgroup)
+                for declarer in after.gpu_declarers
+            ),
+        )
     process_pids = (
         (7001, 8123, 9999)
         if foreign_source == "compute"
@@ -2736,22 +2850,16 @@ def test_exact_lazy_mps_server_growth_never_hides_captured_foreign_evidence(
     if foreign_source == "reused_server":
         from dataclasses import replace
 
-        broad_claim = captured.systemd_claims[0]
         captured = session.TargetSnapshot(
             captured.process_pids,
             captured.docker_claims,
-            (
-                replace(
-                    broad_claim,
-                    live_gpu_declarers=tuple(
-                        replace(declarer, process_start_ticks=999)
-                        if declarer.pid == 7001
-                        else declarer
-                        for declarer in broad_claim.live_gpu_declarers
-                    ),
-                ),
+            captured.systemd_claims,
+            tuple(
+                replace(declarer, process_start_ticks=999)
+                if declarer.pid == 7001
+                else declarer
+                for declarer in captured.process_declarers
             ),
-            captured.process_declarers,
         )
     if foreign_source == "nvml_reuse":
         from dataclasses import replace

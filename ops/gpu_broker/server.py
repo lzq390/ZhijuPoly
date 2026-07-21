@@ -2696,6 +2696,10 @@ def claim_is_exact_dev_gpu1_host_workloads_scope(
             not isinstance(declarer, SystemdGpuDeclarer)
             or declarer.gpu_uuids != frozenset({uuid})
             or declarer.pid not in claim.process_pids
+            or not _systemd_cgroup_contains(
+                declarer.process_cgroup,
+                claim.control_group,
+            )
             for declarer in target_declarers
         )
         or len({declarer.pid for declarer in target_declarers})
@@ -2710,7 +2714,22 @@ def claim_is_exact_dev_gpu1_host_workloads_scope(
     ):
         return False
     target_set = frozenset(target_declarers)
-    if not authorized_mps_declarers <= target_set:
+    # The development controller may be launched from a login ``session-*.scope``
+    # while DFT/MD executors are placed below the user manager by
+    # ``systemd-run --user``.  Those are sibling cgroups.  Descriptor-authorized
+    # MPS processes outside this claim are validated by MpsRuntimeGuard and must
+    # not be required to appear in the user-manager claim.  Conversely, every
+    # authorized MPS declarer whose cgroup is inside this claim must be present;
+    # otherwise the systemd/environment snapshot is incomplete and fails closed.
+    claim_mps_declarers = frozenset(
+        declarer
+        for declarer in authorized_mps_declarers
+        if _systemd_cgroup_contains(
+            declarer.process_cgroup,
+            claim.control_group,
+        )
+    )
+    if not claim_mps_declarers <= target_set:
         return False
 
     authority_entries: list[tuple[Lease, tuple[str, int, int, str]]] = []

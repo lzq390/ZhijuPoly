@@ -1108,6 +1108,23 @@ class SessionController:
     ) -> bool:
         """Never authorize a captured NVML PID using a later reused identity."""
 
+        return not SessionController._captured_pid_identity_mismatches(
+            authorized_pids,
+            process_pids,
+            process_declarers,
+            expected_declarers,
+        )
+
+    @staticmethod
+    def _captured_pid_identity_mismatches(
+        authorized_pids: frozenset[int],
+        process_pids: frozenset[int],
+        process_declarers: tuple[Any, ...],
+        expected_declarers: frozenset[Any],
+    ) -> frozenset[int]:
+        """Return captured PIDs whose adjacent identity cannot be proven."""
+
+        mismatches: set[int] = set()
         for pid in authorized_pids & process_pids:
             try:
                 captured = frozenset(
@@ -1121,10 +1138,40 @@ class SessionController:
                     if declarer.pid == pid
                 )
             except (AttributeError, TypeError):
-                return False
+                mismatches.add(pid)
+                continue
             if len(captured) != 1 or captured != expected:
-                return False
-        return True
+                mismatches.add(pid)
+        return frozenset(mismatches)
+
+    @staticmethod
+    def _mps_declarers_bound_to_claim(
+        authorized_declarers: frozenset[Any],
+        claim: Any,
+    ) -> bool:
+        """Bind only the descriptor MPS processes that live in this claim.
+
+        A controller launched from a login session and a workload launched by
+        the user manager occupy sibling cgroups.  MPS identities outside the
+        claim remain covered by descriptor authority; any MPS identity inside
+        the claim must be present in its atomic live-environment snapshot.
+        """
+
+        from ops.gpu_broker.server import _systemd_cgroup_contains
+
+        try:
+            live_declarers = frozenset(claim.live_gpu_declarers)
+            claim_declarers = frozenset(
+                declarer
+                for declarer in authorized_declarers
+                if _systemd_cgroup_contains(
+                    declarer.process_cgroup,
+                    claim.control_group,
+                )
+            )
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return claim_declarers <= live_declarers
 
     @staticmethod
     def _managed_workload_authority(
@@ -1679,8 +1726,8 @@ class SessionController:
                             for declarer in claim.live_gpu_declarers
                         )
                     )
-                    classified_identity_is_stable = (
-                        self._captured_pids_match_expected_declarers(
+                    classified_identity_mismatches = (
+                        self._captured_pid_identity_mismatches(
                             authority.server_pids | classified_nvml,
                             frozenset(snapshot.process_pids),
                             snapshot.process_declarers,
@@ -1703,11 +1750,15 @@ class SessionController:
                     )
                     if (
                         self.dft_warmup_open
-                        and not classified_identity_is_stable
+                        and classified_identity_mismatches
                     ):
                         classified_reasons = (
                             *classified_reasons,
-                            "managed GPU1 process identity changed after NVML capture",
+                            "managed GPU1 process identity changed after NVML capture: "
+                            "PID(s) "
+                            + ",".join(
+                                map(str, sorted(classified_identity_mismatches))
+                            ),
                         )
                     classified_unknown_clients = (
                         observed_initial_clients - classified_clients
@@ -1759,8 +1810,10 @@ class SessionController:
                                 claim.control_group,
                             )
                             in after_managed_systemd_claims
-                            and mps_after_inventory.gpu_declarers
-                            <= frozenset(claim.live_gpu_declarers)
+                            and self._mps_declarers_bound_to_claim(
+                                mps_after_inventory.gpu_declarers,
+                                claim,
+                            )
                             for claim in snapshot.systemd_claims
                         )
                     )
@@ -1966,14 +2019,14 @@ class SessionController:
                                 missing_addition_declarers
                             ).values()
                         )
-                    classified_identity_is_stable = (
-                        self._captured_pids_match_expected_declarers(
+                    classified_identity_mismatches = (
+                        self._captured_pid_identity_mismatches(
                             classified_allowed_pids,
                             unsealed_compute,
                             tuple(unsealed_process_declarers.values()),
                             classified_expected_declarers,
                         )
-                        and self._captured_pids_match_expected_declarers(
+                        | self._captured_pid_identity_mismatches(
                             classified_allowed_pids,
                             sealed_compute,
                             tuple(sealed_process_declarers.values()),
@@ -1999,11 +2052,15 @@ class SessionController:
                         )
                     if (
                         self.dft_warmup_open
-                        and not classified_identity_is_stable
+                        and classified_identity_mismatches
                     ):
                         classified_reasons = (
                             *classified_reasons,
-                            "managed GPU1 process identity changed after NVML capture",
+                            "managed GPU1 process identity changed after NVML capture: "
+                            "PID(s) "
+                            + ",".join(
+                                map(str, sorted(classified_identity_mismatches))
+                            ),
                         )
                     classified_unknown_clients = (
                         clients_after - classified_managed_clients
@@ -2047,8 +2104,10 @@ class SessionController:
                                 claim.control_group,
                             )
                             in after_managed_systemd_claims
-                            and mps_after.gpu_declarers
-                            <= frozenset(claim.live_gpu_declarers)
+                            and self._mps_declarers_bound_to_claim(
+                                mps_after.gpu_declarers,
+                                claim,
+                            )
                             for claim in trailing_systemd
                         )
                         if after_declarers_bound_to_managed_claim:

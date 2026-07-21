@@ -4086,7 +4086,7 @@ def _mixed_dft_mps_user_manager_claim(
     control_pid = 7001
     server_pid = 7002
     dft_cgroup = str(lease.workload_cgroup)[3:]
-    mps_cgroup = "/user.slice/user-1001.slice/nexpoly-mps.scope"
+    mps_cgroup = user_manager_control_group(1001) + "/nexpoly-mps.scope"
     declarers = (
         SystemdGpuDeclarer(
             pid=root_pid,
@@ -4225,7 +4225,7 @@ def _mixed_dft_md_mps_user_manager_claim(
         )
         for pid in (dft_root, 8456, md_root, 9456)
     )
-    mps_cgroup = "/user.slice/user-1001.slice/nexpoly-mps.scope"
+    mps_cgroup = user_manager_control_group(1001) + "/nexpoly-mps.scope"
     mps_declarers = (
         SystemdGpuDeclarer(
             pid=7001,
@@ -4300,6 +4300,98 @@ def test_exact_broad_claim_accepts_complete_dft_mps_md_partition(
         leases=leases,
         authorized_mps_declarers=authority.gpu_declarers,
     ) is True
+
+
+def test_exact_broad_claim_accepts_descriptor_mps_in_sibling_login_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    sibling_cgroup = "/user.slice/user-1001.slice/session-33690.scope"
+    sibling_mps_declarers = frozenset(
+        replace(declarer, process_cgroup=sibling_cgroup)
+        for declarer in authority.gpu_declarers
+    )
+    mps_pids = frozenset(declarer.pid for declarer in authority.gpu_declarers)
+    claim = replace(
+        claim,
+        process_pids=claim.process_pids - mps_pids,
+        live_gpu_declarers=tuple(
+            declarer
+            for declarer in claim.live_gpu_declarers
+            if declarer.pid not in mps_pids
+        ),
+    )
+    authority = replace(authority, gpu_declarers=sibling_mps_declarers)
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=leases,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is True
+
+
+def test_exact_broad_claim_rejects_sibling_mps_forged_into_manager_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    sibling_cgroup = "/user.slice/user-1001.slice/session-33690.scope"
+    sibling_mps_declarers = frozenset(
+        replace(declarer, process_cgroup=sibling_cgroup)
+        for declarer in authority.gpu_declarers
+    )
+    claim = replace(
+        claim,
+        live_gpu_declarers=tuple(
+            next(
+                sibling
+                for sibling in sibling_mps_declarers
+                if sibling.pid == declarer.pid
+            )
+            if declarer in authority.gpu_declarers
+            else declarer
+            for declarer in claim.live_gpu_declarers
+        ),
+    )
+    authority = replace(authority, gpu_declarers=sibling_mps_declarers)
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=leases,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is False
+
+
+def test_exact_broad_claim_rejects_missing_descriptor_mps_inside_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    missing = next(iter(authority.gpu_declarers))
+    claim = replace(
+        claim,
+        live_gpu_declarers=tuple(
+            declarer
+            for declarer in claim.live_gpu_declarers
+            if declarer != missing
+        ),
+    )
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=leases,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is False
 
 
 def test_exact_broad_claim_accepts_only_exact_parented_dft_inheritance(
