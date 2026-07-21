@@ -868,6 +868,30 @@ def test_repository_systemd_registrations_bind_the_real_manager_scopes(
     }
 
 
+def test_global_registrations_remain_valid_when_session_policy_is_narrowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ops.gpu_broker.server as broker_server
+
+    repository = Path(__file__).resolve().parents[3]
+    runtime_policy = tmp_path / "external-reservations.json"
+    runtime_policy.write_bytes(
+        (repository / "ops/config/gpu-external-reservations.json").read_bytes()
+    )
+    runtime_policy.chmod(0o600)
+    monkeypatch.setitem(broker_server.DEVICE_POLICY, ("dev", "md"), (1,))
+
+    policy = load_external_reservations(runtime_policy)
+
+    assert policy.managed_docker_claims["md-dev"].gpu_uuids == frozenset(
+        {
+            EXPECTED_GPU_UUIDS[1],
+            EXPECTED_GPU_UUIDS[3],
+        }
+    )
+
+
 def test_external_reservations_accept_only_an_exact_local_inherited_fd(
     tmp_path: Path,
 ) -> None:

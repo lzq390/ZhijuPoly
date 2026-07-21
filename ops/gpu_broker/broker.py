@@ -31,7 +31,7 @@ EXPECTED_GPU_UUIDS = {
 
 # Candidate order is a host policy, not client input.  GPU0 is intentionally
 # absent and can never be selected by this broker.
-DEVICE_POLICY = {
+BASE_DEVICE_POLICY = {
     ("prod", "backend"): (2,),
     ("prod", "dft"): (2, 3, 1),
     ("prod", "md"): (2, 3, 1),
@@ -39,6 +39,7 @@ DEVICE_POLICY = {
     ("dev", "dft"): (1, 3),
     ("dev", "md"): (1, 3),
 }
+DEVICE_POLICY = dict(BASE_DEVICE_POLICY)
 if os.environ.get("NEXPOLY_GPU1_ONLY_SESSION") == "1":
     # Process-local restriction used only by the opt-in development
     # controller.  The repository policy and production candidates remain

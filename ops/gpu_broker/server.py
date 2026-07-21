@@ -30,6 +30,7 @@ from gpu_resource.transient_scope import (
 )
 
 from .broker import (
+    BASE_DEVICE_POLICY,
     COMPONENT_BUDGETS_MIB,
     COMPONENT_THREAD_PERCENT,
     DEVICE_POLICY,
@@ -421,11 +422,11 @@ def load_external_reservations(path: Path) -> ExternalReservationPolicy:
             raise BrokerError(
                 "external_inventory_unavailable", "managed Docker registration is invalid"
             )
-        allowed_policy = {
+        baseline_policy = {
             EXPECTED_GPU_UUIDS[index]
-            for index in DEVICE_POLICY[(strings[1], strings[0])]
+            for index in BASE_DEVICE_POLICY[(strings[1], strings[0])]
         }
-        if not set(gpu_uuids).issubset(allowed_policy):
+        if not set(gpu_uuids).issubset(baseline_policy):
             raise BrokerError(
                 "external_inventory_unavailable",
                 "managed Docker GPUs are outside component policy",
