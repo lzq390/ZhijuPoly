@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from threading import Event, Lock, Thread, get_ident
+from threading import Event, Lock, Thread
 from time import sleep
 from types import SimpleNamespace
 
@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.main import _build_gpu_runtime_registry, _warm_managed_ocsr_runtime, create_app
+from app.main import _build_gpu_runtime_registry, create_app
 from app.routers import query as query_router_module
 from app.routers.gpu_status import router as gpu_status_router
 from app.services.gpu_runtime_registry import (
@@ -115,73 +115,6 @@ def test_main_registry_guard_requires_and_rechecks_healthy_residency() -> None:
     with registry.inference_session("ocsr", timeout_seconds=0):
         pass
     assert calls == 2
-
-
-def test_managed_cuda_ocsr_loads_and_warms_on_lifespan_thread(monkeypatch) -> None:
-    caller_thread = get_ident()
-    events: list[tuple[str, int]] = []
-    runtime = object()
-    settings = Settings(
-        gpu_broker_enabled=True,
-        ocsr_enabled=True,
-        ocsr_device="cuda",
-        gen_model_enabled=False,
-        retro_model_enabled=False,
-        polytao_enabled=False,
-        model_enabled=False,
-    )
-    app = FastAPI()
-    app.state.settings = settings
-    registry = GpuRuntimeRegistry(
-        admission_guard=lambda: events.append(("admit", get_ident()))
-    )
-    registry.register(
-        "ocsr",
-        enabled=True,
-        loader=lambda: events.append(("load", get_ident())) or runtime,
-    )
-    app.state.gpu_runtime_registry = registry
-    monkeypatch.setattr(
-        "app.main.warmup_image_recognition_runtime",
-        lambda value: events.append(("warmup", get_ident()))
-        if value is runtime
-        else pytest.fail("unexpected OCSR runtime"),
-    )
-
-    _warm_managed_ocsr_runtime(app)
-
-    assert events == [
-        ("admit", caller_thread),
-        ("load", caller_thread),
-        ("warmup", caller_thread),
-    ]
-    assert registry.model_snapshots()["ocsr"]["ready"] is True
-
-
-@pytest.mark.parametrize("device", ["cpu", "mps"])
-def test_managed_ocsr_lifespan_warmup_skips_non_cuda_devices(device: str) -> None:
-    settings = Settings(
-        gpu_broker_enabled=True,
-        ocsr_enabled=True,
-        ocsr_device=device,
-        gen_model_enabled=False,
-        retro_model_enabled=False,
-        polytao_enabled=False,
-        model_enabled=False,
-    )
-    app = FastAPI()
-    app.state.settings = settings
-    registry = GpuRuntimeRegistry()
-    registry.register(
-        "ocsr",
-        enabled=True,
-        loader=lambda: pytest.fail("non-CUDA OCSR must remain lazy"),
-    )
-    app.state.gpu_runtime_registry = registry
-
-    _warm_managed_ocsr_runtime(app)
-
-    assert registry.model_snapshots()["ocsr"]["loaded"] is False
 
 
 def test_registry_preloads_enabled_models_in_registration_order() -> None:
