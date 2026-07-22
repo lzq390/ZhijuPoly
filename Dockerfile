@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime@sha256:2428b92ebbaeceba5572b98c18c8a94e43162bead6e88588ad54471147c58a20 AS backend-base
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime@sha256:77f17f843507062875ce8be2a6f76aa6aa3df7f9ef1e31d9d7432f4b0f563dee AS backend-base
 
 ARG PYPI_INDEX_URL="https://pypi.org/simple"
 ARG PYPI_MIRROR_URL="https://pypi.org/simple"
@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python --version | grep -Eq '^Python 3\.11\.' \
     && python -m pip install --no-index --no-deps --require-hashes \
         -r /tmp/requirements-system.lock \
-    && python -c "import importlib.metadata as m, torch; expected={'torch':'2.6.0+cu118','torchvision':'0.21.0+cu118'}; actual={name:m.version(name) for name in expected}; assert actual == expected, (actual, expected); assert torch.version.cuda == '11.8', torch.version.cuda" \
+    && python -c "import importlib.metadata as m, torch; expected={'torch':'2.6.0+cu124','torchvision':'0.21.0+cu124'}; actual={name:m.version(name) for name in expected}; assert actual == expected, (actual, expected); assert torch.version.cuda == '12.4', torch.version.cuda" \
     && python -m pip install --only-binary=:all: --require-hashes \
         --retries 10 \
         --timeout 120 \
@@ -58,7 +58,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         --retries 10 \
         --timeout 120 \
         -r /tmp/requirements-legacy.lock \
-    && python -c "import importlib.metadata as m, torch; expected={'torch':'2.6.0+cu118','torchvision':'0.21.0+cu118','transformers':'4.57.6','scikit-learn':'1.8.0'}; actual={name:m.version(name) for name in expected}; assert actual == expected, (actual, expected); assert torch.version.cuda == '11.8', torch.version.cuda"
+    && python -c "import importlib.metadata as m, torch; expected={'torch':'2.6.0+cu124','torchvision':'0.21.0+cu124','transformers':'4.57.6','scikit-learn':'1.8.0'}; actual={name:m.version(name) for name in expected}; assert actual == expected, (actual, expected); assert torch.version.cuda == '12.4', torch.version.cuda"
 
 COPY backend /app/backend
 COPY gpu_resource /app/gpu_resource

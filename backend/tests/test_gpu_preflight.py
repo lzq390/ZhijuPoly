@@ -45,15 +45,21 @@ def _configured_settings(tmp_path: Path) -> SimpleNamespace:
     )
 
 
-def _install_fake_torch(monkeypatch, *, capability: tuple[int, int] = (8, 9)) -> None:
+def _install_fake_torch(
+    monkeypatch,
+    *,
+    capability: tuple[int, int] = (8, 9),
+    torch_version: str = "2.6.0+cu124",
+    cuda_runtime: str = "12.4",
+) -> None:
     cuda = SimpleNamespace(
         is_available=lambda: True,
         get_device_capability=lambda _index: capability,
         get_device_name=lambda _index: "NVIDIA GeForce RTX 4090",
     )
     torch = SimpleNamespace(
-        __version__="2.6.0+cu118",
-        version=SimpleNamespace(cuda="11.8"),
+        __version__=torch_version,
+        version=SimpleNamespace(cuda=cuda_runtime),
         cuda=cuda,
     )
     monkeypatch.setitem(sys.modules, "torch", torch)
@@ -150,6 +156,27 @@ def test_configured_preflight_checks_exact_runtime_and_assets(tmp_path, monkeypa
         "async_queue_timeout_seconds": 600.0,
     }
     assert all(state["enabled"] for state in report["models"].values())
+
+
+def test_configured_preflight_rejects_legacy_cuda_runtime(tmp_path, monkeypatch) -> None:
+    settings = _configured_settings(tmp_path)
+    _install_fake_torch(
+        monkeypatch,
+        torch_version="2.6.0+cu118",
+        cuda_runtime="11.8",
+    )
+    monkeypatch.setattr(
+        gpu_preflight,
+        "_distribution_version",
+        lambda name: gpu_preflight.EXPECTED_VERSIONS[name],
+    )
+    monkeypatch.setattr(gpu_preflight, "_import_runtime_dependency", lambda _name: object())
+
+    report = gpu_preflight.inspect_configured_runtime(settings)
+
+    assert report["status"] == "not_configured"
+    assert any("imported torch must be 2.6.0+cu124" in error for error in report["errors"])
+    assert any("CUDA runtime must be 12.4" in error for error in report["errors"])
 
 
 def test_broker_managed_configured_preflight_never_imports_cuda_runtime(

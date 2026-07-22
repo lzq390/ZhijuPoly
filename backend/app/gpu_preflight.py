@@ -18,12 +18,12 @@ from app.services.polytao_runtime import REQUIRED_MODEL_FILES
 
 
 EXPECTED_VERSIONS = {
-    "torch": "2.6.0+cu118",
-    "torchvision": "0.21.0+cu118",
+    "torch": "2.6.0+cu124",
+    "torchvision": "0.21.0+cu124",
     "transformers": "4.57.6",
     "scikit-learn": "1.8.0",
 }
-EXPECTED_CUDA_RUNTIME = "11.8"
+EXPECTED_CUDA_RUNTIME = "12.4"
 EXPECTED_CAPABILITY = (8, 9)
 DEFAULT_STATUS_URL = "http://127.0.0.1:8000/internal/gpu/status"
 
