@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import anyio
 from fastapi import APIRouter, HTTPException, Request
-from starlette.concurrency import run_in_threadpool
 
 from app.models import (
     MonomerPolymerizationRequest,
@@ -21,9 +21,10 @@ router = APIRouter(prefix="/api/v1", tags=["monomer-polymerization"])
 @router.get("/monomer-polymerization/status", response_model=MonomerPolymerizationStatusResponse)
 async def monomer_polymerization_status(request: Request) -> MonomerPolymerizationStatusResponse:
     settings = request.app.state.settings
-    return await run_in_threadpool(
+    return await anyio.to_thread.run_sync(
         get_monomer_polymerization_status,
         settings.smipoly_enabled,
+        limiter=request.app.state.smipoly_limiter,
     )
 
 
@@ -37,7 +38,11 @@ async def monomer_polymerization(
         raise HTTPException(status_code=503, detail="monomer polymerization service is disabled")
 
     try:
-        return await run_in_threadpool(run_monomer_polymerization, request_body)
+        return await anyio.to_thread.run_sync(
+            run_monomer_polymerization,
+            request_body,
+            limiter=request.app.state.smipoly_limiter,
+        )
     except InvalidSmilesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ModelArtifactError as exc:

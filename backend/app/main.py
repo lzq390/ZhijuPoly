@@ -224,6 +224,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.state.settings = app_settings
+    app.state.smipoly_limiter = anyio.CapacityLimiter(1)
     app.state.postgres_connection_factory = postgres_connection
     app.state.structure_similarity_index = StructureSimilarityIndex()
     app.state.inflight_api_writes = InflightApiWriteTracker()
