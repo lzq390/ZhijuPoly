@@ -347,6 +347,10 @@ gpu_session_up_rollback
         self.assertIn('"stabilizing"', down_body)
         self.assertIn('if [[ "$state" == "stopped" ]]', down_body)
         self.assertIn("verify_gpu_session_stopped_runtime", down_body)
+        self.assertGreaterEqual(
+            down_body.count("verify_gpu_session_stopped_runtime"),
+            2,
+        )
         self.assertLess(
             down_body.index('if [[ "$state" == "stopped" ]]'),
             down_body.index("NEXPOLY_DEV_GPU_SESSION_ID="),

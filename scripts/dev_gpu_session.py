@@ -3017,6 +3017,11 @@ class SessionController:
                         "full audit did not retain its exact MPS authority"
                     )
             except Exception as exc:
+                if self.stop_requested and not self.automatic_recovery:
+                    # A graceful drain may arrive while a long host audit is
+                    # in flight.  Its now-stale result must not race the shell
+                    # teardown into automatic-recovery mode.
+                    continue
                 # Inventory uncertainty is itself fail-closed, but never a
                 # naked controller exit that would strand Broker/MPS state.
                 try:
@@ -3032,6 +3037,10 @@ class SessionController:
                 )
                 self.automatic_recovery = True
                 self.stop_requested = True
+                continue
+            if self.stop_requested and not self.automatic_recovery:
+                # Admission is already closed and the controller owns cleanup;
+                # do not classify a result captured across the drain edge.
                 continue
             if reasons:
                 client.set_draining(True)
@@ -3294,6 +3303,16 @@ def up_execute() -> dict[str, Any]:
 
 
 def down_execute() -> dict[str, Any]:
+    if not CONTROLLER_RECORD.exists() and not CONTROLLER_RECORD.is_symlink():
+        stopped = status()
+        expected_stopped = {
+            "schema_version": 1,
+            "status": "stopped",
+            "gpu_index": 1,
+        }
+        if stopped == expected_stopped:
+            return stopped
+        raise DevGpuSessionError("stopped controller state is invalid")
     record = _controller_record()
     pid = record["pid"]
     descriptor = os.pidfd_open(pid)
@@ -3478,13 +3497,45 @@ def activate_execute(session_id: str) -> dict[str, Any]:
 
 
 def drain_execute() -> dict[str, Any]:
-    _controller_record()
+    record = _controller_record()
     from gpu_resource import GpuBrokerClient
 
-    result = GpuBrokerClient(GPU_ROOT / "broker.sock").set_draining(True)
-    if result.get("draining") is not True or not isinstance(result.get("leases"), list):
-        raise DevGpuSessionError("Broker returned an invalid drain result")
-    return result
+    pid = record["pid"]
+    descriptor = os.pidfd_open(pid)
+    try:
+        if process_start_ticks(pid) != record["start_ticks"]:
+            raise DevGpuSessionError("controller PID was reused before drain")
+        result = GpuBrokerClient(GPU_ROOT / "broker.sock").set_draining(True)
+        if result.get("draining") is not True or not isinstance(
+            result.get("leases"), list
+        ):
+            raise DevGpuSessionError("Broker returned an invalid drain result")
+        if _controller_record() != record:
+            raise DevGpuSessionError("controller identity changed during drain")
+        # Stop the audit loop before the shell removes exact session-owned
+        # workers.  The controller remains the cleanup authority and waits for
+        # their leases to drain; this prevents intentional teardown churn from
+        # being misclassified as foreign contamination.
+        signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+    finally:
+        os.close(descriptor)
+    deadline = time.monotonic() + 45.0
+    while time.monotonic() < deadline:
+        current = status()
+        state = current.get("status")
+        if state in {"cleanup-blocked", "isolation-waiting", "stopped"}:
+            return result
+        if state not in {
+            "auditing",
+            "plane-ready",
+            "stabilizing",
+            "ready",
+        }:
+            raise DevGpuSessionError(
+                f"controller drain handshake ended as {state}"
+            )
+        time.sleep(0.1)
+    raise DevGpuSessionError("timed out waiting for controller drain handshake")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

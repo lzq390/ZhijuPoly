@@ -1878,6 +1878,7 @@ gpu_session_down() {
   wait_backend_configured
   verify_backend_drift
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --execute
+  verify_gpu_session_stopped_runtime
   echo "Development backend restored to CPU-only idle mode."
 }
 

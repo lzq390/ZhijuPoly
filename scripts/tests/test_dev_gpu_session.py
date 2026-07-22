@@ -5694,7 +5694,7 @@ def test_down_waits_for_exact_owned_lease_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     record = {"pid": 123, "start_ticks": 456}
-    exists = iter((True, False))
+    exists = iter((True, True, False))
     ticks = iter((0.0, 0.0, 1.0))
     signals: list[int] = []
     sleeps: list[float] = []
@@ -5730,6 +5730,27 @@ def test_down_waits_for_exact_owned_lease_cleanup(
     assert sleeps == [0.25]
 
 
+def test_down_is_idempotent_after_controller_finished_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        session,
+        "CONTROLLER_RECORD",
+        SimpleNamespace(exists=lambda: False, is_symlink=lambda: False),
+    )
+    stopped = {"schema_version": 1, "status": "stopped", "gpu_index": 1}
+    monkeypatch.setattr(session, "status", lambda: stopped)
+    monkeypatch.setattr(
+        session,
+        "_controller_record",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("must not read a missing record")
+        ),
+    )
+
+    assert session.down_execute() == stopped
+
+
 def test_down_times_out_when_owned_lease_never_releases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5760,6 +5781,79 @@ def test_down_times_out_when_owned_lease_never_releases(
 
     with pytest.raises(session.DevGpuSessionError, match="timed out"):
         session.down_execute()
+
+
+def test_drain_stops_audits_after_broker_admission_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import gpu_resource
+
+    record = {"pid": 123, "start_ticks": 456}
+    signals: list[int] = []
+    closes: list[int] = []
+    draining: list[bool] = []
+    monkeypatch.setattr(session, "_controller_record", lambda: record)
+    monkeypatch.setattr(session, "process_start_ticks", lambda _pid: 456)
+    monkeypatch.setattr(session.os, "pidfd_open", lambda _pid: 9, raising=False)
+    monkeypatch.setattr(session.os, "close", closes.append)
+    monkeypatch.setattr(
+        session.signal,
+        "pidfd_send_signal",
+        lambda _fd, value: signals.append(value),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        gpu_resource,
+        "GpuBrokerClient",
+        lambda _path: SimpleNamespace(
+            set_draining=lambda value: (
+                draining.append(value) or {"draining": True, "leases": []}
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        session,
+        "status",
+        lambda: {"schema_version": 1, "status": "stopped", "gpu_index": 1},
+    )
+
+    assert session.drain_execute() == {"draining": True, "leases": []}
+    assert draining == [True]
+    assert signals == [session.signal.SIGTERM]
+    assert closes == [9]
+
+
+def test_drain_never_signals_a_replaced_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import gpu_resource
+
+    before = {"pid": 123, "start_ticks": 456}
+    after = {"pid": 124, "start_ticks": 789}
+    records = iter((before, after))
+    signals: list[int] = []
+    monkeypatch.setattr(session, "_controller_record", lambda: next(records))
+    monkeypatch.setattr(session, "process_start_ticks", lambda _pid: 456)
+    monkeypatch.setattr(session.os, "pidfd_open", lambda _pid: 9, raising=False)
+    monkeypatch.setattr(session.os, "close", lambda _fd: None)
+    monkeypatch.setattr(
+        session.signal,
+        "pidfd_send_signal",
+        lambda _fd, value: signals.append(value),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        gpu_resource,
+        "GpuBrokerClient",
+        lambda _path: SimpleNamespace(
+            set_draining=lambda _value: {"draining": True, "leases": []}
+        ),
+    )
+
+    with pytest.raises(session.DevGpuSessionError, match="changed during drain"):
+        session.drain_execute()
+
+    assert signals == []
 
 
 def test_stabilize_command_waits_for_matching_post_signal_generation(
@@ -6239,6 +6333,40 @@ def test_ready_is_published_only_after_explicit_activation(
 
     assert controller._serve_loop(SimpleNamespace()) == 0
     assert states[:2] == ["ready", "stopped"]
+
+
+def test_graceful_stop_discards_an_inflight_audit_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.gpu3_guard = {"guard": "same"}
+    states: list[str] = []
+
+    def interrupted_audit(_client):
+        controller.stop_requested = True
+        raise session.DevGpuSessionError("systemd membership changed")
+
+    monkeypatch.setattr(controller, "_audit", interrupted_audit)
+    monkeypatch.setattr(controller, "_cleanup", lambda _client: True)
+    monkeypatch.setattr(controller, "_state", lambda value, **_kwargs: states.append(value))
+    monkeypatch.setattr(controller, "_remove_controller_record", lambda: None)
+    monkeypatch.setattr(
+        controller,
+        "_recovery_command",
+        lambda _command: pytest.fail("graceful stop must not enter recovery"),
+    )
+    monkeypatch.setattr(
+        session,
+        "read_gpu3_guard_fingerprint",
+        lambda: {"guard": "same"},
+    )
+
+    assert controller._serve_loop(SimpleNamespace()) == 0
+    assert controller.automatic_recovery is False
+    assert states == ["stopped"]
 
 
 def test_pre_plane_failure_removes_controller_record(
