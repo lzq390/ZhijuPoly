@@ -936,6 +936,7 @@ exit 7
         compose = GPU_SESSION_COMPOSE.read_text(encoding="utf-8")
         self.assertIn("exec python -X faulthandler -m uvicorn app.main:app", compose)
         self.assertIn("--workers 1", compose)
+        self.assertIn("ipc: host", compose)
         self.assertNotIn("--reload", compose)
 
     def test_worker_bootstrap_and_start_are_fail_closed(self) -> None:

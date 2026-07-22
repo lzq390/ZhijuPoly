@@ -3,6 +3,9 @@
 services:
   backend:
     user: "1001:1001"
+    # The host MPS server and its container client exchange CUDA IPC state
+    # through host shared memory in addition to the private pipe directory.
+    ipc: host
     # The Broker residency lease is bound to the exact Uvicorn process.
     # Dev hot reload replaces that process and invalidates descriptor authority,
     # so governed GPU sessions must keep one stable Backend process identity.
