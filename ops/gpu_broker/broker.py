@@ -833,9 +833,12 @@ class HostGpuBroker:
                 # NVIDIA's terminate_client request must run while the client
                 # can still service the MPS protocol.  First re-bind the exact
                 # lease scope, then terminate all currently reported contexts.
-                # Holding the Broker lock prevents a new lease, while the
-                # later freeze and second MPS query close the in-process
-                # reconnect race.
+                # Holding the Broker lock prevents a new lease.  The first
+                # MPS audit includes its host grace period and must complete
+                # while the workload can still service MPS teardown.  Only
+                # after the exact lease clients disappear may the dedicated
+                # scope be frozen; a second audit then closes the reconnect
+                # race before the exact owned scope is killed.
                 failure_stage = "workload_revalidation"
                 self._validate_workload(lease)
                 failure_stage = "mps_client_termination"
@@ -851,6 +854,12 @@ class HostGpuBroker:
                     raise BrokerError(
                         "mps_termination_failed",
                         "MPS termination evidence is invalid",
+                    )
+                failure_stage = "pre_freeze_mps_drain"
+                if self._mps_clients_alive(lease):
+                    raise BrokerError(
+                        "mps_termination_failed",
+                        "an exact MPS client survived the pre-freeze grace period",
                     )
                 failure_stage = "workload_freeze"
                 freeze_token = self._freeze_workload(lease)
