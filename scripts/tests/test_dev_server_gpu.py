@@ -12,6 +12,7 @@ import unittest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPOSITORY_ROOT / "scripts" / "dev_server_gpu.sh"
 DEV_COMPOSE = REPOSITORY_ROOT / "docker-compose.dev.yml"
+GPU_SESSION_COMPOSE = REPOSITORY_ROOT / "docker-compose.dev-gpu-session.yml"
 BACKEND_DOCKERFILE = REPOSITORY_ROOT / "Dockerfile"
 DEV_ENV_EXAMPLE = REPOSITORY_ROOT / ".env.dev.example"
 DEV_BUILDKIT_CONFIG = REPOSITORY_ROOT / "ops" / "config" / "buildkitd.dev.toml"
@@ -616,6 +617,12 @@ exit 7
         self.assertIn("cd /app/backend/app", compose)
         self.assertIn("--app-dir /app/backend", compose)
         self.assertNotIn("--reload-exclude", compose)
+
+    def test_gpu_session_backend_keeps_stable_lease_process_identity(self) -> None:
+        compose = GPU_SESSION_COMPOSE.read_text(encoding="utf-8")
+        self.assertIn("exec uvicorn app.main:app", compose)
+        self.assertIn("--workers 1", compose)
+        self.assertNotIn("--reload", compose)
 
     def test_worker_bootstrap_and_start_are_fail_closed(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")

@@ -3,6 +3,17 @@
 services:
   backend:
     user: "1001:1001"
+    # The Broker residency lease is bound to the exact Uvicorn process.
+    # Dev hot reload replaces that process and invalidates descriptor authority,
+    # so governed GPU sessions must keep one stable Backend process identity.
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        cd /app/backend/app;
+        exec uvicorn app.main:app --app-dir /app/backend
+        --host 0.0.0.0 --port 8000
+        --workers 1 --timeout-graceful-shutdown 40
     environment:
       MODEL_ENABLED: "true"
       OCSR_ENABLED: "true"
