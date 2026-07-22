@@ -43,6 +43,12 @@ STEADY_CHURN_TIMEOUT_SECONDS = 12.0
 FULL_AUDIT_ATTEMPTS = 3
 PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS = 8
 LATE_SESSION_OWNED_STOP_ATTEMPTS = 8
+_PREACTIVATION_DOCKER_CHURN_MESSAGES = frozenset(
+    {
+        "Docker container inventory changed during audit",
+        "Docker container fingerprint changed during audit",
+    }
+)
 
 
 class DevGpuSessionError(RuntimeError):
@@ -2166,12 +2172,32 @@ class SessionController:
         return True
 
     def _audit(self, client: Any) -> tuple[dict[str, Any], TargetSnapshot, tuple[str, ...]]:
+        from ops.gpu_broker.broker import BrokerError
+
         started = time.monotonic()
         preactivation_rollout = (
             self.plane_ready_published
             and self.dft_stabilized
             and self.activation_generation == 0
         )
+
+        def retryable_docker_rollout_churn(
+            exc: BrokerError,
+            *,
+            captured_activation: int,
+        ) -> bool:
+            return (
+                preactivation_rollout
+                and self.plane_ready_published
+                and self.dft_stabilized
+                and captured_activation == 0
+                and self.activation_generation == 0
+                and type(exc) is BrokerError
+                and exc.code == "gpu_claim_inventory_unavailable"
+                and len(exc.args) == 1
+                and exc.args[0] in _PREACTIVATION_DOCKER_CHURN_MESSAGES
+            )
+
         # MD runtime-probe acquire/release and Backend residency activation can
         # span several complete host inventories.  These extra attempts only
         # discard changed rounds; the unchanged full classifier still decides
@@ -2210,12 +2236,22 @@ class SessionController:
                 # reuse a foreign PID and must never retroactively authorize it.
                 enclosing_broker_token = broker_authority_token(client.status())
                 mps_before = self._mps_authority_for_audit(client)
-                status, snapshot = consistent_broker_snapshot(
-                    client,
-                    membership_churn_retries=churn_retries,
-                    membership_churn_timeout_seconds=churn_timeout,
-                    membership_churn_guard=fast_guard,
-                )
+                try:
+                    status, snapshot = consistent_broker_snapshot(
+                        client,
+                        membership_churn_retries=churn_retries,
+                        membership_churn_timeout_seconds=churn_timeout,
+                        membership_churn_guard=fast_guard,
+                    )
+                except BrokerError as exc:
+                    if retryable_docker_rollout_churn(
+                        exc,
+                        captured_activation=captured_activation,
+                    ):
+                        raise _AuditRoundChanged(
+                            "Docker inventory changed during preactivation rollout"
+                        ) from exc
+                    raise
                 if broker_authority_token(status) != enclosing_broker_token:
                     raise _AuditRoundChanged(
                         "Broker authority changed after the initial MPS seal"
@@ -2432,11 +2468,21 @@ class SessionController:
                 unsealed_process_declarers = (
                     capture_compute_process_declarers(unsealed_compute)
                 )
-                trailing_docker = tuple(
-                    claim
-                    for claim in query_docker_gpu_claims()
-                    if GPU_UUID in claim.gpu_uuids
-                )
+                try:
+                    trailing_docker = tuple(
+                        claim
+                        for claim in query_docker_gpu_claims()
+                        if GPU_UUID in claim.gpu_uuids
+                    )
+                except BrokerError as exc:
+                    if retryable_docker_rollout_churn(
+                        exc,
+                        captured_activation=captured_activation,
+                    ):
+                        raise _AuditRoundChanged(
+                            "Docker inventory changed during preactivation rollout"
+                        ) from exc
+                    raise
                 try:
                     trailing_systemd = tuple(
                         claim

@@ -3935,6 +3935,285 @@ def test_preactivation_rollout_broker_seal_changes_are_bounded(
     assert mps_reads == rollout_attempts
 
 
+@pytest.mark.parametrize(
+    "docker_error",
+    (
+        "Docker container inventory changed during audit",
+        "Docker container fingerprint changed during audit",
+    ),
+)
+@pytest.mark.parametrize("failure_site", ("initial", "trailing"))
+def test_preactivation_rollout_retries_exact_docker_inventory_churn(
+    failure_site: str,
+    docker_error: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+    from ops.gpu_broker import server
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = True
+    controller.dft_stabilized = True
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    calls = 0
+
+    def changing_inventory(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= 3:
+            raise BrokerError("gpu_claim_inventory_unavailable", docker_error)
+        return (status, empty_snapshot()) if failure_site == "initial" else ()
+
+    if failure_site == "initial":
+        monkeypatch.setattr(
+            session,
+            "consistent_broker_snapshot",
+            changing_inventory,
+        )
+    else:
+        monkeypatch.setattr(server, "query_docker_gpu_claims", changing_inventory)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert calls == 4
+    assert controller.full_audit_generation == 1
+
+
+def test_preactivation_docker_inventory_churn_retry_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = True
+    controller.dft_stabilized = True
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    calls = 0
+
+    def changing_inventory(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "Docker container inventory changed during audit",
+        )
+
+    monkeypatch.setattr(
+        session,
+        "consistent_broker_snapshot",
+        changing_inventory,
+    )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="authority changed throughout trailing full audits",
+    ):
+        controller._audit(client)
+
+    assert calls == session.PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS
+    assert controller.full_audit_generation == 0
+
+
+@pytest.mark.parametrize(
+    ("error_code", "error_message", "subclassed"),
+    (
+        (
+            "gpu_claim_inventory_unavailable",
+            "Docker GPU claim inventory failed",
+            False,
+        ),
+        (
+            "gpu_claim_inventory_unavailable",
+            "Docker inspect inventory is incomplete",
+            False,
+        ),
+        (
+            "gpu_claim_inventory_unavailable",
+            "Docker GPU claim is invalid",
+            False,
+        ),
+        (
+            "unexpected_code",
+            "Docker container inventory changed during audit",
+            False,
+        ),
+        (
+            "gpu_claim_inventory_unavailable",
+            "Docker container inventory changed during audit",
+            True,
+        ),
+    ),
+)
+def test_preactivation_rollout_does_not_retry_other_docker_inventory_errors(
+    error_code: str,
+    error_message: str,
+    subclassed: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    class DerivedBrokerError(BrokerError):
+        pass
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = True
+    controller.dft_stabilized = True
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    error_type = DerivedBrokerError if subclassed else BrokerError
+    error = error_type(error_code, error_message)
+    calls = 0
+
+    def unavailable(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", unavailable)
+
+    with pytest.raises(BrokerError) as captured:
+        controller._audit(client)
+
+    assert captured.value is error
+    assert calls == 1
+    assert controller.full_audit_generation == 0
+
+
+@pytest.mark.parametrize(
+    "last_activation_generation",
+    (
+        pytest.param(0, id="activation"),
+        pytest.param(1, id="steady"),
+    ),
+)
+def test_docker_inventory_churn_outside_preactivation_rollout_fails_closed(
+    last_activation_generation: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = True
+    controller.dft_stabilized = True
+    controller.dft_warmup_open = False
+    controller.activation_generation = 1
+    controller.last_audit_activation_generation = last_activation_generation
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    error = BrokerError(
+        "gpu_claim_inventory_unavailable",
+        "Docker container inventory changed during audit",
+    )
+    calls = 0
+
+    def changing_inventory(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    monkeypatch.setattr(
+        session,
+        "consistent_broker_snapshot",
+        changing_inventory,
+    )
+
+    with pytest.raises(BrokerError) as captured:
+        controller._audit(client)
+
+    assert captured.value is error
+    assert calls == 1
+    assert controller.full_audit_generation == 0
+
+
+def test_activation_signal_during_docker_inventory_churn_disables_rollout_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = True
+    controller.dft_stabilized = True
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    error = BrokerError(
+        "gpu_claim_inventory_unavailable",
+        "Docker container inventory changed during audit",
+    )
+    calls = 0
+
+    def changing_inventory(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        controller.activation_generation += 1
+        raise error
+
+    monkeypatch.setattr(
+        session,
+        "consistent_broker_snapshot",
+        changing_inventory,
+    )
+
+    with pytest.raises(BrokerError) as captured:
+        controller._audit(client)
+
+    assert captured.value is error
+    assert calls == 1
+    assert controller.activation_generation == 1
+    assert controller.full_audit_generation == 0
+
+
 def test_preactivation_rollout_returns_stable_foreign_evidence_immediately(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
