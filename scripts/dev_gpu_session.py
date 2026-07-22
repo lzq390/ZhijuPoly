@@ -49,6 +49,14 @@ _PREACTIVATION_DOCKER_CHURN_MESSAGES = frozenset(
         "Docker container fingerprint changed during audit",
     }
 )
+_TRANSIENT_MPS_INVENTORY_MESSAGES = frozenset(
+    {
+        # The MPS control daemon can emit one torn client row while that
+        # client disconnects.  Discard the whole audit round; never accept or
+        # normalize the malformed row itself.
+        "MPS ps row is invalid",
+    }
+)
 
 
 class DevGpuSessionError(RuntimeError):
@@ -1420,7 +1428,7 @@ class SessionController:
         return authority
 
     def _mps_authority_for_audit(self, client: Any) -> Any:
-        """Retry only a proven lazy MPS membership CAS during DFT warmup."""
+        """Discard torn inventories and retry proven DFT warmup churn."""
 
         from ops.gpu_broker.broker import BrokerError
 
@@ -1429,6 +1437,15 @@ class SessionController:
             try:
                 return self._mps_authority()
             except BrokerError as exc:
+                if (
+                    type(exc) is BrokerError
+                    and exc.code == "mps_control_unavailable"
+                    and len(exc.args) == 1
+                    and exc.args[0] in _TRANSIENT_MPS_INVENTORY_MESSAGES
+                ):
+                    raise _AuditRoundChanged(
+                        "MPS client inventory changed while it was serialized"
+                    ) from exc
                 if (
                     exc.code != "mps_authority_changed"
                     or not self.dft_warmup_open

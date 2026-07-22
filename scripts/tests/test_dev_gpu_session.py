@@ -773,6 +773,83 @@ def test_audit_marks_unleased_private_mps_client_foreign(tmp_path, monkeypatch) 
     assert reasons == ("unknown private MPS client PID(s): 8123",)
 
 
+def test_full_audit_discards_one_torn_mps_client_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    authority = mps_snapshot()
+    calls = 0
+
+    def snapshot():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS ps row is invalid",
+            )
+        return authority
+
+    monkeypatch.setattr(controller, "_mps_authority", snapshot)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert calls == 4
+    assert controller.full_audit_generation == 1
+
+
+def test_full_audit_fails_closed_on_repeated_torn_mps_client_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    calls = 0
+
+    def snapshot():
+        nonlocal calls
+        calls += 1
+        raise BrokerError(
+            "mps_control_unavailable",
+            "MPS ps row is invalid",
+        )
+
+    monkeypatch.setattr(controller, "_mps_authority", snapshot)
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="authority changed throughout trailing full audits",
+    ):
+        controller._audit(client)
+
+    assert calls == session.FULL_AUDIT_ATTEMPTS
+
+
 def test_direct_user_scope_does_not_expand_managed_workload_authority() -> None:
     lease_id = "a1" * 16
     workload_pid = 8123
