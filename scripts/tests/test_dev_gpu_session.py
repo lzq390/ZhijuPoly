@@ -2557,6 +2557,151 @@ def test_full_audit_seals_only_one_live_exact_dft_residency(
 
 
 @pytest.mark.parametrize(
+    "stabilization_generation",
+    (
+        pytest.param(1, id="completed-generation"),
+        pytest.param(2, id="late-signal"),
+    ),
+)
+def test_completed_dft_stabilization_is_not_resealed_during_backend_rollout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stabilization_generation: int,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker import server
+
+    dft_record = dft_residency_record()
+    backend_record = backend_residency_record()
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 5,
+        "draining": False,
+        "leases": [dft_record, backend_record],
+    }
+    claim = backend_docker_claim()
+    authority = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({6101, 8123}),
+        declarers=frozenset(
+            {mps_declarer(7000), mps_declarer(7001, 101)}
+        ),
+    )
+    snapshot = session.TargetSnapshot((7001,), (claim,), ())
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.plane_ready_published = True
+    controller.dft_stabilization_generation = stabilization_generation
+    controller.last_audit_stabilization_generation = 1
+    controller.dft_stabilized = True
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=snapshot,
+        authority=authority,
+        trailing_compute=frozenset({7001}),
+        trailing_docker=(claim,),
+    )
+    dft_control_group = scope_control_group("d1" * 16, uid=1001)
+    monkeypatch.setattr(server, "read_boot_id", lambda: "boot")
+    monkeypatch.setattr(
+        server,
+        "read_process_start_ticks",
+        lambda pid: 333 if pid == 6101 else 456,
+    )
+    monkeypatch.setattr(
+        server,
+        "_read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        server.os,
+        "getpgid",
+        lambda pid: 6101 if pid == 6101 else 8123,
+    )
+    monkeypatch.setattr(
+        server,
+        "_read_unified_process_cgroup",
+        lambda pid: (
+            "/docker/backend.scope" if pid == 6101 else dft_control_group
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "_pid_is_or_descends_from",
+        lambda pid, ancestor: pid == ancestor and pid in {6101, 8123},
+    )
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert controller.dft_stabilized is True
+    assert controller.dft_warmup_open is False
+    assert (
+        controller.last_audit_stabilization_generation
+        == stabilization_generation
+    )
+    assert controller.full_audit_generation == 1
+
+
+def test_pending_dft_stabilization_still_requires_a_sole_residency_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from ops.gpu_broker.broker import Lease
+
+    residency = Lease(**dft_residency_record())
+    execution = replace(
+        residency,
+        lease_id="e1" * 16,
+        fencing_token=2,
+        request_id="dft:dev:execution:stabilization-race",
+        kind="execution",
+        parent_lease_id=residency.lease_id,
+    )
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 3,
+        "draining": False,
+        "leases": [residency.public_dict(), execution.public_dict()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_stabilization_generation = 1
+    authority = dft_resident_authority()
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=session.TargetSnapshot((7001,), (), ()),
+        authority=authority,
+        trailing_compute=frozenset({7001}),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_exact_dft_descendants",
+        lambda _status, pids: pids == frozenset({8123}),
+    )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="DFT stabilization encountered another Broker lease",
+    ):
+        controller._audit(client)
+
+    assert controller.dft_stabilized is False
+    assert controller.dft_warmup_open is True
+    assert controller.last_audit_stabilization_generation == 0
+    assert controller.full_audit_generation == 0
+
+
+@pytest.mark.parametrize(
     ("authority", "snapshot", "trailing_compute", "message"),
     (
         (

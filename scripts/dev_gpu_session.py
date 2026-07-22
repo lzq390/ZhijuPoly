@@ -2187,6 +2187,13 @@ class SessionController:
         for round_index in range(audit_attempts):
             captured_activation = self.activation_generation
             captured_stabilization = self.dft_stabilization_generation
+            pending_dft_seal = (
+                self.dft_warmup_open
+                and not self.dft_stabilized
+                and captured_stabilization > 0
+                and captured_stabilization
+                > self.last_audit_stabilization_generation
+            )
             fast_guard = None
             churn_retries = 8
             churn_timeout = STEADY_CHURN_TIMEOUT_SECONDS
@@ -2796,7 +2803,7 @@ class SessionController:
                     )
 
                 if (
-                    captured_stabilization > 0
+                    pending_dft_seal
                     and captured_stabilization
                     == self.dft_stabilization_generation
                 ):
@@ -2836,7 +2843,7 @@ class SessionController:
                     self.last_audit_activation_generation = captured_activation
                     self.last_audit_stabilization_generation = captured_stabilization
                     if (
-                        captured_stabilization > 0
+                        pending_dft_seal
                         and captured_stabilization
                         == self.dft_stabilization_generation
                     ):
