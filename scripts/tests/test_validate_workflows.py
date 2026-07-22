@@ -66,6 +66,84 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             failures,
         )
 
+    def test_gpu_session_compose_render_is_governed(self) -> None:
+        failures: list[str] = []
+        policy.validate_gpu_session_compose_policy(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+
+    def test_gpu_session_compose_render_requires_exact_inputs(self) -> None:
+        controls = (
+            (
+                'NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"',
+                'NEXPOLY_DEV_GPU_SESSION_ID: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"',
+                "fixed development GPU session identity",
+            ),
+            (
+                "NEXPOLY_GPU_STATE_ROOT: /tmp/nexpoly-gpu-state",
+                "NEXPOLY_GPU_STATE_ROOT: /tmp/other-gpu-state",
+                "isolated development GPU state root",
+            ),
+            (
+                "docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+                "-f docker-compose.dev-gpu-session.yml config --quiet",
+                "docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+                "config --quiet",
+                "base, development, and GPU-session Compose render",
+            ),
+        )
+        for marker, replacement, expected_failure in controls:
+            with self.subTest(marker=marker):
+                changed = CI_TEXT.replace(marker, replacement, 1)
+                failures: list[str] = []
+                policy.validate_gpu_session_compose_policy(changed, failures)
+                self.assertTrue(
+                    any(expected_failure in failure for failure in failures),
+                    failures,
+                )
+
+    def test_gpu_session_compose_render_rejects_commented_controls(self) -> None:
+        controls = (
+            '          NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"',
+            "          NEXPOLY_GPU_STATE_ROOT: /tmp/nexpoly-gpu-state",
+            "          docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+            "-f docker-compose.dev-gpu-session.yml config --quiet",
+        )
+        changed = CI_TEXT
+        for line in controls:
+            changed = changed.replace(line, "          # " + line.strip(), 1)
+
+        failures: list[str] = []
+        policy.validate_gpu_session_compose_policy(changed, failures)
+
+        self.assertTrue(
+            any("active fixed development GPU session identity" in failure for failure in failures),
+            failures,
+        )
+        self.assertTrue(
+            any("active isolated development GPU state root" in failure for failure in failures),
+            failures,
+        )
+        self.assertTrue(
+            any("active base, development, and GPU-session Compose render" in failure for failure in failures),
+            failures,
+        )
+
+    def test_gpu_session_compose_render_rejects_disabled_step(self) -> None:
+        marker = "      - name: Validate Compose configurations\n"
+        changed = CI_TEXT.replace(
+            marker,
+            marker + "        if: ${{ false }}\n",
+            1,
+        )
+
+        failures: list[str] = []
+        policy.validate_gpu_session_compose_policy(changed, failures)
+
+        self.assertTrue(
+            any("must not define an if condition" in failure for failure in failures),
+            failures,
+        )
+
 
 class ExactBTransitionPolicyTests(unittest.TestCase):
     def test_current_transition_and_mutable_digest_are_complete(self) -> None:

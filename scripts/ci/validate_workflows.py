@@ -21,6 +21,8 @@ PINNED_ACTION = re.compile(
 )
 ANY_ACTION = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)")
 WORKFLOW_JOB_HEADER = re.compile(r"(?m)^  (?P<name>[A-Za-z0-9_-]+):\n")
+WORKFLOW_STEP_ITEM = re.compile(r"(?m)^      - ")
+WORKFLOW_STEP_KEY = re.compile(r"^        [A-Za-z_][A-Za-z0-9_-]*:")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SAFE_DATASET = re.compile(r"^[A-Za-z0-9_.-]+$")
 FROZEN_ASSET_DOC = re.compile(
@@ -150,6 +152,112 @@ def validate_complete_history_checkouts(
             "only script-tests, production-alias-integration, bridge-validation, "
             "and exact-b-bridge may request complete Git history"
         )
+
+
+def validate_gpu_session_compose_policy(
+    ci_text: str,
+    failures: list[str],
+) -> None:
+    body = workflow_job_body(ci_text, "policy", failures)
+    if body is None:
+        return
+    step_header = "      - name: Validate Compose configurations\n"
+    if body.count(step_header) != 1:
+        failures.append(
+            "policy job must contain exactly one active Validate Compose "
+            "configurations step"
+        )
+        return
+    step_start = body.index(step_header)
+    next_step = WORKFLOW_STEP_ITEM.search(body, step_start + len(step_header))
+    step = body[step_start : next_step.start() if next_step else len(body)]
+    step_lines = step.splitlines()
+    if any(re.match(r"^        if\s*:", line) for line in step_lines):
+        failures.append(
+            "Validate Compose configurations step must not define an if condition"
+        )
+
+    env_header = "        env:"
+    run_header = "        run: |"
+    env_positions = [
+        index for index, line in enumerate(step_lines) if line == env_header
+    ]
+    run_positions = [
+        index for index, line in enumerate(step_lines) if line == run_header
+    ]
+    if len(env_positions) != 1 or len(run_positions) != 1:
+        failures.append(
+            "Validate Compose configurations step must contain one exact env "
+            "block followed by one exact literal run block"
+        )
+        return
+    env_position = env_positions[0]
+    run_position = run_positions[0]
+    next_env_sibling = next(
+        (
+            index
+            for index in range(env_position + 1, len(step_lines))
+            if WORKFLOW_STEP_KEY.match(step_lines[index])
+        ),
+        len(step_lines),
+    )
+    if next_env_sibling != run_position:
+        failures.append(
+            "Validate Compose configurations env block must be immediately "
+            "followed by its literal run block"
+        )
+        return
+    run_end = next(
+        (
+            index
+            for index in range(run_position + 1, len(step_lines))
+            if WORKFLOW_STEP_KEY.match(step_lines[index])
+        ),
+        len(step_lines),
+    )
+    env_lines = step_lines[env_position + 1 : run_position]
+    run_lines = step_lines[run_position + 1 : run_end]
+    env_controls = (
+        (
+            "fixed development GPU session identity",
+            '          NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"',
+        ),
+        (
+            "isolated development GPU state root",
+            "          NEXPOLY_GPU_STATE_ROOT: /tmp/nexpoly-gpu-state",
+        ),
+    )
+    run_controls = (
+        (
+            "base, development, and GPU-session Compose render",
+            "          docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+            "-f docker-compose.dev-gpu-session.yml config --quiet",
+        ),
+    )
+    for label, line in env_controls:
+        if env_lines.count(line) != 1:
+            failures.append(
+                f"Validate Compose configurations env must contain exactly one "
+                f"active {label} control"
+            )
+    for label, line in run_controls:
+        if run_lines.count(line) != 1:
+            failures.append(
+                f"Validate Compose configurations run block must contain exactly "
+                f"one active {label} control"
+            )
+    require_ordered_markers(
+        "\n".join(env_lines),
+        env_controls,
+        label="development GPU-session Compose environment",
+        failures=failures,
+    )
+    require_ordered_markers(
+        "\n".join(run_lines),
+        run_controls,
+        label="development GPU-session Compose render",
+        failures=failures,
+    )
 
 
 def _unique_shell_section(
@@ -526,6 +634,7 @@ def main() -> int:
         failures,
     )
     validate_complete_history_checkouts(ci_text, failures)
+    validate_gpu_session_compose_policy(ci_text, failures)
     validate_exact_b_job(ci_text, failures)
 
     for forbidden in (

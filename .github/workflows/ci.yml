@@ -106,10 +106,13 @@ jobs:
           LAB_DATA_POSTGRES_DSN: postgresql://nexpoly:ci-only@lab-postgres:5432/nexpoly
           BYTEFF2_ROOT: /tmp/byteff2
           POLYTAO_ENABLED: "true"
+          NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"
+          NEXPOLY_GPU_STATE_ROOT: /tmp/nexpoly-gpu-state
         run: |
           install -m 600 /dev/null "$NEXPOLY_APP_ENV_FILE"
           docker compose -f docker-compose.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.dev-gpu-session.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
           GPU_BROKER_ENVIRONMENT=dev docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.gpu-governed.yml config --quiet
           GPU_BROKER_ENVIRONMENT=prod docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.gpu-governed.yml config --quiet
