@@ -55,6 +55,30 @@
 }
 
 @layer utilities {
+  .project-list-scrollbar {
+    scrollbar-color: rgba(148, 163, 184, 0.28) transparent;
+    scrollbar-width: thin;
+  }
+
+  .project-list-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .project-list-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .project-list-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.28);
+    background-clip: padding-box;
+    border: 1px solid transparent;
+    border-radius: 999px;
+  }
+
+  .project-list-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.42);
+  }
+
   .text-balance {
     text-wrap: balance;
   }

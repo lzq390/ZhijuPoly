@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { ChevronDown, Menu, MessageSquare, X } from "lucide-react";
+import { ChevronDown, Folder, Menu, MessageSquare, Star, X } from "lucide-react";
+import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge";
 
 export type AppShellModuleItem = {
   id: string;
@@ -22,10 +23,24 @@ type AppShellProps = {
   fullBleed?: boolean;
   moduleGroups: AppShellModuleGroup[];
   onOpenHome: () => void;
+  projects: OpenScienceProjectSummary[];
+  activeProjectDirectory: string | null;
+  isProjectBridgeReady: boolean;
+  onOpenProject: (directory: string) => void;
   children: ReactNode;
 };
 
-export function AppShell({ activeModule, fullBleed = false, moduleGroups, onOpenHome, children }: AppShellProps) {
+export function AppShell({
+  activeModule,
+  fullBleed = false,
+  moduleGroups,
+  onOpenHome,
+  projects,
+  activeProjectDirectory,
+  isProjectBridgeReady,
+  onOpenProject,
+  children
+}: AppShellProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const isHome = activeModule === "home";
   const isResearchWorkbench = activeModule === "explorer" || activeModule === "databaseQuery";
@@ -53,6 +68,10 @@ export function AppShell({ activeModule, fullBleed = false, moduleGroups, onOpen
           onToggleGroup={(title) =>
             setExpandedGroupTitle((current) => (current === title ? null : title))
           }
+          projects={projects}
+          activeProjectDirectory={activeProjectDirectory}
+          isProjectBridgeReady={isProjectBridgeReady}
+          onOpenProject={(directory) => handleNavigate(() => onOpenProject(directory))}
         />
       </aside>
 
@@ -73,6 +92,10 @@ export function AppShell({ activeModule, fullBleed = false, moduleGroups, onOpen
               onToggleGroup={(title) =>
                 setExpandedGroupTitle((current) => (current === title ? null : title))
               }
+              projects={projects}
+              activeProjectDirectory={activeProjectDirectory}
+              isProjectBridgeReady={isProjectBridgeReady}
+              onOpenProject={(directory) => handleNavigate(() => onOpenProject(directory))}
               trailing={
                 <button
                   type="button"
@@ -121,6 +144,10 @@ type SidebarContentProps = {
   onNavigate: (action: () => void) => void;
   expandedGroupTitle: string | null;
   onToggleGroup: (title: string) => void;
+  projects: OpenScienceProjectSummary[];
+  activeProjectDirectory: string | null;
+  isProjectBridgeReady: boolean;
+  onOpenProject: (directory: string) => void;
   trailing?: ReactNode;
 };
 
@@ -130,6 +157,10 @@ function SidebarContent({
   onNavigate,
   expandedGroupTitle,
   onToggleGroup,
+  projects,
+  activeProjectDirectory,
+  isProjectBridgeReady,
+  onOpenProject,
   trailing
 }: SidebarContentProps) {
   return (
@@ -144,8 +175,8 @@ function SidebarContent({
         {trailing}
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto pr-0.5" aria-label="业务模块">
-        <div className="flex flex-col gap-1 pb-3 pt-1">
+      <nav className="max-h-[55%] shrink-0 overflow-y-auto pr-0.5" aria-label="业务模块">
+        <div className="flex flex-col gap-1 pb-2 pt-1">
           {moduleGroups.map((group) => {
             const isExpanded = expandedGroupTitle === group.title;
 
@@ -206,6 +237,65 @@ function SidebarContent({
           })}
         </div>
       </nav>
+
+      <section className="flex min-h-0 flex-1 flex-col border-t border-slate-200/80 pt-2" aria-labelledby="project-list-title">
+        <div className="flex shrink-0 items-center gap-2 px-2 py-1.5">
+          <Folder className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+          <h2 id="project-list-title" className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">
+            项目
+          </h2>
+          {isProjectBridgeReady ? (
+            <span className="ml-auto text-[11px] tabular-nums text-slate-400">{projects.length}</span>
+          ) : null}
+        </div>
+
+        <div className="project-list-scrollbar min-h-0 flex-1 overflow-y-auto pr-0.5">
+          {!isProjectBridgeReady ? (
+            <p className="px-2 py-2 text-xs text-slate-400">正在同步项目…</p>
+          ) : projects.length === 0 ? (
+            <p className="px-2 py-2 text-xs text-slate-400">暂无项目</p>
+          ) : (
+            <div className="space-y-0.5 pb-2">
+              {projects.map((project) => {
+                const isActive = project.directory === activeProjectDirectory;
+                return (
+                  <button
+                    key={project.directory}
+                    type="button"
+                    data-project-directory={project.directory}
+                    aria-current={isActive ? "page" : undefined}
+                    title={project.directory}
+                    className={[
+                      "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
+                      isActive
+                        ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200"
+                        : "text-slate-600 hover:bg-white/78 hover:text-slate-950"
+                    ].join(" ")}
+                    onClick={() => onOpenProject(project.directory)}
+                  >
+                    <Folder
+                      className={[
+                        "h-4 w-4 shrink-0",
+                        isActive ? "text-teal-700" : "text-slate-400 group-hover:text-teal-700"
+                      ].join(" ")}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-1">
+                        <span className="block min-w-0 flex-1 truncate text-[13px] font-medium">{project.name}</span>
+                        {project.favorite ? (
+                          <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-500" aria-hidden="true" />
+                        ) : null}
+                      </span>
+                      <span className="block truncate text-[11px] text-slate-400">{project.displayPath}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

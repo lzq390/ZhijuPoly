@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Atom,
@@ -12,7 +12,7 @@ import {
   Sparkles
 } from "lucide-react";
 import { AppShell, type AppShellModuleGroup } from "./components/AppShell";
-import { AgentWorkspaceHomePage } from "./components/AgentWorkspaceHomePage";
+import { AgentWorkspaceHomePage, agentWorkspaceUrl } from "./components/AgentWorkspaceHomePage";
 import { ConditionalGenerationPage } from "./components/ConditionalGenerationPage";
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
@@ -33,6 +33,10 @@ import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
 import { standardizeSmiles } from "./services/api";
 import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
+import {
+  createOpenScienceProjectBridge,
+  type OpenScienceProjectsSnapshot
+} from "./lib/openScienceProjectBridge";
 import {
   type KnowledgeNavigationRequest,
   type PredictableProperty,
@@ -292,6 +296,17 @@ export default function App() {
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const predict = usePredict();
   const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>([]);
+  const agentWorkspaceIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [projectSnapshot, setProjectSnapshot] = useState<OpenScienceProjectsSnapshot | null>(null);
+  const projectBridge = useMemo(
+    () =>
+      createOpenScienceProjectBridge({
+        workspaceUrl: agentWorkspaceUrl(),
+        getFrameWindow: () => agentWorkspaceIframeRef.current?.contentWindow ?? null,
+        onSnapshot: setProjectSnapshot
+      }),
+    []
+  );
 
   async function getCurrentSmiles() {
     const fallbackSmiles = smiles.trim();
@@ -352,6 +367,12 @@ export default function App() {
       window.history.scrollRestoration = previousScrollRestoration;
     };
   }, []);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => projectBridge.handleMessage(event);
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [projectBridge]);
 
   function applyRoute(route: AppRoute) {
     setActiveModule(route.module);
@@ -548,6 +569,11 @@ export default function App() {
     }
   }
 
+  function openAgentProject(directory: string) {
+    navigate({ module: "home", datasetKey: null });
+    projectBridge.openProject(directory);
+  }
+
   const moduleGroups: AppShellModuleGroup[] = [
     {
       title: "结构",
@@ -707,9 +733,19 @@ export default function App() {
       fullBleed={isFullBleedModule}
       moduleGroups={moduleGroups}
       onOpenHome={() => navigate({ module: "home", datasetKey: null })}
+      projects={projectSnapshot?.projects ?? []}
+      activeProjectDirectory={projectSnapshot?.activeDirectory ?? null}
+      isProjectBridgeReady={projectSnapshot !== null}
+      onOpenProject={openAgentProject}
     >
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
-        <AgentWorkspaceHomePage />
+        <AgentWorkspaceHomePage
+          iframeRef={agentWorkspaceIframeRef}
+          onLoad={() => {
+            setProjectSnapshot(null);
+            projectBridge.requestProjects();
+          }}
+        />
       </div>
 
       {activeModule === "databaseQuery" ? (
