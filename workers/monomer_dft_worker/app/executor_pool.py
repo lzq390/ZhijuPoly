@@ -46,6 +46,9 @@ from .schemas import ArtifactDescriptor, JobSubmitRequest
 
 
 EXECUTOR_START_TIMEOUT_SECONDS = 60.0
+EXECUTOR_SHUTDOWN_ACK_TIMEOUT_SECONDS = 2.0
+EXECUTOR_SHUTDOWN_EXIT_TIMEOUT_SECONDS = 5.0
+EXECUTOR_BROKER_TERMINATION_EXIT_TIMEOUT_SECONDS = 2.0
 LEASE_HEARTBEAT_SECONDS = 1.0
 PRIMARY_REBUILD_ATTEMPTS = 3
 PRIMARY_REBUILD_BACKOFF_SECONDS = 0.1
@@ -425,33 +428,63 @@ class SubprocessExecutor:
                     stream.close()
                     self.stream = None
                 return
-            if process.poll() is None and prepare_termination is not None:
-                # A registered GPU executor must remain stable while the Broker
-                # revalidates its exact scope, terminates its MPS clients,
-                # freezes the scope, and cgroup-kills only that owned workload.
-                # Asking the child to shut itself down first would race those
-                # checks with CUDA-context and systemd-scope teardown.
+            process_was_live = process.poll() is None
+            graceful_attempted = process_was_live and not force
+            graceful_confirmed = False
+            graceful_error: Exception | None = None
+            if graceful_attempted and stream is not None:
+                previous_timeout: float | None = None
+                restore_timeout = False
+                try:
+                    previous_timeout = stream.gettimeout()
+                    restore_timeout = True
+                    stream.settimeout(EXECUTOR_SHUTDOWN_ACK_TIMEOUT_SECONDS)
+                    send_frame(stream, protocol_message("shutdown"))
+                    stopped = receive_frame(stream)
+                    validate_message(stopped, "stopped")
+                    graceful_confirmed = True
+                except Exception as exc:
+                    graceful_error = exc
+                finally:
+                    if restore_timeout:
+                        with contextlib.suppress(Exception):
+                            stream.settimeout(previous_timeout)
+                if graceful_confirmed:
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        process.wait(timeout=EXECUTOR_SHUTDOWN_EXIT_TIMEOUT_SECONDS)
+            elif graceful_attempted:
+                graceful_error = ExecutorProtocolError(
+                    "executor voluntary shutdown IPC is unavailable"
+                )
+
+            if process.poll() is not None and graceful_attempted and not graceful_confirmed:
+                # An EOF/exit without the exact stopped frame is ambiguous: do
+                # not convert that race into release authority. The pool will
+                # abandon and quarantine the lease instead.
+                raise GpuTerminationUnsafe(
+                    "executor exited before voluntary shutdown was proven"
+                ) from graceful_error
+
+            if process.poll() is None:
+                if prepare_termination is None:
+                    raise GpuTerminationUnsafe(
+                        "executor is still live and Broker-prepared termination "
+                        "is unavailable"
+                    ) from graceful_error
+                # A forced/broken child, or an idle child that did not finish
+                # the exact voluntary handshake, falls back to the Broker's
+                # MPS proof and exact owned cgroup kill. No Worker-side signal
+                # is ever sent.
                 prepare_termination()
                 with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=2.0)
+                    process.wait(
+                        timeout=EXECUTOR_BROKER_TERMINATION_EXIT_TIMEOUT_SECONDS
+                    )
                 if process.poll() is None:
                     raise GpuTerminationUnsafe(
                         "executor process remained live after Broker-prepared "
                         "termination"
                     )
-            elif not force and process.poll() is None and stream is not None:
-                with contextlib.suppress(Exception):
-                    send_frame(stream, protocol_message("shutdown"))
-                    ready, _, _ = select.select([stream], [], [], 2.0)
-                    if ready:
-                        validate_message(receive_frame(stream), "stopped")
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=3.0)
-            if process.poll() is None:
-                raise GpuTerminationUnsafe(
-                    "executor is still live and Broker-prepared termination "
-                    "was unavailable"
-                )
             else:
                 with contextlib.suppress(Exception):
                     process.wait(timeout=0)

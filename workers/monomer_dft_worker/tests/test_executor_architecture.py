@@ -487,7 +487,11 @@ send_frame(stream, protocol_message('stopped'))
         else:
             assert scope_arguments.exists() is False
     finally:
-        executor.close()
+        executor.close(
+            prepare_termination=lambda: pytest.fail(
+                "normal graceful shutdown must not call Broker prepare"
+            )
+        )
 
 
 def test_executor_spawn_and_preload_share_one_start_deadline(
@@ -617,48 +621,56 @@ def test_forced_executor_close_never_signals_before_mps_prepare(
     assert process_group_signals == []
 
 
-def test_broker_governed_close_prepares_before_child_shutdown_and_only_reaps(
+def test_hung_graceful_shutdown_falls_back_to_exact_broker_prepare(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[tuple[str, object]] = []
 
-    class BrokerKilledProcess:
-        pid = 654_320
+    class HungProcess:
+        pid = 654_322
 
         def __init__(self) -> None:
             self.prepared = False
-            self.reaped = False
+            self.exited = False
 
         def poll(self):
-            return -9 if self.reaped else None
+            return -9 if self.exited else None
 
         def wait(self, timeout=0):
             events.append(("wait", timeout))
-            if self.prepared:
-                self.reaped = True
-                return -9
-            raise subprocess.TimeoutExpired("executor", timeout)
+            if not self.prepared:
+                raise subprocess.TimeoutExpired("executor", timeout)
+            self.exited = True
+            return -9
 
     class Stream:
+        timeout: float | None = None
+
+        def gettimeout(self):
+            return self.timeout
+
+        def settimeout(self, timeout) -> None:
+            self.timeout = timeout
+
         def close(self) -> None:
             events.append(("stream_close", None))
 
     lease = GpuLease(
-        lease_id="ordered-termination",
+        lease_id="hung-graceful",
         gpu_index="1",
         gpu_uuid="GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
         kind="residency",
         budget_mib=4096,
         active_thread_percentage=50,
-        fencing_token=1,
+        fencing_token=7,
         preferred=True,
-        broker_instance_id="broker-ordered-termination",
+        broker_instance_id="broker-hung-graceful",
     )
     executor = SubprocessExecutor(
         settings=_settings(tmp_path), lease=lease, mode="primary", model="aimnet2"
     )
-    process = BrokerKilledProcess()
+    process = HungProcess()
     executor.process = process  # type: ignore[assignment]
     executor.pid = process.pid
     executor.stream = Stream()  # type: ignore[assignment]
@@ -669,9 +681,9 @@ def test_broker_governed_close_prepares_before_child_shutdown_and_only_reaps(
         lambda _stream, message: events.append(("send", message["type"])),
     )
     monkeypatch.setattr(
-        executor_pool_module.select,
-        "select",
-        lambda *_args, **_kwargs: ([], [], []),
+        executor_pool_module,
+        "receive_frame",
+        lambda _stream: (_ for _ in ()).throw(socket.timeout("hung")),
     )
     monkeypatch.setattr(
         executor_pool_module.os,
@@ -680,20 +692,89 @@ def test_broker_governed_close_prepares_before_child_shutdown_and_only_reaps(
     )
 
     def prepare() -> None:
-        events.append(("prepare", None))
+        events.append(("prepare", lease.lease_id))
         process.prepared = True
 
     executor.close(force=False, prepare_termination=prepare)
 
     assert events == [
-        ("prepare", None),
-        ("wait", 2.0),
-        ("wait", 0),
+        ("send", "shutdown"),
+        ("prepare", lease.lease_id),
+        (
+            "wait",
+            executor_pool_module.EXECUTOR_BROKER_TERMINATION_EXIT_TIMEOUT_SECONDS,
+        ),
         ("stream_close", None),
     ]
-    assert process.reaped is True
+    assert process.exited is True
     assert executor.process is None
     assert executor.stream is None
+
+
+def test_exit_during_broker_prepare_race_remains_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RacingProcess:
+        pid = 654_323
+
+        def __init__(self) -> None:
+            self.exited = False
+
+        def poll(self):
+            return 0 if self.exited else None
+
+        def wait(self, timeout=0):
+            raise subprocess.TimeoutExpired("executor", timeout)
+
+    class Stream:
+        timeout: float | None = None
+
+        def gettimeout(self):
+            return self.timeout
+
+        def settimeout(self, timeout) -> None:
+            self.timeout = timeout
+
+        def close(self) -> None:
+            raise AssertionError("failed close must retain the suspect IPC handle")
+
+    lease = GpuLease(
+        lease_id="prepare-exit-race",
+        gpu_index="1",
+        gpu_uuid="GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+        kind="residency",
+        budget_mib=4096,
+        active_thread_percentage=50,
+        fencing_token=9,
+        preferred=True,
+        broker_instance_id="broker-prepare-exit-race",
+    )
+    executor = SubprocessExecutor(
+        settings=_settings(tmp_path), lease=lease, mode="primary", model="aimnet2"
+    )
+    process = RacingProcess()
+    stream = Stream()
+    executor.process = process  # type: ignore[assignment]
+    executor.pid = process.pid
+    executor.stream = stream  # type: ignore[assignment]
+    monkeypatch.setattr(executor_pool_module, "send_frame", lambda *_args: None)
+    monkeypatch.setattr(
+        executor_pool_module,
+        "receive_frame",
+        lambda _stream: (_ for _ in ()).throw(socket.timeout("hung")),
+    )
+
+    def raced_prepare() -> None:
+        process.exited = True
+        raise GpuTerminationUnsafe("Broker could not prove the raced workload")
+
+    with pytest.raises(GpuTerminationUnsafe, match="raced workload"):
+        executor.close(force=False, prepare_termination=raced_prepare)
+
+    assert process.exited is True
+    assert executor.process is process
+    assert executor.stream is stream
 
 
 def test_broker_governed_close_of_naturally_exited_process_is_signal_free(
