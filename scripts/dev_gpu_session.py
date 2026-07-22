@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import os
@@ -29,6 +30,7 @@ RUNTIME_ROOT = REPO_ROOT / ".runtime"
 SESSION_ROOT = RUNTIME_ROOT / "gpu-session"
 RUNS_ROOT = SESSION_ROOT / "runs"
 CONTROLLER_RECORD = SESSION_ROOT / "controller.json"
+CONTROLLER_START_LOCK = SESSION_ROOT / "controller-start.lock"
 GPU_ROOT = RUNTIME_ROOT / "gpu-resource"
 RESERVATIONS_SOURCE = REPO_ROOT / "ops/config/gpu-external-reservations.json"
 POLICY_FILE = REPO_ROOT / "ops/config/gpu-broker-policy.json"
@@ -42,7 +44,8 @@ DFT_WARMUP_CHURN_TIMEOUT_SECONDS = 90.0
 STEADY_CHURN_TIMEOUT_SECONDS = 12.0
 FULL_AUDIT_ATTEMPTS = 3
 PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS = 8
-LATE_SESSION_OWNED_STOP_ATTEMPTS = 8
+DEFAULT_DFT_START_TIMEOUT_SECONDS = 60.0
+LATE_SESSION_OWNED_STOP_GRACE_SECONDS = 5.0
 _PREACTIVATION_DOCKER_CHURN_MESSAGES = frozenset(
     {
         "Docker container inventory changed during audit",
@@ -164,7 +167,7 @@ def process_argv(pid: int, *, proc_root: Path = Path("/proc")) -> tuple[str, ...
 
 
 def _atomic_json(path: Path, value: dict[str, Any], *, replace: bool = True) -> None:
-    if path.is_symlink() or (not replace and path.exists()):
+    if path.is_symlink():
         raise DevGpuSessionError(f"unsafe preexisting session record: {path}")
     descriptor, raw_temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(raw_temporary)
@@ -175,7 +178,19 @@ def _atomic_json(path: Path, value: dict[str, Any], *, replace: bool = True) -> 
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1
-        os.replace(temporary, path)
+        if replace:
+            os.replace(temporary, path)
+        else:
+            # Publish a fully written inode with a kernel-enforced no-clobber
+            # operation.  An exists()+replace sequence lets two controller
+            # creators both pass the check and silently replace each other.
+            try:
+                os.link(temporary, path, follow_symlinks=False)
+            except FileExistsError as exc:
+                raise DevGpuSessionError(
+                    f"unsafe preexisting session record: {path}"
+                ) from exc
+            temporary.unlink()
         parent_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(parent_descriptor)
@@ -188,6 +203,38 @@ def _atomic_json(path: Path, value: dict[str, Any], *, replace: bool = True) -> 
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def _open_private_lock(path: Path) -> int:
+    """Open a stable owner-private lock inode without following a symlink."""
+
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
+    except OSError as exc:
+        raise DevGpuSessionError(
+            f"controller start lock is unavailable: {path}"
+        ) from exc
+    try:
+        metadata = os.fstat(descriptor)
+        path_metadata = path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_gid != os.getegid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or (metadata.st_dev, metadata.st_ino)
+            != (path_metadata.st_dev, path_metadata.st_ino)
+        ):
+            raise DevGpuSessionError(f"controller start lock is unsafe: {path}")
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
 
 
 def _load_private_json(path: Path) -> dict[str, Any]:
@@ -1144,7 +1191,18 @@ class SessionController:
         self.plane_ready_published = False
         self.plane_cleaned = False
         self.owned_components_stopped = False
+        self.final_owned_components_stop_confirmed = False
         self.late_session_owned_stop_attempts = 0
+        self.late_session_owned_stop_deadline: float | None = None
+        raw_dft_start_timeout = os.environ.get(
+            "MONOMER_DFT_START_TIMEOUT_SECONDS",
+            str(int(DEFAULT_DFT_START_TIMEOUT_SECONDS)),
+        )
+        if re.fullmatch(r"[1-9][0-9]*", raw_dft_start_timeout) is None:
+            raise DevGpuSessionError(
+                "MONOMER_DFT_START_TIMEOUT_SECONDS must be a positive integer"
+            )
+        self.dft_start_timeout_seconds = float(raw_dft_start_timeout)
         self.cpu_restored = False
         self.mps_started = False
         self.audit_sequence = 0
@@ -1610,6 +1668,7 @@ class SessionController:
         snapshot: TargetSnapshot,
         authorized_mps_declarers: frozenset[Any] = frozenset(),
         authorized_mps_client_pids: frozenset[int] = frozenset(),
+        authorized_mps_server_pids: frozenset[int] = frozenset(),
     ) -> tuple[
         frozenset[int],
         frozenset[int],
@@ -1641,6 +1700,7 @@ class SessionController:
                 uuid=GPU_UUID,
                 leases=leases,
                 authorized_mps_declarers=authorized_mps_declarers,
+                authorized_mps_server_pids=authorized_mps_server_pids,
             ):
                 managed_systemd_claims.add(
                     (claim.scope, claim.unit, claim.control_group)
@@ -1781,17 +1841,24 @@ class SessionController:
         return lease.lease_id, lease.fencing_token
 
     def _retry_late_session_owned_stop(self, status: dict[str, Any]) -> bool:
-        """Retry only a proven late session-owned DFT lease, with a hard cap."""
+        """Retry a proven late DFT lease through its complete startup window."""
 
         if (
             not self.automatic_recovery
             or not self.owned_components_stopped
-            or self.late_session_owned_stop_attempts
-            >= LATE_SESSION_OWNED_STOP_ATTEMPTS
         ):
             return False
         identity = self._exact_session_owned_late_dft_lease(status)
         if identity is None:
+            return False
+        now = time.monotonic()
+        if self.late_session_owned_stop_deadline is None:
+            self.late_session_owned_stop_deadline = (
+                now
+                + self.dft_start_timeout_seconds
+                + LATE_SESSION_OWNED_STOP_GRACE_SECONDS
+            )
+        if now >= self.late_session_owned_stop_deadline:
             return False
         self.late_session_owned_stop_attempts += 1
         succeeded = self._recovery_command("gpu-session-stop-owned-internal")
@@ -1805,14 +1872,40 @@ class SessionController:
 
     def _cleanup(self, client: Any) -> bool:
         drained = client.set_draining(True)
-        if any(
+        gpu1_lease_active = any(
             isinstance(lease, dict) and lease.get("gpu_uuid") == GPU_UUID
             for lease in drained.get("leases", [])
-        ):
+        )
+        if gpu1_lease_active:
+            self.final_owned_components_stop_confirmed = False
             if self._retry_late_session_owned_stop(drained):
                 return False
             self._state("cleanup-blocked", reason="NexPoly GPU1 leases are still active")
             return False
+        if self.automatic_recovery and not self.final_owned_components_stop_confirmed:
+            # The first stop-owned sweep can race a DFT start before its PID,
+            # socket, session record, or Broker lease appears.  Once the lease
+            # inventory looks empty, cross the Worker ctl lock one final time;
+            # the shell command succeeds only after all three runtime identity
+            # paths are absent.  Re-read Broker admission afterward so this is
+            # a two-sided fence around the complete late-start window.
+            if not self._recovery_command("gpu-session-stop-owned-internal"):
+                return False
+            self.owned_components_stopped = True
+            drained = client.set_draining(True)
+            gpu1_lease_active = any(
+                isinstance(lease, dict) and lease.get("gpu_uuid") == GPU_UUID
+                for lease in drained.get("leases", [])
+            )
+            if gpu1_lease_active:
+                if self._retry_late_session_owned_stop(drained):
+                    return False
+                self._state(
+                    "cleanup-blocked",
+                    reason="NexPoly GPU1 leases appeared during the final owned stop",
+                )
+                return False
+            self.final_owned_components_stop_confirmed = True
         if self.mps_started:
             self._mps_command("stop")
             self.mps_started = False
@@ -2315,8 +2408,9 @@ class SessionController:
                     ) = self._managed_workload_authority(
                         status,
                         snapshot,
-                        authority.gpu_declarers,
-                        observed_initial_clients,
+                        authorized_mps_declarers=authority.gpu_declarers,
+                        authorized_mps_client_pids=observed_initial_clients,
+                        authorized_mps_server_pids=authority.server_pids,
                     )
                     classified_expected_declarers = (
                         authority.gpu_declarers
@@ -2627,8 +2721,9 @@ class SessionController:
                     ) = self._managed_workload_authority(
                         final_status,
                         trailing_snapshot,
-                        authority.gpu_declarers,
-                        clients_after,
+                        authorized_mps_declarers=authority.gpu_declarers,
+                        authorized_mps_client_pids=clients_after,
+                        authorized_mps_server_pids=authority.server_pids,
                     )
                     classified_expected_declarers = (
                         authority.gpu_declarers
@@ -3250,6 +3345,26 @@ def up_execute() -> dict[str, Any]:
     _private_directory(RUNTIME_ROOT, create=False)
     _private_directory(SESSION_ROOT, create=True)
     _private_directory(RUNS_ROOT, create=True)
+    lock_descriptor = _open_private_lock(CONTROLLER_START_LOCK)
+    try:
+        try:
+            fcntl.flock(
+                lock_descriptor,
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+        except BlockingIOError as exc:
+            raise DevGpuSessionError(
+                "GPU session controller startup is already in progress"
+            ) from exc
+        return _up_execute_locked()
+    finally:
+        try:
+            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_descriptor)
+
+
+def _up_execute_locked() -> dict[str, Any]:
     if CONTROLLER_RECORD.exists() or CONTROLLER_RECORD.is_symlink():
         raise DevGpuSessionError("GPU session controller record already exists")
     source_sha, source_tree = _git_identity()

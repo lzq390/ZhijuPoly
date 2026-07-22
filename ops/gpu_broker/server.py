@@ -1085,6 +1085,37 @@ def _systemd_cgroup_contains(candidate: str, control_group: str) -> bool:
     )
 
 
+def _systemd_cgroup_is_user_manager_sibling(
+    candidate: str,
+    manager_control_group: str,
+) -> bool:
+    """Recognize one canonical login scope directly beside user@.service."""
+
+    if (
+        not isinstance(candidate, str)
+        or not candidate.startswith("/")
+        or candidate == "/"
+        or candidate.endswith("/")
+        or "//" in candidate
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in candidate
+        )
+        or any(part in {"", ".", ".."} for part in candidate.split("/")[1:])
+    ):
+        return False
+    user_slice_control_group, separator, _manager_unit = (
+        manager_control_group.rpartition("/")
+    )
+    if not separator:
+        return False
+    return re.fullmatch(
+        re.escape(user_slice_control_group)
+        + r"/session-[A-Za-z0-9][A-Za-z0-9_-]*\.scope",
+        candidate,
+    ) is not None
+
+
 def _read_control_group_processes(
     control_group: str,
     *,
@@ -2745,6 +2776,7 @@ def claim_is_exact_dev_gpu1_host_workloads_scope(
     uuid: str,
     leases: tuple[Lease, ...],
     authorized_mps_declarers: frozenset[SystemdGpuDeclarer] = frozenset(),
+    authorized_mps_server_pids: frozenset[int] = frozenset(),
 ) -> bool:
     """Prove the complete GPU part of the broad UID 1001 manager claim.
 
@@ -2764,11 +2796,17 @@ def claim_is_exact_dev_gpu1_host_workloads_scope(
         or claim.control_group != user_manager_control_group(1001)
         or claim.gpu_uuids != frozenset({uuid})
         or bool(claim.static_gpu_uuids)
-        or claim.active_gpu_uuids != frozenset({uuid})
+        or not isinstance(claim.active_gpu_uuids, frozenset)
+        or not claim.active_gpu_uuids <= frozenset({uuid})
         or not isinstance(claim.live_gpu_declarers, tuple)
         or not isinstance(claim.process_pids, frozenset)
         or not isinstance(leases, tuple)
         or not isinstance(authorized_mps_declarers, frozenset)
+        or not isinstance(authorized_mps_server_pids, frozenset)
+        or any(
+            not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+            for pid in authorized_mps_server_pids
+        )
     ):
         return False
     target_declarers = claim.live_gpu_declarers
@@ -2793,6 +2831,9 @@ def claim_is_exact_dev_gpu1_host_workloads_scope(
         )
         or len({declarer.pid for declarer in authorized_mps_declarers})
         != len(authorized_mps_declarers)
+        or not authorized_mps_server_pids.issubset(
+            {declarer.pid for declarer in authorized_mps_declarers}
+        )
     ):
         return False
     target_set = frozenset(target_declarers)
@@ -2811,7 +2852,43 @@ def claim_is_exact_dev_gpu1_host_workloads_scope(
             claim.control_group,
         )
     )
-    if not claim_mps_declarers <= target_set:
+    # Under MPS, NVML attributes compute activity to the MPS server.  When the
+    # descriptor-owned control/server processes inherit the controller's direct
+    # login scope beside ``user@1001.service``, the exact user-manager claim
+    # therefore has no active GPU UUID despite containing the declared DFT/MD
+    # clients.  The empty set is safe only for that proven sibling layout; all
+    # other claims retain the exact active-GPU requirement.
+    active_gpu_attribution_is_exact = claim.active_gpu_uuids == frozenset({uuid})
+    sibling_mps_control_declarers = frozenset(
+        declarer
+        for declarer in authorized_mps_declarers
+        if declarer.pid not in authorized_mps_server_pids
+    )
+    sibling_mps_cgroups = frozenset(
+        declarer.process_cgroup for declarer in authorized_mps_declarers
+    )
+    empty_active_gpu_attribution_is_exact_sibling_mps = (
+        not claim.active_gpu_uuids
+        and len(authorized_mps_server_pids) == 1
+        and len(authorized_mps_declarers) == 2
+        and len(sibling_mps_control_declarers) == 1
+        and len(sibling_mps_cgroups) == 1
+        and not claim_mps_declarers
+        and all(
+            _systemd_cgroup_is_user_manager_sibling(
+                declarer.process_cgroup,
+                claim.control_group,
+            )
+            for declarer in authorized_mps_declarers
+        )
+    )
+    if (
+        not claim_mps_declarers <= target_set
+        or not (
+            active_gpu_attribution_is_exact
+            or empty_active_gpu_attribution_is_exact_sibling_mps
+        )
+    ):
         return False
 
     authority_entries: list[tuple[Lease, tuple[str, int, int, str]]] = []
@@ -3468,6 +3545,7 @@ class ExternalGpuGuard:
                     uuid=uuid,
                     leases=leases,
                     authorized_mps_declarers=mps_authority.gpu_declarers,
+                    authorized_mps_server_pids=mps_authority.server_pids,
                 ):
                     descriptor_host_workload_pids.update(
                         declarer.pid

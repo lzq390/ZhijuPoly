@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -151,6 +153,25 @@ gpu_session_up_rollback
             capture_output=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    @unittest.skipUnless(
+        (REPOSITORY_ROOT / ".env.dev").is_file(),
+        "public dev CLI requires the owner-local .env.dev",
+    )
+    def test_public_gpu_session_up_dry_run_passes_through_flock_wrapper(self) -> None:
+        environment = dict(os.environ)
+        environment.pop("NEXPOLY_DEV_GPU_SESSION_EXECUTE", None)
+        completed = subprocess.run(
+            [str(SCRIPT), "gpu-session-up"],
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["action"], "up")
+        self.assertIs(payload["dry_run"], True)
 
     def test_embedded_smoke_python_has_valid_syntax(self) -> None:
         lines = SCRIPT.read_text(encoding="utf-8").splitlines()
@@ -394,6 +415,289 @@ gpu_session_up_rollback
             '"$DFT_WORKER_SOCKET_DIR/worker.sock"',
         ):
             self.assertIn(marker, stopped_body)
+
+    def test_gpu_session_requires_explicit_lowercase_true_md_before_locking(self) -> None:
+        requirement = self._shell_function_source("gpu_session_require_md_worker")
+        wrapper = self._shell_function_source("gpu_session_up_locked")
+        self.assertIn('${MONOMER_MD_DEV_WORKER_ENABLED:-}', requirement)
+        self.assertLess(
+            wrapper.index("gpu_session_require_md_worker"),
+            wrapper.index("gpu_session_prepare_up_lock"),
+        )
+        self.assertLess(
+            wrapper.index("gpu_session_prepare_up_lock"),
+            wrapper.index("flock --exclusive --nonblock --close"),
+        )
+        self.assertLess(
+            wrapper.index("flock --exclusive --nonblock --close"),
+            wrapper.index("gpu-session-up-locked-internal"),
+        )
+        dispatch = SCRIPT.read_text(encoding="utf-8")
+        internal = dispatch[
+            dispatch.index("  gpu-session-up-locked-internal)"):
+            dispatch.index("  gpu-session-status)")
+        ]
+        self.assertLess(
+            internal.index("gpu_session_assert_up_lock_held"),
+            internal.index("gpu_session_require_md_worker"),
+        )
+        self.assertLess(
+            internal.index("gpu_session_require_md_worker"),
+            internal.index("gpu_session_up"),
+        )
+        self.assertIn("MONOMER_MD_DEV_WORKER_ENABLED=true", DEV_ENV_EXAMPLE.read_text())
+
+        with tempfile.TemporaryDirectory() as raw:
+            marker = Path(raw) / "side-effects"
+            for value in (None, "false", "TRUE"):
+                assignment = (
+                    "unset MONOMER_MD_DEV_WORKER_ENABLED"
+                    if value is None
+                    else f"MONOMER_MD_DEV_WORKER_ENABLED={value}"
+                )
+                completed = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        f"""
+set -eu
+{assignment}
+ROOT_DIR=/must-not-run
+GPU_SESSION_UP_LOCK=/must-not-run
+SIDE_EFFECT_MARKER="$1"
+{requirement}
+{wrapper}
+gpu_session_prepare_up_lock() {{ printf 'prepare\n' >> "$SIDE_EFFECT_MARKER"; }}
+flock() {{ printf 'flock\n' >> "$SIDE_EFFECT_MARKER"; }}
+gpu_session_up_locked
+""",
+                        "md-contract-harness",
+                        str(marker),
+                    ],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 2, (value, completed.stderr))
+                self.assertIn("requires MONOMER_MD_DEV_WORKER_ENABLED=true", completed.stderr)
+                self.assertFalse(marker.exists(), value)
+
+    def test_gpu_session_flock_close_does_not_leak_to_a_long_lived_child(self) -> None:
+        wrapper = self._shell_function_source("gpu_session_up_locked")
+        self.assertIn("--close", wrapper)
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            lock = root / "gpu-session-up.lock"
+            child_record = root / "child.pid"
+            completed = subprocess.run(
+                [
+                    "flock",
+                    "--exclusive",
+                    "--nonblock",
+                    "--close",
+                    str(lock),
+                    "bash",
+                    "-c",
+                    'sleep 30 </dev/null >/dev/null 2>&1 & printf "%s\\n" "$!" > "$1"',
+                    "flock-child",
+                    str(child_record),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            child_pid = int(child_record.read_text(encoding="ascii"))
+            try:
+                os.kill(child_pid, 0)
+                contender = subprocess.run(
+                    ["flock", "--exclusive", "--nonblock", str(lock), "true"],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(contender.returncode, 0, contender.stderr)
+            finally:
+                try:
+                    os.kill(child_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+    def test_gpu_session_flock_allows_only_one_independent_start_process(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            lock = root / "gpu-session-up.lock"
+            lifecycle = root / "lifecycle.log"
+            command = (
+                'printf "start\\n" >> "$1"; '
+                'sleep 0.4; printf "finish\\n" >> "$1"'
+            )
+            winner = subprocess.Popen(
+                [
+                    "flock", "--exclusive", "--nonblock", "--close",
+                    "--conflict-exit-code", "75", str(lock),
+                    "bash", "-c", command, "gpu-up", str(lifecycle),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for _ in range(100):
+                if lifecycle.exists():
+                    break
+                subprocess.run(["sleep", "0.01"], check=True)
+            loser = subprocess.run(
+                [
+                    "flock", "--exclusive", "--nonblock", "--close",
+                    "--conflict-exit-code", "75", str(lock),
+                    "bash", "-c", command, "gpu-up", str(lifecycle),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            stdout, stderr = winner.communicate(timeout=5)
+            lifecycle_lines = lifecycle.read_text(encoding="ascii").splitlines()
+
+        self.assertEqual(winner.returncode, 0, (stdout, stderr))
+        self.assertEqual(loser.returncode, 75, loser.stderr)
+        self.assertEqual(lifecycle_lines, ["start", "finish"])
+
+    def test_internal_gpu_start_route_requires_its_exact_flock_parent(self) -> None:
+        assertion = self._shell_function_source("gpu_session_assert_up_lock_held")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            route = scripts / "dev_server_gpu.sh"
+            lock = root / "gpu-session-up.lock"
+            marker = root / "admitted"
+            ready = root / "holder-ready"
+            route.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+GPU_SESSION_PYTHON=/usr/bin/python3
+GPU_SESSION_UP_LOCK="$ROOT_DIR/gpu-session-up.lock"
+"""
+                + assertion
+                + """
+[[ "${1:-}" == "gpu-session-up-locked-internal" ]]
+gpu_session_assert_up_lock_held
+printf 'admitted\n' > "$ROUTE_MARKER"
+""",
+                encoding="utf-8",
+            )
+            route.chmod(0o700)
+            environment = {**os.environ, "ROUTE_MARKER": str(marker)}
+            valid = subprocess.run(
+                [
+                    "/usr/bin/flock", "--exclusive", "--nonblock", "--close",
+                    "--conflict-exit-code", "75", str(lock), str(route),
+                    "gpu-session-up-locked-internal",
+                ],
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+            self.assertTrue(marker.exists())
+            marker.unlink()
+
+            holder = subprocess.Popen(
+                [
+                    "/usr/bin/flock", "--exclusive", "--nonblock", "--close",
+                    str(lock), "bash", "-c",
+                    'printf ready > "$1"; exec sleep 30', "holder", str(ready),
+                ],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                for _ in range(100):
+                    if ready.exists():
+                        break
+                    subprocess.run(["sleep", "0.01"], check=True)
+                self.assertTrue(ready.exists())
+                bypass = subprocess.run(
+                    [str(route), "gpu-session-up-locked-internal"],
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertNotEqual(bypass.returncode, 0)
+                self.assertIn("parent identity differs", bypass.stderr)
+                self.assertFalse(marker.exists())
+            finally:
+                try:
+                    os.killpg(holder.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                holder.wait(timeout=5)
+
+    def test_dft_no_socket_cleanup_uses_ctl_lock_and_exact_pid_stop(self) -> None:
+        function = self._shell_function_source("dft_worker_drain_stop")
+        stopped_assertion = self._shell_function_source(
+            "dft_worker_assert_stopped_runtime"
+        )
+        controller_source = (
+            REPOSITORY_ROOT / "scripts" / "monomer_dft_worker_ctl.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("process_has_exact_session_environment", controller_source)
+        for marker in (
+            "NEXPOLY_DEV_GPU1_ONLY_SESSION=1",
+            "NEXPOLY_DEV_GPU_SESSION_ID=$NEXPOLY_DEV_GPU_SESSION_ID",
+            "MONOMER_DFT_WORKER_VERSION=$MONOMER_DFT_WORKER_VERSION",
+            "NEXPOLY_DFT_GPU_DEVICE=1",
+            "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=",
+        ):
+            self.assertIn(marker, controller_source)
+        self.assertIn('flock -n 9 || fail "another worker control operation is in progress"', controller_source)
+
+        for busy, expected_result in ((True, 1), (False, 0)):
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                runtime = root / ".runtime"
+                socket_dir = runtime / "monomer-dft-worker-socket"
+                socket_dir.mkdir(parents=True)
+                pid_file = runtime / "monomer-dft-worker.pid"
+                pid_file.write_text("123 456\n", encoding="ascii")
+                ctl_log = root / "ctl.log"
+                harness = f"""
+set -u
+ROOT_DIR="$1"
+DFT_WORKER_SOCKET_DIR="$2"
+DFT_WORKER_SESSION_RECORD="$3"
+CTL_LOG="$4"
+BUSY="$5"
+
+{stopped_assertion}
+{function}
+
+dft_worker_ctl() {{
+  printf '%s\n' "$*" >> "$CTL_LOG"
+  [[ "$BUSY" != "true" ]] || return 1
+  rm -f -- "$ROOT_DIR/.runtime/monomer-dft-worker.pid"
+}}
+dft_worker_session_record() {{ return 9; }}
+
+set +e
+dft_worker_drain_stop
+result=$?
+set -e
+printf 'result=%s\n' "$result"
+"""
+                completed = subprocess.run(
+                    [
+                        "bash", "-c", harness, "dft-cleanup-harness",
+                        str(root), str(socket_dir),
+                        str(runtime / "monomer-dft-worker.session.json"),
+                        str(ctl_log), "true" if busy else "false",
+                    ],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn(f"result={expected_result}", completed.stdout)
+                self.assertEqual(ctl_log.read_text(encoding="ascii").splitlines(), ["stop"])
+                self.assertEqual(pid_file.exists(), busy)
 
     def test_gpu_session_up_pins_the_exact_backend_candidate_identity(self) -> None:
         body = self._shell_function_source("gpu_session_up")

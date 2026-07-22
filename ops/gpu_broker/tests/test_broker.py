@@ -4900,6 +4900,7 @@ def test_exact_broad_claim_accepts_descriptor_mps_in_sibling_login_scope(
     claim = replace(
         claim,
         process_pids=claim.process_pids - mps_pids,
+        active_gpu_uuids=frozenset(),
         live_gpu_declarers=tuple(
             declarer
             for declarer in claim.live_gpu_declarers
@@ -4914,7 +4915,130 @@ def test_exact_broad_claim_accepts_descriptor_mps_in_sibling_login_scope(
         uuid=EXPECTED_GPU_UUIDS[1],
         leases=leases,
         authorized_mps_declarers=authority.gpu_declarers,
+        authorized_mps_server_pids=authority.server_pids,
     ) is True
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ("no-server", "server-without-declarer", "split-scope", "extra-control"),
+)
+def test_exact_broad_claim_empty_active_requires_exact_sibling_mps_server(
+    fault: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    sibling_cgroup = "/user.slice/user-1001.slice/session-33690.scope"
+    sibling_mps_declarers = frozenset(
+        replace(declarer, process_cgroup=sibling_cgroup)
+        for declarer in authority.gpu_declarers
+    )
+    server_pid = next(iter(authority.server_pids))
+    control = next(
+        declarer
+        for declarer in sibling_mps_declarers
+        if declarer.pid != server_pid
+    )
+    server = next(
+        declarer
+        for declarer in sibling_mps_declarers
+        if declarer.pid == server_pid
+    )
+    server_pids = authority.server_pids
+    if fault == "no-server":
+        server_pids = frozenset()
+        sibling_mps_declarers = frozenset({control})
+    elif fault == "server-without-declarer":
+        server_pids = frozenset({9999})
+    elif fault == "split-scope":
+        sibling_mps_declarers = frozenset(
+            {
+                control,
+                replace(
+                    server,
+                    process_cgroup=(
+                        "/user.slice/user-1001.slice/session-33691.scope"
+                    ),
+                ),
+            }
+        )
+    else:
+        sibling_mps_declarers = sibling_mps_declarers | {
+            replace(control, pid=7003, process_start_ticks=303)
+        }
+    mps_pids = frozenset(declarer.pid for declarer in authority.gpu_declarers)
+    claim = replace(
+        claim,
+        process_pids=claim.process_pids - mps_pids,
+        active_gpu_uuids=frozenset(),
+        live_gpu_declarers=tuple(
+            declarer
+            for declarer in claim.live_gpu_declarers
+            if declarer.pid not in mps_pids
+        ),
+    )
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=leases,
+        authorized_mps_declarers=sibling_mps_declarers,
+        authorized_mps_server_pids=server_pids,
+    ) is False
+
+
+@pytest.mark.parametrize(
+    "sibling_cgroup",
+    (
+        None,
+        "/user.slice/user-1001.slice/user@1001.service/nexpoly-mps.scope",
+        "/user.slice/user-1001.slice",
+        "/user.slice/user-1001.slice/nexpoly-mps.scope",
+        "/user.slice/user-1001.slice/session-33690.scope/nested.scope",
+        "/user.slice/user-1002.slice/session-33690.scope",
+        "/user.slice/user-1001.slice/session-33690.scope/../foreign.scope",
+    ),
+)
+def test_exact_broad_claim_rejects_empty_active_gpu_without_exact_mps_sibling(
+    sibling_cgroup: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    mps_pids = frozenset(declarer.pid for declarer in authority.gpu_declarers)
+    claim = replace(
+        claim,
+        process_pids=claim.process_pids - mps_pids,
+        active_gpu_uuids=frozenset(),
+        live_gpu_declarers=tuple(
+            declarer
+            for declarer in claim.live_gpu_declarers
+            if declarer.pid not in mps_pids
+        ),
+    )
+    authority = replace(
+        authority,
+        gpu_declarers=(
+            frozenset()
+            if sibling_cgroup is None
+            else frozenset(
+                replace(declarer, process_cgroup=sibling_cgroup)
+                for declarer in authority.gpu_declarers
+            )
+        ),
+    )
+
+    assert claim_is_exact_dev_gpu1_host_workloads_scope(
+        claim,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+        leases=leases,
+        authorized_mps_declarers=authority.gpu_declarers,
+    ) is False
 
 
 def test_exact_broad_claim_rejects_sibling_mps_forged_into_manager_claim(
@@ -5367,6 +5491,103 @@ def test_external_guard_admits_md_beside_mixed_dft_and_mps_broad_claim(
         "md",
         "dev",
     ) is False
+
+
+def test_external_guard_admits_descriptor_mps_sibling_with_empty_active_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    sibling_cgroup = "/user.slice/user-1001.slice/session-33690.scope"
+    sibling_mps_declarers = frozenset(
+        replace(declarer, process_cgroup=sibling_cgroup)
+        for declarer in authority.gpu_declarers
+    )
+    mps_pids = frozenset(declarer.pid for declarer in authority.gpu_declarers)
+    claim = replace(
+        claim,
+        process_pids=claim.process_pids - mps_pids,
+        active_gpu_uuids=frozenset(),
+        live_gpu_declarers=tuple(
+            declarer
+            for declarer in claim.live_gpu_declarers
+            if declarer.pid not in mps_pids
+        ),
+    )
+    authority = replace(authority, gpu_declarers=sibling_mps_declarers)
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {
+            EXPECTED_GPU_UUIDS[1]: authority.server_pids,
+        },
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (claim,),
+        unmanaged_mps_client_query=lambda *_args: False,
+        mps_authority_query=lambda *_args: authority,
+        allow_descriptor_mps_authority=True,
+        cache_seconds=0,
+    )
+
+    assert guard(
+        1,
+        EXPECTED_GPU_UUIDS[1],
+        leases,
+        _owner(),
+        "md",
+        "dev",
+    ) is False
+
+
+def test_external_guard_blocks_empty_active_sibling_without_mps_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leases, claim, authority = _mixed_dft_md_mps_user_manager_claim(
+        monkeypatch
+    )
+    sibling_cgroup = "/user.slice/user-1001.slice/session-33690.scope"
+    server_pids = authority.server_pids
+    control = next(
+        declarer
+        for declarer in authority.gpu_declarers
+        if declarer.pid not in server_pids
+    )
+    sibling_control = replace(control, process_cgroup=sibling_cgroup)
+    mps_pids = frozenset(declarer.pid for declarer in authority.gpu_declarers)
+    claim = replace(
+        claim,
+        process_pids=claim.process_pids - mps_pids,
+        active_gpu_uuids=frozenset(),
+        live_gpu_declarers=tuple(
+            declarer
+            for declarer in claim.live_gpu_declarers
+            if declarer.pid not in mps_pids
+        ),
+    )
+    authority = replace(
+        authority,
+        server_pids=frozenset(),
+        gpu_declarers=frozenset({sibling_control}),
+    )
+    guard = ExternalGpuGuard(
+        ExternalReservationPolicy(frozenset(), {}, {}),
+        process_query=lambda: {EXPECTED_GPU_UUIDS[1]: frozenset()},
+        docker_claim_query=lambda: (),
+        systemd_claim_query=lambda: (claim,),
+        unmanaged_mps_client_query=lambda *_args: False,
+        mps_authority_query=lambda *_args: authority,
+        allow_descriptor_mps_authority=True,
+        cache_seconds=0,
+    )
+
+    assert guard(
+        1,
+        EXPECTED_GPU_UUIDS[1],
+        leases,
+        _owner(),
+        "md",
+        "dev",
+    ) is True
 
 
 @pytest.mark.parametrize("registered_client", (True, False))

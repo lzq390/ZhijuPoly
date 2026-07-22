@@ -18,6 +18,43 @@ if str(SCRIPTS_ROOT) not in sys.path:
 import dev_gpu_session as session  # noqa: E402
 
 
+def test_atomic_json_no_clobber_preserves_the_first_complete_record(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "controller.json"
+    first = {"schema_version": 1, "winner": "first"}
+    session._atomic_json(path, first, replace=False)
+
+    with pytest.raises(session.DevGpuSessionError, match="preexisting"):
+        session._atomic_json(
+            path,
+            {"schema_version": 1, "winner": "second"},
+            replace=False,
+        )
+
+    assert json.loads(path.read_text(encoding="utf-8")) == first
+    assert (path.stat().st_mode & 0o777) == 0o600
+    assert path.stat().st_nlink == 1
+    assert not list(tmp_path.glob(".controller.json.*"))
+
+
+def test_controller_creation_lock_is_nonblocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock = tmp_path / "controller-start.lock"
+    descriptor = session._open_private_lock(lock)
+    session.fcntl.flock(descriptor, session.fcntl.LOCK_EX | session.fcntl.LOCK_NB)
+    monkeypatch.setattr(session, "CONTROLLER_START_LOCK", lock)
+    monkeypatch.setattr(session, "_private_directory", lambda *_args, **_kwargs: None)
+    try:
+        with pytest.raises(session.DevGpuSessionError, match="already in progress"):
+            session.up_execute()
+    finally:
+        session.fcntl.flock(descriptor, session.fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
 def empty_snapshot() -> session.TargetSnapshot:
     return session.TargetSnapshot((), (), ())
 
@@ -1035,6 +1072,42 @@ def test_exact_dft_user_manager_claim_authorizes_only_residency_declarers(
     assert mps_nvml == mps_clients == frozenset(
         {workload_pid, compiler_pid}
     )
+
+
+def test_controller_empty_active_sibling_requires_verified_mps_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    status = {"leases": [dft_residency_record()]}
+    sibling_control = replace(
+        mps_declarer(7000),
+        process_cgroup="/user.slice/user-1001.slice/session-42.scope",
+    )
+    authority = mps_snapshot(declarers=frozenset({sibling_control}))
+    snapshot = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        authority,
+        session.TargetSnapshot((8123,), (), ()),
+    )
+    claim = replace(
+        snapshot.systemd_claims[0],
+        active_gpu_uuids=frozenset(),
+    )
+    snapshot = session.TargetSnapshot(
+        snapshot.process_pids,
+        snapshot.docker_claims,
+        (claim,),
+        snapshot.process_declarers,
+    )
+
+    assert session.SessionController._managed_workload_authority(
+        status,
+        snapshot,
+        authorized_mps_declarers=authority.gpu_declarers,
+        authorized_mps_server_pids=authority.server_pids,
+    ) == (frozenset(), frozenset(), frozenset())
 
 
 @pytest.mark.parametrize("fault", ("reserved", "suspect", "owner"))
@@ -3429,7 +3502,7 @@ def test_exact_trailing_dft_systemd_churn_uses_warmup_budget_beyond_three_rounds
     monkeypatch.setattr(
         controller,
         "_managed_workload_authority",
-        lambda _status, snapshot, *_args: (
+        lambda _status, snapshot, *_args, **_kwargs: (
             frozenset(),
             frozenset(),
             frozenset(
@@ -4346,8 +4419,21 @@ def test_full_audit_accepts_dft_claim_with_mps_in_sibling_login_scope(
     run = tmp_path / ("run-" + "d" * 32)
     run.mkdir()
     controller = session.SessionController(run, "a" * 40, "b" * 40)
-    before = mps_snapshot(declarers=frozenset({mps_declarer(7000)}))
-    after = dft_resident_authority()
+    sibling_login_scope = "/user.slice/user-1001.slice/session-42.scope"
+    control = replace(
+        mps_declarer(7000),
+        process_cgroup=sibling_login_scope,
+    )
+    server = replace(
+        mps_declarer(7001, 101),
+        process_cgroup=sibling_login_scope,
+    )
+    before = mps_snapshot(declarers=frozenset({control}))
+    after = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({8123}),
+        declarers=frozenset({control, server}),
+    )
     captured = dft_broad_snapshot(
         monkeypatch,
         status,
@@ -4362,6 +4448,7 @@ def test_full_audit_accepts_dft_claim_with_mps_in_sibling_login_scope(
         (
             replace(
                 claim,
+                active_gpu_uuids=frozenset(),
                 process_pids=claim.process_pids - mps_pids,
                 live_gpu_declarers=tuple(
                     declarer
@@ -6016,6 +6103,78 @@ def test_automatic_recovery_restores_cpu_before_waiting_for_mps_cleanup(
     ]
 
 
+def test_cleanup_requires_final_owned_stop_after_late_no_lease_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.automatic_recovery = True
+    controller.owned_components_stopped = True
+    controller.broker = SimpleNamespace(terminate=lambda: None, wait=lambda timeout: 0)
+    commands: list[str] = []
+    drain_reads = 0
+
+    def set_draining(_value: bool) -> dict[str, object]:
+        nonlocal drain_reads
+        drain_reads += 1
+        return {"draining": True, "leases": []}
+
+    monkeypatch.setattr(
+        controller,
+        "_recovery_command",
+        lambda command: commands.append(command) or True,
+    )
+    monkeypatch.setattr(controller, "_cleanup_owned_tree", lambda: None)
+    monkeypatch.setattr(session, "GPU_ROOT", tmp_path / "gpu-resource")
+
+    assert controller._cleanup(SimpleNamespace(set_draining=set_draining)) is True
+    assert commands == ["gpu-session-stop-owned-internal"]
+    assert drain_reads == 2
+    assert controller.final_owned_components_stop_confirmed is True
+
+
+def test_cleanup_keeps_plane_when_final_owned_stop_reports_dft_residue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.automatic_recovery = True
+    controller.owned_components_stopped = True
+    controller.broker = SimpleNamespace(terminate=lambda: None, wait=lambda timeout: 0)
+    results = iter((False, True))
+    commands: list[str] = []
+    cleaned: list[bool] = []
+    client = SimpleNamespace(
+        set_draining=lambda _value: {"draining": True, "leases": []}
+    )
+
+    def recover(command: str) -> bool:
+        commands.append(command)
+        return next(results)
+
+    monkeypatch.setattr(controller, "_recovery_command", recover)
+    monkeypatch.setattr(
+        controller,
+        "_cleanup_owned_tree",
+        lambda: cleaned.append(True),
+    )
+    monkeypatch.setattr(session, "GPU_ROOT", tmp_path / "gpu-resource")
+
+    assert controller._cleanup(client) is False
+    assert cleaned == []
+    assert controller.final_owned_components_stop_confirmed is False
+    assert controller._cleanup(client) is True
+    assert commands == [
+        "gpu-session-stop-owned-internal",
+        "gpu-session-stop-owned-internal",
+    ]
+    assert cleaned == [True]
+
+
 def _late_dft_status(
     monkeypatch: pytest.MonkeyPatch,
     controller: session.SessionController,
@@ -6255,13 +6414,14 @@ def test_automatic_recovery_rescans_and_stops_late_exact_dft_lease(
         "gpu-session-stop-owned-internal",
         "gpu-session-restore-cpu-internal",
         "gpu-session-stop-owned-internal",
+        "gpu-session-stop-owned-internal",
     ]
     assert controller.late_session_owned_stop_attempts == 1
     assert states[-1] == "recovered"
 
 
 @pytest.mark.parametrize("command_succeeds", (True, False))
-def test_late_exact_dft_stop_retries_are_bounded(
+def test_late_exact_dft_stop_retries_through_start_timeout_plus_grace(
     command_succeeds: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6269,6 +6429,7 @@ def test_late_exact_dft_stop_retries_are_bounded(
     run = tmp_path / ("run-" + "d" * 32)
     run.mkdir()
     controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_start_timeout_seconds = 3.0
     controller.automatic_recovery = True
     controller.owned_components_stopped = True
     status = {
@@ -6292,17 +6453,40 @@ def test_late_exact_dft_stop_retries_are_bounded(
         "_state",
         lambda value, **_kwargs: states.append(value),
     )
+    ticks = iter((100.0, 107.9, 108.0, 109.0))
+    monkeypatch.setattr(session.time, "monotonic", lambda: next(ticks))
     client = SimpleNamespace(set_draining=lambda _value: status)
 
-    results = [
-        controller._cleanup(client)
-        for _ in range(session.LATE_SESSION_OWNED_STOP_ATTEMPTS + 2)
-    ]
+    results = [controller._cleanup(client) for _ in range(4)]
 
-    assert results == [False] * (session.LATE_SESSION_OWNED_STOP_ATTEMPTS + 2)
-    assert commands == ["gpu-session-stop-owned-internal"] * 8
-    assert controller.late_session_owned_stop_attempts == 8
+    assert results == [False] * 4
+    assert commands == ["gpu-session-stop-owned-internal"] * 2
+    assert controller.late_session_owned_stop_attempts == 2
+    assert controller.late_session_owned_stop_deadline == 108.0
     assert states[-2:] == ["cleanup-blocked", "cleanup-blocked"]
+
+
+def test_late_dft_deadline_uses_configured_start_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MONOMER_DFT_START_TIMEOUT_SECONDS", "120")
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.automatic_recovery = True
+    controller.owned_components_stopped = True
+    monkeypatch.setattr(
+        controller,
+        "_exact_session_owned_late_dft_lease",
+        lambda _status: ("d1" * 16, 1),
+    )
+    monkeypatch.setattr(controller, "_recovery_command", lambda _command: True)
+    monkeypatch.setattr(controller, "_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(session.time, "monotonic", lambda: 10.0)
+
+    assert controller._retry_late_session_owned_stop({}) is True
+    assert controller.late_session_owned_stop_deadline == 135.0
 
 
 def test_ready_is_published_only_after_explicit_activation(

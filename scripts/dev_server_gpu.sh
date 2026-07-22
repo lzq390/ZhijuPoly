@@ -63,6 +63,7 @@ GPU_COMPOSE=(
 )
 GPU_SESSION_CONTROLLER="$ROOT_DIR/scripts/dev_gpu_session.py"
 GPU_SESSION_PYTHON="/usr/bin/python3"
+GPU_SESSION_UP_LOCK="$ROOT_DIR/.runtime/gpu-session-up.lock"
 [[ -x "$GPU_SESSION_PYTHON" ]] && "$GPU_SESSION_PYTHON" -I -c \
   'import os, signal; assert callable(os.pidfd_open); assert callable(signal.pidfd_send_signal)' \
   >/dev/null 2>&1 || {
@@ -1161,14 +1162,64 @@ def live_identity():
     return pid, ticks
 
 def safe_record():
-    metadata = record_path.lstat()
-    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1:
-        raise SystemExit("DFT Worker session record is unsafe")
-    value = json.loads(record_path.read_text(encoding="utf-8"))
+    try:
+        descriptor = os.open(
+            record_path,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+    except OSError as exc:
+        raise SystemExit("DFT Worker session record is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or metadata.st_size > 64 * 1024
+        ):
+            raise SystemExit("DFT Worker session record is unsafe")
+        with os.fdopen(descriptor, encoding="utf-8") as stream:
+            descriptor = -1
+            value = json.load(stream)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     expected_keys = {"schema_version", "pid", "start_ticks", "session_id", "source_sha", "source_tree", "worker_lock_sha256", "worker_version", "worker_instance_id"}
     if not isinstance(value, dict) or set(value) != expected_keys:
         raise SystemExit("DFT Worker session record schema differs")
-    return value
+    return value, (metadata.st_dev, metadata.st_ino)
+
+if action == "remove-inactive":
+    record, record_identity = safe_record()
+    if (
+        isinstance(record.get("pid"), bool)
+        or not isinstance(record.get("pid"), int)
+        or record["pid"] <= 0
+        or isinstance(record.get("start_ticks"), bool)
+        or not isinstance(record.get("start_ticks"), int)
+        or record["start_ticks"] <= 0
+        or record.get("schema_version") != 1
+        or record.get("session_id") != session_id
+        or record.get("source_sha") != source_sha
+        or record.get("source_tree") != source_tree
+        or record.get("worker_lock_sha256") != lock_sha
+        or record.get("worker_version") != version
+    ):
+        raise SystemExit("DFT Worker session record differs from this session")
+    if pid_file.exists() or pid_file.is_symlink():
+        raise SystemExit("DFT Worker PID record still exists")
+    try:
+        if process_ticks(record["pid"]) == record["start_ticks"]:
+            raise SystemExit("DFT Worker recorded process is still live")
+    except FileNotFoundError:
+        pass
+    current = record_path.lstat()
+    if record_identity != (current.st_dev, current.st_ino):
+        raise SystemExit("DFT Worker session record changed before cleanup")
+    record_path.unlink()
+    print(record["worker_instance_id"])
+    raise SystemExit(0)
 
 health = json.loads(raw_health)
 instance = health.get("worker_instance_id")
@@ -1204,9 +1255,9 @@ if action == "bind":
         try: os.unlink(temporary)
         except FileNotFoundError: pass
 elif action == "verify":
-    if safe_record() != expected:
+    if safe_record()[0] != expected:
         raise SystemExit("DFT Worker session/process/health identity changed")
-else:
+elif action != "remove-inactive":
     raise SystemExit("unknown DFT Worker session-record action")
 print(instance)
 PY
@@ -1222,12 +1273,40 @@ dft_worker_ctl() {
     scripts/monomer_dft_worker_ctl.sh "$@"
 }
 
+dft_worker_assert_stopped_runtime() {
+  local path
+  for path in \
+    "$ROOT_DIR/.runtime/monomer-dft-worker.pid" \
+    "$DFT_WORKER_SOCKET_DIR/worker.sock" \
+    "$DFT_WORKER_SESSION_RECORD"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      echo "DFT Worker cleanup retains an exact runtime identity path: $path" >&2
+      return 1
+    fi
+  done
+}
+
 dft_worker_drain_stop() {
-  local socket="$DFT_WORKER_SOCKET_DIR/worker.sock" health response instance
-  if [[ ! -S "$socket" ]]; then
-    [[ ! -e "$DFT_WORKER_SESSION_RECORD" && ! -L "$DFT_WORKER_SESSION_RECORD" ]] && return 0
-    echo "DFT Worker session record exists without its exact socket; refusing a broad stop." >&2
+  local socket="$DFT_WORKER_SOCKET_DIR/worker.sock"
+  local pid_file="$ROOT_DIR/.runtime/monomer-dft-worker.pid"
+  local health response instance
+  [[ ! -L "$socket" && ! -L "$pid_file" ]] || {
+    echo "DFT Worker runtime identity path is unsafe." >&2
     return 1
+  }
+  if [[ ! -S "$socket" ]]; then
+    # Always enter the Worker's non-blocking ctl lock.  If start still owns
+    # that lock, cleanup must remain retryable instead of claiming success in
+    # the post-fork/pre-socket window.  Once acquired, stop_worker validates
+    # the PID, start ticks, command, and exact GPU-session environment before
+    # sending a signal.
+    dft_worker_ctl stop || return 1
+    [[ ! -e "$pid_file" && ! -L "$pid_file" ]] || return 1
+    if [[ -e "$DFT_WORKER_SESSION_RECORD" || -L "$DFT_WORKER_SESSION_RECORD" ]]; then
+      dft_worker_session_record remove-inactive >/dev/null || return 1
+    fi
+    dft_worker_assert_stopped_runtime
+    return
   fi
   health="$(curl --max-time 10 --unix-socket "$socket" -fsS http://localhost/health)" || return 1
   if [[ ! -e "$DFT_WORKER_SESSION_RECORD" && ! -L "$DFT_WORKER_SESSION_RECORD" ]]; then
@@ -1253,7 +1332,8 @@ if value.get("worker_instance_id") != sys.argv[1] or value.get("draining") is no
 ' "$instance"; then
       dft_worker_ctl stop-if-drained-instance "$instance"
       rm -f -- "$DFT_WORKER_SESSION_RECORD"
-      return 0
+      dft_worker_assert_stopped_runtime
+      return
     fi
     sleep 0.5
   done
@@ -1611,6 +1691,95 @@ PY
 
 GPU_SESSION_ROLLBACK_ARMED=false
 
+gpu_session_require_md_worker() {
+  [[ "${MONOMER_MD_DEV_WORKER_ENABLED:-}" == "true" ]] || {
+    echo "GPU session startup requires MONOMER_MD_DEV_WORKER_ENABLED=true so MD is part of the governed activation." >&2
+    return 2
+  }
+}
+
+gpu_session_prepare_up_lock() {
+  local lock_metadata expected_lock_metadata
+  [[ ! -L "$ROOT_DIR/.runtime" ]] || {
+    echo "Development runtime root must not be a symlink." >&2
+    return 1
+  }
+  mkdir -p -- "$ROOT_DIR/.runtime"
+  [[ -d "$ROOT_DIR/.runtime" && ! -L "$ROOT_DIR/.runtime" &&
+    "$(stat -c '%u' "$ROOT_DIR/.runtime")" == "$(id -u)" ]] || {
+    echo "Development runtime root is unsafe." >&2
+    return 1
+  }
+  chmod 700 -- "$ROOT_DIR/.runtime"
+  [[ ! -L "$GPU_SESSION_UP_LOCK" &&
+    ( ! -e "$GPU_SESSION_UP_LOCK" || -f "$GPU_SESSION_UP_LOCK" ) ]] || {
+    echo "GPU session startup lock path is unsafe." >&2
+    return 1
+  }
+  if [[ ! -e "$GPU_SESSION_UP_LOCK" ]]; then
+    ( set -o noclobber; : > "$GPU_SESSION_UP_LOCK" ) 2>/dev/null || true
+  fi
+  chmod 600 -- "$GPU_SESSION_UP_LOCK"
+  lock_metadata="$(stat -Lc '%u:%g:%a:%h' "$GPU_SESSION_UP_LOCK")"
+  expected_lock_metadata="$(id -u):$(id -g):600:1"
+  [[ -f "$GPU_SESSION_UP_LOCK" && ! -L "$GPU_SESSION_UP_LOCK" &&
+    "$lock_metadata" == "$expected_lock_metadata" ]] || {
+    echo "GPU session startup lock is unsafe." >&2
+    return 1
+  }
+}
+
+gpu_session_assert_up_lock_held() {
+  # A direct invocation of the internal route must fail even while another
+  # CLI owns the operation lock.  The only accepted parent is the root-owned
+  # GNU flock process with the exact argv used below; a losing flock process
+  # never execs this child.  --close keeps the lock descriptor out of this
+  # process and every persistent Worker it launches.
+  "$GPU_SESSION_PYTHON" -I - \
+    "$PPID" "$GPU_SESSION_UP_LOCK" "$ROOT_DIR/scripts/dev_server_gpu.sh" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+raw_parent, lock_path, script_path = sys.argv[1:]
+if not raw_parent.isdigit() or raw_parent.startswith("0"):
+    raise SystemExit("internal GPU session startup parent identity differs")
+parent = int(raw_parent)
+exe_path = Path(f"/proc/{parent}/exe").resolve()
+expected_exe_path = Path("/usr/bin/flock").resolve()
+metadata = exe_path.stat()
+argv = tuple(
+    item.decode("utf-8")
+    for item in Path(f"/proc/{parent}/cmdline").read_bytes().split(b"\0")
+    if item
+)
+expected = (
+    "/usr/bin/flock",
+    "--exclusive",
+    "--nonblock",
+    "--close",
+    "--conflict-exit-code",
+    "75",
+    lock_path,
+    script_path,
+    "gpu-session-up-locked-internal",
+)
+if (
+    exe_path != expected_exe_path
+    or metadata.st_uid != 0
+    or not stat.S_ISREG(metadata.st_mode)
+    or stat.S_IMODE(metadata.st_mode) & 0o022
+    or argv != expected
+):
+    raise SystemExit("internal GPU session startup parent identity differs")
+PY
+  if /usr/bin/flock --exclusive --nonblock "$GPU_SESSION_UP_LOCK" -c true; then
+    echo "Internal GPU session startup command lacks its outer operation lock." >&2
+    return 2
+  fi
+}
+
 gpu_session_controller_status_fields() {
   python3 -c '
 import json
@@ -1811,6 +1980,27 @@ gpu_session_up() {
   echo "Development GPU1 session is ready; GPU3 was not modified."
 }
 
+gpu_session_up_locked() {
+  gpu_session_require_md_worker
+  gpu_session_prepare_up_lock
+  # The flock wrapper parent owns the lock through the complete internal
+  # operation, including ERR-trap rollback.  --close prevents the descriptor
+  # from leaking into long-lived MD/DFT children.  A losing caller never
+  # enters the internal command and therefore cannot clean up the winner.
+  local status=0
+  if /usr/bin/flock --exclusive --nonblock --close --conflict-exit-code 75 \
+    "$GPU_SESSION_UP_LOCK" \
+    "$ROOT_DIR/scripts/dev_server_gpu.sh" gpu-session-up-locked-internal; then
+    return 0
+  else
+    status=$?
+  fi
+  if [[ "$status" == "75" ]]; then
+    echo "Development GPU1 session startup is already in progress." >&2
+  fi
+  return "$status"
+}
+
 verify_gpu_session_stopped_runtime() {
   verify_backend_drift
   local path
@@ -1891,6 +2081,7 @@ gpu_session_stop_owned_internal() {
   gpu_backend_stop_exact_session || failed=1
   worker_drain_stop || failed=1
   dft_worker_drain_stop || failed=1
+  dft_worker_assert_stopped_runtime || failed=1
   return "$failed"
 }
 
@@ -2260,6 +2451,11 @@ case "${1:-up}" in
     worker_prepare_venv
     ;;
   gpu-session-up)
+    gpu_session_up_locked
+    ;;
+  gpu-session-up-locked-internal)
+    gpu_session_assert_up_lock_held
+    gpu_session_require_md_worker
     gpu_session_up
     ;;
   gpu-session-status)

@@ -333,6 +333,7 @@ load_env() {
   local session_mode="${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}"
   local session_id="${NEXPOLY_DEV_GPU_SESSION_ID:-}"
   local session_version="${MONOMER_DFT_WORKER_VERSION:-}"
+  local session_start_timeout="${MONOMER_DFT_START_TIMEOUT_SECONDS:-60}"
   [[ ! -L "$ENV_FILE" ]] || fail "environment file must not be a symlink: $ENV_FILE"
   if [[ ! -f "$ENV_FILE" ]]; then
     [[ "$required" == "false" ]] && return 0
@@ -358,9 +359,11 @@ load_env() {
     NEXPOLY_DFT_GPU_DEVICE=1
     NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=""
     MONOMER_DFT_WORKER_VERSION="$session_version"
+    MONOMER_DFT_START_TIMEOUT_SECONDS="$session_start_timeout"
     export NEXPOLY_DEV_GPU1_ONLY_SESSION NEXPOLY_DEV_GPU_SESSION_ID
     export NEXPOLY_DFT_GPU_DEVICE NEXPOLY_DFT_OVERFLOW_GPU_DEVICES
     export MONOMER_DFT_WORKER_VERSION
+    export MONOMER_DFT_START_TIMEOUT_SECONDS
   fi
 }
 
@@ -602,6 +605,33 @@ process_has_worker_command() {
   return 1
 }
 
+process_has_exact_session_environment() {
+  local pid="$1"
+  [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]] || return 0
+  [[ "${NEXPOLY_DEV_GPU_SESSION_ID:-}" =~ ^[0-9a-f]{32}$ &&
+    -n "${MONOMER_DFT_WORKER_VERSION:-}" ]] || return 1
+  [[ -r "/proc/$pid/environ" ]] || return 1
+  local -a observed=()
+  local expected="" entry="" found=false
+  mapfile -d '' -t observed < "/proc/$pid/environ" || return 1
+  for expected in \
+    "MONOMER_DFT_DEPLOYMENT=dev" \
+    "NEXPOLY_DEV_GPU1_ONLY_SESSION=1" \
+    "NEXPOLY_DEV_GPU_SESSION_ID=$NEXPOLY_DEV_GPU_SESSION_ID" \
+    "MONOMER_DFT_WORKER_VERSION=$MONOMER_DFT_WORKER_VERSION" \
+    "NEXPOLY_DFT_GPU_DEVICE=1" \
+    "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="; do
+    found=false
+    for entry in "${observed[@]}"; do
+      if [[ "$entry" == "$expected" ]]; then
+        found=true
+        break
+      fi
+    done
+    [[ "$found" == "true" ]] || return 1
+  done
+}
+
 is_managed_process() {
   local pid="$1"
   local expected_start_ticks="$2"
@@ -610,7 +640,8 @@ is_managed_process() {
   actual_start_ticks="$(process_start_ticks "$pid")" || return 1
   [[ "$actual_start_ticks" == "$expected_start_ticks" ]] || return 1
   process_has_instance_marker "$pid" || return 1
-  process_has_worker_command "$pid"
+  process_has_worker_command "$pid" || return 1
+  process_has_exact_session_environment "$pid"
 }
 
 recover_spawn_start_ticks() {
