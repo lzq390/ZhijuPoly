@@ -49,8 +49,8 @@ def _install_fake_torch(
     monkeypatch,
     *,
     capability: tuple[int, int] = (8, 9),
-    torch_version: str = "2.6.0+cu124",
-    cuda_runtime: str = "12.4",
+    torch_version: str = "2.9.1+cu128",
+    cuda_runtime: str = "12.8",
 ) -> None:
     cuda = SimpleNamespace(
         is_available=lambda: True,
@@ -175,8 +175,8 @@ def test_configured_preflight_rejects_legacy_cuda_runtime(tmp_path, monkeypatch)
     report = gpu_preflight.inspect_configured_runtime(settings)
 
     assert report["status"] == "not_configured"
-    assert any("imported torch must be 2.6.0+cu124" in error for error in report["errors"])
-    assert any("CUDA runtime must be 12.4" in error for error in report["errors"])
+    assert any("imported torch must be 2.9.1+cu128" in error for error in report["errors"])
+    assert any("CUDA runtime must be 12.8" in error for error in report["errors"])
 
 
 def test_broker_managed_configured_preflight_never_imports_cuda_runtime(

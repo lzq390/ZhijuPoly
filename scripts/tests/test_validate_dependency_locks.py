@@ -33,13 +33,13 @@ class DependencyLockPolicyTests(unittest.TestCase):
             backend = root / "backend"
             backend.mkdir()
             (backend / "requirements-system.in").write_text(
-                "torch==2.6.0+cu124\ntorchvision==0.21.0+cu124\n",
+                "torch==2.9.1+cu128\ntorchvision==0.24.1+cu128\n",
                 encoding="utf-8",
             )
             (backend / "requirements-system.lock").write_text(
-                "torch==2.6.0+cu124 \\\n"
+                "torch==2.9.1+cu128 \\\n"
                 "    --hash=sha256:" + "0" * 64 + "\n"
-                "torchvision==0.21.0+cu124 \\\n"
+                "torchvision==0.24.1+cu128 \\\n"
                 "    --hash=sha256:" + policy.SYSTEM_HASHES["torchvision"] + "\n",
                 encoding="utf-8",
             )
@@ -67,6 +67,8 @@ class DependencyLockPolicyTests(unittest.TestCase):
     def test_cuda_12_base_runtime_includes_split_cuda_packages(self) -> None:
         self.assertIn("nvidia-cusparselt-cu12", policy.BASE_RUNTIME_PACKAGES)
         self.assertIn("nvidia-nvjitlink-cu12", policy.BASE_RUNTIME_PACKAGES)
+        self.assertIn("nvidia-cufile-cu12", policy.BASE_RUNTIME_PACKAGES)
+        self.assertIn("nvidia-nvshmem-cu12", policy.BASE_RUNTIME_PACKAGES)
 
 
 if __name__ == "__main__":

@@ -224,7 +224,7 @@ change must perform, and verify rollback for, the ordered transition:
 7. enable MD governance, then separately enable the resident DFT executor;
 8. run concurrent GPU smoke tests before reopening admission.
 
-Mixed Backend CUDA 12.4 and DFT CUDA 12.8 clients must pass a real test against
+Backend and DFT CUDA 12.8 clients must pass a real test against
 the host Driver/CUDA MPS server. Failure blocks activation; it is not a reason
 to bypass the Broker or MPS.
 

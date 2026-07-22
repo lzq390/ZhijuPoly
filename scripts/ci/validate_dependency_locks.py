@@ -11,16 +11,16 @@ import re
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PYTORCH_BASE = (
-    "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime@"
-    "sha256:77f17f843507062875ce8be2a6f76aa6aa3df7f9ef1e31d9d7432f4b0f563dee"
+    "pytorch/pytorch:2.9.1-cuda12.8-cudnn9-runtime@"
+    "sha256:7b324d212a4450795b49edba9949b7cdc72429148a64e974334bfe5774d51385"
 )
 SYSTEM_VERSIONS = {
-    "torch": "2.6.0+cu124",
-    "torchvision": "0.21.0+cu124",
+    "torch": "2.9.1+cu128",
+    "torchvision": "0.24.1+cu128",
 }
 SYSTEM_HASHES = {
-    "torch": "d4c3e9a8d31a7c0fcbb9da17c31a1917e1fac26c566a4cfbd8c9568ad7cade79",
-    "torchvision": "137376805aca5ba57bd2c7a3ecb8569df961dbe82b128aac9b3b0a7125ef9385",
+    "torch": "2a1da940f0757621d098c9755f7504d791a72a40920ec85a4fd98b20253fca4e",
+    "torchvision": "1b44f67cbd8f36e2a58bfaa3176d35b37df55604adf5929e89006e531f849faa",
 }
 BASE_RUNTIME_PACKAGES = {
     "torch",
@@ -32,12 +32,14 @@ BASE_RUNTIME_PACKAGES = {
     "nvidia-cuda-runtime-cu12",
     "nvidia-cudnn-cu12",
     "nvidia-cufft-cu12",
+    "nvidia-cufile-cu12",
     "nvidia-curand-cu12",
     "nvidia-cusolver-cu12",
     "nvidia-cusparse-cu12",
     "nvidia-cusparselt-cu12",
     "nvidia-nccl-cu12",
     "nvidia-nvjitlink-cu12",
+    "nvidia-nvshmem-cu12",
     "nvidia-nvtx-cu12",
 }
 LEGACY_CUDA_PACKAGES = {
@@ -203,7 +205,11 @@ def validate_backend_split(root: Path) -> list[str]:
     for package, expected in runtime_declared.items():
         if app_versions.get(package) != expected:
             failures.append(f"{app_lock}: direct input must remain {package}=={expected}")
-    for package, expected in {"scikit-learn": "1.8.0", "transformers": "4.57.6"}.items():
+    for package, expected in {
+        "scikit-learn": "1.8.0",
+        "sympy": "1.14.0",
+        "transformers": "4.57.6",
+    }.items():
         if app_versions.get(package) != expected:
             failures.append(f"{app_lock}: expected {package}=={expected}")
     app_text = app_lock.read_text(encoding="utf-8")
@@ -212,7 +218,7 @@ def validate_backend_split(root: Path) -> list[str]:
     if "pip-compile" not in app_text:
         failures.append(f"{app_lock}: missing pip-compile provenance header")
     if "cu118" in app_text or re.search(r"nvidia-[a-z0-9-]+-cu11", app_text):
-        failures.append(f"{app_lock}: CUDA 11 packages must not be mixed into the CUDA 12.4 runtime")
+        failures.append(f"{app_lock}: CUDA 11 packages must not be mixed into the CUDA 12.8 runtime")
     return failures
 
 
@@ -278,7 +284,7 @@ def validate_tooling(root: Path) -> list[str]:
         failures.append("scripts/compile_requirements.sh must not use uv")
     for required in (
         "--constraint=backend/requirements-system.in",
-        'PYTORCH_INDEX_URL="https://download.pytorch.org/whl/cu124"',
+        'PYTORCH_INDEX_URL="https://download.pytorch.org/whl/cu128"',
         "--unsafe-package=\"$package\"",
         "scripts/ci/validate_dependency_locks.py",
     ):
@@ -288,7 +294,7 @@ def validate_tooling(root: Path) -> list[str]:
         f"FROM {PYTORCH_BASE}",
         "COPY backend/requirements-system.lock /tmp/requirements-system.lock",
         "pip install --no-index --no-deps --require-hashes",
-        "torch.version.cuda == '12.4'",
+        "torch.version.cuda == '12.8'",
         'WEB_CONCURRENCY=1',
     ):
         if required not in dockerfile:
@@ -340,7 +346,7 @@ def main() -> int:
         for failure in failures:
             print(f"dependency lock policy: {failure}")
         return 1
-    print("validated hashed Python locks and the immutable CUDA 12.4 runtime split")
+    print("validated hashed Python locks and the immutable CUDA 12.8 runtime split")
     return 0
 
 

@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 PIP_TOOLS_VERSION="7.5.0"
-PYTORCH_INDEX_URL="https://download.pytorch.org/whl/cu124"
+PYTORCH_INDEX_URL="https://download.pytorch.org/whl/cu128"
 
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || {
   echo "Python is required: $PYTHON_BIN" >&2
@@ -58,12 +58,14 @@ system_packages=(
   nvidia-cuda-runtime-cu12
   nvidia-cudnn-cu12
   nvidia-cufft-cu12
+  nvidia-cufile-cu12
   nvidia-curand-cu12
   nvidia-cusolver-cu12
   nvidia-cusparse-cu12
   nvidia-cusparselt-cu12
   nvidia-nccl-cu12
   nvidia-nvjitlink-cu12
+  nvidia-nvshmem-cu12
   nvidia-nvtx-cu12
 )
 backend_args=(
