@@ -695,7 +695,7 @@ verify_backend_drift() {
     return 1
   }
   docker exec "$container_id" python -c \
-    "import os; expected={'WEB_CONCURRENCY':'1','NVIDIA_VISIBLE_DEVICES':'none','GPU_PRELOAD_MODE':'lazy','GPU_MAX_CONCURRENT_INFERENCES':'1','GPU_MAX_WAITING_INFERENCES':'8','GPU_SYNC_QUEUE_TIMEOUT_SECONDS':'30','GPU_ASYNC_QUEUE_TIMEOUT_SECONDS':'600','MODEL_ENABLED':'false','OCSR_ENABLED':'false','OCSR_DEVICE':'cpu','GEN_MODEL_ENABLED':'false','GEN_DEVICE':'cpu','GEN_JOB_WORKERS':'1','GEN_MAX_ACTIVE_JOBS':'8','RETRO_MODEL_ENABLED':'false','RETRO_DEVICE':'cpu','POLYTAO_ENABLED':'false','POLYTAO_DEVICE':'cpu','POLYTAO_JOB_THREADS':'1','POLYTAO_MAX_ACTIVE_JOBS':'1','MONOMER_MD_SUBMIT_ENABLED':'false','MONOMER_DFT_SUBMIT_ENABLED':'false'}; actual={key:os.getenv(key) for key in expected}; assert actual == expected, actual"
+    "import os; expected={'WEB_CONCURRENCY':'1','NVIDIA_VISIBLE_DEVICES':'none','GPU_PRELOAD_MODE':'lazy','GPU_MAX_CONCURRENT_INFERENCES':'1','GPU_MAX_WAITING_INFERENCES':'8','GPU_SYNC_QUEUE_TIMEOUT_SECONDS':'30','GPU_ASYNC_QUEUE_TIMEOUT_SECONDS':'600','MODEL_ENABLED':'true','OCSR_ENABLED':'false','OCSR_DEVICE':'cpu','GEN_MODEL_ENABLED':'false','GEN_DEVICE':'cpu','GEN_JOB_WORKERS':'1','GEN_MAX_ACTIVE_JOBS':'8','RETRO_MODEL_ENABLED':'false','RETRO_DEVICE':'cpu','POLYTAO_ENABLED':'false','POLYTAO_DEVICE':'cpu','POLYTAO_JOB_THREADS':'1','POLYTAO_MAX_ACTIVE_JOBS':'1','MONOMER_MD_SUBMIT_ENABLED':'false','MONOMER_DFT_SUBMIT_ENABLED':'false'}; actual={key:os.getenv(key) for key in expected}; assert actual == expected, actual"
   docker inspect "$container_id" | python3 -c '
 import json, sys
 container = json.load(sys.stdin)[0]
@@ -2002,6 +2002,24 @@ exact = post(
 )
 if exact.get("total") != 1 or exact["results"][0].get("similarity_score") != 1:
     raise SystemExit("exact structure-query smoke did not honor threshold/top_k")
+
+prediction = post(
+    "/api/v1/predict",
+    {
+        "smiles": "CCO",
+        "properties": ["Glass transition temperature"],
+    },
+)
+predicted_tg = prediction.get("predictions", {}).get("Glass transition temperature")
+if not isinstance(predicted_tg, (int, float)):
+    raise SystemExit("CPU property-prediction smoke returned no numeric result")
+
+polytao_descriptors = post(
+    "/api/v1/conditional-generation/polytao/descriptors",
+    {"smiles": "CCO"},
+)
+if len(polytao_descriptors.get("descriptors", [])) != 15:
+    raise SystemExit("CPU PolyTAO descriptor smoke did not return 15 descriptors")
 
 smipoly = post(
     "/api/v1/monomer-polymerization",

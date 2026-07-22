@@ -3,7 +3,9 @@ name: nexpoly_dev
 x-dev-backend-env: &dev-backend-env
   WEB_CONCURRENCY: "1"
   MODEL_DIR: /app/model
-  MODEL_ENABLED: "false"
+  # RDKit/sklearn property prediction is CPU-only and must remain available
+  # independently of the opportunistic GPU1 session.
+  MODEL_ENABLED: "true"
   OCSR_ENABLED: "false"
   OCSR_MODEL_DIR: /app/model/ocsr
   OCSR_DEVICE: "cpu"

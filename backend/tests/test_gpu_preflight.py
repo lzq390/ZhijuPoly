@@ -67,7 +67,9 @@ def _install_fake_torch(
 
 def _disabled_settings(tmp_path: Path) -> SimpleNamespace:
     settings = _configured_settings(tmp_path)
-    settings.model_enabled = False
+    # Property prediction is backed by RDKit/sklearn and remains enabled in
+    # the CPU-only development runtime.
+    settings.model_enabled = True
     settings.ocsr_enabled = False
     settings.gen_model_enabled = False
     settings.retro_model_enabled = False
@@ -106,7 +108,7 @@ def test_disabled_preflight_validates_cpu_policy_without_importing_cuda(
     ("attribute", "value", "message"),
     [
         ("gen_model_enabled", True, "conditional_generation"),
-        ("model_enabled", True, "property_prediction"),
+        ("ocsr_enabled", True, "ocsr"),
         ("gpu_broker_enabled", True, "GPU Broker disabled"),
         ("gpu_preload_mode", "required", "GPU_PRELOAD_MODE=lazy"),
     ],

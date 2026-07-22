@@ -321,6 +321,28 @@ gpu_session_up_rollback
         self.assertIn("'NVIDIA_VISIBLE_DEVICES':'1'", source)
         self.assertNotIn("NEXPOLY_DEV_GPU_DEVICE", overlay)
 
+    def test_cpu_property_prediction_is_independent_of_gpu_session(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        compose = DEV_COMPOSE.read_text(encoding="utf-8")
+        overlay = GPU_SESSION_COMPOSE.read_text(encoding="utf-8")
+        base_environment = compose[
+            compose.index("x-dev-backend-env:"):compose.index("\nservices:")
+        ]
+
+        self.assertIn('MODEL_ENABLED: "true"', base_environment)
+        self.assertNotIn("\n      MODEL_ENABLED:", overlay)
+        self.assertIn("'MODEL_ENABLED':'true'", source)
+        for gpu_only_flag in (
+            "OCSR_ENABLED",
+            "GEN_MODEL_ENABLED",
+            "RETRO_MODEL_ENABLED",
+            "POLYTAO_ENABLED",
+            "MONOMER_MD_SUBMIT_ENABLED",
+            "MONOMER_DFT_SUBMIT_ENABLED",
+        ):
+            self.assertIn(f'{gpu_only_flag}: "false"', base_environment)
+            self.assertIn(f"{gpu_only_flag}:", overlay)
+
     def test_gpu_session_activation_is_ordered_after_real_dft_residency(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         start = source.index("gpu_session_up() {")

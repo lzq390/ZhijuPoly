@@ -195,17 +195,15 @@ def inspect_configured_runtime(
 def inspect_disabled_runtime(settings: Settings) -> dict[str, Any]:
     report = inspect_configured_runtime(settings, require_cuda=False)
     errors = report["errors"]
-    enabled_models = [
+    enabled_gpu_models = [
         name
         for name, state in report["models"].items()
         if state.get("enabled")
     ]
-    if bool(getattr(settings, "model_enabled", False)):
-        enabled_models.append("property_prediction")
-    if enabled_models:
+    if enabled_gpu_models:
         errors.append(
-            "CPU-only runtime requires all model entry points disabled: "
-            + ", ".join(sorted(enabled_models))
+            "CPU-only runtime requires all GPU model entry points disabled: "
+            + ", ".join(sorted(enabled_gpu_models))
         )
     if bool(getattr(settings, "gpu_broker_enabled", False)):
         errors.append("CPU-only runtime requires GPU Broker disabled")
