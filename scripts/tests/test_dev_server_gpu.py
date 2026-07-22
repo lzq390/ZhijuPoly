@@ -620,7 +620,7 @@ exit 7
 
     def test_gpu_session_backend_keeps_stable_lease_process_identity(self) -> None:
         compose = GPU_SESSION_COMPOSE.read_text(encoding="utf-8")
-        self.assertIn("exec uvicorn app.main:app", compose)
+        self.assertIn("exec python -X faulthandler -m uvicorn app.main:app", compose)
         self.assertIn("--workers 1", compose)
         self.assertNotIn("--reload", compose)
 

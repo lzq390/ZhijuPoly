@@ -11,7 +11,7 @@ services:
       - -ec
       - >-
         cd /app/backend/app;
-        exec uvicorn app.main:app --app-dir /app/backend
+        exec python -X faulthandler -m uvicorn app.main:app --app-dir /app/backend
         --host 0.0.0.0 --port 8000
         --workers 1 --timeout-graceful-shutdown 40
     environment:
