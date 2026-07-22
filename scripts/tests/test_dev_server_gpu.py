@@ -369,6 +369,320 @@ gpu_session_up_rollback
         ):
             self.assertIn(marker, stopped_body)
 
+    def test_gpu_session_up_pins_the_exact_backend_candidate_identity(self) -> None:
+        body = self._shell_function_source("gpu_session_up")
+        expected_calls = (
+            'gpu_backend_candidate_hash="$(compute_gpu_backend_config_hash)"',
+            'NEXPOLY_DEV_CONFIG_HASH="$gpu_backend_candidate_hash"',
+            '"${GPU_COMPOSE[@]}" up -d --no-deps --force-recreate backend',
+            'gpu_backend_candidate_id="$("${GPU_COMPOSE[@]}" ps -q backend)"',
+            'wait_gpu_backend_configured "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"',
+            'verify_gpu_backend_drift plane-ready "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"',
+            'write_gpu_session_activation_manifest "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"',
+            'verify_gpu_backend_drift ready "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"',
+        )
+        positions = [body.index(marker) for marker in expected_calls]
+        self.assertEqual(positions, sorted(positions))
+
+        verification = self._shell_function_source("verify_gpu_backend_drift")
+        self.assertIn('desired_hash="$expected_config_hash"', verification)
+        self.assertIn('container_id" != "$expected_container_id', verification)
+        manifest = self._shell_function_source("write_gpu_session_activation_manifest")
+        self.assertIn('container_id" != "$expected_container_id', manifest)
+
+        stop = self._shell_function_source("gpu_backend_stop_exact_session")
+        self.assertLess(
+            stop.index('archive_gpu_backend_candidate_logs "$container_id"'),
+            stop.index('"${GPU_COMPOSE[@]}" stop backend'),
+        )
+
+    def test_gpu_backend_wait_rejects_a_same_name_cpu_replacement(self) -> None:
+        candidate = "a" * 64
+        replacement = "b" * 64
+        config_hash = "c" * 64
+        session_id = "d" * 32
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            compose_count = root / "compose-count"
+            archive_log = root / "archive.log"
+            compose_count.write_text("0", encoding="ascii")
+            harness = f"""
+set -u
+EXPECTED_ID="$1"
+REPLACEMENT_ID="$2"
+EXPECTED_HASH="$3"
+NEXPOLY_DEV_GPU_SESSION_ID="$4"
+COUNT_FILE="$5"
+ARCHIVE_LOG="$6"
+GPU_COMPOSE=(fake_compose)
+
+{self._shell_function_source("gpu_backend_candidate_identity_lost")}
+{self._shell_function_source("wait_gpu_backend_configured")}
+
+fake_compose() {{
+  local count
+  [[ "$*" == "ps -q backend" ]] || return 9
+  count="$(<"$COUNT_FILE")"
+  if [[ "$count" == "0" ]]; then
+    printf '1' > "$COUNT_FILE"
+    printf '%s\n' "$EXPECTED_ID"
+  else
+    printf '%s\n' "$REPLACEMENT_ID"
+  fi
+}}
+docker() {{
+  [[ "$1" == "inspect" && "$2" == "-f" ]] || return 8
+  case "$3" in
+    *com.nexpoly.gpu.session-id*) printf '%s\n' "$NEXPOLY_DEV_GPU_SESSION_ID" ;;
+    *com.nexpoly.dev.config-hash*) printf '%s\n' "$EXPECTED_HASH" ;;
+    *State.Status*) printf '%s\n' running ;;
+    *State.Restarting*) printf '%s\n' false ;;
+    *RestartCount*) printf '%s\n' 0 ;;
+    *State.Health*) printf '%s\n' starting ;;
+    *) return 7 ;;
+  esac
+}}
+archive_gpu_backend_candidate_logs() {{
+  printf '%s\n' "$1" >> "$ARCHIVE_LOG"
+}}
+sleep() {{ :; }}
+
+set +e
+wait_gpu_backend_configured "$EXPECTED_ID" "$EXPECTED_HASH"
+result=$?
+set -e
+printf 'result=%s\n' "$result"
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "wait-replacement-harness",
+                    candidate,
+                    replacement,
+                    config_hash,
+                    session_id,
+                    str(compose_count),
+                    str(archive_log),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            archived = (
+                archive_log.read_text(encoding="ascii").splitlines()
+                if archive_log.exists()
+                else []
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("result=1", completed.stdout)
+        self.assertIn("candidate identity lost", completed.stderr)
+        self.assertIn("controller recovery or a same-name replacement", completed.stderr)
+        self.assertEqual(archived, [candidate])
+
+    def test_gpu_backend_wait_archives_the_first_restart_failure(self) -> None:
+        candidate = "a" * 64
+        config_hash = "c" * 64
+        session_id = "d" * 32
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            archive_log = root / "archive.log"
+            sleep_log = root / "sleep.log"
+            harness = f"""
+set -u
+EXPECTED_ID="$1"
+EXPECTED_HASH="$2"
+NEXPOLY_DEV_GPU_SESSION_ID="$3"
+ARCHIVE_LOG="$4"
+SLEEP_LOG="$5"
+GPU_COMPOSE=(fake_compose)
+
+{self._shell_function_source("gpu_backend_candidate_identity_lost")}
+{self._shell_function_source("wait_gpu_backend_configured")}
+
+fake_compose() {{
+  [[ "$*" == "ps -q backend" ]] || return 9
+  printf '%s\n' "$EXPECTED_ID"
+}}
+docker() {{
+  if [[ "$1" == "logs" ]]; then
+    printf '%s\n' 'native crash evidence'
+    return 0
+  fi
+  [[ "$1" == "inspect" && "$2" == "-f" ]] || return 8
+  case "$3" in
+    *com.nexpoly.gpu.session-id*) printf '%s\n' "$NEXPOLY_DEV_GPU_SESSION_ID" ;;
+    *com.nexpoly.dev.config-hash*) printf '%s\n' "$EXPECTED_HASH" ;;
+    *State.Status*) printf '%s\n' restarting ;;
+    *State.Restarting*) printf '%s\n' true ;;
+    *RestartCount*) printf '%s\n' 1 ;;
+    *) return 7 ;;
+  esac
+}}
+archive_gpu_backend_candidate_logs() {{
+  printf '%s\n' "$1" >> "$ARCHIVE_LOG"
+}}
+sleep() {{ printf '%s\n' slept >> "$SLEEP_LOG"; }}
+
+set +e
+wait_gpu_backend_configured "$EXPECTED_ID" "$EXPECTED_HASH"
+result=$?
+set -e
+printf 'result=%s\n' "$result"
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "wait-restart-harness",
+                    candidate,
+                    config_hash,
+                    session_id,
+                    str(archive_log),
+                    str(sleep_log),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            archived = archive_log.read_text(encoding="ascii").splitlines()
+            slept = sleep_log.exists()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("result=1", completed.stdout)
+        self.assertIn("native/restart failure", completed.stderr)
+        self.assertIn("restart_count=1", completed.stderr)
+        self.assertEqual(archived, [candidate])
+        self.assertFalse(slept)
+
+    def test_gpu_backend_verify_rejects_a_replacement_before_drift_checks(self) -> None:
+        candidate = "a" * 64
+        replacement = "b" * 64
+        config_hash = "c" * 64
+        script_source = SCRIPT.read_text(encoding="utf-8")
+        verify_start = script_source.index("verify_gpu_backend_drift() {")
+        verify_identity_prefix = (
+            script_source[
+                verify_start:script_source.index(
+                    '  expected_image="$(docker image inspect', verify_start
+                )
+            ]
+            + "}\n"
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            archive_log = Path(raw) / "archive.log"
+            harness = f"""
+set -u
+EXPECTED_ID="$1"
+REPLACEMENT_ID="$2"
+EXPECTED_HASH="$3"
+ARCHIVE_LOG="$4"
+GPU_COMPOSE=(fake_compose)
+
+{self._shell_function_source("gpu_backend_candidate_identity_lost")}
+{verify_identity_prefix}
+
+assert_clean_candidate() {{ :; }}
+assert_default_builder() {{ :; }}
+fake_compose() {{
+  [[ "$*" == "ps -q backend" ]] || return 9
+  printf '%s\n' "$REPLACEMENT_ID"
+}}
+archive_gpu_backend_candidate_logs() {{
+  printf '%s\n' "$1" >> "$ARCHIVE_LOG"
+}}
+
+set +e
+verify_gpu_backend_drift plane-ready "$EXPECTED_ID" "$EXPECTED_HASH"
+result=$?
+set -e
+printf 'result=%s\n' "$result"
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "verify-replacement-harness",
+                    candidate,
+                    replacement,
+                    config_hash,
+                    str(archive_log),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            archived = (
+                archive_log.read_text(encoding="ascii").splitlines()
+                if archive_log.exists()
+                else []
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("result=1", completed.stdout)
+        self.assertIn("candidate identity lost", completed.stderr)
+        self.assertNotIn("Compose configuration has drifted", completed.stderr)
+        self.assertEqual(archived, [candidate])
+
+    def test_gpu_backend_log_archive_is_private_and_never_blocks_recovery(self) -> None:
+        candidate = "a" * 64
+        session_id = "d" * 32
+        with tempfile.TemporaryDirectory() as raw:
+            run_directory = Path(raw) / f"20260722T010203Z-{session_id}"
+            run_directory.mkdir(mode=0o700)
+            harness = f"""
+set -u
+EXPECTED_ID="$1"
+NEXPOLY_DEV_GPU_SESSION_ID="$2"
+RUN_DIRECTORY="$3"
+
+{self._shell_function_source("archive_gpu_backend_candidate_logs")}
+
+gpu_session_current_run_directory() {{
+  printf '%s\n' "$RUN_DIRECTORY"
+}}
+docker() {{
+  if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+    printf '%s\n' "$NEXPOLY_DEV_GPU_SESSION_ID"
+    return 0
+  fi
+  if [[ "$1" == "logs" ]]; then
+    printf '%s\n' 'candidate stdout'
+    printf '%s\n' 'candidate stderr' >&2
+    return 7
+  fi
+  return 8
+}}
+
+archive_gpu_backend_candidate_logs "$EXPECTED_ID"
+printf 'result=%s\n' "$?"
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "archive-harness",
+                    candidate,
+                    session_id,
+                    str(run_directory),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            archive = run_directory / f"backend-candidate-{candidate}.log"
+            contents = archive.read_text(encoding="utf-8") if archive.exists() else ""
+            mode = archive.stat().st_mode & 0o777 if archive.exists() else None
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("result=0", completed.stdout)
+        self.assertEqual(mode, 0o600)
+        self.assertIn("candidate stdout", contents)
+        self.assertIn("candidate stderr", contents)
+        archive_source = self._shell_function_source("archive_gpu_backend_candidate_logs")
+        self.assertNotIn(".Config.Env", archive_source)
+
     def test_gpu_up_rollback_defers_to_live_controller_automatic_recovery(self) -> None:
         completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
             controller_source="""#!/usr/bin/env bash

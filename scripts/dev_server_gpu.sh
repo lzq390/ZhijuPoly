@@ -1272,41 +1272,186 @@ worker_status() {
   printf '%s\n' "$payload"
 }
 
+gpu_backend_candidate_identity_lost() {
+  local expected_container_id="${1:-missing}" observed_container_id="${2:-missing}"
+  echo "Governed development Backend candidate identity lost; controller recovery or a same-name replacement occurred (expected ${expected_container_id:0:12}, observed ${observed_container_id:0:12})." >&2
+  return 1
+}
+
+gpu_session_current_run_directory() {
+  local controller_payload
+  [[ "${NEXPOLY_DEV_GPU_SESSION_ID:-}" =~ ^[0-9a-f]{32}$ ]] || return 1
+  controller_payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)" || return 1
+  printf '%s' "$controller_payload" | python3 -c '
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+value = json.load(sys.stdin)
+root = Path(sys.argv[1])
+session_id = sys.argv[2]
+run_directory = Path(value.get("run_directory", ""))
+runs_root = root / ".runtime" / "gpu-session" / "runs"
+if value.get("session_id") != session_id:
+    raise SystemExit("controller session identity differs")
+if not run_directory.is_absolute() or run_directory.parent != runs_root:
+    raise SystemExit("controller run directory is outside the private runs root")
+if not run_directory.name.endswith("-" + session_id):
+    raise SystemExit("controller run directory session suffix differs")
+metadata = run_directory.lstat()
+if (
+    not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(metadata.st_mode) != 0o700
+):
+    raise SystemExit("controller run directory is not owner-private")
+print(run_directory)
+' "$ROOT_DIR" "$NEXPOLY_DEV_GPU_SESSION_ID"
+}
+
+archive_gpu_backend_candidate_logs() {
+  local container_id="${1:-}" session_label run_directory target temporary
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || return 0
+  [[ "${NEXPOLY_DEV_GPU_SESSION_ID:-}" =~ ^[0-9a-f]{32}$ ]] || return 0
+  if ! session_label="$(docker inspect -f '{{index .Config.Labels "com.nexpoly.gpu.session-id"}}' "$container_id" 2>/dev/null)" ||
+    [[ "$session_label" != "$NEXPOLY_DEV_GPU_SESSION_ID" ]]; then
+    return 0
+  fi
+  run_directory="$(gpu_session_current_run_directory 2>/dev/null)" || return 0
+  target="$run_directory/backend-candidate-${container_id}.log"
+  [[ ! -e "$target" && ! -L "$target" ]] || return 0
+  temporary="$(mktemp "$run_directory/.backend-candidate-log.XXXXXX")" || return 0
+  if ! chmod 600 "$temporary"; then
+    rm -f -- "$temporary"
+    return 0
+  fi
+  docker logs --timestamps "$container_id" >"$temporary" 2>&1 || true
+  chmod 600 "$temporary" || {
+    rm -f -- "$temporary"
+    return 0
+  }
+  if [[ -e "$target" || -L "$target" ]] || ! mv -n -- "$temporary" "$target"; then
+    rm -f -- "$temporary"
+  fi
+  return 0
+}
+
 wait_gpu_backend_configured() {
-  local container_id health
+  local expected_container_id="${1:-}" expected_config_hash="${2:-}"
+  local container_id health actual_hash session_label status restarting restart_count
+  [[ "$expected_container_id" =~ ^[0-9a-f]{64}$ && "$expected_config_hash" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "Governed development Backend wait requires a pinned candidate ID and config hash." >&2
+    return 1
+  }
   for _ in $(seq 1 180); do
-    container_id="$("${GPU_COMPOSE[@]}" ps -q backend)"
-    if [[ -n "$container_id" ]]; then
-      health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container_id")"
-      [[ "$health" == "healthy" ]] && return 0
-      if [[ "$(docker inspect -f '{{.State.Status}}' "$container_id")" == "exited" ]]; then
-        "${GPU_COMPOSE[@]}" logs --tail=120 backend >&2
-        return 1
-      fi
+    if ! container_id="$("${GPU_COMPOSE[@]}" ps -q backend)" ||
+      [[ "$container_id" != "$expected_container_id" ]]; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      gpu_backend_candidate_identity_lost "$expected_container_id" "${container_id:-missing}"
+      return 1
     fi
+    if ! session_label="$(docker inspect -f '{{index .Config.Labels "com.nexpoly.gpu.session-id"}}' "$expected_container_id" 2>/dev/null)" ||
+      [[ "$session_label" != "$NEXPOLY_DEV_GPU_SESSION_ID" ]]; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      gpu_backend_candidate_identity_lost "$expected_container_id" "$container_id"
+      return 1
+    fi
+    if ! actual_hash="$(docker inspect -f '{{index .Config.Labels "com.nexpoly.dev.config-hash"}}' "$expected_container_id" 2>/dev/null)"; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      gpu_backend_candidate_identity_lost "$expected_container_id" "$container_id"
+      return 1
+    fi
+    if [[ "$actual_hash" != "$expected_config_hash" ]]; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      echo "Governed development Backend candidate Compose configuration has drifted." >&2
+      return 1
+    fi
+    if ! status="$(docker inspect -f '{{.State.Status}}' "$expected_container_id" 2>/dev/null)" ||
+      ! restarting="$(docker inspect -f '{{.State.Restarting}}' "$expected_container_id" 2>/dev/null)" ||
+      ! restart_count="$(docker inspect -f '{{.RestartCount}}' "$expected_container_id" 2>/dev/null)"; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      gpu_backend_candidate_identity_lost "$expected_container_id" "$container_id"
+      return 1
+    fi
+    if [[ ! "$restart_count" =~ ^[0-9]+$ || "$restarting" != "true" && "$restarting" != "false" ]]; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      echo "Governed development Backend candidate restart metadata is invalid." >&2
+      return 1
+    fi
+    if [[ "$status" == "restarting" || "$restarting" == "true" || "$restart_count" -gt 0 ]]; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      docker logs --tail=120 "$expected_container_id" >&2 || true
+      echo "Governed development Backend candidate entered a native/restart failure (status=$status, restarting=$restarting, restart_count=$restart_count)." >&2
+      return 1
+    fi
+    if [[ "$status" == "exited" ]]; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      docker logs --tail=120 "$expected_container_id" >&2 || true
+      echo "Governed development Backend candidate exited before becoming healthy." >&2
+      return 1
+    fi
+    if ! health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$expected_container_id" 2>/dev/null)"; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      gpu_backend_candidate_identity_lost "$expected_container_id" "$container_id"
+      return 1
+    fi
+    [[ "$health" == "healthy" ]] && return 0
     sleep 1
   done
   echo "Timed out waiting for the governed development backend." >&2
-  "${GPU_COMPOSE[@]}" logs --tail=120 backend >&2 || true
+  archive_gpu_backend_candidate_logs "$expected_container_id" || true
+  docker logs --tail=120 "$expected_container_id" >&2 || true
   return 1
 }
 
 verify_gpu_backend_drift() {
   local expected_controller_status="${1:-ready}"
-  local container_id expected_image actual_image desired_hash actual_hash
+  local expected_container_id="${2:-}" expected_config_hash="${3:-}"
+  local container_id expected_image actual_image desired_hash actual_hash session_label
   local image_revision image_tree image_lock image_build_config runtime_identity
   assert_clean_candidate
   assert_default_builder
   container_id="$("${GPU_COMPOSE[@]}" ps -q backend)"
   [[ -n "$container_id" ]] || { echo "Governed development backend is missing." >&2; return 1; }
+  if [[ -n "$expected_container_id" ]]; then
+    [[ "$expected_container_id" =~ ^[0-9a-f]{64}$ && "$expected_config_hash" =~ ^[0-9a-f]{64}$ ]] || {
+      echo "Governed development Backend verification requires a pinned candidate ID and config hash." >&2
+      return 1
+    }
+    if [[ "$container_id" != "$expected_container_id" ]]; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      gpu_backend_candidate_identity_lost "$expected_container_id" "$container_id"
+      return 1
+    fi
+    if ! session_label="$(docker inspect -f '{{index .Config.Labels "com.nexpoly.gpu.session-id"}}' "$expected_container_id" 2>/dev/null)" ||
+      [[ "$session_label" != "$NEXPOLY_DEV_GPU_SESSION_ID" ]]; then
+      archive_gpu_backend_candidate_logs "$expected_container_id" || true
+      gpu_backend_candidate_identity_lost "$expected_container_id" "$container_id"
+      return 1
+    fi
+  fi
   expected_image="$(docker image inspect -f '{{.Id}}' "$DEV_BACKEND_IMAGE")"
-  actual_image="$(docker inspect -f '{{.Image}}' "$container_id")"
+  if ! actual_image="$(docker inspect -f '{{.Image}}' "$container_id" 2>/dev/null)"; then
+    [[ -z "$expected_container_id" ]] || archive_gpu_backend_candidate_logs "$expected_container_id" || true
+    [[ -z "$expected_container_id" ]] || gpu_backend_candidate_identity_lost "$expected_container_id" "$container_id"
+    return 1
+  fi
   [[ "$actual_image" == "$expected_image" ]] || {
     echo "Governed development backend is running a stale image ID." >&2
     return 1
   }
-  desired_hash="$(compute_gpu_backend_config_hash)"
-  actual_hash="$(docker inspect -f '{{index .Config.Labels "com.nexpoly.dev.config-hash"}}' "$container_id")"
+  if [[ -n "$expected_container_id" ]]; then
+    desired_hash="$expected_config_hash"
+  else
+    desired_hash="$(compute_gpu_backend_config_hash)"
+  fi
+  if ! actual_hash="$(docker inspect -f '{{index .Config.Labels "com.nexpoly.dev.config-hash"}}' "$container_id" 2>/dev/null)"; then
+    [[ -z "$expected_container_id" ]] || archive_gpu_backend_candidate_logs "$expected_container_id" || true
+    [[ -z "$expected_container_id" ]] || gpu_backend_candidate_identity_lost "$expected_container_id" "$container_id"
+    return 1
+  fi
   [[ -n "$desired_hash" && "$actual_hash" == "$desired_hash" ]] || {
     echo "Governed development backend Compose configuration has drifted." >&2
     return 1
@@ -1392,17 +1537,30 @@ verify_backend_image_build_identity() {
 }
 
 write_gpu_session_activation_manifest() {
+  local expected_container_id="${1:-}" expected_config_hash="${2:-}"
   local controller_payload run_directory container_id image_id manifest
+  [[ "$expected_container_id" =~ ^[0-9a-f]{64}$ && "$expected_config_hash" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "GPU session activation manifest requires a pinned Backend candidate identity." >&2
+    return 1
+  }
   controller_payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)"
   run_directory="$(printf '%s' "$controller_payload" | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_directory"])')"
   container_id="$("${GPU_COMPOSE[@]}" ps -q backend)"
-  [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || return 1
-  image_id="$(docker inspect -f '{{.Image}}' "$container_id")"
+  if [[ "$container_id" != "$expected_container_id" ]]; then
+    archive_gpu_backend_candidate_logs "$expected_container_id" || true
+    gpu_backend_candidate_identity_lost "$expected_container_id" "${container_id:-missing}"
+    return 1
+  fi
+  if ! image_id="$(docker inspect -f '{{.Image}}' "$expected_container_id" 2>/dev/null)"; then
+    archive_gpu_backend_candidate_logs "$expected_container_id" || true
+    gpu_backend_candidate_identity_lost "$expected_container_id" "$container_id"
+    return 1
+  fi
   manifest="$run_directory/activation-manifest.json"
   "$GPU_SESSION_PYTHON" -I - \
     "$manifest" "$WORKER_PID_FILE" "$DFT_WORKER_SESSION_RECORD" \
     "$NEXPOLY_DEV_GPU_SESSION_ID" "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" \
-    "$container_id" "$image_id" "$NEXPOLY_DEV_CONFIG_HASH" <<'PY'
+    "$expected_container_id" "$image_id" "$expected_config_hash" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -1515,6 +1673,10 @@ gpu_backend_stop_exact_session() {
     # An idle CPU backend or another authority is never stopped by recovery.
     return 0
   fi
+  # Preserve the exact governed candidate's final output before Compose can
+  # delete it.  Archival is deliberately best-effort and never weakens the
+  # controller's safe rollback path.
+  archive_gpu_backend_candidate_logs "$container_id" || true
   "${GPU_COMPOSE[@]}" stop backend
 }
 
@@ -1614,6 +1776,7 @@ gpu_session_up() {
   GPU_SESSION_ROLLBACK_ARMED=true
   trap gpu_session_up_rollback ERR
   local controller_payload dft_health
+  local gpu_backend_candidate_id gpu_backend_candidate_hash
   controller_payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" up --execute)"
   NEXPOLY_DEV_GPU_SESSION_ID="$(printf '%s' "$controller_payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin); session=value.get("session_id"); assert value.get("status") == "plane-ready" and isinstance(session,str) and re.fullmatch(r"[0-9a-f]{32}", session), value; print(session)')"
   export NEXPOLY_DEV_GPU_SESSION_ID
@@ -1624,15 +1787,25 @@ gpu_session_up() {
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" stabilize --execute \
     --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" >/dev/null
   worker_up
-  NEXPOLY_DEV_CONFIG_HASH="$(compute_gpu_backend_config_hash)"
+  gpu_backend_candidate_hash="$(compute_gpu_backend_config_hash)"
+  [[ "$gpu_backend_candidate_hash" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "Governed development Backend candidate config hash is invalid." >&2
+    return 1
+  }
+  NEXPOLY_DEV_CONFIG_HASH="$gpu_backend_candidate_hash"
   export NEXPOLY_DEV_CONFIG_HASH
   "${GPU_COMPOSE[@]}" up -d --no-deps --force-recreate backend
-  wait_gpu_backend_configured
-  verify_gpu_backend_drift plane-ready
-  write_gpu_session_activation_manifest
+  if ! gpu_backend_candidate_id="$("${GPU_COMPOSE[@]}" ps -q backend)" ||
+    [[ ! "$gpu_backend_candidate_id" =~ ^[0-9a-f]{64}$ ]]; then
+    gpu_backend_candidate_identity_lost missing "${gpu_backend_candidate_id:-missing}"
+    return 1
+  fi
+  wait_gpu_backend_configured "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
+  verify_gpu_backend_drift plane-ready "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
+  write_gpu_session_activation_manifest "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" activate --execute \
     --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" >/dev/null
-  verify_gpu_backend_drift ready
+  verify_gpu_backend_drift ready "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
   GPU_SESSION_ROLLBACK_ARMED=false
   trap - ERR
   echo "Development GPU1 session is ready; GPU3 was not modified."
