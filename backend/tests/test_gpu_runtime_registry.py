@@ -10,7 +10,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.main import _build_gpu_runtime_registry, create_app
+from app.main import (
+    _build_gpu_runtime_registry,
+    _initialize_dev_managed_cuda_runtime,
+    create_app,
+)
 from app.routers import query as query_router_module
 from app.routers.gpu_status import router as gpu_status_router
 from app.services.gpu_runtime_registry import (
@@ -115,6 +119,60 @@ def test_main_registry_guard_requires_and_rechecks_healthy_residency() -> None:
     with registry.inference_session("ocsr", timeout_seconds=0):
         pass
     assert calls == 2
+
+
+def test_dev_managed_cuda_initializes_on_the_caller_thread(monkeypatch) -> None:
+    caller_thread = __import__("threading").get_ident()
+    events: list[tuple[str, int]] = []
+
+    class Cuda:
+        def init(self) -> None:
+            events.append(("init", __import__("threading").get_ident()))
+
+        def is_initialized(self) -> bool:
+            events.append(("initialized", __import__("threading").get_ident()))
+            return True
+
+        def synchronize(self) -> None:
+            events.append(("synchronize", __import__("threading").get_ident()))
+
+    class Lease:
+        def confirm_current(self) -> None:
+            events.append(("confirm", __import__("threading").get_ident()))
+
+    fake_torch = SimpleNamespace(
+        cuda=Cuda(),
+        empty=lambda _size, *, device: events.append(
+            (f"empty:{device}", __import__("threading").get_ident())
+        )
+        or object(),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+
+    _initialize_dev_managed_cuda_runtime(
+        SimpleNamespace(gpu_broker_environment="dev"),
+        Lease(),
+    )
+
+    assert [name for name, _thread in events] == [
+        "init",
+        "initialized",
+        "empty:cuda",
+        "synchronize",
+        "confirm",
+    ]
+    assert {thread for _name, thread in events} == {caller_thread}
+
+
+def test_managed_cuda_initialization_does_not_change_production() -> None:
+    class Lease:
+        def confirm_current(self) -> None:
+            raise AssertionError("production residency must remain unchanged")
+
+    _initialize_dev_managed_cuda_runtime(
+        SimpleNamespace(gpu_broker_environment="prod"),
+        Lease(),
+    )
 
 
 def test_registry_preloads_enabled_models_in_registration_order() -> None:
@@ -764,6 +822,10 @@ def test_required_preload_rechecks_residency_after_warmup(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.main._acquire_backend_gpu_residency", lambda _settings: Lease()
     )
+    monkeypatch.setattr(
+        "app.main._initialize_dev_managed_cuda_runtime",
+        lambda _settings, _lease: events.append("cuda-init"),
+    )
     settings = Settings(
         gpu_preload_mode="required",
         gpu_broker_enabled=True,
@@ -787,5 +849,5 @@ def test_required_preload_rechecks_residency_after_warmup(monkeypatch) -> None:
         with TestClient(app):
             pass
 
-    assert events[:3] == ["load", "warmup", "lease-assert"]
+    assert events[:4] == ["cuda-init", "load", "warmup", "lease-assert"]
     assert events[-1] == "lease-abandon"

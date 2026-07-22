@@ -121,6 +121,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     api_app.state.settings,
                 )
                 api_app.state.backend_gpu_residency_lease = residency_lease
+                _initialize_dev_managed_cuda_runtime(
+                    api_app.state.settings,
+                    residency_lease,
+                )
             if required_startup:
                 api_app.state.gpu_runtime_registry.preload_enabled()
                 if residency_lease is not None:
@@ -395,6 +399,36 @@ def _acquire_backend_gpu_residency(settings: Settings) -> ManagedGpuLease:
         lease.close()
         raise
     return lease
+
+
+def _initialize_dev_managed_cuda_runtime(
+    settings: Settings,
+    residency_lease: ManagedGpuLease,
+) -> None:
+    """Initialize the dev CUDA context on the lifespan thread.
+
+    The pinned Backend runtime must establish its MPS client before request
+    work is dispatched to AnyIO threads.  Model loading remains lazy; this
+    probe only creates and synchronizes the process CUDA context after the
+    exact residency lease has installed its client environment.
+    """
+
+    if settings.gpu_broker_environment != "dev":
+        return
+    try:
+        import torch
+
+        torch.cuda.init()
+        if not torch.cuda.is_initialized():
+            raise RuntimeError("CUDA runtime did not reach initialized state")
+        probe = torch.empty(1, device="cuda")
+        torch.cuda.synchronize()
+        del probe
+        residency_lease.confirm_current()
+    except Exception as exc:
+        raise RuntimeError(
+            "development Backend CUDA/MPS initialization failed"
+        ) from exc
 
 
 def _build_gpu_runtime_registry(app: FastAPI, settings: Settings) -> GpuRuntimeRegistry:
