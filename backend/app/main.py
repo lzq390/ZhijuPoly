@@ -121,6 +121,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     api_app.state.settings,
                 )
                 api_app.state.backend_gpu_residency_lease = residency_lease
+                _warm_managed_ocsr_runtime(api_app)
             if required_startup:
                 api_app.state.gpu_runtime_registry.preload_enabled()
                 if residency_lease is not None:
@@ -395,6 +396,26 @@ def _acquire_backend_gpu_residency(settings: Settings) -> ManagedGpuLease:
         lease.close()
         raise
     return lease
+
+
+def _warm_managed_ocsr_runtime(app: FastAPI) -> None:
+    """Initialize CUDA-backed OCSR on the Uvicorn lifespan thread.
+
+    The pinned Backend PyTorch/CUDA runtime can crash in native CUDA MPS
+    initialization when its first CUDA call is made from an AnyIO worker
+    thread.  Keep the request path off the event loop, but establish and warm
+    the process-wide CUDA runtime here after the residency lease is active.
+    """
+
+    settings = app.state.settings
+    device = str(settings.ocsr_device or "auto").strip().lower()
+    if not settings.ocsr_enabled or not (
+        device == "auto" or device == "gpu" or device.startswith("cuda")
+    ):
+        return
+    registry = app.state.gpu_runtime_registry
+    with registry.inference_session("ocsr", timeout_seconds=0) as runtime:
+        warmup_image_recognition_runtime(runtime)
 
 
 def _build_gpu_runtime_registry(app: FastAPI, settings: Settings) -> GpuRuntimeRegistry:
