@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import zipfile
 from pathlib import Path
+from threading import get_ident
 from xml.sax.saxutils import escape
 
 import pytest
@@ -13,7 +14,9 @@ from app.database import sqlite_connection
 from app.import_knowledge import import_knowledge_directory_to_sqlite, import_knowledge_zip_to_sqlite
 from app.models import KnowledgeSearchRequest
 from app.postgres_database import postgres_connection
+from app.routers import knowledge as knowledge_routes
 from app.routers.knowledge import search_knowledge
+from app.services.postgres_knowledge_search import _build_search_sql_parts
 
 
 def make_request(app: FastAPI) -> Request:
@@ -130,6 +133,16 @@ def write_knowledge_zip(path: Path) -> None:
 
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("P1_提取结果.xlsx", make_xlsx(rows))
+
+
+def test_postgres_knowledge_search_keeps_indexed_columns_bare() -> None:
+    sql_parts = _build_search_sql_parts(["epoxy"])
+    generated_sql = " ".join(part for part in sql_parts if isinstance(part, str))
+
+    assert "COALESCE" not in generated_sql
+    assert "polymer_iupac ILIKE" in generated_sql
+    assert "formulation ILIKE" in generated_sql
+    assert "abstract ILIKE" in generated_sql
 
 
 def test_import_knowledge_zip_to_sqlite_and_searches_abstract(tmp_path: Path) -> None:
@@ -305,6 +318,34 @@ async def test_search_knowledge_api_returns_matches_from_abstract(test_app: Fast
     assert "epoxy resin" in response.results[0].abstract_snippet.casefold()
     assert response.results[0].matched_terms == ["epoxy"]
     assert response.results[0].matched_fields == ["Polymer", "Title", "Abstract"]
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_runs_synchronous_work_off_event_loop(
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _insert_knowledge_documents(
+        test_app,
+        [{"title_en": "Epoxy coating", "abstract": "An epoxy resin coating."}],
+    )
+    event_loop_thread = get_ident()
+    worker_threads: list[int] = []
+    original_search = knowledge_routes._search_knowledge_sync
+
+    def recording_search(request_body, app):
+        worker_threads.append(get_ident())
+        return original_search(request_body, app)
+
+    monkeypatch.setattr(knowledge_routes, "_search_knowledge_sync", recording_search)
+
+    response = await search_knowledge(
+        KnowledgeSearchRequest(query="epoxy", top_k=5),
+        make_request(test_app),
+    )
+
+    assert response.total == 1
+    assert worker_threads and worker_threads[0] != event_loop_thread
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,10 @@ from app.services.knowledge_search import SEARCH_FIELDS, _escape_like, normalize
 
 
 def _field_like_sql(column: str) -> str:
-    return f"COALESCE({column}, '') ILIKE %s ESCAPE '\\'"
+    # Keep the indexed column bare so PostgreSQL can use its gin_trgm_ops
+    # index. NULL ILIKE yields NULL, which is already non-matching in WHERE,
+    # OR, and CASE WHEN expressions.
+    return f"{column} ILIKE %s ESCAPE '\\'"
 
 
 def _build_search_sql_parts(terms: list[str]) -> tuple[str, list[str], str, list[str], str, list[str]]:

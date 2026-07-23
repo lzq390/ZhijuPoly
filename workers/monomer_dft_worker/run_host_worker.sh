@@ -431,8 +431,17 @@ MONOMER_DFT_DEPLOYMENT="${MONOMER_DFT_DEPLOYMENT:-dev}"
   fail "MONOMER_DFT_DEPLOYMENT must be dev; production is hard-off"
 [[ "${NEXPOLY_DFT_GPU_DEVICE:-1}" == "1" ]] || \
   fail "dev primary DFT executor must use physical GPU 1; GPU 0 and GPU 2 are forbidden"
-[[ "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}" == "3" ]] || \
-  fail "dev overflow order must be physical GPU 3 only; GPU 0 and GPU 2 are forbidden"
+[[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" =~ ^[01]$ ]] || \
+  fail "NEXPOLY_DEV_GPU1_ONLY_SESSION must be 0 or 1"
+if [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]]; then
+  [[ "${NEXPOLY_DEV_GPU_SESSION_ID:-}" =~ ^[0-9a-f]{32}$ ]] || \
+    fail "GPU1-only session identity is missing or invalid"
+  [[ -z "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-}" ]] || \
+    fail "GPU1-only development sessions forbid every overflow GPU"
+else
+  [[ "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}" == "3" ]] || \
+    fail "dev overflow order must be physical GPU 3 only; GPU 0 and GPU 2 are forbidden"
+fi
 
 MONOMER_DFT_PYTHON="$(absolute_runtime_path "${MONOMER_DFT_PYTHON:-$RUNTIME_ROOT/venvs/monomer-dft-worker/bin/python}")"
 MONOMER_DFT_WORKER_UDS="$(absolute_runtime_path "${MONOMER_DFT_WORKER_UDS:-$RUNTIME_ROOT/monomer-dft-worker-socket/worker.sock}")"
@@ -493,7 +502,11 @@ validate_supervisor_configuration
 export MONOMER_DFT_MAX_CONCURRENT_JOBS=1
 export MONOMER_DFT_DEPLOYMENT
 export NEXPOLY_DFT_GPU_DEVICE="${NEXPOLY_DFT_GPU_DEVICE:-1}"
-export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}"
+if [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]]; then
+  export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=""
+else
+  export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}"
+fi
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 # The supervisor must remain CUDA-blind. Each leased executor child receives
 # exactly one CUDA_VISIBLE_DEVICES value before importing any CUDA library.

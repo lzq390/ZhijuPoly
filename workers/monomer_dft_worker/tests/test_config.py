@@ -30,6 +30,7 @@ ENV_NAMES = (
     "MONOMER_DFT_OPTIMIZATION_TIMEOUT_SECONDS",
     "NEXPOLY_DFT_GPU_DEVICE",
     "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES",
+    "NEXPOLY_DEV_GPU1_ONLY_SESSION",
     "MONOMER_DFT_DEPLOYMENT",
     "MONOMER_DFT_GPU_BROKER_ENABLED",
     "MONOMER_DFT_STANDALONE_GPU_SMOKE",
@@ -96,6 +97,19 @@ def test_load_settings_uses_isolated_runtime_defaults(monkeypatch: pytest.Monkey
     assert settings.single_point_timeout_seconds == 600
     assert settings.optimization_timeout_seconds == 1800
     assert settings.model_name == "aimnet2"
+
+
+def test_gpu1_only_session_has_no_dft_overflow_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clean_environment(monkeypatch)
+    monkeypatch.setenv("NEXPOLY_DEV_GPU1_ONLY_SESSION", "1")
+    monkeypatch.setenv("NEXPOLY_DFT_OVERFLOW_GPU_DEVICES", "")
+
+    settings = config.load_settings()
+
+    assert settings.physical_gpu == "1"
+    assert settings.overflow_gpu_devices == ()
 
 
 def test_broker_preflight_provenance_path_imports_no_cuda_stack(

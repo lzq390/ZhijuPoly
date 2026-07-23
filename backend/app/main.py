@@ -71,6 +71,7 @@ from app.services.polytao_jobs import PolytaoJobManager
 from app.services.polytao_runtime import BackendPolytaoRuntime
 from app.services.monomer_md_repository import mark_expired_unclaimed_monomer_md_jobs_failed_postgres
 from app.services.reverse_design_jobs import ReverseDesignJobManager
+from app.services.structure_similarity_index import StructureSimilarityIndex
 from gpu_resource import GpuBrokerClient, ManagedGpuLease, mps_client_environment
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     api_app.state.settings,
                 )
                 api_app.state.backend_gpu_residency_lease = residency_lease
+                _initialize_dev_managed_cuda_runtime(
+                    api_app.state.settings,
+                    residency_lease,
+                )
             if required_startup:
                 api_app.state.gpu_runtime_registry.preload_enabled()
                 if residency_lease is not None:
@@ -219,7 +224,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.state.settings = app_settings
+    app.state.smipoly_limiter = anyio.CapacityLimiter(1)
     app.state.postgres_connection_factory = postgres_connection
+    app.state.structure_similarity_index = StructureSimilarityIndex()
     app.state.inflight_api_writes = InflightApiWriteTracker()
     # In lazy/development mode startup database checks are allowed to fail
     # without taking unrelated APIs offline.
@@ -395,11 +402,53 @@ def _acquire_backend_gpu_residency(settings: Settings) -> ManagedGpuLease:
     return lease
 
 
+def _initialize_dev_managed_cuda_runtime(
+    settings: Settings,
+    residency_lease: ManagedGpuLease,
+) -> None:
+    """Initialize the dev CUDA context on the lifespan thread.
+
+    The pinned Backend runtime must establish its MPS client before request
+    work is dispatched to AnyIO threads.  Model loading remains lazy; this
+    probe only creates and synchronizes the process CUDA context after the
+    exact residency lease has installed its client environment.
+    """
+
+    if settings.gpu_broker_environment != "dev":
+        return
+    try:
+        import torch
+
+        torch.cuda.init()
+        if not torch.cuda.is_initialized():
+            raise RuntimeError("CUDA runtime did not reach initialized state")
+        probe = torch.empty(1, device="cuda")
+        torch.cuda.synchronize()
+        del probe
+        residency_lease.confirm_current()
+    except Exception as exc:
+        raise RuntimeError(
+            "development Backend CUDA/MPS initialization failed"
+        ) from exc
+
+
 def _build_gpu_runtime_registry(app: FastAPI, settings: Settings) -> GpuRuntimeRegistry:
+    def assert_gpu_admission() -> None:
+        if not settings.gpu_broker_enabled:
+            return
+        residency = getattr(app.state, "backend_gpu_residency_lease", None)
+        if residency is None:
+            raise RuntimeError("GPU inference requires an active Backend residency lease")
+        # A cached heartbeat can be stale for one heartbeat interval.  Every
+        # inference admission therefore crosses the Broker fencing boundary
+        # synchronously before any runtime is loaded or executed.
+        residency.confirm_current()
+
     registry = GpuRuntimeRegistry(
         preload_mode=settings.gpu_preload_mode,
         max_concurrent_inferences=settings.gpu_max_concurrent_inferences,
         max_waiting_inferences=settings.gpu_max_waiting_inferences,
+        admission_guard=assert_gpu_admission,
     )
     registry.register(
         "ocsr",

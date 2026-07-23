@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import get_ident
 from time import sleep
 
 import pytest
@@ -10,6 +11,7 @@ from starlette.requests import Request
 
 from app.config import Settings
 from app.models import ReverseDesignTgRequest, ReverseDesignTgResponse
+from app.routers import reverse_design as reverse_design_routes
 from app.routers.reverse_design import _search_by_tg_response, search_by_tg
 from app.services.fingerprint import fingerprint_to_bytes, generate, tanimoto
 from app.services.postgres_reverse_design import (
@@ -44,6 +46,35 @@ def test_reverse_design_route_forwards_postgres_scan_progress(test_app: FastAPI)
     assert response.total == 1
     assert response.results[0].pi_id == 7
     assert progress_events[-1]["scanned_rows"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_reverse_design_tg_runs_synchronous_scan_off_event_loop(
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_loop_thread = get_ident()
+    worker_threads: list[int] = []
+    original_search = reverse_design_routes._search_by_tg_response
+
+    def recording_search(*args, **kwargs):
+        worker_threads.append(get_ident())
+        return original_search(*args, **kwargs)
+
+    monkeypatch.setattr(reverse_design_routes, "_search_by_tg_response", recording_search)
+
+    response = await search_by_tg(
+        ReverseDesignTgRequest(
+            smiles="CCO",
+            target_tg=215,
+            similarity_threshold=0.0,
+            candidate_size=1,
+        ),
+        make_request(test_app),
+    )
+
+    assert response.total == 1
+    assert worker_threads and worker_threads[0] != event_loop_thread
 
 
 class FakePostgresCursor:

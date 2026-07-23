@@ -207,6 +207,31 @@ def _seed_governance(connection) -> None:
             ("property_filter_csv", "fixture/property_filter.csv", "ready", 6, None),
         ],
     )
+    core_source = connection.execute(
+        """
+        INSERT INTO governance.source_files (
+          logical_name, path, storage_kind, status, row_count, sha256, notes
+        )
+        VALUES (%s, %s, 'fixture', 'ready', %s, %s, %s)
+        RETURNING source_file_id
+        """,
+        (
+            "core_property_csv",
+            "fixture/core.csv",
+            6,
+            "a" * 64,
+            "governed structure-similarity fixture",
+        ),
+    ).fetchone()
+    connection.execute(
+        """
+        INSERT INTO governance.import_batches (
+          dataset_key, source_file_id, finished_at, status, row_count
+        )
+        VALUES ('core', %s, now(), 'completed', %s)
+        """,
+        (int(core_source["source_file_id"]), 6),
+    )
 
 
 def _seed_core_polymers(connection) -> None:

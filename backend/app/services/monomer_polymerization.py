@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import contextlib
 import importlib
-import io
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -110,13 +108,12 @@ def run_monomer_polymerization(
     source_df = runtime.pd.DataFrame(rows)
 
     try:
-        with contextlib.redirect_stdout(io.StringIO()):
-            classified_df = runtime.monc.moncls(source_df, smiColn="SMILES", dsp_rsl=False)
-            generated_df = runtime.polg.biplym(
-                classified_df,
-                targ=["all"] if request.target_class == "all" else [request.target_class],
-                dsp_rsl=False,
-            )
+        classified_df = runtime.monc.moncls(source_df, smiColn="SMILES", dsp_rsl=False)
+        generated_df = runtime.polg.biplym(
+            classified_df,
+            targ=["all"] if request.target_class == "all" else [request.target_class],
+            dsp_rsl=False,
+        )
     except Exception as exc:  # pragma: no cover - exercised through route-level 503 tests
         raise ModelArtifactError("SMiPoly polymerization failed") from exc
 

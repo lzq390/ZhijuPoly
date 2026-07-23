@@ -54,11 +54,11 @@ TARGET_REF = f"refs/nexpoly/bridge-target/{TARGET_SHA}"
 TARGET_CORE_BLOB = "15b8a1378d4100a5c74666344107bf00661fe34f"
 TARGET_BACKEND_IMAGE = (
     "ghcr.io/lzq390/nexpoly-backend@"
-    "sha256:ec850b6873cca0340a63faf47ab19b3c4a65f1a656c5866e73487890a6f057f4"
+    "sha256:ecd522706ce34b6aa444b30f1dee49e34e9c5ab1e4bca78b6037848facacd8c7"
 )
 TARGET_WEB_IMAGE = (
     "ghcr.io/lzq390/nexpoly-web@"
-    "sha256:6b7e51ba07861e9894d484e7f0133128697c47fe02c230ab179a38c3d053d008"
+    "sha256:bc4a472c7eab5fc4b2f1e278567d9fc2551ac70e720ff06053c297c6829c18e0"
 )
 ASSET_MANIFEST_SHA256 = (
     "sha256:0588cc6a9acd50efbcba49850bbea79ab44fa1752fa530b8537ccb21753ebc9b"

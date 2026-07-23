@@ -26,6 +26,9 @@ from app.services.image_recognition import recognize_structure_image_from_bytes,
 from app.services.property_similarity import property_similarity_search_postgres
 from app.services.similarity import similarity_search_postgres
 from app.services.smiles_utils import standardize_smiles
+from app.services.structure_similarity_index import (
+    StructureSimilarityIndexUnavailableError,
+)
 from app.services.structure_3d import generate_3d_molblock
 from app.utils.exceptions import (
     InvalidImageError,
@@ -81,8 +84,12 @@ def _run_ocsr_inference(app, image_bytes: bytes, content_type: str | None):
 
 @router.post("/query/smiles", response_model=SmilesQueryResponse)
 async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> SmilesQueryResponse:
+    return await run_in_threadpool(_query_smiles_sync, request_body, request.app)
+
+
+def _query_smiles_sync(request_body: SmilesQueryRequest, app) -> SmilesQueryResponse:
     started_at = perf_counter()
-    settings = request.app.state.settings
+    settings = app.state.settings
     predicted_property_name: str | None = None
     predicted_property_value: float | None = None
     predicted_property_unit: str | None = None
@@ -91,13 +98,14 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
         raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
 
     try:
-        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+        with app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
             if request_body.match_mode == "structure":
                 rows_with_scores = similarity_search_postgres(
                     connection,
                     request_body.smiles,
-                    similarity_threshold=0.0,
-                    top_k=10,
+                    similarity_threshold=request_body.similarity_threshold,
+                    top_k=request_body.top_k,
+                    index=app.state.structure_similarity_index,
                 )
             elif request_body.property_name is not None:
                 if not settings.model_enabled:
@@ -107,7 +115,8 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
                     request_body.smiles,
                     request_body.property_name,
                     model_dir=settings.model_dir_path,
-                    top_k=10,
+                    similarity_threshold=request_body.similarity_threshold,
+                    top_k=request_body.top_k,
                 )
                 predicted_property_name = request_body.property_name
             else:
@@ -122,6 +131,12 @@ async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> Sm
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except StructureSimilarityIndexUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="structure similarity index is unavailable",
+            headers={"Retry-After": "2"},
+        ) from exc
     except ModelArtifactError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -165,7 +180,8 @@ async def get_polymer_detail(polymer_id: int, request: Request) -> PolymerResult
 async def generate_structure_3d(request_body: Structure3DRequest, request: Request) -> Structure3DResponse:
     try:
         settings = request.app.state.settings
-        molblock, capped_smiles = generate_3d_molblock(
+        molblock, capped_smiles = await run_in_threadpool(
+            generate_3d_molblock,
             request_body.smiles,
             timeout_seconds=settings.structure_3d_timeout_seconds,
         )

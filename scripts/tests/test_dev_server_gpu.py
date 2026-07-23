@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -12,11 +14,83 @@ import unittest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPOSITORY_ROOT / "scripts" / "dev_server_gpu.sh"
 DEV_COMPOSE = REPOSITORY_ROOT / "docker-compose.dev.yml"
+GPU_SESSION_COMPOSE = REPOSITORY_ROOT / "docker-compose.dev-gpu-session.yml"
+BACKEND_DOCKERFILE = REPOSITORY_ROOT / "Dockerfile"
 DEV_ENV_EXAMPLE = REPOSITORY_ROOT / ".env.dev.example"
 DEV_BUILDKIT_CONFIG = REPOSITORY_ROOT / "ops" / "config" / "buildkitd.dev.toml"
 
 
 class DevServerGpuScriptTests(unittest.TestCase):
+    def _shell_function_source(self, name: str) -> str:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index(f"{name}() {{")
+        end = source.index("\n}\n", start) + len("\n}\n")
+        return source[start:end]
+
+    def _run_gpu_up_rollback(
+        self,
+        *,
+        controller_source: str,
+        session_id: str = "a" * 32,
+    ) -> tuple[subprocess.CompletedProcess[str], list[str], list[str]]:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            controller = root / "controller"
+            controller.write_text(controller_source, encoding="utf-8")
+            controller.chmod(0o700)
+            controller_log = root / "controller.log"
+            fallback_log = root / "fallback.log"
+            harness = f"""
+set -u
+GPU_SESSION_PYTHON="$1"
+GPU_SESSION_CONTROLLER="ignored-controller-path"
+GPU_SESSION_ROLLBACK_ARMED=true
+NEXPOLY_DEV_GPU_SESSION_ID="$2"
+export FAKE_CONTROLLER_LOG="$3"
+FALLBACK_LOG="$4"
+
+{self._shell_function_source("gpu_session_controller_status_fields")}
+{self._shell_function_source("gpu_session_controller_owns_recovery")}
+{self._shell_function_source("gpu_session_controller_finish_recovery")}
+{self._shell_function_source("gpu_session_up_rollback")}
+
+gpu_session_stop_owned_internal() {{
+  printf '%s\n' stop-owned >> "$FALLBACK_LOG"
+}}
+gpu_session_restore_cpu_internal() {{
+  printf '%s\n' restore-cpu >> "$FALLBACK_LOG"
+}}
+
+set +e
+false
+gpu_session_up_rollback
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "rollback-harness",
+                    str(controller),
+                    session_id,
+                    str(controller_log),
+                    str(fallback_log),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            controller_calls = (
+                controller_log.read_text(encoding="utf-8").splitlines()
+                if controller_log.exists()
+                else []
+            )
+            fallback_calls = (
+                fallback_log.read_text(encoding="utf-8").splitlines()
+                if fallback_log.exists()
+                else []
+            )
+        return completed, controller_calls, fallback_calls
+
     def _asset_verifier_source(self) -> str:
         lines = SCRIPT.read_text(encoding="utf-8").splitlines()
         marker = 'python3 - "$NEXPOLY_ASSET_ROOT" "$manifest" <<\'PY\''
@@ -80,6 +154,25 @@ class DevServerGpuScriptTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    @unittest.skipUnless(
+        (REPOSITORY_ROOT / ".env.dev").is_file(),
+        "public dev CLI requires the owner-local .env.dev",
+    )
+    def test_public_gpu_session_up_dry_run_passes_through_flock_wrapper(self) -> None:
+        environment = dict(os.environ)
+        environment.pop("NEXPOLY_DEV_GPU_SESSION_EXECUTE", None)
+        completed = subprocess.run(
+            [str(SCRIPT), "gpu-session-up"],
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["action"], "up")
+        self.assertIs(payload["dry_run"], True)
+
     def test_embedded_smoke_python_has_valid_syntax(self) -> None:
         lines = SCRIPT.read_text(encoding="utf-8").splitlines()
         blocks: list[str] = []
@@ -134,6 +227,38 @@ class DevServerGpuScriptTests(unittest.TestCase):
         self.assertNotIn("DEV_BUILDKIT", source)
         self.assertNotIn("DEV_BUILDX", source)
         self.assertIn('docker image inspect "$DEV_BACKEND_IMAGE" >/dev/null', source)
+        build_start = source.index("build_backend_image() {")
+        build_end = source.index("\n}\n", build_start)
+        self.assertIn("assert_clean_candidate", source[build_start:build_end])
+        drift_start = source.index("verify_backend_drift() {")
+        drift_end = source.index("\n}\n", drift_start)
+        self.assertIn("assert_clean_candidate", source[drift_start:drift_end])
+        self.assertIn("git ls-files --others --exclude-standard", source)
+
+    def test_backend_tests_use_a_dedicated_locked_image_and_full_discovery(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        compose = DEV_COMPOSE.read_text(encoding="utf-8")
+        dockerfile = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
+
+        self.assertIn("FROM backend-base AS backend-test", dockerfile)
+        self.assertIn("COPY backend/requirements-ci.lock", dockerfile)
+        self.assertIn("FROM backend-base AS runtime", dockerfile)
+        self.assertIn("backend-test:", compose)
+        self.assertIn("target: backend-test", compose)
+
+        branch = source[
+            source.index("  test-backend)"):source.index("  build-frontend)")
+        ]
+        self.assertIn("test_backend", branch)
+        test_function = source[
+            source.index("test_backend() ("):source.index("smoke_static()")
+        ]
+        self.assertIn("--profile test up -d backend-test-postgres", test_function)
+        self.assertIn("build --builder default backend-test", test_function)
+        self.assertIn("run --rm --no-deps backend-test", test_function)
+        self.assertIn("python -m pytest /app/backend/tests", test_function)
+        self.assertIn("rm -sf backend-test-postgres", test_function)
+        self.assertNotIn("tests/test_", branch)
 
     def test_ordinary_up_never_auto_applies_the_contract(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -145,6 +270,22 @@ class DevServerGpuScriptTests(unittest.TestCase):
         up_branch = up[up.index("  up)"):up.index("  stop)")]
         self.assertIn("run_dev_migrations", up_branch)
         self.assertNotIn("run_dev_contract_migration", up_branch)
+
+    def test_ordinary_up_precreates_owner_private_worker_mounts(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        case = source[source.index('case "${1:-up}" in'):]
+        up_branch = case[case.index("  up)"):case.index("  stop)")]
+
+        self.assertIn("prepare_worker_runtime_directories", up_branch)
+        self.assertIn("prepare_dft_runtime_directories", up_branch)
+        self.assertLess(
+            up_branch.index("prepare_worker_runtime_directories"),
+            up_branch.index("build_backend_image"),
+        )
+        self.assertLess(
+            up_branch.index("prepare_dft_runtime_directories"),
+            up_branch.index("build_backend_image"),
+        )
 
     def test_explicit_contract_command_archives_full_database_and_removed_table(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -182,6 +323,862 @@ class DevServerGpuScriptTests(unittest.TestCase):
             "docker system prune",
         ):
             self.assertNotIn(destructive_command, source)
+
+    def test_gpu_session_device_is_literal_gpu1_and_env_override_is_rejected(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        overlay = (REPOSITORY_ROOT / "docker-compose.dev-gpu-session.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('[[ "${NEXPOLY_DEV_GPU_DEVICE:-1}" == "1" ]]', source)
+        self.assertIn('export NEXPOLY_DEV_GPU_DEVICE=1', source)
+        self.assertIn('GPU_SESSION_PYTHON="/usr/bin/python3"', source)
+        self.assertIn('- "1"', overlay)
+        self.assertIn(
+            'NVIDIA_VISIBLE_DEVICES: "none"',
+            DEV_COMPOSE.read_text(encoding="utf-8"),
+        )
+        self.assertIn('NVIDIA_VISIBLE_DEVICES: "1"', overlay)
+        self.assertIn("'NVIDIA_VISIBLE_DEVICES':'none'", source)
+        self.assertIn("'NVIDIA_VISIBLE_DEVICES':'1'", source)
+        self.assertNotIn("NEXPOLY_DEV_GPU_DEVICE", overlay)
+
+    def test_cpu_property_prediction_is_independent_of_gpu_session(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        compose = DEV_COMPOSE.read_text(encoding="utf-8")
+        overlay = GPU_SESSION_COMPOSE.read_text(encoding="utf-8")
+        base_environment = compose[
+            compose.index("x-dev-backend-env:"):compose.index("\nservices:")
+        ]
+
+        self.assertIn('MODEL_ENABLED: "true"', base_environment)
+        self.assertNotIn("\n      MODEL_ENABLED:", overlay)
+        self.assertIn("'MODEL_ENABLED':'true'", source)
+        for gpu_only_flag in (
+            "OCSR_ENABLED",
+            "GEN_MODEL_ENABLED",
+            "RETRO_MODEL_ENABLED",
+            "POLYTAO_ENABLED",
+            "MONOMER_MD_SUBMIT_ENABLED",
+            "MONOMER_DFT_SUBMIT_ENABLED",
+        ):
+            self.assertIn(f'{gpu_only_flag}: "false"', base_environment)
+            self.assertIn(f"{gpu_only_flag}:", overlay)
+
+    def test_gpu_session_activation_is_ordered_after_real_dft_residency(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("gpu_session_up() {")
+        body = source[start:source.index("\n}\n\ngpu_session_status()", start)]
+        ordered_markers = (
+            "dft_worker_ctl start",
+            'dft_health="$(curl',
+            'dft_worker_session_record bind "$dft_health"',
+            "stabilize --execute",
+            "worker_up",
+            '"${GPU_COMPOSE[@]}" up -d --no-deps --force-recreate backend',
+            "wait_gpu_backend_configured",
+            "write_gpu_session_activation_manifest",
+            "activate --execute",
+        )
+        positions = [body.index(marker) for marker in ordered_markers]
+        self.assertEqual(positions, sorted(positions))
+
+        down_start = source.index("gpu_session_down() {")
+        down_body = source[
+            down_start:
+            source.index("\n}\n\ngpu_session_stop_owned_internal()", down_start)
+        ]
+        self.assertIn('"stabilizing"', down_body)
+        self.assertIn('if [[ "$state" == "stopped" ]]', down_body)
+        self.assertIn("verify_gpu_session_stopped_runtime", down_body)
+        self.assertGreaterEqual(
+            down_body.count("verify_gpu_session_stopped_runtime"),
+            2,
+        )
+        self.assertLess(
+            down_body.index('if [[ "$state" == "stopped" ]]'),
+            down_body.index("NEXPOLY_DEV_GPU_SESSION_ID="),
+        )
+
+        stopped_start = source.index("verify_gpu_session_stopped_runtime() {")
+        stopped_body = source[
+            stopped_start:source.index("\n}\n\ngpu_session_status()", stopped_start)
+        ]
+        self.assertIn("verify_backend_drift", stopped_body)
+        for marker in (
+            ".runtime/gpu-session/controller.json",
+            ".runtime/gpu-resource/broker.sock",
+            ".runtime/gpu-resource/mps-1",
+            '"$WORKER_PID_FILE"',
+            '"$WORKER_SOCKET"',
+            '"$DFT_WORKER_SESSION_RECORD"',
+            ".runtime/monomer-dft-worker.pid",
+            '"$DFT_WORKER_SOCKET_DIR/worker.sock"',
+        ):
+            self.assertIn(marker, stopped_body)
+
+    def test_gpu_session_requires_explicit_lowercase_true_md_before_locking(self) -> None:
+        requirement = self._shell_function_source("gpu_session_require_md_worker")
+        wrapper = self._shell_function_source("gpu_session_up_locked")
+        self.assertIn('${MONOMER_MD_DEV_WORKER_ENABLED:-}', requirement)
+        self.assertLess(
+            wrapper.index("gpu_session_require_md_worker"),
+            wrapper.index("gpu_session_prepare_up_lock"),
+        )
+        self.assertLess(
+            wrapper.index("gpu_session_prepare_up_lock"),
+            wrapper.index("flock --exclusive --nonblock --close"),
+        )
+        self.assertLess(
+            wrapper.index("flock --exclusive --nonblock --close"),
+            wrapper.index("gpu-session-up-locked-internal"),
+        )
+        dispatch = SCRIPT.read_text(encoding="utf-8")
+        internal = dispatch[
+            dispatch.index("  gpu-session-up-locked-internal)"):
+            dispatch.index("  gpu-session-status)")
+        ]
+        self.assertLess(
+            internal.index("gpu_session_assert_up_lock_held"),
+            internal.index("gpu_session_require_md_worker"),
+        )
+        self.assertLess(
+            internal.index("gpu_session_require_md_worker"),
+            internal.index("gpu_session_up"),
+        )
+        self.assertIn("MONOMER_MD_DEV_WORKER_ENABLED=true", DEV_ENV_EXAMPLE.read_text())
+
+        with tempfile.TemporaryDirectory() as raw:
+            marker = Path(raw) / "side-effects"
+            for value in (None, "false", "TRUE"):
+                assignment = (
+                    "unset MONOMER_MD_DEV_WORKER_ENABLED"
+                    if value is None
+                    else f"MONOMER_MD_DEV_WORKER_ENABLED={value}"
+                )
+                completed = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        f"""
+set -eu
+{assignment}
+ROOT_DIR=/must-not-run
+GPU_SESSION_UP_LOCK=/must-not-run
+SIDE_EFFECT_MARKER="$1"
+{requirement}
+{wrapper}
+gpu_session_prepare_up_lock() {{ printf 'prepare\n' >> "$SIDE_EFFECT_MARKER"; }}
+flock() {{ printf 'flock\n' >> "$SIDE_EFFECT_MARKER"; }}
+gpu_session_up_locked
+""",
+                        "md-contract-harness",
+                        str(marker),
+                    ],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 2, (value, completed.stderr))
+                self.assertIn("requires MONOMER_MD_DEV_WORKER_ENABLED=true", completed.stderr)
+                self.assertFalse(marker.exists(), value)
+
+    def test_gpu_session_flock_close_does_not_leak_to_a_long_lived_child(self) -> None:
+        wrapper = self._shell_function_source("gpu_session_up_locked")
+        self.assertIn("--close", wrapper)
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            lock = root / "gpu-session-up.lock"
+            child_record = root / "child.pid"
+            completed = subprocess.run(
+                [
+                    "flock",
+                    "--exclusive",
+                    "--nonblock",
+                    "--close",
+                    str(lock),
+                    "bash",
+                    "-c",
+                    'sleep 30 </dev/null >/dev/null 2>&1 & printf "%s\\n" "$!" > "$1"',
+                    "flock-child",
+                    str(child_record),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            child_pid = int(child_record.read_text(encoding="ascii"))
+            try:
+                os.kill(child_pid, 0)
+                contender = subprocess.run(
+                    ["flock", "--exclusive", "--nonblock", str(lock), "true"],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(contender.returncode, 0, contender.stderr)
+            finally:
+                try:
+                    os.kill(child_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+    def test_gpu_session_flock_allows_only_one_independent_start_process(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            lock = root / "gpu-session-up.lock"
+            lifecycle = root / "lifecycle.log"
+            command = (
+                'printf "start\\n" >> "$1"; '
+                'sleep 0.4; printf "finish\\n" >> "$1"'
+            )
+            winner = subprocess.Popen(
+                [
+                    "flock", "--exclusive", "--nonblock", "--close",
+                    "--conflict-exit-code", "75", str(lock),
+                    "bash", "-c", command, "gpu-up", str(lifecycle),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for _ in range(100):
+                if lifecycle.exists():
+                    break
+                subprocess.run(["sleep", "0.01"], check=True)
+            loser = subprocess.run(
+                [
+                    "flock", "--exclusive", "--nonblock", "--close",
+                    "--conflict-exit-code", "75", str(lock),
+                    "bash", "-c", command, "gpu-up", str(lifecycle),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            stdout, stderr = winner.communicate(timeout=5)
+            lifecycle_lines = lifecycle.read_text(encoding="ascii").splitlines()
+
+        self.assertEqual(winner.returncode, 0, (stdout, stderr))
+        self.assertEqual(loser.returncode, 75, loser.stderr)
+        self.assertEqual(lifecycle_lines, ["start", "finish"])
+
+    def test_internal_gpu_start_route_requires_its_exact_flock_parent(self) -> None:
+        assertion = self._shell_function_source("gpu_session_assert_up_lock_held")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            route = scripts / "dev_server_gpu.sh"
+            lock = root / "gpu-session-up.lock"
+            marker = root / "admitted"
+            ready = root / "holder-ready"
+            route.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+GPU_SESSION_PYTHON=/usr/bin/python3
+GPU_SESSION_UP_LOCK="$ROOT_DIR/gpu-session-up.lock"
+"""
+                + assertion
+                + """
+[[ "${1:-}" == "gpu-session-up-locked-internal" ]]
+gpu_session_assert_up_lock_held
+printf 'admitted\n' > "$ROUTE_MARKER"
+""",
+                encoding="utf-8",
+            )
+            route.chmod(0o700)
+            environment = {**os.environ, "ROUTE_MARKER": str(marker)}
+            valid = subprocess.run(
+                [
+                    "/usr/bin/flock", "--exclusive", "--nonblock", "--close",
+                    "--conflict-exit-code", "75", str(lock), str(route),
+                    "gpu-session-up-locked-internal",
+                ],
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+            self.assertTrue(marker.exists())
+            marker.unlink()
+
+            holder = subprocess.Popen(
+                [
+                    "/usr/bin/flock", "--exclusive", "--nonblock", "--close",
+                    str(lock), "bash", "-c",
+                    'printf ready > "$1"; exec sleep 30', "holder", str(ready),
+                ],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                for _ in range(100):
+                    if ready.exists():
+                        break
+                    subprocess.run(["sleep", "0.01"], check=True)
+                self.assertTrue(ready.exists())
+                bypass = subprocess.run(
+                    [str(route), "gpu-session-up-locked-internal"],
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertNotEqual(bypass.returncode, 0)
+                self.assertIn("parent identity differs", bypass.stderr)
+                self.assertFalse(marker.exists())
+            finally:
+                try:
+                    os.killpg(holder.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                holder.wait(timeout=5)
+
+    def test_dft_no_socket_cleanup_uses_ctl_lock_and_exact_pid_stop(self) -> None:
+        function = self._shell_function_source("dft_worker_drain_stop")
+        stopped_assertion = self._shell_function_source(
+            "dft_worker_assert_stopped_runtime"
+        )
+        controller_source = (
+            REPOSITORY_ROOT / "scripts" / "monomer_dft_worker_ctl.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("process_has_exact_session_environment", controller_source)
+        for marker in (
+            "NEXPOLY_DEV_GPU1_ONLY_SESSION=1",
+            "NEXPOLY_DEV_GPU_SESSION_ID=$NEXPOLY_DEV_GPU_SESSION_ID",
+            "MONOMER_DFT_WORKER_VERSION=$MONOMER_DFT_WORKER_VERSION",
+            "NEXPOLY_DFT_GPU_DEVICE=1",
+            "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=",
+        ):
+            self.assertIn(marker, controller_source)
+        self.assertIn('flock -n 9 || fail "another worker control operation is in progress"', controller_source)
+
+        for busy, expected_result in ((True, 1), (False, 0)):
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                runtime = root / ".runtime"
+                socket_dir = runtime / "monomer-dft-worker-socket"
+                socket_dir.mkdir(parents=True)
+                pid_file = runtime / "monomer-dft-worker.pid"
+                pid_file.write_text("123 456\n", encoding="ascii")
+                ctl_log = root / "ctl.log"
+                harness = f"""
+set -u
+ROOT_DIR="$1"
+DFT_WORKER_SOCKET_DIR="$2"
+DFT_WORKER_SESSION_RECORD="$3"
+CTL_LOG="$4"
+BUSY="$5"
+
+{stopped_assertion}
+{function}
+
+dft_worker_ctl() {{
+  printf '%s\n' "$*" >> "$CTL_LOG"
+  [[ "$BUSY" != "true" ]] || return 1
+  rm -f -- "$ROOT_DIR/.runtime/monomer-dft-worker.pid"
+}}
+dft_worker_session_record() {{ return 9; }}
+
+set +e
+dft_worker_drain_stop
+result=$?
+set -e
+printf 'result=%s\n' "$result"
+"""
+                completed = subprocess.run(
+                    [
+                        "bash", "-c", harness, "dft-cleanup-harness",
+                        str(root), str(socket_dir),
+                        str(runtime / "monomer-dft-worker.session.json"),
+                        str(ctl_log), "true" if busy else "false",
+                    ],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn(f"result={expected_result}", completed.stdout)
+                self.assertEqual(ctl_log.read_text(encoding="ascii").splitlines(), ["stop"])
+                self.assertEqual(pid_file.exists(), busy)
+
+    def test_gpu_session_up_pins_the_exact_backend_candidate_identity(self) -> None:
+        body = self._shell_function_source("gpu_session_up")
+        expected_calls = (
+            'gpu_backend_candidate_hash="$(compute_gpu_backend_config_hash)"',
+            'NEXPOLY_DEV_CONFIG_HASH="$gpu_backend_candidate_hash"',
+            '"${GPU_COMPOSE[@]}" up -d --no-deps --force-recreate backend',
+            'gpu_backend_candidate_id="$("${GPU_COMPOSE[@]}" ps -q backend)"',
+            'wait_gpu_backend_configured "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"',
+            'verify_gpu_backend_drift plane-ready "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"',
+            'write_gpu_session_activation_manifest "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"',
+            'verify_gpu_backend_drift ready "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"',
+        )
+        positions = [body.index(marker) for marker in expected_calls]
+        self.assertEqual(positions, sorted(positions))
+
+        verification = self._shell_function_source("verify_gpu_backend_drift")
+        self.assertIn('desired_hash="$expected_config_hash"', verification)
+        self.assertIn('container_id" != "$expected_container_id', verification)
+        manifest = self._shell_function_source("write_gpu_session_activation_manifest")
+        self.assertIn('container_id" != "$expected_container_id', manifest)
+
+        stop = self._shell_function_source("gpu_backend_stop_exact_session")
+        self.assertLess(
+            stop.index('archive_gpu_backend_candidate_logs "$container_id"'),
+            stop.index('"${GPU_COMPOSE[@]}" stop backend'),
+        )
+
+    def test_gpu_backend_wait_rejects_a_same_name_cpu_replacement(self) -> None:
+        candidate = "a" * 64
+        replacement = "b" * 64
+        config_hash = "c" * 64
+        session_id = "d" * 32
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            compose_count = root / "compose-count"
+            archive_log = root / "archive.log"
+            compose_count.write_text("0", encoding="ascii")
+            harness = f"""
+set -u
+EXPECTED_ID="$1"
+REPLACEMENT_ID="$2"
+EXPECTED_HASH="$3"
+NEXPOLY_DEV_GPU_SESSION_ID="$4"
+COUNT_FILE="$5"
+ARCHIVE_LOG="$6"
+GPU_COMPOSE=(fake_compose)
+
+{self._shell_function_source("gpu_backend_candidate_identity_lost")}
+{self._shell_function_source("wait_gpu_backend_configured")}
+
+fake_compose() {{
+  local count
+  [[ "$*" == "ps -q backend" ]] || return 9
+  count="$(<"$COUNT_FILE")"
+  if [[ "$count" == "0" ]]; then
+    printf '1' > "$COUNT_FILE"
+    printf '%s\n' "$EXPECTED_ID"
+  else
+    printf '%s\n' "$REPLACEMENT_ID"
+  fi
+}}
+docker() {{
+  [[ "$1" == "inspect" && "$2" == "-f" ]] || return 8
+  case "$3" in
+    *com.nexpoly.gpu.session-id*) printf '%s\n' "$NEXPOLY_DEV_GPU_SESSION_ID" ;;
+    *com.nexpoly.dev.config-hash*) printf '%s\n' "$EXPECTED_HASH" ;;
+    *State.Status*) printf '%s\n' running ;;
+    *State.Restarting*) printf '%s\n' false ;;
+    *RestartCount*) printf '%s\n' 0 ;;
+    *State.Health*) printf '%s\n' starting ;;
+    *) return 7 ;;
+  esac
+}}
+archive_gpu_backend_candidate_logs() {{
+  printf '%s\n' "$1" >> "$ARCHIVE_LOG"
+}}
+sleep() {{ :; }}
+
+set +e
+wait_gpu_backend_configured "$EXPECTED_ID" "$EXPECTED_HASH"
+result=$?
+set -e
+printf 'result=%s\n' "$result"
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "wait-replacement-harness",
+                    candidate,
+                    replacement,
+                    config_hash,
+                    session_id,
+                    str(compose_count),
+                    str(archive_log),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            archived = (
+                archive_log.read_text(encoding="ascii").splitlines()
+                if archive_log.exists()
+                else []
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("result=1", completed.stdout)
+        self.assertIn("candidate identity lost", completed.stderr)
+        self.assertIn("controller recovery or a same-name replacement", completed.stderr)
+        self.assertEqual(archived, [candidate])
+
+    def test_gpu_backend_wait_archives_the_first_restart_failure(self) -> None:
+        candidate = "a" * 64
+        config_hash = "c" * 64
+        session_id = "d" * 32
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            archive_log = root / "archive.log"
+            sleep_log = root / "sleep.log"
+            harness = f"""
+set -u
+EXPECTED_ID="$1"
+EXPECTED_HASH="$2"
+NEXPOLY_DEV_GPU_SESSION_ID="$3"
+ARCHIVE_LOG="$4"
+SLEEP_LOG="$5"
+GPU_COMPOSE=(fake_compose)
+
+{self._shell_function_source("gpu_backend_candidate_identity_lost")}
+{self._shell_function_source("wait_gpu_backend_configured")}
+
+fake_compose() {{
+  [[ "$*" == "ps -q backend" ]] || return 9
+  printf '%s\n' "$EXPECTED_ID"
+}}
+docker() {{
+  if [[ "$1" == "logs" ]]; then
+    printf '%s\n' 'native crash evidence'
+    return 0
+  fi
+  [[ "$1" == "inspect" && "$2" == "-f" ]] || return 8
+  case "$3" in
+    *com.nexpoly.gpu.session-id*) printf '%s\n' "$NEXPOLY_DEV_GPU_SESSION_ID" ;;
+    *com.nexpoly.dev.config-hash*) printf '%s\n' "$EXPECTED_HASH" ;;
+    *State.Status*) printf '%s\n' restarting ;;
+    *State.Restarting*) printf '%s\n' true ;;
+    *RestartCount*) printf '%s\n' 1 ;;
+    *) return 7 ;;
+  esac
+}}
+archive_gpu_backend_candidate_logs() {{
+  printf '%s\n' "$1" >> "$ARCHIVE_LOG"
+}}
+sleep() {{ printf '%s\n' slept >> "$SLEEP_LOG"; }}
+
+set +e
+wait_gpu_backend_configured "$EXPECTED_ID" "$EXPECTED_HASH"
+result=$?
+set -e
+printf 'result=%s\n' "$result"
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "wait-restart-harness",
+                    candidate,
+                    config_hash,
+                    session_id,
+                    str(archive_log),
+                    str(sleep_log),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            archived = archive_log.read_text(encoding="ascii").splitlines()
+            slept = sleep_log.exists()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("result=1", completed.stdout)
+        self.assertIn("native/restart failure", completed.stderr)
+        self.assertIn("restart_count=1", completed.stderr)
+        self.assertEqual(archived, [candidate])
+        self.assertFalse(slept)
+
+    def test_gpu_backend_verify_rejects_a_replacement_before_drift_checks(self) -> None:
+        candidate = "a" * 64
+        replacement = "b" * 64
+        config_hash = "c" * 64
+        script_source = SCRIPT.read_text(encoding="utf-8")
+        verify_start = script_source.index("verify_gpu_backend_drift() {")
+        verify_identity_prefix = (
+            script_source[
+                verify_start:script_source.index(
+                    '  expected_image="$(docker image inspect', verify_start
+                )
+            ]
+            + "}\n"
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            archive_log = Path(raw) / "archive.log"
+            harness = f"""
+set -u
+EXPECTED_ID="$1"
+REPLACEMENT_ID="$2"
+EXPECTED_HASH="$3"
+ARCHIVE_LOG="$4"
+GPU_COMPOSE=(fake_compose)
+
+{self._shell_function_source("gpu_backend_candidate_identity_lost")}
+{verify_identity_prefix}
+
+assert_clean_candidate() {{ :; }}
+assert_default_builder() {{ :; }}
+fake_compose() {{
+  [[ "$*" == "ps -q backend" ]] || return 9
+  printf '%s\n' "$REPLACEMENT_ID"
+}}
+archive_gpu_backend_candidate_logs() {{
+  printf '%s\n' "$1" >> "$ARCHIVE_LOG"
+}}
+
+set +e
+verify_gpu_backend_drift plane-ready "$EXPECTED_ID" "$EXPECTED_HASH"
+result=$?
+set -e
+printf 'result=%s\n' "$result"
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "verify-replacement-harness",
+                    candidate,
+                    replacement,
+                    config_hash,
+                    str(archive_log),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            archived = (
+                archive_log.read_text(encoding="ascii").splitlines()
+                if archive_log.exists()
+                else []
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("result=1", completed.stdout)
+        self.assertIn("candidate identity lost", completed.stderr)
+        self.assertNotIn("Compose configuration has drifted", completed.stderr)
+        self.assertEqual(archived, [candidate])
+
+    def test_gpu_backend_log_archive_is_private_and_never_blocks_recovery(self) -> None:
+        candidate = "a" * 64
+        session_id = "d" * 32
+        with tempfile.TemporaryDirectory() as raw:
+            run_directory = Path(raw) / f"20260722T010203Z-{session_id}"
+            run_directory.mkdir(mode=0o700)
+            harness = f"""
+set -u
+EXPECTED_ID="$1"
+NEXPOLY_DEV_GPU_SESSION_ID="$2"
+RUN_DIRECTORY="$3"
+
+{self._shell_function_source("archive_gpu_backend_candidate_logs")}
+
+gpu_session_current_run_directory() {{
+  printf '%s\n' "$RUN_DIRECTORY"
+}}
+docker() {{
+  if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+    printf '%s\n' "$NEXPOLY_DEV_GPU_SESSION_ID"
+    return 0
+  fi
+  if [[ "$1" == "logs" ]]; then
+    printf '%s\n' 'candidate stdout'
+    printf '%s\n' 'candidate stderr' >&2
+    return 7
+  fi
+  return 8
+}}
+
+archive_gpu_backend_candidate_logs "$EXPECTED_ID"
+printf 'result=%s\n' "$?"
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "archive-harness",
+                    candidate,
+                    session_id,
+                    str(run_directory),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            archive = run_directory / f"backend-candidate-{candidate}.log"
+            contents = archive.read_text(encoding="utf-8") if archive.exists() else ""
+            mode = archive.stat().st_mode & 0o777 if archive.exists() else None
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("result=0", completed.stdout)
+        self.assertEqual(mode, 0o600)
+        self.assertIn("candidate stdout", contents)
+        self.assertIn("candidate stderr", contents)
+        archive_source = self._shell_function_source("archive_gpu_backend_candidate_logs")
+        self.assertNotIn(".Config.Env", archive_source)
+
+    def test_gpu_up_rollback_defers_to_live_controller_automatic_recovery(self) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  printf '%s\\n' '{"status":"contaminated","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  exit 0
+fi
+if [[ "$*" == *" down --execute" ]]; then
+  exit 0
+fi
+exit 9
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, [])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
+    def test_gpu_up_rollback_keeps_exact_shell_fallback_if_controller_is_dead(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+exit 7
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, ["stop-owned", "restore-cpu"])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path drain --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
+    def test_gpu_up_rollback_rechecks_controller_ownership_after_drain(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  status_count="$(grep -c ' status$' "$FAKE_CONTROLLER_LOG")"
+  if [[ "$status_count" == "1" ]]; then
+    printf '%s\\n' '{"status":"plane-ready","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  else
+    printf '%s\\n' '{"status":"contaminated","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  fi
+  exit 0
+fi
+if [[ "$*" == *" drain --execute" || "$*" == *" down --execute" ]]; then
+  exit 0
+fi
+exit 9
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, [])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path drain --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
+    def test_gpu_up_rollback_keeps_shell_fallback_if_controller_never_takes_over(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  printf '%s\\n' '{"status":"plane-ready","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  exit 0
+fi
+if [[ "$*" == *" drain --execute" || "$*" == *" down --execute" ]]; then
+  exit 0
+fi
+exit 9
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, ["stop-owned", "restore-cpu"])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path drain --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
+    def test_gpu_up_rollback_never_takes_over_after_live_controller_wait_timeout(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  printf '%s\\n' '{"status":"cleanup-blocked","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  exit 0
+fi
+exit 8
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, [])
+        self.assertIn("remains the recovery authority", completed.stderr)
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+                "-I ignored-controller-path status",
+            ],
+        )
+
+    def test_gpu_up_rollback_takes_over_only_after_recovery_controller_dies(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  status_count="$(grep -c ' status$' "$FAKE_CONTROLLER_LOG")"
+  if [[ "$status_count" == "1" ]]; then
+    printf '%s\\n' '{"status":"audit-failed","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+    exit 0
+  fi
+fi
+exit 7
+""",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, ["stop-owned", "restore-cpu"])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path drain --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
 
     def test_canary_state_is_dev_private_and_fenced_from_production(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -265,6 +1262,13 @@ class DevServerGpuScriptTests(unittest.TestCase):
         self.assertIn("--app-dir /app/backend", compose)
         self.assertNotIn("--reload-exclude", compose)
 
+    def test_gpu_session_backend_keeps_stable_lease_process_identity(self) -> None:
+        compose = GPU_SESSION_COMPOSE.read_text(encoding="utf-8")
+        self.assertIn("exec python -X faulthandler -m uvicorn app.main:app", compose)
+        self.assertIn("--workers 1", compose)
+        self.assertIn("ipc: host", compose)
+        self.assertNotIn("--reload", compose)
+
     def test_worker_bootstrap_and_start_are_fail_closed(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         env_example = DEV_ENV_EXAMPLE.read_text(encoding="utf-8")
@@ -278,10 +1282,15 @@ class DevServerGpuScriptTests(unittest.TestCase):
         self.assertIn("  worker-venv)", source)
         self.assertIn("worker_verify_venv", source)
         self.assertIn("worker_assert_process_identity", source)
+        self.assertIn("worker_cleanup_failed_launch()", source)
+        self.assertIn("worker_process_record collect-dead", source)
+        self.assertIn("worker_secure_socket()", source)
+        self.assertIn("stat -c '%u:%a'", source)
         worker_start = source.index("worker_up() {")
         worker_up = source[worker_start:source.index("\n}\n\nworker_stop()", worker_start)]
         self.assertLess(worker_up.index("validate_asset_release"), worker_up.index("worker_health"))
         self.assertLess(worker_up.index("worker_verify_venv"), worker_up.index("worker_health"))
+        self.assertIn("export MONOMER_MD_GPU_SCOPE_LAUNCHER=systemd-user-scope", worker_up)
         self.assertIn("MONOMER_MD_DEV_WORKER_BASE_PYTHON=", env_example)
         self.assertIn("MONOMER_MD_DEV_WORKER_BASE_PYTHON_IDENTITY_SHA256=sha256:", env_example)
 

@@ -464,6 +464,18 @@ class ConfigurationValidationTests(unittest.TestCase):
         self.assertIn('python3 -m unittest -v "${unittest_files[@]}"', workflow)
         self.assertIn("scripts/tests/test_monomer_md_worker_launcher.py", workflow)
         self.assertIn("scripts/tests/test_worker_slot_runtime.py", workflow)
+        self.assertIn("scripts/tests/test_dev_gpu_session.py", workflow)
+        self.assertIn("scripts/tests/test_dev_worker_process.py", workflow)
+        self.assertIn(
+            "Prepare the exact development Worker test runtime",
+            workflow,
+        )
+        self.assertIn(
+            'worker_python="$GITHUB_WORKSPACE/.venv-monomer-md-worker/bin/python"',
+            workflow,
+        )
+        self.assertIn('"$worker_python" -m pip install --require-hashes', workflow)
+        self.assertIn("python scripts/prepare_dev_worker_venv.py verify", workflow)
 
 
 if __name__ == "__main__":

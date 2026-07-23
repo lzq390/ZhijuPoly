@@ -135,10 +135,11 @@ describe("in-memory generation job expiry", () => {
 
     const state = currentConditionalHook();
     expect(api.createConditionalGenerationTgJob).toHaveBeenCalledOnce();
-    expect(api.createConditionalGenerationTgJob).toHaveBeenCalledWith(request);
+    expect(api.createConditionalGenerationTgJob).toHaveBeenCalledWith(request, expect.any(AbortSignal));
     expect(api.fetchConditionalGenerationTgJob).toHaveBeenCalledOnce();
     expect(api.fetchConditionalGenerationTgJob).toHaveBeenCalledWith(
-      "conditional.instance.job"
+      "conditional.instance.job",
+      expect.any(AbortSignal)
     );
     expect(state.request).toEqual(request);
     expect(state.job?.job_id).toBe("conditional.instance.job");

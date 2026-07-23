@@ -3,27 +3,30 @@ name: nexpoly_dev
 x-dev-backend-env: &dev-backend-env
   WEB_CONCURRENCY: "1"
   MODEL_DIR: /app/model
+  # RDKit/sklearn property prediction is CPU-only and must remain available
+  # independently of the opportunistic GPU1 session.
   MODEL_ENABLED: "true"
-  OCSR_ENABLED: "true"
+  OCSR_ENABLED: "false"
   OCSR_MODEL_DIR: /app/model/ocsr
-  OCSR_DEVICE: "cuda"
+  OCSR_DEVICE: "cpu"
   OCSR_MAX_IMAGE_BYTES: "5242880"
-  GEN_MODEL_ENABLED: "true"
+  GEN_MODEL_ENABLED: "false"
   GEN_MODEL_DIR: /app/model/conditional_generation
-  GEN_DEVICE: "cuda"
+  GEN_DEVICE: "cpu"
   GEN_JOB_WORKERS: "1"
   GEN_MAX_ACTIVE_JOBS: "8"
   GPU_PRELOAD_MODE: "lazy"
+  NVIDIA_VISIBLE_DEVICES: "none"
   GPU_MAX_CONCURRENT_INFERENCES: "1"
   GPU_MAX_WAITING_INFERENCES: "8"
   GPU_SYNC_QUEUE_TIMEOUT_SECONDS: "30"
   GPU_ASYNC_QUEUE_TIMEOUT_SECONDS: "600"
-  RETRO_MODEL_ENABLED: "true"
+  RETRO_MODEL_ENABLED: "false"
   RETRO_MODEL_ID: /app/model/reactiont5-retrosynthesis
-  RETRO_DEVICE: "cuda"
-  POLYTAO_ENABLED: "${POLYTAO_ENABLED:-true}"
+  RETRO_DEVICE: "cpu"
+  POLYTAO_ENABLED: "false"
   POLYTAO_MODEL_DIR: /app/model/polytao
-  POLYTAO_DEVICE: "cuda"
+  POLYTAO_DEVICE: "cpu"
   POLYTAO_JOB_THREADS: "1"
   POLYTAO_MAX_ACTIVE_JOBS: "1"
   STRUCTURED_DATA_BACKEND: "postgres"
@@ -32,10 +35,20 @@ x-dev-backend-env: &dev-backend-env
   PI_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
   LAB_DATA_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
   ALLOWED_ORIGINS: "${NEXPOLY_DEV_ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}"
-  MONOMER_MD_SUBMIT_ENABLED: "${MONOMER_MD_SUBMIT_ENABLED:-true}"
+  MONOMER_MD_SUBMIT_ENABLED: "false"
   MONOMER_MD_WORKER_BASE_URL: "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock"
   MONOMER_MD_WORKER_TIMEOUT_SECONDS: "30"
   MONOMER_MD_CANARY_STATE_DIR: "/app/monomer-md-canaries"
+  MONOMER_DFT_WORKER_BASE_URL: http://monomer-dft-worker
+  MONOMER_DFT_WORKER_UDS: /app/monomer-dft-worker/worker.sock
+  MONOMER_DFT_WORKER_TIMEOUT_SECONDS: "${MONOMER_DFT_WORKER_TIMEOUT_SECONDS:-15}"
+  MONOMER_DFT_SUBMIT_ENABLED: "false"
+  MONOMER_DFT_MAX_ACTIVE_JOBS: "9"
+  MONOMER_DFT_RECONCILE_INTERVAL_SECONDS: "${MONOMER_DFT_RECONCILE_INTERVAL_SECONDS:-1}"
+  MONOMER_DFT_ARTIFACT_RETENTION_DAYS: "${MONOMER_DFT_ARTIFACT_RETENTION_DAYS:-30}"
+  MONOMER_DFT_VALIDATION_CONCURRENCY: "${MONOMER_DFT_VALIDATION_CONCURRENCY:-2}"
+  MONOMER_DFT_DOWNLOAD_MAX_CONCURRENT: "${MONOMER_DFT_DOWNLOAD_MAX_CONCURRENT:-2}"
+  MONOMER_DFT_DOWNLOAD_SPOOL_ROOT: /app/.runtime/monomer-dft-download-spool
   POLYTAO_RATE_LIMIT_PER_IP_PER_MINUTE: "5"
   POLYTAO_RATE_LIMIT_WINDOW_SECONDS: "60"
 
@@ -60,6 +73,14 @@ services:
       lab-postgres:
         condition: service_healthy
     image: nexpoly-dev-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: "${NEXPOLY_BUILD_REVISION:-dev}"
+        SOURCE_TREE: "${NEXPOLY_BUILD_SOURCE_TREE:-unknown}"
+        DEPENDENCY_LOCK_SHA256: "${NEXPOLY_BACKEND_DEPENDENCY_LOCK_SHA256:-unknown}"
+        BUILD_CONFIG_SHA256: "${NEXPOLY_BACKEND_BUILD_CONFIG_SHA256:-unknown}"
     env_file: !override
       - path: .env.dev.ai
         required: false
@@ -73,6 +94,18 @@ services:
       - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/model:/app/model:ro
       - ${MONOMER_MD_DEV_WORKER_SOCKET_DIR:-./.runtime/monomer-md-worker-socket}:/app/monomer-md-worker
       - ${MONOMER_MD_DEV_CANARY_STATE_DIR:-./.runtime/monomer-md-canaries}:/app/monomer-md-canaries
+      - type: bind
+        source: ${MONOMER_DFT_DEV_WORKER_SOCKET_DIR:-./.runtime/monomer-dft-worker-socket}
+        target: /app/monomer-dft-worker
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MONOMER_DFT_DEV_DOWNLOAD_SPOOL_DIR:-./.runtime/monomer-dft-download-spool}
+        target: /app/.runtime/monomer-dft-download-spool
+        read_only: false
+        bind:
+          create_host_path: false
     # Uvicorn 0.32 always adds its current working directory to WatchFiles.
     # Start it from the application directory so tests, locks, and other
     # repository inputs are structurally outside the watched tree.
@@ -93,17 +126,70 @@ services:
         - >-
           python -m app.postgres_preflight --strict >/tmp/nexpoly-postgres-preflight.json &&
           python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()" &&
-          python -m app.gpu_preflight --mode configured >/tmp/nexpoly-gpu-preflight.json
+          python -m app.gpu_preflight --mode disabled >/tmp/nexpoly-gpu-preflight.json
       interval: 30s
       timeout: 15s
       retries: 3
       start_period: 120s
-    gpus: !override
-      - driver: nvidia
-        device_ids:
-          - "${NEXPOLY_DEV_GPU_DEVICE:-1}"
-        capabilities:
-          - gpu
+    gpus: !reset []
+
+  backend-test:
+    profiles:
+      - test
+    image: nexpoly-dev-backend-test:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend-test
+      args:
+        SOURCE_REVISION: "${NEXPOLY_BUILD_REVISION:-dev}"
+        SOURCE_TREE: "${NEXPOLY_BUILD_SOURCE_TREE:-unknown}"
+        DEPENDENCY_LOCK_SHA256: "${NEXPOLY_BACKEND_DEPENDENCY_LOCK_SHA256:-unknown}"
+        BUILD_CONFIG_SHA256: "${NEXPOLY_BACKEND_BUILD_CONFIG_SHA256:-unknown}"
+        PYPI_INDEX_URL: "${NEXPOLY_DEV_PYPI_INDEX_URL:-https://pypi.org/simple}"
+        PYPI_MIRROR_URL: "${NEXPOLY_DEV_PYPI_MIRROR_URL:-https://mirrors.ustc.edu.cn/pypi/simple}"
+    env_file: !reset []
+    environment:
+      <<: *dev-backend-env
+      APP_POSTGRES_DSN: postgresql://nexpoly_test:nexpoly_test@backend-test-postgres:5432/postgres
+      PI_POSTGRES_DSN: postgresql://nexpoly_test:nexpoly_test@backend-test-postgres:5432/postgres
+      LAB_DATA_POSTGRES_DSN: postgresql://nexpoly_test:nexpoly_test@backend-test-postgres:5432/postgres
+      MODEL_ENABLED: "true"
+      OCSR_ENABLED: "true"
+      OCSR_DEVICE: cpu
+      MONOMER_DFT_DOWNLOAD_SPOOL_ROOT: /tmp/monomer-dft-downloads
+      PYTEST_ADDOPTS: "-p no:cacheprovider"
+    volumes: !override
+      - ./backend:/app/backend:ro
+      - ./contracts:/app/contracts:ro
+      - ./workers:/app/workers:ro
+      - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/backend-data:/app/backend/data:ro
+      - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/database:/app/database:ro
+      - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/model:/app/model:ro
+    tmpfs:
+      - /tmp/monomer-dft-downloads:mode=0700,uid=1001,gid=1001
+    depends_on:
+      backend-test-postgres:
+        condition: service_healthy
+    command: ["python", "-m", "pytest", "/app/backend/tests"]
+
+  backend-test-postgres:
+    profiles:
+      - test
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: "no"
+    environment:
+      POSTGRES_USER: nexpoly_test
+      POSTGRES_PASSWORD: nexpoly_test
+      POSTGRES_DB: postgres
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexpoly_test -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
 
   lab-postgres:
     environment:
@@ -130,6 +216,8 @@ services:
       HOST: 0.0.0.0
     volumes:
       - ./frontend:/app/frontend
+      - ./contracts:/app/contracts:ro
+      - ./backend/tests/fixtures:/app/backend/tests/fixtures:ro
       - nexpoly_dev_frontend_node_modules:/app/frontend/node_modules
     ports:
       - "${NEXPOLY_DEV_FRONTEND_BIND_ADDRESS:-127.0.0.1}:${NEXPOLY_DEV_FRONTEND_PORT:-15173}:5173"

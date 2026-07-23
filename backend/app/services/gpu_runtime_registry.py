@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterator, Literal
 
 RuntimeLoader = Callable[[], Any]
 RuntimeWarmup = Callable[[Any], None]
+RuntimeAdmissionGuard = Callable[[], None]
 
 
 class GpuQueueError(RuntimeError):
@@ -99,6 +100,7 @@ class GpuRuntimeRegistry:
         preload_mode: str = "lazy",
         max_concurrent_inferences: int = 1,
         max_waiting_inferences: int = 8,
+        admission_guard: RuntimeAdmissionGuard | None = None,
     ) -> None:
         normalized = str(preload_mode or "lazy").strip().lower()
         if normalized not in {"lazy", "required"}:
@@ -111,6 +113,7 @@ class GpuRuntimeRegistry:
         self.preload_mode = normalized
         self.max_concurrent_inferences = normalized_max_concurrent
         self.max_waiting_inferences = max(0, int(max_waiting_inferences))
+        self._admission_guard = admission_guard
         self._entries: dict[str, _RuntimeEntry] = {}
         self._entries_lock = Lock()
         self._scheduler_condition = Condition(Lock())
@@ -156,6 +159,8 @@ class GpuRuntimeRegistry:
             raise RuntimeError(f"GPU runtime is disabled: {name}")
         self._acquire_inference(name, timeout_seconds=max(0.0, float(timeout_seconds)))
         try:
+            if self._admission_guard is not None:
+                self._admission_guard()
             yield self.ensure_loaded(name)
         finally:
             self._release_inference(name)

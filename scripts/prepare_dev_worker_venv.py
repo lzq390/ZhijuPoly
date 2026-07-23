@@ -14,6 +14,12 @@ import sys
 import tempfile
 import uuid
 
+from dev_worker_process import (
+    WorkerProcessRecordError,
+    load_record as load_worker_process_record,
+    process_argv as read_worker_process_argv,
+    process_start_ticks as read_worker_process_start_ticks,
+)
 import release_controller
 
 
@@ -89,37 +95,34 @@ def managed_worker_argv(
         raise DevWorkerVenvError("managed Worker PID file path must be absolute and safe")
     if not socket_path.is_absolute() or ".." in socket_path.parts:
         raise DevWorkerVenvError("managed Worker socket path must be absolute and safe")
-    if pid_file.is_symlink():
-        raise DevWorkerVenvError("managed Worker PID file is unsafe")
     if not pid_file.exists():
         if socket_path.exists() or socket_path.is_symlink():
             raise DevWorkerVenvError(
                 "managed Worker socket exists without a PID file; inspect it before preparing the venv"
             )
         return None
-    if not pid_file.is_file() or pid_file.stat().st_size > 32:
-        raise DevWorkerVenvError("managed Worker PID file is unsafe")
     try:
-        raw_pid = pid_file.read_text(encoding="ascii").strip()
-    except (OSError, UnicodeError) as exc:
-        raise DevWorkerVenvError("managed Worker PID file cannot be read") from exc
-    if not raw_pid.isdigit() or int(raw_pid) <= 0:
-        raise DevWorkerVenvError("managed Worker PID file is invalid")
-    command_path = proc_root / raw_pid / "cmdline"
-    try:
-        raw_command = command_path.read_bytes()
-    except OSError as exc:
+        record = load_worker_process_record(pid_file)
+        pid = record["pid"]
+        if read_worker_process_start_ticks(pid, proc_root=proc_root) != record["start_ticks"]:
+            raise WorkerProcessRecordError("managed Worker PID was reused")
+        argv = read_worker_process_argv(pid, proc_root=proc_root)
+    except WorkerProcessRecordError as exc:
         raise DevWorkerVenvError(
-            "managed Worker PID is stale or unreadable; run worker-stop before preparing the venv"
+            "managed Worker process record is stale or unsafe; run worker-stop before preparing the venv"
         ) from exc
-    try:
-        argv = [item.decode("utf-8") for item in raw_command.split(b"\0") if item]
-    except UnicodeError as exc:
-        raise DevWorkerVenvError("managed Worker command line is not UTF-8") from exc
-    if not argv or "-m" not in argv or "uvicorn" not in argv or "--uds" not in argv:
+    if argv != record["argv"]:
+        raise DevWorkerVenvError("managed Worker command differs from its process record")
+    if argv != [
+        record["python"],
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--uds",
+        str(socket_path),
+    ]:
         raise DevWorkerVenvError("managed Worker PID does not identify the expected Uvicorn process")
-    socket_index = argv.index("--uds") + 1
-    if socket_index >= len(argv) or argv[socket_index] != str(socket_path):
+    if record["socket"] != str(socket_path):
         raise DevWorkerVenvError("managed Worker PID does not own the configured Unix socket")
     return argv
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from functools import lru_cache
 from typing import Any
 
 from app.models import PolymerResult, PropertyGroups, PropertyItem
@@ -15,6 +16,13 @@ CATEGORY_MAP = {
     "Optical": "optical",
     "Others": "other",
 }
+
+
+@lru_cache(maxsize=4096)
+def _generate_2d_svg_cached(smiles: str) -> str | None:
+    """Reuse deterministic depictions across warm similarity queries."""
+
+    return generate_2d_svg(smiles)
 
 
 def fetch_property_rows_postgres(connection: Any, polymer_id: int) -> list[Any]:
@@ -34,6 +42,35 @@ def fetch_property_rows_postgres(connection: Any, polymer_id: int) -> list[Any]:
         (polymer_id,),
     ).fetchall()
     return list(rows)
+
+
+def fetch_property_rows_for_polymers_postgres(
+    connection: Any,
+    polymer_ids: Sequence[int],
+) -> dict[int, list[Any]]:
+    if not polymer_ids:
+        return {}
+
+    rows = connection.execute(
+        """
+        SELECT
+            polymer_id,
+            property_category,
+            property_name,
+            property_value,
+            property_value_num,
+            property_unit,
+            label_source
+        FROM core.polymer_properties
+        WHERE polymer_id = ANY(%s)
+        ORDER BY polymer_id, property_id
+        """,
+        (list(polymer_ids),),
+    ).fetchall()
+    grouped = {polymer_id: [] for polymer_id in polymer_ids}
+    for row in rows:
+        grouped.setdefault(int(row["polymer_id"]), []).append(row)
+    return grouped
 
 
 def group_properties(property_rows: Iterable[Any]) -> PropertyGroups:
@@ -82,7 +119,7 @@ def build_polymer_result(
         smiles=polymer_row["smiles"],
         canonical_smiles=polymer_row["canonical_smiles"],
         similarity_score=similarity_score,
-        structure_svg=generate_2d_svg(source_smiles),
+        structure_svg=_generate_2d_svg_cached(source_smiles),
         matched_property_name=polymer_row["matched_property_name"] if "matched_property_name" in polymer_keys else None,
         matched_property_value=polymer_row["matched_property_value"] if "matched_property_value" in polymer_keys else None,
         matched_property_unit=polymer_row["matched_property_unit"] if "matched_property_unit" in polymer_keys else None,
@@ -106,10 +143,15 @@ def load_polymer_results_postgres(
     similarity_scores: dict[int, float] | None = None,
 ) -> list[PolymerResult]:
     scores = similarity_scores or {}
+    polymer_ids = [int(polymer_row["polymer_id"]) for polymer_row in polymer_rows]
+    property_rows_by_polymer = fetch_property_rows_for_polymers_postgres(
+        connection,
+        polymer_ids,
+    )
     return [
-        load_polymer_result_postgres(
-            connection,
+        build_polymer_result(
             polymer_row,
+            property_rows_by_polymer.get(int(polymer_row["polymer_id"]), []),
             similarity_score=scores.get(int(polymer_row["polymer_id"])),
         )
         for polymer_row in polymer_rows

@@ -28,14 +28,17 @@ from gpu_resource.transient_scope import (
     user_manager_control_group,
     validate_lease_id,
 )
+from gpu_resource.client import MAX_RESPONSE_BYTES
 
 from .broker import (
+    BASE_DEVICE_POLICY,
     COMPONENT_BUDGETS_MIB,
     COMPONENT_THREAD_PERCENT,
     DEVICE_POLICY,
     EXPECTED_GPU_UUIDS,
     GPU_TOTAL_BUDGET_MIB,
     BrokerError,
+    BrokerPersistenceFatal,
     HostGpuBroker,
     Lease,
     OwnerIdentity,
@@ -102,6 +105,43 @@ class SystemdGpuDeclarer:
 
 
 @dataclass(frozen=True, slots=True)
+class MpsClientProcessIdentity:
+    """One MPS client PID bound to an adjacent host process identity."""
+
+    client_pid: int
+    process_start_ticks: int
+    process_cgroup: str
+
+
+@dataclass(frozen=True, slots=True)
+class MpsAuthoritySnapshot:
+    """One descriptor-bound MPS control-plane CAS result."""
+
+    server_pids: frozenset[int]
+    gpu_declarers: frozenset[SystemdGpuDeclarer]
+    clients: frozenset["MpsClient"]
+    descriptor_authority: bool
+    client_process_identities: frozenset[MpsClientProcessIdentity] = frozenset()
+
+
+class MpsClientMembershipChanged(BrokerError):
+    """A client-only MPS CAS delta with both adjacent process identities."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        before_authority: MpsAuthoritySnapshot,
+        after_authority: MpsAuthoritySnapshot,
+    ) -> None:
+        if code not in {"mps_authority_changed", "mps_control_unavailable"}:
+            raise ValueError("MPS client membership change code is invalid")
+        super().__init__(code, message)
+        self.before_authority = before_authority
+        self.after_authority = after_authority
+
+
+@dataclass(frozen=True, slots=True)
 class SystemdGpuClaim:
     scope: str
     unit: str
@@ -109,9 +149,53 @@ class SystemdGpuClaim:
     control_group: str
     process_pids: frozenset[int]
     gpu_uuids: frozenset[str]
+    # Preserve the complete, twice-validated cgroup membership identity so a
+    # later controller seal can distinguish exact descendant churn from an
+    # unrelated unit, PID reuse, or a process moving between cgroups.
+    process_identities: tuple[tuple[int, int, str], ...] = ()
     static_gpu_uuids: frozenset[str] = frozenset()
     active_gpu_uuids: frozenset[str] = frozenset()
     live_gpu_declarers: tuple[SystemdGpuDeclarer, ...] = ()
+
+
+class SystemdProcessDisappeared(BrokerError):
+    """A previously stable PID vanished during systemd identity revalidation."""
+
+    def __init__(
+        self,
+        pid: int,
+        expected_start_ticks: int,
+        expected_control_group: str,
+    ) -> None:
+        super().__init__(
+            "gpu_claim_inventory_changed",
+            f"systemd process PID {pid} disappeared during audit",
+        )
+        self.pid = pid
+        self.expected_start_ticks = expected_start_ticks
+        self.expected_control_group = expected_control_group
+
+
+class SystemdMembershipChanged(BrokerError):
+    """A systemd unit's complete PID identity membership changed mid-audit."""
+
+    def __init__(
+        self,
+        scope: str,
+        unit: str,
+        control_group: str,
+        expected_identities: tuple[tuple[int, int, str], ...],
+        current_identities: tuple[tuple[int, int, str], ...],
+    ) -> None:
+        super().__init__(
+            "gpu_claim_inventory_changed",
+            f"{scope} systemd unit {unit} membership changed during audit",
+        )
+        self.scope = scope
+        self.unit = unit
+        self.control_group = control_group
+        self.expected_identities = tuple(sorted(expected_identities))
+        self.current_identities = tuple(sorted(current_identities))
 
 
 @dataclass(frozen=True, slots=True)
@@ -421,11 +505,11 @@ def load_external_reservations(path: Path) -> ExternalReservationPolicy:
             raise BrokerError(
                 "external_inventory_unavailable", "managed Docker registration is invalid"
             )
-        allowed_policy = {
+        baseline_policy = {
             EXPECTED_GPU_UUIDS[index]
-            for index in DEVICE_POLICY[(strings[1], strings[0])]
+            for index in BASE_DEVICE_POLICY[(strings[1], strings[0])]
         }
-        if not set(gpu_uuids).issubset(allowed_policy):
+        if not set(gpu_uuids).issubset(baseline_policy):
             raise BrokerError(
                 "external_inventory_unavailable",
                 "managed Docker GPUs are outside component policy",
@@ -715,6 +799,19 @@ def _resolve_gpu_claim_tokens(tokens: object) -> frozenset[str]:
         else:
             raise ValueError(f"GPU claim is outside governance: {token}")
     return frozenset(resolved)
+
+
+def _mps_device_matches(reported_uuid: str, expected_uuid: str) -> bool:
+    return (
+        isinstance(reported_uuid, str)
+        and len(reported_uuid) >= 12
+        and reported_uuid.startswith("GPU-")
+        and all(
+            character in "0123456789abcdefABCDEF-"
+            for character in reported_uuid[4:]
+        )
+        and expected_uuid.startswith(reported_uuid)
+    )
 
 
 def _read_process_environment(pid: int) -> dict[str, str]:
@@ -1021,6 +1118,37 @@ def _systemd_cgroup_contains(candidate: str, control_group: str) -> bool:
     )
 
 
+def _systemd_cgroup_is_user_manager_sibling(
+    candidate: str,
+    manager_control_group: str,
+) -> bool:
+    """Recognize one canonical login scope directly beside user@.service."""
+
+    if (
+        not isinstance(candidate, str)
+        or not candidate.startswith("/")
+        or candidate == "/"
+        or candidate.endswith("/")
+        or "//" in candidate
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in candidate
+        )
+        or any(part in {"", ".", ".."} for part in candidate.split("/")[1:])
+    ):
+        return False
+    user_slice_control_group, separator, _manager_unit = (
+        manager_control_group.rpartition("/")
+    )
+    if not separator:
+        return False
+    return re.fullmatch(
+        re.escape(user_slice_control_group)
+        + r"/session-[A-Za-z0-9][A-Za-z0-9_-]*\.scope",
+        candidate,
+    ) is not None
+
+
 def _read_control_group_processes(
     control_group: str,
     *,
@@ -1164,11 +1292,25 @@ def _verify_systemd_process_identity(
     read_process_cgroup=_read_unified_process_cgroup,
     read_process_start_ticks=read_process_start_ticks,
 ) -> None:
-    current = _read_stable_systemd_process_identity(
-        pid,
-        read_process_cgroup=read_process_cgroup,
-        read_process_start_ticks=read_process_start_ticks,
-    )
+    try:
+        current = _read_stable_systemd_process_identity(
+            pid,
+            read_process_cgroup=read_process_cgroup,
+            read_process_start_ticks=read_process_start_ticks,
+        )
+    except BrokerError as exc:
+        cause: BaseException | None = exc
+        while cause is not None and not isinstance(
+            cause, (FileNotFoundError, ProcessLookupError)
+        ):
+            cause = cause.__cause__
+        if cause is None:
+            raise
+        raise SystemdProcessDisappeared(
+            pid,
+            expected_start_ticks,
+            expected_control_group,
+        ) from exc
     if current != (expected_start_ticks, expected_control_group):
         raise BrokerError(
             "gpu_claim_inventory_unavailable",
@@ -1440,6 +1582,7 @@ def _query_systemd_unit_authorities(
 def query_systemd_gpu_claims(
     *,
     compute_processes: dict[str, frozenset[int]] | None = None,
+    compute_process_identities: dict[int, tuple[int, str]] | None = None,
     run=subprocess.run,
     read_process_environment=_read_process_environment,
     read_control_group_processes=_read_control_group_processes,
@@ -1487,6 +1630,37 @@ def query_systemd_gpu_claims(
             "gpu_claim_inventory_unavailable",
             "systemd NVIDIA process inventory is invalid",
         )
+    compute_pids = frozenset(
+        pid for pids in compute_processes.values() for pid in pids
+    )
+    if compute_process_identities is None:
+        compute_process_identities = {}
+    if not isinstance(compute_process_identities, dict) or any(
+        not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or pid <= 0
+        or pid not in compute_pids
+        or not isinstance(identity, tuple)
+        or len(identity) != 2
+        or not isinstance(identity[0], int)
+        or isinstance(identity[0], bool)
+        or identity[0] <= 0
+        or not isinstance(identity[1], str)
+        or not identity[1].startswith("/")
+        or identity[1] == "/"
+        or identity[1].endswith("/")
+        or "//" in identity[1]
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in identity[1]
+        )
+        or any(part in {"", ".", ".."} for part in identity[1].split("/")[1:])
+        for pid, identity in compute_process_identities.items()
+    ):
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "systemd NVIDIA process identity hints are invalid",
+        )
 
     process_cgroup_snapshot = (
         _snapshot_systemd_process_cgroups(
@@ -1498,6 +1672,10 @@ def query_systemd_gpu_claims(
         if read_control_group_processes is _read_control_group_processes
         else None
     )
+    captured_process_identities = {
+        pid: (start_ticks, process_cgroup)
+        for pid, start_ticks, process_cgroup in process_cgroup_snapshot or ()
+    }
     claims: list[SystemdGpuClaim] = []
     verified_process_identities: set[tuple[int, int, str]] = set()
     authority_snapshots: dict[str, tuple[_SystemdUnitAuthority, ...]] = {}
@@ -1603,6 +1781,25 @@ def query_systemd_gpu_claims(
                                     "systemd cgroup process identity differs",
                                 )
                             process_identities[pid] = identity
+                    for pid, identity in compute_process_identities.items():
+                        if not _systemd_cgroup_contains(identity[1], control_group):
+                            continue
+                        captured_identity = process_identities.get(pid)
+                        if captured_identity is not None and captured_identity != identity:
+                            raise BrokerError(
+                                "gpu_claim_inventory_unavailable",
+                                "NVIDIA PID identity conflicts with systemd inventory",
+                            )
+                        if captured_identity is None:
+                            _verify_systemd_process_identity(
+                                pid,
+                                identity[0],
+                                identity[1],
+                                read_process_cgroup=read_process_cgroup,
+                                read_process_start_ticks=read_process_start_ticks,
+                            )
+                            process_identities[pid] = identity
+                    process_pids = frozenset(process_identities)
                 except BrokerError:
                     raise
                 except Exception as exc:
@@ -1718,11 +1915,42 @@ def query_systemd_gpu_claims(
                 if uuid not in EXPECTED_GPU_UUIDS.values():
                     continue
                 for pid in pids:
-                    process_identity = _read_stable_systemd_process_identity(
-                        pid,
-                        read_process_cgroup=read_process_cgroup,
-                        read_process_start_ticks=read_process_start_ticks,
-                    )
+                    captured_identity = captured_process_identities.get(pid)
+                    hinted_identity = compute_process_identities.get(pid)
+                    if (
+                        captured_identity is not None
+                        and hinted_identity is not None
+                        and captured_identity != hinted_identity
+                    ):
+                        raise BrokerError(
+                            "gpu_claim_inventory_unavailable",
+                            "NVIDIA PID identity conflicts with adjacent capture",
+                        )
+                    if captured_identity is None:
+                        if hinted_identity is None:
+                            process_identity = _read_stable_systemd_process_identity(
+                                pid,
+                                read_process_cgroup=read_process_cgroup,
+                                read_process_start_ticks=read_process_start_ticks,
+                            )
+                        else:
+                            _verify_systemd_process_identity(
+                                pid,
+                                hinted_identity[0],
+                                hinted_identity[1],
+                                read_process_cgroup=read_process_cgroup,
+                                read_process_start_ticks=read_process_start_ticks,
+                            )
+                            process_identity = hinted_identity
+                    else:
+                        _verify_systemd_process_identity(
+                            pid,
+                            captured_identity[0],
+                            captured_identity[1],
+                            read_process_cgroup=read_process_cgroup,
+                            read_process_start_ticks=read_process_start_ticks,
+                        )
+                        process_identity = captured_identity
                     process_cgroup = process_identity[1]
                     if control_group and _systemd_cgroup_contains(
                         process_cgroup,
@@ -1907,6 +2135,12 @@ def query_systemd_gpu_claims(
                         control_group=control_group,
                         process_pids=process_pids,
                         gpu_uuids=frozenset(gpu_uuids),
+                        process_identities=tuple(
+                            (pid, start_ticks, process_cgroup)
+                            for pid, (start_ticks, process_cgroup) in sorted(
+                                process_identities.items()
+                            )
+                        ),
                         static_gpu_uuids=static_gpu_uuids,
                         active_gpu_uuids=frozenset(active_uuids),
                         live_gpu_declarers=live_gpu_declarers,
@@ -1997,9 +2231,22 @@ def query_systemd_gpu_claims(
                     "systemd cgroup process identity differs",
                 )
         if current_identities != expected_identities:
-            raise BrokerError(
-                "gpu_claim_inventory_unavailable",
-                f"{scope} systemd unit {unit} membership changed during audit",
+            raise SystemdMembershipChanged(
+                scope,
+                unit,
+                control_group,
+                tuple(
+                    (pid, start_ticks, process_cgroup)
+                    for pid, (start_ticks, process_cgroup) in sorted(
+                        expected_identities.items()
+                    )
+                ),
+                tuple(
+                    (pid, start_ticks, process_cgroup)
+                    for pid, (start_ticks, process_cgroup) in sorted(
+                        current_identities.items()
+                    )
+                ),
             )
 
     # User inventory runs before system inventory. Revalidate every enumerated
@@ -2047,10 +2294,33 @@ def query_systemd_gpu_claims(
 
 
 def validate_policy_document(path: Path) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise BrokerError("invalid_policy", "GPU policy document is missing or unsafe")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        descriptor_match = re.fullmatch(
+            rf"/proc/{os.getpid()}/fd/([1-9][0-9]*)",
+            str(path),
+        )
+        if descriptor_match is not None:
+            descriptor = int(descriptor_match.group(1))
+            if descriptor <= 2:
+                raise OSError("policy descriptor is reserved")
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_gid != os.getegid()
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_size > 64 * 1024
+            ):
+                raise OSError("policy descriptor metadata is unsafe")
+            raw = os.pread(descriptor, metadata.st_size + 1, 0)
+            if len(raw) != metadata.st_size:
+                raise OSError("policy descriptor changed during read")
+            payload = json.loads(raw.decode("utf-8"))
+        else:
+            if path.is_symlink() or not path.is_file():
+                raise OSError("policy path is missing or unsafe")
+            payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise BrokerError("invalid_policy", "GPU policy document is unreadable") from exc
     expected = {
@@ -2174,23 +2444,45 @@ class _ExternalGpuAdmission:
             guard._monotonic() + guard._admission_timeout_seconds
         )
         self._initial: _ExternalInventorySnapshot | None = None
+        self._initial_mps_key: (
+            tuple[int, str, MpsAuthoritySnapshot] | None
+        ) = None
         self._inventory_failed = False
 
-    def initial_inventory(self) -> _ExternalInventorySnapshot:
+    def initial_inventory(
+        self,
+        index: int,
+        uuid: str,
+        mps_authority: MpsAuthoritySnapshot,
+    ) -> _ExternalInventorySnapshot:
         if self._inventory_failed:
             raise BrokerError(
                 "gpu_claim_inventory_unavailable",
                 "initial external GPU inventory is unavailable",
             )
+        # Only descriptor/composite authority binds GPU declarer identities to
+        # this inventory.  Keep the legacy production callback's established
+        # cross-candidate sharing behavior unchanged.
+        key = (
+            (index, uuid, mps_authority)
+            if self.guard._mps_authority_query is not None
+            else None
+        )
         if self._initial is None:
             try:
                 self._initial = self.guard._inventories(
                     deadline=self.deadline
                 )
+                self._initial_mps_key = key
             except Exception:
                 self._inventory_failed = True
                 raise
-        return self._initial
+        if key is None or self._initial_mps_key == key:
+            return self._initial
+        # A shared request inventory collected for another candidate was not
+        # enclosed by this target's MPS authority.  Re-sample instead of
+        # retroactively authorizing a same-PID server on the cached snapshot.
+        return self.guard._inventories(deadline=self.deadline)
 
     def __call__(self, index: int, uuid: str) -> bool:
         return self.guard._candidate_busy(self, index, uuid)
@@ -2202,6 +2494,797 @@ class _ExternalGpuAdmission:
             self.deadline,
             monotonic=self.guard._monotonic,
         )
+
+
+def exact_dft_residency_scope_authority(
+    lease: Lease,
+    *,
+    index: int,
+    uuid: str,
+) -> tuple[int, int, str] | None:
+    """Return the exact active DFT residency workload identity, if any.
+
+    This is deliberately narrower than a generic managed lease check.  The
+    development DFT executor is the only workload whose compiler descendants
+    legitimately make the UID user-manager claim dynamic while a session is
+    running.
+    """
+
+    broker_uid = 1001
+    if (
+        os.geteuid() != broker_uid
+        or lease.kind != "residency"
+        or lease.placement != "preferred"
+        or lease.preferred is not True
+        or lease.component != "dft"
+        or lease.environment != "dev"
+        or not isinstance(lease.client_id, str)
+        or not lease.client_id
+        or lease.gpu_index != index
+        or lease.gpu_uuid != uuid
+        or lease.parent_lease_id is not None
+        or lease.status != "active"
+        or lease.mps_termination_status != "none"
+    ):
+        return None
+    workload_pid = lease.workload_pid
+    workload_start_ticks = lease.workload_process_start_ticks
+    workload_process_group_id = lease.workload_process_group_id
+    if (
+        isinstance(workload_pid, bool)
+        or not isinstance(workload_pid, int)
+        or isinstance(workload_start_ticks, bool)
+        or not isinstance(workload_start_ticks, int)
+        or isinstance(workload_process_group_id, bool)
+        or not isinstance(workload_process_group_id, int)
+        or workload_pid <= 0
+        or workload_start_ticks <= 0
+        or workload_process_group_id <= 0
+        or workload_process_group_id != workload_pid
+    ):
+        return None
+    try:
+        expected_control_group = scope_control_group(
+            lease.lease_id,
+            uid=broker_uid,
+        )
+    except (TypeError, ValueError):
+        return None
+    if lease.workload_cgroup != f"0::{expected_control_group}":
+        return None
+    return workload_pid, workload_start_ticks, expected_control_group
+
+
+def process_is_exact_dft_residency_descendant(
+    pid: int,
+    lease: Lease,
+    *,
+    index: int,
+    uuid: str,
+) -> bool:
+    """Bind one live PID to the exact DFT residency root without trusting a list.
+
+    This helper is intentionally independent of the systemd inventory.  It is
+    used only by the development controller while that inventory is changing
+    during DFT compiler warmup.  Both the root and the observed process are
+    re-read so PID reuse, credential changes, cgroup moves and ancestry races
+    fail closed.
+    """
+
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    authority = exact_dft_residency_scope_authority(
+        lease,
+        index=index,
+        uuid=uuid,
+    )
+    if authority is None:
+        return False
+    workload_pid, workload_start_ticks, expected_control_group = authority
+
+    def root_identity() -> tuple[int, tuple[int, int, int, int], int, str]:
+        return (
+            read_process_start_ticks(workload_pid),
+            _read_process_uids(workload_pid),
+            os.getpgid(workload_pid),
+            _read_unified_process_cgroup(workload_pid),
+        )
+
+    def process_identity() -> tuple[int, tuple[int, int, int, int], int, str]:
+        return (
+            read_process_start_ticks(pid),
+            _read_process_uids(pid),
+            os.getpgid(pid),
+            _read_unified_process_cgroup(pid),
+        )
+
+    expected_root = (
+        workload_start_ticks,
+        (1001, 1001, 1001, 1001),
+        workload_pid,
+        expected_control_group,
+    )
+    try:
+        root_before = root_identity()
+        process_before = process_identity()
+        if (
+            root_before != expected_root
+            or process_before[1] != (1001, 1001, 1001, 1001)
+            or process_before[2] != workload_pid
+            or process_before[3] != expected_control_group
+            or not _pid_is_or_descends_from(pid, workload_pid)
+        ):
+            return False
+        process_after = process_identity()
+        descends_after = _pid_is_or_descends_from(pid, workload_pid)
+        root_after = root_identity()
+    except (BrokerError, OSError, TypeError, ValueError):
+        return False
+    return (
+        process_before == process_after
+        and descends_after
+        and root_before == root_after == expected_root
+    )
+
+
+def exact_md_execution_scope_authority(
+    lease: Lease,
+    *,
+    index: int,
+    uuid: str,
+) -> tuple[int, int, str] | None:
+    """Return one exact independent GPU1 MD execution workload identity."""
+
+    broker_uid = 1001
+    if (
+        os.geteuid() != broker_uid
+        or index != 1
+        or uuid != EXPECTED_GPU_UUIDS[1]
+        or lease.kind != "execution"
+        or lease.placement != "any"
+        or lease.preferred is not True
+        or lease.component != "md"
+        or lease.environment != "dev"
+        or not isinstance(lease.client_id, str)
+        or not lease.client_id
+        or lease.gpu_index != index
+        or lease.gpu_uuid != uuid
+        or lease.memory_mib != COMPONENT_BUDGETS_MIB["md"]
+        or lease.thread_percent != COMPONENT_THREAD_PERCENT["md"]
+        or lease.parent_lease_id is not None
+        or lease.status != "active"
+        or lease.mps_termination_status != "none"
+    ):
+        return None
+    workload_pid = lease.workload_pid
+    workload_start_ticks = lease.workload_process_start_ticks
+    workload_process_group_id = lease.workload_process_group_id
+    if (
+        isinstance(workload_pid, bool)
+        or not isinstance(workload_pid, int)
+        or isinstance(workload_start_ticks, bool)
+        or not isinstance(workload_start_ticks, int)
+        or isinstance(workload_process_group_id, bool)
+        or not isinstance(workload_process_group_id, int)
+        or workload_pid <= 0
+        or workload_start_ticks <= 0
+        or workload_process_group_id != workload_pid
+    ):
+        return None
+    try:
+        expected_control_group = scope_control_group(
+            lease.lease_id,
+            uid=broker_uid,
+        )
+    except (TypeError, ValueError):
+        return None
+    if lease.workload_cgroup != f"0::{expected_control_group}":
+        return None
+    return workload_pid, workload_start_ticks, expected_control_group
+
+
+def _exact_dev_gpu1_host_scope_authority(
+    lease: Lease,
+    *,
+    index: int,
+    uuid: str,
+) -> tuple[str, int, int, str] | None:
+    """Limit broad user-manager authority to DFT residency and MD jobs."""
+
+    if (
+        index != 1
+        or uuid != EXPECTED_GPU_UUIDS[1]
+        or not isinstance(lease, Lease)
+    ):
+        return None
+    if lease.component == "dft":
+        if (
+            lease.memory_mib != COMPONENT_BUDGETS_MIB["dft"]
+            or lease.thread_percent != COMPONENT_THREAD_PERCENT["dft"]
+        ):
+            return None
+        authority = exact_dft_residency_scope_authority(
+            lease,
+            index=index,
+            uuid=uuid,
+        )
+        component = "dft"
+    elif lease.component == "md":
+        authority = exact_md_execution_scope_authority(
+            lease,
+            index=index,
+            uuid=uuid,
+        )
+        component = "md"
+    else:
+        return None
+    if authority is None:
+        return None
+    return component, *authority
+
+
+def _declarer_is_exact_host_scope_descendant(
+    declarer: SystemdGpuDeclarer,
+    authority: tuple[str, int, int, str],
+    *,
+    uuid: str,
+) -> bool:
+    """Double-read one GPU declarer against one Broker-fenced scope root."""
+
+    _component, workload_pid, workload_start_ticks, control_group = authority
+    if (
+        not isinstance(declarer, SystemdGpuDeclarer)
+        or isinstance(declarer.pid, bool)
+        or not isinstance(declarer.pid, int)
+        or declarer.pid <= 0
+        or isinstance(declarer.process_start_ticks, bool)
+        or not isinstance(declarer.process_start_ticks, int)
+        or declarer.process_start_ticks <= 0
+        or declarer.process_cgroup != control_group
+        or declarer.gpu_uuids != frozenset({uuid})
+    ):
+        return False
+
+    expected_uids = (1001, 1001, 1001, 1001)
+
+    def identity(pid: int) -> tuple[int, tuple[int, int, int, int], int, str]:
+        return (
+            read_process_start_ticks(pid),
+            _read_process_uids(pid),
+            os.getpgid(pid),
+            _read_unified_process_cgroup(pid),
+        )
+
+    expected_root = (
+        workload_start_ticks,
+        expected_uids,
+        workload_pid,
+        control_group,
+    )
+    expected_process = (
+        declarer.process_start_ticks,
+        expected_uids,
+        workload_pid,
+        control_group,
+    )
+    try:
+        root_before = identity(workload_pid)
+        process_before = (
+            root_before
+            if declarer.pid == workload_pid
+            else identity(declarer.pid)
+        )
+        descends_before = _pid_is_or_descends_from(
+            declarer.pid,
+            workload_pid,
+        )
+        process_after = identity(declarer.pid)
+        descends_after = _pid_is_or_descends_from(
+            declarer.pid,
+            workload_pid,
+        )
+        root_after = (
+            process_after
+            if declarer.pid == workload_pid
+            else identity(workload_pid)
+        )
+    except (BrokerError, OSError, TypeError, ValueError):
+        return False
+    return (
+        root_before == root_after == expected_root
+        and process_before == process_after == expected_process
+        and descends_before
+        and descends_after
+    )
+
+
+def _lease_owner_identity_is_stable(lease: Lease) -> bool:
+    """Double-read the active lease owner and bind it to this host boot."""
+
+    if (
+        isinstance(lease.owner_pid, bool)
+        or not isinstance(lease.owner_pid, int)
+        or lease.owner_pid <= 0
+        or isinstance(lease.owner_process_start_ticks, bool)
+        or not isinstance(lease.owner_process_start_ticks, int)
+        or lease.owner_process_start_ticks <= 0
+        or not isinstance(lease.owner_boot_id, str)
+        or not lease.owner_boot_id
+    ):
+        return False
+    expected = (
+        lease.owner_process_start_ticks,
+        (1001, 1001, 1001, 1001),
+    )
+    try:
+        if lease.owner_boot_id != read_boot_id():
+            return False
+        before = (
+            read_process_start_ticks(lease.owner_pid),
+            _read_process_uids(lease.owner_pid),
+        )
+        after = (
+            read_process_start_ticks(lease.owner_pid),
+            _read_process_uids(lease.owner_pid),
+        )
+    except (BrokerError, OSError, TypeError, ValueError):
+        return False
+    return before == after == expected
+
+
+def _parented_dft_execution_is_exact_inheritance(
+    lease: Lease,
+    dft_residencies: tuple[Lease, ...],
+    *,
+    index: int,
+    uuid: str,
+) -> bool:
+    """Ensure a logical resident DFT execution never contributes a new root."""
+
+    parents = tuple(
+        parent
+        for parent in dft_residencies
+        if parent.lease_id == lease.parent_lease_id
+    )
+    return (
+        len(parents) == 1
+        and lease.kind == "execution"
+        and lease.placement == "preferred"
+        and lease.preferred is True
+        and lease.component == "dft"
+        and lease.environment == "dev"
+        and lease.client_id == parents[0].client_id
+        and lease.gpu_index == index
+        and lease.gpu_uuid == uuid
+        and lease.memory_mib == COMPONENT_BUDGETS_MIB["dft"]
+        and lease.thread_percent == COMPONENT_THREAD_PERCENT["dft"]
+        and lease.owner_pid == parents[0].owner_pid
+        and lease.owner_process_start_ticks
+        == parents[0].owner_process_start_ticks
+        and lease.owner_boot_id == parents[0].owner_boot_id
+        and lease.status == "active"
+        and lease.mps_termination_status == "none"
+        and (
+            lease.workload_pid,
+            lease.workload_process_start_ticks,
+            lease.workload_process_group_id,
+            lease.workload_cgroup,
+        )
+        == (
+            parents[0].workload_pid,
+            parents[0].workload_process_start_ticks,
+            parents[0].workload_process_group_id,
+            parents[0].workload_cgroup,
+        )
+    )
+
+
+def claim_is_exact_dev_gpu1_host_workloads_scope(
+    claim: SystemdGpuClaim,
+    *,
+    index: int,
+    uuid: str,
+    leases: tuple[Lease, ...],
+    authorized_mps_declarers: frozenset[SystemdGpuDeclarer] = frozenset(),
+    authorized_mps_server_pids: frozenset[int] = frozenset(),
+) -> bool:
+    """Prove the complete GPU part of the broad UID 1001 manager claim.
+
+    CPU-only manager members are irrelevant.  Every live GPU declarer must be
+    either an exact descriptor-authorized MPS process or belong uniquely to
+    one active, independent DFT-residency/MD-execution transient scope.  Every
+    eligible Broker root must itself be present, preventing a partial claim
+    from authorizing a stale or unrelated child.
+    """
+
+    if (
+        index != 1
+        or uuid != EXPECTED_GPU_UUIDS[1]
+        or not isinstance(claim, SystemdGpuClaim)
+        or claim.scope != "system"
+        or claim.unit != "user@1001.service"
+        or claim.control_group != user_manager_control_group(1001)
+        or claim.gpu_uuids != frozenset({uuid})
+        or bool(claim.static_gpu_uuids)
+        or not isinstance(claim.active_gpu_uuids, frozenset)
+        or not claim.active_gpu_uuids <= frozenset({uuid})
+        or not isinstance(claim.live_gpu_declarers, tuple)
+        or not isinstance(claim.process_pids, frozenset)
+        or not isinstance(leases, tuple)
+        or not isinstance(authorized_mps_declarers, frozenset)
+        or not isinstance(authorized_mps_server_pids, frozenset)
+        or any(
+            not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+            for pid in authorized_mps_server_pids
+        )
+    ):
+        return False
+    target_declarers = claim.live_gpu_declarers
+    if (
+        not target_declarers
+        or any(
+            not isinstance(declarer, SystemdGpuDeclarer)
+            or declarer.gpu_uuids != frozenset({uuid})
+            or declarer.pid not in claim.process_pids
+            or not _systemd_cgroup_contains(
+                declarer.process_cgroup,
+                claim.control_group,
+            )
+            for declarer in target_declarers
+        )
+        or len({declarer.pid for declarer in target_declarers})
+        != len(target_declarers)
+        or any(
+            not isinstance(declarer, SystemdGpuDeclarer)
+            or declarer.gpu_uuids != frozenset({uuid})
+            for declarer in authorized_mps_declarers
+        )
+        or len({declarer.pid for declarer in authorized_mps_declarers})
+        != len(authorized_mps_declarers)
+        or not authorized_mps_server_pids.issubset(
+            {declarer.pid for declarer in authorized_mps_declarers}
+        )
+    ):
+        return False
+    target_set = frozenset(target_declarers)
+    # The development controller may be launched from a login ``session-*.scope``
+    # while DFT/MD executors are placed below the user manager by
+    # ``systemd-run --user``.  Those are sibling cgroups.  Descriptor-authorized
+    # MPS processes outside this claim are validated by MpsRuntimeGuard and must
+    # not be required to appear in the user-manager claim.  Conversely, every
+    # authorized MPS declarer whose cgroup is inside this claim must be present;
+    # otherwise the systemd/environment snapshot is incomplete and fails closed.
+    claim_mps_declarers = frozenset(
+        declarer
+        for declarer in authorized_mps_declarers
+        if _systemd_cgroup_contains(
+            declarer.process_cgroup,
+            claim.control_group,
+        )
+    )
+    # Under MPS, NVML attributes compute activity to the MPS server.  When the
+    # descriptor-owned control/server processes inherit the controller's direct
+    # login scope beside ``user@1001.service``, the exact user-manager claim
+    # therefore has no active GPU UUID despite containing the declared DFT/MD
+    # clients.  The empty set is safe only for that proven sibling layout; all
+    # other claims retain the exact active-GPU requirement.
+    active_gpu_attribution_is_exact = claim.active_gpu_uuids == frozenset({uuid})
+    sibling_mps_control_declarers = frozenset(
+        declarer
+        for declarer in authorized_mps_declarers
+        if declarer.pid not in authorized_mps_server_pids
+    )
+    sibling_mps_cgroups = frozenset(
+        declarer.process_cgroup for declarer in authorized_mps_declarers
+    )
+    empty_active_gpu_attribution_is_exact_sibling_mps = (
+        not claim.active_gpu_uuids
+        and len(authorized_mps_server_pids) == 1
+        and len(authorized_mps_declarers) == 2
+        and len(sibling_mps_control_declarers) == 1
+        and len(sibling_mps_cgroups) == 1
+        and not claim_mps_declarers
+        and all(
+            _systemd_cgroup_is_user_manager_sibling(
+                declarer.process_cgroup,
+                claim.control_group,
+            )
+            for declarer in authorized_mps_declarers
+        )
+    )
+    if (
+        not claim_mps_declarers <= target_set
+        or not (
+            active_gpu_attribution_is_exact
+            or empty_active_gpu_attribution_is_exact_sibling_mps
+        )
+    ):
+        return False
+
+    authority_entries: list[tuple[Lease, tuple[str, int, int, str]]] = []
+    for lease in leases:
+        authority = _exact_dev_gpu1_host_scope_authority(
+            lease,
+            index=index,
+            uuid=uuid,
+        )
+        if authority is not None and _lease_owner_identity_is_stable(lease):
+            authority_entries.append((lease, authority))
+    authorities = tuple(authority for _lease, authority in authority_entries)
+    dft_residencies = tuple(
+        lease
+        for lease, authority in authority_entries
+        if authority[0] == "dft"
+    )
+    if (
+        len(dft_residencies) != 1
+        or len({(authority[1], authority[3]) for authority in authorities})
+        != len(authorities)
+        or any(
+            lease.component == "dft"
+            and lease.environment == "dev"
+            and lease.gpu_index == index
+            and lease.gpu_uuid == uuid
+            and lease.kind == "execution"
+            and lease.parent_lease_id is not None
+            and lease.status == "active"
+            and not _parented_dft_execution_is_exact_inheritance(
+                lease,
+                dft_residencies,
+                index=index,
+                uuid=uuid,
+            )
+            for lease in leases
+        )
+        or any(
+            _declarer_is_exact_host_scope_descendant(
+                declarer,
+                authority,
+                uuid=uuid,
+            )
+            for declarer in authorized_mps_declarers
+            for authority in authorities
+        )
+    ):
+        return False
+
+    workload_declarers = tuple(
+        declarer
+        for declarer in target_declarers
+        if declarer not in authorized_mps_declarers
+    )
+    matched_authorities: set[int] = set()
+    for declarer in workload_declarers:
+        matches = tuple(
+            position
+            for position, authority in enumerate(authorities)
+            if _declarer_is_exact_host_scope_descendant(
+                declarer,
+                authority,
+                uuid=uuid,
+            )
+        )
+        if len(matches) != 1:
+            return False
+        matched_authorities.add(matches[0])
+    return (
+        len(matched_authorities) == len(authorities)
+        and all(
+            any(
+                declarer.pid == authority[1]
+                and declarer.process_start_ticks == authority[2]
+                and declarer.process_cgroup == authority[3]
+                for declarer in workload_declarers
+            )
+            for authority in authorities
+        )
+    )
+
+
+def claim_is_exact_dft_residency_scope(
+    claim: SystemdGpuClaim,
+    *,
+    index: int,
+    uuid: str,
+    lease: Lease,
+    authorized_mps_declarers: frozenset[SystemdGpuDeclarer] = frozenset(),
+) -> bool:
+    """Recognize one exact dev DFT residency on any policy GPU.
+
+    This compatibility path intentionally retains the pre-session behavior
+    for legacy/non-descriptor admission, including dev GPU3.  The stricter
+    composite GPU1 partition is selected separately by descriptor authority.
+    """
+
+    authority = exact_dft_residency_scope_authority(
+        lease,
+        index=index,
+        uuid=uuid,
+    )
+    if authority is None:
+        return False
+    workload_pid, workload_start_ticks, expected_control_group = authority
+    target_declarers = tuple(
+        declarer
+        for declarer in claim.live_gpu_declarers
+        if uuid in declarer.gpu_uuids
+    )
+    expected_workload_declarer = SystemdGpuDeclarer(
+        pid=workload_pid,
+        process_start_ticks=workload_start_ticks,
+        process_cgroup=expected_control_group,
+        gpu_uuids=frozenset({uuid}),
+    )
+    try:
+        target_declarer_set = frozenset(target_declarers)
+        declarers_are_exact = (
+            isinstance(authorized_mps_declarers, frozenset)
+            and all(
+                isinstance(declarer, SystemdGpuDeclarer)
+                and declarer.gpu_uuids == frozenset({uuid})
+                for declarer in authorized_mps_declarers
+            )
+            and bool(target_declarers)
+            and len({declarer.pid for declarer in target_declarers})
+            == len(target_declarers)
+            and expected_workload_declarer in target_declarers
+            and expected_workload_declarer not in authorized_mps_declarers
+            and authorized_mps_declarers <= target_declarer_set
+            and len(
+                {declarer.pid for declarer in authorized_mps_declarers}
+            )
+            == len(authorized_mps_declarers)
+            and all(
+                declarer.pid in claim.process_pids
+                and declarer.gpu_uuids == frozenset({uuid})
+                and (
+                    declarer in authorized_mps_declarers
+                    or (
+                        declarer.process_cgroup == expected_control_group
+                        and _pid_is_or_descends_from(
+                            declarer.pid,
+                            workload_pid,
+                        )
+                        and read_process_start_ticks(declarer.pid)
+                        == declarer.process_start_ticks
+                        and _read_unified_process_cgroup(declarer.pid)
+                        == expected_control_group
+                    )
+                )
+                for declarer in target_declarers
+            )
+        )
+    except (BrokerError, OSError, TypeError, ValueError):
+        return False
+    return (
+        claim.scope == "system"
+        and claim.unit == "user@1001.service"
+        and claim.control_group == user_manager_control_group(1001)
+        and claim.gpu_uuids == frozenset({uuid})
+        and not claim.static_gpu_uuids
+        and claim.active_gpu_uuids == frozenset({uuid})
+        and declarers_are_exact
+    )
+
+
+def exact_dev_gpu1_backend_docker_workload_pids(
+    leases: tuple[Lease, ...],
+    docker_claims: tuple[DockerGpuClaim, ...],
+) -> frozenset[int]:
+    """Return the sole Backend root only after exact lease/container binding."""
+
+    candidates = tuple(
+        lease
+        for lease in leases
+        if isinstance(lease, Lease)
+        and lease.kind == "residency"
+        and lease.placement == "preferred"
+        and lease.preferred is True
+        and lease.component == "backend"
+        and lease.environment == "dev"
+        and lease.client_id == "backend-dev"
+        and lease.request_id == "backend:dev:residency"
+        and lease.gpu_index == 1
+        and lease.gpu_uuid == EXPECTED_GPU_UUIDS[1]
+        and lease.memory_mib == COMPONENT_BUDGETS_MIB["backend"]
+        and lease.thread_percent == COMPONENT_THREAD_PERCENT["backend"]
+        and lease.parent_lease_id is None
+        and lease.status == "active"
+        and lease.mps_termination_status == "none"
+    )
+    claims = tuple(
+        claim
+        for claim in docker_claims
+        if isinstance(claim, DockerGpuClaim)
+        and claim.registration_id == "backend-dev"
+        and claim.component == "backend"
+        and claim.environment == "dev"
+        and claim.compose_project == "nexpoly_dev"
+        and claim.compose_service == "backend"
+        and claim.gpu_uuids == frozenset({EXPECTED_GPU_UUIDS[1]})
+    )
+    if len(candidates) != 1 or len(claims) != 1:
+        return frozenset()
+    lease = candidates[0]
+    claim = claims[0]
+    try:
+        current_boot_id = read_boot_id()
+    except (BrokerError, OSError, TypeError, ValueError):
+        return frozenset()
+    workload_pid = lease.workload_pid
+    workload_start_ticks = lease.workload_process_start_ticks
+    workload_process_group_id = lease.workload_process_group_id
+    if (
+        isinstance(workload_pid, bool)
+        or not isinstance(workload_pid, int)
+        or isinstance(workload_start_ticks, bool)
+        or not isinstance(workload_start_ticks, int)
+        or isinstance(workload_process_group_id, bool)
+        or not isinstance(workload_process_group_id, int)
+        or workload_pid <= 0
+        or workload_start_ticks <= 0
+        or workload_process_group_id <= 0
+        or lease.owner_pid != workload_pid
+        or lease.owner_process_start_ticks != workload_start_ticks
+        or lease.owner_boot_id != current_boot_id
+        or isinstance(claim.init_pid, bool)
+        or not isinstance(claim.init_pid, int)
+        or claim.init_pid <= 0
+        or not isinstance(lease.workload_cgroup, str)
+        or not lease.workload_cgroup.startswith("0::/")
+        or "\n" in lease.workload_cgroup
+    ):
+        return frozenset()
+    expected_cgroup = lease.workload_cgroup[3:]
+    expected_workload = (
+        workload_start_ticks,
+        (1001, 1001, 1001, 1001),
+        workload_process_group_id,
+        expected_cgroup,
+    )
+
+    def identity(pid: int) -> tuple[int, tuple[int, int, int, int], int, str]:
+        return (
+            read_process_start_ticks(pid),
+            _read_process_uids(pid),
+            os.getpgid(pid),
+            _read_unified_process_cgroup(pid),
+        )
+
+    try:
+        workload_before = identity(workload_pid)
+        init_before = (
+            workload_before
+            if claim.init_pid == workload_pid
+            else identity(claim.init_pid)
+        )
+        descends_before = _pid_is_or_descends_from(
+            workload_pid,
+            claim.init_pid,
+        )
+        workload_after = identity(workload_pid)
+        init_after = (
+            workload_after
+            if claim.init_pid == workload_pid
+            else identity(claim.init_pid)
+        )
+        descends_after = _pid_is_or_descends_from(
+            workload_pid,
+            claim.init_pid,
+        )
+    except (BrokerError, OSError, TypeError, ValueError):
+        return frozenset()
+    if (
+        workload_before != workload_after
+        or workload_before != expected_workload
+        or init_before != init_after
+        or init_before[1] != (1001, 1001, 1001, 1001)
+        or init_before[3] != expected_cgroup
+        or not descends_before
+        or not descends_after
+    ):
+        return frozenset()
+    return frozenset({workload_pid})
 
 
 class ExternalGpuGuard:
@@ -2216,6 +3299,7 @@ class ExternalGpuGuard:
         systemd_claim_query=query_systemd_gpu_claims,
         unmanaged_mps_client_query=None,
         authorized_mps_server_pids=None,
+        mps_authority_query=None,
         allow_descriptor_mps_authority: bool = False,
         cache_seconds: float = 0.0,
         admission_timeout_seconds: float = (
@@ -2239,7 +3323,15 @@ class ExternalGpuGuard:
         self._docker_claim_query = docker_claim_query
         self._systemd_claim_query = systemd_claim_query
         self._unmanaged_mps_client_query = unmanaged_mps_client_query
+        if (
+            authorized_mps_server_pids is not None
+            and mps_authority_query is not None
+        ):
+            raise ValueError(
+                "configure either legacy MPS servers or one MPS authority snapshot"
+            )
         self._authorized_mps_server_pids = authorized_mps_server_pids
+        self._mps_authority_query = mps_authority_query
         self._allow_descriptor_mps_authority = allow_descriptor_mps_authority
         self._admission_timeout_seconds = float(
             admission_timeout_seconds
@@ -2307,14 +3399,20 @@ class ExternalGpuGuard:
         if uuid in self.policy.blocked_gpu_uuids:
             return True
         try:
-            initial = admission.initial_inventory()
             initial_mps, initial_unmanaged = self._mps_audit(
                 index,
                 uuid,
                 admission.leases,
                 deadline=admission.deadline,
             )
-            if initial_unmanaged or self._snapshot_blocks_candidate(
+            if initial_unmanaged:
+                return True
+            initial = admission.initial_inventory(
+                index,
+                uuid,
+                initial_mps,
+            )
+            if self._snapshot_blocks_candidate(
                 initial,
                 index=index,
                 uuid=uuid,
@@ -2322,28 +3420,19 @@ class ExternalGpuGuard:
                 owner=admission.owner,
                 component=admission.component,
                 environment=admission.environment,
-                client_id=admission.client_id,
-                parent_lease_id=admission.parent_lease_id,
-                authorized_mps_servers=initial_mps,
+                mps_authority=initial_mps,
             ):
                 return True
 
             # Only a candidate that appears free pays for the final snapshot.
             # Docker and systemd each perform their own internal CAS; comparing
             # the target fingerprint here binds them to the initial request-local
-            # inventory. MPS is re-audited last because a client does not change
-            # the shared server PID reported by NVML.
+            # inventory. One MPS authority snapshot encloses both inventories;
+            # its final CAS also catches clients that do not change NVML's shared
+            # server PID.
             final = self._inventories(deadline=admission.deadline)
-            final_mps, final_unmanaged = self._mps_audit(
-                index,
-                uuid,
-                admission.leases,
-                deadline=admission.deadline,
-            )
             if (
-                final_unmanaged
-                or final_mps != initial_mps
-                or final.target_fingerprint(uuid)
+                final.target_fingerprint(uuid)
                 != initial.target_fingerprint(uuid)
             ):
                 return True
@@ -2355,18 +3444,14 @@ class ExternalGpuGuard:
                 owner=admission.owner,
                 component=admission.component,
                 environment=admission.environment,
-                client_id=admission.client_id,
-                parent_lease_id=admission.parent_lease_id,
-                authorized_mps_servers=final_mps,
+                mps_authority=initial_mps,
             ):
                 return True
 
-            # Docker/systemd and the final MPS audit take time after the
-            # snapshot's first nvidia-smi query. Re-read the target immediately
-            # before allowing it so a direct CUDA process appearing inside that
-            # window cannot inherit the lease. A same-UID MPS client can still
-            # race its path-based audit; UID 1001 is the documented trust
-            # boundary for that residual.
+            # Docker/systemd take time after the snapshot's first nvidia-smi
+            # query. Re-read the target before the final MPS seal. A same-UID
+            # direct process or MPS client can still race its respective final
+            # read; UID 1001 is the documented trust boundary for that residual.
             trailing_processes = self._query_compute_processes(
                 deadline=admission.deadline
             )
@@ -2374,9 +3459,18 @@ class ExternalGpuGuard:
                 uuid,
                 frozenset(),
             ) != final.processes.get(uuid, frozenset())
-            if not busy:
-                admission.finalize(index, uuid)
-            return busy
+            if busy:
+                return True
+            final_mps, final_unmanaged = self._mps_audit(
+                index,
+                uuid,
+                admission.leases,
+                deadline=admission.deadline,
+            )
+            if final_unmanaged or final_mps != initial_mps:
+                return True
+            admission.finalize(index, uuid)
+            return False
         except Exception:
             # Allocation fails closed if any authority snapshot is unavailable.
             return True
@@ -2388,30 +3482,106 @@ class ExternalGpuGuard:
         leases: tuple[Lease, ...],
         *,
         deadline: float,
-    ) -> tuple[frozenset[int], bool]:
-        authorized = (
-            frozenset()
-            if self._authorized_mps_server_pids is None
-            else _call_with_optional_deadline(
-                self._authorized_mps_server_pids,
+    ) -> tuple[MpsAuthoritySnapshot, bool]:
+        if self._mps_authority_query is not None:
+            authority = _call_with_optional_deadline(
+                self._mps_authority_query,
                 index,
                 uuid,
                 deadline=deadline,
                 monotonic=self._monotonic,
             )
-        )
+        else:
+            authorized = (
+                frozenset()
+                if self._authorized_mps_server_pids is None
+                else _call_with_optional_deadline(
+                    self._authorized_mps_server_pids,
+                    index,
+                    uuid,
+                    deadline=deadline,
+                    monotonic=self._monotonic,
+                )
+            )
+            authority = MpsAuthoritySnapshot(
+                server_pids=authorized,
+                gpu_declarers=frozenset(),
+                clients=frozenset(),
+                descriptor_authority=False,
+            )
         if (
-            not isinstance(authorized, frozenset)
+            not isinstance(authority, MpsAuthoritySnapshot)
+            or not isinstance(authority.server_pids, frozenset)
+            or not isinstance(authority.gpu_declarers, frozenset)
+            or not isinstance(authority.clients, frozenset)
+            or not isinstance(authority.descriptor_authority, bool)
+            or not isinstance(authority.client_process_identities, frozenset)
+            or (
+                self._allow_descriptor_mps_authority
+                and self._mps_authority_query is not None
+                and not authority.descriptor_authority
+            )
+            or len(authority.server_pids) > 1
             or any(
                 not isinstance(pid, int)
                 or isinstance(pid, bool)
                 or pid <= 0
-                for pid in authorized
+                for pid in authority.server_pids
+            )
+            or any(
+                not isinstance(declarer, SystemdGpuDeclarer)
+                or declarer.pid <= 0
+                or declarer.process_start_ticks <= 0
+                or declarer.gpu_uuids != frozenset({uuid})
+                for declarer in authority.gpu_declarers
+            )
+            or (
+                self._mps_authority_query is not None
+                and (
+                    len({item.pid for item in authority.gpu_declarers})
+                    != len(authority.gpu_declarers)
+                    or len(authority.gpu_declarers)
+                    != 1 + len(authority.server_pids)
+                    or not authority.server_pids
+                    <= {item.pid for item in authority.gpu_declarers}
+                )
+            )
+            or any(
+                not isinstance(client, MpsClient)
+                or client.server_pid not in authority.server_pids
+                or not _mps_device_matches(client.device_uuid, uuid)
+                for client in authority.clients
+            )
+            or any(
+                not isinstance(identity, MpsClientProcessIdentity)
+                or isinstance(identity.client_pid, bool)
+                or identity.client_pid <= 0
+                or isinstance(identity.process_start_ticks, bool)
+                or identity.process_start_ticks <= 0
+                or not isinstance(identity.process_cgroup, str)
+                or not identity.process_cgroup.startswith("/")
+                or identity.process_cgroup == "/"
+                for identity in authority.client_process_identities
+            )
+            or len(authority.client_process_identities)
+            != len(
+                {
+                    identity.client_pid
+                    for identity in authority.client_process_identities
+                }
+            )
+            or (
+                authority.descriptor_authority
+                and {
+                    identity.client_pid
+                    for identity in authority.client_process_identities
+                }
+                != {client.client_pid for client in authority.clients}
             )
         ):
             raise BrokerError(
                 "mps_control_unavailable",
-                "MPS server authority returned an invalid identity set",
+                "MPS authority returned an invalid identity snapshot",
             )
         unmanaged = (
             False
@@ -2430,7 +3600,7 @@ class ExternalGpuGuard:
                 "mps_control_unavailable",
                 "MPS client authority returned an invalid result",
             )
-        return authorized, unmanaged
+        return authority, unmanaged
 
     def _snapshot_blocks_candidate(
         self,
@@ -2442,10 +3612,30 @@ class ExternalGpuGuard:
         owner: OwnerIdentity,
         component: str,
         environment: str,
-        client_id: str | None,
-        parent_lease_id: str | None,
-        authorized_mps_servers: frozenset[int],
+        mps_authority: MpsAuthoritySnapshot,
     ) -> bool:
+        authorized_mps_servers = mps_authority.server_pids
+        descriptor_gpu1_authority = (
+            self._allow_descriptor_mps_authority
+            and mps_authority.descriptor_authority
+            and index == 1
+            and uuid == EXPECTED_GPU_UUIDS[1]
+        )
+        descriptor_backend_pids = (
+            exact_dev_gpu1_backend_docker_workload_pids(
+                leases,
+                snapshot.docker_claims,
+            )
+            if descriptor_gpu1_authority
+            else frozenset()
+        )
+        if descriptor_gpu1_authority and any(
+            lease.gpu_index == index
+            and lease.gpu_uuid == uuid
+            and lease.component == "backend"
+            for lease in leases
+        ) and not descriptor_backend_pids:
+            return True
         for claim in snapshot.docker_claims:
             if uuid not in claim.gpu_uuids:
                 continue
@@ -2481,19 +3671,32 @@ class ExternalGpuGuard:
                     return True
 
         systemd_authorized_mps_servers: set[int] = set()
+        descriptor_host_workload_pids: set[int] = set()
         for claim in snapshot.systemd_claims:
             if uuid not in claim.gpu_uuids:
                 continue
-            if self._claim_is_current_dft_residency_scope(
+            if descriptor_gpu1_authority:
+                if claim_is_exact_dev_gpu1_host_workloads_scope(
+                    claim,
+                    index=index,
+                    uuid=uuid,
+                    leases=leases,
+                    authorized_mps_declarers=mps_authority.gpu_declarers,
+                    authorized_mps_server_pids=mps_authority.server_pids,
+                ):
+                    descriptor_host_workload_pids.update(
+                        declarer.pid
+                        for declarer in claim.live_gpu_declarers
+                        if declarer not in mps_authority.gpu_declarers
+                        and declarer.gpu_uuids == frozenset({uuid})
+                    )
+                    continue
+            elif self._claim_is_unique_dft_residency_scope(
                 claim,
                 index=index,
                 uuid=uuid,
                 leases=leases,
-                owner=owner,
-                component=component,
-                environment=environment,
-                client_id=client_id,
-                parent_lease_id=parent_lease_id,
+                authorized_mps_declarers=mps_authority.gpu_declarers,
             ):
                 continue
             identity = f"{claim.scope}:{claim.unit}"
@@ -2524,6 +3727,21 @@ class ExternalGpuGuard:
             ):
                 return True
 
+        if descriptor_gpu1_authority:
+            mps_client_pids = frozenset(
+                client.client_pid for client in mps_authority.clients
+            )
+            descriptor_workload_pids = (
+                descriptor_backend_pids
+                | frozenset(descriptor_host_workload_pids)
+            ) & mps_client_pids
+            for pid in snapshot.processes.get(uuid, frozenset()):
+                if pid in authorized_mps_servers:
+                    continue
+                if pid not in descriptor_workload_pids:
+                    return True
+            return False
+
         owners = [lease.owner_pid for lease in leases if lease.gpu_uuid == uuid]
         for pid in snapshot.processes.get(uuid, frozenset()):
             if pid in authorized_mps_servers:
@@ -2538,117 +3756,34 @@ class ExternalGpuGuard:
         return False
 
     @staticmethod
-    def _claim_is_current_dft_residency_scope(
+    def _claim_is_unique_dft_residency_scope(
         claim: SystemdGpuClaim,
         *,
         index: int,
         uuid: str,
         leases: tuple[Lease, ...],
-        owner: OwnerIdentity,
-        component: str,
-        environment: str,
-        client_id: str | None,
-        parent_lease_id: str | None,
+        authorized_mps_declarers: frozenset[SystemdGpuDeclarer],
     ) -> bool:
-        """Recognize one exact live declarer behind a parented DFT attempt.
+        """Retain exact DFT-only authority for legacy/non-descriptor paths."""
 
-        The system manager reports the UID 1001 user manager as the ancestor
-        claim, so its unit-level process set is intentionally too broad for
-        authorization.  Only identity-stable live-environment declarers in the
-        exact residency workload process tree may be matched to the parent
-        lease.  This includes compiler subprocesses spawned by the resident
-        executor after model warm-up.
-        """
-
-        broker_uid = 1001
-        if (
-            component != "dft"
-            or environment != "dev"
-            or client_id is None
-            or parent_lease_id is None
-            or os.geteuid() != broker_uid
-        ):
-            return False
         candidates = tuple(
             lease
             for lease in leases
-            if lease.lease_id == parent_lease_id
-            if lease.kind == "residency"
-            and lease.placement == "preferred"
-            and lease.preferred is True
-            and lease.component == component
-            and lease.environment == environment
-            and lease.client_id == client_id
-            and lease.gpu_index == index
-            and lease.gpu_uuid == uuid
-            and lease.parent_lease_id is None
-            and lease.status == "active"
-            and lease.mps_termination_status == "none"
-            and lease.owner_pid == owner.pid
-            and lease.owner_process_start_ticks == owner.process_start_ticks
-            and lease.owner_boot_id == owner.boot_id
+            if exact_dft_residency_scope_authority(
+                lease,
+                index=index,
+                uuid=uuid,
+            )
+            is not None
         )
         if len(candidates) != 1:
             return False
-        lease = candidates[0]
-        workload_pid = lease.workload_pid
-        if (
-            workload_pid is None
-            or lease.workload_process_start_ticks is None
-            or lease.workload_process_group_id is None
-            or workload_pid <= 0
-            or lease.workload_process_start_ticks <= 0
-            or lease.workload_process_group_id <= 0
-            or lease.workload_process_group_id != workload_pid
-        ):
-            return False
-        expected_control_group = scope_control_group(
-            lease.lease_id,
-            uid=broker_uid,
-        )
-        target_declarers = tuple(
-            declarer
-            for declarer in claim.live_gpu_declarers
-            if uuid in declarer.gpu_uuids
-        )
-        expected_workload_declarer = SystemdGpuDeclarer(
-            pid=workload_pid,
-            process_start_ticks=lease.workload_process_start_ticks,
-            process_cgroup=expected_control_group,
-            gpu_uuids=frozenset({uuid}),
-        )
-        try:
-            declarers_are_exact_descendants = (
-                bool(target_declarers)
-                and len({declarer.pid for declarer in target_declarers})
-                == len(target_declarers)
-                and expected_workload_declarer in target_declarers
-                and all(
-                    declarer.pid in claim.process_pids
-                    and declarer.gpu_uuids == frozenset({uuid})
-                    and declarer.process_cgroup == expected_control_group
-                    and _pid_is_or_descends_from(
-                        declarer.pid,
-                        workload_pid,
-                    )
-                    and read_process_start_ticks(declarer.pid)
-                    == declarer.process_start_ticks
-                    and _read_unified_process_cgroup(declarer.pid)
-                    == expected_control_group
-                    for declarer in target_declarers
-                )
-            )
-        except (BrokerError, OSError, TypeError, ValueError):
-            return False
-        return (
-            claim.scope == "system"
-            and claim.unit == f"user@{broker_uid}.service"
-            and claim.control_group == user_manager_control_group(broker_uid)
-            and claim.gpu_uuids == frozenset({uuid})
-            and not claim.static_gpu_uuids
-            and claim.active_gpu_uuids == frozenset({uuid})
-            and declarers_are_exact_descendants
-            and lease.workload_cgroup == f"0::{expected_control_group}"
+        return claim_is_exact_dft_residency_scope(
+            claim,
+            index=index,
+            uuid=uuid,
+            lease=candidates[0],
+            authorized_mps_declarers=authorized_mps_declarers,
         )
 
     def _query_compute_processes(
@@ -3293,7 +4428,15 @@ class JobCgroupController:
         return target
 
     def _active_scope_path(self, lease: Lease) -> Path:
-        self._require_bound_scope(lease)
+        try:
+            self._require_bound_scope(lease)
+        except BrokerError as exc:
+            self._log_workload_revalidation_failure(
+                lease,
+                check="lease_scope_binding",
+                broker_error_code=exc.code,
+            )
+            raise
         target = self._existing_scope_path(lease)
         unit = self._scope_unit(lease)
         expected = {
@@ -3304,27 +4447,134 @@ class JobCgroupController:
             "Slice": SCOPE_SLICE,
         }
         pids = self._scope_pids(target)
-        if self._unit_status(unit) != expected or not pids:
+        if self._unit_status(unit) != expected:
+            self._log_workload_revalidation_failure(
+                lease,
+                check="scope_unit_state",
+                broker_error_code="workload_identity_mismatch",
+            )
             raise BrokerError(
                 "workload_identity_mismatch",
                 "transient GPU scope is not active with a live workload",
             )
-        if (
+        if not pids:
+            self._log_workload_revalidation_failure(
+                lease,
+                check="scope_membership",
+                broker_error_code="workload_identity_mismatch",
+            )
+            raise BrokerError(
+                "workload_identity_mismatch",
+                "transient GPU scope is not active with a live workload",
+            )
+        workload_identity_missing = (
             lease.workload_pid is None
             or lease.workload_process_start_ticks is None
             or lease.workload_process_group_id is None
-            or pids != {lease.workload_pid}
+        )
+        exact_root_membership = (
+            not workload_identity_missing and pids == {lease.workload_pid}
+        )
+        exact_dft_descendant_membership = (
+            not workload_identity_missing
+            and not exact_root_membership
+            and self._is_exact_dft_descendant_membership(lease, pids)
+        )
+        if workload_identity_missing or not (
+            exact_root_membership or exact_dft_descendant_membership
         ):
+            self._log_workload_revalidation_failure(
+                lease,
+                check="scope_membership",
+                broker_error_code="workload_identity_mismatch",
+            )
             raise BrokerError(
                 "workload_identity_mismatch",
                 "active transient GPU scope workload identity differs",
             )
-        self._require_process_identity(
-            lease.workload_pid,
-            lease.workload_process_start_ticks,
-            lease.workload_process_group_id,
-        )
+        try:
+            self._require_process_identity(
+                lease.workload_pid,
+                lease.workload_process_start_ticks,
+                lease.workload_process_group_id,
+            )
+        except BrokerError as exc:
+            self._log_workload_revalidation_failure(
+                lease,
+                check="process_identity",
+                broker_error_code=exc.code,
+            )
+            raise
+        if exact_dft_descendant_membership:
+            try:
+                membership_after = self._scope_pids(target)
+            except BrokerError as exc:
+                self._log_workload_revalidation_failure(
+                    lease,
+                    check="scope_membership",
+                    broker_error_code=exc.code,
+                )
+                raise
+            if membership_after != pids:
+                self._log_workload_revalidation_failure(
+                    lease,
+                    check="scope_membership",
+                    broker_error_code="workload_identity_mismatch",
+                )
+                raise BrokerError(
+                    "workload_identity_mismatch",
+                    "active transient GPU scope membership changed during validation",
+                )
         return target
+
+    @staticmethod
+    def _is_exact_dft_descendant_membership(
+        lease: Lease,
+        pids: set[int],
+    ) -> bool:
+        workload_pid = lease.workload_pid
+        expected_uuid = EXPECTED_GPU_UUIDS.get(lease.gpu_index)
+        if (
+            isinstance(workload_pid, bool)
+            or not isinstance(workload_pid, int)
+            or workload_pid <= 0
+            or workload_pid not in pids
+            or expected_uuid is None
+            or lease.gpu_uuid != expected_uuid
+        ):
+            return False
+        authority = exact_dft_residency_scope_authority(
+            lease,
+            index=lease.gpu_index,
+            uuid=expected_uuid,
+        )
+        if authority is None or authority[0] != workload_pid:
+            return False
+        return all(
+            process_is_exact_dft_residency_descendant(
+                pid,
+                lease,
+                index=lease.gpu_index,
+                uuid=expected_uuid,
+            )
+            for pid in sorted(pids)
+        )
+
+    @staticmethod
+    def _log_workload_revalidation_failure(
+        lease: Lease,
+        *,
+        check: str,
+        broker_error_code: str,
+    ) -> None:
+        logger.error(
+            "gpu_workload_revalidation_failed lease_id=%s fencing_token=%d "
+            "check=%s broker_error_code=%s",
+            lease.lease_id,
+            lease.fencing_token,
+            check,
+            broker_error_code,
+        )
 
     def _require_bound_scope(self, lease: Lease) -> None:
         expected = self._expected_control_group(lease)
@@ -3612,12 +4862,28 @@ class MpsRuntimeGuard:
         *,
         deadline: float | None = None,
     ) -> frozenset[int]:
-        """Return only the server owned by this exact MPS control authority.
+        """Compatibility view: only servers may be exempted from NVML."""
+
+        return self.authority_snapshot(
+            index,
+            uuid,
+            deadline=deadline,
+        ).server_pids
+
+    def authority_snapshot(
+        self,
+        index: int,
+        uuid: str,
+        *,
+        deadline: float | None = None,
+    ) -> MpsAuthoritySnapshot:
+        """Return one atomic control/server declarer authority snapshot.
 
         NVIDIA attributes MPS clients to the shared server in NVML.  Therefore
-        a server PID may be exempted from the global process gate only after
-        the private pipe, control daemon, root-owned executables, cgroup, GPU
-        binding and two control-plane snapshots all agree.
+        only ``server_pids`` may be exempted from the process gate.  The full
+        declarer identities additionally allow the broad UID user-manager
+        systemd claim to contain the exact descriptor-owned control/server
+        processes without trusting a PID or environment alone.
         """
 
         _ensure_admission_open(deadline)
@@ -3629,28 +4895,29 @@ class MpsRuntimeGuard:
         pipe_directory = self.pipe_directory(index)
         pipe_before = self._pipe_identity(pipe_directory)
         first_servers = self._server_list(index, deadline=deadline)
-        if not first_servers:
-            return frozenset()
-        if len(first_servers) != 1:
+        if len(first_servers) > 1:
             raise BrokerError(
                 "mps_control_unavailable",
                 "MPS control authority reported multiple servers",
             )
-        server_pid = next(iter(first_servers))
         control_pid = self._control_pid(pipe_directory, uuid)
         control_cgroup = self._validate_process_identity(
             control_pid,
             self.control_executable,
             kind="control",
         )
-        server_cgroup = self._validate_process_identity(
-            server_pid,
-            self.server_executable,
-            kind="server",
+        server_pid = next(iter(first_servers)) if first_servers else None
+        server_cgroup = (
+            self._validate_process_identity(
+                server_pid,
+                self.server_executable,
+                kind="server",
+            )
+            if server_pid is not None
+            else None
         )
-        if (
-            control_cgroup != server_cgroup
-            or not _cgroup_has_scoped_path(control_cgroup)
+        if not _cgroup_has_scoped_path(control_cgroup) or (
+            server_cgroup is not None and control_cgroup != server_cgroup
         ):
             raise BrokerError(
                 "mps_control_unavailable",
@@ -3678,47 +4945,386 @@ class MpsRuntimeGuard:
                 "mps_control_unavailable",
                 "MPS control environment authority differs",
             )
-        clients = self._query_clients(index, deadline=deadline)
-        if any(
-            client.server_pid != server_pid
-            or not self._device_matches(client.device_uuid, uuid)
-            for client in clients
-        ):
-            raise BrokerError(
-                "mps_control_unavailable",
-                "MPS client inventory differs from server authority",
-            )
-        if (
-            self._server_list(index, deadline=deadline) != first_servers
-            or self._control_pid(pipe_directory, uuid) != control_pid
-            or self._pipe_identity(pipe_directory) != pipe_before
-        ):
+
+        def reject_server_membership_change(
+            observed_servers: frozenset[int],
+        ) -> None:
+            if not first_servers and len(observed_servers) == 1:
+                lazy_server_pid = next(iter(observed_servers))
+                current_control = self._validated_gpu_declarer(
+                    control_pid,
+                    self.control_executable,
+                    kind="control",
+                    uuid=uuid,
+                    pipe_directory=pipe_directory,
+                    pipe_identity=pipe_before,
+                )
+                current_server = self._validated_gpu_declarer(
+                    lazy_server_pid,
+                    self.server_executable,
+                    kind="server",
+                    uuid=uuid,
+                    pipe_directory=pipe_directory,
+                    pipe_identity=pipe_before,
+                )
+                if (
+                    current_control.process_cgroup
+                    == self._unified_cgroup_path(control_cgroup)
+                    == current_server.process_cgroup
+                ):
+                    raise BrokerError(
+                        "mps_authority_changed",
+                        "descriptor-owned MPS server lazily appeared during audit",
+                    )
             raise BrokerError(
                 "mps_control_unavailable",
                 "MPS server authority changed during audit",
             )
-        # Re-read process identity after all control queries to close PID reuse
-        # and executable/cgroup replacement during the snapshot.
-        if (
-            self._validate_process_identity(
-                control_pid,
-                self.control_executable,
-                kind="control",
+
+        clients = self._query_clients(index, deadline=deadline)
+        client_process_identities: frozenset[MpsClientProcessIdentity] | None = None
+        if server_pid is not None:
+            if any(
+                client.server_pid != server_pid
+                or not self._device_matches(client.device_uuid, uuid)
+                for client in clients
+            ):
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "MPS client inventory differs from server authority",
+                )
+            client_process_identities = self._capture_client_process_identities(
+                clients
             )
-            != control_cgroup
-            or self._validate_process_identity(
+        middle_servers = self._server_list(index, deadline=deadline)
+        if (
+            self._control_pid(pipe_directory, uuid) != control_pid
+            or self._pipe_identity(pipe_directory) != pipe_before
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control authority changed during audit",
+            )
+        if middle_servers != first_servers:
+            reject_server_membership_change(middle_servers)
+        if server_pid is None and clients:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS client inventory differs from server authority",
+            )
+        if client_process_identities is None:
+            client_process_identities = frozenset()
+        control_declarer = self._validated_gpu_declarer(
+            control_pid,
+            self.control_executable,
+            kind="control",
+            uuid=uuid,
+            pipe_directory=pipe_directory,
+            pipe_identity=pipe_before,
+        )
+        declarers = {control_declarer}
+        if server_pid is not None:
+            server_declarer = self._validated_gpu_declarer(
                 server_pid,
                 self.server_executable,
                 kind="server",
+                uuid=uuid,
+                pipe_directory=pipe_directory,
+                pipe_identity=pipe_before,
             )
-            != server_cgroup
+            declarers.add(server_declarer)
+        if (
+            control_declarer.process_cgroup
+            != self._unified_cgroup_path(control_cgroup)
+            or (
+                server_cgroup is not None
+                and server_declarer.process_cgroup
+                != self._unified_cgroup_path(server_cgroup)
+            )
         ):
             raise BrokerError(
                 "mps_control_unavailable",
                 "MPS process authority changed during audit",
             )
+        trailing_clients = self._query_clients(index, deadline=deadline)
+        trailing_client_process_identities: (
+            frozenset[MpsClientProcessIdentity] | None
+        ) = None
+        if server_pid is not None:
+            if any(
+                client.server_pid != server_pid
+                or not self._device_matches(client.device_uuid, uuid)
+                for client in trailing_clients
+            ):
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "MPS trailing client inventory differs from server authority",
+                )
+            trailing_client_process_identities = (
+                self._capture_client_process_identities(trailing_clients)
+            )
+        trailing_servers = self._server_list(index, deadline=deadline)
+        if (
+            self._control_pid(pipe_directory, uuid) != control_pid
+            or self._pipe_identity(pipe_directory) != pipe_before
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS control authority changed after declarer validation",
+            )
+        if trailing_servers != first_servers:
+            reject_server_membership_change(trailing_servers)
+        if server_pid is None and trailing_clients:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS trailing client inventory differs from server authority",
+            )
+        if trailing_client_process_identities is None:
+            trailing_client_process_identities = frozenset()
+        trailing_declarers = {
+            self._validated_gpu_declarer(
+                control_pid,
+                self.control_executable,
+                kind="control",
+                uuid=uuid,
+                pipe_directory=pipe_directory,
+                pipe_identity=pipe_before,
+            )
+        }
+        if server_pid is not None:
+            trailing_declarers.add(
+                self._validated_gpu_declarer(
+                    server_pid,
+                    self.server_executable,
+                    kind="server",
+                    uuid=uuid,
+                    pipe_directory=pipe_directory,
+                    pipe_identity=pipe_before,
+                )
+            )
+        if trailing_declarers != declarers:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS declarer authority changed during final identity audit",
+            )
+        client_set = frozenset(clients)
+        trailing_client_set = frozenset(trailing_clients)
+        if trailing_client_set != client_set:
+            before_identity_by_pid = {
+                identity.client_pid: identity
+                for identity in client_process_identities
+            }
+            after_identity_by_pid = {
+                identity.client_pid: identity
+                for identity in trailing_client_process_identities
+            }
+            if any(
+                before_identity_by_pid[pid] != after_identity_by_pid[pid]
+                for pid in before_identity_by_pid.keys()
+                & after_identity_by_pid.keys()
+            ):
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "MPS retained client process identity changed during audit",
+                )
+            before_authority = MpsAuthoritySnapshot(
+                server_pids=first_servers,
+                gpu_declarers=frozenset(declarers),
+                clients=client_set,
+                descriptor_authority=self.descriptor_authority,
+                client_process_identities=client_process_identities,
+            )
+            after_authority = MpsAuthoritySnapshot(
+                server_pids=first_servers,
+                gpu_declarers=frozenset(trailing_declarers),
+                clients=trailing_client_set,
+                descriptor_authority=self.descriptor_authority,
+                client_process_identities=(
+                    trailing_client_process_identities
+                ),
+            )
+            if client_set < trailing_client_set:
+                raise MpsClientMembershipChanged(
+                    "mps_authority_changed",
+                    "descriptor-owned MPS client membership grew during audit",
+                    before_authority,
+                    after_authority,
+                )
+            raise MpsClientMembershipChanged(
+                "mps_control_unavailable",
+                "MPS client identity disappeared or changed during audit",
+                before_authority,
+                after_authority,
+            )
+        if trailing_client_process_identities != client_process_identities:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS client process identity changed during audit",
+            )
         _ensure_admission_open(deadline)
-        return first_servers
+        return MpsAuthoritySnapshot(
+            server_pids=first_servers,
+            gpu_declarers=frozenset(trailing_declarers),
+            clients=client_set,
+            descriptor_authority=self.descriptor_authority,
+            client_process_identities=trailing_client_process_identities,
+        )
+
+    def _capture_client_process_identities(
+        self,
+        clients: tuple["MpsClient", ...],
+    ) -> frozenset[MpsClientProcessIdentity]:
+        """Bind every reported MPS client PID to one stable scoped cgroup."""
+
+        identities: set[MpsClientProcessIdentity] = set()
+        for pid in sorted({client.client_pid for client in clients}):
+            try:
+                start_before = self._read_start_ticks(pid)
+                cgroup_before = self._read_process_cgroup(pid)
+                start_after = self._read_start_ticks(pid)
+                cgroup_after = self._read_process_cgroup(pid)
+            except (BrokerError, OSError, TypeError, ValueError) as exc:
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "cannot bind an MPS client to a stable host identity",
+                ) from exc
+            if (
+                isinstance(start_before, bool)
+                or not isinstance(start_before, int)
+                or start_before <= 0
+                or isinstance(start_after, bool)
+                or not isinstance(start_after, int)
+                or start_after <= 0
+                or start_after != start_before
+                or not isinstance(cgroup_before, str)
+                or cgroup_after != cgroup_before
+                or not _cgroup_has_scoped_path(cgroup_before)
+            ):
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "MPS client host identity changed during audit",
+                )
+            identities.add(
+                MpsClientProcessIdentity(
+                    client_pid=pid,
+                    process_start_ticks=start_before,
+                    process_cgroup=self._unified_cgroup_path(cgroup_before),
+                )
+            )
+        return frozenset(identities)
+
+    @staticmethod
+    def _unified_cgroup_path(raw: str) -> str:
+        matches = [
+            line.split(":", 2)[2]
+            for line in raw.splitlines()
+            if line.startswith("0::") and len(line.split(":", 2)) == 3
+        ]
+        if len(matches) != 1 or not matches[0].startswith("/"):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS process is not in an exact cgroup-v2 path",
+            )
+        return matches[0]
+
+    def _validated_gpu_declarer(
+        self,
+        pid: int,
+        executable: Path,
+        *,
+        kind: str,
+        uuid: str,
+        pipe_directory: Path,
+        pipe_identity: tuple[
+            tuple[int, int, int, int, int],
+            tuple[int, int, int, int, int],
+        ],
+    ) -> SystemdGpuDeclarer:
+        try:
+            start_before = self._read_start_ticks(pid)
+            cgroup_before = self._validate_process_identity(
+                pid,
+                executable,
+                kind=kind,
+            )
+            environment_before = self._read_process_environment(pid)
+            reported_pipe_before = self._resolve_process_authority_path(
+                environment_before["CUDA_MPS_PIPE_DIRECTORY"],
+                pid,
+            )
+            cgroup_after = self._validate_process_identity(
+                pid,
+                executable,
+                kind=kind,
+            )
+            environment_after = self._read_process_environment(pid)
+            reported_pipe_after = self._resolve_process_authority_path(
+                environment_after["CUDA_MPS_PIPE_DIRECTORY"],
+                pid,
+            )
+            start_after = self._read_start_ticks(pid)
+            expected_pipe = pipe_directory.resolve(strict=True)
+        except (
+            BrokerError,
+            KeyError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise BrokerError(
+                "mps_control_unavailable",
+                f"MPS {kind} declarer identity is unavailable",
+            ) from exc
+        if (
+            isinstance(start_before, bool)
+            or not isinstance(start_before, int)
+            or start_before <= 0
+            or start_before != start_after
+            or cgroup_before != cgroup_after
+            or environment_before != environment_after
+            or self._environment_gpu_uuids(environment_before)
+            != frozenset({uuid})
+            or reported_pipe_before != expected_pipe
+            or reported_pipe_after != expected_pipe
+            or self._pipe_identity(reported_pipe_after) != pipe_identity
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                f"MPS {kind} declarer identity changed during audit",
+            )
+        return SystemdGpuDeclarer(
+            pid=pid,
+            process_start_ticks=start_before,
+            process_cgroup=self._unified_cgroup_path(cgroup_after),
+            gpu_uuids=frozenset({uuid}),
+        )
+
+    @staticmethod
+    def _environment_gpu_uuids(
+        environment: dict[str, str],
+    ) -> frozenset[str]:
+        declared: set[str] = set()
+        for name in ("CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES"):
+            value = environment.get(name)
+            if value is None:
+                continue
+            normalized = value.strip()
+            if normalized.lower() in {"", "none", "void"}:
+                continue
+            if normalized.lower() == "all":
+                declared.update(EXPECTED_GPU_UUIDS.values())
+            else:
+                try:
+                    declared.update(
+                        _resolve_gpu_claim_tokens(normalized.split(","))
+                    )
+                except ValueError as exc:
+                    raise BrokerError(
+                        "mps_control_unavailable",
+                        "MPS process GPU environment is outside governance",
+                    ) from exc
+        return frozenset(declared)
 
     @staticmethod
     def _resolve_process_authority_path(raw: str, pid: int) -> Path:
@@ -4287,16 +5893,16 @@ class MpsRuntimeGuard:
                     command=fields[5],
                 )
             )
+        if len(frozenset(clients)) != len(clients):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS ps response contains a duplicate client identity",
+            )
         return tuple(clients)
 
     @staticmethod
     def _device_matches(reported_uuid: str, expected_uuid: str) -> bool:
-        return (
-            len(reported_uuid) >= 12
-            and reported_uuid.startswith("GPU-")
-            and all(character in "0123456789abcdefABCDEF-" for character in reported_uuid[4:])
-            and expected_uuid.startswith(reported_uuid)
-        )
+        return _mps_device_matches(reported_uuid, expected_uuid)
 
     def _run_control(
         self,
@@ -4349,6 +5955,7 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
     server: "GpuBrokerUnixServer"
 
     def handle(self) -> None:
+        fatal_persistence_error: BrokerPersistenceFatal | None = None
         try:
             raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
             if not raw or len(raw) > MAX_REQUEST_BYTES or not raw.endswith(b"\n"):
@@ -4362,6 +5969,19 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
             owner = self._peer_owner()
             result = self.server.dispatch(request, owner=owner)
             response = {"ok": True, "result": result}
+        except BrokerPersistenceFatal as exc:
+            logger.critical(
+                "fatal GPU Broker persistence failure; stopping service",
+                exc_info=True,
+            )
+            fatal_persistence_error = exc
+            response = {
+                "ok": False,
+                "error": {
+                    "code": "internal_error",
+                    "message": "GPU broker internal error",
+                },
+            }
         except BrokerError as exc:
             response = {"ok": False, "error": {"code": exc.code, "message": str(exc)}}
         except Exception:
@@ -4370,10 +5990,26 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
                 "ok": False,
                 "error": {"code": "internal_error", "message": "GPU broker internal error"},
             }
-        self.wfile.write(
+        encoded = (
             json.dumps(response, sort_keys=True, separators=(",", ":")).encode("utf-8")
             + b"\n"
         )
+        if len(encoded) > MAX_RESPONSE_BYTES:
+            logger.critical(
+                "GPU Broker response exceeded the client wire limit: %d bytes",
+                len(encoded),
+            )
+            encoded = (
+                b'{"error":{"code":"internal_error","message":'
+                b'"GPU broker internal error"},"ok":false}\n'
+            )
+        try:
+            self.wfile.write(encoded)
+        finally:
+            if fatal_persistence_error is not None:
+                self.server.stop_after_persistence_failure(
+                    fatal_persistence_error
+                )
 
     def _peer_owner(self) -> OwnerIdentity:
         if not hasattr(socket, "SO_PEERCRED"):
@@ -4394,6 +6030,8 @@ class GpuBrokerUnixServer(socketserver.ThreadingUnixStreamServer):
     def __init__(self, socket_path: Path, broker: HostGpuBroker) -> None:
         self.socket_path = socket_path
         self.broker = broker
+        self._fatal_error_lock = threading.Lock()
+        self._fatal_persistence_error: BrokerPersistenceFatal | None = None
         socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(socket_path.parent, 0o700)
         if socket_path.exists():
@@ -4416,6 +6054,21 @@ class GpuBrokerUnixServer(socketserver.ThreadingUnixStreamServer):
         finally:
             os.umask(previous_umask)
         os.chmod(socket_path, 0o600)
+
+    @property
+    def fatal_persistence_error(self) -> BrokerPersistenceFatal | None:
+        with self._fatal_error_lock:
+            return self._fatal_persistence_error
+
+    def stop_after_persistence_failure(
+        self, error: BrokerPersistenceFatal
+    ) -> None:
+        with self._fatal_error_lock:
+            if self._fatal_persistence_error is None:
+                self._fatal_persistence_error = error
+        # Request handlers run on ThreadingMixIn workers.  BaseServer.shutdown
+        # must be called from a thread other than serve_forever's thread.
+        self.shutdown()
 
     def server_close(self) -> None:
         try:
@@ -4591,16 +6244,23 @@ def main() -> int:
     args.mps_state_root = process_stable_descriptor_path(
         args.mps_state_root
     )
+    args.policy = process_stable_descriptor_path(args.policy)
     validate_policy_document(args.policy)
     validate_gpu_inventory(query_gpu_inventory())
     mps_guard = MpsRuntimeGuard(args.mps_state_root)
     cgroup_controller = JobCgroupController()
     external_policy = load_external_reservations(args.external_reservations)
+    descriptor_mps_authority = mps_guard.descriptor_authority
+    mps_authority_kwargs = (
+        {"mps_authority_query": mps_guard.authority_snapshot}
+        if descriptor_mps_authority
+        else {"authorized_mps_server_pids": mps_guard.authorized_server_pids}
+    )
     external_guard = ExternalGpuGuard(
         external_policy,
         unmanaged_mps_client_query=mps_guard.unmanaged_client_alive,
-        authorized_mps_server_pids=mps_guard.authorized_server_pids,
-        allow_descriptor_mps_authority=mps_guard.descriptor_authority,
+        allow_descriptor_mps_authority=descriptor_mps_authority,
+        **mps_authority_kwargs,
     )
     broker = HostGpuBroker(
         args.state,
@@ -4625,6 +6285,11 @@ def main() -> int:
         server.serve_forever(poll_interval=0.5)
     finally:
         server.server_close()
+    if server.fatal_persistence_error is not None:
+        logger.critical(
+            "GPU Broker stopped after an indeterminate persistence commit"
+        )
+        return 1
     return 0
 
 

@@ -1,19 +1,48 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 from pathlib import Path
+from threading import Event, Lock, Thread, get_ident
 from types import SimpleNamespace
 
+import anyio
 import pandas as pd
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from app.config import Settings
 from app.main import create_app
+from app.models import (
+    MonomerPolymerizationRequest,
+    MonomerPolymerizationResponse,
+    MonomerPolymerizationStatusResponse,
+)
+from app.routers import monomer_polymerization as monomer_polymerization_routes
+from app.routers.monomer_polymerization import (
+    monomer_polymerization,
+    monomer_polymerization_status,
+)
 from app.utils.exceptions import ModelArtifactError
 
 
 REQUIRED_SECOND_MONOMER_TARGETS = ("polyimide", "polyester", "polyamide", "polyurethane")
 OPTIONAL_SECOND_MONOMER_TARGETS = ("polyolefin", "polyether", "polyoxazolidone", "all")
+
+
+def make_request(app) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [],
+            "query_string": b"",
+            "app": app,
+        }
+    )
 
 
 def _settings(tmp_path: Path, *, smipoly_enabled: bool = True) -> Settings:
@@ -38,6 +67,307 @@ def test_monomer_polymerization_status_reports_disabled_service(tmp_path: Path) 
     assert data["available"] is False
     assert data["default_target_class"] == "polyimide"
     assert data["target_requirements"]["polyimide"]["monomer_b_required"] is True
+
+
+@pytest.mark.asyncio
+async def test_monomer_polymerization_routes_run_sync_services_off_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(_settings(tmp_path))
+    event_loop_thread = get_ident()
+    status_threads: list[int] = []
+    polymerization_threads: list[int] = []
+
+    def fake_status(enabled: bool) -> MonomerPolymerizationStatusResponse:
+        status_threads.append(get_ident())
+        return MonomerPolymerizationStatusResponse(
+            enabled=enabled,
+            available=True,
+            message="available",
+        )
+
+    def fake_polymerization(
+        request_body: MonomerPolymerizationRequest,
+    ) -> MonomerPolymerizationResponse:
+        polymerization_threads.append(get_ident())
+        return MonomerPolymerizationResponse(
+            target_class=request_body.target_class,
+            query_time_ms=0.0,
+            total=0,
+        )
+
+    monkeypatch.setattr(
+        monomer_polymerization_routes,
+        "get_monomer_polymerization_status",
+        fake_status,
+    )
+    monkeypatch.setattr(
+        monomer_polymerization_routes,
+        "run_monomer_polymerization",
+        fake_polymerization,
+    )
+
+    status_response = await monomer_polymerization_status(make_request(app))
+    result_response = await monomer_polymerization(
+        MonomerPolymerizationRequest(
+            monomer_a_smiles="CCO",
+            monomer_b_smiles="CCN",
+            target_class="polyimide",
+        ),
+        make_request(app),
+    )
+
+    assert status_response.available is True
+    assert result_response.total == 0
+    assert status_threads and status_threads[0] != event_loop_thread
+    assert polymerization_threads and polymerization_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_monomer_polymerization_uses_exclusive_limiter_without_mutating_stdout_or_shared_pool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(_settings(tmp_path))
+    original_stdout = sys.stdout
+    state_lock = Lock()
+    first_call_entered = Event()
+    release_first_call = Event()
+    active_calls = 0
+    maximum_active_calls = 0
+    monc_calls = 0
+    observed_stdout: list[object] = []
+
+    class FakeMonc:
+        @staticmethod
+        def moncls(df, smiColn: str, dsp_rsl: bool = False):
+            nonlocal active_calls, maximum_active_calls, monc_calls
+            assert smiColn == "SMILES"
+            assert dsp_rsl is False
+            with state_lock:
+                monc_calls += 1
+                call_number = monc_calls
+                active_calls += 1
+                maximum_active_calls = max(maximum_active_calls, active_calls)
+                observed_stdout.append(sys.stdout)
+            if call_number == 1:
+                first_call_entered.set()
+                assert release_first_call.wait(timeout=2)
+            return df.assign(smip_cand_mons=df["SMILES"])
+
+    class FakePolg:
+        Ps_classL = {"polyether": 12}
+
+        @staticmethod
+        def biplym(df, targ, dsp_rsl: bool = False):
+            nonlocal active_calls
+            assert targ == ["polyether"]
+            assert dsp_rsl is False
+            with state_lock:
+                observed_stdout.append(sys.stdout)
+                active_calls -= 1
+            return pd.DataFrame(
+                columns=["mon1", "mon2", "polym", "polymer_class", "Ps_rxnL", "reactset"]
+            )
+
+    runtime = SimpleNamespace(
+        pd=pd,
+        monc=FakeMonc,
+        polg=FakePolg,
+        target_classes=("polyether",),
+    )
+    monkeypatch.setattr(
+        "app.services.monomer_polymerization._load_smipoly_runtime",
+        lambda: runtime,
+    )
+    request_body = MonomerPolymerizationRequest(
+        monomer_a_smiles="CCO",
+        target_class="polyether",
+    )
+    default_limiter = anyio.to_thread.current_default_thread_limiter()
+    original_default_tokens = default_limiter.total_tokens
+    default_limiter.total_tokens = 1
+    tasks: list[asyncio.Task[MonomerPolymerizationResponse]] = []
+
+    try:
+        tasks.append(
+            asyncio.create_task(
+                monomer_polymerization(request_body, make_request(app))
+            )
+        )
+        for _ in range(100):
+            if first_call_entered.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert first_call_entered.is_set()
+
+        tasks.append(
+            asyncio.create_task(
+                monomer_polymerization(request_body, make_request(app))
+            )
+        )
+        await asyncio.sleep(0.05)
+
+        assert maximum_active_calls == 1
+        assert sys.stdout is original_stdout
+        assert await asyncio.wait_for(
+            anyio.to_thread.run_sync(lambda: "shared-pool-free"),
+            timeout=0.5,
+        ) == "shared-pool-free"
+
+        release_first_call.set()
+        responses = await asyncio.wait_for(asyncio.gather(*tasks), timeout=2)
+        assert [response.total for response in responses] == [0, 0]
+    finally:
+        release_first_call.set()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        default_limiter.total_tokens = original_default_tokens
+
+    assert maximum_active_calls == 1
+    assert active_calls == 0
+    assert observed_stdout
+    assert all(value is original_stdout for value in observed_stdout)
+    assert sys.stdout is original_stdout
+
+
+def test_monomer_polymerization_limiters_are_isolated_across_app_event_loops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    apps = (
+        create_app(_settings(tmp_path / "first")),
+        create_app(_settings(tmp_path / "second")),
+    )
+    first_call_entered = Event()
+    second_call_entered = Event()
+    release_first_call = Event()
+    state_lock = Lock()
+    calls = 0
+
+    def fake_polymerization(
+        request_body: MonomerPolymerizationRequest,
+    ) -> MonomerPolymerizationResponse:
+        nonlocal calls
+        assert request_body.target_class == "polyether"
+        with state_lock:
+            calls += 1
+            call_number = calls
+        if call_number == 1:
+            first_call_entered.set()
+            assert release_first_call.wait(timeout=2)
+        else:
+            second_call_entered.set()
+        return MonomerPolymerizationResponse(
+            target_class=request_body.target_class,
+            query_time_ms=0.0,
+            total=0,
+        )
+
+    monkeypatch.setattr(
+        monomer_polymerization_routes,
+        "run_monomer_polymerization",
+        fake_polymerization,
+    )
+    request_body = MonomerPolymerizationRequest(
+        monomer_a_smiles="CCO",
+        target_class="polyether",
+    )
+    responses: list[MonomerPolymerizationResponse] = []
+    errors: list[BaseException] = []
+
+    def invoke(app) -> None:
+        async def run() -> None:
+            response = await asyncio.wait_for(
+                monomer_polymerization(request_body, make_request(app)),
+                timeout=3,
+            )
+            responses.append(response)
+
+        try:
+            asyncio.run(run())
+        except BaseException as exc:  # pragma: no cover - assertion reports details
+            errors.append(exc)
+
+    first = Thread(target=invoke, args=(apps[0],))
+    second = Thread(target=invoke, args=(apps[1],))
+    first.start()
+    assert first_call_entered.wait(timeout=1)
+    second.start()
+    second_progressed = second_call_entered.wait(timeout=1)
+    release_first_call.set()
+    first.join(timeout=4)
+    second.join(timeout=4)
+
+    assert second_progressed, "the second app was blocked by another event loop's limiter"
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert len(responses) == 2
+    assert all(response.total == 0 for response in responses)
+    assert apps[0].state.smipoly_limiter is not apps[1].state.smipoly_limiter
+
+
+@pytest.mark.asyncio
+async def test_monomer_polymerization_limiter_recovers_after_smipoly_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(_settings(tmp_path))
+    original_stdout = sys.stdout
+    calls = 0
+
+    class FlakyMonc:
+        @staticmethod
+        def moncls(df, smiColn: str, dsp_rsl: bool = False):
+            nonlocal calls
+            assert smiColn == "SMILES"
+            assert dsp_rsl is False
+            assert sys.stdout is original_stdout
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("synthetic SMiPoly failure")
+            return df.assign(smip_cand_mons=df["SMILES"])
+
+    class FakePolg:
+        Ps_classL = {"polyether": 12}
+
+        @staticmethod
+        def biplym(df, targ, dsp_rsl: bool = False):
+            assert targ == ["polyether"]
+            assert dsp_rsl is False
+            assert sys.stdout is original_stdout
+            return pd.DataFrame(
+                columns=["mon1", "mon2", "polym", "polymer_class", "Ps_rxnL", "reactset"]
+            )
+
+    runtime = SimpleNamespace(
+        pd=pd,
+        monc=FlakyMonc,
+        polg=FakePolg,
+        target_classes=("polyether",),
+    )
+    monkeypatch.setattr(
+        "app.services.monomer_polymerization._load_smipoly_runtime",
+        lambda: runtime,
+    )
+    request_body = MonomerPolymerizationRequest(
+        monomer_a_smiles="CCO",
+        target_class="polyether",
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        await monomer_polymerization(request_body, make_request(app))
+    assert raised.value.status_code == 503
+
+    response = await asyncio.wait_for(
+        monomer_polymerization(request_body, make_request(app)),
+        timeout=1,
+    )
+    assert response.total == 0
+    assert calls == 2
+    assert sys.stdout is original_stdout
 
 
 def test_monomer_polymerization_post_reports_disabled_service(tmp_path: Path) -> None:

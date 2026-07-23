@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from contextlib import contextmanager
 from pathlib import Path
-from threading import Event
+from threading import Event, get_ident
 
 import httpx
 import pytest
@@ -25,6 +26,7 @@ from app.models import (
     Structure3DRequest,
 )
 from app.routers import database_browser
+from app.routers import query as query_routes
 from app.routers.predict import predict
 from app.postgres_database import postgres_connection
 from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles, router as query_router
@@ -540,14 +542,100 @@ async def test_query_smiles_structure_returns_top_structural_matches(test_app: F
     )
 
     assert response.match_type == "structure"
-    assert response.total == 2
+    assert response.total == 1
     assert response.results[0].polymer_name == "polymer_a"
     assert response.results[0].similarity_score == 1.0
-    assert response.results[0].similarity_score >= response.results[1].similarity_score
     assert response.results[0].structure_svg is not None
     assert "<svg" in response.results[0].structure_svg
     assert any(item.property_name == "Tg" for item in response.results[0].properties.thermal)
     assert any(item.property_name == "Conductivity" for item in response.results[0].properties.electrical)
+
+
+@pytest.mark.asyncio
+async def test_query_smiles_structure_honors_threshold_and_top_k(test_app: FastAPI) -> None:
+    request = make_request(test_app)
+
+    top_one = await query_smiles(
+        SmilesQueryRequest(
+            smiles="CCO",
+            match_mode="structure",
+            similarity_threshold=0.0,
+            top_k=1,
+        ),
+        request,
+    )
+    all_matches = await query_smiles(
+        SmilesQueryRequest(
+            smiles="CCO",
+            match_mode="structure",
+            similarity_threshold=0.0,
+            top_k=100,
+        ),
+        request,
+    )
+
+    assert top_one.total == 1
+    assert all_matches.total == 2
+    assert [result.polymer_name for result in all_matches.results] == ["polymer_a", "polymer_b"]
+
+
+@pytest.mark.asyncio
+async def test_query_smiles_runs_synchronous_work_off_event_loop(
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_loop_thread = get_ident()
+    worker_threads: list[int] = []
+    original_query = query_routes._query_smiles_sync
+
+    def recording_query(request_body, app):
+        worker_threads.append(get_ident())
+        return original_query(request_body, app)
+
+    monkeypatch.setattr(query_routes, "_query_smiles_sync", recording_query)
+
+    response = await query_smiles(
+        SmilesQueryRequest(
+            smiles="CCO",
+            match_mode="structure",
+            similarity_threshold=1.0,
+            top_k=1,
+        ),
+        make_request(test_app),
+    )
+
+    assert response.total == 1
+    assert worker_threads and worker_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_query_smiles_maps_similarity_index_database_failure_to_503(
+    test_app: FastAPI,
+) -> None:
+    class BrokenConnection:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("database statement failed")
+
+    @contextmanager
+    def broken_connection_factory(_dsn):
+        yield BrokenConnection()
+
+    test_app.state.postgres_connection_factory = broken_connection_factory
+
+    with pytest.raises(HTTPException) as exc_info:
+        await query_smiles(
+            SmilesQueryRequest(
+                smiles="CCO",
+                match_mode="structure",
+                similarity_threshold=0.7,
+                top_k=10,
+            ),
+            make_request(test_app),
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "structure similarity index is unavailable"
+    assert exc_info.value.headers == {"Retry-After": "2"}
 
 
 @pytest.mark.asyncio
@@ -577,7 +665,7 @@ async def test_query_smiles_property_returns_nearest_property_matches(predict_en
         SmilesQueryRequest(
             smiles="CCO",
             match_mode="property",
-            similarity_threshold=0.3,
+            similarity_threshold=0.0,
             top_k=2,
             property_name="Glass transition temperature",
         ),
@@ -599,6 +687,82 @@ async def test_query_smiles_property_returns_nearest_property_matches(predict_en
         any(item.property_name == "Glass transition temperature" for item in result.properties.thermal)
         for result in response.results
     )
+
+
+@pytest.mark.asyncio
+async def test_query_smiles_property_honors_threshold_and_top_k(
+    predict_enabled_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.property_similarity.predict",
+        lambda smiles, properties, *, model_dir: {properties[0]: 210.0},
+    )
+    request = make_request(predict_enabled_app)
+
+    thresholded = await query_smiles(
+        SmilesQueryRequest(
+            smiles="CCO",
+            match_mode="property",
+            similarity_threshold=0.7,
+            top_k=100,
+            property_name="Glass transition temperature",
+        ),
+        request,
+    )
+    top_one = await query_smiles(
+        SmilesQueryRequest(
+            smiles="CCO",
+            match_mode="property",
+            similarity_threshold=0.0,
+            top_k=1,
+            property_name="Glass transition temperature",
+        ),
+        request,
+    )
+
+    assert thresholded.total == 1
+    assert thresholded.results[0].polymer_name == "polymer_a"
+    assert thresholded.results[0].similarity_score == 1.0
+    assert top_one.total == 1
+
+
+@pytest.mark.asyncio
+async def test_query_smiles_property_top_k_counts_unique_polymers(
+    predict_enabled_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.property_similarity.predict",
+        lambda smiles, properties, *, model_dir: {properties[0]: 210.0},
+    )
+    with postgres_connection(predict_enabled_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute(
+            """
+            INSERT INTO core.polymer_properties (
+              property_id, polymer_id, property_category, property_name,
+              property_value, property_value_num, property_unit, label_source,
+              source_row_number
+            )
+            VALUES (7, 1, 'Thermal', 'Glass transition temperature',
+                    '210.0', 210.0, '°C', 'duplicate-late', 7)
+            """
+        )
+
+    response = await query_smiles(
+        SmilesQueryRequest(
+            smiles="CCO",
+            match_mode="property",
+            similarity_threshold=0.0,
+            top_k=2,
+            property_name="Glass transition temperature",
+        ),
+        make_request(predict_enabled_app),
+    )
+
+    assert response.total == 2
+    assert [result.polymer_id for result in response.results] == ["1", "2"]
+    assert response.results[0].matched_property_source == "exp"
 
 
 @pytest.mark.asyncio
@@ -694,10 +858,12 @@ def test_api_uses_temporary_postgres_database(test_app: FastAPI) -> None:
 async def test_generate_structure_3d_uses_configured_timeout(test_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     request = make_request(test_app)
     test_app.state.settings.structure_3d_timeout_seconds = 27.5
-    captured: dict[str, float] = {}
+    event_loop_thread = get_ident()
+    captured: dict[str, object] = {}
 
     def fake_generate_3d_molblock(smiles: str, *, timeout_seconds: float) -> tuple[str, str]:
         captured["timeout_seconds"] = timeout_seconds
+        captured["thread"] = get_ident()
         return ("mock molblock V2000", smiles)
 
     monkeypatch.setattr("app.routers.query.generate_3d_molblock", fake_generate_3d_molblock)
@@ -705,7 +871,8 @@ async def test_generate_structure_3d_uses_configured_timeout(test_app: FastAPI, 
     response = await generate_structure_3d(Structure3DRequest(smiles="*CC*"), request)
 
     assert response.format == "mol"
-    assert captured == {"timeout_seconds": 27.5}
+    assert captured["timeout_seconds"] == 27.5
+    assert captured["thread"] != event_loop_thread
 
 
 @pytest.mark.asyncio
