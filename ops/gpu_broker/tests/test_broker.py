@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -25,12 +26,15 @@ from gpu_resource import (
     user_manager_control_group,
     wait_for_scope_membership,
 )
+from gpu_resource.client import MAX_RESPONSE_BYTES
 from ops.gpu_broker.broker import (
     BrokerError,
+    BrokerPersistenceFatal,
     EXPECTED_GPU_UUIDS,
     HostGpuBroker,
     Lease,
     OwnerIdentity,
+    PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT,
     read_boot_id,
     read_process_start_ticks,
     validate_gpu_inventory,
@@ -301,11 +305,13 @@ def _acquire(
     placement: str | None = None,
     parent_lease_id: str | None = None,
     client_id: str | None = None,
+    request_id: str | None = None,
 ):
     budget = {"backend": 8192, "dft": 4096, "md": 8192}[component]
     if placement is None:
         placement = "any" if component == "md" else "preferred"
     return broker.acquire(
+        request_id=request_id,
         kind=kind,
         placement=placement,
         component=component,
@@ -316,6 +322,71 @@ def _acquire(
         thread_percent=100 if component == "backend" else 50,
         wait_timeout_seconds=wait,
         parent_lease_id=parent_lease_id,
+    )
+
+
+def _parented_dft_journal_broker(
+    state_path: Path,
+    *,
+    client_id: str = "dft-dev-journal",
+    residency_request_id: str | None = None,
+    **overrides,
+) -> tuple[HostGpuBroker, Lease]:
+    def resolve(_lease, pid, start_ticks, process_group_id):
+        return (
+            pid,
+            start_ticks,
+            process_group_id,
+            "0::/nexpoly-gpu-jobs/journal-executor",
+        )
+
+    options = {
+        "resolve_workload_identity": resolve,
+        "parented_execution_safe_to_release": (
+            lambda _child, _parent, _leases: True
+        ),
+    }
+    options.update(overrides)
+    broker = HostGpuBroker(state_path, **options)
+    residency = _acquire(
+        broker,
+        component="dft",
+        environment="dev",
+        kind="residency",
+        client_id=client_id,
+        request_id=residency_request_id,
+    )
+    broker.activate(
+        residency.lease_id,
+        residency.fencing_token,
+        owner=_owner(),
+    )
+    residency = broker.register_workload(
+        residency.lease_id,
+        residency.fencing_token,
+        owner=_owner(),
+        workload_pid=os.getpid(),
+        workload_process_start_ticks=read_process_start_ticks(os.getpid()),
+        workload_process_group_id=os.getpgid(os.getpid()),
+    )
+    return broker, residency
+
+
+def _acquire_parented_dft_journal_execution(
+    broker: HostGpuBroker,
+    residency: Lease,
+    *,
+    request_id: str | None = None,
+) -> Lease:
+    return _acquire(
+        broker,
+        component="dft",
+        environment="dev",
+        kind="execution",
+        placement="preferred",
+        parent_lease_id=residency.lease_id,
+        client_id=residency.client_id,
+        request_id=request_id,
     )
 
 
@@ -566,7 +637,8 @@ def test_failed_release_state_commit_never_creates_a_tombstone(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    broker = HostGpuBroker(tmp_path / "state.json")
+    state_path = tmp_path / "state.json"
+    broker = HostGpuBroker(state_path)
     lease = _acquire(
         broker,
         component="backend",
@@ -574,14 +646,101 @@ def test_failed_release_state_commit_never_creates_a_tombstone(
         kind="residency",
     )
 
-    def fail_commit() -> None:
-        raise OSError("disk failure")
+    real_replace = os.replace
 
-    monkeypatch.setattr(broker, "_persist_locked", fail_commit)
-    with pytest.raises(OSError, match="disk failure"):
+    def fail_commit(source, destination) -> None:
+        if Path(destination) == state_path:
+            raise OSError("disk failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_commit)
+    with pytest.raises(BrokerPersistenceFatal, match="restart required"):
         broker.release(lease.lease_id, lease.fencing_token, owner=_owner())
 
-    assert broker.status()["last_released_lease"] is None
+    assert broker._last_released_lease is None
+    with pytest.raises(BrokerPersistenceFatal, match="restart required"):
+        broker.status()
+
+
+def test_persistence_poison_rejects_every_public_authority_api(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "state.json"
+    broker = HostGpuBroker(state_path)
+    lease = _acquire(
+        broker,
+        component="backend",
+        environment="prod",
+        kind="residency",
+    )
+    real_replace = os.replace
+
+    def fail_commit(source, destination) -> None:
+        if Path(destination) == state_path:
+            raise OSError("state replace failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_commit)
+    with pytest.raises(BrokerPersistenceFatal, match="restart required"):
+        broker.set_draining(True)
+
+    owner = _owner()
+    operations = (
+        broker.status,
+        lambda: broker.set_draining(False),
+        lambda: broker.acquire(
+            request_id="poisoned-acquire",
+            kind="residency",
+            placement="preferred",
+            component="backend",
+            environment="prod",
+            client_id="poisoned-client",
+            owner=owner,
+            memory_mib=8192,
+            thread_percent=100,
+        ),
+        lambda: broker.cancel_acquire("poisoned-acquire", owner=owner),
+        lambda: broker.activate(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=owner,
+        ),
+        lambda: broker.register_workload(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=owner,
+            workload_pid=os.getpid(),
+            workload_process_start_ticks=read_process_start_ticks(
+                os.getpid()
+            ),
+            workload_process_group_id=os.getpgid(os.getpid()),
+        ),
+        lambda: broker.heartbeat(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=owner,
+        ),
+        lambda: broker.release(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=owner,
+        ),
+        lambda: broker.quarantine(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=owner,
+            reason="gpu_fatal",
+        ),
+        lambda: broker.prepare_process_termination(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=owner,
+        ),
+    )
+    for operation in operations:
+        with pytest.raises(BrokerPersistenceFatal, match="restart required"):
+            operation()
 
 
 def test_reconcile_never_creates_a_release_tombstone(tmp_path: Path) -> None:
@@ -1787,6 +1946,573 @@ def test_dft_residency_defers_to_executor_and_parented_execution_is_logical(
 
     broker.release(execution.lease_id, execution.fencing_token, owner=_owner())
     assert parent_release_checks == [(execution.lease_id, residency.lease_id)]
+
+
+def test_dft_residency_allows_only_one_live_parented_execution(
+    tmp_path: Path,
+) -> None:
+    broker, residency = _parented_dft_journal_broker(
+        tmp_path / "state.json"
+    )
+    first = _acquire_parented_dft_journal_execution(
+        broker,
+        residency,
+        request_id="parented-execution-first",
+    )
+
+    recovered = _acquire_parented_dft_journal_execution(
+        broker,
+        residency,
+        request_id="parented-execution-first",
+    )
+    assert recovered.lease_id == first.lease_id
+
+    with pytest.raises(BrokerError) as unavailable:
+        _acquire_parented_dft_journal_execution(
+            broker,
+            residency,
+            request_id="parented-execution-second",
+        )
+    assert unavailable.value.code == "gpu_capacity_unavailable"
+    assert [
+        lease["lease_id"]
+        for lease in broker.status()["leases"]
+        if lease["parent_lease_id"] == residency.lease_id
+    ] == [first.lease_id]
+
+
+def test_parented_dft_lifecycle_journal_records_only_committed_transitions(
+    tmp_path: Path,
+) -> None:
+    broker, residency = _parented_dft_journal_broker(
+        tmp_path / "state.json"
+    )
+    initial = broker.status()
+    initial_authority_sequence = initial["lease_authority_sequence"]
+    assert initial["parented_dft_execution_lifecycle_sequence"] == 0
+    assert initial["parented_dft_execution_lifecycle_first_sequence"] == 1
+    assert initial["parented_dft_execution_lifecycle_events"] == []
+
+    execution = _acquire_parented_dft_journal_execution(
+        broker,
+        residency,
+    )
+    issued_child = execution.public_dict()
+    issued = broker.status()
+    assert issued["parented_dft_execution_lifecycle_sequence"] == 1
+    assert issued["parented_dft_execution_lifecycle_first_sequence"] == 1
+    assert issued["parented_dft_execution_lifecycle_events"] == [
+        {
+            "sequence": 1,
+            "action": "issue",
+            "root_lease_id": residency.lease_id,
+            "root_fencing_token": residency.fencing_token,
+            "next_fencing_token_after": execution.fencing_token + 1,
+            "lease_authority_sequence_after": (
+                initial_authority_sequence + 1
+            ),
+            "child": issued_child,
+        }
+    ]
+
+    recovered = _acquire_parented_dft_journal_execution(
+        broker,
+        residency,
+    )
+    assert recovered.lease_id == execution.lease_id
+    assert broker.status()["parented_dft_execution_lifecycle_sequence"] == 1
+
+    execution = broker.activate(
+        execution.lease_id,
+        execution.fencing_token,
+        owner=_owner(),
+    )
+    activated_child = execution.public_dict()
+    after_activate = broker.status()
+    assert after_activate["parented_dft_execution_lifecycle_sequence"] == 2
+    assert after_activate["parented_dft_execution_lifecycle_events"][1] == {
+        "sequence": 2,
+        "action": "activate",
+        "root_lease_id": residency.lease_id,
+        "root_fencing_token": residency.fencing_token,
+        "next_fencing_token_after": execution.fencing_token + 1,
+        "lease_authority_sequence_after": initial_authority_sequence + 2,
+        "child": activated_child,
+    }
+
+    broker.activate(
+        execution.lease_id,
+        execution.fencing_token,
+        owner=_owner(),
+    )
+    after_idempotent_activate = broker.status()
+    assert (
+        after_idempotent_activate[
+            "parented_dft_execution_lifecycle_sequence"
+        ]
+        == 2
+    )
+    assert (
+        after_idempotent_activate[
+            "parented_dft_execution_lifecycle_events"
+        ][1]["child"]
+        == activated_child
+    )
+
+    broker.release(
+        execution.lease_id,
+        execution.fencing_token,
+        owner=_owner(),
+    )
+    released = broker.status()
+    assert released["parented_dft_execution_lifecycle_sequence"] == 3
+    assert [
+        event["sequence"]
+        for event in released["parented_dft_execution_lifecycle_events"]
+    ] == [1, 2, 3]
+    assert [
+        event["action"]
+        for event in released["parented_dft_execution_lifecycle_events"]
+    ] == ["issue", "activate", "release"]
+    assert (
+        released["parented_dft_execution_lifecycle_events"][2]["child"]
+        == released["last_released_lease"]
+    )
+    assert all(
+        event["next_fencing_token_after"]
+        == released["next_fencing_token"]
+        for event in released["parented_dft_execution_lifecycle_events"]
+    )
+    assert [
+        event["lease_authority_sequence_after"]
+        for event in released["parented_dft_execution_lifecycle_events"]
+    ] == list(
+        range(
+            initial_authority_sequence + 1,
+            initial_authority_sequence + 4,
+        )
+    )
+
+
+def test_parented_dft_lifecycle_journal_ring_exposes_retained_window(
+    tmp_path: Path,
+) -> None:
+    maximum_client_id = "c" * 128
+    maximum_residency_request_id = "r" * 128
+    maximum_execution_request_id = "e" * 128
+    broker, residency = _parented_dft_journal_broker(
+        tmp_path / "state.json",
+        client_id=maximum_client_id,
+        residency_request_id=maximum_residency_request_id,
+    )
+    backend = _acquire(
+        broker,
+        component="backend",
+        environment="dev",
+        kind="residency",
+        client_id="backend-dev-journal",
+    )
+    broker.activate(
+        backend.lease_id,
+        backend.fencing_token,
+        owner=_owner(),
+    )
+    md = _acquire(
+        broker,
+        component="md",
+        environment="dev",
+        kind="execution",
+        client_id="md-dev-journal",
+    )
+    broker.activate(md.lease_id, md.fencing_token, owner=_owner())
+    broker.register_workload(
+        md.lease_id,
+        md.fencing_token,
+        owner=_owner(),
+        workload_pid=os.getpid(),
+        workload_process_start_ticks=read_process_start_ticks(os.getpid()),
+        workload_process_group_id=os.getpgid(os.getpid()),
+    )
+    cycles = (
+        PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT // 3
+    ) + 1
+    for _index in range(cycles):
+        execution = _acquire_parented_dft_journal_execution(
+            broker,
+            residency,
+            request_id=maximum_execution_request_id,
+        )
+        broker.activate(
+            execution.lease_id,
+            execution.fencing_token,
+            owner=_owner(),
+        )
+        broker.release(
+            execution.lease_id,
+            execution.fencing_token,
+            owner=_owner(),
+        )
+
+    live_execution = _acquire_parented_dft_journal_execution(
+        broker,
+        residency,
+        request_id=maximum_execution_request_id,
+    )
+    status = broker.status()
+    total_sequence = cycles * 3 + 1
+    first_sequence = (
+        total_sequence
+        - PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT
+        + 1
+    )
+    events = status["parented_dft_execution_lifecycle_events"]
+    assert status["parented_dft_execution_lifecycle_sequence"] == total_sequence
+    assert (
+        status["parented_dft_execution_lifecycle_first_sequence"]
+        == first_sequence
+    )
+    assert len(events) == PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT
+    assert [event["sequence"] for event in events] == list(
+        range(first_sequence, total_sequence + 1)
+    )
+    assert live_execution.request_id == maximum_execution_request_id
+    assert len(
+        [
+            lease
+            for lease in status["leases"]
+            if lease["parent_lease_id"] == residency.lease_id
+        ]
+    ) == 1
+    wire_response = (
+        json.dumps(
+            {"ok": True, "result": status},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+    assert len(wire_response) <= MAX_RESPONSE_BYTES
+
+
+def test_parented_dft_lifecycle_journal_is_not_persisted_across_restart(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.json"
+    broker, residency = _parented_dft_journal_broker(state_path)
+    _acquire_parented_dft_journal_execution(broker, residency)
+    before = broker.status()
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert before["parented_dft_execution_lifecycle_sequence"] == 1
+    assert all(
+        "parented_dft_execution_lifecycle" not in key
+        for key in persisted
+    )
+
+    restarted = HostGpuBroker(
+        state_path,
+        parented_execution_safe_to_release=(
+            lambda _child, _parent, _leases: True
+        ),
+    )
+    after = restarted.status()
+    assert after["broker_instance_id"] != before["broker_instance_id"]
+    assert after["parented_dft_execution_lifecycle_sequence"] == 0
+    assert after["parented_dft_execution_lifecycle_first_sequence"] == 1
+    assert after["parented_dft_execution_lifecycle_events"] == []
+
+
+def test_lease_authority_sequence_exposes_transient_root_suspect_aba(
+    tmp_path: Path,
+) -> None:
+    now = [1.0]
+    broker, residency = _parented_dft_journal_broker(
+        tmp_path / "state.json",
+        heartbeat_timeout_seconds=1,
+        now=lambda: now[0],
+        process_alive=lambda _owner: True,
+    )
+    before = broker.status()
+    before_record = next(
+        lease
+        for lease in before["leases"]
+        if lease["lease_id"] == residency.lease_id
+    )
+    assert before_record["status"] == "active"
+
+    now[0] = 3.0
+    suspect = broker.status()
+    suspect_record = next(
+        lease
+        for lease in suspect["leases"]
+        if lease["lease_id"] == residency.lease_id
+    )
+    assert suspect_record["status"] == "suspect"
+    assert (
+        suspect["lease_authority_sequence"]
+        == before["lease_authority_sequence"] + 1
+    )
+
+    broker.activate(
+        residency.lease_id,
+        residency.fencing_token,
+        owner=_owner(),
+    )
+    after = broker.status()
+    after_record = next(
+        lease
+        for lease in after["leases"]
+        if lease["lease_id"] == residency.lease_id
+    )
+    assert after_record["status"] == "active"
+    assert (
+        after["lease_authority_sequence"]
+        == before["lease_authority_sequence"] + 2
+    )
+    assert (
+        after["parented_dft_execution_lifecycle_sequence"]
+        == before["parented_dft_execution_lifecycle_sequence"]
+        == 0
+    )
+
+
+def test_parented_dft_issue_persist_failure_poison_stops_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "state.json"
+    broker, residency = _parented_dft_journal_broker(state_path)
+    real_replace = os.replace
+    replace_calls = 0
+
+    def fail_allocation_commit(source, destination) -> None:
+        nonlocal replace_calls
+        if Path(destination) == state_path:
+            replace_calls += 1
+        if replace_calls == 2:
+            raise OSError("allocation commit failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_allocation_commit)
+    with pytest.raises(BrokerPersistenceFatal, match="restart required"):
+        _acquire_parented_dft_journal_execution(broker, residency)
+
+    assert broker._parented_dft_execution_lifecycle_sequence == 0
+    assert list(broker._parented_dft_execution_lifecycle_events) == []
+    with pytest.raises(BrokerPersistenceFatal, match="restart required"):
+        broker.status()
+    persisted_ids = {
+        lease["lease_id"]
+        for lease in json.loads(
+            state_path.read_text(encoding="utf-8")
+        )["leases"]
+    }
+    assert set(broker._leases) - persisted_ids
+
+    monkeypatch.setattr(os, "replace", real_replace)
+    restarted = HostGpuBroker(
+        state_path,
+        parented_execution_safe_to_release=(
+            lambda _child, _parent, _leases: True
+        ),
+    )
+    restarted_status = restarted.status()
+    assert restarted_status["broker_instance_id"] != broker.instance_id
+    assert {
+        lease["lease_id"]
+        for lease in restarted_status["leases"]
+    } == {residency.lease_id}
+
+
+def test_parented_dft_activate_persist_failure_poison_stops_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "state.json"
+    broker, residency = _parented_dft_journal_broker(state_path)
+    execution = _acquire_parented_dft_journal_execution(
+        broker,
+        residency,
+    )
+    real_replace = os.replace
+
+    def fail_activation_commit(source, destination) -> None:
+        if Path(destination) == state_path:
+            raise OSError("activation commit failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_activation_commit)
+
+    with pytest.raises(BrokerPersistenceFatal, match="restart required"):
+        broker.activate(
+            execution.lease_id,
+            execution.fencing_token,
+            owner=_owner(),
+        )
+
+    assert broker._parented_dft_execution_lifecycle_sequence == 1
+    assert [
+        event["action"]
+        for event in (
+            item.public_dict()
+            for item in broker._parented_dft_execution_lifecycle_events
+        )
+    ] == ["issue"]
+    with pytest.raises(BrokerPersistenceFatal, match="restart required"):
+        broker.status()
+
+    monkeypatch.setattr(os, "replace", real_replace)
+    restarted = HostGpuBroker(
+        state_path,
+        parented_execution_safe_to_release=(
+            lambda _child, _parent, _leases: True
+        ),
+    )
+    restarted_execution = next(
+        lease
+        for lease in restarted.status()["leases"]
+        if lease["lease_id"] == execution.lease_id
+    )
+    assert restarted.instance_id != broker.instance_id
+    assert restarted_execution["status"] == "suspect"
+
+
+def test_parented_dft_release_post_replace_failure_poison_stops_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "state.json"
+    broker, residency = _parented_dft_journal_broker(state_path)
+    execution = _acquire_parented_dft_journal_execution(
+        broker,
+        residency,
+    )
+    broker.activate(
+        execution.lease_id,
+        execution.fencing_token,
+        owner=_owner(),
+    )
+    real_fsync = os.fsync
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("release directory commit failed")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
+    with pytest.raises(BrokerPersistenceFatal, match="restart required"):
+        broker.release(
+            execution.lease_id,
+            execution.fencing_token,
+            owner=_owner(),
+        )
+
+    assert broker._last_released_lease is None
+    assert broker._parented_dft_execution_lifecycle_sequence == 2
+    assert [
+        event["action"]
+        for event in (
+            item.public_dict()
+            for item in broker._parented_dft_execution_lifecycle_events
+        )
+    ] == ["issue", "activate"]
+    with pytest.raises(BrokerPersistenceFatal, match="restart required"):
+        broker.status()
+
+    monkeypatch.setattr(os, "fsync", real_fsync)
+    restarted = HostGpuBroker(
+        state_path,
+        parented_execution_safe_to_release=(
+            lambda _child, _parent, _leases: True
+        ),
+    )
+    restarted_status = restarted.status()
+    assert restarted_status["broker_instance_id"] != broker.instance_id
+    assert {
+        lease["lease_id"]
+        for lease in restarted_status["leases"]
+    } == {residency.lease_id}
+
+
+def test_parented_dft_reconcile_and_suspect_transitions_publish_no_events(
+    tmp_path: Path,
+) -> None:
+    now = [1.0]
+    alive = [True]
+    broker, residency = _parented_dft_journal_broker(
+        tmp_path / "state.json",
+        heartbeat_timeout_seconds=1,
+        now=lambda: now[0],
+        process_alive=lambda _owner: alive[0],
+    )
+    execution = _acquire_parented_dft_journal_execution(
+        broker,
+        residency,
+    )
+    broker.activate(
+        execution.lease_id,
+        execution.fencing_token,
+        owner=_owner(),
+    )
+
+    now[0] = 3.0
+    suspect = broker.status()
+    assert {
+        lease["status"] for lease in suspect["leases"]
+    } == {"suspect"}
+    assert suspect["parented_dft_execution_lifecycle_sequence"] == 2
+
+    alive[0] = False
+    now[0] = 5.0
+    reconciled = broker.status()
+    assert execution.lease_id not in {
+        lease["lease_id"] for lease in reconciled["leases"]
+    }
+    assert reconciled["last_released_lease"] is None
+    assert reconciled["parented_dft_execution_lifecycle_sequence"] == 2
+    assert [
+        event["action"]
+        for event in reconciled[
+            "parented_dft_execution_lifecycle_events"
+        ]
+    ] == ["issue", "activate"]
+
+
+def test_non_parented_dft_and_non_dft_operations_publish_no_events(
+    tmp_path: Path,
+) -> None:
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        mps_clients_alive=lambda _lease: False,
+        workload_empty=lambda _lease: True,
+        cleanup_workload=lambda _lease: None,
+    )
+    for component, kind in (
+        ("backend", "residency"),
+        ("dft", "residency"),
+        ("md", "execution"),
+    ):
+        lease = _acquire(
+            broker,
+            component=component,
+            environment="dev",
+            kind=kind,
+        )
+        broker.activate(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=_owner(),
+        )
+        broker.release(
+            lease.lease_id,
+            lease.fencing_token,
+            owner=_owner(),
+        )
+
+    status = broker.status()
+    assert status["parented_dft_execution_lifecycle_sequence"] == 0
+    assert status["parented_dft_execution_lifecycle_first_sequence"] == 1
+    assert status["parented_dft_execution_lifecycle_events"] == []
 
 
 def test_parented_release_allows_governed_shared_mps_clients_and_rejects_alien(
@@ -6495,6 +7221,13 @@ def test_systemd_claim_inventory_reads_active_unit_environment_in_batches() -> N
             control_group=control_group,
             process_pids=frozenset({1234}),
             gpu_uuids=frozenset({gpu2}),
+            process_identities=(
+                (
+                    1234,
+                    _stable_systemd_ticks(1234),
+                    control_group,
+                ),
+            ),
             static_gpu_uuids=frozenset({gpu2}),
             live_gpu_declarers=(
                 SystemdGpuDeclarer(
@@ -7280,6 +8013,13 @@ def test_systemd_inventory_keeps_same_named_user_and_system_units_distinct() -> 
             control_group=system_cgroup,
             process_pids=frozenset({2101}),
             gpu_uuids=frozenset({gpu3}),
+            process_identities=(
+                (
+                    2101,
+                    _stable_systemd_ticks(2101),
+                    system_cgroup,
+                ),
+            ),
             static_gpu_uuids=frozenset({gpu3}),
             live_gpu_declarers=(
                 SystemdGpuDeclarer(
@@ -7297,6 +8037,18 @@ def test_systemd_inventory_keeps_same_named_user_and_system_units_distinct() -> 
             control_group=user_cgroup,
             process_pids=frozenset({1101, 1102}),
             gpu_uuids=frozenset({gpu1}),
+            process_identities=(
+                (
+                    1101,
+                    _stable_systemd_ticks(1101),
+                    user_cgroup,
+                ),
+                (
+                    1102,
+                    _stable_systemd_ticks(1102),
+                    user_cgroup,
+                ),
+            ),
             static_gpu_uuids=frozenset({gpu1}),
             live_gpu_declarers=(
                 SystemdGpuDeclarer(
@@ -7370,6 +8122,13 @@ def test_systemd_mps_inventory_with_main_pid_zero_flows_into_guard() -> None:
             control_group=control_group,
             process_pids=frozenset({server_pid}),
             gpu_uuids=frozenset({gpu1}),
+            process_identities=(
+                (
+                    server_pid,
+                    _stable_systemd_ticks(server_pid),
+                    control_group,
+                ),
+            ),
             active_gpu_uuids=frozenset({gpu1}),
         ),
     )
@@ -7451,6 +8210,13 @@ def test_systemd_inventory_applies_pass_then_unset_environment(
                     control_group=control_group,
                     process_pids=frozenset({pid}),
                     gpu_uuids=expected_gpu_uuids,
+                    process_identities=(
+                        (
+                            pid,
+                            _stable_systemd_ticks(pid),
+                            control_group,
+                        ),
+                    ),
                     static_gpu_uuids=expected_gpu_uuids,
                     live_gpu_declarers=(
                         SystemdGpuDeclarer(
@@ -7512,6 +8278,13 @@ def test_systemd_inventory_attributes_active_gpu_pid_to_its_exact_gpu() -> None:
             control_group=control_group,
             process_pids=frozenset({worker_pid}),
             gpu_uuids=frozenset({gpu3}),
+            process_identities=(
+                (
+                    worker_pid,
+                    _stable_systemd_ticks(worker_pid),
+                    control_group,
+                ),
+            ),
             active_gpu_uuids=frozenset({gpu3}),
         ),
     )
@@ -7570,6 +8343,13 @@ def test_systemd_claim_inventory_accepts_omitted_empty_environment_files() -> No
             control_group=control_group,
             process_pids=frozenset({1234}),
             gpu_uuids=frozenset({gpu2}),
+            process_identities=(
+                (
+                    1234,
+                    _stable_systemd_ticks(1234),
+                    control_group,
+                ),
+            ),
             static_gpu_uuids=frozenset({gpu2}),
             live_gpu_declarers=(
                 SystemdGpuDeclarer(
@@ -7616,6 +8396,13 @@ def test_systemd_claim_inventory_detects_gpu_declared_only_in_live_environment()
             control_group=control_group,
             process_pids=frozenset({1234}),
             gpu_uuids=frozenset({gpu3}),
+            process_identities=(
+                (
+                    1234,
+                    _stable_systemd_ticks(1234),
+                    control_group,
+                ),
+            ),
             live_gpu_declarers=(
                 SystemdGpuDeclarer(
                     pid=1234,
@@ -7732,6 +8519,13 @@ def test_systemd_claim_inventory_reads_environment_files_and_live_process(
             control_group=control_group,
             process_pids=frozenset({os.getpid()}),
             gpu_uuids=frozenset({gpu1}),
+            process_identities=(
+                (
+                    os.getpid(),
+                    read_process_start_ticks(os.getpid()),
+                    control_group,
+                ),
+            ),
             static_gpu_uuids=frozenset({gpu1}),
             live_gpu_declarers=(
                 SystemdGpuDeclarer(
@@ -7785,6 +8579,13 @@ def test_systemd_claim_inventory_reads_repeated_and_prefixed_optional_files(
             control_group=control_group,
             process_pids=frozenset({os.getpid()}),
             gpu_uuids=frozenset({gpu1}),
+            process_identities=(
+                (
+                    os.getpid(),
+                    read_process_start_ticks(os.getpid()),
+                    control_group,
+                ),
+            ),
             static_gpu_uuids=frozenset({gpu1}),
             live_gpu_declarers=(
                 SystemdGpuDeclarer(
@@ -8165,6 +8966,48 @@ def test_nonroot_uds_client_acquires_activates_heartbeats_and_releases(tmp_path:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_server_stops_after_fatal_persistence_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "state.json"
+    broker = HostGpuBroker(state_path)
+    original_instance_id = broker.instance_id
+    socket_path = tmp_path / "socket" / "broker.sock"
+    server = GpuBrokerUnixServer(socket_path, broker)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    real_replace = os.replace
+
+    def fail_commit(source, destination) -> None:
+        if Path(destination) == state_path:
+            raise OSError("server state commit failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_commit)
+    try:
+        client = GpuBrokerClient(socket_path)
+        with pytest.raises(GpuBrokerClientError) as error:
+            client.set_draining(True)
+        assert error.value.code == "internal_error"
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert isinstance(
+            server.fatal_persistence_error,
+            BrokerPersistenceFatal,
+        )
+    finally:
+        if thread.is_alive():
+            server.shutdown()
+            thread.join(timeout=2)
+        server.server_close()
+
+    monkeypatch.setattr(os, "replace", real_replace)
+    restarted = HostGpuBroker(state_path)
+    assert restarted.instance_id != original_instance_id
+    assert restarted.status()["draining"] is False
 
 
 def test_client_accepts_only_exact_parent_workload_inheritance(tmp_path: Path) -> None:

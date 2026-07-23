@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import stat
 from pathlib import Path
 
 
@@ -15,6 +17,10 @@ RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
 DEPLOYMENT_DOC_PATH = REPOSITORY_ROOT / "docs" / "deployment.md"
 LEGACY_REMOTE_RELEASE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "remote_release.sh"
 EXACT_B_BRIDGE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "test_exact_b_bridge.sh"
+BACKEND_DOCKERFILE_PATH = REPOSITORY_ROOT / "Dockerfile"
+BACKEND_IMAGE_ASSERTION_PATH = (
+    REPOSITORY_ROOT / "scripts" / "ci" / "assert_backend_image_identity.sh"
+)
 
 PINNED_ACTION = re.compile(
     r"^\s*-?\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s*#.*)?$"
@@ -59,6 +65,354 @@ EXPECTED_B_BACKEND_IMAGE = (
 EXPECTED_B_WEB_IMAGE = (
     "ghcr.io/lzq390/nexpoly-web@sha256:"
     "6b7e51ba07861e9894d484e7f0133128697c47fe02c230ab179a38c3d053d008"
+)
+BACKEND_IMAGE_IDENTITY_STEP_LINES = (
+    "      - id: backend-identity",
+    "        name: Resolve Backend image identity",
+    "        shell: bash",
+    "        run: |",
+    "          set -euo pipefail",
+    (
+        '          test "$(git rev-parse HEAD)" = '
+        '"${{ needs.resolve-sha.outputs.candidate_sha }}"'
+    ),
+    '          test -z "$(git status --porcelain=v1 --untracked-files=all)"',
+    "          source_tree=\"$(git rev-parse 'HEAD^{tree}')\"",
+    "          dependency_lock_sha256=\"sha256:$(",
+    "            sha256sum \\",
+    "              backend/requirements.lock \\",
+    "              backend/requirements-system.lock \\",
+    "              backend/requirements-legacy.lock \\",
+    "              backend/requirements-ci.lock |",
+    "              sha256sum | awk '{print $1}'",
+    "          )\"",
+    "          build_config_sha256=\"sha256:$(",
+    "            sha256sum \\",
+    "              Dockerfile \\",
+    "              docker-compose.yml \\",
+    "              docker-compose.dev.yml \\",
+    "              docker-compose.gpu-governed.yml \\",
+    "              docker-compose.dev-gpu-session.yml |",
+    "              sha256sum | awk '{print $1}'",
+    "          )\"",
+    "          {",
+    '            echo "source_tree=${source_tree}"',
+    '            echo "dependency_lock_sha256=${dependency_lock_sha256}"',
+    '            echo "build_config_sha256=${build_config_sha256}"',
+    '          } >>"$GITHUB_OUTPUT"',
+)
+BACKEND_IMAGE_IDENTITY_STEP = "\n".join(BACKEND_IMAGE_IDENTITY_STEP_LINES)
+REVIEWED_GIT_CONTEXT_LINE = (
+    '          context: "https://github.com/lzq390/ZhijuPoly.git#'
+    '${{ needs.resolve-sha.outputs.candidate_sha }}"'
+)
+REVIEWED_GIT_TOKEN_LINE = "          github-token: ${{ github.token }}"
+IMAGE_BUILD_JOB_PREFIX_LINES = (
+    "    name: Build ${{ matrix.name }} image without publishing",
+    "    if: github.event_name == 'pull_request'",
+    "    needs: resolve-sha",
+    "    runs-on: ubuntu-24.04",
+    "    timeout-minutes: 90",
+    "    strategy:",
+    "      fail-fast: false",
+    "      matrix:",
+    "        include:",
+    "          - name: backend",
+    "            file: Dockerfile",
+    "            cache_scope: backend",
+    "            lock_pattern: backend/requirements*.lock",
+    "          - name: web",
+    "            file: frontend/Dockerfile",
+    "            cache_scope: web",
+    "            lock_pattern: frontend/package-lock.json",
+    "    steps:",
+)
+IMAGE_BUILD_STEP_HEADERS = (
+    "      - name: Check out candidate",
+    "      - name: Assert immutable checkout",
+    "      - name: Set up Buildx",
+    "      - id: backend-identity",
+    "      - name: Build image",
+    "      - name: Verify Backend image identity",
+)
+IMAGE_BUILD_STEP_LINES = (
+    "      - name: Build image",
+    (
+        "        uses: docker/build-push-action@"
+        "10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6"
+    ),
+    "        with:",
+    REVIEWED_GIT_CONTEXT_LINE,
+    REVIEWED_GIT_TOKEN_LINE,
+    "          file: ${{ matrix.file }}",
+    "          platforms: linux/amd64",
+    "          push: false",
+    "          load: true",
+    (
+        "          tags: nexpoly-ci-${{ matrix.cache_scope }}:"
+        "sha-${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ),
+    "          build-args: |",
+    "            SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}",
+    "            SOURCE_TREE=${{ steps.backend-identity.outputs.source_tree }}",
+    (
+        "            DEPENDENCY_LOCK_SHA256="
+        "${{ steps.backend-identity.outputs.dependency_lock_sha256 }}"
+    ),
+    (
+        "            BUILD_CONFIG_SHA256="
+        "${{ steps.backend-identity.outputs.build_config_sha256 }}"
+    ),
+    "            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}",
+    "            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}",
+    (
+        "          cache-from: type=gha,scope=ci-${{ matrix.cache_scope }}-"
+        "${{ hashFiles(matrix.lock_pattern) }}"
+    ),
+    (
+        "          cache-to: type=gha,mode=max,scope=ci-"
+        "${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}"
+    ),
+)
+IMAGE_BUILD_VERIFY_STEP_LINES = (
+    "      - name: Verify Backend image identity",
+    "        if: matrix.name == 'backend'",
+    "        env:",
+    (
+        "          BACKEND_IMAGE: nexpoly-ci-backend:"
+        "sha-${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ),
+    "          EXPECTED_REVISION: ${{ needs.resolve-sha.outputs.candidate_sha }}",
+    "          EXPECTED_TREE: ${{ steps.backend-identity.outputs.source_tree }}",
+    (
+        "          EXPECTED_DEPENDENCY_LOCK: "
+        "${{ steps.backend-identity.outputs.dependency_lock_sha256 }}"
+    ),
+    (
+        "          EXPECTED_BUILD_CONFIG: "
+        "${{ steps.backend-identity.outputs.build_config_sha256 }}"
+    ),
+    "        run: |",
+    "          scripts/ci/assert_backend_image_identity.sh \\",
+    '            "$BACKEND_IMAGE" \\',
+    '            "$EXPECTED_REVISION" \\',
+    '            "$EXPECTED_TREE" \\',
+    '            "$EXPECTED_DEPENDENCY_LOCK" \\',
+    '            "$EXPECTED_BUILD_CONFIG"',
+)
+RELEASE_BACKEND_BUILD_STEP_LINES = (
+    "      - id: backend",
+    "        name: Build and push Backend once",
+    (
+        "        uses: docker/build-push-action@"
+        "10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6"
+    ),
+    "        with:",
+    REVIEWED_GIT_CONTEXT_LINE,
+    REVIEWED_GIT_TOKEN_LINE,
+    "          file: Dockerfile",
+    "          platforms: linux/amd64",
+    "          push: true",
+    (
+        "          tags: ghcr.io/lzq390/nexpoly-backend:"
+        "sha-${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ),
+    "          labels: |",
+    (
+        "            org.opencontainers.image.revision="
+        "${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ),
+    (
+        "            org.opencontainers.image.source="
+        "${{ github.server_url }}/${{ github.repository }}"
+    ),
+    (
+        "            org.opencontainers.image.version="
+        "sha-${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ),
+    "          build-args: |",
+    "            SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}",
+    "            SOURCE_TREE=${{ steps.backend-identity.outputs.source_tree }}",
+    (
+        "            DEPENDENCY_LOCK_SHA256="
+        "${{ steps.backend-identity.outputs.dependency_lock_sha256 }}"
+    ),
+    (
+        "            BUILD_CONFIG_SHA256="
+        "${{ steps.backend-identity.outputs.build_config_sha256 }}"
+    ),
+    "            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}",
+    "            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}",
+    (
+        "          cache-from: type=gha,scope=release-backend-"
+        "${{ hashFiles('backend/requirements*.lock') }}"
+    ),
+    (
+        "          cache-to: type=gha,mode=max,scope=release-backend-"
+        "${{ hashFiles('backend/requirements*.lock') }}"
+    ),
+    "          provenance: false",
+)
+RELEASE_BACKEND_VERIFY_STEP_LINES = (
+    "      - name: Verify published Backend image identity",
+    "        env:",
+    (
+        "          BACKEND_IMAGE: ghcr.io/lzq390/nexpoly-backend@"
+        "${{ steps.backend.outputs.digest }}"
+    ),
+    "          EXPECTED_REVISION: ${{ needs.resolve-sha.outputs.candidate_sha }}",
+    "          EXPECTED_TREE: ${{ steps.backend-identity.outputs.source_tree }}",
+    (
+        "          EXPECTED_DEPENDENCY_LOCK: "
+        "${{ steps.backend-identity.outputs.dependency_lock_sha256 }}"
+    ),
+    (
+        "          EXPECTED_BUILD_CONFIG: "
+        "${{ steps.backend-identity.outputs.build_config_sha256 }}"
+    ),
+    "        run: |",
+    '          docker pull "$BACKEND_IMAGE"',
+    "          scripts/ci/assert_backend_image_identity.sh \\",
+    '            "$BACKEND_IMAGE" \\',
+    '            "$EXPECTED_REVISION" \\',
+    '            "$EXPECTED_TREE" \\',
+    '            "$EXPECTED_DEPENDENCY_LOCK" \\',
+    '            "$EXPECTED_BUILD_CONFIG"',
+)
+RELEASE_WEB_BUILD_STEP_LINES = (
+    "      - id: web",
+    "        name: Build and push Web once",
+    (
+        "        uses: docker/build-push-action@"
+        "10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6"
+    ),
+    "        with:",
+    REVIEWED_GIT_CONTEXT_LINE,
+    REVIEWED_GIT_TOKEN_LINE,
+    "          file: frontend/Dockerfile",
+    "          platforms: linux/amd64",
+    "          push: true",
+    (
+        "          tags: ghcr.io/lzq390/nexpoly-web:"
+        "sha-${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ),
+    "          labels: |",
+    (
+        "            org.opencontainers.image.revision="
+        "${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ),
+    (
+        "            org.opencontainers.image.source="
+        "${{ github.server_url }}/${{ github.repository }}"
+    ),
+    (
+        "            org.opencontainers.image.version="
+        "sha-${{ needs.resolve-sha.outputs.candidate_sha }}"
+    ),
+    "          build-args: |",
+    "            SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}",
+    "            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}",
+    "            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}",
+    (
+        "          cache-from: type=gha,scope=release-web-"
+        "${{ hashFiles('frontend/package-lock.json') }}"
+    ),
+    (
+        "          cache-to: type=gha,mode=max,scope=release-web-"
+        "${{ hashFiles('frontend/package-lock.json') }}"
+    ),
+    "          provenance: false",
+)
+RELEASE_TAG_SEAL_STEP_LINES = (
+    "      - name: Seal published SHA tags to reviewed digests",
+    "        env:",
+    "          RELEASE_COMMIT: ${{ needs.resolve-sha.outputs.candidate_sha }}",
+    "          EXPECTED_BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}",
+    "          EXPECTED_WEB_DIGEST: ${{ steps.web.outputs.digest }}",
+    "        run: |",
+    "          set -euo pipefail",
+    '          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]',
+    (
+        '          [[ "$EXPECTED_BACKEND_DIGEST" =~ '
+        "^sha256:[0-9a-f]{64}$ ]]"
+    ),
+    (
+        '          [[ "$EXPECTED_WEB_DIGEST" =~ '
+        "^sha256:[0-9a-f]{64}$ ]]"
+    ),
+    "          resolve_remote_digest() {",
+    '            local reference="$1"',
+    "            local hash",
+    '            hash="$(',
+    (
+        '              docker buildx imagetools inspect --raw "$reference" |'
+    ),
+    "                sha256sum | awk '{print $1}'",
+    '            )"',
+    '            [[ "$hash" =~ ^[0-9a-f]{64}$ ]]',
+    "            printf 'sha256:%s\\n' \"$hash\"",
+    "          }",
+    (
+        '          backend_tag="ghcr.io/lzq390/nexpoly-backend:'
+        'sha-${RELEASE_COMMIT}"'
+    ),
+    (
+        '          web_tag="ghcr.io/lzq390/nexpoly-web:'
+        'sha-${RELEASE_COMMIT}"'
+    ),
+    '          test "$(resolve_remote_digest "$backend_tag")" = \\',
+    '            "$EXPECTED_BACKEND_DIGEST"',
+    '          test "$(resolve_remote_digest "$web_tag")" = \\',
+    '            "$EXPECTED_WEB_DIGEST"',
+)
+RELEASE_STEP_HEADERS = (
+    "      - name: Check out release SHA",
+    "      - name: Assert immutable checkout",
+    "      - name: Validate reviewed image publication policy",
+    "      - name: Set up Buildx",
+    "      - name: Log in to private GHCR",
+    "      - id: backend-identity",
+    "      - id: backend",
+    "      - name: Verify published Backend image identity",
+    "      - id: web",
+    "      - name: Record immutable image references",
+    "      - name: Smoke the exact published image digests",
+    "      - name: Seal published SHA tags to reviewed digests",
+)
+BACKEND_DOCKERFILE_IDENTITY_LINES = (
+    'ARG SOURCE_REVISION="unknown"',
+    'ARG SOURCE_TREE="unknown"',
+    'ARG DEPENDENCY_LOCK_SHA256="unknown"',
+    'ARG BUILD_CONFIG_SHA256="unknown"',
+    'ARG SOURCE_URL="https://github.com/lzq390/ZhijuPoly"',
+    'ARG VERSION="dev"',
+    "",
+    'LABEL org.opencontainers.image.source="$SOURCE_URL" \\',
+    '      org.opencontainers.image.revision="$SOURCE_REVISION" \\',
+    '      com.nexpoly.source.tree="$SOURCE_TREE" \\',
+    '      com.nexpoly.backend.dependency-lock="$DEPENDENCY_LOCK_SHA256" \\',
+    '      com.nexpoly.backend.build-config="$BUILD_CONFIG_SHA256" \\',
+    '      org.opencontainers.image.version="$VERSION"',
+    "",
+    "ENV BUILD_REVISION=${SOURCE_REVISION} \\",
+    "    BUILD_SOURCE_TREE=${SOURCE_TREE} \\",
+    "    BUILD_DEPENDENCY_LOCK_SHA256=${DEPENDENCY_LOCK_SHA256} \\",
+    "    BUILD_CONFIG_SHA256=${BUILD_CONFIG_SHA256}",
+)
+BACKEND_DOCKERFILE_IDENTITY_BLOCK = "\n".join(
+    BACKEND_DOCKERFILE_IDENTITY_LINES
+)
+BACKEND_DOCKERFILE_IDENTITY_TOKENS = (
+    "SOURCE_REVISION",
+    "SOURCE_TREE",
+    "DEPENDENCY_LOCK_SHA256",
+    "BUILD_CONFIG_SHA256",
+    "com.nexpoly.source.tree",
+    "com.nexpoly.backend.dependency-lock",
+    "com.nexpoly.backend.build-config",
+)
+EXPECTED_BACKEND_IMAGE_ASSERTION_SHA256 = (
+    "1b9877203bacfbeb890c200b88b2df665d66b482fd3dc516cf6d7fe4cb93c05c"
 )
 
 
@@ -105,6 +459,241 @@ def workflow_job_body(
         )
         return None
     return matches[0]
+
+
+def workflow_step_blocks(job_body: str) -> list[str]:
+    starts = list(WORKFLOW_STEP_ITEM.finditer(job_body))
+    return [
+        job_body[
+            start.start() : (
+                starts[index + 1].start()
+                if index + 1 < len(starts)
+                else len(job_body)
+            )
+        ]
+        for index, start in enumerate(starts)
+    ]
+
+
+def validate_backend_image_identity_policy(
+    ci_text: str,
+    failures: list[str],
+) -> None:
+    jobs = (
+        (
+            "image-build",
+            IMAGE_BUILD_STEP_LINES,
+            IMAGE_BUILD_VERIFY_STEP_LINES,
+        ),
+        (
+            "release",
+            RELEASE_BACKEND_BUILD_STEP_LINES,
+            RELEASE_BACKEND_VERIFY_STEP_LINES,
+        ),
+    )
+    for job_name, expected_build_lines, expected_verify_lines in jobs:
+        body = workflow_job_body(ci_text, job_name, failures)
+        if body is None:
+            continue
+        if job_name == "image-build":
+            first_step = WORKFLOW_STEP_ITEM.search(body)
+            actual_prefix = (
+                []
+                if first_step is None
+                else body[: first_step.start()].rstrip().splitlines()
+            )
+            if actual_prefix != list(IMAGE_BUILD_JOB_PREFIX_LINES):
+                failures.append(
+                    "image-build must retain the exact active Backend/Web "
+                    "matrix and pull-request execution policy"
+                )
+        steps = workflow_step_blocks(body)
+        expected_headers = (
+            IMAGE_BUILD_STEP_HEADERS
+            if job_name == "image-build"
+            else RELEASE_STEP_HEADERS
+        )
+        actual_headers = tuple(
+            step.splitlines()[0]
+            for step in steps
+            if step.splitlines()
+        )
+        if actual_headers != expected_headers:
+            failures.append(
+                f"{job_name} must retain the exact reviewed step sequence "
+                "without injected build-context or registry mutations"
+            )
+        identity_indices = [
+            index
+            for index, step in enumerate(steps)
+            if (
+                "id: backend-identity" in step
+                or "name: Resolve Backend image identity" in step
+            )
+        ]
+        if len(identity_indices) != 1:
+            failures.append(
+                f"{job_name} must contain exactly one active Backend image "
+                f"identity step; found {len(identity_indices)}"
+            )
+            continue
+        identity_index = identity_indices[0]
+        identity_step = steps[identity_index]
+        if identity_step.splitlines() != list(BACKEND_IMAGE_IDENTITY_STEP_LINES):
+            failures.append(
+                f"{job_name} Backend image identity step must use the exact "
+                "source-tree, dependency-lock, build-config, and output algorithm"
+            )
+
+        checkout_indices = [
+            index
+            for index, step in enumerate(steps)
+            if "uses: actions/checkout@" in step
+        ]
+        assertion_indices = [
+            index
+            for index, step in enumerate(steps)
+            if "name: Assert immutable checkout" in step
+        ]
+        build_indices = [
+            index
+            for index, step in enumerate(steps)
+            if step.startswith(expected_build_lines[0] + "\n")
+            or step.rstrip() == expected_build_lines[0]
+        ]
+        verify_indices = [
+            index
+            for index, step in enumerate(steps)
+            if step.startswith(expected_verify_lines[0] + "\n")
+            or step.rstrip() == expected_verify_lines[0]
+        ]
+        if (
+            len(checkout_indices) != 1
+            or len(assertion_indices) != 1
+            or len(build_indices) != 1
+            or len(verify_indices) != 1
+        ):
+            failures.append(
+                f"{job_name} Backend identity policy requires one checkout, "
+                "immutable assertion, Backend build, and image verification step"
+            )
+            continue
+        checkout_index = checkout_indices[0]
+        assertion_index = assertion_indices[0]
+        build_index = build_indices[0]
+        verify_index = verify_indices[0]
+        if not checkout_index < assertion_index < identity_index:
+            failures.append(
+                f"{job_name} Backend image identity must run after checkout and "
+                "its immutable assertion"
+            )
+        if build_index != identity_index + 1:
+            failures.append(
+                f"{job_name} Backend image identity must be immediately "
+                "adjacent to the Backend build"
+            )
+        if verify_index != build_index + 1:
+            failures.append(
+                f"{job_name} Backend image verification must immediately "
+                "follow the Backend build"
+            )
+        build_step = steps[build_index]
+        if build_step.rstrip().splitlines() != list(expected_build_lines):
+            failures.append(
+                f"{job_name} Backend build must use the exact governed action, "
+                "context, Dockerfile, platform, publication, cache, and "
+                "immutable build arguments without a condition or "
+                "continue-on-error"
+            )
+        verify_step = steps[verify_index]
+        if verify_step.rstrip().splitlines() != list(expected_verify_lines):
+            failures.append(
+                f"{job_name} Backend image verification must inspect the exact "
+                "built or published image identity"
+            )
+        if job_name == "release":
+            web_indices = [
+                index
+                for index, step in enumerate(steps)
+                if step.startswith(RELEASE_WEB_BUILD_STEP_LINES[0] + "\n")
+                or step.rstrip() == RELEASE_WEB_BUILD_STEP_LINES[0]
+            ]
+            seal_indices = [
+                index
+                for index, step in enumerate(steps)
+                if step.startswith(RELEASE_TAG_SEAL_STEP_LINES[0] + "\n")
+                or step.rstrip() == RELEASE_TAG_SEAL_STEP_LINES[0]
+            ]
+            if len(web_indices) != 1:
+                failures.append(
+                    "release must contain one exact governed Web image build"
+                )
+            elif (
+                steps[web_indices[0]].rstrip().splitlines()
+                != list(RELEASE_WEB_BUILD_STEP_LINES)
+            ):
+                failures.append(
+                    "release Web build must use the exact reviewed Git context, "
+                    "action, SHA tag, labels, cache, and build arguments"
+                )
+            if len(seal_indices) != 1:
+                failures.append(
+                    "release must contain one final SHA-tag digest seal"
+                )
+            else:
+                seal_index = seal_indices[0]
+                if seal_index != len(steps) - 1:
+                    failures.append(
+                        "release SHA-tag digest seal must be the final step"
+                    )
+                if (
+                    steps[seal_index].rstrip().splitlines()
+                    != list(RELEASE_TAG_SEAL_STEP_LINES)
+                ):
+                    failures.append(
+                        "release SHA-tag digest seal must resolve both published "
+                        "tags and match the reviewed action digests"
+                    )
+
+
+def validate_backend_dockerfile_identity_policy(
+    dockerfile_text: str,
+    failures: list[str],
+) -> None:
+    if dockerfile_text.count(BACKEND_DOCKERFILE_IDENTITY_BLOCK) != 1:
+        failures.append(
+            "Dockerfile must contain one exact Backend ARG-to-LABEL-and-ENV "
+            "identity binding"
+        )
+        return
+    remaining = dockerfile_text.replace(
+        BACKEND_DOCKERFILE_IDENTITY_BLOCK,
+        "",
+        1,
+    )
+    unexpected = [
+        token
+        for token in BACKEND_DOCKERFILE_IDENTITY_TOKENS
+        if token in remaining
+    ]
+    if unexpected:
+        failures.append(
+            "Dockerfile must not override Backend image identity outside its "
+            "governed binding: "
+            + ", ".join(unexpected)
+        )
+
+
+def validate_backend_image_assertion_script(
+    script: bytes,
+    failures: list[str],
+) -> None:
+    digest = hashlib.sha256(script).hexdigest()
+    if digest != EXPECTED_BACKEND_IMAGE_ASSERTION_SHA256:
+        failures.append(
+            "Backend image identity assertion script differs from its reviewed "
+            "label and environment verifier"
+        )
 
 
 def validate_complete_history_checkouts(
@@ -521,6 +1110,29 @@ def main() -> int:
         ci_text = ""
     else:
         ci_text = CI_PATH.read_text(encoding="utf-8")
+    if (
+        BACKEND_DOCKERFILE_PATH.is_symlink()
+        or not BACKEND_DOCKERFILE_PATH.is_file()
+    ):
+        failures.append("Backend Dockerfile is missing or unsafe")
+        backend_dockerfile_text = ""
+    else:
+        backend_dockerfile_text = BACKEND_DOCKERFILE_PATH.read_text(
+            encoding="utf-8"
+        )
+    if (
+        BACKEND_IMAGE_ASSERTION_PATH.is_symlink()
+        or not BACKEND_IMAGE_ASSERTION_PATH.is_file()
+    ):
+        failures.append("Backend image identity assertion script is missing or unsafe")
+        backend_image_assertion = b""
+    else:
+        backend_image_assertion = BACKEND_IMAGE_ASSERTION_PATH.read_bytes()
+        assertion_mode = stat.S_IMODE(BACKEND_IMAGE_ASSERTION_PATH.stat().st_mode)
+        if assertion_mode != 0o755:
+            failures.append(
+                "Backend image identity assertion script must use mode 0755"
+            )
     if LEGACY_REMOTE_RELEASE_PATH.exists() or LEGACY_REMOTE_RELEASE_PATH.is_symlink():
         failures.append("the legacy CI-to-production remote release transport must stay removed")
 
@@ -636,6 +1248,15 @@ def main() -> int:
     validate_complete_history_checkouts(ci_text, failures)
     validate_gpu_session_compose_policy(ci_text, failures)
     validate_exact_b_job(ci_text, failures)
+    validate_backend_image_identity_policy(ci_text, failures)
+    validate_backend_dockerfile_identity_policy(
+        backend_dockerfile_text,
+        failures,
+    )
+    validate_backend_image_assertion_script(
+        backend_image_assertion,
+        failures,
+    )
 
     for forbidden in (
         "workflow_run:",
@@ -668,10 +1289,14 @@ def main() -> int:
 
     if ci_text.count("push: true") != 2:
         failures.append("ci.yml must push exactly the Backend and Web SHA images")
-    if ci_text.count("ghcr.io/lzq390/nexpoly-backend:sha-") != 1:
-        failures.append("ci.yml must publish exactly one immutable Backend SHA tag")
-    if ci_text.count("ghcr.io/lzq390/nexpoly-web:sha-") != 1:
-        failures.append("ci.yml must publish exactly one immutable Web SHA tag")
+    if ci_text.count("ghcr.io/lzq390/nexpoly-backend:sha-") != 2:
+        failures.append(
+            "ci.yml must publish and finally seal one immutable Backend SHA tag"
+        )
+    if ci_text.count("ghcr.io/lzq390/nexpoly-web:sha-") != 2:
+        failures.append(
+            "ci.yml must publish and finally seal one immutable Web SHA tag"
+        )
     if ci_text.count(
         "org.opencontainers.image.revision=${{ needs.resolve-sha.outputs.candidate_sha }}"
     ) != 2:

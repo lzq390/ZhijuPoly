@@ -102,6 +102,7 @@ def mps_snapshot(
 def dft_residency_record(
     *,
     lease_id: str = "d1" * 16,
+    fencing_token: int = 1,
     workload_pid: int = 8123,
     workload_start_ticks: int = 456,
 ) -> dict[str, object]:
@@ -111,7 +112,7 @@ def dft_residency_record(
     control_group = scope_control_group(lease_id, uid=1001)
     return Lease(
         lease_id=lease_id,
-        fencing_token=1,
+        fencing_token=fencing_token,
         broker_instance_id="broker",
         request_id="dft:dev:residency",
         kind="residency",
@@ -136,6 +137,144 @@ def dft_residency_record(
         workload_process_group_id=workload_pid,
         workload_cgroup=f"0::{control_group}",
     ).public_dict()
+
+
+def dft_parented_execution_record(
+    *,
+    residency: dict[str, object] | None = None,
+    lease_id: str = "e1" * 16,
+    fencing_token: int = 2,
+    status: str = "active",
+) -> dict[str, object]:
+    from dataclasses import replace
+
+    from ops.gpu_broker.broker import Lease
+
+    root = Lease(**(dft_residency_record() if residency is None else residency))
+    child = replace(
+        root,
+        lease_id=lease_id,
+        fencing_token=fencing_token,
+        request_id=f"dft:dev:execution:{fencing_token}",
+        kind="execution",
+        parent_lease_id=root.lease_id,
+        status=status,
+        created_at=3.0,
+        heartbeat_at=4.0,
+    )
+    if status == "reserved":
+        child = replace(
+            child,
+            workload_pid=None,
+            workload_process_start_ticks=None,
+            workload_process_group_id=None,
+            workload_cgroup=None,
+        )
+    return child.public_dict()
+
+
+def dft_lifecycle_event(
+    sequence: int,
+    action: str,
+    child: dict[str, object],
+    *,
+    residency: dict[str, object] | None = None,
+    next_fencing_token_after: int,
+    lease_authority_sequence_after: int | None = None,
+) -> dict[str, object]:
+    root = dft_residency_record() if residency is None else residency
+    return {
+        "sequence": sequence,
+        "action": action,
+        "root_lease_id": root["lease_id"],
+        "root_fencing_token": root["fencing_token"],
+        "next_fencing_token_after": next_fencing_token_after,
+        "lease_authority_sequence_after": (
+            3 + sequence
+            if lease_authority_sequence_after is None
+            else lease_authority_sequence_after
+        ),
+        "child": child,
+    }
+
+
+def dft_lifecycle_status(
+    *,
+    residency: dict[str, object] | None = None,
+    next_fencing_token: int = 2,
+    execution: dict[str, object] | None = None,
+    last_released_lease: dict[str, object] | None = None,
+    extra_leases: tuple[dict[str, object], ...] = (),
+    lifecycle_events: tuple[dict[str, object], ...] = (),
+    lifecycle_sequence: int | None = None,
+    lifecycle_first_sequence: int | None = None,
+    lease_authority_sequence: int | None = None,
+) -> dict[str, object]:
+    root = dft_residency_record() if residency is None else residency
+    sequence = (
+        int(lifecycle_events[-1]["sequence"])
+        if lifecycle_sequence is None and lifecycle_events
+        else 0
+        if lifecycle_sequence is None
+        else lifecycle_sequence
+    )
+    first_sequence = (
+        int(lifecycle_events[0]["sequence"])
+        if lifecycle_first_sequence is None and lifecycle_events
+        else sequence + 1
+        if lifecycle_first_sequence is None
+        else lifecycle_first_sequence
+    )
+    return {
+        "schema_version": 1,
+        "broker_instance_id": "broker",
+        "boot_id": "boot",
+        "next_fencing_token": next_fencing_token,
+        "lease_authority_sequence": (
+            3 + sequence
+            if lease_authority_sequence is None
+            else lease_authority_sequence
+        ),
+        "parented_dft_execution_lifecycle_sequence": sequence,
+        "parented_dft_execution_lifecycle_first_sequence": first_sequence,
+        "parented_dft_execution_lifecycle_events": list(lifecycle_events),
+        "draining": False,
+        "quarantined_gpus": {},
+        "last_released_lease": last_released_lease,
+        "leases": [
+            root,
+            *((execution,) if execution is not None else ()),
+            *extra_leases,
+        ],
+    }
+
+
+def dft_single_issue_transition() -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+]:
+    root = dft_residency_record()
+    reserved = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+        status="reserved",
+    )
+    issue = dft_lifecycle_event(
+        1,
+        "issue",
+        reserved,
+        residency=root,
+        next_fencing_token_after=3,
+    )
+    before = dft_lifecycle_status(residency=root)
+    after = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=3,
+        execution=reserved,
+        lifecycle_events=(issue,),
+    )
+    return root, before, after
 
 
 def md_execution_record(
@@ -531,6 +670,22 @@ def dft_broad_snapshot(
             {root_pid, *(item.pid for item in mps_declarers), 8999}
         ),
         gpu_uuids=frozenset({session.GPU_UUID}),
+        process_identities=tuple(
+            sorted(
+                (
+                    (root_pid, root_start, control_group),
+                    *(
+                        (
+                            declarer.pid,
+                            declarer.process_start_ticks,
+                            declarer.process_cgroup,
+                        )
+                        for declarer in mps_declarers
+                    ),
+                    (8999, 999, manager_control_group),
+                )
+            )
+        ),
         active_gpu_uuids=frozenset({session.GPU_UUID}),
         live_gpu_declarers=(root, *mps_declarers),
     )
@@ -812,6 +967,7 @@ def test_audit_marks_unleased_private_mps_client_foreign(tmp_path, monkeypatch) 
         status=lambda: {
             "broker_instance_id": "b",
             "next_fencing_token": 1,
+            "lease_authority_sequence": 1,
             "draining": False,
             "leases": [],
         }
@@ -841,6 +997,7 @@ def test_full_audit_discards_one_torn_mps_client_row(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
         "draining": False,
         "leases": [],
     }
@@ -880,6 +1037,7 @@ def test_full_audit_fails_closed_on_repeated_torn_mps_client_rows(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
         "draining": False,
         "leases": [],
     }
@@ -1286,6 +1444,7 @@ def test_broker_snapshot_retries_across_a_legitimate_lease_transition() -> None:
     empty = {
         "broker_instance_id": "broker",
         "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
         "draining": False,
         "leases": [],
     }
@@ -1310,6 +1469,439 @@ def test_broker_snapshot_retries_across_a_legitimate_lease_transition() -> None:
     assert snapshot.process_pids == (88,)
 
 
+@pytest.mark.parametrize("transition", ("issue", "activate", "release", "aba"))
+def test_exact_parented_dft_execution_lifecycle_is_classified(
+    transition: str,
+) -> None:
+    root = dft_residency_record()
+    reserved = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+        status="reserved",
+    )
+    active = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+    )
+    issue = dft_lifecycle_event(
+        1,
+        "issue",
+        reserved,
+        residency=root,
+        next_fencing_token_after=3,
+    )
+    activate = dft_lifecycle_event(
+        2,
+        "activate",
+        active,
+        residency=root,
+        next_fencing_token_after=3,
+    )
+    release = dft_lifecycle_event(
+        3,
+        "release",
+        active,
+        residency=root,
+        next_fencing_token_after=3,
+    )
+    if transition == "issue":
+        before = dft_lifecycle_status(residency=root)
+        after = dft_lifecycle_status(
+            residency={**root, "heartbeat_at": 7.0},
+            next_fencing_token=3,
+            execution=reserved,
+            lifecycle_events=(issue,),
+        )
+    elif transition == "activate":
+        before = dft_lifecycle_status(
+            residency=root,
+            next_fencing_token=3,
+            execution=reserved,
+            lifecycle_events=(issue,),
+        )
+        after = dft_lifecycle_status(
+            residency={**root, "heartbeat_at": 7.0},
+            next_fencing_token=3,
+            execution=active,
+            lifecycle_events=(issue, activate),
+        )
+    elif transition == "release":
+        before = dft_lifecycle_status(
+            residency=root,
+            next_fencing_token=3,
+            execution=active,
+            lifecycle_events=(issue, activate),
+        )
+        after = dft_lifecycle_status(
+            residency={**root, "heartbeat_at": 7.0},
+            next_fencing_token=3,
+            last_released_lease=active,
+            lifecycle_events=(issue, activate, release),
+        )
+    else:
+        before = dft_lifecycle_status(residency=root)
+        after = dft_lifecycle_status(
+            residency={**root, "heartbeat_at": 7.0},
+            next_fencing_token=3,
+            last_released_lease=active,
+            lifecycle_events=(issue, activate, release),
+        )
+
+    assert (
+        session._exact_dft_execution_broker_lifecycle_transition_key(
+            before,
+            after,
+        )
+        == (root["lease_id"], root["fencing_token"])
+    )
+
+
+def test_broker_snapshot_surfaces_exact_parented_dft_execution_aba() -> None:
+    root = dft_residency_record()
+    reserved = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+        status="reserved",
+    )
+    active = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+    )
+    events = (
+        dft_lifecycle_event(
+            1,
+            "issue",
+            reserved,
+            residency=root,
+            next_fencing_token_after=3,
+        ),
+        dft_lifecycle_event(
+            2,
+            "activate",
+            active,
+            residency=root,
+            next_fencing_token_after=3,
+        ),
+        dft_lifecycle_event(
+            3,
+            "release",
+            active,
+            residency=root,
+            next_fencing_token_after=3,
+        ),
+    )
+    before = dft_lifecycle_status(residency=root)
+    after = dft_lifecycle_status(
+        residency={**root, "heartbeat_at": 7.0},
+        next_fencing_token=3,
+        last_released_lease=active,
+        lifecycle_events=events,
+    )
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+
+    with pytest.raises(
+        session._ExactDftExecutionLifecycleChurn
+    ) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            empty_snapshot,
+            surface_exact_dft_execution_lifecycle_churn=True,
+        )
+
+    assert raised.value.root_key == (
+        root["lease_id"],
+        root["fencing_token"],
+    )
+    assert raised.value.status == after
+    assert raised.value.snapshot == empty_snapshot()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "event_extra_field",
+        "event_gap",
+        "event_reorder",
+        "event_action",
+        "event_authority_gap",
+        "child_drift",
+        "activate_without_issue",
+        "release_reserved",
+        "final_child_mismatch",
+        "non_dft_authority_aba",
+        "root_drift",
+        "root_budget_drift",
+        "token_gap",
+        "tombstone_mismatch",
+        "overflow",
+        "restart",
+    ),
+)
+def test_exact_parented_dft_execution_lifecycle_rejects_ambiguity(
+    mutation: str,
+) -> None:
+    root = dft_residency_record()
+    reserved = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+        status="reserved",
+    )
+    active = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+    )
+    events = [
+        dft_lifecycle_event(
+            1,
+            "issue",
+            reserved,
+            residency=root,
+            next_fencing_token_after=3,
+        ),
+        dft_lifecycle_event(
+            2,
+            "activate",
+            active,
+            residency=root,
+            next_fencing_token_after=3,
+        ),
+        dft_lifecycle_event(
+            3,
+            "release",
+            active,
+            residency=root,
+            next_fencing_token_after=3,
+        ),
+    ]
+    before = dft_lifecycle_status(residency=root)
+    after = dft_lifecycle_status(
+        residency={**root, "heartbeat_at": 7.0},
+        next_fencing_token=3,
+        last_released_lease=active,
+        lifecycle_events=tuple(events),
+    )
+    after = json.loads(json.dumps(after))
+    if mutation == "event_extra_field":
+        after["parented_dft_execution_lifecycle_events"][0]["extra"] = True
+    elif mutation == "event_gap":
+        del after["parented_dft_execution_lifecycle_events"][1]
+    elif mutation == "event_reorder":
+        events_after = after["parented_dft_execution_lifecycle_events"]
+        events_after[0], events_after[1] = events_after[1], events_after[0]
+    elif mutation == "event_action":
+        after["parented_dft_execution_lifecycle_events"][1][
+            "action"
+        ] = "unknown"
+    elif mutation == "event_authority_gap":
+        after["parented_dft_execution_lifecycle_events"][1][
+            "lease_authority_sequence_after"
+        ] += 1
+    elif mutation == "child_drift":
+        after["parented_dft_execution_lifecycle_events"][1]["child"][
+            "client_id"
+        ] = "foreign"
+    elif mutation == "activate_without_issue":
+        after["parented_dft_execution_lifecycle_first_sequence"] = 2
+        after["parented_dft_execution_lifecycle_events"] = after[
+            "parented_dft_execution_lifecycle_events"
+        ][1:]
+    elif mutation == "release_reserved":
+        release_event = after["parented_dft_execution_lifecycle_events"][2]
+        release_event["child"] = reserved
+    elif mutation == "final_child_mismatch":
+        after["leases"].append(
+            dft_parented_execution_record(
+                residency=root,
+                lease_id="e3" * 16,
+                fencing_token=3,
+            )
+        )
+    elif mutation == "non_dft_authority_aba":
+        after["lease_authority_sequence"] += 1
+    elif mutation == "root_drift":
+        after["leases"][0]["request_id"] = "dft:dev:changed"
+    elif mutation == "root_budget_drift":
+        before["leases"][0]["memory_mib"] = 2048
+        after["leases"][0]["memory_mib"] = 2048
+    elif mutation == "token_gap":
+        after["next_fencing_token"] += 1
+    elif mutation == "tombstone_mismatch":
+        after["last_released_lease"]["request_id"] = "dft:dev:wrong"
+    elif mutation == "overflow":
+        after["parented_dft_execution_lifecycle_first_sequence"] = 2
+        after["parented_dft_execution_lifecycle_events"] = after[
+            "parented_dft_execution_lifecycle_events"
+        ][1:]
+    else:
+        after["broker_instance_id"] = "replacement"
+
+    assert (
+        session._exact_dft_execution_broker_lifecycle_transition_key(
+            before,
+            after,
+        )
+        is None
+    )
+
+
+def test_exact_dft_partition_rejects_unrelated_parented_sibling() -> None:
+    root = dft_residency_record()
+    sibling = md_execution_record(fencing_token=2)
+    sibling["parent_lease_id"] = "a5" * 16
+    status = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=3,
+    )
+    status["leases"].append(sibling)
+
+    assert session._exact_dft_status_partition(status) is None
+
+
+def test_exact_parented_dft_journal_overlap_is_immutable() -> None:
+    root = dft_residency_record()
+    reserved = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+        status="reserved",
+    )
+    active = dft_parented_execution_record(residency=root, fencing_token=2)
+    issue = dft_lifecycle_event(
+        1,
+        "issue",
+        reserved,
+        residency=root,
+        next_fencing_token_after=3,
+    )
+    activate = dft_lifecycle_event(
+        2,
+        "activate",
+        active,
+        residency=root,
+        next_fencing_token_after=3,
+    )
+    before = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=3,
+        execution=reserved,
+        lifecycle_events=(issue,),
+    )
+    rewritten_issue = json.loads(json.dumps(issue))
+    rewritten_issue["child"]["request_id"] = "dft:dev:rewritten"
+    after = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=3,
+        execution=active,
+        lifecycle_events=(rewritten_issue, activate),
+    )
+
+    assert (
+        session._exact_dft_execution_broker_lifecycle_transition_key(
+            before,
+            after,
+        )
+        is None
+    )
+
+
+def test_real_broker_journal_replays_multiple_dft_generations(
+    tmp_path: Path,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.broker import (
+        HostGpuBroker,
+        OwnerIdentity,
+        read_boot_id,
+        read_process_start_ticks,
+    )
+
+    owner = OwnerIdentity(
+        os.getpid(),
+        read_process_start_ticks(os.getpid()),
+        read_boot_id(),
+    )
+
+    def resolve(lease, pid, start_ticks, _process_group_id):
+        return (
+            pid,
+            start_ticks,
+            pid,
+            f"0::{scope_control_group(lease.lease_id, uid=1001)}",
+        )
+
+    broker = HostGpuBroker(
+        tmp_path / "broker-state.json",
+        resolve_workload_identity=resolve,
+        parented_execution_safe_to_release=lambda *_args: True,
+    )
+    root = broker.acquire(
+        request_id="dft-root",
+        kind="residency",
+        placement="preferred",
+        component="dft",
+        environment="dev",
+        client_id="dft-dev",
+        owner=owner,
+        memory_mib=4096,
+        thread_percent=50,
+    )
+    broker.activate(root.lease_id, root.fencing_token, owner=owner)
+    root = broker.register_workload(
+        root.lease_id,
+        root.fencing_token,
+        owner=owner,
+        workload_pid=owner.pid,
+        workload_process_start_ticks=owner.process_start_ticks,
+        workload_process_group_id=owner.pid,
+    )
+
+    def acquire_child(index: int):
+        return broker.acquire(
+            request_id=f"dft-child-{index}",
+            kind="execution",
+            placement="preferred",
+            component="dft",
+            environment="dev",
+            client_id=root.client_id,
+            owner=owner,
+            memory_mib=4096,
+            thread_percent=50,
+            parent_lease_id=root.lease_id,
+        )
+
+    empty = broker.status()
+    first = acquire_child(1)
+    reserved = broker.status()
+    assert session._exact_dft_execution_broker_lifecycle_transition_key(
+        empty,
+        reserved,
+    ) == (root.lease_id, root.fencing_token)
+    broker.activate(first.lease_id, first.fencing_token, owner=owner)
+    active = broker.status()
+    assert session._exact_dft_execution_broker_lifecycle_transition_key(
+        reserved,
+        active,
+    ) == (root.lease_id, root.fencing_token)
+    broker.release(first.lease_id, first.fencing_token, owner=owner)
+    released = broker.status()
+    assert session._exact_dft_execution_broker_lifecycle_transition_key(
+        active,
+        released,
+    ) == (root.lease_id, root.fencing_token)
+
+    before_multiple = broker.status()
+    for index in (2, 3):
+        child = acquire_child(index)
+        broker.activate(child.lease_id, child.fencing_token, owner=owner)
+        broker.release(child.lease_id, child.fencing_token, owner=owner)
+    after_multiple = broker.status()
+
+    assert session._exact_dft_execution_broker_lifecycle_transition_key(
+        before_multiple,
+        after_multiple,
+    ) == (root.lease_id, root.fencing_token)
+
+
 def test_broker_snapshot_retries_acquire_release_aba_after_inventory_error() -> None:
     from ops.gpu_broker.server import SystemdProcessDisappeared
     from gpu_resource.transient_scope import scope_control_group
@@ -1318,6 +1910,7 @@ def test_broker_snapshot_retries_acquire_release_aba_after_inventory_error() -> 
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -1327,6 +1920,7 @@ def test_broker_snapshot_retries_acquire_release_aba_after_inventory_error() -> 
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "last_released_lease": issued,
         "leases": [heartbeating_dft_lease],
     }
@@ -1361,6 +1955,7 @@ def test_broker_snapshot_retries_new_md_lease_visible_before_release() -> None:
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -1368,6 +1963,7 @@ def test_broker_snapshot_retries_new_md_lease_visible_before_release() -> None:
     active = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [{**dft_lease, "heartbeat_at": 7.0}, md_lease],
     }
     released = {
@@ -1413,6 +2009,7 @@ def test_broker_snapshot_retries_structured_md_membership_aba(
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -1420,6 +2017,7 @@ def test_broker_snapshot_retries_structured_md_membership_aba(
     active = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [{**dft_lease, "heartbeat_at": 7.0}, md_lease],
     }
     released = {
@@ -1472,6 +2070,7 @@ def test_broker_snapshot_retries_released_md_membership_aba() -> None:
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -1479,6 +2078,7 @@ def test_broker_snapshot_retries_released_md_membership_aba() -> None:
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "last_released_lease": md_lease,
         "leases": [{**dft_lease, "heartbeat_at": 7.0}],
     }
@@ -1517,6 +2117,7 @@ def test_broker_snapshot_retries_visible_md_release() -> None:
     active = {
         "broker_instance_id": "broker",
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "draining": False,
         "quarantined_gpus": {},
         "last_released_lease": None,
@@ -1557,6 +2158,7 @@ def test_broker_snapshot_surfaces_stable_exact_md_scope_disappearance() -> None:
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_residency_record(), md_lease],
@@ -1604,6 +2206,7 @@ def test_broker_snapshot_surfaces_exact_md_worker_scope_handoff(
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease, unregistered],
@@ -1673,6 +2276,7 @@ def test_md_worker_scope_handoff_rejects_unproven_membership(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_residency_record(), md_lease],
@@ -1733,6 +2337,7 @@ def test_visible_md_release_rejects_nonexclusive_transition(
     active = {
         "broker_instance_id": "broker",
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "draining": False,
         "quarantined_gpus": {},
         "last_released_lease": None,
@@ -1820,6 +2425,7 @@ def test_md_transition_never_hides_unproven_membership_churn(fault: str) -> None
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -1827,6 +2433,7 @@ def test_md_transition_never_hides_unproven_membership_churn(fault: str) -> None
     active = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [dft_lease, md_lease],
     }
     statuses = iter((before, active))
@@ -1873,6 +2480,7 @@ def test_visible_md_transition_remains_bounded_by_authority_attempts() -> None:
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -1880,6 +2488,7 @@ def test_visible_md_transition_remains_bounded_by_authority_attempts() -> None:
     active = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [dft_lease, md_lease],
     }
     statuses = iter((before, active))
@@ -1911,6 +2520,7 @@ def test_visible_md_issue_never_hides_an_unrelated_live_lease_change() -> None:
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -1918,6 +2528,7 @@ def test_visible_md_issue_never_hides_an_unrelated_live_lease_change() -> None:
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [md_lease],
     }
     statuses = iter((before, after))
@@ -1964,6 +2575,7 @@ def test_visible_md_issue_allows_only_existing_lease_heartbeat_change(
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -1971,6 +2583,7 @@ def test_visible_md_issue_allows_only_existing_lease_heartbeat_change(
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [changed_dft, md_lease],
     }
     statuses = iter((before, after))
@@ -1999,6 +2612,7 @@ def test_visible_md_issue_never_attributes_a_foreign_cgroup() -> None:
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -2006,6 +2620,7 @@ def test_visible_md_issue_never_attributes_a_foreign_cgroup() -> None:
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [dft_lease, md_execution_record()],
     }
     statuses = iter((before, after))
@@ -2046,6 +2661,7 @@ def test_visible_md_issue_rejects_duplicate_lease_authority(
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -2053,6 +2669,7 @@ def test_visible_md_issue_rejects_duplicate_lease_authority(
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [dft_lease, md_lease, duplicate],
     }
     statuses = iter((before, after))
@@ -2081,6 +2698,7 @@ def test_visible_md_issue_rejects_noncanonical_transition(mutation: str) -> None
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -2088,6 +2706,7 @@ def test_visible_md_issue_rejects_noncanonical_transition(mutation: str) -> None
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [dft_lease, md_lease],
     }
     if mutation == "generation":
@@ -2128,6 +2747,7 @@ def test_broker_snapshot_never_hides_generic_foreign_error_during_aba() -> None:
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -2135,6 +2755,7 @@ def test_broker_snapshot_never_hides_generic_foreign_error_during_aba() -> None:
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "last_released_lease": md_execution_record(),
     }
     statuses = iter((before, after))
@@ -2161,6 +2782,7 @@ def test_broker_snapshot_never_attributes_foreign_scope_to_matching_md_aba() -> 
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -2168,6 +2790,7 @@ def test_broker_snapshot_never_attributes_foreign_scope_to_matching_md_aba() -> 
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "last_released_lease": md_execution_record(),
     }
     statuses = iter((before, after))
@@ -2193,6 +2816,7 @@ def test_broker_snapshot_resamples_successful_acquire_release_aba() -> None:
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -2200,6 +2824,7 @@ def test_broker_snapshot_resamples_successful_acquire_release_aba() -> None:
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "last_released_lease": md_execution_record(),
     }
     statuses = iter((before, after, after, after))
@@ -2267,6 +2892,7 @@ def test_broker_authority_token_binds_exact_dft_matcher_fields(field: str) -> No
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [lease],
     }
@@ -2284,7 +2910,9 @@ def test_broker_snapshot_resamples_exact_dft_membership_churn(scope: str) -> Non
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
     client = SimpleNamespace(status=lambda: status)
@@ -2301,6 +2929,8 @@ def test_broker_snapshot_resamples_exact_dft_membership_churn(scope: str) -> Non
         client,
         collect,
         membership_churn_retries=2,
+        membership_churn_guard=lambda _status: True,
+        membership_churn_timeout_seconds=90.0,
     )
 
     assert observed_status == status
@@ -2308,11 +2938,124 @@ def test_broker_snapshot_resamples_exact_dft_membership_churn(scope: str) -> Non
     assert calls == 3
 
 
+def test_broker_snapshot_rejects_steady_unattested_dft_membership_churn() -> None:
+    root = dft_residency_record()
+    child = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+    )
+    status = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=3,
+        execution=child,
+        lease_authority_sequence=5,
+    )
+    client = SimpleNamespace(status=lambda: status)
+    error = dft_membership_error()
+
+    with pytest.raises(type(error)) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(error),
+            surface_exact_dft_execution_lifecycle_churn=True,
+        )
+
+    assert raised.value is error
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "root_only",
+        "mixed",
+        "root_disappeared",
+        "foreign_exact_cgroup",
+        "process_disappeared",
+    ),
+)
+def test_broker_snapshot_steady_dft_membership_never_uses_scope_only_evidence(
+    fault: str,
+) -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    root = dft_residency_record()
+    child = (
+        None
+        if fault == "root_only"
+        else dft_parented_execution_record(
+            residency=root,
+            fencing_token=2,
+        )
+    )
+    status = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=3 if child is not None else 2,
+        execution=child,
+        lease_authority_sequence=5,
+    )
+    manager_cgroup = user_manager_control_group(1001)
+    dft_cgroup = scope_control_group(root["lease_id"], uid=1001)
+    root_identity = (
+        int(root["workload_pid"]),
+        int(root["workload_process_start_ticks"]),
+        dft_cgroup,
+    )
+    manager_identity = (7000, 100, manager_cgroup)
+    if fault == "root_only":
+        error = dft_membership_error()
+    elif fault == "mixed":
+        error = dft_membership_error(
+            expected=(manager_identity, root_identity),
+            current=(
+                manager_identity,
+                root_identity,
+                (8201, 501, dft_cgroup),
+                (99001, 601, f"{manager_cgroup}/foreign.scope"),
+            ),
+        )
+    elif fault == "root_disappeared":
+        error = dft_membership_error(
+            expected=(manager_identity, root_identity),
+            current=(manager_identity,),
+        )
+    elif fault == "foreign_exact_cgroup":
+        error = dft_membership_error(
+            expected=(
+                manager_identity,
+                root_identity,
+                (99001, 601, dft_cgroup),
+            ),
+            current=(manager_identity, root_identity),
+        )
+    else:
+        error = SystemdProcessDisappeared(
+            99001,
+            601,
+            dft_cgroup,
+        )
+    client = SimpleNamespace(status=lambda: status)
+
+    with pytest.raises(type(error)) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(error),
+            surface_exact_dft_execution_lifecycle_churn=True,
+        )
+
+    assert raised.value is error
+
+
 def test_broker_snapshot_fails_closed_after_bounded_dft_churn() -> None:
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
     client = SimpleNamespace(status=lambda: status)
@@ -2329,8 +3072,10 @@ def test_broker_snapshot_fails_closed_after_bounded_dft_churn() -> None:
     ):
         session.consistent_broker_snapshot(
             client,
-            collect,
-            membership_churn_retries=1,
+                collect,
+                membership_churn_retries=1,
+                membership_churn_guard=lambda _status: True,
+                membership_churn_timeout_seconds=90.0,
         )
 
     assert calls == 2
@@ -2340,7 +3085,9 @@ def test_broker_snapshot_fails_closed_at_dft_churn_deadline() -> None:
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
     client = SimpleNamespace(status=lambda: status)
@@ -2359,9 +3106,10 @@ def test_broker_snapshot_fails_closed_at_dft_churn_deadline() -> None:
         session.consistent_broker_snapshot(
             client,
             collect,
-            membership_churn_retries=8,
-            membership_churn_timeout_seconds=12.0,
-            monotonic=lambda: next(ticks),
+                membership_churn_retries=8,
+                membership_churn_timeout_seconds=12.0,
+                membership_churn_guard=lambda _status: True,
+                monotonic=lambda: next(ticks),
         )
 
     assert calls == 1
@@ -2373,7 +3121,9 @@ def test_broker_snapshot_never_retries_unknown_membership_churn() -> None:
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
     client = SimpleNamespace(status=lambda: status)
@@ -2472,7 +3222,9 @@ def test_broker_snapshot_never_retries_unproven_dft_membership_churn(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
     client = SimpleNamespace(status=lambda: status)
@@ -2510,7 +3262,9 @@ def test_exact_dft_churn_inner_budget_survives_more_than_three_transitions() -> 
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
     client = SimpleNamespace(status=lambda: status)
@@ -2548,6 +3302,7 @@ def test_fast_dft_guard_accepts_stable_exact_children_only(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2590,6 +3345,7 @@ def test_fast_dft_guard_accepts_exact_lazy_server_and_client_transition(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2636,6 +3392,7 @@ def test_fast_dft_guard_never_retroactively_exempts_reused_server_pid(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2682,6 +3439,7 @@ def test_fast_dft_guard_fails_closed_for_foreign_authority(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2724,6 +3482,7 @@ def test_fast_dft_guard_rejects_duplicate_lease_and_90_second_expiry(
     duplicate = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [
             dft_residency_record(),
@@ -2739,6 +3498,7 @@ def test_fast_dft_guard_rejects_duplicate_lease_and_90_second_expiry(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2779,6 +3539,7 @@ def test_warmup_retries_only_internal_mps_membership_cas_until_success(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2826,6 +3587,7 @@ def test_warmup_never_retries_unproven_or_expired_mps_churn(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": (
             [] if failure == "foreign" else [dft_residency_record()]
@@ -2859,6 +3621,7 @@ def test_full_audit_seals_only_one_live_exact_dft_residency(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -2910,6 +3673,7 @@ def test_completed_dft_stabilization_is_not_resealed_during_backend_rollout(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 5,
+        "lease_authority_sequence": 5,
         "draining": False,
         "leases": [dft_record, backend_record],
     }
@@ -3001,6 +3765,7 @@ def test_pending_dft_stabilization_still_requires_a_sole_residency_lease(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "draining": False,
         "leases": [residency.public_dict(), execution.public_dict()],
     }
@@ -3074,6 +3839,7 @@ def test_full_audit_never_seals_without_real_dft_cuda_residency(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3112,6 +3878,7 @@ def test_full_audit_never_retroactively_authorizes_reused_mps_server_pid(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3204,6 +3971,7 @@ def test_full_audit_never_seals_missing_or_stale_dft_root(
     empty_status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [],
     }
@@ -3246,6 +4014,7 @@ def test_stabilization_signal_mid_audit_requires_the_next_full_generation(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -3268,9 +4037,11 @@ def test_stabilization_signal_mid_audit_requires_the_next_full_generation(
         trailing_compute=frozenset({7001}),
     )
     first = True
+    collections = 0
 
     def collect(_client, **_kwargs):
-        nonlocal first
+        nonlocal first, collections
+        collections += 1
         if first:
             first = False
             controller.dft_stabilization_generation += 1
@@ -3284,13 +4055,10 @@ def test_stabilization_signal_mid_audit_requires_the_next_full_generation(
     )
 
     controller._audit(client)
-    assert controller.dft_stabilized is False
-    assert controller.last_audit_stabilization_generation == 0
-
-    controller._audit(client)
     assert controller.dft_stabilized is True
     assert controller.last_audit_stabilization_generation == 1
-    assert controller.full_audit_generation == 2
+    assert controller.full_audit_generation == 1
+    assert collections == 2
 
 
 def test_activation_signal_mid_audit_cannot_authorize_that_generation(
@@ -3300,6 +4068,7 @@ def test_activation_signal_mid_audit_cannot_authorize_that_generation(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [],
     }
@@ -3308,11 +4077,14 @@ def test_activation_signal_mid_audit_cannot_authorize_that_generation(
     controller = session.SessionController(run, "a" * 40, "b" * 40)
     controller.dft_warmup_open = False
     controller.dft_stabilized = True
+    controller.activation_generation = 1
     client = patch_full_audit_runtime(monkeypatch, controller, status)
     first = True
+    collections = 0
 
     def collect(_client, **_kwargs):
-        nonlocal first
+        nonlocal first, collections
+        collections += 1
         if first:
             first = False
             controller.activation_generation += 1
@@ -3321,10 +4093,49 @@ def test_activation_signal_mid_audit_cannot_authorize_that_generation(
     monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
 
     controller._audit(client)
-    assert controller.last_audit_activation_generation == 0
+    assert controller.last_audit_activation_generation == 2
+    assert controller.full_audit_generation == 1
+    assert collections == 2
+
+
+def test_activation_signal_downgrades_dft_lifecycle_retry_to_generic_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    collections = 0
+
+    def collect(_client, **_kwargs):
+        nonlocal collections
+        collections += 1
+        if collections == 1:
+            controller.activation_generation += 1
+            raise session._ExactDftExecutionLifecycleChurn(
+                ("d1" * 16, 1),
+                "exact DFT lifecycle changed during rollout",
+            )
+        return status, empty_snapshot()
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+
     controller._audit(client)
-    assert controller.last_audit_activation_generation == 1
-    assert controller.full_audit_generation == 2
+
+    assert controller.last_audit_activation_generation == 2
+    assert controller.full_audit_generation == 1
+    assert collections == 2
 
 
 def test_trailing_audit_recomputes_backend_identity_authority(
@@ -3334,6 +4145,7 @@ def test_trailing_audit_recomputes_backend_identity_authority(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [backend_residency_record()],
     }
@@ -3390,6 +4202,7 @@ def test_trailing_audit_rejects_new_static_systemd_gpu_claim(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [],
     }
@@ -3428,6 +4241,7 @@ def test_trailing_audit_resamples_exact_md_scope_transition(
     idle = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_lease],
@@ -3435,6 +4249,7 @@ def test_trailing_audit_resamples_exact_md_scope_transition(
     active = {
         **idle,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [dft_lease, md_lease],
     }
     before = idle if transition_shape == "aba" else active
@@ -3509,6 +4324,7 @@ def test_trailing_audit_same_md_lease_uses_dedicated_budget_beyond_three(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_residency_record(), md_lease],
@@ -3575,6 +4391,7 @@ def test_trailing_audit_same_md_lease_dedicated_budget_is_bounded(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_residency_record(), md_lease],
@@ -3653,6 +4470,7 @@ def test_trailing_audit_exact_md_releases_keep_three_round_budget(
         active = {
             "broker_instance_id": "broker",
             "next_fencing_token": fencing_token + 1,
+            "lease_authority_sequence": fencing_token + 1,
             "draining": False,
             "quarantined_gpus": {},
             "last_released_lease": tombstone,
@@ -3737,6 +4555,7 @@ def _exact_md_mps_transition(
     idle: dict[str, object] = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -3744,6 +4563,7 @@ def _exact_md_mps_transition(
     active: dict[str, object] = {
         **idle,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "leases": [md_lease],
     }
     terminating_lease = {
@@ -4185,6 +5005,7 @@ def test_full_audit_same_md_mps_key_uses_dedicated_budget_beyond_three(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
         "draining": False,
         "leases": [],
     }
@@ -4289,6 +5110,7 @@ def test_full_audit_same_md_mps_key_dedicated_budget_is_bounded(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
         "draining": False,
         "leases": [],
     }
@@ -4330,6 +5152,7 @@ def test_full_audit_different_md_mps_keys_keep_short_authority_budget(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
         "draining": False,
         "leases": [],
     }
@@ -4371,6 +5194,439 @@ def test_full_audit_different_md_mps_keys_keep_short_authority_budget(
     assert controller.full_audit_generation == 0
 
 
+def test_full_audit_classifies_foreign_snapshot_before_dft_journal_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    _root, before, after = dft_single_issue_transition()
+    foreign = server.SystemdGpuClaim(
+        scope="user",
+        unit="foreign-gpu.service",
+        main_pid=9999,
+        control_group="/user.slice/foreign-gpu.service",
+        process_pids=frozenset({9999}),
+        gpu_uuids=frozenset({session.GPU_UUID}),
+        process_identities=(
+            (9999, 901, "/user.slice/foreign-gpu.service"),
+        ),
+        static_gpu_uuids=frozenset({session.GPU_UUID}),
+    )
+    captured = session.TargetSnapshot((9999,), (), (foreign,))
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    authority = mps_snapshot()
+    real_consistent_broker_snapshot = session.consistent_broker_snapshot
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        before,
+        snapshot=captured,
+        authority=authority,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        lambda _client: authority,
+    )
+    client.status = lambda: before
+
+    def consistent(_client: object, **_kwargs: object):
+        statuses = iter((before, after))
+        return real_consistent_broker_snapshot(
+            SimpleNamespace(status=lambda: next(statuses)),
+            lambda: captured,
+            surface_exact_dft_execution_lifecycle_churn=True,
+        )
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", consistent)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert "foreign CUDA PID(s): 9999" in reasons
+    assert "foreign systemd claim: user:foreign-gpu.service" in reasons
+    assert controller.full_audit_generation == 0
+
+
+def test_full_audit_classifies_trailing_foreign_claim_before_dft_journal_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    _root, before, after = dft_single_issue_transition()
+    authority = mps_snapshot()
+    initial = dft_broad_snapshot(
+        monkeypatch,
+        before,
+        authority,
+        empty_snapshot(),
+    )
+    foreign = server.SystemdGpuClaim(
+        scope="user",
+        unit="foreign-gpu.service",
+        main_pid=9999,
+        control_group="/user.slice/foreign-gpu.service",
+        process_pids=frozenset({9999}),
+        gpu_uuids=frozenset({session.GPU_UUID}),
+        process_identities=(
+            (9999, 901, "/user.slice/foreign-gpu.service"),
+        ),
+        static_gpu_uuids=frozenset({session.GPU_UUID}),
+    )
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        before,
+        snapshot=initial,
+        authority=authority,
+        trailing_compute=frozenset({9999}),
+        trailing_systemd=(*initial.systemd_claims, foreign),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        lambda _client: authority,
+    )
+    statuses = iter((before, after))
+    client.status = lambda: next(statuses)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert "foreign CUDA PID(s): 9999" in reasons
+    assert "foreign systemd claim: user:foreign-gpu.service" in reasons
+    assert controller.full_audit_generation == 0
+
+
+def test_full_audit_same_dft_root_survives_more_than_generic_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    real_consistent_broker_snapshot = session.consistent_broker_snapshot
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    snapshot = empty_snapshot()
+    authority = mps_snapshot()
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        lambda _client: authority,
+    )
+    root = dft_residency_record()
+    reserved_two = dft_parented_execution_record(
+        residency=root,
+        lease_id="e2" * 16,
+        fencing_token=2,
+        status="reserved",
+    )
+    active_two = dft_parented_execution_record(
+        residency=root,
+        lease_id="e2" * 16,
+        fencing_token=2,
+    )
+    reserved_three = dft_parented_execution_record(
+        residency=root,
+        lease_id="e3" * 16,
+        fencing_token=3,
+        status="reserved",
+    )
+    active_three = dft_parented_execution_record(
+        residency=root,
+        lease_id="e3" * 16,
+        fencing_token=3,
+    )
+    reserved_four = dft_parented_execution_record(
+        residency=root,
+        lease_id="e4" * 16,
+        fencing_token=4,
+        status="reserved",
+    )
+    events = (
+        dft_lifecycle_event(
+            1,
+            "issue",
+            reserved_two,
+            residency=root,
+            next_fencing_token_after=3,
+        ),
+        dft_lifecycle_event(
+            2,
+            "activate",
+            active_two,
+            residency=root,
+            next_fencing_token_after=3,
+        ),
+        dft_lifecycle_event(
+            3,
+            "release",
+            active_two,
+            residency=root,
+            next_fencing_token_after=3,
+        ),
+        dft_lifecycle_event(
+            4,
+            "issue",
+            reserved_three,
+            residency=root,
+            next_fencing_token_after=4,
+        ),
+        dft_lifecycle_event(
+            5,
+            "activate",
+            active_three,
+            residency=root,
+            next_fencing_token_after=4,
+        ),
+        dft_lifecycle_event(
+            6,
+            "release",
+            active_three,
+            residency=root,
+            next_fencing_token_after=4,
+        ),
+        dft_lifecycle_event(
+            7,
+            "issue",
+            reserved_four,
+            residency=root,
+            next_fencing_token_after=5,
+        ),
+    )
+    empty_two = dft_lifecycle_status(residency=root)
+    issued_two = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=3,
+        execution=reserved_two,
+        lifecycle_events=events[:1],
+    )
+    released_two = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=3,
+        last_released_lease=active_two,
+        lifecycle_events=events[:3],
+    )
+    aba_three = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=4,
+        last_released_lease=active_three,
+        lifecycle_events=events[:6],
+    )
+    issued_four = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=5,
+        execution=reserved_four,
+        last_released_lease=active_three,
+        lifecycle_events=events,
+    )
+    boundaries = (
+        (empty_two, issued_two),
+        (issued_two, released_two),
+        (released_two, aba_three),
+        (aba_three, issued_four),
+    )
+    calls = 0
+    status_reads = 0
+
+    def controller_status() -> dict[str, object]:
+        nonlocal status_reads
+        round_index, phase = divmod(status_reads, 2)
+        status_reads += 1
+        if round_index < len(boundaries):
+            return boundaries[round_index][phase]
+        return status
+
+    client.status = controller_status
+
+    def consistent(
+        _client: object,
+        **_kwargs: object,
+    ) -> tuple[dict[str, object], session.TargetSnapshot]:
+        nonlocal calls
+        calls += 1
+        if calls <= session.FULL_AUDIT_ATTEMPTS + 1:
+            before, after = boundaries[calls - 1]
+            statuses = iter((before, after))
+            return real_consistent_broker_snapshot(
+                SimpleNamespace(status=lambda: next(statuses)),
+                empty_snapshot,
+                surface_exact_dft_execution_lifecycle_churn=True,
+            )
+        return status, snapshot
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", consistent)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert calls == session.FULL_AUDIT_ATTEMPTS + 2
+    assert controller.full_audit_generation == 1
+
+
+def test_full_audit_same_dft_root_lifecycle_attempt_budget_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    calls = 0
+
+    def consistent(_client: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise session._ExactDftExecutionLifecycleChurn(
+            ("d1" * 16, 1),
+            "one exact child boundary changed",
+        )
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", consistent)
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="one exact DFT execution lifecycle did not stabilize",
+    ):
+        controller._audit(client)
+
+    assert (
+        calls
+        == session.EXACT_DFT_EXECUTION_LIFECYCLE_AUDIT_ATTEMPTS
+    )
+    assert controller.full_audit_generation == 0
+
+
+def test_full_audit_same_dft_root_lifecycle_deadline_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    calls = 0
+
+    def consistent(_client: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise session._ExactDftExecutionLifecycleChurn(
+            ("d1" * 16, 1),
+            "one exact child boundary changed",
+        )
+
+    monotonic_values = iter(
+        (
+            0.0,
+            0.0,
+            session.EXACT_DFT_EXECUTION_LIFECYCLE_TIMEOUT_SECONDS,
+        )
+    )
+    monkeypatch.setattr(session, "consistent_broker_snapshot", consistent)
+    monkeypatch.setattr(
+        session.time,
+        "monotonic",
+        lambda: next(monotonic_values),
+    )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="one exact DFT execution lifecycle did not stabilize",
+    ):
+        controller._audit(client)
+
+    assert calls == 2
+    assert controller.full_audit_generation == 0
+
+
+def test_full_audit_different_dft_roots_keep_short_authority_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    keys = iter(
+        (
+            ("d1" * 16, 1),
+            ("d2" * 16, 2),
+            ("d3" * 16, 3),
+        )
+    )
+    calls = 0
+
+    def consistent(_client: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise session._ExactDftExecutionLifecycleChurn(
+            next(keys),
+            "a different exact DFT root changed",
+        )
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", consistent)
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="authority changed throughout trailing full audits",
+    ):
+        controller._audit(client)
+
+    assert calls == session.FULL_AUDIT_ATTEMPTS
+    assert controller.full_audit_generation == 0
+
+
 def test_trailing_audit_propagates_unowned_process_disappearance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4380,6 +5636,7 @@ def test_trailing_audit_propagates_unowned_process_disappearance(
     before = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [dft_residency_record()],
@@ -4387,6 +5644,7 @@ def test_trailing_audit_propagates_unowned_process_disappearance(
     after = {
         **before,
         "next_fencing_token": 3,
+        "lease_authority_sequence": 3,
         "last_released_lease": md_execution_record(),
     }
     run = tmp_path / ("run-" + "d" * 32)
@@ -4427,24 +5685,34 @@ def test_exact_trailing_dft_systemd_churn_uses_warmup_budget_beyond_three_rounds
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
 
     def claim(version: int) -> object:
+        from gpu_resource.transient_scope import scope_control_group
+
+        dft_cgroup = scope_control_group("d1" * 16, uid=1001)
+        compiler_pid = 8200 + version
         return server.SystemdGpuClaim(
             scope="system",
             unit="user@1001.service",
             main_pid=7000,
             control_group=server.user_manager_control_group(1001),
-            process_pids=frozenset({8123}),
+            process_pids=frozenset({8123, compiler_pid}),
             gpu_uuids=frozenset({session.GPU_UUID}),
+            process_identities=(
+                (8123, 456, dft_cgroup),
+                (compiler_pid, 500 + version, dft_cgroup),
+            ),
             active_gpu_uuids=frozenset({session.GPU_UUID}),
             live_gpu_declarers=(
                 server.SystemdGpuDeclarer(
                     pid=8123,
-                    process_start_ticks=version,
-                    process_cgroup="/dft.scope",
+                    process_start_ticks=456,
+                    process_cgroup=dft_cgroup,
                     gpu_uuids=frozenset({session.GPU_UUID}),
                 ),
             ),
@@ -4494,6 +5762,104 @@ def test_exact_trailing_dft_systemd_churn_uses_warmup_budget_beyond_three_rounds
     assert fast_rounds == [1, 2, 3, 4]
 
 
+def test_steady_successful_dft_systemd_claim_churn_keeps_generic_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    root = dft_residency_record()
+    child = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+    )
+    status = dft_lifecycle_status(
+        residency=root,
+        next_fencing_token=3,
+        execution=child,
+        lease_authority_sequence=5,
+    )
+
+    def claim(version: int) -> object:
+        from gpu_resource.transient_scope import scope_control_group
+
+        dft_cgroup = scope_control_group(root["lease_id"], uid=1001)
+        compiler_pid = 8200 + version
+        return server.SystemdGpuClaim(
+            scope="system",
+            unit="user@1001.service",
+            main_pid=7000,
+            control_group=server.user_manager_control_group(1001),
+            process_pids=frozenset({8123, compiler_pid}),
+            gpu_uuids=frozenset({session.GPU_UUID}),
+            process_identities=(
+                (8123, 456, dft_cgroup),
+                (compiler_pid, 500 + version, dft_cgroup),
+            ),
+            active_gpu_uuids=frozenset({session.GPU_UUID}),
+            live_gpu_declarers=(
+                server.SystemdGpuDeclarer(
+                    pid=8123,
+                    process_start_ticks=456,
+                    process_cgroup=dft_cgroup,
+                    gpu_uuids=frozenset({session.GPU_UUID}),
+                ),
+            ),
+        )
+
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    rounds = 0
+    systemd_reads = 0
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        rounds += 1
+        return status, session.TargetSnapshot((), (), (claim(rounds),))
+
+    def trailing_systemd(**_kwargs):
+        nonlocal systemd_reads
+        systemd_reads += 1
+        return (claim(rounds + 100),)
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+    monkeypatch.setattr(
+        controller,
+        "_managed_workload_authority",
+        lambda _status, snapshot, *_args, **_kwargs: (
+            frozenset(),
+            frozenset(),
+            frozenset(
+                (item.scope, item.unit, item.control_group)
+                for item in snapshot.systemd_claims
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("steady systemd churn invoked the warmup fast guard")
+        ),
+    )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="authority changed throughout trailing full audits",
+    ):
+        controller._audit(client)
+
+    assert rounds == session.FULL_AUDIT_ATTEMPTS
+    assert systemd_reads == session.FULL_AUDIT_ATTEMPTS
+    assert controller.full_audit_generation == 0
+
+
 @pytest.mark.parametrize("direction", ("grow", "shrink", "burst"))
 def test_trailing_query_retries_exact_dft_membership_exception_beyond_three(
     tmp_path: Path,
@@ -4509,7 +5875,9 @@ def test_trailing_query_retries_exact_dft_membership_exception_beyond_three(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
     run = tmp_path / ("run-" + "d" * 32)
@@ -4591,7 +5959,9 @@ def test_trailing_query_exact_dft_membership_requires_stable_broker_token(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
     changed = {**status, "broker_instance_id": "replacement"}
@@ -4645,6 +6015,7 @@ def test_trailing_query_never_retries_mixed_dft_and_foreign_membership(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -4702,7 +6073,9 @@ def test_trailing_query_exact_dft_membership_requires_fast_guard(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
+        "quarantined_gpus": {},
         "leases": [dft_residency_record()],
     }
     run = tmp_path / ("run-" + "d" * 32)
@@ -4741,6 +6114,181 @@ def test_trailing_query_exact_dft_membership_requires_fast_guard(
         controller._audit(client)
 
 
+@pytest.mark.parametrize("error_kind", ("membership", "process_disappeared"))
+def test_steady_trailing_active_dft_child_rejects_unattested_systemd_churn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_kind: str,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker import server
+
+    root = dft_residency_record()
+    child = dft_parented_execution_record(
+        residency=root,
+        fencing_token=2,
+    )
+    status = {
+        **dft_lifecycle_status(
+            residency=root,
+            next_fencing_token=3,
+            execution=child,
+            lease_authority_sequence=5,
+        ),
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    authority = mps_snapshot()
+    captured = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        authority,
+        empty_snapshot(),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=captured,
+        authority=authority,
+        trailing_systemd=captured.systemd_claims,
+    )
+    if error_kind == "membership":
+        error = dft_membership_error()
+    else:
+        error = server.SystemdProcessDisappeared(
+            8124,
+            457,
+            scope_control_group(root["lease_id"], uid=1001),
+        )
+    systemd_reads = 0
+
+    def trailing_systemd(**_kwargs: object) -> tuple[object, ...]:
+        nonlocal systemd_reads
+        systemd_reads += 1
+        raise error
+
+    monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("steady churn invoked the warmup-only fast guard")
+        ),
+    )
+
+    with pytest.raises(type(error)) as raised:
+        controller._audit(client)
+
+    assert raised.value is error
+    assert systemd_reads == 1
+    assert controller.full_audit_generation == 0
+
+
+@pytest.mark.parametrize("error_kind", ("membership", "process_disappeared"))
+def test_steady_trailing_exact_dft_churn_never_uses_warmup_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_kind: str,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker import server
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    authority = mps_snapshot()
+    captured = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        authority,
+        empty_snapshot(),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=captured,
+        authority=authority,
+        trailing_systemd=captured.systemd_claims,
+    )
+    if error_kind == "membership":
+        error = dft_membership_error()
+    else:
+        error = server.SystemdProcessDisappeared(
+            8124,
+            457,
+            scope_control_group("d1" * 16, uid=1001),
+        )
+    systemd_reads = 0
+
+    def trailing_systemd(**_kwargs: object) -> tuple[object, ...]:
+        nonlocal systemd_reads
+        systemd_reads += 1
+        raise error
+
+    monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("steady churn invoked the warmup-only fast guard")
+        ),
+    )
+
+    with pytest.raises(type(error)) as raised:
+        controller._audit(client)
+
+    assert raised.value is error
+    assert systemd_reads == 1
+    assert controller.full_audit_generation == 0
+
+
+@pytest.mark.parametrize("fault", ("root", "foreign"))
+def test_exact_dft_process_disappearance_rejects_non_child_scope(
+    fault: str,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    error = SystemdProcessDisappeared(
+        8123 if fault == "root" else 8124,
+        456 if fault == "root" else 457,
+        (
+            scope_control_group("d1" * 16, uid=1001)
+            if fault == "root"
+            else "/user.slice/foreign.scope"
+        ),
+    )
+
+    assert (
+        session._exact_dft_membership_churn_root_key(error, status)
+        is None
+    )
+
+
 def test_full_audit_retries_exact_mps_client_membership_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4748,6 +6296,7 @@ def test_full_audit_retries_exact_mps_client_membership_change(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -4798,6 +6347,7 @@ def test_full_audit_retries_exact_lazy_mps_server_growth(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -4866,6 +6416,7 @@ def test_initial_unclaimed_lazy_server_stays_foreign_when_not_sole_sibling(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -4923,6 +6474,7 @@ def test_initial_unclaimed_lazy_server_login_sibling_requires_fast_retry(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -4978,6 +6530,7 @@ def test_trailing_unclaimed_lazy_server_login_sibling_requires_fast_retry(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -5047,6 +6600,7 @@ def test_full_audit_discards_broker_change_after_initial_mps_seal(
     empty = {
         "broker_instance_id": "broker",
         "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -5054,6 +6608,7 @@ def test_full_audit_discards_broker_change_after_initial_mps_seal(
     resident = {
         **empty,
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "leases": [dft_residency_record()],
     }
     run = tmp_path / ("run-" + "d" * 32)
@@ -5141,6 +6696,7 @@ def test_initial_mps_broker_seal_change_keeps_three_round_budget(
             {
                 "broker_instance_id": "broker",
                 "next_fencing_token": generation,
+                "lease_authority_sequence": generation,
                 "draining": False,
                 "quarantined_gpus": {},
                 "leases": [],
@@ -5148,6 +6704,7 @@ def test_initial_mps_broker_seal_change_keeps_three_round_budget(
             {
                 "broker_instance_id": "broker",
                 "next_fencing_token": generation + 1,
+                "lease_authority_sequence": generation + 1,
                 "draining": False,
                 "quarantined_gpus": {},
                 "leases": [],
@@ -5208,6 +6765,7 @@ def test_preactivation_rollout_commits_after_three_broker_seal_changes(
         {
             "broker_instance_id": "broker",
             "next_fencing_token": generation,
+            "lease_authority_sequence": generation,
             "draining": False,
             "quarantined_gpus": {},
             "leases": [],
@@ -5255,6 +6813,7 @@ def test_preactivation_rollout_broker_seal_changes_are_bounded(
         {
             "broker_instance_id": "broker",
             "next_fencing_token": generation,
+            "lease_authority_sequence": generation,
             "draining": False,
             "quarantined_gpus": {},
             "leases": [],
@@ -5323,6 +6882,7 @@ def test_preactivation_rollout_retries_exact_docker_inventory_churn(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -5368,6 +6928,7 @@ def test_preactivation_docker_inventory_churn_retry_is_bounded(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -5450,6 +7011,7 @@ def test_preactivation_rollout_does_not_retry_other_docker_inventory_errors(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -5497,6 +7059,7 @@ def test_docker_inventory_churn_outside_preactivation_rollout_fails_closed(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -5544,6 +7107,7 @@ def test_activation_signal_during_docker_inventory_churn_disables_rollout_retry(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -5589,6 +7153,7 @@ def test_preactivation_rollout_returns_stable_foreign_evidence_immediately(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "quarantined_gpus": {},
         "leases": [],
@@ -5631,6 +7196,7 @@ def test_full_audit_accepts_dft_claim_with_mps_in_sibling_login_scope(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -5712,6 +7278,7 @@ def test_full_audit_discards_lazy_server_that_appeared_after_captured_inventory(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -5789,6 +7356,7 @@ def test_trailing_full_audit_retries_exact_lazy_mps_server_growth(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -5868,6 +7436,7 @@ def test_trailing_full_audit_retries_lazy_server_between_nvml_seals(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -5961,6 +7530,7 @@ def test_trailing_lazy_server_seal_growth_never_hides_foreign_evidence(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6038,6 +7608,7 @@ def test_trailing_lazy_growth_rejects_unsealed_untrusted_dft_pid(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6131,6 +7702,7 @@ def test_exact_lazy_mps_server_growth_rejects_ambiguous_authority(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6290,6 +7862,7 @@ def test_exact_lazy_mps_server_growth_never_hides_captured_foreign_evidence(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6448,6 +8021,7 @@ def test_full_audit_retries_more_than_three_exact_mps_client_additions(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6512,6 +8086,7 @@ def test_full_audit_never_extends_unknown_mps_client_growth(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6557,6 +8132,7 @@ def test_full_audit_keeps_short_budget_for_exact_mps_client_inventory_lag(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6607,6 +8183,7 @@ def test_exact_mps_growth_never_hides_initial_foreign_evidence(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6653,6 +8230,7 @@ def test_exact_mps_growth_never_hides_dft_warmup_docker_evidence(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6702,6 +8280,7 @@ def test_exact_trailing_growth_never_hides_foreign_or_static_systemd_evidence(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6768,6 +8347,7 @@ def test_full_audit_retries_exact_nvml_growth_across_systemd_inventory(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6835,6 +8415,7 @@ def test_full_audit_retries_more_than_three_exact_nvml_additions(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6891,6 +8472,7 @@ def test_full_audit_rejects_stable_unknown_mps_client(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6928,6 +8510,7 @@ def test_warmup_full_audit_strictly_rejects_initial_and_trailing_docker(
     status = {
         "broker_instance_id": "broker",
         "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
         "draining": False,
         "leases": [dft_residency_record()],
     }
@@ -6983,6 +8566,7 @@ def test_steady_full_audit_retains_the_12_second_churn_boundary(
         status=lambda: {
             "broker_instance_id": "broker",
             "next_fencing_token": 1,
+            "lease_authority_sequence": 1,
             "draining": False,
             "leases": [],
         }

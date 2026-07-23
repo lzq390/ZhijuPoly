@@ -428,19 +428,70 @@ jobs:
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - id: backend-identity
+        name: Resolve Backend image identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.resolve-sha.outputs.candidate_sha }}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          dependency_lock_sha256="sha256:$(
+            sha256sum \
+              backend/requirements.lock \
+              backend/requirements-system.lock \
+              backend/requirements-legacy.lock \
+              backend/requirements-ci.lock |
+              sha256sum | awk '{print $1}'
+          )"
+          build_config_sha256="sha256:$(
+            sha256sum \
+              Dockerfile \
+              docker-compose.yml \
+              docker-compose.dev.yml \
+              docker-compose.gpu-governed.yml \
+              docker-compose.dev-gpu-session.yml |
+              sha256sum | awk '{print $1}'
+          )"
+          {
+            echo "source_tree=${source_tree}"
+            echo "dependency_lock_sha256=${dependency_lock_sha256}"
+            echo "build_config_sha256=${build_config_sha256}"
+          } >>"$GITHUB_OUTPUT"
       - name: Build image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
+          github-token: ${{ github.token }}
           file: ${{ matrix.file }}
           platforms: linux/amd64
           push: false
+          load: true
+          tags: nexpoly-ci-${{ matrix.cache_scope }}:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
           build-args: |
             SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
+            SOURCE_TREE=${{ steps.backend-identity.outputs.source_tree }}
+            DEPENDENCY_LOCK_SHA256=${{ steps.backend-identity.outputs.dependency_lock_sha256 }}
+            BUILD_CONFIG_SHA256=${{ steps.backend-identity.outputs.build_config_sha256 }}
             SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
             VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
           cache-from: type=gha,scope=ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}
           cache-to: type=gha,mode=max,scope=ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}
+      - name: Verify Backend image identity
+        if: matrix.name == 'backend'
+        env:
+          BACKEND_IMAGE: nexpoly-ci-backend:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          EXPECTED_REVISION: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          EXPECTED_TREE: ${{ steps.backend-identity.outputs.source_tree }}
+          EXPECTED_DEPENDENCY_LOCK: ${{ steps.backend-identity.outputs.dependency_lock_sha256 }}
+          EXPECTED_BUILD_CONFIG: ${{ steps.backend-identity.outputs.build_config_sha256 }}
+        run: |
+          scripts/ci/assert_backend_image_identity.sh \
+            "$BACKEND_IMAGE" \
+            "$EXPECTED_REVISION" \
+            "$EXPECTED_TREE" \
+            "$EXPECTED_DEPENDENCY_LOCK" \
+            "$EXPECTED_BUILD_CONFIG"
 
   bridge-validation:
     name: bridge-validation
@@ -583,11 +634,42 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      - id: backend-identity
+        name: Resolve Backend image identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.resolve-sha.outputs.candidate_sha }}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          dependency_lock_sha256="sha256:$(
+            sha256sum \
+              backend/requirements.lock \
+              backend/requirements-system.lock \
+              backend/requirements-legacy.lock \
+              backend/requirements-ci.lock |
+              sha256sum | awk '{print $1}'
+          )"
+          build_config_sha256="sha256:$(
+            sha256sum \
+              Dockerfile \
+              docker-compose.yml \
+              docker-compose.dev.yml \
+              docker-compose.gpu-governed.yml \
+              docker-compose.dev-gpu-session.yml |
+              sha256sum | awk '{print $1}'
+          )"
+          {
+            echo "source_tree=${source_tree}"
+            echo "dependency_lock_sha256=${dependency_lock_sha256}"
+            echo "build_config_sha256=${build_config_sha256}"
+          } >>"$GITHUB_OUTPUT"
       - id: backend
         name: Build and push Backend once
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
+          github-token: ${{ github.token }}
           file: Dockerfile
           platforms: linux/amd64
           push: true
@@ -598,16 +680,35 @@ jobs:
             org.opencontainers.image.version=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
           build-args: |
             SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
+            SOURCE_TREE=${{ steps.backend-identity.outputs.source_tree }}
+            DEPENDENCY_LOCK_SHA256=${{ steps.backend-identity.outputs.dependency_lock_sha256 }}
+            BUILD_CONFIG_SHA256=${{ steps.backend-identity.outputs.build_config_sha256 }}
             SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
             VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
           cache-from: type=gha,scope=release-backend-${{ hashFiles('backend/requirements*.lock') }}
           cache-to: type=gha,mode=max,scope=release-backend-${{ hashFiles('backend/requirements*.lock') }}
           provenance: false
+      - name: Verify published Backend image identity
+        env:
+          BACKEND_IMAGE: ghcr.io/lzq390/nexpoly-backend@${{ steps.backend.outputs.digest }}
+          EXPECTED_REVISION: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          EXPECTED_TREE: ${{ steps.backend-identity.outputs.source_tree }}
+          EXPECTED_DEPENDENCY_LOCK: ${{ steps.backend-identity.outputs.dependency_lock_sha256 }}
+          EXPECTED_BUILD_CONFIG: ${{ steps.backend-identity.outputs.build_config_sha256 }}
+        run: |
+          docker pull "$BACKEND_IMAGE"
+          scripts/ci/assert_backend_image_identity.sh \
+            "$BACKEND_IMAGE" \
+            "$EXPECTED_REVISION" \
+            "$EXPECTED_TREE" \
+            "$EXPECTED_DEPENDENCY_LOCK" \
+            "$EXPECTED_BUILD_CONFIG"
       - id: web
         name: Build and push Web once
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
+          github-token: ${{ github.token }}
           file: frontend/Dockerfile
           platforms: linux/amd64
           push: true
@@ -685,3 +786,29 @@ jobs:
           asset_path="$(grep -Eo '(src|href)="/assets/[^"?]+' "$web_html" | head -n1 | cut -d'"' -f2)"
           [[ "$asset_path" == /assets/* ]]
           curl --fail --silent --show-error "http://127.0.0.1:18080${asset_path}" >/dev/null
+      - name: Seal published SHA tags to reviewed digests
+        env:
+          RELEASE_COMMIT: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          EXPECTED_BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+          EXPECTED_WEB_DIGEST: ${{ steps.web.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_BACKEND_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          resolve_remote_digest() {
+            local reference="$1"
+            local hash
+            hash="$(
+              docker buildx imagetools inspect --raw "$reference" |
+                sha256sum | awk '{print $1}'
+            )"
+            [[ "$hash" =~ ^[0-9a-f]{64}$ ]]
+            printf 'sha256:%s\n' "$hash"
+          }
+          backend_tag="ghcr.io/lzq390/nexpoly-backend:sha-${RELEASE_COMMIT}"
+          web_tag="ghcr.io/lzq390/nexpoly-web:sha-${RELEASE_COMMIT}"
+          test "$(resolve_remote_digest "$backend_tag")" = \
+            "$EXPECTED_BACKEND_DIGEST"
+          test "$(resolve_remote_digest "$web_tag")" = \
+            "$EXPECTED_WEB_DIGEST"

@@ -28,6 +28,7 @@ from gpu_resource.transient_scope import (
     user_manager_control_group,
     validate_lease_id,
 )
+from gpu_resource.client import MAX_RESPONSE_BYTES
 
 from .broker import (
     BASE_DEVICE_POLICY,
@@ -37,6 +38,7 @@ from .broker import (
     EXPECTED_GPU_UUIDS,
     GPU_TOTAL_BUDGET_MIB,
     BrokerError,
+    BrokerPersistenceFatal,
     HostGpuBroker,
     Lease,
     OwnerIdentity,
@@ -147,6 +149,10 @@ class SystemdGpuClaim:
     control_group: str
     process_pids: frozenset[int]
     gpu_uuids: frozenset[str]
+    # Preserve the complete, twice-validated cgroup membership identity so a
+    # later controller seal can distinguish exact descendant churn from an
+    # unrelated unit, PID reuse, or a process moving between cgroups.
+    process_identities: tuple[tuple[int, int, str], ...] = ()
     static_gpu_uuids: frozenset[str] = frozenset()
     active_gpu_uuids: frozenset[str] = frozenset()
     live_gpu_declarers: tuple[SystemdGpuDeclarer, ...] = ()
@@ -2129,6 +2135,12 @@ def query_systemd_gpu_claims(
                         control_group=control_group,
                         process_pids=process_pids,
                         gpu_uuids=frozenset(gpu_uuids),
+                        process_identities=tuple(
+                            (pid, start_ticks, process_cgroup)
+                            for pid, (start_ticks, process_cgroup) in sorted(
+                                process_identities.items()
+                            )
+                        ),
                         static_gpu_uuids=static_gpu_uuids,
                         active_gpu_uuids=frozenset(active_uuids),
                         live_gpu_declarers=live_gpu_declarers,
@@ -5943,6 +5955,7 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
     server: "GpuBrokerUnixServer"
 
     def handle(self) -> None:
+        fatal_persistence_error: BrokerPersistenceFatal | None = None
         try:
             raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
             if not raw or len(raw) > MAX_REQUEST_BYTES or not raw.endswith(b"\n"):
@@ -5956,6 +5969,19 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
             owner = self._peer_owner()
             result = self.server.dispatch(request, owner=owner)
             response = {"ok": True, "result": result}
+        except BrokerPersistenceFatal as exc:
+            logger.critical(
+                "fatal GPU Broker persistence failure; stopping service",
+                exc_info=True,
+            )
+            fatal_persistence_error = exc
+            response = {
+                "ok": False,
+                "error": {
+                    "code": "internal_error",
+                    "message": "GPU broker internal error",
+                },
+            }
         except BrokerError as exc:
             response = {"ok": False, "error": {"code": exc.code, "message": str(exc)}}
         except Exception:
@@ -5964,10 +5990,26 @@ class BrokerRequestHandler(socketserver.StreamRequestHandler):
                 "ok": False,
                 "error": {"code": "internal_error", "message": "GPU broker internal error"},
             }
-        self.wfile.write(
+        encoded = (
             json.dumps(response, sort_keys=True, separators=(",", ":")).encode("utf-8")
             + b"\n"
         )
+        if len(encoded) > MAX_RESPONSE_BYTES:
+            logger.critical(
+                "GPU Broker response exceeded the client wire limit: %d bytes",
+                len(encoded),
+            )
+            encoded = (
+                b'{"error":{"code":"internal_error","message":'
+                b'"GPU broker internal error"},"ok":false}\n'
+            )
+        try:
+            self.wfile.write(encoded)
+        finally:
+            if fatal_persistence_error is not None:
+                self.server.stop_after_persistence_failure(
+                    fatal_persistence_error
+                )
 
     def _peer_owner(self) -> OwnerIdentity:
         if not hasattr(socket, "SO_PEERCRED"):
@@ -5988,6 +6030,8 @@ class GpuBrokerUnixServer(socketserver.ThreadingUnixStreamServer):
     def __init__(self, socket_path: Path, broker: HostGpuBroker) -> None:
         self.socket_path = socket_path
         self.broker = broker
+        self._fatal_error_lock = threading.Lock()
+        self._fatal_persistence_error: BrokerPersistenceFatal | None = None
         socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(socket_path.parent, 0o700)
         if socket_path.exists():
@@ -6010,6 +6054,21 @@ class GpuBrokerUnixServer(socketserver.ThreadingUnixStreamServer):
         finally:
             os.umask(previous_umask)
         os.chmod(socket_path, 0o600)
+
+    @property
+    def fatal_persistence_error(self) -> BrokerPersistenceFatal | None:
+        with self._fatal_error_lock:
+            return self._fatal_persistence_error
+
+    def stop_after_persistence_failure(
+        self, error: BrokerPersistenceFatal
+    ) -> None:
+        with self._fatal_error_lock:
+            if self._fatal_persistence_error is None:
+                self._fatal_persistence_error = error
+        # Request handlers run on ThreadingMixIn workers.  BaseServer.shutdown
+        # must be called from a thread other than serve_forever's thread.
+        self.shutdown()
 
     def server_close(self) -> None:
         try:
@@ -6226,6 +6285,11 @@ def main() -> int:
         server.serve_forever(poll_interval=0.5)
     finally:
         server.server_close()
+    if server.fatal_persistence_error is not None:
+        logger.critical(
+            "GPU Broker stopped after an indeterminate persistence commit"
+        )
+        return 1
     return 0
 
 

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -46,6 +47,8 @@ FULL_AUDIT_ATTEMPTS = 3
 PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS = 8
 EXACT_MD_LIFECYCLE_AUDIT_ATTEMPTS = 8
 EXACT_MD_LIFECYCLE_TIMEOUT_SECONDS = 30.0
+EXACT_DFT_EXECUTION_LIFECYCLE_AUDIT_ATTEMPTS = 8
+EXACT_DFT_EXECUTION_LIFECYCLE_TIMEOUT_SECONDS = 30.0
 DEFAULT_DFT_START_TIMEOUT_SECONDS = 60.0
 LATE_SESSION_OWNED_STOP_GRACE_SECONDS = 5.0
 _PREACTIVATION_DOCKER_CHURN_MESSAGES = frozenset(
@@ -74,6 +77,23 @@ class _AuditRoundChanged(DevGpuSessionError):
 
 class _ExactDftTrailingChurn(_AuditRoundChanged):
     """A separately proven DFT-warmup transition may use the 90s budget."""
+
+
+class _ExactDftExecutionLifecycleChurn(_AuditRoundChanged):
+    """One exact child execution changed beneath a stable DFT residency."""
+
+    def __init__(
+        self,
+        root_key: tuple[str, int],
+        message: str,
+        *,
+        status: dict[str, Any] | None = None,
+        snapshot: Any | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.root_key = root_key
+        self.status = status
+        self.snapshot = snapshot
 
 
 class _ExactMdLifecycleChurn(_AuditRoundChanged):
@@ -467,6 +487,7 @@ def _claim_fingerprint(claim: Any) -> tuple[Any, ...]:
         claim.control_group,
         tuple(sorted(claim.process_pids)),
         tuple(sorted(claim.gpu_uuids)),
+        tuple(sorted(claim.process_identities)),
         tuple(sorted(claim.static_gpu_uuids)),
         tuple(sorted(claim.active_gpu_uuids)),
         tuple(
@@ -575,6 +596,7 @@ def broker_authority_token(status: dict[str, Any]) -> tuple[Any, ...]:
     """Identity relevant to matching a host snapshot to Broker ownership."""
 
     next_fencing_token = status.get("next_fencing_token")
+    lease_authority_sequence = status.get("lease_authority_sequence")
     if (
         isinstance(next_fencing_token, bool)
         or not isinstance(next_fencing_token, int)
@@ -582,6 +604,14 @@ def broker_authority_token(status: dict[str, Any]) -> tuple[Any, ...]:
     ):
         raise DevGpuSessionError(
             "Broker returned an invalid fencing authority generation"
+        )
+    if (
+        isinstance(lease_authority_sequence, bool)
+        or not isinstance(lease_authority_sequence, int)
+        or lease_authority_sequence < 0
+    ):
+        raise DevGpuSessionError(
+            "Broker returned an invalid lease authority sequence"
         )
     leases = status.get("leases")
     if not isinstance(leases, list):
@@ -618,6 +648,7 @@ def broker_authority_token(status: dict[str, Any]) -> tuple[Any, ...]:
     return (
         status.get("broker_instance_id"),
         next_fencing_token,
+        lease_authority_sequence,
         status.get("draining"),
         tuple(sorted(normalized, key=repr)),
     )
@@ -661,6 +692,678 @@ def _exact_dft_residency_leases(status: dict[str, Any]) -> tuple[Any, ...]:
         ) is not None:
             result.append(lease)
     return tuple(result)
+
+
+def _broker_lease_has_canonical_identity(
+    lease: Any,
+    *,
+    broker_instance_id: str,
+    next_fencing_token: int,
+) -> bool:
+    """Reject synthetic or internally inconsistent lease authority records."""
+
+    scalar_ids = (
+        lease.owner_pid,
+        lease.owner_process_start_ticks,
+        lease.fencing_token,
+    )
+    times = (lease.created_at, lease.heartbeat_at)
+    return (
+        isinstance(broker_instance_id, str)
+        and bool(broker_instance_id)
+        and lease.broker_instance_id == broker_instance_id
+        and isinstance(lease.lease_id, str)
+        and re.fullmatch(r"[0-9a-f]{32}", lease.lease_id) is not None
+        and isinstance(lease.request_id, str)
+        and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", lease.request_id) is not None
+        and isinstance(lease.client_id, str)
+        and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", lease.client_id) is not None
+        and isinstance(lease.owner_boot_id, str)
+        and bool(lease.owner_boot_id)
+        and all(
+            isinstance(value, int) and not isinstance(value, bool) and value > 0
+            for value in scalar_ids
+        )
+        and isinstance(next_fencing_token, int)
+        and not isinstance(next_fencing_token, bool)
+        and lease.fencing_token < next_fencing_token
+        and all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and float(value) >= 0.0
+            for value in times
+        )
+        and float(lease.heartbeat_at) >= float(lease.created_at)
+        and lease.mps_termination_status == "none"
+        and lease.mps_terminated_client_pids == []
+        and lease.mps_termination_at is None
+    )
+
+
+def _exact_parented_dft_execution_phase(
+    lease: Any,
+    root: Any,
+    *,
+    broker_instance_id: str,
+    next_fencing_token: int,
+) -> str | None:
+    """Return ``reserved`` or ``active`` for one exact logical DFT child."""
+
+    from ops.gpu_broker.server import (
+        _parented_dft_execution_is_exact_inheritance,
+    )
+
+    if (
+        not _broker_lease_has_canonical_identity(
+            lease,
+            broker_instance_id=broker_instance_id,
+            next_fencing_token=next_fencing_token,
+        )
+        or lease.kind != "execution"
+        or lease.placement != "preferred"
+        or lease.preferred is not True
+        or lease.component != "dft"
+        or lease.environment != "dev"
+        or lease.client_id != root.client_id
+        or lease.gpu_index != GPU_INDEX
+        or lease.gpu_uuid != GPU_UUID
+        or lease.memory_mib != 4096
+        or lease.thread_percent != 50
+        or lease.owner_pid != root.owner_pid
+        or lease.owner_process_start_ticks
+        != root.owner_process_start_ticks
+        or lease.owner_boot_id != root.owner_boot_id
+        or lease.parent_lease_id != root.lease_id
+        or lease.fencing_token <= root.fencing_token
+    ):
+        return None
+    if _parented_dft_execution_is_exact_inheritance(
+        lease,
+        (root,),
+        index=GPU_INDEX,
+        uuid=GPU_UUID,
+    ):
+        return "active"
+    if (
+        lease.status == "reserved"
+        and (
+            lease.workload_pid,
+            lease.workload_process_start_ticks,
+            lease.workload_process_group_id,
+            lease.workload_cgroup,
+        )
+        == (None, None, None, None)
+    ):
+        return "reserved"
+    return None
+
+
+def _exact_dft_status_partition(
+    status: dict[str, Any],
+) -> tuple[Any, Any | None, tuple[Any, ...]] | None:
+    """Decode one exact DFT root, at most one logical child, and all others."""
+
+    from ops.gpu_broker.server import exact_dft_residency_scope_authority
+
+    broker_instance_id = status.get("broker_instance_id")
+    next_fencing_token = status.get("next_fencing_token")
+    if (
+        not isinstance(broker_instance_id, str)
+        or not broker_instance_id
+        or isinstance(next_fencing_token, bool)
+        or not isinstance(next_fencing_token, int)
+        or next_fencing_token <= 1
+        or status.get("draining") is not False
+        or status.get("quarantined_gpus") != {}
+    ):
+        return None
+    try:
+        leases = _canonical_broker_leases(status)
+    except DevGpuSessionError:
+        return None
+    if any(
+        not _broker_lease_has_canonical_identity(
+            lease,
+            broker_instance_id=broker_instance_id,
+            next_fencing_token=next_fencing_token,
+        )
+        for lease in leases
+    ):
+        return None
+    if any(
+        len({getattr(item, field) for item in leases}) != len(leases)
+        for field in ("lease_id", "fencing_token")
+    ):
+        return None
+    roots = tuple(
+        lease
+        for lease in leases
+        if lease.kind == "residency"
+        and lease.component == "dft"
+        and lease.memory_mib == 4096
+        and lease.thread_percent == 50
+        and exact_dft_residency_scope_authority(
+            lease,
+            index=GPU_INDEX,
+            uuid=GPU_UUID,
+        )
+        is not None
+    )
+    if len(roots) != 1:
+        return None
+    root = roots[0]
+    if not _broker_lease_has_canonical_identity(
+        root,
+        broker_instance_id=broker_instance_id,
+        next_fencing_token=next_fencing_token,
+    ):
+        return None
+    child = None
+    others: list[Any] = []
+    for lease in leases:
+        if lease.lease_id == root.lease_id:
+            continue
+        if lease.component == "dft" or lease.parent_lease_id is not None:
+            if (
+                child is not None
+                or _exact_parented_dft_execution_phase(
+                    lease,
+                    root,
+                    broker_instance_id=broker_instance_id,
+                    next_fencing_token=next_fencing_token,
+                )
+                is None
+            ):
+                return None
+            child = lease
+            continue
+        others.append(lease)
+    return root, child, tuple(others)
+
+
+def _broker_live_authority(leases: tuple[Any, ...]) -> tuple[str, ...]:
+    """Canonicalize lease authority while excluding heartbeat-only refreshes."""
+
+    normalized: list[str] = []
+    for lease in leases:
+        record = lease.public_dict()
+        record.pop("heartbeat_at")
+        normalized.append(json.dumps(record, sort_keys=True, separators=(",", ":")))
+    return tuple(sorted(normalized))
+
+
+def _canonical_parented_dft_execution_journal(
+    status: dict[str, Any],
+) -> tuple[int, int, tuple[tuple[dict[str, Any], Any], ...]] | None:
+    """Decode one complete retained Broker lifecycle suffix.
+
+    The sequence is process-local and therefore useful only while the enclosing
+    Broker instance remains unchanged.  Every retained record is decoded even
+    when it predates the caller's boundary so overlap rewrites and malformed
+    history cannot be hidden behind a valid-looking new suffix.
+    """
+
+    from ops.gpu_broker.broker import (
+        Lease,
+        PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT,
+    )
+
+    broker_instance_id = status.get("broker_instance_id")
+    next_fencing_token = status.get("next_fencing_token")
+    lease_authority_sequence = status.get("lease_authority_sequence")
+    sequence = status.get("parented_dft_execution_lifecycle_sequence")
+    first_sequence = status.get(
+        "parented_dft_execution_lifecycle_first_sequence"
+    )
+    raw_events = status.get("parented_dft_execution_lifecycle_events")
+    if (
+        status.get("schema_version") != 1
+        or not isinstance(broker_instance_id, str)
+        or not broker_instance_id
+        or isinstance(next_fencing_token, bool)
+        or not isinstance(next_fencing_token, int)
+        or next_fencing_token < 1
+        or isinstance(lease_authority_sequence, bool)
+        or not isinstance(lease_authority_sequence, int)
+        or lease_authority_sequence < 0
+        or isinstance(sequence, bool)
+        or not isinstance(sequence, int)
+        or sequence < 0
+        or isinstance(first_sequence, bool)
+        or not isinstance(first_sequence, int)
+        or first_sequence < 1
+        or not isinstance(raw_events, list)
+        or len(raw_events) > PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT
+    ):
+        return None
+    expected_event_count = min(
+        sequence,
+        PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT,
+    )
+    expected_first_sequence = max(
+        1,
+        sequence - PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT + 1,
+    )
+    if (
+        len(raw_events) != expected_event_count
+        or first_sequence != expected_first_sequence
+    ):
+        return None
+    if not raw_events:
+        return sequence, first_sequence, ()
+
+    event_fields = {
+        "sequence",
+        "action",
+        "root_lease_id",
+        "root_fencing_token",
+        "next_fencing_token_after",
+        "lease_authority_sequence_after",
+        "child",
+    }
+    decoded: list[tuple[dict[str, Any], Lease]] = []
+    previous_event_authority_sequence = 0
+    for expected_sequence, raw_event in zip(
+        range(first_sequence, sequence + 1),
+        raw_events,
+        strict=True,
+    ):
+        if (
+            not isinstance(raw_event, dict)
+            or set(raw_event) != event_fields
+            or raw_event.get("sequence") != expected_sequence
+            or isinstance(raw_event.get("sequence"), bool)
+            or not isinstance(raw_event.get("action"), str)
+            or raw_event.get("action") not in {"issue", "activate", "release"}
+            or not isinstance(raw_event.get("root_lease_id"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", raw_event["root_lease_id"]) is None
+            or isinstance(raw_event.get("root_fencing_token"), bool)
+            or not isinstance(raw_event.get("root_fencing_token"), int)
+            or raw_event["root_fencing_token"] <= 0
+            or raw_event["root_fencing_token"] >= next_fencing_token
+            or isinstance(raw_event.get("next_fencing_token_after"), bool)
+            or not isinstance(raw_event.get("next_fencing_token_after"), int)
+            or not 1
+            <= raw_event["next_fencing_token_after"]
+            <= next_fencing_token
+            or isinstance(
+                raw_event.get("lease_authority_sequence_after"),
+                bool,
+            )
+            or not isinstance(
+                raw_event.get("lease_authority_sequence_after"),
+                int,
+            )
+            or raw_event["lease_authority_sequence_after"] <= 0
+            or raw_event["lease_authority_sequence_after"]
+            > lease_authority_sequence
+            or raw_event["lease_authority_sequence_after"]
+            <= previous_event_authority_sequence
+            or not isinstance(raw_event.get("child"), dict)
+        ):
+            return None
+        try:
+            child = Lease(**raw_event["child"])
+        except (TypeError, ValueError):
+            return None
+        if (
+            child.public_dict() != raw_event["child"]
+            or not _broker_lease_has_canonical_identity(
+                child,
+                broker_instance_id=broker_instance_id,
+                next_fencing_token=next_fencing_token,
+            )
+            or child.kind != "execution"
+            or child.placement != "preferred"
+            or child.preferred is not True
+            or child.component != "dft"
+            or child.environment != "dev"
+            or child.gpu_index != GPU_INDEX
+            or child.gpu_uuid != GPU_UUID
+            or child.memory_mib != 4096
+            or child.thread_percent != 50
+            or child.parent_lease_id != raw_event["root_lease_id"]
+            or child.fencing_token <= raw_event["root_fencing_token"]
+            or (
+                raw_event["action"] == "issue"
+                and (
+                    child.status != "reserved"
+                    or (
+                        child.workload_pid,
+                        child.workload_process_start_ticks,
+                        child.workload_process_group_id,
+                        child.workload_cgroup,
+                    )
+                    != (None, None, None, None)
+                )
+            )
+            or (
+                raw_event["action"] in {"activate", "release"}
+                and (
+                    child.status != "active"
+                    or any(
+                        value is None
+                        for value in (
+                            child.workload_pid,
+                            child.workload_process_start_ticks,
+                            child.workload_process_group_id,
+                            child.workload_cgroup,
+                        )
+                    )
+                )
+            )
+        ):
+            return None
+        decoded.append((raw_event, child))
+        previous_event_authority_sequence = raw_event[
+            "lease_authority_sequence_after"
+        ]
+    return sequence, first_sequence, tuple(decoded)
+
+
+def _canonical_broker_release_tombstone(
+    status: dict[str, Any],
+    leases: tuple[Any, ...],
+) -> tuple[bool, Any | None]:
+    """Decode the single explicit-release tombstone without narrowing its kind."""
+
+    from ops.gpu_broker.broker import Lease
+
+    if "last_released_lease" not in status:
+        return False, None
+    record = status["last_released_lease"]
+    if record is None:
+        return True, None
+    if not isinstance(record, dict):
+        return False, None
+    try:
+        lease = Lease(**record)
+    except (TypeError, ValueError):
+        return False, None
+    broker_instance_id = status.get("broker_instance_id")
+    next_fencing_token = status.get("next_fencing_token")
+    if (
+        lease.public_dict() != record
+        or lease.broker_instance_id != broker_instance_id
+        or not isinstance(lease.lease_id, str)
+        or re.fullmatch(r"[0-9a-f]{32}", lease.lease_id) is None
+        or isinstance(lease.fencing_token, bool)
+        or not isinstance(lease.fencing_token, int)
+        or lease.fencing_token <= 0
+        or isinstance(next_fencing_token, bool)
+        or not isinstance(next_fencing_token, int)
+        or lease.fencing_token >= next_fencing_token
+        or any(
+            live.lease_id == lease.lease_id
+            or live.fencing_token == lease.fencing_token
+            for live in leases
+        )
+    ):
+        return False, None
+    return True, lease
+
+
+def _dft_child_activation_matches(reserved: Any, active: Any) -> bool:
+    """Require activation to change only phase, heartbeat, and inherited work."""
+
+    reserved_record = reserved.public_dict()
+    active_record = active.public_dict()
+    reserved_record.pop("heartbeat_at")
+    active_record.pop("heartbeat_at")
+    active_record.update(
+        status="reserved",
+        workload_pid=None,
+        workload_process_start_ticks=None,
+        workload_process_group_id=None,
+        workload_cgroup=None,
+    )
+    return reserved_record == active_record
+
+
+def _exact_dft_execution_broker_lifecycle_transition_key(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> tuple[str, int] | None:
+    """Replay every retained child transition beneath one unchanged DFT root."""
+
+    before_instance = before.get("broker_instance_id")
+    before_generation = before.get("next_fencing_token")
+    after_generation = after.get("next_fencing_token")
+    before_authority_sequence = before.get("lease_authority_sequence")
+    after_authority_sequence = after.get("lease_authority_sequence")
+    if (
+        not isinstance(before_instance, str)
+        or not before_instance
+        or after.get("broker_instance_id") != before_instance
+        or not isinstance(before.get("boot_id"), str)
+        or not before["boot_id"]
+        or after.get("boot_id") != before["boot_id"]
+        or before.get("draining") is not False
+        or after.get("draining") is not False
+        or before.get("quarantined_gpus") != {}
+        or after.get("quarantined_gpus") != {}
+        or isinstance(before_generation, bool)
+        or not isinstance(before_generation, int)
+        or before_generation <= 0
+        or isinstance(after_generation, bool)
+        or not isinstance(after_generation, int)
+        or after_generation < before_generation
+        or isinstance(before_authority_sequence, bool)
+        or not isinstance(before_authority_sequence, int)
+        or before_authority_sequence < 0
+        or isinstance(after_authority_sequence, bool)
+        or not isinstance(after_authority_sequence, int)
+        or after_authority_sequence < before_authority_sequence
+    ):
+        return None
+
+    before_journal = _canonical_parented_dft_execution_journal(before)
+    after_journal = _canonical_parented_dft_execution_journal(after)
+    if before_journal is None or after_journal is None:
+        return None
+    before_sequence, _before_first, before_events = before_journal
+    after_sequence, after_first, after_events = after_journal
+    if after_sequence <= before_sequence:
+        return None
+    if after_first > before_sequence + 1:
+        return None
+
+    before_event_map = {
+        event["sequence"]: event for event, _child in before_events
+    }
+    after_decoded_event_map = {
+        event["sequence"]: (event, child) for event, child in after_events
+    }
+    if any(
+        before_event_map[sequence] != after_decoded_event_map[sequence][0]
+        for sequence in before_event_map.keys()
+        & after_decoded_event_map.keys()
+    ):
+        return None
+    expected_new_sequences = tuple(range(before_sequence + 1, after_sequence + 1))
+    if any(
+        sequence not in after_decoded_event_map
+        for sequence in expected_new_sequences
+    ):
+        return None
+    new_events = tuple(
+        after_decoded_event_map[sequence]
+        for sequence in expected_new_sequences
+    )
+    if after_authority_sequence - before_authority_sequence != len(new_events):
+        return None
+
+    before_partition = _exact_dft_status_partition(before)
+    after_partition = _exact_dft_status_partition(after)
+    if before_partition is None or after_partition is None:
+        return None
+    before_root, before_child, before_others = before_partition
+    after_root, after_child, after_others = after_partition
+    if (
+        _broker_live_authority((before_root,))
+        != _broker_live_authority((after_root,))
+        or before_root.broker_instance_id != before_instance
+        or _broker_live_authority(before_others)
+        != _broker_live_authority(after_others)
+    ):
+        return None
+    root_key = before_root.lease_id, before_root.fencing_token
+
+    before_tombstone_ok, before_tombstone = (
+        _canonical_broker_release_tombstone(
+            before,
+            (before_root, *((before_child,) if before_child is not None else ()), *before_others),
+        )
+    )
+    after_tombstone_ok, after_tombstone = (
+        _canonical_broker_release_tombstone(
+            after,
+            (after_root, *((after_child,) if after_child is not None else ()), *after_others),
+        )
+    )
+    if not before_tombstone_ok or not after_tombstone_ok:
+        return None
+
+    current_generation = before_generation
+    current_authority_sequence = before_authority_sequence
+    current_child = before_child
+    current_phase = (
+        None
+        if current_child is None
+        else _exact_parented_dft_execution_phase(
+            current_child,
+            before_root,
+            broker_instance_id=before_instance,
+            next_fencing_token=after_generation,
+        )
+    )
+    if current_child is not None and current_phase is None:
+        return None
+    observed_child_ids = {
+        event_child.lease_id for _event, event_child in before_events
+    }
+    observed_child_tokens = {
+        event_child.fencing_token for _event, event_child in before_events
+    }
+    if current_child is not None:
+        observed_child_ids.add(current_child.lease_id)
+        observed_child_tokens.add(current_child.fencing_token)
+    latest_release = None
+    release_seen = False
+    for event, event_child in new_events:
+        if (
+            (event["root_lease_id"], event["root_fencing_token"]) != root_key
+            or event["lease_authority_sequence_after"]
+            != current_authority_sequence + 1
+            or event_child.client_id != before_root.client_id
+            or event_child.owner_pid != before_root.owner_pid
+            or event_child.owner_process_start_ticks
+            != before_root.owner_process_start_ticks
+            or event_child.owner_boot_id != before_root.owner_boot_id
+        ):
+            return None
+        current_authority_sequence += 1
+        event_phase = _exact_parented_dft_execution_phase(
+            event_child,
+            before_root,
+            broker_instance_id=before_instance,
+            next_fencing_token=after_generation,
+        )
+        action = event["action"]
+        if action == "issue":
+            if (
+                current_child is not None
+                or event_phase != "reserved"
+                or event_child.fencing_token != current_generation
+                or event["next_fencing_token_after"] != current_generation + 1
+                or event_child.lease_id in observed_child_ids
+                or event_child.fencing_token in observed_child_tokens
+            ):
+                return None
+            current_generation += 1
+            current_child = event_child
+            current_phase = "reserved"
+            observed_child_ids.add(event_child.lease_id)
+            observed_child_tokens.add(event_child.fencing_token)
+        elif action == "activate":
+            if (
+                current_child is None
+                or current_phase != "reserved"
+                or event_phase != "active"
+                or (
+                    event_child.lease_id,
+                    event_child.fencing_token,
+                )
+                != (current_child.lease_id, current_child.fencing_token)
+                or not _dft_child_activation_matches(
+                    current_child,
+                    event_child,
+                )
+                or event["next_fencing_token_after"] != current_generation
+            ):
+                return None
+            current_child = event_child
+            current_phase = "active"
+        else:
+            if (
+                current_child is None
+                or current_phase != "active"
+                or event_phase != "active"
+                or (
+                    event_child.lease_id,
+                    event_child.fencing_token,
+                )
+                != (current_child.lease_id, current_child.fencing_token)
+                or _broker_live_authority((event_child,))
+                != _broker_live_authority((current_child,))
+                or event["next_fencing_token_after"] != current_generation
+            ):
+                return None
+            latest_release = event_child
+            release_seen = True
+            current_child = None
+            current_phase = None
+
+    if (
+        current_generation != after_generation
+        or current_authority_sequence != after_authority_sequence
+    ):
+        return None
+    after_phase = (
+        None
+        if after_child is None
+        else _exact_parented_dft_execution_phase(
+            after_child,
+            after_root,
+            broker_instance_id=before_instance,
+            next_fencing_token=after_generation,
+        )
+    )
+    if (
+        current_phase != after_phase
+        or (current_child is None) != (after_child is None)
+        or (
+            current_child is not None
+            and (
+                _broker_live_authority((current_child,))
+                != _broker_live_authority((after_child,))
+            )
+        )
+    ):
+        return None
+    if release_seen:
+        if (
+            latest_release is None
+            or after_tombstone is None
+            or after_tombstone.public_dict() != latest_release.public_dict()
+        ):
+            return None
+    elif (
+        None if before_tombstone is None else before_tombstone.public_dict()
+    ) != (None if after_tombstone is None else after_tombstone.public_dict()):
+        return None
+    return root_key
 
 
 def _exact_backend_docker_workload_pids(
@@ -786,11 +1489,13 @@ def _structured_membership_delta_within(
     )
 
 
-def _is_exact_dft_membership_churn(
+def _exact_dft_membership_churn_root_key(
     error: Exception,
     status: dict[str, Any],
-) -> bool:
-    """Limit transient retries to the exact active DFT residency ancestry."""
+    *,
+    allow_residency_only: bool = False,
+) -> tuple[str, int] | None:
+    """Limit warmup-only retries to the exact active DFT residency scope."""
 
     from gpu_resource.transient_scope import (
         scope_unit_name,
@@ -798,43 +1503,281 @@ def _is_exact_dft_membership_churn(
     )
     from ops.gpu_broker.server import (
         SystemdMembershipChanged,
+        SystemdProcessDisappeared,
         exact_dft_residency_scope_authority,
     )
 
     if (
-        not isinstance(error, SystemdMembershipChanged)
+        not isinstance(error, (SystemdMembershipChanged, SystemdProcessDisappeared))
         or status.get("draining") is not False
+        or not allow_residency_only
     ):
-        return False
-    leases = _exact_dft_residency_leases(status)
-    if len(leases) != 1:
-        return False
-    lease = leases[0]
+        return None
+    partition = _exact_dft_status_partition(status)
+    if partition is None:
+        return None
+    lease, _child, _others = partition
     authority = exact_dft_residency_scope_authority(
         lease,
         index=GPU_INDEX,
         uuid=GPU_UUID,
     )
     if authority is None:
-        return False
-    workload_cgroup = authority[2]
+        return None
+    if (
+        not isinstance(lease.lease_id, str)
+        or not lease.lease_id
+        or isinstance(lease.fencing_token, bool)
+        or not isinstance(lease.fencing_token, int)
+        or lease.fencing_token <= 0
+    ):
+        return None
+    root_key = lease.lease_id, lease.fencing_token
+    workload_pid, _workload_start_ticks, workload_cgroup = authority
+    if isinstance(error, SystemdProcessDisappeared):
+        # The root itself is authority, not churn.  Only a previously captured
+        # non-root member of the exact resident scope may disappear and cause
+        # the whole round to be re-sampled.
+        if (
+            error.code == "gpu_claim_inventory_changed"
+            and isinstance(error.pid, int)
+            and not isinstance(error.pid, bool)
+            and error.pid > 0
+            and error.pid != workload_pid
+            and isinstance(error.expected_start_ticks, int)
+            and not isinstance(error.expected_start_ticks, bool)
+            and error.expected_start_ticks > 0
+            and error.expected_control_group == workload_cgroup
+        ):
+            return root_key
+        return None
     if error.scope == "system":
-        return _structured_membership_delta_within(
+        exact = _structured_membership_delta_within(
             error,
             scope="system",
             unit="user@1001.service",
             unit_cgroup=user_manager_control_group(1001),
             workload_cgroup=workload_cgroup,
         )
-    if error.scope == "user":
-        return _structured_membership_delta_within(
+    elif error.scope == "user":
+        exact = _structured_membership_delta_within(
             error,
             scope="user",
             unit=scope_unit_name(lease.lease_id),
             unit_cgroup=workload_cgroup,
             workload_cgroup=workload_cgroup,
         )
-    return False
+    else:
+        exact = False
+    return root_key if exact else None
+
+
+def _is_exact_dft_membership_churn(
+    error: Exception,
+    status: dict[str, Any],
+    *,
+    allow_residency_only: bool = False,
+) -> bool:
+    return (
+        _exact_dft_membership_churn_root_key(
+            error,
+            status,
+            allow_residency_only=allow_residency_only,
+        )
+        is not None
+    )
+
+
+def _systemd_claim_identity_map(
+    claim: Any,
+) -> dict[int, tuple[int, str]] | None:
+    identities = getattr(claim, "process_identities", None)
+    if not isinstance(identities, tuple):
+        return None
+    result: dict[int, tuple[int, str]] = {}
+    for record in identities:
+        if (
+            not isinstance(record, tuple)
+            or len(record) != 3
+            or isinstance(record[0], bool)
+            or not isinstance(record[0], int)
+            or record[0] <= 0
+            or isinstance(record[1], bool)
+            or not isinstance(record[1], int)
+            or record[1] <= 0
+            or _canonical_systemd_control_group(record[2]) is None
+            or record[0] in result
+        ):
+            return None
+        result[record[0]] = (record[1], record[2])
+    if frozenset(result) != claim.process_pids:
+        return None
+    return result
+
+
+def _exact_dft_systemd_claim_churn_root_key(
+    before_claims: tuple[Any, ...],
+    after_claims: tuple[Any, ...],
+    status: dict[str, Any],
+    *,
+    allow_residency_only: bool = False,
+) -> tuple[str, int] | None:
+    """Prove that two successful systemd seals differ only below one DFT root."""
+
+    from gpu_resource.transient_scope import (
+        scope_unit_name,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.server import (
+        _systemd_cgroup_contains,
+        exact_dft_residency_scope_authority,
+    )
+
+    partition = _exact_dft_status_partition(status)
+    if partition is None:
+        return None
+    root, child, _others = partition
+    child_phase = (
+        None
+        if child is None
+        else _exact_parented_dft_execution_phase(
+            child,
+            root,
+            broker_instance_id=str(status["broker_instance_id"]),
+            next_fencing_token=int(status["next_fencing_token"]),
+        )
+    )
+    if child_phase != "active" and not allow_residency_only:
+        return None
+    authority = exact_dft_residency_scope_authority(
+        root,
+        index=GPU_INDEX,
+        uuid=GPU_UUID,
+    )
+    if authority is None:
+        return None
+    _workload_pid, _workload_start_ticks, workload_cgroup = authority
+    root_key = root.lease_id, root.fencing_token
+
+    def keyed(claims: tuple[Any, ...]) -> dict[tuple[str, str], Any] | None:
+        result: dict[tuple[str, str], Any] = {}
+        for claim in claims:
+            key = (getattr(claim, "scope", None), getattr(claim, "unit", None))
+            if (
+                not all(isinstance(value, str) and value for value in key)
+                or key in result
+            ):
+                return None
+            result[key] = claim
+        return result
+
+    before_map = keyed(before_claims)
+    after_map = keyed(after_claims)
+    if (
+        before_map is None
+        or after_map is None
+        or before_map.keys() != after_map.keys()
+    ):
+        return None
+    changed = False
+    for key in sorted(before_map):
+        before = before_map[key]
+        after = after_map[key]
+        if _claim_fingerprint(before) == _claim_fingerprint(after):
+            continue
+        fixed_before = (
+            before.scope,
+            before.unit,
+            before.main_pid,
+            before.control_group,
+            before.gpu_uuids,
+            before.static_gpu_uuids,
+            before.active_gpu_uuids,
+        )
+        fixed_after = (
+            after.scope,
+            after.unit,
+            after.main_pid,
+            after.control_group,
+            after.gpu_uuids,
+            after.static_gpu_uuids,
+            after.active_gpu_uuids,
+        )
+        if fixed_before != fixed_after:
+            return None
+        if before.scope == "system":
+            if (
+                before.unit != "user@1001.service"
+                or before.control_group != user_manager_control_group(1001)
+            ):
+                return None
+        elif before.scope == "user":
+            if (
+                before.unit != scope_unit_name(root.lease_id)
+                or before.control_group != workload_cgroup
+            ):
+                return None
+        else:
+            return None
+        before_identities = _systemd_claim_identity_map(before)
+        after_identities = _systemd_claim_identity_map(after)
+        if before_identities is None or after_identities is None:
+            return None
+        common_pids = before_identities.keys() & after_identities.keys()
+        if any(
+            before_identities[pid] != after_identities[pid]
+            for pid in common_pids
+        ):
+            return None
+        changed_pids = (
+            before_identities.keys() ^ after_identities.keys()
+        )
+        if not changed_pids or any(
+            not _systemd_cgroup_contains(
+                (
+                    before_identities.get(pid)
+                    or after_identities[pid]
+                )[1],
+                workload_cgroup,
+            )
+            for pid in changed_pids
+        ):
+            return None
+
+        def declarers(claim: Any) -> dict[int, Any] | None:
+            result: dict[int, Any] = {}
+            for declarer in claim.live_gpu_declarers:
+                identity = _systemd_claim_identity_map(claim)
+                if (
+                    identity is None
+                    or declarer.pid in result
+                    or identity.get(declarer.pid)
+                    != (
+                        declarer.process_start_ticks,
+                        declarer.process_cgroup,
+                    )
+                    or declarer.gpu_uuids != frozenset({GPU_UUID})
+                ):
+                    return None
+                result[declarer.pid] = declarer
+            return result
+
+        before_declarers = declarers(before)
+        after_declarers = declarers(after)
+        if before_declarers is None or after_declarers is None:
+            return None
+        stable_declarers = before_declarers.keys() & after_declarers.keys()
+        if any(
+            before_declarers[pid] != after_declarers[pid]
+            for pid in stable_declarers
+        ):
+            return None
+        if (
+            before_declarers.keys() ^ after_declarers.keys()
+        ) - changed_pids:
+            return None
+        changed = True
+    return root_key if changed else None
 
 
 def _exact_md_lifecycle_scope_authority(
@@ -1666,6 +2609,7 @@ def consistent_broker_snapshot(
     membership_churn_timeout_seconds: float = STEADY_CHURN_TIMEOUT_SECONDS,
     membership_churn_guard: Callable[[dict[str, Any]], bool] | None = None,
     surface_exact_md_lifecycle_churn: bool = False,
+    surface_exact_dft_execution_lifecycle_churn: bool = False,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> tuple[dict[str, Any], TargetSnapshot]:
     """Bind an expensive host inventory between two stable Broker reads."""
@@ -1676,6 +2620,10 @@ def consistent_broker_snapshot(
         raise ValueError("membership_churn_retries must not be negative")
     if not isinstance(surface_exact_md_lifecycle_churn, bool):
         raise ValueError("surface_exact_md_lifecycle_churn must be boolean")
+    if not isinstance(surface_exact_dft_execution_lifecycle_churn, bool):
+        raise ValueError(
+            "surface_exact_dft_execution_lifecycle_churn must be boolean"
+        )
     if (
         isinstance(membership_churn_timeout_seconds, bool)
         or not isinstance(membership_churn_timeout_seconds, (int, float))
@@ -1713,6 +2661,13 @@ def consistent_broker_snapshot(
                     md_lifecycle_key,
                     "one exact MD lease changed during the host inventory",
                 ) from exc
+            dft_membership_root_key = (
+                _exact_dft_membership_churn_root_key(
+                    exc,
+                    after,
+                    allow_residency_only=membership_churn_guard is not None,
+                )
+            )
             if (
                 before_authority != after_authority
                 and _is_exact_managed_scope_membership_transition(
@@ -1723,7 +2678,8 @@ def consistent_broker_snapshot(
                 continue
             if (
                 before_authority == after_authority
-                and _is_exact_dft_membership_churn(exc, after)
+                and dft_membership_root_key is not None
+                and membership_churn_guard is not None
             ):
                 if (
                     churn_retries >= membership_churn_retries
@@ -1745,8 +2701,25 @@ def consistent_broker_snapshot(
                 continue
             raise
         after = client.status()
-        if before_authority == broker_authority_token(after):
+        after_authority = broker_authority_token(after)
+        if before_authority == after_authority:
             return after, snapshot
+        dft_execution_root_key = (
+            _exact_dft_execution_broker_lifecycle_transition_key(
+                before,
+                after,
+            )
+        )
+        if (
+            dft_execution_root_key is not None
+            and surface_exact_dft_execution_lifecycle_churn
+        ):
+            raise _ExactDftExecutionLifecycleChurn(
+                dft_execution_root_key,
+                "one exact DFT execution changed during the host inventory",
+                status=after,
+                snapshot=snapshot,
+            )
         authority_changes += 1
     raise DevGpuSessionError("Broker authority changed throughout the host audit")
 
@@ -2969,6 +3942,9 @@ class SessionController:
         md_lifecycle_key: tuple[str, int] | None = None
         md_lifecycle_rounds = 0
         md_lifecycle_started_at: float | None = None
+        dft_execution_root_key: tuple[str, int] | None = None
+        dft_execution_lifecycle_rounds = 0
+        dft_execution_lifecycle_started_at: float | None = None
         # Counters and monotonic deadlines below terminate every retry class;
         # this outer cap is only a final invariant against programming errors.
         audit_attempts = 2048
@@ -2982,6 +3958,26 @@ class SessionController:
                 and captured_stabilization
                 > self.last_audit_stabilization_generation
             )
+            surface_exact_dft_execution_lifecycle = (
+                self.dft_stabilized
+                and not self.dft_warmup_open
+                and captured_activation > 0
+            )
+
+            def steady_dft_lifecycle_generation_is_current() -> bool:
+                return (
+                    surface_exact_dft_execution_lifecycle
+                    and self.dft_stabilized
+                    and not self.dft_warmup_open
+                    and captured_activation > 0
+                    and captured_activation == self.activation_generation
+                    and captured_stabilization
+                    == self.dft_stabilization_generation
+                )
+
+            pending_dft_execution_lifecycle_root_key: (
+                tuple[str, int] | None
+            ) = None
             fast_guard = None
             churn_retries = 8
             churn_timeout = STEADY_CHURN_TIMEOUT_SECONDS
@@ -3008,7 +4004,28 @@ class SessionController:
                         membership_churn_timeout_seconds=churn_timeout,
                         membership_churn_guard=fast_guard,
                         surface_exact_md_lifecycle_churn=True,
+                        surface_exact_dft_execution_lifecycle_churn=(
+                            surface_exact_dft_execution_lifecycle
+                        ),
                     )
+                except _ExactDftExecutionLifecycleChurn as exc:
+                    if not steady_dft_lifecycle_generation_is_current():
+                        raise _AuditRoundChanged(
+                            "controller rollout generation changed during "
+                            "exact DFT lifecycle sampling"
+                        ) from exc
+                    if not isinstance(
+                        exc.status,
+                        dict,
+                    ) or not isinstance(exc.snapshot, TargetSnapshot):
+                        # Evidence-free synthetic lifecycle signals are handled
+                        # by the outer bounded retry path.  A real collector
+                        # transition must carry the sampled host evidence so it
+                        # can be classified before that evidence is discarded.
+                        raise
+                    pending_dft_execution_lifecycle_root_key = exc.root_key
+                    status = exc.status
+                    snapshot = exc.snapshot
                 except BrokerError as exc:
                     if retryable_docker_rollout_churn(
                         exc,
@@ -3031,9 +4048,31 @@ class SessionController:
                             "one exact MD lease changed after the initial MPS "
                             "seal",
                         )
-                    raise _AuditRoundChanged(
-                        "Broker authority changed after the initial MPS seal"
+                    observed_dft_execution_root_key = (
+                        _exact_dft_execution_broker_lifecycle_transition_key(
+                            enclosing_status,
+                            status,
+                        )
                     )
+                    if (
+                        observed_dft_execution_root_key is not None
+                        and steady_dft_lifecycle_generation_is_current()
+                    ):
+                        if pending_dft_execution_lifecycle_root_key not in {
+                            None,
+                            observed_dft_execution_root_key,
+                        }:
+                            raise _AuditRoundChanged(
+                                "different DFT roots changed across the initial "
+                                "Broker seals"
+                            )
+                        pending_dft_execution_lifecycle_root_key = (
+                            observed_dft_execution_root_key
+                        )
+                    else:
+                        raise _AuditRoundChanged(
+                            "Broker authority changed after the initial MPS seal"
+                        )
                 if (
                     self.dft_warmup_open
                     and self.dft_churn_started_at is not None
@@ -3308,6 +4347,13 @@ class SessionController:
                             "one exact MD lease changed during the trailing "
                             "systemd audit",
                         ) from exc
+                    exact_dft_membership_root_key = (
+                        _exact_dft_membership_churn_root_key(
+                            exc,
+                            transition_status,
+                            allow_residency_only=self.dft_warmup_open,
+                        )
+                    )
                     if _is_exact_managed_scope_membership_transition(
                         exc,
                         status,
@@ -3320,10 +4366,8 @@ class SessionController:
                     if (
                         broker_authority_token(transition_status)
                         == expected_token
-                        and _is_exact_dft_membership_churn(
-                            exc,
-                            transition_status,
-                        )
+                        and exact_dft_membership_root_key is not None
+                        and self.dft_warmup_open
                     ):
                         self._fast_dft_churn_guard(
                             client,
@@ -3363,9 +4407,31 @@ class SessionController:
                             "one exact MD lease changed during the trailing "
                             "Broker audit",
                         )
-                    raise _AuditRoundChanged(
-                        "Broker authority changed during trailing full audit"
+                    observed_dft_execution_root_key = (
+                        _exact_dft_execution_broker_lifecycle_transition_key(
+                            status,
+                            final_status,
+                        )
                     )
+                    if (
+                        observed_dft_execution_root_key is not None
+                        and steady_dft_lifecycle_generation_is_current()
+                    ):
+                        if pending_dft_execution_lifecycle_root_key not in {
+                            None,
+                            observed_dft_execution_root_key,
+                        }:
+                            raise _AuditRoundChanged(
+                                "different DFT roots changed across the trailing "
+                                "Broker seals"
+                            )
+                        pending_dft_execution_lifecycle_root_key = (
+                            observed_dft_execution_root_key
+                        )
+                    else:
+                        raise _AuditRoundChanged(
+                            "Broker authority changed during trailing full audit"
+                        )
                 trailing_mps_changed = mps_after != mps_before
                 if trailing_mps_changed:
                     exact_md_mps_key = _exact_md_mps_lifecycle_transition_key(
@@ -3678,10 +4744,20 @@ class SessionController:
                     )
                 if systemd_changed:
                     if self.dft_warmup_open:
-                        self._fast_dft_churn_guard(client, final_status)
-                        raise _ExactDftTrailingChurn(
-                            "exact DFT systemd claims changed during trailing audit"
+                        exact_dft_systemd_root_key = (
+                            _exact_dft_systemd_claim_churn_root_key(
+                                snapshot.systemd_claims,
+                                trailing_systemd,
+                                final_status,
+                                allow_residency_only=True,
+                            )
                         )
+                        if exact_dft_systemd_root_key is not None:
+                            self._fast_dft_churn_guard(client, final_status)
+                            raise _ExactDftTrailingChurn(
+                                "exact DFT systemd claims changed during "
+                                "trailing audit"
+                            )
                     raise _AuditRoundChanged(
                         "GPU1 systemd claims changed during trailing full audit"
                     )
@@ -3731,11 +4807,25 @@ class SessionController:
                         raise DevGpuSessionError(
                             "DFT residency root died or changed before stabilization"
                         )
+                if pending_dft_execution_lifecycle_root_key is not None:
+                    raise _ExactDftExecutionLifecycleChurn(
+                        pending_dft_execution_lifecycle_root_key,
+                        "one exact DFT execution changed during a fully "
+                        "classified host audit",
+                    )
                 previous_mask = signal.pthread_sigmask(
                     signal.SIG_BLOCK,
                     {signal.SIGUSR1, signal.SIGUSR2},
                 )
                 try:
+                    if (
+                        captured_activation != self.activation_generation
+                        or captured_stabilization
+                        != self.dft_stabilization_generation
+                    ):
+                        raise _AuditRoundChanged(
+                            "controller rollout generation changed before audit commit"
+                        )
                     self.audit_sequence += 1
                     self.full_audit_generation += 1
                     self.audit_mode = "full"
@@ -3756,6 +4846,9 @@ class SessionController:
                 return final_status, snapshot, ()
             except _ExactMdLifecycleChurn as exc:
                 now = time.monotonic()
+                dft_execution_root_key = None
+                dft_execution_lifecycle_rounds = 0
+                dft_execution_lifecycle_started_at = None
                 if exc.lease_key != md_lifecycle_key:
                     authority_change_rounds += 1
                     if authority_change_rounds >= authority_change_attempts:
@@ -3778,6 +4871,43 @@ class SessionController:
                         "its bounded audit window"
                     ) from exc
                 continue
+            except _ExactDftExecutionLifecycleChurn as exc:
+                now = time.monotonic()
+                md_lifecycle_key = None
+                md_lifecycle_rounds = 0
+                md_lifecycle_started_at = None
+                if not steady_dft_lifecycle_generation_is_current():
+                    dft_execution_root_key = None
+                    dft_execution_lifecycle_rounds = 0
+                    dft_execution_lifecycle_started_at = None
+                    authority_change_rounds += 1
+                    if authority_change_rounds >= authority_change_attempts:
+                        raise DevGpuSessionError(
+                            "GPU1 authority changed throughout trailing full audits"
+                        ) from exc
+                    continue
+                if exc.root_key != dft_execution_root_key:
+                    authority_change_rounds += 1
+                    if authority_change_rounds >= authority_change_attempts:
+                        raise DevGpuSessionError(
+                            "GPU1 authority changed throughout trailing full audits"
+                        ) from exc
+                    dft_execution_root_key = exc.root_key
+                    dft_execution_lifecycle_rounds = 0
+                    dft_execution_lifecycle_started_at = now
+                dft_execution_lifecycle_rounds += 1
+                if (
+                    dft_execution_lifecycle_rounds
+                    >= EXACT_DFT_EXECUTION_LIFECYCLE_AUDIT_ATTEMPTS
+                    or dft_execution_lifecycle_started_at is None
+                    or now - dft_execution_lifecycle_started_at
+                    >= EXACT_DFT_EXECUTION_LIFECYCLE_TIMEOUT_SECONDS
+                ):
+                    raise DevGpuSessionError(
+                        "one exact DFT execution lifecycle did not stabilize "
+                        "within its bounded audit window"
+                    ) from exc
+                continue
             except _ExactDftTrailingChurn:
                 if round_index + 1 >= audit_attempts:
                     raise DevGpuSessionError(
@@ -3789,6 +4919,9 @@ class SessionController:
                 md_lifecycle_key = None
                 md_lifecycle_rounds = 0
                 md_lifecycle_started_at = None
+                dft_execution_root_key = None
+                dft_execution_lifecycle_rounds = 0
+                dft_execution_lifecycle_started_at = None
                 if authority_change_rounds >= authority_change_attempts:
                     raise DevGpuSessionError(
                         "GPU1 authority changed throughout trailing full audits"
