@@ -77,6 +77,8 @@ function renderShell(
     onOpenProject?: (directory: string) => void;
     onBrowseProjects?: () => void;
     onNewProject?: () => void;
+    onSetProjectFavorite?: (directory: string, favorite: boolean) => void;
+    onArchiveProject?: (directory: string) => void;
   }
 ) {
   return render(
@@ -90,10 +92,22 @@ function renderShell(
       onOpenProject={options?.onOpenProject ?? vi.fn()}
       onBrowseProjects={options?.onBrowseProjects ?? vi.fn()}
       onNewProject={options?.onNewProject ?? vi.fn()}
+      onSetProjectFavorite={options?.onSetProjectFavorite ?? vi.fn()}
+      onArchiveProject={options?.onArchiveProject ?? vi.fn()}
     >
       <div>页面内容</div>
     </AppShell>
   );
+}
+
+function getProjectButton(directory: string): HTMLButtonElement {
+  const button = screen
+    .getAllByRole("button")
+    .find((candidate) => candidate.getAttribute("data-project-directory") === directory);
+  if (!button) {
+    throw new Error(`未找到项目按钮：${directory}`);
+  }
+  return button as HTMLButtonElement;
 }
 
 describe("AppShell 侧边栏", () => {
@@ -142,6 +156,8 @@ describe("AppShell 侧边栏", () => {
         onOpenProject={vi.fn()}
         onBrowseProjects={vi.fn()}
         onNewProject={vi.fn()}
+        onSetProjectFavorite={vi.fn()}
+        onArchiveProject={vi.fn()}
       >
         <div>页面内容</div>
       </AppShell>
@@ -156,8 +172,8 @@ describe("AppShell 侧边栏", () => {
     renderShell();
 
     expect(screen.getByRole("heading", { name: "项目" })).not.toBeNull();
-    expect(screen.getAllByRole("button", { name: /Alpha/ })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: /Beta/ })).toHaveLength(1);
+    expect(getProjectButton("/home/codexlab/DevTool/Alpha")).not.toBeNull();
+    expect(getProjectButton("/home/codexlab/DevTool/Beta")).not.toBeNull();
 
     const projectButtons = screen
       .getAllByRole("button")
@@ -187,11 +203,55 @@ describe("AppShell 侧边栏", () => {
       onOpenProject
     });
 
-    const activeProject = screen.getByRole("button", { name: /Beta/ });
+    const activeProject = getProjectButton("/home/codexlab/DevTool/Beta");
     expect(activeProject.getAttribute("aria-current")).toBe("page");
 
-    fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+    fireEvent.click(getProjectButton("/home/codexlab/DevTool/Alpha"));
     expect(onOpenProject).toHaveBeenCalledWith("/home/codexlab/DevTool/Alpha");
+  });
+
+  it("项目三点菜单发送目标收藏状态和归档操作且不会误触项目打开", () => {
+    const onOpenProject = vi.fn();
+    const onSetProjectFavorite = vi.fn();
+    const onArchiveProject = vi.fn();
+    renderShell("home", { onOpenProject, onSetProjectFavorite, onArchiveProject });
+
+    const alphaMenu = screen.getByRole("button", { name: "打开 Alpha 项目菜单" });
+    expect(alphaMenu.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(alphaMenu);
+
+    expect(alphaMenu.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("menu", { name: "Alpha 项目操作" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "取消收藏" }));
+
+    expect(onSetProjectFavorite).toHaveBeenCalledWith("/home/codexlab/DevTool/Alpha", false);
+    expect(onOpenProject).not.toHaveBeenCalled();
+
+    const betaMenu = screen.getByRole("button", { name: "打开 Beta 项目菜单" });
+    fireEvent.click(betaMenu);
+    fireEvent.click(screen.getByRole("menuitem", { name: "收藏项目" }));
+    expect(onSetProjectFavorite).toHaveBeenCalledWith("/home/codexlab/DevTool/Beta", true);
+
+    fireEvent.click(betaMenu);
+    fireEvent.click(screen.getByRole("menuitem", { name: "归档项目" }));
+    expect(onArchiveProject).toHaveBeenCalledWith("/home/codexlab/DevTool/Beta");
+    expect(onOpenProject).not.toHaveBeenCalled();
+  });
+
+  it("项目菜单支持 Escape 和点击外部关闭并恢复触发按钮焦点", () => {
+    renderShell();
+
+    const trigger = screen.getByRole("button", { name: "打开 Alpha 项目菜单" });
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menu", { name: "Alpha 项目操作" })).not.toBeNull();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Alpha 项目操作" })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+
+    fireEvent.click(trigger);
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu", { name: "Alpha 项目操作" })).toBeNull();
   });
 
   it("桥接尚未就绪时显示低干扰加载状态", () => {
@@ -200,5 +260,6 @@ describe("AppShell 侧边栏", () => {
     expect(screen.getByText("正在同步项目…")).not.toBeNull();
     expect((screen.getByRole("button", { name: "搜索项目" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "新建项目" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: /打开 .* 项目菜单/ })).toBeNull();
   });
 });

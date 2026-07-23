@@ -584,6 +584,14 @@ export default function App() {
     projectBridge.newProject();
   }
 
+  function setAgentProjectFavorite(directory: string, favorite: boolean) {
+    projectBridge.setProjectFavorite(directory, favorite);
+  }
+
+  function archiveAgentProject(directory: string) {
+    projectBridge.archiveProject(directory);
+  }
+
   const moduleGroups: AppShellModuleGroup[] = [
     {
       title: "结构",
@@ -749,6 +757,8 @@ export default function App() {
       onOpenProject={openAgentProject}
       onBrowseProjects={browseAgentProjects}
       onNewProject={createAgentProject}
+      onSetProjectFavorite={setAgentProjectFavorite}
+      onArchiveProject={archiveAgentProject}
     >
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
         <AgentWorkspaceHomePage

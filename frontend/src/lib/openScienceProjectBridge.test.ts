@@ -80,6 +80,8 @@ describe("createOpenScienceProjectBridge", () => {
     expect(bridge.requestProjects()).toBe(true);
     expect(bridge.browseProjects()).toBe(true);
     expect(bridge.newProject()).toBe(true);
+    expect(bridge.setProjectFavorite("/home/codexlab/DevTool/Alpha", false)).toBe(true);
+    expect(bridge.archiveProject("/home/codexlab/DevTool/Beta")).toBe(true);
     expect(bridge.openProject("/home/codexlab/DevTool/Alpha")).toBe(true);
     expect(postMessage).toHaveBeenNthCalledWith(
       1,
@@ -113,6 +115,27 @@ describe("createOpenScienceProjectBridge", () => {
       {
         namespace: "openscience.zhijupoly",
         version: 1,
+        type: "project.favorite.set",
+        directory: "/home/codexlab/DevTool/Alpha",
+        favorite: false
+      },
+      "http://127.0.0.1:4454"
+    );
+    expect(postMessage).toHaveBeenNthCalledWith(
+      5,
+      {
+        namespace: "openscience.zhijupoly",
+        version: 1,
+        type: "project.archive",
+        directory: "/home/codexlab/DevTool/Beta"
+      },
+      "http://127.0.0.1:4454"
+    );
+    expect(postMessage).toHaveBeenNthCalledWith(
+      6,
+      {
+        namespace: "openscience.zhijupoly",
+        version: 1,
         type: "project.open",
         directory: "/home/codexlab/DevTool/Alpha"
       },
@@ -135,9 +158,15 @@ describe("createOpenScienceProjectBridge", () => {
     expect(invalidBridge.requestProjects()).toBe(false);
     expect(invalidBridge.browseProjects()).toBe(false);
     expect(invalidBridge.newProject()).toBe(false);
+    expect(invalidBridge.setProjectFavorite("/home/codexlab/DevTool/Alpha", true)).toBe(false);
+    expect(invalidBridge.archiveProject("/home/codexlab/DevTool/Alpha")).toBe(false);
     expect(invalidBridge.openProject("/home/codexlab/DevTool/Alpha")).toBe(false);
     expect(unloadedBridge.requestProjects()).toBe(false);
     expect(unloadedBridge.browseProjects()).toBe(false);
     expect(unloadedBridge.newProject()).toBe(false);
+    expect(unloadedBridge.setProjectFavorite("/home/codexlab/DevTool/Alpha", true)).toBe(false);
+    expect(unloadedBridge.archiveProject("/home/codexlab/DevTool/Alpha")).toBe(false);
+    expect(unloadedBridge.setProjectFavorite("   ", true)).toBe(false);
+    expect(unloadedBridge.archiveProject("   ")).toBe(false);
   });
 });

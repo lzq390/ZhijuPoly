@@ -135,6 +135,29 @@ export function createOpenScienceProjectBridge(options: CreateOpenScienceProject
         type: "project.new"
       });
     },
+    setProjectFavorite(directory: string, favorite: boolean) {
+      if (!directory.trim()) {
+        return false;
+      }
+      return post({
+        namespace: OPENSCIENCE_BRIDGE_NAMESPACE,
+        version: OPENSCIENCE_BRIDGE_VERSION,
+        type: "project.favorite.set",
+        directory,
+        favorite
+      });
+    },
+    archiveProject(directory: string) {
+      if (!directory.trim()) {
+        return false;
+      }
+      return post({
+        namespace: OPENSCIENCE_BRIDGE_NAMESPACE,
+        version: OPENSCIENCE_BRIDGE_VERSION,
+        type: "project.archive",
+        directory
+      });
+    },
     openProject(directory: string) {
       if (!directory.trim()) {
         return false;

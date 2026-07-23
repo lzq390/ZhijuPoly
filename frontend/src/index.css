@@ -79,6 +79,25 @@
     background-color: rgba(148, 163, 184, 0.42);
   }
 
+  .project-actions-trigger {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .project-list-item:hover .project-actions-trigger,
+  .project-list-item:focus-within .project-actions-trigger,
+  .project-actions-trigger[data-open="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  @media (hover: none) {
+    .project-actions-trigger {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
   .text-balance {
     text-wrap: balance;
   }

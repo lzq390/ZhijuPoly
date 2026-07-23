@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
-import { ChevronDown, Folder, Menu, MessageSquare, Plus, Search, Star, X } from "lucide-react";
+import type { KeyboardEvent, ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Archive, ChevronDown, Ellipsis, Folder, Menu, MessageSquare, Plus, Search, Star, X } from "lucide-react";
 import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge";
 
 export type AppShellModuleItem = {
@@ -29,6 +30,8 @@ type AppShellProps = {
   onOpenProject: (directory: string) => void;
   onBrowseProjects: () => void;
   onNewProject: () => void;
+  onSetProjectFavorite: (directory: string, favorite: boolean) => void;
+  onArchiveProject: (directory: string) => void;
   children: ReactNode;
 };
 
@@ -43,6 +46,8 @@ export function AppShell({
   onOpenProject,
   onBrowseProjects,
   onNewProject,
+  onSetProjectFavorite,
+  onArchiveProject,
   children
 }: AppShellProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -78,6 +83,8 @@ export function AppShell({
           onOpenProject={(directory) => handleNavigate(() => onOpenProject(directory))}
           onBrowseProjects={() => handleNavigate(onBrowseProjects)}
           onNewProject={() => handleNavigate(onNewProject)}
+          onSetProjectFavorite={onSetProjectFavorite}
+          onArchiveProject={onArchiveProject}
         />
       </aside>
 
@@ -104,6 +111,8 @@ export function AppShell({
               onOpenProject={(directory) => handleNavigate(() => onOpenProject(directory))}
               onBrowseProjects={() => handleNavigate(onBrowseProjects)}
               onNewProject={() => handleNavigate(onNewProject)}
+              onSetProjectFavorite={onSetProjectFavorite}
+              onArchiveProject={onArchiveProject}
               trailing={
                 <button
                   type="button"
@@ -158,6 +167,8 @@ type SidebarContentProps = {
   onOpenProject: (directory: string) => void;
   onBrowseProjects: () => void;
   onNewProject: () => void;
+  onSetProjectFavorite: (directory: string, favorite: boolean) => void;
+  onArchiveProject: (directory: string) => void;
   trailing?: ReactNode;
 };
 
@@ -173,6 +184,8 @@ function SidebarContent({
   onOpenProject,
   onBrowseProjects,
   onNewProject,
+  onSetProjectFavorite,
+  onArchiveProject,
   trailing
 }: SidebarContentProps) {
   return (
@@ -292,46 +305,234 @@ function SidebarContent({
             <p className="px-2 py-2 text-xs text-slate-400">暂无项目</p>
           ) : (
             <div className="space-y-0.5 pb-2">
-              {projects.map((project) => {
-                const isActive = project.directory === activeProjectDirectory;
-                return (
-                  <button
-                    key={project.directory}
-                    type="button"
-                    data-project-directory={project.directory}
-                    aria-current={isActive ? "page" : undefined}
-                    title={project.directory}
-                    className={[
-                      "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
-                      isActive
-                        ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200"
-                        : "text-slate-600 hover:bg-white/78 hover:text-slate-950"
-                    ].join(" ")}
-                    onClick={() => onOpenProject(project.directory)}
-                  >
-                    <Folder
-                      className={[
-                        "h-4 w-4 shrink-0",
-                        isActive ? "text-teal-700" : "text-slate-400 group-hover:text-teal-700"
-                      ].join(" ")}
-                      aria-hidden="true"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex min-w-0 items-center gap-1">
-                        <span className="block min-w-0 flex-1 truncate text-[13px] font-medium">{project.name}</span>
-                        {project.favorite ? (
-                          <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-500" aria-hidden="true" />
-                        ) : null}
-                      </span>
-                      <span className="block truncate text-[11px] text-slate-400">{project.displayPath}</span>
-                    </span>
-                  </button>
-                );
-              })}
+              {projects.map((project) => (
+                <ProjectListItem
+                  key={project.directory}
+                  project={project}
+                  active={project.directory === activeProjectDirectory}
+                  onOpen={() => onOpenProject(project.directory)}
+                  onSetFavorite={(favorite) => onSetProjectFavorite(project.directory, favorite)}
+                  onArchive={() => onArchiveProject(project.directory)}
+                />
+              ))}
             </div>
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+const PROJECT_MENU_WIDTH = 176;
+const PROJECT_MENU_HEIGHT = 88;
+const PROJECT_MENU_GAP = 4;
+const PROJECT_MENU_MARGIN = 8;
+
+function ProjectListItem({
+  project,
+  active,
+  onOpen,
+  onSetFavorite,
+  onArchive
+}: {
+  project: OpenScienceProjectSummary;
+  active: boolean;
+  onOpen: () => void;
+  onSetFavorite: (favorite: boolean) => void;
+  onArchive: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: PROJECT_MENU_MARGIN, left: PROJECT_MENU_MARGIN });
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuId = useId();
+
+  function positionMenu() {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+
+    const maxLeft = Math.max(PROJECT_MENU_MARGIN, window.innerWidth - PROJECT_MENU_WIDTH - PROJECT_MENU_MARGIN);
+    const left = Math.min(Math.max(PROJECT_MENU_MARGIN, rect.right - PROJECT_MENU_WIDTH), maxLeft);
+    const below = rect.bottom + PROJECT_MENU_GAP;
+    const above = rect.top - PROJECT_MENU_GAP - PROJECT_MENU_HEIGHT;
+    const top =
+      below + PROJECT_MENU_HEIGHT <= window.innerHeight - PROJECT_MENU_MARGIN
+        ? below
+        : Math.max(PROJECT_MENU_MARGIN, above);
+
+    setMenuPosition({ top, left });
+  }
+
+  function closeMenu(restoreFocus = false) {
+    setMenuOpen(false);
+    if (restoreFocus) {
+      triggerRef.current?.focus();
+    }
+  }
+
+  useLayoutEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+
+    positionMenu();
+    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) {
+        return;
+      }
+      closeMenu();
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      closeMenu(true);
+    }
+
+    function handleViewportChange() {
+      closeMenu();
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [menuOpen]);
+
+  function handleMenuKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") {
+      return;
+    }
+
+    const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+    if (items.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === "Home") {
+      items[0]?.focus();
+      return;
+    }
+    if (event.key === "End") {
+      items.at(-1)?.focus();
+      return;
+    }
+
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    const next = current < 0 ? 0 : (current + step + items.length) % items.length;
+    items[next]?.focus();
+  }
+
+  const menu = menuOpen
+    ? createPortal(
+        <div
+          id={menuId}
+          ref={menuRef}
+          role="menu"
+          aria-label={`${project.name} 项目操作`}
+          className="fixed z-[70] w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_16px_40px_rgba(8,17,31,0.18)]"
+          style={{ top: menuPosition.top, left: menuPosition.left }}
+          onKeyDown={handleMenuKeyDown}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13px] font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-950 focus-visible:bg-slate-100 focus-visible:outline-none"
+            onClick={() => {
+              closeMenu(true);
+              onSetFavorite(!project.favorite);
+            }}
+          >
+            <Star
+              className={[
+                "h-3.5 w-3.5 shrink-0",
+                project.favorite ? "fill-amber-400 text-amber-500" : "text-slate-400"
+              ].join(" ")}
+              aria-hidden="true"
+            />
+            {project.favorite ? "取消收藏" : "收藏项目"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13px] font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-950 focus-visible:bg-slate-100 focus-visible:outline-none"
+            onClick={() => {
+              closeMenu();
+              onArchive();
+            }}
+          >
+            <Archive className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+            归档项目
+          </button>
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <div
+      className={[
+        "project-list-item group relative flex w-full items-stretch rounded-lg transition-colors",
+        active
+          ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200"
+          : "text-slate-600 hover:bg-white/78 hover:text-slate-950"
+      ].join(" ")}
+    >
+      <button
+        type="button"
+        data-project-directory={project.directory}
+        aria-current={active ? "page" : undefined}
+        title={project.directory}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 pr-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500/50"
+        onClick={onOpen}
+      >
+        <Folder
+          className={[
+            "h-4 w-4 shrink-0",
+            active ? "text-teal-700" : "text-slate-400 group-hover:text-teal-700"
+          ].join(" ")}
+          aria-hidden="true"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="block min-w-0 flex-1 truncate text-[13px] font-medium">{project.name}</span>
+            {project.favorite ? (
+              <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-500" aria-hidden="true" />
+            ) : null}
+          </span>
+          <span className="block truncate text-[11px] text-slate-400">{project.displayPath}</span>
+        </span>
+      </button>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={`打开 ${project.name} 项目菜单`}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        aria-controls={menuOpen ? menuId : undefined}
+        data-open={menuOpen ? "true" : "false"}
+        className="project-actions-trigger my-1 mr-1 inline-flex w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50"
+        onClick={() => setMenuOpen((current) => !current)}
+      >
+        <Ellipsis className="h-4 w-4" aria-hidden="true" />
+      </button>
+      {menu}
     </div>
   );
 }
