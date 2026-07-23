@@ -65,6 +65,12 @@ _TRANSIENT_MPS_INVENTORY_MESSAGES = frozenset(
         "MPS ps row is invalid",
     }
 )
+_TRANSIENT_SYSTEMD_UNIT_AUTHORITY_MESSAGES = frozenset(
+    {
+        "user systemd unit authority changed during audit",
+        "system systemd unit authority changed during audit",
+    }
+)
 
 
 class DevGpuSessionError(RuntimeError):
@@ -1417,6 +1423,19 @@ def _is_canonical_systemd_process_disappearance(error: Exception) -> bool:
     )
 
 
+def _is_transient_systemd_unit_authority_change(error: Exception) -> bool:
+    """Recognize only the list/show CAS for an active service inventory."""
+
+    from ops.gpu_broker.broker import BrokerError
+
+    return (
+        type(error) is BrokerError
+        and error.code == "gpu_claim_inventory_unavailable"
+        and len(error.args) == 1
+        and error.args[0] in _TRANSIENT_SYSTEMD_UNIT_AUTHORITY_MESSAGES
+    )
+
+
 def _systemd_disappearance_is_outside_managed_gpu_scopes(
     error: Exception,
     status: dict[str, Any],
@@ -2662,6 +2681,7 @@ def consistent_broker_snapshot(
     membership_churn_timeout_seconds: float = STEADY_CHURN_TIMEOUT_SECONDS,
     membership_churn_guard: Callable[[dict[str, Any]], bool] | None = None,
     retry_stable_systemd_process_disappearance: bool = False,
+    retry_stable_systemd_unit_authority_change: bool = False,
     surface_exact_md_lifecycle_churn: bool = False,
     surface_exact_dft_execution_lifecycle_churn: bool = False,
     monotonic: Callable[[], float] = time.monotonic,
@@ -2675,6 +2695,10 @@ def consistent_broker_snapshot(
     if not isinstance(retry_stable_systemd_process_disappearance, bool):
         raise ValueError(
             "retry_stable_systemd_process_disappearance must be boolean"
+        )
+    if not isinstance(retry_stable_systemd_unit_authority_change, bool):
+        raise ValueError(
+            "retry_stable_systemd_unit_authority_change must be boolean"
         )
     if not isinstance(surface_exact_md_lifecycle_churn, bool):
         raise ValueError("surface_exact_md_lifecycle_churn must be boolean")
@@ -2744,6 +2768,27 @@ def consistent_broker_snapshot(
                 # this round and take a fresh full inventory.  PID reuse,
                 # cgroup movement and every other inventory failure remain
                 # fail-closed.
+                churn_retries += 1
+                continue
+            stable_unit_authority_change = (
+                retry_stable_systemd_unit_authority_change
+                and membership_churn_guard is None
+                and _is_transient_systemd_unit_authority_change(exc)
+                and before_authority == after_authority
+            )
+            if stable_unit_authority_change:
+                if (
+                    churn_retries >= membership_churn_retries
+                    or monotonic() - audit_started
+                    >= float(membership_churn_timeout_seconds)
+                ):
+                    raise DevGpuSessionError(
+                        "systemd unit authority remained unstable throughout "
+                        "the host audit"
+                    ) from exc
+                # The global active-service list/show CAS changed, so none of
+                # this round's process evidence is accepted.  A fresh full
+                # inventory must succeed under the same Broker authority.
                 churn_retries += 1
                 continue
             dft_membership_root_key = (
@@ -4089,6 +4134,7 @@ class SessionController:
                         membership_churn_timeout_seconds=churn_timeout,
                         membership_churn_guard=fast_guard,
                         retry_stable_systemd_process_disappearance=True,
+                        retry_stable_systemd_unit_authority_change=True,
                         surface_exact_md_lifecycle_churn=True,
                         surface_exact_dft_execution_lifecycle_churn=(
                             surface_exact_dft_execution_lifecycle
@@ -4476,6 +4522,19 @@ class SessionController:
                         raise _AuditRoundChanged(
                             "one stable systemd process disappeared during the "
                             "trailing systemd audit"
+                        ) from exc
+                    raise
+                except BrokerError as exc:
+                    transition_status = client.status()
+                    if (
+                        not self.dft_warmup_open
+                        and broker_authority_token(transition_status)
+                        == expected_token
+                        and _is_transient_systemd_unit_authority_change(exc)
+                    ):
+                        raise _AuditRoundChanged(
+                            "systemd unit authority changed during the trailing "
+                            "systemd audit"
                         ) from exc
                     raise
                 sealed_process_map = query_compute_processes()

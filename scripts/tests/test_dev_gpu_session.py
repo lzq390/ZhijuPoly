@@ -1602,6 +1602,119 @@ def test_broker_snapshot_never_uses_generic_disappearance_retry_in_warmup() -> N
     assert calls == 1
 
 
+@pytest.mark.parametrize("scope", ("user", "system"))
+def test_broker_snapshot_retries_stable_systemd_unit_authority_change(
+    scope: str,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                f"{scope} systemd unit authority changed during audit",
+            )
+        return empty_snapshot()
+
+    returned, snapshot = session.consistent_broker_snapshot(
+        client,
+        collect,
+        retry_stable_systemd_unit_authority_change=True,
+    )
+
+    assert returned == status
+    assert snapshot == empty_snapshot()
+    assert calls == 2
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    (
+        (
+            "gpu_claim_inventory_unavailable",
+            "system systemd manager environment changed during audit",
+        ),
+        (
+            "gpu_claim_inventory_changed",
+            "system systemd unit authority changed during audit",
+        ),
+    ),
+)
+def test_broker_snapshot_never_retries_other_systemd_authority_errors(
+    code: str,
+    message: str,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    error = BrokerError(code, message)
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise error
+
+    with pytest.raises(BrokerError) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            collect,
+            retry_stable_systemd_unit_authority_change=True,
+        )
+
+    assert raised.value is error
+    assert calls == 1
+
+
+def test_broker_snapshot_never_retries_systemd_unit_authority_in_warmup() -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_residency_record()],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    error = BrokerError(
+        "gpu_claim_inventory_unavailable",
+        "system systemd unit authority changed during audit",
+    )
+
+    with pytest.raises(BrokerError) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(error),
+            membership_churn_guard=lambda _status: True,
+            retry_stable_systemd_unit_authority_change=True,
+        )
+
+    assert raised.value is error
+
+
 def test_broker_snapshot_process_disappearance_retry_is_bounded() -> None:
     from ops.gpu_broker.server import SystemdProcessDisappeared
 
@@ -4427,10 +4540,13 @@ def test_trailing_audit_rejects_new_static_systemd_gpu_claim(
     assert reasons == ("foreign systemd claim: user:foreign-gpu.service",)
 
 
-def test_trailing_audit_resamples_stable_systemd_process_disappearance(
+@pytest.mark.parametrize("churn_kind", ("process", "unit"))
+def test_trailing_audit_resamples_stable_systemd_inventory_churn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    churn_kind: str,
 ) -> None:
+    from ops.gpu_broker.broker import BrokerError
     from ops.gpu_broker import server
 
     status = {
@@ -4473,10 +4589,15 @@ def test_trailing_audit_resamples_stable_systemd_process_disappearance(
         nonlocal systemd_reads
         systemd_reads += 1
         if systemd_reads == 1:
-            raise server.SystemdProcessDisappeared(
-                105042,
-                4400999,
-                "/user.slice/user-1001.slice/user@1001.service/init.scope",
+            if churn_kind == "process":
+                raise server.SystemdProcessDisappeared(
+                    105042,
+                    4400999,
+                    "/user.slice/user-1001.slice/user@1001.service/init.scope",
+                )
+            raise BrokerError(
+                "gpu_claim_inventory_unavailable",
+                "system systemd unit authority changed during audit",
             )
         return captured.systemd_claims
 
@@ -8847,6 +8968,7 @@ def test_steady_full_audit_retains_the_12_second_churn_boundary(
     assert observed["membership_churn_timeout_seconds"] == 12.0
     assert observed["membership_churn_guard"] is None
     assert observed["retry_stable_systemd_process_disappearance"] is True
+    assert observed["retry_stable_systemd_unit_authority_change"] is True
 
 
 def test_down_waits_for_exact_owned_lease_cleanup(
