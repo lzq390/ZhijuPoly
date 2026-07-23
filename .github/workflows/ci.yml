@@ -342,6 +342,9 @@ jobs:
         run: |
           set -euo pipefail
           base_python="$(command -v python)"
+          resolved_base_python="$(readlink -f -- "$base_python")"
+          [[ "$resolved_base_python" == /* ]]
+          sudo chmod go-w -- "$resolved_base_python"
           base_identity="$(
             python scripts/prepare_dev_worker_venv.py identity \
               --base-python "$base_python" |
