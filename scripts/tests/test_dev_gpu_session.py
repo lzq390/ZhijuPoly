@@ -4494,6 +4494,253 @@ def test_exact_trailing_dft_systemd_churn_uses_warmup_budget_beyond_three_rounds
     assert fast_rounds == [1, 2, 3, 4]
 
 
+@pytest.mark.parametrize("direction", ("grow", "shrink", "burst"))
+def test_trailing_query_retries_exact_dft_membership_exception_beyond_three(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+) -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker import server
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    authority = mps_snapshot()
+    captured = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        authority,
+        empty_snapshot(),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=captured,
+        authority=authority,
+        trailing_systemd=captured.systemd_claims,
+    )
+    manager_cgroup = user_manager_control_group(1001)
+    dft_cgroup = scope_control_group("d1" * 16, uid=1001)
+    stable = (7000, 100, manager_cgroup)
+    exact = (
+        (8201, 501, dft_cgroup),
+        (8202, 502, dft_cgroup),
+        (8203, 503, dft_cgroup),
+    )
+    expected = (stable, exact[0])
+    current = (stable,)
+    if direction == "grow":
+        expected, current = current, expected
+    elif direction == "burst":
+        expected, current = (stable,), (stable, *exact)
+    error = dft_membership_error(
+        expected=expected,
+        current=current,
+    )
+    rounds = 0
+    systemd_reads = 0
+    fast_rounds: list[int] = []
+
+    def collect(_client: object, **_kwargs: object):
+        nonlocal rounds
+        rounds += 1
+        return status, captured
+
+    def trailing_systemd(**_kwargs: object):
+        nonlocal systemd_reads
+        systemd_reads += 1
+        if systemd_reads <= session.FULL_AUDIT_ATTEMPTS + 1:
+            raise error
+        return captured.systemd_claims
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda _client, _status: fast_rounds.append(rounds) or True,
+    )
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert rounds == session.FULL_AUDIT_ATTEMPTS + 2
+    assert systemd_reads == session.FULL_AUDIT_ATTEMPTS + 2
+    assert fast_rounds == list(
+        range(1, session.FULL_AUDIT_ATTEMPTS + 2)
+    )
+
+
+def test_trailing_query_exact_dft_membership_requires_stable_broker_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    changed = {**status, "broker_instance_id": "replacement"}
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    authority = mps_snapshot()
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        authority=authority,
+    )
+    statuses = iter((status, changed))
+    client.status = lambda: next(statuses)
+    error = dft_membership_error()
+    guarded: list[object] = []
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        lambda _client: authority,
+    )
+    monkeypatch.setattr(
+        server,
+        "query_systemd_gpu_claims",
+        lambda **_kwargs: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda *_args: guarded.append(object()) or True,
+    )
+
+    with pytest.raises(server.SystemdMembershipChanged) as raised:
+        controller._audit(client)
+
+    assert raised.value is error
+    assert guarded == []
+
+
+def test_trailing_query_never_retries_mixed_dft_and_foreign_membership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker import server
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    authority = mps_snapshot()
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        authority=authority,
+    )
+    manager_cgroup = user_manager_control_group(1001)
+    dft_cgroup = scope_control_group("d1" * 16, uid=1001)
+    stable = (7000, 100, manager_cgroup)
+    error = dft_membership_error(
+        expected=(stable,),
+        current=(
+            stable,
+            (8201, 501, dft_cgroup),
+            (99001, 601, f"{manager_cgroup}/foreign.scope"),
+        ),
+    )
+    guarded: list[object] = []
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        lambda _client: authority,
+    )
+    monkeypatch.setattr(
+        server,
+        "query_systemd_gpu_claims",
+        lambda **_kwargs: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda *_args: guarded.append(object()) or True,
+    )
+
+    with pytest.raises(server.SystemdMembershipChanged) as raised:
+        controller._audit(client)
+
+    assert raised.value is error
+    assert guarded == []
+
+
+def test_trailing_query_exact_dft_membership_requires_fast_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    authority = mps_snapshot()
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        authority=authority,
+    )
+    error = dft_membership_error()
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        lambda _client: authority,
+    )
+    monkeypatch.setattr(
+        server,
+        "query_systemd_gpu_claims",
+        lambda **_kwargs: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_fast_dft_churn_guard",
+        lambda *_args: (_ for _ in ()).throw(
+            session.DevGpuSessionError("DFT fast guard rejected")
+        ),
+    )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="DFT fast guard rejected",
+    ):
+        controller._audit(client)
+
+
 def test_full_audit_retries_exact_mps_client_membership_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -3317,6 +3317,22 @@ class SessionController:
                             "one exact managed scope changed during the "
                             "trailing systemd audit"
                         ) from exc
+                    if (
+                        broker_authority_token(transition_status)
+                        == expected_token
+                        and _is_exact_dft_membership_churn(
+                            exc,
+                            transition_status,
+                        )
+                    ):
+                        self._fast_dft_churn_guard(
+                            client,
+                            transition_status,
+                        )
+                        raise _ExactDftTrailingChurn(
+                            "exact DFT membership changed during the trailing "
+                            "systemd audit"
+                        ) from exc
                     raise
                 sealed_process_map = query_compute_processes()
                 sealed_compute = frozenset(
