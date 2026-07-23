@@ -837,12 +837,62 @@ def _is_exact_dft_membership_churn(
     return False
 
 
+def _exact_md_lifecycle_scope_authority(
+    lease: Any,
+) -> tuple[int, int, str] | None:
+    """Recover exact MD scope identity from active or safely terminated state."""
+
+    from ops.gpu_broker.broker import Lease
+    from ops.gpu_broker.server import exact_md_execution_scope_authority
+
+    if not isinstance(lease, Lease) or lease.component != "md":
+        return None
+    active_authority = exact_md_execution_scope_authority(
+        lease,
+        index=GPU_INDEX,
+        uuid=GPU_UUID,
+    )
+    if active_authority is not None:
+        return active_authority
+    terminated_pids = lease.mps_terminated_client_pids
+    if (
+        lease.status != "terminating"
+        or lease.mps_termination_status != "safe"
+        or not isinstance(terminated_pids, list)
+        or any(
+            isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0
+            for pid in terminated_pids
+        )
+        or terminated_pids != sorted(set(terminated_pids))
+        or isinstance(lease.mps_termination_at, bool)
+        or not isinstance(lease.mps_termination_at, (int, float))
+        or lease.mps_termination_at <= 0
+    ):
+        return None
+    normalized = lease.public_dict()
+    normalized.update(
+        status="active",
+        mps_termination_status="none",
+        mps_terminated_client_pids=[],
+        mps_termination_at=None,
+    )
+    try:
+        active_lease = Lease(**normalized)
+    except (TypeError, ValueError):
+        return None
+    return exact_md_execution_scope_authority(
+        active_lease,
+        index=GPU_INDEX,
+        uuid=GPU_UUID,
+    )
+
+
 def _exact_managed_scope_membership_transition_candidate(
-    error: Exception,
+    error: Exception | None,
     before: dict[str, Any],
     after: dict[str, Any],
 ) -> Any | None:
-    """Prove an exact PID membership delta belongs to one lease transition."""
+    """Prove one Broker lifecycle, then optionally bind a systemd delta."""
 
     from ops.gpu_broker.broker import Lease
     from ops.gpu_broker.server import (
@@ -855,9 +905,8 @@ def _exact_managed_scope_membership_transition_candidate(
         user_manager_control_group,
     )
 
-    if not isinstance(
-        error,
-        (SystemdProcessDisappeared, SystemdMembershipChanged),
+    if error is not None and not isinstance(
+        error, (SystemdProcessDisappeared, SystemdMembershipChanged)
     ):
         return None
     before_instance = before.get("broker_instance_id")
@@ -1107,6 +1156,74 @@ def _exact_managed_scope_membership_transition_candidate(
     if (
         candidate is None
         and after_generation == before_generation
+        and (before_record == record or tombstone_advanced)
+    ):
+        after_by_key = {
+            (item.lease_id, item.fencing_token): item for item in after_leases
+        }
+        termination_candidates: list[Lease] = []
+        for existing in before_leases:
+            existing_authority = _exact_dev_gpu1_host_scope_authority(
+                existing,
+                index=GPU_INDEX,
+                uuid=GPU_UUID,
+            )
+            terminating = after_by_key.get(
+                (existing.lease_id, existing.fencing_token)
+            )
+            if (
+                terminating is None
+                and released_candidate is not None
+                and released_candidate.lease_id == existing.lease_id
+                and released_candidate.fencing_token == existing.fencing_token
+            ):
+                terminating = released_candidate
+            if (
+                existing.component != "md"
+                or existing_authority is None
+                or terminating is None
+                or _exact_md_lifecycle_scope_authority(terminating) is None
+                or terminating.status != "terminating"
+            ):
+                continue
+            normalized_before = existing.public_dict()
+            normalized_after = terminating.public_dict()
+            normalized_before.pop("heartbeat_at")
+            normalized_after.pop("heartbeat_at")
+            normalized_after.update(
+                status=normalized_before["status"],
+                mps_termination_status=normalized_before[
+                    "mps_termination_status"
+                ],
+                mps_terminated_client_pids=normalized_before[
+                    "mps_terminated_client_pids"
+                ],
+                mps_termination_at=normalized_before["mps_termination_at"],
+            )
+            before_others = tuple(
+                item
+                for item in before_leases
+                if (item.lease_id, item.fencing_token)
+                != (existing.lease_id, existing.fencing_token)
+            )
+            after_others = tuple(
+                item
+                for item in after_leases
+                if (item.lease_id, item.fencing_token)
+                != (existing.lease_id, existing.fencing_token)
+            )
+            if (
+                normalized_before == normalized_after
+                and live_authority(before_others)
+                == live_authority(after_others)
+            ):
+                termination_candidates.append(existing)
+        if len(termination_candidates) == 1:
+            candidate = termination_candidates[0]
+
+    if (
+        candidate is None
+        and after_generation == before_generation
         and before_record == record
         and live_authority(before_leases) == live_authority(after_leases)
     ):
@@ -1133,8 +1250,14 @@ def _exact_managed_scope_membership_transition_candidate(
         index=GPU_INDEX,
         uuid=GPU_UUID,
     )
+    if authority is None and candidate.component == "md":
+        md_authority = _exact_md_lifecycle_scope_authority(candidate)
+        if md_authority is not None:
+            authority = ("md", *md_authority)
     if authority is None:
         return None
+    if error is None:
+        return candidate
     component, workload_pid, workload_start_ticks, expected_scope_cgroup = authority
     md_worker_cgroup = (
         user_manager_control_group(1001)
@@ -1262,6 +1385,276 @@ def _exact_md_lifecycle_transition_key(
     ):
         return None
     return candidate.lease_id, candidate.fencing_token
+
+
+def _exact_md_broker_lifecycle_transition_key(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> tuple[str, int] | None:
+    candidate = _exact_managed_scope_membership_transition_candidate(
+        None,
+        before,
+        after,
+    )
+    if (
+        candidate is None
+        or candidate.component != "md"
+        or not isinstance(candidate.lease_id, str)
+        or not candidate.lease_id
+        or isinstance(candidate.fencing_token, bool)
+        or not isinstance(candidate.fencing_token, int)
+        or candidate.fencing_token <= 0
+    ):
+        return None
+    return candidate.lease_id, candidate.fencing_token
+
+
+def _exact_md_mps_lifecycle_transition_key(
+    before_authority: Any,
+    after_authority: Any,
+    before_status: dict[str, Any],
+    after_status: dict[str, Any],
+) -> tuple[str, int] | None:
+    """Bind one client-only MPS delta to one exact MD lease lifecycle."""
+
+    from ops.gpu_broker.broker import Lease
+    from ops.gpu_broker.server import (
+        MpsAuthoritySnapshot,
+        MpsClient,
+        MpsClientProcessIdentity,
+        _mps_device_matches,
+        _systemd_cgroup_contains,
+    )
+
+    if (
+        not isinstance(before_authority, MpsAuthoritySnapshot)
+        or not isinstance(after_authority, MpsAuthoritySnapshot)
+        or before_authority.descriptor_authority is not True
+        or after_authority.descriptor_authority is not True
+        or before_authority.server_pids != after_authority.server_pids
+        or before_authority.gpu_declarers != after_authority.gpu_declarers
+        or not before_authority.server_pids
+        or len(before_authority.server_pids) != 1
+    ):
+        return None
+
+    def client_map(authority: Any) -> dict[int, tuple[Any, ...]] | None:
+        if (
+            not isinstance(authority.clients, frozenset)
+            or not isinstance(authority.client_process_identities, frozenset)
+        ):
+            return None
+        clients_by_pid: dict[int, list[Any]] = {}
+        for client in authority.clients:
+            if (
+                not isinstance(client, MpsClient)
+                or isinstance(client.client_pid, bool)
+                or client.client_pid <= 0
+                or client.server_pid not in authority.server_pids
+                or not _mps_device_matches(client.device_uuid, GPU_UUID)
+            ):
+                return None
+            clients_by_pid.setdefault(client.client_pid, []).append(client)
+        result: dict[int, tuple[Any, ...]] = {}
+        for pid, clients in clients_by_pid.items():
+            result[pid] = tuple(
+                sorted(
+                    clients,
+                    key=lambda item: (
+                        item.client_id,
+                        item.server_pid,
+                        item.device_uuid,
+                        item.namespace_id,
+                        item.command,
+                    ),
+                )
+            )
+        return result
+
+    def identity_map(authority: Any) -> dict[int, tuple[int, str]] | None:
+        result: dict[int, tuple[int, str]] = {}
+        for identity in authority.client_process_identities:
+            if (
+                not isinstance(identity, MpsClientProcessIdentity)
+                or isinstance(identity.client_pid, bool)
+                or identity.client_pid <= 0
+                or isinstance(identity.process_start_ticks, bool)
+                or identity.process_start_ticks <= 0
+                or _canonical_systemd_control_group(identity.process_cgroup)
+                != identity.process_cgroup
+                or identity.client_pid in result
+            ):
+                return None
+            result[identity.client_pid] = (
+                identity.process_start_ticks,
+                identity.process_cgroup,
+            )
+        return result
+
+    before_clients = client_map(before_authority)
+    after_clients = client_map(after_authority)
+    before_identities = identity_map(before_authority)
+    after_identities = identity_map(after_authority)
+    if (
+        before_clients is None
+        or after_clients is None
+        or before_identities is None
+        or after_identities is None
+        or set(before_clients) != set(before_identities)
+        or set(after_clients) != set(after_identities)
+        or before_authority.clients == after_authority.clients
+    ):
+        return None
+
+    changed_pids = {
+        client.client_pid
+        for client in before_authority.clients ^ after_authority.clients
+    }
+    if not changed_pids:
+        return None
+    if any(
+        before_identities[pid] != after_identities[pid]
+        for pid in before_identities.keys() & after_identities.keys()
+    ):
+        return None
+    for pid in changed_pids:
+        before_identity = before_identities.get(pid)
+        after_identity = after_identities.get(pid)
+        if (
+            (before_identity is None and after_identity is None)
+            or (
+                before_identity is not None
+                and after_identity is not None
+                and before_identity != after_identity
+            )
+        ):
+            return None
+
+    candidate_key = _exact_md_broker_lifecycle_transition_key(
+        before_status,
+        after_status,
+    )
+    if candidate_key is None:
+        return None
+    candidate = _exact_managed_scope_membership_transition_candidate(
+        None,
+        before_status,
+        after_status,
+    )
+    if candidate is None:
+        return None
+    authority = _exact_md_lifecycle_scope_authority(candidate)
+    if authority is None:
+        return None
+    workload_pid, workload_start_ticks, expected_scope_cgroup = authority
+
+    try:
+        before_leases = _canonical_broker_leases(before_status)
+        after_leases = _canonical_broker_leases(after_status)
+    except DevGpuSessionError:
+        return None
+
+    def exact_md_by_key(leases: tuple[Any, ...]) -> dict[tuple[str, int], Any]:
+        result: dict[tuple[str, int], Any] = {}
+        for lease in leases:
+            if _exact_md_lifecycle_scope_authority(lease) is not None:
+                result[(lease.lease_id, lease.fencing_token)] = lease
+        return result
+
+    def exact_released_md(status: dict[str, Any]) -> Any | None:
+        record = status.get("last_released_lease")
+        if not isinstance(record, dict):
+            return None
+        try:
+            lease = Lease(**record)
+        except (TypeError, ValueError):
+            return None
+        if (
+            lease.public_dict() != record
+            or _exact_md_lifecycle_scope_authority(lease) is None
+        ):
+            return None
+        return lease
+
+    before_exact = exact_md_by_key(before_leases)
+    after_exact = exact_md_by_key(after_leases)
+    visible_keys = set(before_exact) | set(after_exact)
+    if visible_keys - {candidate_key}:
+        return None
+
+    after_released = exact_released_md(after_status)
+    after_released_key = (
+        None
+        if after_released is None
+        else (after_released.lease_id, after_released.fencing_token)
+    )
+    completed_aba = (
+        not visible_keys
+        and after_released_key == candidate_key
+        and after_status.get("next_fencing_token")
+        == before_status.get("next_fencing_token", 0) + 1
+    )
+    if not visible_keys and not completed_aba:
+        return None
+
+    before_client_records = before_authority.clients
+    after_client_records = after_authority.clients
+    added = after_client_records - before_client_records
+    removed = before_client_records - after_client_records
+    after_live = after_exact.get(candidate_key)
+    after_terminal = (
+        after_live
+        if after_live is not None and after_live.status == "terminating"
+        else after_released
+        if after_released_key == candidate_key
+        else None
+    )
+    if (
+        (candidate_key not in before_exact and removed and not completed_aba)
+        or (candidate_key not in after_exact and added)
+        or (after_terminal is not None and added)
+    ):
+        return None
+    if after_terminal is not None:
+        terminated_pids = after_terminal.mps_terminated_client_pids
+        removed_pids = {client.client_pid for client in removed}
+        before_scoped_pids = {
+            pid
+            for pid, (_start_ticks, process_cgroup) in before_identities.items()
+            if _systemd_cgroup_contains(
+                process_cgroup,
+                expected_scope_cgroup,
+            )
+        }
+        after_scoped_pids = {
+            pid
+            for pid, (_start_ticks, process_cgroup) in after_identities.items()
+            if _systemd_cgroup_contains(
+                process_cgroup,
+                expected_scope_cgroup,
+            )
+        }
+        if (
+            after_scoped_pids
+            or set(terminated_pids) != removed_pids
+            or set(terminated_pids) != before_scoped_pids
+        ):
+            return None
+
+    for pid in changed_pids:
+        identity = before_identities.get(pid) or after_identities.get(pid)
+        if identity is None:
+            return None
+        start_ticks, process_cgroup = identity
+        if (
+            not _systemd_cgroup_contains(
+                process_cgroup,
+                expected_scope_cgroup,
+            )
+            or (pid == workload_pid and start_ticks != workload_start_ticks)
+        ):
+            return None
+    return candidate_key
 
 
 def consistent_broker_snapshot(
@@ -1716,15 +2109,40 @@ class SessionController:
         return authority
 
     def _mps_authority_for_audit(self, client: Any) -> Any:
-        """Discard torn inventories and retry proven DFT warmup churn."""
+        """Discard torn inventories and surface proven DFT/MD lifecycle churn."""
 
         from ops.gpu_broker.broker import BrokerError
+        from ops.gpu_broker.server import MpsClientMembershipChanged
 
         published = False
         while True:
+            broker_before = client.status()
             try:
                 return self._mps_authority()
             except BrokerError as exc:
+                if isinstance(exc, MpsClientMembershipChanged):
+                    broker_after = client.status()
+                    expected_code = (
+                        "mps_authority_changed"
+                        if exc.before_authority.clients
+                        < exc.after_authority.clients
+                        else "mps_control_unavailable"
+                    )
+                    md_lifecycle_key = (
+                        _exact_md_mps_lifecycle_transition_key(
+                            exc.before_authority,
+                            exc.after_authority,
+                            broker_before,
+                            broker_after,
+                        )
+                        if exc.code == expected_code
+                        else None
+                    )
+                    if md_lifecycle_key is not None:
+                        raise _ExactMdLifecycleChurn(
+                            md_lifecycle_key,
+                            "one exact MD lease changed during the MPS client audit",
+                        ) from exc
                 if (
                     type(exc) is BrokerError
                     and exc.code == "mps_control_unavailable"
@@ -2578,7 +2996,10 @@ class SessionController:
                 # The MPS identity must enclose the whole host inventory.  A
                 # server that appears only after NVML/systemd were sampled may
                 # reuse a foreign PID and must never retroactively authorize it.
-                enclosing_broker_token = broker_authority_token(client.status())
+                enclosing_status = client.status()
+                enclosing_broker_token = broker_authority_token(
+                    enclosing_status
+                )
                 mps_before = self._mps_authority_for_audit(client)
                 try:
                     status, snapshot = consistent_broker_snapshot(
@@ -2598,6 +3019,18 @@ class SessionController:
                         ) from exc
                     raise
                 if broker_authority_token(status) != enclosing_broker_token:
+                    exact_md_broker_key = (
+                        _exact_md_broker_lifecycle_transition_key(
+                            enclosing_status,
+                            status,
+                        )
+                    )
+                    if exact_md_broker_key is not None:
+                        raise _ExactMdLifecycleChurn(
+                            exact_md_broker_key,
+                            "one exact MD lease changed after the initial MPS "
+                            "seal",
+                        )
                     raise _AuditRoundChanged(
                         "Broker authority changed after the initial MPS seal"
                     )
@@ -2613,6 +3046,19 @@ class SessionController:
                 expected_token = broker_authority_token(status)
                 mps_after_inventory = self._mps_authority_for_audit(client)
                 mps_inventory_changed = mps_after_inventory != mps_before
+                if mps_inventory_changed:
+                    exact_md_mps_key = _exact_md_mps_lifecycle_transition_key(
+                        mps_before,
+                        mps_after_inventory,
+                        enclosing_status,
+                        status,
+                    )
+                    if exact_md_mps_key is not None:
+                        raise _ExactMdLifecycleChurn(
+                            exact_md_mps_key,
+                            "one exact MD lease changed across the full MPS "
+                            "inventory",
+                        )
                 exact_lazy_server_growth = (
                     mps_inventory_changed
                     and self._exact_dft_lazy_mps_server_growth(
@@ -2889,10 +3335,35 @@ class SessionController:
                 require_gpu1_default_compute_mode()
                 final_status = client.status()
                 if broker_authority_token(final_status) != expected_token:
+                    exact_md_broker_key = (
+                        _exact_md_broker_lifecycle_transition_key(
+                            status,
+                            final_status,
+                        )
+                    )
+                    if exact_md_broker_key is not None:
+                        raise _ExactMdLifecycleChurn(
+                            exact_md_broker_key,
+                            "one exact MD lease changed during the trailing "
+                            "Broker audit",
+                        )
                     raise _AuditRoundChanged(
                         "Broker authority changed during trailing full audit"
                     )
                 trailing_mps_changed = mps_after != mps_before
+                if trailing_mps_changed:
+                    exact_md_mps_key = _exact_md_mps_lifecycle_transition_key(
+                        mps_before,
+                        mps_after,
+                        status,
+                        final_status,
+                    )
+                    if exact_md_mps_key is not None:
+                        raise _ExactMdLifecycleChurn(
+                            exact_md_mps_key,
+                            "one exact MD lease changed across the trailing MPS "
+                            "audit",
+                        )
                 exact_trailing_lazy_server_growth = (
                     trailing_mps_changed
                     and self._exact_dft_lazy_mps_server_growth(

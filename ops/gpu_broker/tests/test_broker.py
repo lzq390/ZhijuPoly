@@ -45,6 +45,8 @@ from ops.gpu_broker.server import (
     ManagedDockerClaim,
     MpsAuthoritySnapshot,
     MpsClient,
+    MpsClientMembershipChanged,
+    MpsClientProcessIdentity,
     MpsRuntimeGuard,
     SystemdGpuClaim,
     SystemdGpuDeclarer,
@@ -3334,6 +3336,8 @@ def _exact_mps_authority(
 ) -> tuple[MpsRuntimeGuard, dict[str, object]]:
     control_pid = 31_301
     server_pid = 42_402
+    client_pid = 51_001
+    replacement_client_pid = 51_002
     gpu_uuid = EXPECTED_GPU_UUIDS[1]
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
@@ -3368,6 +3372,8 @@ def _exact_mps_authority(
     state: dict[str, object] = {
         "control_pid": control_pid,
         "server_pid": server_pid,
+        "client_pid": client_pid,
+        "replacement_client_pid": replacement_client_pid,
         "gpu_uuid": gpu_uuid,
         "pipe_directory": pipe_directory,
         "pid_file": pid_file,
@@ -3392,10 +3398,21 @@ def _exact_mps_authority(
         "cgroups": {
             control_pid: "0::/user.slice/nexpoly-mps-test.scope",
             server_pid: "0::/user.slice/nexpoly-mps-test.scope",
+            client_pid: "0::/user.slice/nexpoly-md-worker.scope",
+            replacement_client_pid: "0::/user.slice/nexpoly-md-worker.scope",
         },
-        "ticks": {control_pid: 101, server_pid: 202},
+        "ticks": {
+            control_pid: 101,
+            server_pid: 202,
+            client_pid: 303,
+            replacement_client_pid: 404,
+        },
         "unstable_pid": None,
+        "unstable_cgroup_pid": None,
+        "unreadable_ticks_pid": None,
+        "unreadable_cgroup_pid": None,
         "tick_reads": {},
+        "cgroup_reads": {},
     }
 
     def run(command, **kwargs):
@@ -3429,14 +3446,25 @@ def _exact_mps_authority(
 
     def read_cgroup(pid: int) -> str:
         cgroups = state["cgroups"]
+        cgroup_reads = state["cgroup_reads"]
         assert isinstance(cgroups, dict)
-        return cgroups[pid]
+        assert isinstance(cgroup_reads, dict)
+        if state["unreadable_cgroup_pid"] == pid:
+            raise OSError("cgroup identity is unreadable")
+        reads = cgroup_reads.get(pid, 0)
+        cgroup_reads[pid] = reads + 1
+        value = cgroups[pid]
+        if state["unstable_cgroup_pid"] == pid and reads % 2:
+            return "0::/user.slice/foreign.scope"
+        return value
 
     def read_ticks(pid: int) -> int:
         tick_reads = state["tick_reads"]
         ticks = state["ticks"]
         assert isinstance(tick_reads, dict)
         assert isinstance(ticks, dict)
+        if state["unreadable_ticks_pid"] == pid:
+            raise OSError("process start ticks are unreadable")
         reads = tick_reads.get(pid, 0)
         tick_reads[pid] = reads + 1
         value = ticks[pid]
@@ -3550,6 +3578,35 @@ def test_mps_authority_accepts_control_only_before_lazy_server_creation(
     assert authority.server_pids == frozenset()
     assert authority.clients == frozenset()
     assert {item.pid for item in authority.gpu_declarers} == {control_pid}
+    assert authority.client_process_identities == frozenset()
+
+
+def test_mps_authority_returns_exact_stable_client_process_identity(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    client_pid = state["client_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+    assert isinstance(client_pid, int)
+    state["client_inventory"] = (
+        "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+        f"{client_pid} 0 {server_pid} {gpu_uuid} 4026531836 client\n"
+    )
+
+    authority = mps_guard.authority_snapshot(1, gpu_uuid)
+
+    assert authority.client_process_identities == frozenset(
+        {
+            MpsClientProcessIdentity(
+                client_pid=client_pid,
+                process_start_ticks=303,
+                process_cgroup="/user.slice/nexpoly-md-worker.scope",
+            )
+        }
+    )
 
 
 def test_mps_authority_reports_lazy_server_cas_then_succeeds(
@@ -3577,6 +3634,7 @@ def test_mps_authority_reports_lazy_server_cas_then_succeeds(
     with pytest.raises(BrokerError) as error:
         mps_guard.authority_snapshot(1, gpu_uuid)
     assert error.value.code == "mps_authority_changed"
+    assert type(error.value) is BrokerError
 
     authority = mps_guard.authority_snapshot(1, gpu_uuid)
     assert authority.server_pids == frozenset({server_pid})
@@ -3584,7 +3642,7 @@ def test_mps_authority_reports_lazy_server_cas_then_succeeds(
 
 
 @pytest.mark.parametrize("membership_loss", ("server", "client"))
-def test_mps_authority_never_classifies_membership_loss_as_warmup_churn(
+def test_mps_authority_structures_only_exact_client_membership_loss(
     tmp_path: Path,
     membership_loss: str,
 ) -> None:
@@ -3616,9 +3674,28 @@ def test_mps_authority_never_classifies_membership_loss_as_warmup_churn(
         mps_guard.authority_snapshot(1, gpu_uuid)
 
     assert error.value.code == "mps_control_unavailable"
+    if membership_loss == "server":
+        assert type(error.value) is BrokerError
+    else:
+        assert isinstance(error.value, MpsClientMembershipChanged)
+        assert {
+            client.client_pid
+            for client in error.value.before_authority.clients
+        } == {51_001}
+        assert error.value.after_authority.clients == frozenset()
+        assert error.value.before_authority.client_process_identities == frozenset(
+            {
+                MpsClientProcessIdentity(
+                    client_pid=51_001,
+                    process_start_ticks=303,
+                    process_cgroup="/user.slice/nexpoly-md-worker.scope",
+                )
+            }
+        )
+        assert error.value.after_authority.client_process_identities == frozenset()
 
 
-def test_mps_authority_reports_strict_client_growth_as_warmup_churn(
+def test_mps_authority_reports_structured_strict_client_growth(
     tmp_path: Path,
 ) -> None:
     mps_guard, state = _exact_mps_authority(tmp_path)
@@ -3642,14 +3719,202 @@ def test_mps_authority_reports_strict_client_growth_as_warmup_churn(
 
     state["command_hook"] = add_client
 
-    with pytest.raises(BrokerError) as error:
+    with pytest.raises(MpsClientMembershipChanged) as error:
         mps_guard.authority_snapshot(1, gpu_uuid)
     assert error.value.code == "mps_authority_changed"
+    assert (
+        error.value.before_authority.server_pids
+        == error.value.after_authority.server_pids
+        == frozenset({server_pid})
+    )
+    assert (
+        error.value.before_authority.gpu_declarers
+        == error.value.after_authority.gpu_declarers
+    )
+    assert (
+        error.value.before_authority.descriptor_authority
+        is error.value.after_authority.descriptor_authority
+    )
+    assert error.value.before_authority.clients == frozenset()
+    assert {
+        client.client_pid for client in error.value.after_authority.clients
+    } == {51_001}
+    assert error.value.before_authority.client_process_identities == frozenset()
+    assert error.value.after_authority.client_process_identities == frozenset(
+        {
+            MpsClientProcessIdentity(
+                client_pid=51_001,
+                process_start_ticks=303,
+                process_cgroup="/user.slice/nexpoly-md-worker.scope",
+            )
+        }
+    )
 
     assert {client.client_pid for client in mps_guard.authority_snapshot(
         1,
         gpu_uuid,
     ).clients} == {51001}
+
+
+def test_mps_authority_reports_structured_client_replacement(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    client_pid = state["client_pid"]
+    replacement_client_pid = state["replacement_client_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+    assert isinstance(client_pid, int)
+    assert isinstance(replacement_client_pid, int)
+    state["client_inventory"] = (
+        "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+        f"{client_pid} 0 {server_pid} {gpu_uuid} 4026531836 client\n"
+    )
+    ps_calls = 0
+
+    def replace_client(command: str) -> None:
+        nonlocal ps_calls
+        if command != "ps":
+            return
+        ps_calls += 1
+        if ps_calls == 2:
+            state["client_inventory"] = (
+                "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+                f"{replacement_client_pid} 1 {server_pid} {gpu_uuid} "
+                "4026531836 replacement\n"
+            )
+
+    state["command_hook"] = replace_client
+
+    with pytest.raises(MpsClientMembershipChanged) as error:
+        mps_guard.authority_snapshot(1, gpu_uuid)
+
+    assert error.value.code == "mps_control_unavailable"
+    assert (
+        error.value.before_authority.server_pids
+        == error.value.after_authority.server_pids
+        == frozenset({server_pid})
+    )
+    assert (
+        error.value.before_authority.gpu_declarers
+        == error.value.after_authority.gpu_declarers
+    )
+    assert (
+        error.value.before_authority.descriptor_authority
+        is error.value.after_authority.descriptor_authority
+    )
+    assert {
+        client.client_pid for client in error.value.before_authority.clients
+    } == {client_pid}
+    assert {
+        client.client_pid for client in error.value.after_authority.clients
+    } == {replacement_client_pid}
+    assert error.value.before_authority.client_process_identities == frozenset(
+        {
+            MpsClientProcessIdentity(
+                client_pid=client_pid,
+                process_start_ticks=303,
+                process_cgroup="/user.slice/nexpoly-md-worker.scope",
+            )
+        }
+    )
+    assert error.value.after_authority.client_process_identities == frozenset(
+        {
+            MpsClientProcessIdentity(
+                client_pid=replacement_client_pid,
+                process_start_ticks=404,
+                process_cgroup="/user.slice/nexpoly-md-worker.scope",
+            )
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "unstable_pid",
+        "unstable_cgroup_pid",
+        "unreadable_ticks_pid",
+        "unreadable_cgroup_pid",
+    ),
+)
+def test_mps_client_change_with_unprovable_process_identity_is_unstructured(
+    tmp_path: Path,
+    fault: str,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    client_pid = state["client_pid"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+    assert isinstance(client_pid, int)
+    ps_calls = 0
+
+    def add_unprovable_client(command: str) -> None:
+        nonlocal ps_calls
+        if command != "ps":
+            return
+        ps_calls += 1
+        if ps_calls == 2:
+            state["client_inventory"] = (
+                "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+                f"{client_pid} 0 {server_pid} {gpu_uuid} 4026531836 client\n"
+            )
+
+    state[fault] = client_pid
+    state["command_hook"] = add_unprovable_client
+
+    with pytest.raises(BrokerError) as error:
+        mps_guard.authority_snapshot(1, gpu_uuid)
+
+    assert type(error.value) is BrokerError
+    assert error.value.code == "mps_control_unavailable"
+
+
+def test_mps_client_growth_with_retained_pid_reuse_is_unstructured(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    gpu_uuid = state["gpu_uuid"]
+    server_pid = state["server_pid"]
+    client_pid = state["client_pid"]
+    replacement_client_pid = state["replacement_client_pid"]
+    ticks = state["ticks"]
+    assert isinstance(gpu_uuid, str)
+    assert isinstance(server_pid, int)
+    assert isinstance(client_pid, int)
+    assert isinstance(replacement_client_pid, int)
+    assert isinstance(ticks, dict)
+    state["client_inventory"] = (
+        "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+        f"{client_pid} 0 {server_pid} {gpu_uuid} 4026531836 client\n"
+    )
+    ps_calls = 0
+
+    def reuse_retained_pid_while_adding_client(command: str) -> None:
+        nonlocal ps_calls
+        if command != "ps":
+            return
+        ps_calls += 1
+        if ps_calls == 2:
+            ticks[client_pid] = 304
+            state["client_inventory"] = (
+                "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+                f"{client_pid} 0 {server_pid} {gpu_uuid} 4026531836 client\n"
+                f"{replacement_client_pid} 1 {server_pid} {gpu_uuid} "
+                "4026531836 added\n"
+            )
+
+    state["command_hook"] = reuse_retained_pid_while_adding_client
+
+    with pytest.raises(BrokerError) as error:
+        mps_guard.authority_snapshot(1, gpu_uuid)
+
+    assert type(error.value) is BrokerError
+    assert error.value.code == "mps_control_unavailable"
 
 
 @pytest.mark.parametrize("fault", ("environment", "cgroup", "start_ticks"))
@@ -3687,6 +3952,7 @@ def test_control_only_mps_authority_rejects_identity_drift(
         mps_guard.authority_snapshot(1, gpu_uuid)
 
     assert error.value.code == "mps_control_unavailable"
+    assert type(error.value) is BrokerError
 
 
 def test_descriptor_mps_authority_accepts_abbreviated_client_uuid(
@@ -3792,6 +4058,29 @@ def test_mps_authority_rejects_control_endpoint_replacement_during_audit(
         mps_guard.authorized_server_pids(1, EXPECTED_GPU_UUIDS[1])
 
     assert error.value.code == "mps_control_unavailable"
+    assert type(error.value) is BrokerError
+
+
+def test_mps_control_pid_change_is_not_structured_as_client_churn(
+    tmp_path: Path,
+) -> None:
+    mps_guard, state = _exact_mps_authority(tmp_path)
+    pid_file = state["pid_file"]
+    server_pid = state["server_pid"]
+    assert isinstance(pid_file, Path)
+    assert isinstance(server_pid, int)
+
+    def replace_control_pid(command: str) -> None:
+        if command == "ps":
+            pid_file.write_text(f"{server_pid}\n", encoding="ascii")
+
+    state["command_hook"] = replace_control_pid
+
+    with pytest.raises(BrokerError) as error:
+        mps_guard.authority_snapshot(1, EXPECTED_GPU_UUIDS[1])
+
+    assert type(error.value) is BrokerError
+    assert error.value.code == "mps_control_unavailable"
 
 
 def test_mps_authority_discovers_exact_control_when_nvidia_omits_pid_file(
@@ -3821,6 +4110,7 @@ def test_mps_authority_rejects_hardlinked_control_endpoint(tmp_path: Path) -> No
         mps_guard.authorized_server_pids(1, EXPECTED_GPU_UUIDS[1])
 
     assert error.value.code == "mps_control_unavailable"
+    assert type(error.value) is BrokerError
 
 
 def test_host_mps_authority_requires_exact_systemd_unit_binding(
@@ -5611,6 +5901,21 @@ def test_descriptor_nvml_workload_requires_exact_mps_client_membership(
                         device_uuid=EXPECTED_GPU_UUIDS[1],
                         namespace_id=1,
                         command="gmx",
+                    )
+                }
+            )
+            if registered_client
+            else frozenset()
+        ),
+        client_process_identities=(
+            frozenset(
+                {
+                    MpsClientProcessIdentity(
+                        client_pid=md_pid,
+                        process_start_ticks=int(
+                            leases[1].workload_process_start_ticks or 0
+                        ),
+                        process_cgroup=str(leases[1].workload_cgroup)[3:],
                     )
                 }
             )

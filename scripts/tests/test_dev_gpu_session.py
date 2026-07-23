@@ -64,8 +64,13 @@ def mps_snapshot(
     server_pids: frozenset[int] = frozenset(),
     client_pids: frozenset[int] = frozenset(),
     declarers: frozenset[object] = frozenset(),
+    client_process_identities: frozenset[tuple[int, int, str]] = frozenset(),
 ) -> object:
-    from ops.gpu_broker.server import MpsAuthoritySnapshot, MpsClient
+    from ops.gpu_broker.server import (
+        MpsAuthoritySnapshot,
+        MpsClient,
+        MpsClientProcessIdentity,
+    )
 
     server_pid = next(iter(server_pids), 7001)
     return MpsAuthoritySnapshot(
@@ -83,6 +88,14 @@ def mps_snapshot(
             for index, pid in enumerate(sorted(client_pids))
         ),
         descriptor_authority=True,
+        client_process_identities=frozenset(
+            MpsClientProcessIdentity(
+                client_pid=pid,
+                process_start_ticks=start_ticks,
+                process_cgroup=control_group,
+            )
+            for pid, start_ticks, control_group in client_process_identities
+        ),
     )
 
 
@@ -3698,6 +3711,11 @@ def test_trailing_audit_exact_md_releases_keep_three_round_budget(
     client.status = status
     monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
     monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        lambda _client: controller._mps_authority(),
+    )
 
     with pytest.raises(
         session.DevGpuSessionError,
@@ -3707,6 +3725,650 @@ def test_trailing_audit_exact_md_releases_keep_three_round_budget(
 
     assert round_index + 1 == session.FULL_AUDIT_ATTEMPTS
     assert systemd_reads == session.FULL_AUDIT_ATTEMPTS
+
+
+def _exact_md_mps_transition(
+    transition: str,
+) -> tuple[object, object, dict[str, object], dict[str, object], dict[str, object]]:
+    from gpu_resource.transient_scope import scope_control_group
+
+    md_lease = md_execution_record()
+    scope_cgroup = scope_control_group(md_lease["lease_id"], uid=1001)
+    idle: dict[str, object] = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    active: dict[str, object] = {
+        **idle,
+        "next_fencing_token": 3,
+        "leases": [md_lease],
+    }
+    terminating_lease = {
+        **md_lease,
+        "status": "terminating",
+        "mps_termination_status": "safe",
+        "mps_terminated_client_pids": [76741],
+        "mps_termination_at": 1234.5,
+    }
+    terminating: dict[str, object] = {
+        **active,
+        "leases": [terminating_lease],
+    }
+    released: dict[str, object] = {
+        **active,
+        "last_released_lease": terminating_lease,
+        "leases": [],
+    }
+
+    empty = mps_snapshot(
+        server_pids=frozenset({7001}),
+        declarers=frozenset({mps_declarer(7000), mps_declarer(7001, 101)}),
+    )
+    first = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({76741}),
+        declarers=frozenset({mps_declarer(7000), mps_declarer(7001, 101)}),
+        client_process_identities=frozenset(
+            {(76741, 901, scope_cgroup)}
+        ),
+    )
+    second = mps_snapshot(
+        server_pids=frozenset({7001}),
+        client_pids=frozenset({76742}),
+        declarers=frozenset({mps_declarer(7000), mps_declarer(7001, 101)}),
+        client_process_identities=frozenset(
+            {(76742, 902, scope_cgroup)}
+        ),
+    )
+    if transition == "issue_growth":
+        return empty, first, idle, active, md_lease
+    if transition == "active_growth":
+        return empty, first, active, active, md_lease
+    if transition == "release_shrink":
+        return first, empty, active, released, md_lease
+    if transition == "termination_shrink":
+        return first, empty, active, terminating, md_lease
+    if transition == "completed_aba_shrink":
+        return first, empty, idle, released, md_lease
+    if transition == "active_shrink":
+        return first, empty, active, active, md_lease
+    if transition == "active_replace":
+        return first, second, active, active, md_lease
+    raise AssertionError(f"unknown MD MPS transition: {transition}")
+
+
+@pytest.mark.parametrize(
+    "transition",
+    (
+        "issue_growth",
+        "active_growth",
+        "release_shrink",
+        "termination_shrink",
+        "completed_aba_shrink",
+        "active_shrink",
+        "active_replace",
+    ),
+)
+def test_exact_md_mps_lifecycle_classifier_accepts_only_exact_scope_identity(
+    transition: str,
+) -> None:
+    before_authority, after_authority, before, after, lease = (
+        _exact_md_mps_transition(transition)
+    )
+
+    assert session._exact_md_mps_lifecycle_transition_key(
+        before_authority,
+        after_authority,
+        before,
+        after,
+    ) == (lease["lease_id"], lease["fencing_token"])
+
+
+@pytest.mark.parametrize(
+    "transition",
+    (
+        "issue_growth",
+        "termination_shrink",
+        "release_shrink",
+        "completed_aba_shrink",
+    ),
+)
+def test_exact_md_broker_lifecycle_classifier_covers_real_cleanup_phases(
+    transition: str,
+) -> None:
+    _before_authority, _after_authority, before, after, lease = (
+        _exact_md_mps_transition(transition)
+    )
+
+    assert session._exact_md_broker_lifecycle_transition_key(
+        before,
+        after,
+    ) == (lease["lease_id"], lease["fencing_token"])
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "foreign_cgroup",
+        "foreign_pid",
+        "pid_reuse",
+        "retained_pid_reuse",
+        "missing_identity",
+        "multiple_md",
+        "broker_restart",
+        "before_draining",
+        "after_draining",
+        "before_quarantine",
+        "after_quarantine",
+        "wrong_terminated_pids",
+        "terminal_scope_survivor",
+        "terminal_same_pid_record_survivor",
+        "growth_during_release",
+        "shrink_during_issue",
+    ),
+)
+def test_exact_md_mps_lifecycle_classifier_rejects_ambiguous_authority(
+    tamper: str,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group
+
+    before_authority, after_authority, before, after, lease = (
+        _exact_md_mps_transition("active_growth")
+    )
+    scope_cgroup = scope_control_group(lease["lease_id"], uid=1001)
+    if tamper == "foreign_cgroup":
+        after_authority = mps_snapshot(
+            server_pids=frozenset({7001}),
+            client_pids=frozenset({76741}),
+            declarers=frozenset(
+                {mps_declarer(7000), mps_declarer(7001, 101)}
+            ),
+            client_process_identities=frozenset(
+                {(76741, 901, "/user.slice/foreign.scope")}
+            ),
+        )
+    elif tamper == "foreign_pid":
+        after_authority = mps_snapshot(
+            server_pids=frozenset({7001}),
+            client_pids=frozenset({76741}),
+            declarers=frozenset(
+                {mps_declarer(7000), mps_declarer(7001, 101)}
+            ),
+            client_process_identities=frozenset(
+                {(99001, 901, scope_cgroup)}
+            ),
+        )
+    elif tamper == "pid_reuse":
+        before_authority = mps_snapshot(
+            server_pids=frozenset({7001}),
+            client_pids=frozenset({76741}),
+            declarers=frozenset(
+                {mps_declarer(7000), mps_declarer(7001, 101)}
+            ),
+            client_process_identities=frozenset(
+                {(76741, 900, scope_cgroup)}
+            ),
+        )
+        after_authority = mps_snapshot(
+            server_pids=frozenset({7001}),
+            client_pids=frozenset({76741}),
+            declarers=frozenset(
+                {mps_declarer(7000), mps_declarer(7001, 101)}
+            ),
+            client_process_identities=frozenset(
+                {(76741, 901, scope_cgroup)}
+            ),
+        )
+    elif tamper == "retained_pid_reuse":
+        before_authority = mps_snapshot(
+            server_pids=frozenset({7001}),
+            client_pids=frozenset({76740}),
+            declarers=frozenset(
+                {mps_declarer(7000), mps_declarer(7001, 101)}
+            ),
+            client_process_identities=frozenset(
+                {(76740, 900, scope_cgroup)}
+            ),
+        )
+        after_authority = mps_snapshot(
+            server_pids=frozenset({7001}),
+            client_pids=frozenset({76740, 76741}),
+            declarers=frozenset(
+                {mps_declarer(7000), mps_declarer(7001, 101)}
+            ),
+            client_process_identities=frozenset(
+                {
+                    (76740, 901, scope_cgroup),
+                    (76741, 902, scope_cgroup),
+                }
+            ),
+        )
+    elif tamper == "missing_identity":
+        after_authority = mps_snapshot(
+            server_pids=frozenset({7001}),
+            client_pids=frozenset({76741}),
+            declarers=frozenset(
+                {mps_declarer(7000), mps_declarer(7001, 101)}
+            ),
+        )
+    elif tamper == "multiple_md":
+        second = md_execution_record(
+            lease_id="e3" * 16,
+            fencing_token=3,
+            workload_pid=76750,
+            workload_start_ticks=910,
+        )
+        before = {**before, "next_fencing_token": 4, "leases": [lease, second]}
+        after = {**after, "next_fencing_token": 4, "leases": [lease, second]}
+    elif tamper == "broker_restart":
+        after = {**after, "broker_instance_id": "replacement"}
+    elif tamper == "before_draining":
+        before = {**before, "draining": True}
+    elif tamper == "after_draining":
+        after = {**after, "draining": True}
+    elif tamper == "before_quarantine":
+        before = {**before, "quarantined_gpus": {"1": "blocked"}}
+    elif tamper == "after_quarantine":
+        after = {**after, "quarantined_gpus": {"1": "blocked"}}
+    elif tamper == "wrong_terminated_pids":
+        before_authority, after_authority, before, after, _ = (
+            _exact_md_mps_transition("termination_shrink")
+        )
+        terminating_lease = dict(after["leases"][0])
+        terminating_lease["mps_terminated_client_pids"] = [99901]
+        after = {**after, "leases": [terminating_lease]}
+    elif tamper == "terminal_scope_survivor":
+        before_authority, _empty, before, after, _ = (
+            _exact_md_mps_transition("termination_shrink")
+        )
+        before_authority = mps_snapshot(
+            server_pids=frozenset({7001}),
+            client_pids=frozenset({76741, 76742}),
+            declarers=frozenset(
+                {mps_declarer(7000), mps_declarer(7001, 101)}
+            ),
+            client_process_identities=frozenset(
+                {
+                    (76741, 901, scope_cgroup),
+                    (76742, 902, scope_cgroup),
+                }
+            ),
+        )
+        after_authority = mps_snapshot(
+            server_pids=frozenset({7001}),
+            client_pids=frozenset({76742}),
+            declarers=frozenset(
+                {mps_declarer(7000), mps_declarer(7001, 101)}
+            ),
+            client_process_identities=frozenset(
+                {(76742, 902, scope_cgroup)}
+            ),
+        )
+    elif tamper == "terminal_same_pid_record_survivor":
+        from dataclasses import replace
+
+        before_authority, _empty, before, after, _ = (
+            _exact_md_mps_transition("termination_shrink")
+        )
+        client_record = next(iter(before_authority.clients))
+        surviving_record = replace(
+            client_record,
+            client_id=client_record.client_id + 1,
+        )
+        before_authority = replace(
+            before_authority,
+            clients=frozenset({client_record, surviving_record}),
+        )
+        after_authority = replace(
+            before_authority,
+            clients=frozenset({surviving_record}),
+        )
+    elif tamper == "growth_during_release":
+        _, _, release_before, release_after, _ = _exact_md_mps_transition(
+            "release_shrink"
+        )
+        before, after = release_before, release_after
+    elif tamper == "shrink_during_issue":
+        before_authority, after_authority, _, _, _ = (
+            _exact_md_mps_transition("active_shrink")
+        )
+        _, _, issue_before, issue_after, _ = _exact_md_mps_transition(
+            "issue_growth"
+        )
+        before, after = issue_before, issue_after
+    else:
+        raise AssertionError(f"unknown tamper: {tamper}")
+
+    assert session._exact_md_mps_lifecycle_transition_key(
+        before_authority,
+        after_authority,
+        before,
+        after,
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("transition", "code"),
+    (
+        ("issue_growth", "mps_authority_changed"),
+        ("termination_shrink", "mps_control_unavailable"),
+        ("release_shrink", "mps_control_unavailable"),
+        ("completed_aba_shrink", "mps_control_unavailable"),
+    ),
+)
+def test_mps_authority_for_audit_surfaces_exact_md_lifecycle_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    transition: str,
+    code: str,
+) -> None:
+    from ops.gpu_broker.server import MpsClientMembershipChanged
+
+    before_authority, after_authority, before, after, lease = (
+        _exact_md_mps_transition(transition)
+    )
+    error = MpsClientMembershipChanged(
+        code,
+        "descriptor-owned MPS client membership changed during audit",
+        before_authority,
+        after_authority,
+    )
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    status_reads = 0
+
+    def status() -> dict[str, object]:
+        nonlocal status_reads
+        status_reads += 1
+        return before if status_reads == 1 else after
+
+    client = SimpleNamespace(status=status)
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority",
+        lambda: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(session._ExactMdLifecycleChurn) as raised:
+        controller._mps_authority_for_audit(client)
+
+    assert raised.value.lease_key == (
+        lease["lease_id"],
+        lease["fencing_token"],
+    )
+    assert raised.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    ("transition", "code"),
+    (
+        ("active_growth", "mps_control_unavailable"),
+        ("active_shrink", "mps_authority_changed"),
+    ),
+)
+def test_mps_authority_for_audit_preserves_direction_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    transition: str,
+    code: str,
+) -> None:
+    from ops.gpu_broker.server import MpsClientMembershipChanged
+
+    before_authority, after_authority, before, after, _lease = (
+        _exact_md_mps_transition(transition)
+    )
+    error = MpsClientMembershipChanged(
+        code,
+        "structured MPS membership changed in the wrong direction",
+        before_authority,
+        after_authority,
+    )
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority",
+        lambda: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(MpsClientMembershipChanged) as raised:
+        controller._mps_authority_for_audit(client)
+
+    assert raised.value is error
+
+
+@pytest.mark.parametrize(
+    "code",
+    ("mps_authority_changed", "mps_control_unavailable"),
+)
+def test_mps_authority_for_audit_never_upgrades_plain_broker_error_to_md_churn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+) -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    _before_authority, _after_authority, before, _after, _lease = (
+        _exact_md_mps_transition("active_growth")
+    )
+    error = BrokerError(code, "unstructured MPS membership changed")
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    client = SimpleNamespace(status=lambda: before)
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority",
+        lambda: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(BrokerError) as raised:
+        controller._mps_authority_for_audit(client)
+
+    assert raised.value is error
+
+
+def test_full_audit_same_md_mps_key_uses_dedicated_budget_beyond_three(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    authority = mps_snapshot()
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        authority=authority,
+    )
+    calls = 0
+    lease_key = ("e2" * 16, 2)
+
+    def authority_for_audit(_client: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls <= session.FULL_AUDIT_ATTEMPTS + 1:
+            raise session._ExactMdLifecycleChurn(
+                lease_key,
+                "one exact MD MPS membership changed",
+            )
+        return authority
+
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        authority_for_audit,
+    )
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert calls == session.FULL_AUDIT_ATTEMPTS + 4
+    assert controller.full_audit_generation == 1
+
+
+@pytest.mark.parametrize("change_site", ("initial", "trailing"))
+def test_full_audit_surfaces_exact_md_mps_churn_before_unknown_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change_site: str,
+) -> None:
+    before_authority, after_authority, status, _after, _lease = (
+        _exact_md_mps_transition("active_growth")
+    )
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        authority=before_authority,
+    )
+    changed_rounds = session.FULL_AUDIT_ATTEMPTS + 1
+    per_changed_round = (
+        (before_authority, after_authority)
+        if change_site == "initial"
+        else (before_authority, before_authority, after_authority)
+    )
+    authorities = iter(
+        (
+            *(
+                authority
+                for _round in range(changed_rounds)
+                for authority in per_changed_round
+            ),
+            before_authority,
+            before_authority,
+            before_authority,
+        )
+    )
+    calls = 0
+
+    def authority_for_audit(_client: object) -> object:
+        nonlocal calls
+        calls += 1
+        return next(authorities)
+
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        authority_for_audit,
+    )
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert calls == changed_rounds * len(per_changed_round) + 3
+    assert controller.full_audit_generation == 1
+
+
+def test_full_audit_same_md_mps_key_dedicated_budget_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    calls = 0
+
+    def authority_for_audit(_client: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise session._ExactMdLifecycleChurn(
+            ("e2" * 16, 2),
+            "one exact MD MPS membership changed",
+        )
+
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        authority_for_audit,
+    )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="one exact MD lease lifecycle did not stabilize",
+    ):
+        controller._audit(client)
+
+    assert calls == session.EXACT_MD_LIFECYCLE_AUDIT_ATTEMPTS
+    assert controller.full_audit_generation == 0
+
+
+def test_full_audit_different_md_mps_keys_keep_short_authority_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "draining": False,
+        "leases": [],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    client = patch_full_audit_runtime(monkeypatch, controller, status)
+    keys = iter(
+        (
+            ("e2" * 16, 2),
+            ("e3" * 16, 3),
+            ("e4" * 16, 4),
+        )
+    )
+    calls = 0
+
+    def authority_for_audit(_client: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise session._ExactMdLifecycleChurn(
+            next(keys),
+            "a different exact MD MPS membership changed",
+        )
+
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        authority_for_audit,
+    )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="authority changed throughout trailing full audits",
+    ):
+        controller._audit(client)
+
+    assert calls == session.FULL_AUDIT_ATTEMPTS
+    assert controller.full_audit_generation == 0
 
 
 def test_trailing_audit_propagates_unowned_process_disappearance(
@@ -3743,6 +4405,11 @@ def test_trailing_audit_propagates_unowned_process_disappearance(
         server,
         "query_systemd_gpu_claims",
         lambda **_kwargs: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_mps_authority_for_audit",
+        lambda _client: controller._mps_authority(),
     )
 
     with pytest.raises(server.SystemdProcessDisappeared) as raised:

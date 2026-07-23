@@ -103,6 +103,15 @@ class SystemdGpuDeclarer:
 
 
 @dataclass(frozen=True, slots=True)
+class MpsClientProcessIdentity:
+    """One MPS client PID bound to an adjacent host process identity."""
+
+    client_pid: int
+    process_start_ticks: int
+    process_cgroup: str
+
+
+@dataclass(frozen=True, slots=True)
 class MpsAuthoritySnapshot:
     """One descriptor-bound MPS control-plane CAS result."""
 
@@ -110,6 +119,24 @@ class MpsAuthoritySnapshot:
     gpu_declarers: frozenset[SystemdGpuDeclarer]
     clients: frozenset["MpsClient"]
     descriptor_authority: bool
+    client_process_identities: frozenset[MpsClientProcessIdentity] = frozenset()
+
+
+class MpsClientMembershipChanged(BrokerError):
+    """A client-only MPS CAS delta with both adjacent process identities."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        before_authority: MpsAuthoritySnapshot,
+        after_authority: MpsAuthoritySnapshot,
+    ) -> None:
+        if code not in {"mps_authority_changed", "mps_control_unavailable"}:
+            raise ValueError("MPS client membership change code is invalid")
+        super().__init__(code, message)
+        self.before_authority = before_authority
+        self.after_authority = after_authority
 
 
 @dataclass(frozen=True, slots=True)
@@ -3476,6 +3503,7 @@ class ExternalGpuGuard:
             or not isinstance(authority.gpu_declarers, frozenset)
             or not isinstance(authority.clients, frozenset)
             or not isinstance(authority.descriptor_authority, bool)
+            or not isinstance(authority.client_process_identities, frozenset)
             or (
                 self._allow_descriptor_mps_authority
                 and self._mps_authority_query is not None
@@ -3511,6 +3539,32 @@ class ExternalGpuGuard:
                 or client.server_pid not in authority.server_pids
                 or not _mps_device_matches(client.device_uuid, uuid)
                 for client in authority.clients
+            )
+            or any(
+                not isinstance(identity, MpsClientProcessIdentity)
+                or isinstance(identity.client_pid, bool)
+                or identity.client_pid <= 0
+                or isinstance(identity.process_start_ticks, bool)
+                or identity.process_start_ticks <= 0
+                or not isinstance(identity.process_cgroup, str)
+                or not identity.process_cgroup.startswith("/")
+                or identity.process_cgroup == "/"
+                for identity in authority.client_process_identities
+            )
+            or len(authority.client_process_identities)
+            != len(
+                {
+                    identity.client_pid
+                    for identity in authority.client_process_identities
+                }
+            )
+            or (
+                authority.descriptor_authority
+                and {
+                    identity.client_pid
+                    for identity in authority.client_process_identities
+                }
+                != {client.client_pid for client in authority.clients}
             )
         ):
             raise BrokerError(
@@ -4916,6 +4970,20 @@ class MpsRuntimeGuard:
             )
 
         clients = self._query_clients(index, deadline=deadline)
+        client_process_identities: frozenset[MpsClientProcessIdentity] | None = None
+        if server_pid is not None:
+            if any(
+                client.server_pid != server_pid
+                or not self._device_matches(client.device_uuid, uuid)
+                for client in clients
+            ):
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "MPS client inventory differs from server authority",
+                )
+            client_process_identities = self._capture_client_process_identities(
+                clients
+            )
         middle_servers = self._server_list(index, deadline=deadline)
         if (
             self._control_pid(pipe_directory, uuid) != control_pid
@@ -4927,16 +4995,13 @@ class MpsRuntimeGuard:
             )
         if middle_servers != first_servers:
             reject_server_membership_change(middle_servers)
-        if any(
-            server_pid is None
-            or client.server_pid != server_pid
-            or not self._device_matches(client.device_uuid, uuid)
-            for client in clients
-        ):
+        if server_pid is None and clients:
             raise BrokerError(
                 "mps_control_unavailable",
                 "MPS client inventory differs from server authority",
             )
+        if client_process_identities is None:
+            client_process_identities = frozenset()
         control_declarer = self._validated_gpu_declarer(
             control_pid,
             self.control_executable,
@@ -4970,6 +5035,22 @@ class MpsRuntimeGuard:
                 "MPS process authority changed during audit",
             )
         trailing_clients = self._query_clients(index, deadline=deadline)
+        trailing_client_process_identities: (
+            frozenset[MpsClientProcessIdentity] | None
+        ) = None
+        if server_pid is not None:
+            if any(
+                client.server_pid != server_pid
+                or not self._device_matches(client.device_uuid, uuid)
+                for client in trailing_clients
+            ):
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "MPS trailing client inventory differs from server authority",
+                )
+            trailing_client_process_identities = (
+                self._capture_client_process_identities(trailing_clients)
+            )
         trailing_servers = self._server_list(index, deadline=deadline)
         if (
             self._control_pid(pipe_directory, uuid) != control_pid
@@ -4981,6 +5062,13 @@ class MpsRuntimeGuard:
             )
         if trailing_servers != first_servers:
             reject_server_membership_change(trailing_servers)
+        if server_pid is None and trailing_clients:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS trailing client inventory differs from server authority",
+            )
+        if trailing_client_process_identities is None:
+            trailing_client_process_identities = frozenset()
         trailing_declarers = {
             self._validated_gpu_declarer(
                 control_pid,
@@ -5007,33 +5095,111 @@ class MpsRuntimeGuard:
                 "mps_control_unavailable",
                 "MPS declarer authority changed during final identity audit",
             )
-        if any(
-            server_pid is None
-            or client.server_pid != server_pid
-            or not self._device_matches(client.device_uuid, uuid)
-            for client in trailing_clients
-        ):
-            raise BrokerError(
-                "mps_control_unavailable",
-                "MPS trailing client inventory differs from server authority",
-            )
-        if frozenset(trailing_clients) != frozenset(clients):
-            if frozenset(clients) < frozenset(trailing_clients):
+        client_set = frozenset(clients)
+        trailing_client_set = frozenset(trailing_clients)
+        if trailing_client_set != client_set:
+            before_identity_by_pid = {
+                identity.client_pid: identity
+                for identity in client_process_identities
+            }
+            after_identity_by_pid = {
+                identity.client_pid: identity
+                for identity in trailing_client_process_identities
+            }
+            if any(
+                before_identity_by_pid[pid] != after_identity_by_pid[pid]
+                for pid in before_identity_by_pid.keys()
+                & after_identity_by_pid.keys()
+            ):
                 raise BrokerError(
+                    "mps_control_unavailable",
+                    "MPS retained client process identity changed during audit",
+                )
+            before_authority = MpsAuthoritySnapshot(
+                server_pids=first_servers,
+                gpu_declarers=frozenset(declarers),
+                clients=client_set,
+                descriptor_authority=self.descriptor_authority,
+                client_process_identities=client_process_identities,
+            )
+            after_authority = MpsAuthoritySnapshot(
+                server_pids=first_servers,
+                gpu_declarers=frozenset(trailing_declarers),
+                clients=trailing_client_set,
+                descriptor_authority=self.descriptor_authority,
+                client_process_identities=(
+                    trailing_client_process_identities
+                ),
+            )
+            if client_set < trailing_client_set:
+                raise MpsClientMembershipChanged(
                     "mps_authority_changed",
                     "descriptor-owned MPS client membership grew during audit",
+                    before_authority,
+                    after_authority,
                 )
-            raise BrokerError(
+            raise MpsClientMembershipChanged(
                 "mps_control_unavailable",
                 "MPS client identity disappeared or changed during audit",
+                before_authority,
+                after_authority,
+            )
+        if trailing_client_process_identities != client_process_identities:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS client process identity changed during audit",
             )
         _ensure_admission_open(deadline)
         return MpsAuthoritySnapshot(
             server_pids=first_servers,
             gpu_declarers=frozenset(trailing_declarers),
-            clients=frozenset(clients),
+            clients=client_set,
             descriptor_authority=self.descriptor_authority,
+            client_process_identities=trailing_client_process_identities,
         )
+
+    def _capture_client_process_identities(
+        self,
+        clients: tuple["MpsClient", ...],
+    ) -> frozenset[MpsClientProcessIdentity]:
+        """Bind every reported MPS client PID to one stable scoped cgroup."""
+
+        identities: set[MpsClientProcessIdentity] = set()
+        for pid in sorted({client.client_pid for client in clients}):
+            try:
+                start_before = self._read_start_ticks(pid)
+                cgroup_before = self._read_process_cgroup(pid)
+                start_after = self._read_start_ticks(pid)
+                cgroup_after = self._read_process_cgroup(pid)
+            except (BrokerError, OSError, TypeError, ValueError) as exc:
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "cannot bind an MPS client to a stable host identity",
+                ) from exc
+            if (
+                isinstance(start_before, bool)
+                or not isinstance(start_before, int)
+                or start_before <= 0
+                or isinstance(start_after, bool)
+                or not isinstance(start_after, int)
+                or start_after <= 0
+                or start_after != start_before
+                or not isinstance(cgroup_before, str)
+                or cgroup_after != cgroup_before
+                or not _cgroup_has_scoped_path(cgroup_before)
+            ):
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "MPS client host identity changed during audit",
+                )
+            identities.add(
+                MpsClientProcessIdentity(
+                    client_pid=pid,
+                    process_start_ticks=start_before,
+                    process_cgroup=self._unified_cgroup_path(cgroup_before),
+                )
+            )
+        return frozenset(identities)
 
     @staticmethod
     def _unified_cgroup_path(raw: str) -> str:
