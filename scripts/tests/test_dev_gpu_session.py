@@ -851,6 +851,11 @@ def test_inventory_filters_gpu3_and_never_treats_polyprop_as_gpu1(monkeypatch) -
         "query_systemd_gpu_claims",
         lambda **_kwargs: (gpu3_claim,),
     )
+    monkeypatch.setattr(
+        session,
+        "require_gpu1_default_compute_mode",
+        lambda: None,
+    )
 
     snapshot = session.collect_target_snapshot()
 
