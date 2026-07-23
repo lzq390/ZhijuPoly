@@ -574,6 +574,16 @@ export default function App() {
     projectBridge.openProject(directory);
   }
 
+  function browseAgentProjects() {
+    navigate({ module: "home", datasetKey: null });
+    projectBridge.browseProjects();
+  }
+
+  function createAgentProject() {
+    navigate({ module: "home", datasetKey: null });
+    projectBridge.newProject();
+  }
+
   const moduleGroups: AppShellModuleGroup[] = [
     {
       title: "结构",
@@ -737,6 +747,8 @@ export default function App() {
       activeProjectDirectory={projectSnapshot?.activeDirectory ?? null}
       isProjectBridgeReady={projectSnapshot !== null}
       onOpenProject={openAgentProject}
+      onBrowseProjects={browseAgentProjects}
+      onNewProject={createAgentProject}
     >
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
         <AgentWorkspaceHomePage

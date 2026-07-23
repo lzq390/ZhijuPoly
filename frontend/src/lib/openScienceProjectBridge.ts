@@ -121,6 +121,20 @@ export function createOpenScienceProjectBridge(options: CreateOpenScienceProject
         type: "projects.request"
       });
     },
+    browseProjects() {
+      return post({
+        namespace: OPENSCIENCE_BRIDGE_NAMESPACE,
+        version: OPENSCIENCE_BRIDGE_VERSION,
+        type: "projects.browse"
+      });
+    },
+    newProject() {
+      return post({
+        namespace: OPENSCIENCE_BRIDGE_NAMESPACE,
+        version: OPENSCIENCE_BRIDGE_VERSION,
+        type: "project.new"
+      });
+    },
     openProject(directory: string) {
       if (!directory.trim()) {
         return false;

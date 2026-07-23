@@ -69,7 +69,7 @@ describe("createOpenScienceProjectBridge", () => {
     expect(onSnapshot).toHaveBeenCalledWith(snapshot);
   });
 
-  it("使用精确 targetOrigin 请求项目并发送打开命令", () => {
+  it("使用精确 targetOrigin 请求项目并发送项目入口命令", () => {
     const postMessage = vi.fn();
     const bridge = createOpenScienceProjectBridge({
       workspaceUrl: "http://127.0.0.1:4454/path",
@@ -78,6 +78,8 @@ describe("createOpenScienceProjectBridge", () => {
     });
 
     expect(bridge.requestProjects()).toBe(true);
+    expect(bridge.browseProjects()).toBe(true);
+    expect(bridge.newProject()).toBe(true);
     expect(bridge.openProject("/home/codexlab/DevTool/Alpha")).toBe(true);
     expect(postMessage).toHaveBeenNthCalledWith(
       1,
@@ -90,6 +92,24 @@ describe("createOpenScienceProjectBridge", () => {
     );
     expect(postMessage).toHaveBeenNthCalledWith(
       2,
+      {
+        namespace: "openscience.zhijupoly",
+        version: 1,
+        type: "projects.browse"
+      },
+      "http://127.0.0.1:4454"
+    );
+    expect(postMessage).toHaveBeenNthCalledWith(
+      3,
+      {
+        namespace: "openscience.zhijupoly",
+        version: 1,
+        type: "project.new"
+      },
+      "http://127.0.0.1:4454"
+    );
+    expect(postMessage).toHaveBeenNthCalledWith(
+      4,
       {
         namespace: "openscience.zhijupoly",
         version: 1,
@@ -113,7 +133,11 @@ describe("createOpenScienceProjectBridge", () => {
     });
 
     expect(invalidBridge.requestProjects()).toBe(false);
+    expect(invalidBridge.browseProjects()).toBe(false);
+    expect(invalidBridge.newProject()).toBe(false);
     expect(invalidBridge.openProject("/home/codexlab/DevTool/Alpha")).toBe(false);
     expect(unloadedBridge.requestProjects()).toBe(false);
+    expect(unloadedBridge.browseProjects()).toBe(false);
+    expect(unloadedBridge.newProject()).toBe(false);
   });
 });

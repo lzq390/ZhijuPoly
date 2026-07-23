@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { ChevronDown, Folder, Menu, MessageSquare, Star, X } from "lucide-react";
+import { ChevronDown, Folder, Menu, MessageSquare, Plus, Search, Star, X } from "lucide-react";
 import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge";
 
 export type AppShellModuleItem = {
@@ -27,6 +27,8 @@ type AppShellProps = {
   activeProjectDirectory: string | null;
   isProjectBridgeReady: boolean;
   onOpenProject: (directory: string) => void;
+  onBrowseProjects: () => void;
+  onNewProject: () => void;
   children: ReactNode;
 };
 
@@ -39,6 +41,8 @@ export function AppShell({
   activeProjectDirectory,
   isProjectBridgeReady,
   onOpenProject,
+  onBrowseProjects,
+  onNewProject,
   children
 }: AppShellProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -72,6 +76,8 @@ export function AppShell({
           activeProjectDirectory={activeProjectDirectory}
           isProjectBridgeReady={isProjectBridgeReady}
           onOpenProject={(directory) => handleNavigate(() => onOpenProject(directory))}
+          onBrowseProjects={() => handleNavigate(onBrowseProjects)}
+          onNewProject={() => handleNavigate(onNewProject)}
         />
       </aside>
 
@@ -96,6 +102,8 @@ export function AppShell({
               activeProjectDirectory={activeProjectDirectory}
               isProjectBridgeReady={isProjectBridgeReady}
               onOpenProject={(directory) => handleNavigate(() => onOpenProject(directory))}
+              onBrowseProjects={() => handleNavigate(onBrowseProjects)}
+              onNewProject={() => handleNavigate(onNewProject)}
               trailing={
                 <button
                   type="button"
@@ -148,6 +156,8 @@ type SidebarContentProps = {
   activeProjectDirectory: string | null;
   isProjectBridgeReady: boolean;
   onOpenProject: (directory: string) => void;
+  onBrowseProjects: () => void;
+  onNewProject: () => void;
   trailing?: ReactNode;
 };
 
@@ -161,6 +171,8 @@ function SidebarContent({
   activeProjectDirectory,
   isProjectBridgeReady,
   onOpenProject,
+  onBrowseProjects,
+  onNewProject,
   trailing
 }: SidebarContentProps) {
   return (
@@ -244,9 +256,33 @@ function SidebarContent({
           <h2 id="project-list-title" className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">
             项目
           </h2>
-          {isProjectBridgeReady ? (
-            <span className="ml-auto text-[11px] tabular-nums text-slate-400">{projects.length}</span>
-          ) : null}
+          <div className="ml-auto flex items-center gap-1">
+            {isProjectBridgeReady ? (
+              <span className="px-1 text-[11px] tabular-nums text-slate-400">{projects.length}</span>
+            ) : null}
+            <button
+              type="button"
+              aria-label="新建项目"
+              title="新建项目"
+              disabled={!isProjectBridgeReady}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white hover:text-teal-700 disabled:pointer-events-none disabled:opacity-35"
+              onClick={onNewProject}
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
+        <div className="shrink-0 px-1 pb-1">
+          <button
+            type="button"
+            disabled={!isProjectBridgeReady}
+            className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium text-slate-600 transition-colors hover:bg-white/78 hover:text-slate-950 disabled:pointer-events-none disabled:opacity-40"
+            onClick={onBrowseProjects}
+          >
+            <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+            <span className="truncate">搜索项目</span>
+          </button>
         </div>
 
         <div className="project-list-scrollbar min-h-0 flex-1 overflow-y-auto pr-0.5">

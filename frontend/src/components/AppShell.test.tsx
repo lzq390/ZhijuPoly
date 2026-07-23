@@ -75,6 +75,8 @@ function renderShell(
     activeDirectory?: string | null;
     isProjectBridgeReady?: boolean;
     onOpenProject?: (directory: string) => void;
+    onBrowseProjects?: () => void;
+    onNewProject?: () => void;
   }
 ) {
   return render(
@@ -86,6 +88,8 @@ function renderShell(
       activeProjectDirectory={options?.activeDirectory ?? null}
       isProjectBridgeReady={options?.isProjectBridgeReady ?? true}
       onOpenProject={options?.onOpenProject ?? vi.fn()}
+      onBrowseProjects={options?.onBrowseProjects ?? vi.fn()}
+      onNewProject={options?.onNewProject ?? vi.fn()}
     >
       <div>页面内容</div>
     </AppShell>
@@ -136,6 +140,8 @@ describe("AppShell 侧边栏", () => {
         activeProjectDirectory={null}
         isProjectBridgeReady
         onOpenProject={vi.fn()}
+        onBrowseProjects={vi.fn()}
+        onNewProject={vi.fn()}
       >
         <div>页面内容</div>
       </AppShell>
@@ -162,6 +168,18 @@ describe("AppShell 侧边栏", () => {
     ]);
   });
 
+  it("项目区域提供搜索和新建按钮并把操作交给上层", () => {
+    const onBrowseProjects = vi.fn();
+    const onNewProject = vi.fn();
+    renderShell("home", { onBrowseProjects, onNewProject });
+
+    fireEvent.click(screen.getByRole("button", { name: "搜索项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "新建项目" }));
+
+    expect(onBrowseProjects).toHaveBeenCalledTimes(1);
+    expect(onNewProject).toHaveBeenCalledTimes(1);
+  });
+
   it("高亮当前项目并把点击目录交给上层", () => {
     const onOpenProject = vi.fn();
     renderShell("home", {
@@ -180,5 +198,7 @@ describe("AppShell 侧边栏", () => {
     renderShell("home", { projects: [], isProjectBridgeReady: false });
 
     expect(screen.getByText("正在同步项目…")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "搜索项目" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "新建项目" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
