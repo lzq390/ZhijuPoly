@@ -1398,6 +1398,59 @@ def _canonical_systemd_control_group(value: object) -> str | None:
     return value
 
 
+def _is_canonical_systemd_process_disappearance(error: Exception) -> bool:
+    """Recognize only a stable PID identity that subsequently vanished."""
+
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    return (
+        type(error) is SystemdProcessDisappeared
+        and error.code == "gpu_claim_inventory_changed"
+        and isinstance(error.pid, int)
+        and not isinstance(error.pid, bool)
+        and error.pid > 0
+        and isinstance(error.expected_start_ticks, int)
+        and not isinstance(error.expected_start_ticks, bool)
+        and error.expected_start_ticks > 0
+        and _canonical_systemd_control_group(error.expected_control_group)
+        == error.expected_control_group
+    )
+
+
+def _systemd_disappearance_is_outside_managed_gpu_scopes(
+    error: Exception,
+    status: dict[str, Any],
+) -> bool:
+    """Exclude every live Broker-fenced DFT/MD scope from generic churn."""
+
+    from ops.gpu_broker.server import (
+        _exact_dev_gpu1_host_scope_authority,
+        _systemd_cgroup_contains,
+    )
+
+    if not _is_canonical_systemd_process_disappearance(error):
+        return False
+    try:
+        leases = _canonical_broker_leases(status)
+    except DevGpuSessionError:
+        return False
+    for lease in leases:
+        authority = _exact_dev_gpu1_host_scope_authority(
+            lease,
+            index=GPU_INDEX,
+            uuid=GPU_UUID,
+        )
+        if (
+            authority is not None
+            and _systemd_cgroup_contains(
+                error.expected_control_group,
+                authority[3],
+            )
+        ):
+            return False
+    return True
+
+
 def _canonical_systemd_identity_map(
     identities: object,
 ) -> dict[int, tuple[int, str]] | None:
@@ -2608,6 +2661,7 @@ def consistent_broker_snapshot(
     membership_churn_retries: int = 8,
     membership_churn_timeout_seconds: float = STEADY_CHURN_TIMEOUT_SECONDS,
     membership_churn_guard: Callable[[dict[str, Any]], bool] | None = None,
+    retry_stable_systemd_process_disappearance: bool = False,
     surface_exact_md_lifecycle_churn: bool = False,
     surface_exact_dft_execution_lifecycle_churn: bool = False,
     monotonic: Callable[[], float] = time.monotonic,
@@ -2618,6 +2672,10 @@ def consistent_broker_snapshot(
         raise ValueError("attempts must be positive")
     if membership_churn_retries < 0:
         raise ValueError("membership_churn_retries must not be negative")
+    if not isinstance(retry_stable_systemd_process_disappearance, bool):
+        raise ValueError(
+            "retry_stable_systemd_process_disappearance must be boolean"
+        )
     if not isinstance(surface_exact_md_lifecycle_churn, bool):
         raise ValueError("surface_exact_md_lifecycle_churn must be boolean")
     if not isinstance(surface_exact_dft_execution_lifecycle_churn, bool):
@@ -2661,6 +2719,33 @@ def consistent_broker_snapshot(
                     md_lifecycle_key,
                     "one exact MD lease changed during the host inventory",
                 ) from exc
+            stable_process_disappearance = (
+                retry_stable_systemd_process_disappearance
+                and membership_churn_guard is None
+                and _is_canonical_systemd_process_disappearance(exc)
+                and before_authority == after_authority
+                and _systemd_disappearance_is_outside_managed_gpu_scopes(
+                    exc,
+                    after,
+                )
+            )
+            if stable_process_disappearance:
+                if (
+                    churn_retries >= membership_churn_retries
+                    or monotonic() - audit_started
+                    >= float(membership_churn_timeout_seconds)
+                ):
+                    raise DevGpuSessionError(
+                        "systemd process disappearance remained unstable "
+                        "throughout the host audit"
+                    ) from exc
+                # The PID vanished rather than changing identity, and no
+                # Broker authority changed.  Discard every observation from
+                # this round and take a fresh full inventory.  PID reuse,
+                # cgroup movement and every other inventory failure remain
+                # fail-closed.
+                churn_retries += 1
+                continue
             dft_membership_root_key = (
                 _exact_dft_membership_churn_root_key(
                     exc,
@@ -4003,6 +4088,7 @@ class SessionController:
                         membership_churn_retries=churn_retries,
                         membership_churn_timeout_seconds=churn_timeout,
                         membership_churn_guard=fast_guard,
+                        retry_stable_systemd_process_disappearance=True,
                         surface_exact_md_lifecycle_churn=True,
                         surface_exact_dft_execution_lifecycle_churn=(
                             surface_exact_dft_execution_lifecycle
@@ -4376,6 +4462,20 @@ class SessionController:
                         raise _ExactDftTrailingChurn(
                             "exact DFT membership changed during the trailing "
                             "systemd audit"
+                        ) from exc
+                    if (
+                        not self.dft_warmup_open
+                        and broker_authority_token(transition_status)
+                        == expected_token
+                        and _is_canonical_systemd_process_disappearance(exc)
+                        and _systemd_disappearance_is_outside_managed_gpu_scopes(
+                            exc,
+                            transition_status,
+                        )
+                    ):
+                        raise _AuditRoundChanged(
+                            "one stable systemd process disappeared during the "
+                            "trailing systemd audit"
                         ) from exc
                     raise
                 sealed_process_map = query_compute_processes()

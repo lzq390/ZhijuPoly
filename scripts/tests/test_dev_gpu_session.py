@@ -1469,6 +1469,212 @@ def test_broker_snapshot_retries_across_a_legitimate_lease_transition() -> None:
     assert snapshot.process_pids == (88,)
 
 
+def test_broker_snapshot_retries_stable_systemd_process_disappearance() -> None:
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SystemdProcessDisappeared(
+                105042,
+                4400999,
+                "/user.slice/user-1001.slice/user@1001.service/init.scope",
+            )
+        return empty_snapshot()
+
+    returned, snapshot = session.consistent_broker_snapshot(
+        client,
+        collect,
+        retry_stable_systemd_process_disappearance=True,
+    )
+
+    assert returned == status
+    assert snapshot == empty_snapshot()
+    assert calls == 2
+
+
+def test_broker_snapshot_process_disappearance_retry_is_opt_in() -> None:
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    error = SystemdProcessDisappeared(
+        105042,
+        4400999,
+        "/user.slice/user-1001.slice/user@1001.service/init.scope",
+    )
+
+    with pytest.raises(SystemdProcessDisappeared) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(error),
+        )
+
+    assert raised.value is error
+
+
+def test_broker_snapshot_never_retries_process_identity_change() -> None:
+    from ops.gpu_broker.broker import BrokerError
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    error = BrokerError(
+        "gpu_claim_inventory_unavailable",
+        "systemd process identity changed for PID 105042",
+    )
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise error
+
+    with pytest.raises(BrokerError) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            collect,
+            retry_stable_systemd_process_disappearance=True,
+        )
+
+    assert raised.value is error
+    assert calls == 1
+
+
+def test_broker_snapshot_never_uses_generic_disappearance_retry_in_warmup() -> None:
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_residency_record()],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    error = SystemdProcessDisappeared(
+        105042,
+        4400999,
+        "/user.slice/user-1001.slice/user@1001.service/init.scope",
+    )
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise error
+
+    with pytest.raises(SystemdProcessDisappeared) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            collect,
+            membership_churn_guard=lambda _status: True,
+            retry_stable_systemd_process_disappearance=True,
+        )
+
+    assert raised.value is error
+    assert calls == 1
+
+
+def test_broker_snapshot_process_disappearance_retry_is_bounded() -> None:
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    calls = 0
+
+    def collect() -> session.TargetSnapshot:
+        nonlocal calls
+        calls += 1
+        raise SystemdProcessDisappeared(
+            105042,
+            4400999,
+            "/user.slice/user-1001.slice/user@1001.service/init.scope",
+        )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="systemd process disappearance remained unstable",
+    ):
+        session.consistent_broker_snapshot(
+            client,
+            collect,
+            membership_churn_retries=1,
+            retry_stable_systemd_process_disappearance=True,
+        )
+
+    assert calls == 2
+
+
+@pytest.mark.parametrize(
+    ("pid", "start_ticks", "control_group"),
+    (
+        (True, 4400999, "/user.slice/user-1001.slice/user@1001.service"),
+        (105042, 0, "/user.slice/user-1001.slice/user@1001.service"),
+        (105042, 4400999, "user.slice/user-1001.slice"),
+    ),
+)
+def test_broker_snapshot_never_retries_invalid_process_disappearance(
+    pid: object,
+    start_ticks: object,
+    control_group: object,
+) -> None:
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 1,
+        "lease_authority_sequence": 1,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    error = SystemdProcessDisappeared(pid, start_ticks, control_group)
+
+    with pytest.raises(SystemdProcessDisappeared) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(error),
+            retry_stable_systemd_process_disappearance=True,
+        )
+
+    assert raised.value is error
+
+
 @pytest.mark.parametrize("transition", ("issue", "activate", "release", "aba"))
 def test_exact_parented_dft_execution_lifecycle_is_classified(
     transition: str,
@@ -4219,6 +4425,69 @@ def test_trailing_audit_rejects_new_static_systemd_gpu_claim(
 
     _status, _snapshot, reasons = controller._audit(client)
     assert reasons == ("foreign systemd claim: user:foreign-gpu.service",)
+
+
+def test_trailing_audit_resamples_stable_systemd_process_disappearance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.gpu_broker import server
+
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 2,
+        "lease_authority_sequence": 2,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_residency_record()],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    authority = mps_snapshot()
+    captured = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        authority,
+        empty_snapshot(),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=captured,
+        authority=authority,
+    )
+    rounds = 0
+    systemd_reads = 0
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        rounds += 1
+        return status, captured
+
+    def trailing_systemd(**_kwargs):
+        nonlocal systemd_reads
+        systemd_reads += 1
+        if systemd_reads == 1:
+            raise server.SystemdProcessDisappeared(
+                105042,
+                4400999,
+                "/user.slice/user-1001.slice/user@1001.service/init.scope",
+            )
+        return captured.systemd_claims
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert rounds == 2
+    assert systemd_reads == 2
 
 
 @pytest.mark.parametrize("error_kind", ("process", "membership"))
@@ -8577,6 +8846,7 @@ def test_steady_full_audit_retains_the_12_second_churn_boundary(
     assert observed["membership_churn_retries"] == 8
     assert observed["membership_churn_timeout_seconds"] == 12.0
     assert observed["membership_churn_guard"] is None
+    assert observed["retry_stable_systemd_process_disappearance"] is True
 
 
 def test_down_waits_for_exact_owned_lease_cleanup(
