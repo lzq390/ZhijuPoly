@@ -1549,6 +1549,7 @@ def _query_systemd_unit_authorities(
 def query_systemd_gpu_claims(
     *,
     compute_processes: dict[str, frozenset[int]] | None = None,
+    compute_process_identities: dict[int, tuple[int, str]] | None = None,
     run=subprocess.run,
     read_process_environment=_read_process_environment,
     read_control_group_processes=_read_control_group_processes,
@@ -1595,6 +1596,37 @@ def query_systemd_gpu_claims(
         raise BrokerError(
             "gpu_claim_inventory_unavailable",
             "systemd NVIDIA process inventory is invalid",
+        )
+    compute_pids = frozenset(
+        pid for pids in compute_processes.values() for pid in pids
+    )
+    if compute_process_identities is None:
+        compute_process_identities = {}
+    if not isinstance(compute_process_identities, dict) or any(
+        not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or pid <= 0
+        or pid not in compute_pids
+        or not isinstance(identity, tuple)
+        or len(identity) != 2
+        or not isinstance(identity[0], int)
+        or isinstance(identity[0], bool)
+        or identity[0] <= 0
+        or not isinstance(identity[1], str)
+        or not identity[1].startswith("/")
+        or identity[1] == "/"
+        or identity[1].endswith("/")
+        or "//" in identity[1]
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in identity[1]
+        )
+        or any(part in {"", ".", ".."} for part in identity[1].split("/")[1:])
+        for pid, identity in compute_process_identities.items()
+    ):
+        raise BrokerError(
+            "gpu_claim_inventory_unavailable",
+            "systemd NVIDIA process identity hints are invalid",
         )
 
     process_cgroup_snapshot = (
@@ -1716,6 +1748,25 @@ def query_systemd_gpu_claims(
                                     "systemd cgroup process identity differs",
                                 )
                             process_identities[pid] = identity
+                    for pid, identity in compute_process_identities.items():
+                        if not _systemd_cgroup_contains(identity[1], control_group):
+                            continue
+                        captured_identity = process_identities.get(pid)
+                        if captured_identity is not None and captured_identity != identity:
+                            raise BrokerError(
+                                "gpu_claim_inventory_unavailable",
+                                "NVIDIA PID identity conflicts with systemd inventory",
+                            )
+                        if captured_identity is None:
+                            _verify_systemd_process_identity(
+                                pid,
+                                identity[0],
+                                identity[1],
+                                read_process_cgroup=read_process_cgroup,
+                                read_process_start_ticks=read_process_start_ticks,
+                            )
+                            process_identities[pid] = identity
+                    process_pids = frozenset(process_identities)
                 except BrokerError:
                     raise
                 except Exception as exc:
@@ -1832,12 +1883,32 @@ def query_systemd_gpu_claims(
                     continue
                 for pid in pids:
                     captured_identity = captured_process_identities.get(pid)
-                    if captured_identity is None:
-                        process_identity = _read_stable_systemd_process_identity(
-                            pid,
-                            read_process_cgroup=read_process_cgroup,
-                            read_process_start_ticks=read_process_start_ticks,
+                    hinted_identity = compute_process_identities.get(pid)
+                    if (
+                        captured_identity is not None
+                        and hinted_identity is not None
+                        and captured_identity != hinted_identity
+                    ):
+                        raise BrokerError(
+                            "gpu_claim_inventory_unavailable",
+                            "NVIDIA PID identity conflicts with adjacent capture",
                         )
+                    if captured_identity is None:
+                        if hinted_identity is None:
+                            process_identity = _read_stable_systemd_process_identity(
+                                pid,
+                                read_process_cgroup=read_process_cgroup,
+                                read_process_start_ticks=read_process_start_ticks,
+                            )
+                        else:
+                            _verify_systemd_process_identity(
+                                pid,
+                                hinted_identity[0],
+                                hinted_identity[1],
+                                read_process_cgroup=read_process_cgroup,
+                                read_process_start_ticks=read_process_start_ticks,
+                            )
+                            process_identity = hinted_identity
                     else:
                         _verify_systemd_process_identity(
                             pid,

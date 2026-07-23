@@ -44,6 +44,8 @@ DFT_WARMUP_CHURN_TIMEOUT_SECONDS = 90.0
 STEADY_CHURN_TIMEOUT_SECONDS = 12.0
 FULL_AUDIT_ATTEMPTS = 3
 PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS = 8
+EXACT_MD_LIFECYCLE_AUDIT_ATTEMPTS = 8
+EXACT_MD_LIFECYCLE_TIMEOUT_SECONDS = 30.0
 DEFAULT_DFT_START_TIMEOUT_SECONDS = 60.0
 LATE_SESSION_OWNED_STOP_GRACE_SECONDS = 5.0
 _PREACTIVATION_DOCKER_CHURN_MESSAGES = frozenset(
@@ -72,6 +74,14 @@ class _AuditRoundChanged(DevGpuSessionError):
 
 class _ExactDftTrailingChurn(_AuditRoundChanged):
     """A separately proven DFT-warmup transition may use the 90s budget."""
+
+
+class _ExactMdLifecycleChurn(_AuditRoundChanged):
+    """One exact MD lease changed while a complete audit round was sampled."""
+
+    def __init__(self, lease_key: tuple[str, int], message: str) -> None:
+        super().__init__(message)
+        self.lease_key = lease_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,7 +310,16 @@ def collect_target_snapshot() -> TargetSnapshot:
     )
     systemd_claims = tuple(
         claim
-        for claim in query_systemd_gpu_claims(compute_processes=processes)
+        for claim in query_systemd_gpu_claims(
+            compute_processes=processes,
+            compute_process_identities={
+                pid: (
+                    declarer.process_start_ticks,
+                    declarer.process_cgroup,
+                )
+                for pid, declarer in process_declarers.items()
+            },
+        )
         if GPU_UUID in claim.gpu_uuids
     )
     return TargetSnapshot(
@@ -818,11 +837,11 @@ def _is_exact_dft_membership_churn(
     return False
 
 
-def _is_exact_managed_scope_membership_transition(
+def _exact_managed_scope_membership_transition_candidate(
     error: Exception,
     before: dict[str, Any],
     after: dict[str, Any],
-) -> bool:
+) -> Any | None:
     """Prove an exact PID membership delta belongs to one lease transition."""
 
     from ops.gpu_broker.broker import Lease
@@ -831,13 +850,16 @@ def _is_exact_managed_scope_membership_transition(
         SystemdProcessDisappeared,
         _exact_dev_gpu1_host_scope_authority,
     )
-    from gpu_resource.transient_scope import user_manager_control_group
+    from gpu_resource.transient_scope import (
+        scope_unit_name,
+        user_manager_control_group,
+    )
 
     if not isinstance(
         error,
         (SystemdProcessDisappeared, SystemdMembershipChanged),
     ):
-        return False
+        return None
     before_instance = before.get("broker_instance_id")
     if (
         not isinstance(before_instance, str)
@@ -848,7 +870,7 @@ def _is_exact_managed_scope_membership_transition(
         or before.get("quarantined_gpus") != {}
         or after.get("quarantined_gpus") != {}
     ):
-        return False
+        return None
     before_generation = before.get("next_fencing_token")
     after_generation = after.get("next_fencing_token")
     if (
@@ -858,18 +880,18 @@ def _is_exact_managed_scope_membership_transition(
         or not isinstance(after_generation, int)
         or after_generation not in (before_generation, before_generation + 1)
     ):
-        return False
+        return None
     try:
         before_leases = _canonical_broker_leases(before)
         after_leases = _canonical_broker_leases(after)
     except DevGpuSessionError:
-        return False
+        return None
     if any(
         len({getattr(item, field) for item in leases}) != len(leases)
         for leases in (before_leases, after_leases)
         for field in ("lease_id", "fencing_token")
     ):
-        return False
+        return None
 
     def live_authority(leases: tuple[Lease, ...]) -> tuple[str, ...]:
         # Heartbeats may legitimately advance while the systemd inventory is
@@ -927,7 +949,7 @@ def _is_exact_managed_scope_membership_transition(
             after_generation,
         )
     except ValueError:
-        return False
+        return None
 
     tombstone_advanced = (
         released_candidate is not None
@@ -1018,20 +1040,108 @@ def _is_exact_managed_scope_membership_transition(
             ):
                 candidate = visible_candidate
 
+    if (
+        candidate is None
+        and after_generation == before_generation
+        and before_record == record
+    ):
+        before_by_key = {
+            (item.lease_id, item.fencing_token): item for item in before_leases
+        }
+
+        def registration_authority(item: Lease) -> str:
+            registration_fields = {
+                "workload_pid",
+                "workload_process_start_ticks",
+                "workload_process_group_id",
+                "workload_cgroup",
+            }
+            normalized = item.public_dict()
+            normalized.pop("heartbeat_at")
+            for field in registration_fields:
+                normalized.pop(field)
+            return json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+
+        registration_candidates: list[Lease] = []
+        for item in after_leases:
+            existing = before_by_key.get((item.lease_id, item.fencing_token))
+            if (
+                existing is None
+                or item.component != "md"
+                or any(
+                    getattr(existing, field) is not None
+                    for field in (
+                        "workload_pid",
+                        "workload_process_start_ticks",
+                        "workload_process_group_id",
+                        "workload_cgroup",
+                    )
+                )
+                or registration_authority(existing)
+                != registration_authority(item)
+                or _exact_dev_gpu1_host_scope_authority(
+                    item,
+                    index=GPU_INDEX,
+                    uuid=GPU_UUID,
+                )
+                is None
+            ):
+                continue
+            before_others = tuple(
+                lease
+                for lease in before_leases
+                if (lease.lease_id, lease.fencing_token)
+                != (item.lease_id, item.fencing_token)
+            )
+            after_others = tuple(
+                lease
+                for lease in after_leases
+                if (lease.lease_id, lease.fencing_token)
+                != (item.lease_id, item.fencing_token)
+            )
+            if live_authority(before_others) == live_authority(after_others):
+                registration_candidates.append(item)
+        if len(registration_candidates) == 1:
+            candidate = registration_candidates[0]
+
+    if (
+        candidate is None
+        and after_generation == before_generation
+        and before_record == record
+        and live_authority(before_leases) == live_authority(after_leases)
+    ):
+        stable_md_candidates = tuple(
+            item
+            for item in after_leases
+            if item.component == "md"
+            and _exact_dev_gpu1_host_scope_authority(
+                item,
+                index=GPU_INDEX,
+                uuid=GPU_UUID,
+            )
+            is not None
+        )
+        if len(stable_md_candidates) == 1:
+            candidate = stable_md_candidates[0]
+
     if candidate is None:
-        return False
+        return None
     if candidate.broker_instance_id != before_instance:
-        return False
+        return None
     authority = _exact_dev_gpu1_host_scope_authority(
         candidate,
         index=GPU_INDEX,
         uuid=GPU_UUID,
     )
     if authority is None:
-        return False
-    expected_scope_cgroup = authority[3]
+        return None
+    component, workload_pid, workload_start_ticks, expected_scope_cgroup = authority
+    md_worker_cgroup = (
+        user_manager_control_group(1001)
+        + "/app.slice/nexpoly-monomer-md-worker.service"
+    )
     if isinstance(error, SystemdProcessDisappeared):
-        return (
+        exact_scope_disappearance = (
             isinstance(error.pid, int)
             and not isinstance(error.pid, bool)
             and error.pid > 0
@@ -1040,14 +1150,118 @@ def _is_exact_managed_scope_membership_transition(
             and error.expected_start_ticks > 0
             and error.expected_control_group == expected_scope_cgroup
         )
+        exact_worker_disappearance = (
+            component == "md"
+            and error.pid == workload_pid
+            and error.expected_start_ticks == workload_start_ticks
+            and error.expected_control_group == md_worker_cgroup
+        )
+        return candidate if (
+            exact_scope_disappearance or exact_worker_disappearance
+        ) else None
 
-    return _structured_membership_delta_within(
+    expected_identities = _canonical_systemd_identity_map(
+        error.expected_identities
+    )
+    current_identities = _canonical_systemd_identity_map(
+        error.current_identities
+    )
+    if expected_identities is None or current_identities is None:
+        return None
+
+    if component == "md":
+        worker_loss = (
+            error.scope == "user"
+            and error.unit == "nexpoly-monomer-md-worker.service"
+            and error.control_group == md_worker_cgroup
+            and expected_identities.get(workload_pid)
+            == (workload_start_ticks, md_worker_cgroup)
+            and workload_pid not in current_identities
+            and {
+                pid: identity
+                for pid, identity in expected_identities.items()
+                if pid != workload_pid
+            }
+            == current_identities
+        )
+        manager_move = (
+            error.scope == "system"
+            and error.unit == "user@1001.service"
+            and error.control_group == user_manager_control_group(1001)
+            and expected_identities.get(workload_pid)
+            == (workload_start_ticks, md_worker_cgroup)
+            and current_identities.get(workload_pid)
+            == (workload_start_ticks, expected_scope_cgroup)
+            and {
+                pid: identity
+                for pid, identity in expected_identities.items()
+                if pid != workload_pid
+            }
+            == {
+                pid: identity
+                for pid, identity in current_identities.items()
+                if pid != workload_pid
+            }
+        )
+        if worker_loss or manager_move:
+            return candidate
+
+    if _structured_membership_delta_within(
+        error,
+        scope="user",
+        unit=scope_unit_name(candidate.lease_id),
+        unit_cgroup=expected_scope_cgroup,
+        workload_cgroup=expected_scope_cgroup,
+    ):
+        return candidate
+
+    if _structured_membership_delta_within(
         error,
         scope="system",
         unit="user@1001.service",
         unit_cgroup=user_manager_control_group(1001),
         workload_cgroup=expected_scope_cgroup,
+    ):
+        return candidate
+    return None
+
+
+def _is_exact_managed_scope_membership_transition(
+    error: Exception,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> bool:
+    return (
+        _exact_managed_scope_membership_transition_candidate(
+            error,
+            before,
+            after,
+        )
+        is not None
     )
+
+
+def _exact_md_lifecycle_transition_key(
+    error: Exception,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> tuple[str, int] | None:
+    candidate = _exact_managed_scope_membership_transition_candidate(
+        error,
+        before,
+        after,
+    )
+    if (
+        candidate is None
+        or candidate.component != "md"
+        or not isinstance(candidate.lease_id, str)
+        or not candidate.lease_id
+        or isinstance(candidate.fencing_token, bool)
+        or not isinstance(candidate.fencing_token, int)
+        or candidate.fencing_token <= 0
+    ):
+        return None
+    return candidate.lease_id, candidate.fencing_token
 
 
 def consistent_broker_snapshot(
@@ -1058,6 +1272,7 @@ def consistent_broker_snapshot(
     membership_churn_retries: int = 8,
     membership_churn_timeout_seconds: float = STEADY_CHURN_TIMEOUT_SECONDS,
     membership_churn_guard: Callable[[dict[str, Any]], bool] | None = None,
+    surface_exact_md_lifecycle_churn: bool = False,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> tuple[dict[str, Any], TargetSnapshot]:
     """Bind an expensive host inventory between two stable Broker reads."""
@@ -1066,6 +1281,8 @@ def consistent_broker_snapshot(
         raise ValueError("attempts must be positive")
     if membership_churn_retries < 0:
         raise ValueError("membership_churn_retries must not be negative")
+    if not isinstance(surface_exact_md_lifecycle_churn, bool):
+        raise ValueError("surface_exact_md_lifecycle_churn must be boolean")
     if (
         isinstance(membership_churn_timeout_seconds, bool)
         or not isinstance(membership_churn_timeout_seconds, (int, float))
@@ -1090,6 +1307,19 @@ def consistent_broker_snapshot(
         except Exception as exc:
             after = client.status()
             after_authority = broker_authority_token(after)
+            md_lifecycle_key = _exact_md_lifecycle_transition_key(
+                exc,
+                before,
+                after,
+            )
+            if (
+                md_lifecycle_key is not None
+                and surface_exact_md_lifecycle_churn
+            ):
+                raise _ExactMdLifecycleChurn(
+                    md_lifecycle_key,
+                    "one exact MD lease changed during the host inventory",
+                ) from exc
             if (
                 before_authority != after_authority
                 and _is_exact_managed_scope_membership_transition(
@@ -2308,18 +2538,22 @@ class SessionController:
                 and exc.args[0] in _PREACTIVATION_DOCKER_CHURN_MESSAGES
             )
 
-        # MD runtime-probe acquire/release and Backend residency activation can
-        # span several complete host inventories.  These extra attempts only
-        # discard changed rounds; the unchanged full classifier still decides
-        # whether any captured GPU authority is allowed.
+        # Different authority generations keep the short fail-closed budget.
+        # Repeated evidence for one exact MD lease gets a separate bounded
+        # window, because systemd-run moves that same PID from the worker unit
+        # into its lease scope and MPS disconnect can overlap process exit.
         authority_change_attempts = (
             PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS
             if preactivation_rollout
             else FULL_AUDIT_ATTEMPTS
         )
-        audit_attempts = (
-            2048 if self.dft_warmup_open else authority_change_attempts
-        )
+        authority_change_rounds = 0
+        md_lifecycle_key: tuple[str, int] | None = None
+        md_lifecycle_rounds = 0
+        md_lifecycle_started_at: float | None = None
+        # Counters and monotonic deadlines below terminate every retry class;
+        # this outer cap is only a final invariant against programming errors.
+        audit_attempts = 2048
         for round_index in range(audit_attempts):
             captured_activation = self.activation_generation
             captured_stabilization = self.dft_stabilization_generation
@@ -2352,6 +2586,7 @@ class SessionController:
                         membership_churn_retries=churn_retries,
                         membership_churn_timeout_seconds=churn_timeout,
                         membership_churn_guard=fast_guard,
+                        surface_exact_md_lifecycle_churn=True,
                     )
                 except BrokerError as exc:
                     if retryable_docker_rollout_churn(
@@ -2599,6 +2834,15 @@ class SessionController:
                         claim
                         for claim in query_systemd_gpu_claims(
                             compute_processes=trailing_process_map,
+                            compute_process_identities={
+                                pid: (
+                                    declarer.process_start_ticks,
+                                    declarer.process_cgroup,
+                                )
+                                for pid, declarer in (
+                                    unsealed_process_declarers.items()
+                                )
+                            },
                         )
                         if GPU_UUID in claim.gpu_uuids
                     )
@@ -2607,6 +2851,17 @@ class SessionController:
                     SystemdMembershipChanged,
                 ) as exc:
                     transition_status = client.status()
+                    observed_md_lifecycle_key = _exact_md_lifecycle_transition_key(
+                        exc,
+                        status,
+                        transition_status,
+                    )
+                    if observed_md_lifecycle_key is not None:
+                        raise _ExactMdLifecycleChurn(
+                            observed_md_lifecycle_key,
+                            "one exact MD lease changed during the trailing "
+                            "systemd audit",
+                        ) from exc
                     if _is_exact_managed_scope_membership_transition(
                         exc,
                         status,
@@ -3012,17 +3267,45 @@ class SessionController:
                     signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
                 self.last_audit_duration = time.monotonic() - started
                 return final_status, snapshot, ()
+            except _ExactMdLifecycleChurn as exc:
+                now = time.monotonic()
+                if exc.lease_key != md_lifecycle_key:
+                    authority_change_rounds += 1
+                    if authority_change_rounds >= authority_change_attempts:
+                        raise DevGpuSessionError(
+                            "GPU1 authority changed throughout trailing full audits"
+                        ) from exc
+                    md_lifecycle_key = exc.lease_key
+                    md_lifecycle_rounds = 0
+                    md_lifecycle_started_at = now
+                md_lifecycle_rounds += 1
+                if (
+                    md_lifecycle_rounds
+                    >= EXACT_MD_LIFECYCLE_AUDIT_ATTEMPTS
+                    or md_lifecycle_started_at is None
+                    or now - md_lifecycle_started_at
+                    >= EXACT_MD_LIFECYCLE_TIMEOUT_SECONDS
+                ):
+                    raise DevGpuSessionError(
+                        "one exact MD lease lifecycle did not stabilize within "
+                        "its bounded audit window"
+                    ) from exc
+                continue
             except _ExactDftTrailingChurn:
                 if round_index + 1 >= audit_attempts:
                     raise DevGpuSessionError(
                         "exact DFT residency did not stabilize within 90 seconds"
                     )
                 continue
-            except _AuditRoundChanged:
-                if round_index + 1 >= authority_change_attempts:
+            except _AuditRoundChanged as exc:
+                authority_change_rounds += 1
+                md_lifecycle_key = None
+                md_lifecycle_rounds = 0
+                md_lifecycle_started_at = None
+                if authority_change_rounds >= authority_change_attempts:
                     raise DevGpuSessionError(
                         "GPU1 authority changed throughout trailing full audits"
-                    )
+                    ) from exc
                 continue
         raise AssertionError("bounded full audit loop did not terminate")
 

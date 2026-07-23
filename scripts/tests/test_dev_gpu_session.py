@@ -709,8 +709,17 @@ def test_target_inventory_binds_nvml_pid_to_adjacent_process_identity(
         events.append("docker")
         return ()
 
-    def systemd_claims(**_kwargs) -> tuple[object, ...]:
+    def systemd_claims(**kwargs) -> tuple[object, ...]:
         events.append("systemd")
+        assert kwargs == {
+            "compute_processes": {session.GPU_UUID: frozenset({7001})},
+            "compute_process_identities": {
+                7001: (
+                    declarer.process_start_ticks,
+                    declarer.process_cgroup,
+                )
+            },
+        }
         return ()
 
     monkeypatch.setattr(
@@ -1525,6 +1534,168 @@ def test_broker_snapshot_retries_visible_md_release() -> None:
     assert status == released
     assert snapshot == empty_snapshot()
     assert calls == 2
+
+
+def test_broker_snapshot_surfaces_stable_exact_md_scope_disappearance() -> None:
+    from gpu_resource.transient_scope import scope_control_group
+    from ops.gpu_broker.server import SystemdProcessDisappeared
+
+    md_lease = md_execution_record()
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 3,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_residency_record(), md_lease],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    error = SystemdProcessDisappeared(
+        int(md_lease["workload_pid"]),
+        int(md_lease["workload_process_start_ticks"]),
+        scope_control_group(md_lease["lease_id"], uid=1001),
+    )
+
+    with pytest.raises(session._ExactMdLifecycleChurn) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(error),
+            surface_exact_md_lifecycle_churn=True,
+        )
+
+    assert raised.value.lease_key == (
+        md_lease["lease_id"],
+        md_lease["fencing_token"],
+    )
+    assert raised.value.__cause__ is error
+
+
+@pytest.mark.parametrize("event", ("worker_loss", "manager_move"))
+def test_broker_snapshot_surfaces_exact_md_worker_scope_handoff(
+    event: str,
+) -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.server import SystemdMembershipChanged
+
+    dft_lease = dft_residency_record()
+    md_lease = md_execution_record()
+    unregistered = {
+        **md_lease,
+        "workload_pid": None,
+        "workload_process_start_ticks": None,
+        "workload_process_group_id": None,
+        "workload_cgroup": None,
+    }
+    before = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 3,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_lease, unregistered],
+    }
+    after = {
+        **before,
+        "leases": [{**dft_lease, "heartbeat_at": 7.0}, md_lease],
+    }
+    statuses = iter((before, after))
+    client = SimpleNamespace(status=lambda: next(statuses))
+    manager_cgroup = user_manager_control_group(1001)
+    worker_cgroup = (
+        manager_cgroup + "/app.slice/nexpoly-monomer-md-worker.service"
+    )
+    workload_pid = int(md_lease["workload_pid"])
+    workload_start = int(md_lease["workload_process_start_ticks"])
+    stable = (7000, 100, worker_cgroup)
+    if event == "worker_loss":
+        error = SystemdMembershipChanged(
+            "user",
+            "nexpoly-monomer-md-worker.service",
+            worker_cgroup,
+            (stable, (workload_pid, workload_start, worker_cgroup)),
+            (stable,),
+        )
+    else:
+        manager = (7001, 101, manager_cgroup)
+        error = SystemdMembershipChanged(
+            "system",
+            "user@1001.service",
+            manager_cgroup,
+            (manager, (workload_pid, workload_start, worker_cgroup)),
+            (
+                manager,
+                (
+                    workload_pid,
+                    workload_start,
+                    scope_control_group(md_lease["lease_id"], uid=1001),
+                ),
+            ),
+        )
+
+    with pytest.raises(session._ExactMdLifecycleChurn) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(error),
+            surface_exact_md_lifecycle_churn=True,
+        )
+
+    assert raised.value.lease_key == (
+        md_lease["lease_id"],
+        md_lease["fencing_token"],
+    )
+
+
+@pytest.mark.parametrize("fault", ("foreign_delta", "pid_reuse", "reverse_move"))
+def test_md_worker_scope_handoff_rejects_unproven_membership(
+    fault: str,
+) -> None:
+    from gpu_resource.transient_scope import (
+        scope_control_group,
+        user_manager_control_group,
+    )
+    from ops.gpu_broker.server import SystemdMembershipChanged
+
+    md_lease = md_execution_record()
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 3,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_residency_record(), md_lease],
+    }
+    client = SimpleNamespace(status=lambda: status)
+    manager_cgroup = user_manager_control_group(1001)
+    worker_cgroup = (
+        manager_cgroup + "/app.slice/nexpoly-monomer-md-worker.service"
+    )
+    scope_cgroup = scope_control_group(md_lease["lease_id"], uid=1001)
+    workload_pid = int(md_lease["workload_pid"])
+    workload_start = int(md_lease["workload_process_start_ticks"])
+    expected = ((workload_pid, workload_start, worker_cgroup),)
+    current = ((workload_pid, workload_start, scope_cgroup),)
+    if fault == "foreign_delta":
+        current += ((90001, 55, "/user.slice/foreign.scope"),)
+    elif fault == "pid_reuse":
+        current = ((workload_pid, workload_start + 1, scope_cgroup),)
+    else:
+        expected, current = current, expected
+    error = SystemdMembershipChanged(
+        "system",
+        "user@1001.service",
+        manager_cgroup,
+        expected,
+        current,
+    )
+
+    with pytest.raises(SystemdMembershipChanged) as raised:
+        session.consistent_broker_snapshot(
+            client,
+            lambda: (_ for _ in ()).throw(error),
+            surface_exact_md_lifecycle_churn=True,
+        )
+
+    assert raised.value is error
 
 
 @pytest.mark.parametrize(
@@ -3312,6 +3483,139 @@ def test_trailing_audit_resamples_exact_md_scope_transition(
     assert reasons == ()
     assert rounds == 2
     assert systemd_reads == 2
+
+
+def test_trailing_audit_same_md_lease_uses_dedicated_budget_beyond_three(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group, scope_unit_name
+    from ops.gpu_broker import server
+
+    md_lease = md_execution_record()
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 3,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_residency_record(), md_lease],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    authority = mps_snapshot()
+    captured = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        authority,
+        empty_snapshot(),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=captured,
+        authority=authority,
+    )
+    rounds = 0
+    systemd_reads = 0
+    scope_cgroup = scope_control_group(md_lease["lease_id"], uid=1001)
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        rounds += 1
+        return status, captured
+
+    def trailing_systemd(**_kwargs):
+        nonlocal systemd_reads
+        systemd_reads += 1
+        if systemd_reads <= session.FULL_AUDIT_ATTEMPTS + 1:
+            raise server.SystemdMembershipChanged(
+                "user",
+                scope_unit_name(md_lease["lease_id"]),
+                scope_cgroup,
+                ((8100 + systemd_reads, 100 + systemd_reads, scope_cgroup),),
+                (),
+            )
+        return captured.systemd_claims
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+
+    _status, _snapshot, reasons = controller._audit(client)
+
+    assert reasons == ()
+    assert rounds == session.FULL_AUDIT_ATTEMPTS + 2
+    assert systemd_reads == session.FULL_AUDIT_ATTEMPTS + 2
+
+
+def test_trailing_audit_same_md_lease_dedicated_budget_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gpu_resource.transient_scope import scope_control_group, scope_unit_name
+    from ops.gpu_broker import server
+
+    md_lease = md_execution_record()
+    status = {
+        "broker_instance_id": "broker",
+        "next_fencing_token": 3,
+        "draining": False,
+        "quarantined_gpus": {},
+        "leases": [dft_residency_record(), md_lease],
+    }
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40)
+    controller.dft_warmup_open = False
+    controller.dft_stabilized = True
+    authority = mps_snapshot()
+    captured = dft_broad_snapshot(
+        monkeypatch,
+        status,
+        authority,
+        empty_snapshot(),
+    )
+    client = patch_full_audit_runtime(
+        monkeypatch,
+        controller,
+        status,
+        snapshot=captured,
+        authority=authority,
+    )
+    rounds = 0
+    systemd_reads = 0
+    scope_cgroup = scope_control_group(md_lease["lease_id"], uid=1001)
+
+    def collect(_client, **_kwargs):
+        nonlocal rounds
+        rounds += 1
+        return status, captured
+
+    def trailing_systemd(**_kwargs):
+        nonlocal systemd_reads
+        systemd_reads += 1
+        raise server.SystemdMembershipChanged(
+            "user",
+            scope_unit_name(md_lease["lease_id"]),
+            scope_cgroup,
+            ((8100, 100, scope_cgroup),),
+            (),
+        )
+
+    monkeypatch.setattr(session, "consistent_broker_snapshot", collect)
+    monkeypatch.setattr(server, "query_systemd_gpu_claims", trailing_systemd)
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="one exact MD lease lifecycle did not stabilize",
+    ):
+        controller._audit(client)
+
+    assert rounds == session.EXACT_MD_LIFECYCLE_AUDIT_ATTEMPTS
+    assert systemd_reads == session.EXACT_MD_LIFECYCLE_AUDIT_ATTEMPTS
 
 
 def test_trailing_audit_exact_md_releases_keep_three_round_budget(

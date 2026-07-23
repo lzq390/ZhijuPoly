@@ -6595,6 +6595,176 @@ def test_systemd_inventory_structures_captured_nvidia_pid_disappearance(
     assert error.value.expected_control_group == control_group
 
 
+def test_systemd_inventory_structures_adjacent_nvidia_pid_disappearance(
+    monkeypatch,
+) -> None:
+    from ops.gpu_broker import server as broker_server
+
+    lease_id = "e2" * 16
+    unit = "user@1001.service"
+    manager_control_group = user_manager_control_group(1001)
+    control_group = scope_control_group(lease_id, uid=1001)
+    pid = 76743
+    start_ticks = 790
+    runner = _ScopedSystemdRunner(
+        {
+            "system": {
+                unit: _systemd_properties(
+                    unit,
+                    main_pid=0,
+                    control_group=manager_control_group,
+                )
+            }
+        }
+    )
+    monkeypatch.setattr(
+        broker_server,
+        "_snapshot_systemd_process_cgroups",
+        lambda **_kwargs: (),
+    )
+
+    def vanished(_pid: int) -> int:
+        try:
+            raise FileNotFoundError("gone")
+        except FileNotFoundError as exc:
+            raise BrokerError("owner_process_unavailable", "gone") from exc
+
+    with pytest.raises(SystemdProcessDisappeared) as error:
+        query_systemd_gpu_claims(
+            compute_processes={EXPECTED_GPU_UUIDS[1]: frozenset({pid})},
+            compute_process_identities={pid: (start_ticks, control_group)},
+            run=runner,
+            read_process_environment=lambda _pid: {
+                "CUDA_VISIBLE_DEVICES": EXPECTED_GPU_UUIDS[1]
+            },
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=vanished,
+        )
+
+    assert error.value.pid == pid
+    assert error.value.expected_start_ticks == start_ticks
+    assert error.value.expected_control_group == control_group
+
+
+@pytest.mark.parametrize(
+    "identity_hints",
+    (
+        {90001: (101, "/user.slice/foreign.scope")},
+        {76743: (True, "/user.slice/exact.scope")},
+        {76743: (101, "relative.scope")},
+        {76743: (101, "/")},
+        {76743: (101, "/user.slice/../foreign.scope")},
+        {76743: (101, "/user.slice/exact.scope/")},
+    ),
+)
+def test_systemd_inventory_rejects_invalid_adjacent_nvidia_identity_hints(
+    identity_hints: object,
+) -> None:
+    with pytest.raises(BrokerError, match="identity hints are invalid"):
+        query_systemd_gpu_claims(
+            compute_processes={
+                EXPECTED_GPU_UUIDS[1]: frozenset({76743})
+            },
+            compute_process_identities=identity_hints,
+        )
+
+
+def test_systemd_inventory_rejects_adjacent_nvidia_identity_conflict(
+    monkeypatch,
+) -> None:
+    from ops.gpu_broker import server as broker_server
+
+    lease_id = "e2" * 16
+    manager_control_group = user_manager_control_group(1001)
+    control_group = scope_control_group(lease_id, uid=1001)
+    pid = 76743
+    runner = _ScopedSystemdRunner(
+        {
+            "system": {
+                "user@1001.service": _systemd_properties(
+                    "user@1001.service",
+                    main_pid=0,
+                    control_group=manager_control_group,
+                )
+            }
+        }
+    )
+    monkeypatch.setattr(
+        broker_server,
+        "_snapshot_systemd_process_cgroups",
+        lambda **_kwargs: ((pid, 791, control_group),),
+    )
+
+    with pytest.raises(BrokerError, match="conflicts") as error:
+        query_systemd_gpu_claims(
+            compute_processes={EXPECTED_GPU_UUIDS[1]: frozenset({pid})},
+            compute_process_identities={pid: (790, control_group)},
+            run=runner,
+            read_process_environment=lambda _pid: {
+                "CUDA_VISIBLE_DEVICES": EXPECTED_GPU_UUIDS[1]
+            },
+            read_process_cgroup=lambda _pid: control_group,
+            read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+            read_process_start_ticks=lambda _pid: 791,
+        )
+
+    assert not isinstance(error.value, SystemdProcessDisappeared)
+
+
+def test_systemd_inventory_merges_live_adjacent_nvidia_identity(
+    monkeypatch,
+) -> None:
+    from ops.gpu_broker import server as broker_server
+
+    lease_id = "e2" * 16
+    manager_control_group = user_manager_control_group(1001)
+    control_group = scope_control_group(lease_id, uid=1001)
+    pid = 76743
+    start_ticks = 790
+    runner = _ScopedSystemdRunner(
+        {
+            "system": {
+                "user@1001.service": _systemd_properties(
+                    "user@1001.service",
+                    main_pid=0,
+                    control_group=manager_control_group,
+                )
+            }
+        }
+    )
+    snapshots = iter(
+        (
+            (),
+            ((pid, start_ticks, control_group),),
+        )
+    )
+    monkeypatch.setattr(
+        broker_server,
+        "_snapshot_systemd_process_cgroups",
+        lambda **_kwargs: next(snapshots),
+    )
+
+    claims = query_systemd_gpu_claims(
+        compute_processes={EXPECTED_GPU_UUIDS[1]: frozenset({pid})},
+        compute_process_identities={pid: (start_ticks, control_group)},
+        run=runner,
+        read_process_environment=lambda _pid: {
+            "CUDA_VISIBLE_DEVICES": EXPECTED_GPU_UUIDS[1]
+        },
+        read_process_cgroup=lambda _pid: control_group,
+        read_process_uids=lambda _pid: (1001, 1001, 1001, 1001),
+        read_process_start_ticks=lambda _pid: start_ticks,
+    )
+
+    assert len(claims) == 1
+    assert claims[0].unit == "user@1001.service"
+    assert claims[0].process_pids == frozenset({pid})
+    assert claims[0].active_gpu_uuids == frozenset(
+        {EXPECTED_GPU_UUIDS[1]}
+    )
+
+
 def test_systemd_inventory_rechecks_user_identity_after_system_scope_query() -> None:
     unit = "nexpoly-worker.service"
     control_group = f"/user.slice/user-1001.slice/{unit}"
