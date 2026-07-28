@@ -924,6 +924,259 @@ class FormalGpuAuthorityTests(unittest.TestCase):
             finally:
                 fixture.close()
 
+    def test_trusted_dev_mps_start_uses_only_gpu1_descriptor_authority(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            fake_repo = temporary_root / "repo"
+            fake_scripts = fake_repo / "scripts"
+            fake_scripts.mkdir(parents=True)
+            fake_control = fake_scripts / "gpu_mps_control.sh"
+            shutil.copy2(MPS_CONTROL, fake_control)
+            fixture = DescriptorAuthorityFixture(fake_repo / ".runtime")
+            fixture.reservations.unlink()
+
+            fake_bin = temporary_root / "bin"
+            fake_bin.mkdir()
+            nvidia_calls = temporary_root / "nvidia-calls"
+            host_audit_called = temporary_root / "host-audit-called"
+            mps_started = temporary_root / "mps-started"
+            mps_stopped = temporary_root / "mps-stopped"
+            fake_nvidia = fake_bin / "nvidia-smi"
+            fake_nvidia.write_text(
+                (
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    "printf '%s\\n' \"$*\" >> \"$NVIDIA_CALLS\"\n"
+                    "case \"$*\" in\n"
+                    "  *--query-gpu=uuid,compute_mode*)\n"
+                    "    printf '%s\\n' "
+                    "'GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771, "
+                    "Default'\n"
+                    "    ;;\n"
+                    "  *--query-gpu=uuid*)\n"
+                    "    printf '%s\\n' "
+                    "'GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771'\n"
+                    "    ;;\n"
+                    "  *) exit 91 ;;\n"
+                    "esac\n"
+                ),
+                encoding="utf-8",
+            )
+            fake_nvidia.chmod(0o700)
+            fake_mps = fake_bin / "nvidia-cuda-mps-control"
+            fake_mps.write_text(
+                (
+                    "#!/usr/bin/env bash\n"
+                    "set -euo pipefail\n"
+                    "if [[ \"${1:-}\" == '-d' ]]; then\n"
+                    "  : > \"$MPS_STARTED\"\n"
+                    "  exit 0\n"
+                    "fi\n"
+                    "request=\"$(cat)\"\n"
+                    "if [[ \"$request\" == 'ps' ]]; then\n"
+                    "  exit 0\n"
+                    "fi\n"
+                    "if [[ \"$request\" == 'quit' ]]; then\n"
+                    "  : > \"$MPS_STOPPED\"\n"
+                    "  exit 0\n"
+                    "fi\n"
+                    "exit 93\n"
+                ),
+                encoding="utf-8",
+            )
+            fake_mps.chmod(0o700)
+            for name in ("docker", "systemctl"):
+                command = fake_bin / name
+                command.write_text(
+                    (
+                        "#!/usr/bin/env bash\n"
+                        ": > \"$HOST_AUDIT_CALLED\"\n"
+                        "exit 92\n"
+                    ),
+                    encoding="utf-8",
+                )
+                command.chmod(0o700)
+
+            authority_environment = fixture.environment()
+            env = {
+                "HOME": os.environ.get("HOME", "/tmp"),
+                "PATH": f"{fake_bin}:/usr/bin:/bin",
+                "NVIDIA_CALLS": str(nvidia_calls),
+                "HOST_AUDIT_CALLED": str(host_audit_called),
+                "MPS_STARTED": str(mps_started),
+                "MPS_STOPPED": str(mps_stopped),
+                "NEXPOLY_GPU_STATE_ROOT": (
+                    f"/proc/{os.getpid()}/fd/{fixture.root_fd}"
+                ),
+                "NEXPOLY_GPU_EXTERNAL_RESERVATIONS": (
+                    str(temporary_root / "missing-reservations.json")
+                ),
+                "NEXPOLY_GPU_BROKER_SOCKET": (
+                    f"/proc/{os.getpid()}/fd/{fixture.root_fd}/broker.sock"
+                ),
+                "NEXPOLY_GPU_MPS_SLOT_DIRECTORY": (
+                    f"/proc/{os.getpid()}/fd/{fixture.slot_fd}"
+                ),
+                "NEXPOLY_GPU_MPS_PIPE_DIRECTORY": (
+                    f"/proc/{os.getpid()}/fd/{fixture.pipe_fd}"
+                ),
+                "NEXPOLY_GPU_MPS_LOG_DIRECTORY": (
+                    f"/proc/{os.getpid()}/fd/{fixture.log_fd}"
+                ),
+                "NEXPOLY_GPU_MPS_DESCRIPTOR_AUTHORITY": "1",
+                "NEXPOLY_GPU_MPS_AUTHORITY_PID": str(os.getpid()),
+                "NEXPOLY_GPU_MPS_AUTHORITY_START_TICKS": (
+                    authority_environment[
+                        "NEXPOLY_DFT_GPU_AUTHORITY_START_TICKS"
+                    ]
+                ),
+                "NEXPOLY_GPU_MPS_EXPECTED_ROOT": str(
+                    fixture.gpu_root
+                ),
+                "NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE": "1",
+            }
+            inherited_directories = (
+                fixture.root_fd,
+                fixture.slot_fd,
+                fixture.pipe_fd,
+                fixture.log_fd,
+            )
+            try:
+                completed = subprocess.run(
+                    [
+                        str(fake_control),
+                        "start",
+                        "1",
+                        "--trusted-dev-start",
+                    ],
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    pass_fds=inherited_directories,
+                )
+                self.assertEqual(
+                    completed.returncode,
+                    0,
+                    msg=completed.stderr,
+                )
+                self.assertTrue(mps_started.exists())
+                self.assertFalse(host_audit_called.exists())
+                self.assertEqual(
+                    nvidia_calls.read_text(encoding="utf-8").splitlines(),
+                    [
+                        (
+                            "--query-gpu=uuid,compute_mode "
+                            "--format=csv,noheader,nounits -i 1"
+                        )
+                    ],
+                )
+
+                missing_default_authority = dict(env)
+                missing_default_authority.pop(
+                    "NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE"
+                )
+                rejected = subprocess.run(
+                    [
+                        str(fake_control),
+                        "start",
+                        "1",
+                        "--trusted-dev-start",
+                    ],
+                    env=missing_default_authority,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    pass_fds=inherited_directories,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(
+                    "requires formal descriptor authority and Default",
+                    rejected.stderr,
+                )
+                wrong_gpu = subprocess.run(
+                    [
+                        str(fake_control),
+                        "start",
+                        "2",
+                        "--trusted-dev-start",
+                    ],
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    pass_fds=inherited_directories,
+                )
+                self.assertNotEqual(wrong_gpu.returncode, 0)
+                self.assertIn("restricted to GPU1", wrong_gpu.stderr)
+                self.assertEqual(
+                    len(
+                        nvidia_calls.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                    ),
+                    1,
+                )
+
+                os.close(fixture.reservations_fd)
+                fixture.reservations.write_bytes(RESERVATIONS.read_bytes())
+                fixture.reservations.chmod(0o600)
+                fixture.reservations_fd = os.open(
+                    fixture.reservations,
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                )
+                fake_gpu_resource = fake_bin / "gpu_resource.py"
+                fake_gpu_resource.write_text(
+                    (
+                        "class GpuBrokerClient:\n"
+                        "    def __init__(self, _socket):\n"
+                        "        pass\n"
+                        "    def status(self):\n"
+                        "        return {'draining': True, 'leases': []}\n"
+                    ),
+                    encoding="utf-8",
+                )
+                stop_environment = dict(env)
+                stop_environment["PYTHONPATH"] = str(fake_bin)
+                stop_environment["NEXPOLY_GPU_EXTERNAL_RESERVATIONS"] = (
+                    f"/proc/{os.getpid()}/fd/{fixture.reservations_fd}"
+                )
+                stopped = subprocess.run(
+                    [str(fake_control), "stop", "1"],
+                    env=stop_environment,
+                    cwd=temporary_root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    pass_fds=(
+                        fixture.root_fd,
+                        fixture.reservations_fd,
+                        fixture.slot_fd,
+                        fixture.pipe_fd,
+                        fixture.log_fd,
+                    ),
+                )
+                self.assertEqual(stopped.returncode, 0, msg=stopped.stderr)
+                self.assertTrue(mps_stopped.exists())
+                self.assertFalse(host_audit_called.exists())
+                self.assertEqual(
+                    nvidia_calls.read_text(encoding="utf-8").splitlines(),
+                    [
+                        (
+                            "--query-gpu=uuid,compute_mode "
+                            "--format=csv,noheader,nounits -i 1"
+                        ),
+                        (
+                            "--query-gpu=uuid "
+                            "--format=csv,noheader,nounits -i 1"
+                        ),
+                    ],
+                )
+            finally:
+                fixture.close()
+
     def test_default_mode_override_requires_formal_authority_before_nvidia(
         self,
     ) -> None:

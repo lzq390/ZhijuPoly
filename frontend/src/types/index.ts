@@ -1725,6 +1725,28 @@ export type DftMoleculeDetail = {
   trace: DftEnergyPoint[];
 };
 
+export type DevGpuSessionPhase =
+  | "stopped"
+  | "recovering"
+  | "queued"
+  | "starting"
+  | "ready"
+  | "failed"
+  | "unavailable";
+
+export type DevGpuSessionStatusResponse = {
+  schema_version: number;
+  operator_available: boolean;
+  phase: DevGpuSessionPhase;
+  controller_status: string;
+  can_recover: boolean;
+  operation_id: string | null;
+  message: string;
+  source_sha: string | null;
+  source_tree: string | null;
+  updated_at: string | null;
+};
+
 export const PREDICTABLE_PROPERTIES: readonly PredictableProperty[] = [
   "Glass transition temperature",
   "Melting temperature",

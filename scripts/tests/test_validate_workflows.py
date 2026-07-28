@@ -84,6 +84,11 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
     def test_gpu_session_compose_render_requires_exact_inputs(self) -> None:
         controls = (
             (
+                'NEXPOLY_DEV_FRONTEND_PORT: "9001"',
+                'NEXPOLY_DEV_FRONTEND_PORT: "15173"',
+                "fixed 9001 development frontend port",
+            ),
+            (
                 'NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"',
                 'NEXPOLY_DEV_GPU_SESSION_ID: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"',
                 "fixed development GPU session identity",
@@ -92,6 +97,13 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
                 "NEXPOLY_GPU_STATE_ROOT: /tmp/nexpoly-gpu-state",
                 "NEXPOLY_GPU_STATE_ROOT: /tmp/other-gpu-state",
                 "isolated development GPU state root",
+            ),
+            (
+                "docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+                "-f docker-compose.dev-gpu-launcher.yml config --quiet",
+                "docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+                "config --quiet",
+                "9001-only GPU-launcher Compose render",
             ),
             (
                 "docker compose -f docker-compose.yml -f docker-compose.dev.yml "
@@ -113,8 +125,11 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
 
     def test_gpu_session_compose_render_rejects_commented_controls(self) -> None:
         controls = (
+            '          NEXPOLY_DEV_FRONTEND_PORT: "9001"',
             '          NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"',
             "          NEXPOLY_GPU_STATE_ROOT: /tmp/nexpoly-gpu-state",
+            "          docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+            "-f docker-compose.dev-gpu-launcher.yml config --quiet",
             "          docker compose -f docker-compose.yml -f docker-compose.dev.yml "
             "-f docker-compose.dev-gpu-session.yml config --quiet",
         )
@@ -125,6 +140,13 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         failures: list[str] = []
         policy.validate_gpu_session_compose_policy(changed, failures)
 
+        self.assertTrue(
+            any(
+                "active fixed 9001 development frontend port" in failure
+                for failure in failures
+            ),
+            failures,
+        )
         self.assertTrue(
             any("active fixed development GPU session identity" in failure for failure in failures),
             failures,

@@ -13,6 +13,7 @@ import type {
   DftMoleculeDetail,
   DftMoleculeBrowseResponse,
   DftPcaSampleResponse,
+  DevGpuSessionStatusResponse,
   ExperimentalProcessBrowseResponse,
   ExperimentalPropertyBrowseResponse,
   FormulationBrowseResponse,
@@ -279,6 +280,14 @@ async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function querySmiles(payload: SmilesQueryRequest): Promise<SmilesQueryResponse> {
   return postJSON("/query/smiles", payload);
+}
+
+export function fetchDevGpuSessionStatus(signal?: AbortSignal): Promise<DevGpuSessionStatusResponse> {
+  return getJSON("/dev-gpu-session/status", { cache: "no-store", signal });
+}
+
+export function recoverDevGpuSession(signal?: AbortSignal): Promise<DevGpuSessionStatusResponse> {
+  return postJSON("/dev-gpu-session/recover", {}, signal);
 }
 
 export function lookupSmilesInDatabase(payload: SmilesLookupRequest): Promise<SmilesLookupResponse> {

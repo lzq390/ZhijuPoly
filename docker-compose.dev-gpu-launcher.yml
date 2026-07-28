@@ -1,0 +1,21 @@
+# Optional 9001-only development GPU launcher.
+# scripts/dev_server_gpu.sh renders this overlay only when the local .env.dev
+# explicitly enables it and the published frontend port is exactly 9001.
+services:
+  backend:
+    environment:
+      DEV_GPU_OPERATOR_ENABLED: "true"
+      DEV_GPU_OPERATOR_FRONTEND_PORT: "${NEXPOLY_DEV_FRONTEND_PORT:?set NEXPOLY_DEV_FRONTEND_PORT to 9001}"
+      DEV_GPU_OPERATOR_SOCKET_PATH: /app/gpu-operator/operator.sock
+      DEV_GPU_OPERATOR_TIMEOUT_SECONDS: "3"
+    volumes:
+      - type: bind
+        source: ${NEXPOLY_DEV_GPU_OPERATOR_CLIENT_DIR:-./.runtime/gpu-operator-client}
+        target: /app/gpu-operator
+        read_only: true
+        bind:
+          create_host_path: false
+
+  frontend-dev:
+    environment:
+      VITE_DEV_GPU_SESSION_CONTROL: "true"

@@ -10,6 +10,20 @@ set -a
 source .env.dev
 set +a
 
+case "${NEXPOLY_DEV_GPU_LAUNCHER_ENABLED:-false}" in
+  true|false) ;;
+  *)
+    echo "NEXPOLY_DEV_GPU_LAUNCHER_ENABLED must be exactly true or false." >&2
+    exit 2
+    ;;
+esac
+if [[ "${NEXPOLY_DEV_GPU_LAUNCHER_ENABLED:-false}" == "true" &&
+  "${NEXPOLY_DEV_FRONTEND_PORT:-}" != "9001" ]]; then
+  echo "The development GPU launcher is restricted to NEXPOLY_DEV_FRONTEND_PORT=9001." >&2
+  exit 2
+fi
+export NEXPOLY_DEV_GPU_LAUNCHER_ENABLED="${NEXPOLY_DEV_GPU_LAUNCHER_ENABLED:-false}"
+
 # This workflow has one immutable physical-device contract.  Reject an
 # inherited or dotenv override before computing state paths or invoking
 # Docker/the controller.
@@ -35,6 +49,7 @@ BACKEND_BUILD_CONFIG_SHA256="sha256:$(
     Dockerfile \
     docker-compose.yml \
     docker-compose.dev.yml \
+    docker-compose.dev-gpu-launcher.yml \
     docker-compose.gpu-governed.yml \
     docker-compose.dev-gpu-session.yml |
     sha256sum | awk '{print $1}'
@@ -53,17 +68,28 @@ export NEXPOLY_BUILD_SOURCE_TREE="$CURRENT_SOURCE_TREE"
 export NEXPOLY_BACKEND_DEPENDENCY_LOCK_SHA256="$BACKEND_DEPENDENCY_LOCK_SHA256"
 export NEXPOLY_BACKEND_BUILD_CONFIG_SHA256="$BACKEND_BUILD_CONFIG_SHA256"
 
-COMPOSE=(docker compose -p nexpoly_dev -f docker-compose.yml -f docker-compose.dev.yml --env-file .env.dev)
+DEV_COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.dev.yml)
+if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
+  DEV_COMPOSE_FILES+=(-f docker-compose.dev-gpu-launcher.yml)
+fi
+COMPOSE=(docker compose -p nexpoly_dev "${DEV_COMPOSE_FILES[@]}" --env-file .env.dev)
 GPU_COMPOSE=(
   docker compose -p nexpoly_dev
-  -f docker-compose.yml
-  -f docker-compose.dev.yml
+  "${DEV_COMPOSE_FILES[@]}"
   -f docker-compose.dev-gpu-session.yml
   --env-file .env.dev
 )
 GPU_SESSION_CONTROLLER="$ROOT_DIR/scripts/dev_gpu_session.py"
 GPU_SESSION_PYTHON="/usr/bin/python3"
 GPU_SESSION_UP_LOCK="$ROOT_DIR/.runtime/gpu-session-up.lock"
+GPU_OPERATOR_SCRIPT="$ROOT_DIR/scripts/dev_gpu_operator.py"
+GPU_OPERATOR_PRIVATE_DIR="$ROOT_DIR/.runtime/gpu-operator"
+GPU_OPERATOR_CLIENT_DIR="$ROOT_DIR/.runtime/gpu-operator-client"
+GPU_OPERATOR_SOCKET="$GPU_OPERATOR_CLIENT_DIR/operator.sock"
+GPU_OPERATOR_IDENTITY="$GPU_OPERATOR_PRIVATE_DIR/operator.json"
+GPU_OPERATOR_LOG="$GPU_OPERATOR_PRIVATE_DIR/operator.log"
+GPU_OPERATOR_UNIT="nexpoly-dev-gpu-operator-${CURRENT_SOURCE_REVISION:0:12}"
+export NEXPOLY_DEV_GPU_OPERATOR_CLIENT_DIR="$GPU_OPERATOR_CLIENT_DIR"
 [[ -x "$GPU_SESSION_PYTHON" ]] && "$GPU_SESSION_PYTHON" -I -c \
   'import os, signal; assert callable(os.pidfd_open); assert callable(signal.pidfd_send_signal)' \
   >/dev/null 2>&1 || {
@@ -162,6 +188,176 @@ prepare_dft_runtime_directories() {
     }
     chmod 700 "$directory"
   done
+}
+
+prepare_gpu_operator_runtime() {
+  [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]] || return 0
+  local user_runtime="/run/user/$(id -u)"
+  [[ -x /usr/bin/systemd-run && ! -L /usr/bin/systemd-run ]] || {
+    echo "The fixed systemd-run launcher is unavailable." >&2
+    return 1
+  }
+  [[ -d "$user_runtime" && ! -L "$user_runtime" &&
+    "$(stat -c '%u:%a' "$user_runtime")" == "$(id -u):700" ]] || {
+    echo "The owner-private systemd user runtime is unavailable." >&2
+    return 1
+  }
+  [[ -S "$user_runtime/bus" && ! -L "$user_runtime/bus" &&
+    "$(stat -c '%u' "$user_runtime/bus")" == "$(id -u)" ]] || {
+    echo "The owner-private systemd user bus is unavailable." >&2
+    return 1
+  }
+  "$GPU_SESSION_PYTHON" -I "$GPU_OPERATOR_SCRIPT" prepare \
+    --repository "$ROOT_DIR"
+}
+
+gpu_operator_request() {
+  local command="$1"
+  "$GPU_SESSION_PYTHON" -I "$GPU_OPERATOR_SCRIPT" request \
+    --socket "$GPU_OPERATOR_SOCKET" \
+    --command "$command" \
+    --timeout 5
+}
+
+gpu_operator_status_is_current() {
+  gpu_operator_request status | python3 -c '
+import json
+import sys
+
+value = json.load(sys.stdin)
+assert value.get("schema_version") == 1, value
+assert value.get("operator_available") is True, value
+assert value.get("source_sha") == sys.argv[1], value
+assert value.get("source_tree") == sys.argv[2], value
+' "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE"
+}
+
+gpu_operator_cleanup_stale_identity() {
+  "$GPU_SESSION_PYTHON" -I - "$GPU_OPERATOR_IDENTITY" "$GPU_OPERATOR_SOCKET" <<'PY'
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+identity_path = Path(sys.argv[1])
+socket_path = Path(sys.argv[2])
+if not identity_path.exists() and not identity_path.is_symlink():
+    if socket_path.exists() or socket_path.is_symlink():
+        metadata = socket_path.lstat()
+        if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise SystemExit("unsafe stale GPU operator socket")
+        socket_path.unlink()
+    raise SystemExit(0)
+metadata = identity_path.lstat()
+if (
+    not stat.S_ISREG(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(metadata.st_mode) != 0o600
+):
+    raise SystemExit("unsafe stale GPU operator identity")
+value = json.loads(identity_path.read_text(encoding="utf-8"))
+pid = value.get("pid")
+start_ticks = value.get("start_ticks")
+if not isinstance(pid, int) or pid <= 1 or not isinstance(start_ticks, int):
+    raise SystemExit("invalid stale GPU operator identity")
+proc_stat = Path(f"/proc/{pid}/stat")
+if proc_stat.exists():
+    try:
+        raw = proc_stat.read_text(encoding="ascii")
+    except FileNotFoundError:
+        raw = ""
+    if raw:
+        closing = raw.rfind(")")
+        live_ticks = int(raw[closing + 2:].split()[19])
+        if live_ticks == start_ticks:
+            raise SystemExit("a live but unresponsive GPU operator still owns the identity")
+identity_path.unlink()
+if socket_path.exists() or socket_path.is_symlink():
+    socket_metadata = socket_path.lstat()
+    if not stat.S_ISSOCK(socket_metadata.st_mode) or socket_metadata.st_uid != os.geteuid():
+        raise SystemExit("unsafe stale GPU operator socket")
+    socket_path.unlink()
+PY
+}
+
+gpu_operator_up() {
+  [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]] || return 0
+  prepare_gpu_operator_runtime
+  if gpu_operator_status_is_current >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -S "$GPU_OPERATOR_SOCKET" && ! -e "$GPU_OPERATOR_IDENTITY" ]]; then
+    # bind() precedes the atomic identity publication by a few instructions.
+    # Give a concurrently starting owner time to publish before classifying
+    # the socket as stale.
+    for _ in $(seq 1 20); do
+      if gpu_operator_status_is_current >/dev/null 2>&1; then
+        return 0
+      fi
+      [[ -e "$GPU_OPERATOR_IDENTITY" ]] && break
+      sleep 0.05
+    done
+  fi
+  if [[ -S "$GPU_OPERATOR_SOCKET" ]]; then
+    if gpu_operator_request shutdown >/dev/null 2>&1; then
+      for _ in $(seq 1 50); do
+        [[ ! -e "$GPU_OPERATOR_SOCKET" && ! -e "$GPU_OPERATOR_IDENTITY" ]] && break
+        sleep 0.1
+      done
+    fi
+  fi
+  gpu_operator_cleanup_stale_identity
+  local launched=true user_runtime="/run/user/$(id -u)"
+  if ! XDG_RUNTIME_DIR="$user_runtime" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$user_runtime/bus" \
+    /usr/bin/systemd-run \
+      --user \
+      --quiet \
+      --collect \
+      --service-type=exec \
+      --unit="$GPU_OPERATOR_UNIT" \
+      --working-directory="$ROOT_DIR" \
+      --setenv="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      --property="StandardOutput=append:$GPU_OPERATOR_LOG" \
+      --property="StandardError=append:$GPU_OPERATOR_LOG" \
+      "$GPU_SESSION_PYTHON" -I "$GPU_OPERATOR_SCRIPT" serve \
+      --repository "$ROOT_DIR" \
+      --source-sha "$CURRENT_SOURCE_REVISION" \
+      --source-tree "$CURRENT_SOURCE_TREE"; then
+    launched=false
+  fi
+  for _ in $(seq 1 100); do
+    if gpu_operator_status_is_current >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  [[ "$launched" == "true" ]] ||
+    echo "The development GPU operator systemd unit failed to launch." >&2
+  echo "Timed out starting the development GPU operator." >&2
+  tail -n 80 "$GPU_OPERATOR_LOG" >&2 || true
+  return 1
+}
+
+gpu_operator_stop() {
+  [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]] || return 0
+  if [[ ! -e "$GPU_OPERATOR_SOCKET" && ! -e "$GPU_OPERATOR_IDENTITY" ]]; then
+    return 0
+  fi
+  if [[ ! -S "$GPU_OPERATOR_SOCKET" ]]; then
+    gpu_operator_cleanup_stale_identity
+    return 0
+  fi
+  gpu_operator_request shutdown >/dev/null
+  for _ in $(seq 1 100); do
+    if [[ ! -e "$GPU_OPERATOR_SOCKET" && ! -e "$GPU_OPERATOR_IDENTITY" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out stopping the development GPU operator." >&2
+  return 1
 }
 
 validate_dft_session_prerequisites() {
@@ -440,6 +636,13 @@ assert_clean_candidate() {
   }
 }
 
+assert_clean_candidate_unless_direct_start() {
+  if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
+    return 0
+  fi
+  assert_clean_candidate
+}
+
 assert_default_builder() {
   local driver
   driver="$(docker buildx inspect default 2>/dev/null | awk -F: '/^Driver:/ {gsub(/[[:space:]]/, "", $2); print $2; exit}')"
@@ -654,7 +857,7 @@ wait_backend_configured() {
 verify_backend_drift() {
   local container_id expected_image actual_image desired_hash actual_hash image_revision runtime_revision
   local image_tree image_lock image_build_config runtime_identity
-  assert_clean_candidate
+  assert_clean_candidate_unless_direct_start
   assert_default_builder
   container_id="$("${COMPOSE[@]}" ps -q backend)"
   [[ -n "$container_id" ]] || { echo "Development backend container is missing." >&2; return 1; }
@@ -697,12 +900,48 @@ verify_backend_drift() {
   }
   docker exec "$container_id" python -c \
     "import os; expected={'WEB_CONCURRENCY':'1','NVIDIA_VISIBLE_DEVICES':'none','GPU_PRELOAD_MODE':'lazy','GPU_MAX_CONCURRENT_INFERENCES':'1','GPU_MAX_WAITING_INFERENCES':'8','GPU_SYNC_QUEUE_TIMEOUT_SECONDS':'30','GPU_ASYNC_QUEUE_TIMEOUT_SECONDS':'600','MODEL_ENABLED':'true','OCSR_ENABLED':'false','OCSR_DEVICE':'cpu','GEN_MODEL_ENABLED':'false','GEN_DEVICE':'cpu','GEN_JOB_WORKERS':'1','GEN_MAX_ACTIVE_JOBS':'8','RETRO_MODEL_ENABLED':'false','RETRO_DEVICE':'cpu','POLYTAO_ENABLED':'false','POLYTAO_DEVICE':'cpu','POLYTAO_JOB_THREADS':'1','POLYTAO_MAX_ACTIVE_JOBS':'1','MONOMER_MD_SUBMIT_ENABLED':'false','MONOMER_DFT_SUBMIT_ENABLED':'false'}; actual={key:os.getenv(key) for key in expected}; assert actual == expected, actual"
+  docker exec "$container_id" python -c \
+    'import os, sys; enabled=sys.argv[1]=="true"; assert (os.getenv("DEV_GPU_OPERATOR_ENABLED")=="true") is enabled; assert not enabled or (os.getenv("DEV_GPU_OPERATOR_FRONTEND_PORT")=="9001" and os.getenv("DEV_GPU_OPERATOR_SOCKET_PATH")=="/app/gpu-operator/operator.sock")' \
+    "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED"
   docker inspect "$container_id" | python3 -c '
-import json, sys
+import json
+import sys
+
 container = json.load(sys.stdin)[0]
 if container["HostConfig"].get("DeviceRequests"):
     raise SystemExit("CPU-only development backend must not have a GPU DeviceRequest")
-'
+mounts = {item["Destination"]: item for item in container.get("Mounts", [])}
+launcher_enabled = sys.argv[1] == "true"
+operator_mount = mounts.get("/app/gpu-operator")
+if launcher_enabled:
+    expected_source = sys.argv[2] + "/.runtime/gpu-operator-client"
+    if (
+        not operator_mount
+        or operator_mount.get("Source") != expected_source
+        or operator_mount.get("RW") is not False
+    ):
+        raise SystemExit("development GPU operator mount differs")
+elif operator_mount:
+    raise SystemExit("disabled development Backend must not mount the GPU operator")
+' "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" "$ROOT_DIR"
+  if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
+    gpu_operator_status_is_current >/dev/null
+  fi
+}
+
+verify_direct_cpu_backend_baseline() {
+  local container_id health
+  if ! verify_backend_drift; then
+    echo "9001 GPU 直启要求现有 CPU backend 匹配当前代码；请先运行 up。" >&2
+    return 1
+  fi
+  if ! container_id="$("${COMPOSE[@]}" ps -q backend)" ||
+    [[ -z "$container_id" ]] ||
+    ! health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container_id" 2>/dev/null)" ||
+    [[ "$health" != "healthy" ]]; then
+    echo "9001 GPU 直启要求现有 CPU backend 健康；请先运行 up。" >&2
+    return 1
+  fi
 }
 
 require_worker_venv_config() {
@@ -1491,7 +1730,7 @@ verify_gpu_backend_drift() {
   local expected_container_id="${2:-}" expected_config_hash="${3:-}"
   local container_id expected_image actual_image desired_hash actual_hash session_label
   local image_revision image_tree image_lock image_build_config runtime_identity
-  assert_clean_candidate
+  assert_clean_candidate_unless_direct_start
   assert_default_builder
   container_id="$("${GPU_COMPOSE[@]}" ps -q backend)"
   [[ -n "$container_id" ]] || { echo "Governed development backend is missing." >&2; return 1; }
@@ -1557,7 +1796,8 @@ verify_gpu_backend_drift() {
   inspect_file="$(mktemp)"
   trap 'rm -f "$inspect_file"' RETURN
   docker inspect "$container_id" >"$inspect_file"
-  python3 - "$ROOT_DIR" "$inspect_file" "$NEXPOLY_DEV_GPU_SESSION_ID" <<'PY'
+  python3 - "$ROOT_DIR" "$inspect_file" "$NEXPOLY_DEV_GPU_SESSION_ID" \
+    "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" <<'PY'
 import json
 import sys
 
@@ -1587,18 +1827,32 @@ expected = {
     "/app/.runtime/monomer-dft-download-spool": (root + "/.runtime/monomer-dft-download-spool", True),
     "/app/.runtime/gpu-resource": (root + "/.runtime/gpu-resource", False),
 }
+launcher_enabled = sys.argv[4] == "true"
+if launcher_enabled:
+    expected["/app/gpu-operator"] = (
+        root + "/.runtime/gpu-operator-client",
+        False,
+    )
 for target, (source, rw) in expected.items():
     mount = mounts.get(target)
     if not mount or mount.get("Source") != source or mount.get("RW") is not rw:
         raise SystemExit(f"governed backend mount differs: {target}")
+if not launcher_enabled and "/app/gpu-operator" in mounts:
+    raise SystemExit("disabled governed backend must not mount the GPU operator")
 PY
   rm -f "$inspect_file"
   trap - RETURN
   docker exec "$container_id" python -c \
     "import os; expected={'NVIDIA_VISIBLE_DEVICES':'1','MODEL_ENABLED':'true','OCSR_ENABLED':'true','OCSR_DEVICE':'cuda','GEN_MODEL_ENABLED':'true','GEN_DEVICE':'cuda','RETRO_MODEL_ENABLED':'true','RETRO_DEVICE':'cuda','POLYTAO_ENABLED':'true','POLYTAO_DEVICE':'cuda','MONOMER_MD_SUBMIT_ENABLED':'true','MONOMER_DFT_SUBMIT_ENABLED':'true','GPU_BROKER_ENABLED':'true','GPU_BROKER_SOCKET_PATH':'/app/.runtime/gpu-resource/broker.sock','GPU_MPS_PIPE_ROOT':'/app/.runtime/gpu-resource'}; actual={key:os.getenv(key) for key in expected}; assert actual == expected, actual"
+  docker exec "$container_id" python -c \
+    'import os, sys; enabled=sys.argv[1]=="true"; assert (os.getenv("DEV_GPU_OPERATOR_ENABLED")=="true") is enabled; assert not enabled or (os.getenv("DEV_GPU_OPERATOR_FRONTEND_PORT")=="9001" and os.getenv("DEV_GPU_OPERATOR_SOCKET_PATH")=="/app/gpu-operator/operator.sock")' \
+    "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED"
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c \
     'import json, sys; value=json.load(sys.stdin); assert value.get("status") == sys.argv[3] and value.get("gpu3_untouched") is True and value.get("contaminated") is False and value.get("source_sha") == sys.argv[1] and value.get("source_tree") == sys.argv[2] and value.get("session_id") == sys.argv[4], value' \
     "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" "$expected_controller_status" "$NEXPOLY_DEV_GPU_SESSION_ID"
+  if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
+    gpu_operator_status_is_current >/dev/null
+  fi
 }
 
 verify_backend_image_build_identity() {
@@ -1803,13 +2057,29 @@ print(state + "\t" + session_id)
 
 gpu_session_controller_owns_recovery() {
   case "$1" in
-    startup-failed|contaminated|audit-failed|isolation-waiting|cleanup-blocked|gpu3-drift|recovered)
+    startup-failed|broker-failed|contaminated|audit-failed|isolation-waiting|cleanup-blocked|gpu3-drift|recovered)
       return 0
       ;;
     *)
       return 1
       ;;
   esac
+}
+
+gpu_session_report_controller_failure() {
+  local session_id="$1"
+  local -a matches=(
+    "$ROOT_DIR/.runtime/gpu-session/runs/"*-"$session_id/controller.log"
+  )
+  if [[ ! "$session_id" =~ ^[0-9a-f]{32}$ || ${#matches[@]} -ne 1 ||
+    ! -f "${matches[0]}" || -L "${matches[0]}" ||
+    "$(stat -c '%u:%a' "${matches[0]}")" != "$(id -u):600" ]]; then
+    return 0
+  fi
+  if [[ -s "${matches[0]}" ]]; then
+    echo "GPU controller failure log (${matches[0]}):" >&2
+    tail -n 40 "${matches[0]}" >&2
+  fi
 }
 
 gpu_session_controller_finish_recovery() {
@@ -1876,6 +2146,7 @@ gpu_session_up_rollback() {
 
     if [[ "$controller_owns_recovery" == "true" ]]; then
       if gpu_session_controller_finish_recovery; then
+        [[ -z "$session_id" ]] || gpu_session_report_controller_failure "$session_id"
         set -e
         return "$original_status"
       fi
@@ -1908,12 +2179,32 @@ gpu_session_up_rollback() {
     fi
     if [[ "$controller_owns_recovery" == "true" ]] &&
       gpu_session_controller_finish_recovery; then
+      [[ -z "$session_id" ]] || gpu_session_report_controller_failure "$session_id"
       set -e
       return "$original_status"
     fi
     if [[ -n "$session_id" ]]; then
-      NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1 gpu_session_stop_owned_internal
-      NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1 gpu_session_restore_cpu_internal
+      local attempt stop_completed=false cpu_restored=false
+      for attempt in 1 2 3; do
+        if NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1 \
+          gpu_session_stop_owned_internal; then
+          stop_completed=true
+          break
+        fi
+      done
+      for attempt in 1 2 3; do
+        if NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1 \
+          gpu_session_restore_cpu_internal; then
+          cpu_restored=true
+          break
+        fi
+      done
+      if [[ "$stop_completed" != "true" ]]; then
+        echo "GPU session shell fallback could not stop every owned component after 3 attempts." >&2
+      fi
+      if [[ "$cpu_restored" != "true" ]]; then
+        echo "GPU session shell fallback could not restore the CPU backend after 3 attempts." >&2
+      fi
     fi
     "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --execute >/dev/null 2>&1
   fi
@@ -1923,8 +2214,19 @@ gpu_session_up_rollback() {
 
 gpu_session_up() {
   if [[ "${NEXPOLY_DEV_GPU_SESSION_EXECUTE:-0}" != "1" ]]; then
-    "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" up --dry-run
+    if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
+      "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" up --dry-run --direct-start
+    else
+      "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" up --dry-run
+    fi
     return 0
+  fi
+  if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
+    [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]] || {
+      echo "Direct GPU1 startup is restricted to the 9001 development launcher." >&2
+      return 2
+    }
+    verify_direct_cpu_backend_baseline
   fi
   validate_asset_release
   prepare_canary_state_directory
@@ -1933,28 +2235,39 @@ gpu_session_up() {
   worker_verify_venv
   validate_worker_transport_runtime
   validate_dft_session_prerequisites
-  build_backend_image
-  verify_backend_image_build_identity
-  # Replace a stale dev GPU DeviceRequest with the verified idle CPU service
-  # before the controller's first free audit.
-  NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
-  export NEXPOLY_DEV_CONFIG_HASH
-  "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
-  wait_backend_configured
-  verify_backend_drift
+  if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" != "1" ]]; then
+    build_backend_image
+    verify_backend_image_build_identity
+    # Preserve the governed CLI contract from origin/main: always replace the
+    # CPU backend before the controller performs its first host audit.
+    NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
+    export NEXPOLY_DEV_CONFIG_HASH
+    "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
+    wait_backend_configured
+    verify_backend_drift
+  fi
   GPU_SESSION_ROLLBACK_ARMED=true
   trap gpu_session_up_rollback ERR
   local controller_payload dft_health
   local gpu_backend_candidate_id gpu_backend_candidate_hash
-  controller_payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" up --execute)"
+  if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
+    controller_payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" up --execute --direct-start)"
+  else
+    controller_payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" up --execute)"
+  fi
   NEXPOLY_DEV_GPU_SESSION_ID="$(printf '%s' "$controller_payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin); session=value.get("session_id"); assert value.get("status") == "plane-ready" and isinstance(session,str) and re.fullmatch(r"[0-9a-f]{32}", session), value; print(session)')"
   export NEXPOLY_DEV_GPU_SESSION_ID
   export NEXPOLY_DEV_GPU_SESSION_ACTIVE=true
   dft_worker_ctl start
   dft_health="$(curl --max-time 10 --unix-socket "$DFT_WORKER_SOCKET_DIR/worker.sock" -fsS http://localhost/health)"
   dft_worker_session_record bind "$dft_health" >/dev/null
-  "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" stabilize --execute \
-    --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" >/dev/null
+  if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
+    "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" stabilize --execute \
+      --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" --direct-start >/dev/null
+  else
+    "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" stabilize --execute \
+      --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" >/dev/null
+  fi
   worker_up
   gpu_backend_candidate_hash="$(compute_gpu_backend_config_hash)"
   [[ "$gpu_backend_candidate_hash" =~ ^[0-9a-f]{64}$ ]] || {
@@ -1972,8 +2285,13 @@ gpu_session_up() {
   wait_gpu_backend_configured "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
   verify_gpu_backend_drift plane-ready "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
   write_gpu_session_activation_manifest "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
-  "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" activate --execute \
-    --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" >/dev/null
+  if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
+    "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" activate --execute \
+      --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" --direct-start >/dev/null
+  else
+    "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" activate --execute \
+      --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" >/dev/null
+  fi
   verify_gpu_backend_drift ready "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
   GPU_SESSION_ROLLBACK_ARMED=false
   trap - ERR
@@ -2020,9 +2338,18 @@ verify_gpu_session_stopped_runtime() {
   done
 }
 
+gpu_session_adopt_direct_start() {
+  local payload="$1"
+  if printf '%s' "$payload" | python3 -c \
+    'import json, sys; raise SystemExit(0 if json.load(sys.stdin).get("direct_start") is True else 1)'; then
+    export NEXPOLY_DEV_GPU_DIRECT_START=1
+  fi
+}
+
 gpu_session_status() {
   local payload state
   payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)"
+  gpu_session_adopt_direct_start "$payload"
   printf '%s\n' "$payload"
   printf '%s' "$payload" | python3 -c \
     'import json, sys; value=json.load(sys.stdin); status=value.get("status"); assert status == "stopped" or (value.get("source_sha") == sys.argv[1] and value.get("source_tree") == sys.argv[2]), value' \
@@ -2050,11 +2377,22 @@ gpu_session_down() {
   fi
   local payload state
   payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)"
+  gpu_session_adopt_direct_start "$payload"
   state="$(printf '%s' "$payload" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status", "invalid"))')"
   if [[ "$state" == "stopped" ]]; then
     verify_gpu_session_stopped_runtime
     echo "Development backend is already in CPU-only idle mode."
     return 0
+  fi
+  if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
+    case "$state" in
+      starting|startup-failed|broker-failed|isolation-waiting|cleanup-blocked|recovered)
+        "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --execute
+        verify_gpu_session_stopped_runtime
+        echo "Development backend restored to CPU-only idle mode."
+        return 0
+        ;;
+    esac
   fi
   NEXPOLY_DEV_GPU_SESSION_ID="$(printf '%s' "$payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin); session=value.get("session_id"); assert value.get("status") in {"ready","plane-ready","stabilizing","contaminated","audit-failed","isolation-waiting","cleanup-blocked"} and isinstance(session,str) and re.fullmatch(r"[0-9a-f]{32}", session), value; print(session)')"
   export NEXPOLY_DEV_GPU_SESSION_ID
@@ -2384,6 +2722,7 @@ case "${1:-up}" in
     prepare_worker_runtime_directories
     prepare_dft_runtime_directories
     build_backend_image
+    gpu_operator_up
     "${COMPOSE[@]}" up -d lab-postgres
     run_dev_migrations
     "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
@@ -2394,6 +2733,7 @@ case "${1:-up}" in
   stop)
     "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c \
       'import json, sys; value=json.load(sys.stdin); assert value.get("status") == "stopped", "use gpu-session-down for an active GPU session"'
+    gpu_operator_stop
     "${COMPOSE[@]}" stop backend frontend-dev
     worker_stop
     "${COMPOSE[@]}" stop lab-postgres
@@ -2401,6 +2741,7 @@ case "${1:-up}" in
   down)
     "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c \
       'import json, sys; value=json.load(sys.stdin); assert value.get("status") == "stopped", "use gpu-session-down for an active GPU session"'
+    gpu_operator_stop
     "${COMPOSE[@]}" stop backend frontend-dev
     worker_stop
     "${COMPOSE[@]}" down
