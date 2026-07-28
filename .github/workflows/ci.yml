@@ -112,6 +112,7 @@ jobs:
           install -m 600 /dev/null "$NEXPOLY_APP_ENV_FILE"
           docker compose -f docker-compose.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.dev-gpu-launcher.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.dev-gpu-session.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
           GPU_BROKER_ENVIRONMENT=dev docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.gpu-governed.yml config --quiet
@@ -452,6 +453,7 @@ jobs:
               Dockerfile \
               docker-compose.yml \
               docker-compose.dev.yml \
+              docker-compose.dev-gpu-launcher.yml \
               docker-compose.gpu-governed.yml \
               docker-compose.dev-gpu-session.yml |
               sha256sum | awk '{print $1}'
@@ -658,6 +660,7 @@ jobs:
               Dockerfile \
               docker-compose.yml \
               docker-compose.dev.yml \
+              docker-compose.dev-gpu-launcher.yml \
               docker-compose.gpu-governed.yml \
               docker-compose.dev-gpu-session.yml |
               sha256sum | awk '{print $1}'

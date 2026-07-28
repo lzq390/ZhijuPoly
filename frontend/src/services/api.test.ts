@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchPolytaoJob, fetchPolytaoStatus } from "./api";
+import {
+  fetchDevGpuSessionStatus,
+  fetchPolytaoJob,
+  fetchPolytaoStatus,
+  recoverDevGpuSession
+} from "./api";
 
 describe("fetchPolytaoStatus", () => {
   afterEach(() => {
@@ -50,6 +55,58 @@ describe("fetchPolytaoStatus", () => {
     await expect(fetchPolytaoStatus()).rejects.toThrow("timed out after 10 seconds");
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
+  });
+});
+
+describe("development GPU session API", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses only the fixed status and recovery routes", async () => {
+    const response = {
+      schema_version: 1,
+      operator_available: true,
+      phase: "stopped",
+      controller_status: "stopped",
+      can_recover: true,
+      operation_id: null,
+      message: "stopped",
+      source_sha: "a".repeat(40),
+      source_tree: "b".repeat(40),
+      updated_at: "2026-07-27T00:00:00Z"
+    };
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(
+          new Response(JSON.stringify(response), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          })
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await fetchDevGpuSessionStatus(controller.signal);
+    await recoverDevGpuSession(controller.signal);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/dev-gpu-session/status",
+      expect.objectContaining({ cache: "no-store", signal: controller.signal })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/dev-gpu-session/recover",
+      expect.objectContaining({
+        method: "POST",
+        body: "{}",
+        signal: controller.signal
+      })
+    );
   });
 });
 

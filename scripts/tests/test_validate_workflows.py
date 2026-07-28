@@ -95,6 +95,13 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             ),
             (
                 "docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+                "-f docker-compose.dev-gpu-launcher.yml config --quiet",
+                "docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+                "config --quiet",
+                "9001-only GPU-launcher Compose render",
+            ),
+            (
+                "docker compose -f docker-compose.yml -f docker-compose.dev.yml "
                 "-f docker-compose.dev-gpu-session.yml config --quiet",
                 "docker compose -f docker-compose.yml -f docker-compose.dev.yml "
                 "config --quiet",
@@ -115,6 +122,8 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         controls = (
             '          NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"',
             "          NEXPOLY_GPU_STATE_ROOT: /tmp/nexpoly-gpu-state",
+            "          docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+            "-f docker-compose.dev-gpu-launcher.yml config --quiet",
             "          docker compose -f docker-compose.yml -f docker-compose.dev.yml "
             "-f docker-compose.dev-gpu-session.yml config --quiet",
         )

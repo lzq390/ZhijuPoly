@@ -91,6 +91,7 @@ BACKEND_IMAGE_IDENTITY_STEP_LINES = (
     "              Dockerfile \\",
     "              docker-compose.yml \\",
     "              docker-compose.dev.yml \\",
+    "              docker-compose.dev-gpu-launcher.yml \\",
     "              docker-compose.gpu-governed.yml \\",
     "              docker-compose.dev-gpu-session.yml |",
     "              sha256sum | awk '{print $1}'",
@@ -817,6 +818,11 @@ def validate_gpu_session_compose_policy(
         ),
     )
     run_controls = (
+        (
+            "9001-only GPU-launcher Compose render",
+            "          docker compose -f docker-compose.yml -f docker-compose.dev.yml "
+            "-f docker-compose.dev-gpu-launcher.yml config --quiet",
+        ),
         (
             "base, development, and GPU-session Compose render",
             "          docker compose -f docker-compose.yml -f docker-compose.dev.yml "

@@ -30,6 +30,7 @@ from app.routers.conditional_generation import router as conditional_generation_
 from app.routers.database_browser import router as database_browser_router
 from app.routers.dft import router as dft_router
 from app.routers.deployment_status import router as deployment_status_router
+from app.routers.dev_gpu_session import router as dev_gpu_session_router
 from app.routers.gpu_status import router as gpu_status_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.lab_data import router as lab_data_router
@@ -50,6 +51,7 @@ from app.routers.reverse_design import router as reverse_design_router
 from app.services.conditional_generation_jobs import ConditionalGenerationJobManager
 from app.services.conditional_generation_runtime import TorchConditionalGenerationRuntime
 from app.services.deployment_control import InflightApiWriteTracker
+from app.services.dev_gpu_operator import DevGpuOperatorClient
 from app.services.gpu_runtime_registry import GpuRuntimeRegistry
 from app.services.image_recognition import (
     load_image_recognition_runtime,
@@ -224,6 +226,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.state.settings = app_settings
+    app.state.dev_gpu_operator_client = None
+    if app_settings.dev_gpu_operator_enabled:
+        app.state.dev_gpu_operator_client = DevGpuOperatorClient(
+            socket_path=app_settings.dev_gpu_operator_socket_path,
+            timeout_seconds=app_settings.dev_gpu_operator_timeout_seconds,
+            expected_source_sha=os.getenv("BUILD_REVISION", ""),
+            expected_source_tree=os.getenv("BUILD_SOURCE_TREE", ""),
+        )
     app.state.smipoly_limiter = anyio.CapacityLimiter(1)
     app.state.postgres_connection_factory = postgres_connection
     app.state.structure_similarity_index = StructureSimilarityIndex()
@@ -303,6 +313,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_api_route("/health", health, methods=["GET"])
     app.include_router(deployment_status_router)
+    if app_settings.dev_gpu_operator_enabled:
+        app.include_router(dev_gpu_session_router)
     app.include_router(gpu_status_router)
     app.include_router(assistant_router)
     app.include_router(query_router)

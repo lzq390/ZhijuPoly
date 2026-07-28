@@ -2,6 +2,15 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import { Home, Menu, MessageSquare, X } from "lucide-react";
 import { Button } from "./ui/button";
+import {
+  GpuSessionButton,
+  useDevGpuSessionControl,
+  type DevGpuSessionControl
+} from "./GpuSessionButton";
+
+const DEV_GPU_SESSION_CONTROL_ENABLED =
+  import.meta.env.DEV &&
+  import.meta.env.VITE_DEV_GPU_SESSION_CONTROL === "true";
 
 export type AppShellModuleItem = {
   id: string;
@@ -28,6 +37,7 @@ type AppShellProps = {
 
 export function AppShell({ activeModule, fullBleed = false, moduleGroups, onOpenHome, children }: AppShellProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const gpuSessionControl = useDevGpuSessionControl(DEV_GPU_SESSION_CONTROL_ENABLED);
   const isHome = activeModule === "home";
   const isResearchWorkbench = activeModule === "explorer" || activeModule === "databaseQuery";
 
@@ -44,6 +54,8 @@ export function AppShell({ activeModule, fullBleed = false, moduleGroups, onOpen
           moduleGroups={moduleGroups}
           onOpenHome={() => handleNavigate(onOpenHome)}
           onNavigate={handleNavigate}
+          gpuSessionControl={DEV_GPU_SESSION_CONTROL_ENABLED ? gpuSessionControl : null}
+          gpuStatusId="gpu-session-status-desktop"
         />
       </aside>
 
@@ -61,6 +73,8 @@ export function AppShell({ activeModule, fullBleed = false, moduleGroups, onOpen
               moduleGroups={moduleGroups}
               onOpenHome={() => handleNavigate(onOpenHome)}
               onNavigate={handleNavigate}
+              gpuSessionControl={DEV_GPU_SESSION_CONTROL_ENABLED ? gpuSessionControl : null}
+              gpuStatusId="gpu-session-status-mobile"
               trailing={
                 <button
                   type="button"
@@ -108,10 +122,20 @@ type SidebarContentProps = {
   moduleGroups: AppShellModuleGroup[];
   onOpenHome: () => void;
   onNavigate: (action: () => void) => void;
+  gpuSessionControl: DevGpuSessionControl | null;
+  gpuStatusId: string;
   trailing?: ReactNode;
 };
 
-function SidebarContent({ isHome, moduleGroups, onOpenHome, onNavigate, trailing }: SidebarContentProps) {
+function SidebarContent({
+  isHome,
+  moduleGroups,
+  onOpenHome,
+  onNavigate,
+  gpuSessionControl,
+  gpuStatusId,
+  trailing
+}: SidebarContentProps) {
   return (
     <div className="flex h-full flex-col gap-3">
       <div className="flex items-center justify-between px-2 py-2">
@@ -121,7 +145,14 @@ function SidebarContent({ isHome, moduleGroups, onOpenHome, onNavigate, trailing
           </span>
           <span className="block min-w-0 truncate text-sm font-semibold text-slate-950">智聚万物</span>
         </button>
-        {trailing}
+        {gpuSessionControl || trailing ? (
+          <div className="flex items-center gap-1">
+            {gpuSessionControl ? (
+              <GpuSessionButton control={gpuSessionControl} statusId={gpuStatusId} />
+            ) : null}
+            {trailing}
+          </div>
+        ) : null}
       </div>
 
       <Button

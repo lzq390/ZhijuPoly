@@ -15,6 +15,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPOSITORY_ROOT / "scripts" / "dev_server_gpu.sh"
 DEV_COMPOSE = REPOSITORY_ROOT / "docker-compose.dev.yml"
 GPU_SESSION_COMPOSE = REPOSITORY_ROOT / "docker-compose.dev-gpu-session.yml"
+GPU_LAUNCHER_COMPOSE = REPOSITORY_ROOT / "docker-compose.dev-gpu-launcher.yml"
 BACKEND_DOCKERFILE = REPOSITORY_ROOT / "Dockerfile"
 DEV_ENV_EXAMPLE = REPOSITORY_ROOT / ".env.dev.example"
 DEV_BUILDKIT_CONFIG = REPOSITORY_ROOT / "ops" / "config" / "buildkitd.dev.toml"
@@ -341,6 +342,43 @@ gpu_session_up_rollback
         self.assertIn("'NVIDIA_VISIBLE_DEVICES':'none'", source)
         self.assertIn("'NVIDIA_VISIBLE_DEVICES':'1'", source)
         self.assertNotIn("NEXPOLY_DEV_GPU_DEVICE", overlay)
+
+    def test_gpu_launcher_is_9001_only_and_uses_a_private_read_only_socket(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        overlay = GPU_LAUNCHER_COMPOSE.read_text(encoding="utf-8")
+        production = (REPOSITORY_ROOT / "docker-compose.prod.yml").read_text(
+            encoding="utf-8"
+        )
+        app_shell = (
+            REPOSITORY_ROOT / "frontend" / "src" / "components" / "AppShell.tsx"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('NEXPOLY_DEV_FRONTEND_PORT:-}" != "9001"', source)
+        self.assertIn('DEV_COMPOSE_FILES+=(-f docker-compose.dev-gpu-launcher.yml)', source)
+        self.assertIn("DEV_GPU_OPERATOR_ENABLED: \"true\"", overlay)
+        self.assertIn("DEV_GPU_OPERATOR_FRONTEND_PORT:", overlay)
+        self.assertIn("VITE_DEV_GPU_SESSION_CONTROL: \"true\"", overlay)
+        self.assertIn("read_only: true", overlay)
+        self.assertNotIn("/var/run/docker.sock", overlay)
+        operator_up = self._shell_function_source("gpu_operator_up")
+        self.assertIn("/usr/bin/systemd-run", operator_up)
+        self.assertIn("--service-type=exec", operator_up)
+        self.assertNotIn("nohup", operator_up)
+        self.assertNotIn("DEV_GPU_OPERATOR_ENABLED", production)
+        self.assertIn("import.meta.env.DEV", app_shell)
+        self.assertIn(
+            'import.meta.env.VITE_DEV_GPU_SESSION_CONTROL === "true"',
+            app_shell,
+        )
+
+    def test_gpu_session_reuses_an_exact_cpu_backend_baseline(self) -> None:
+        baseline = self._shell_function_source("ensure_cpu_backend_baseline")
+        up = self._shell_function_source("gpu_session_up")
+
+        self.assertIn("if verify_backend_drift", baseline)
+        self.assertIn("Reusing the verified CPU-only", baseline)
+        self.assertIn('"${COMPOSE[@]}" up -d --no-deps --force-recreate backend', baseline)
+        self.assertIn("ensure_cpu_backend_baseline", up)
 
     def test_cpu_property_prediction_is_independent_of_gpu_session(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
