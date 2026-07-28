@@ -1,0 +1,50 @@
+[Unit]
+Description=NexPoly production monomer DFT worker
+After=network-online.target nexpoly-gpu2-guard.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/data/lzq/gith/nexpoly
+UnsetEnvironment=BASH_ENV BASHOPTS BASH_XTRACEFD CUDA_DEVICE_ORDER CUDA_VISIBLE_DEVICES ENV LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD NVIDIA_VISIBLE_DEVICES PYTHONHOME PYTHONINSPECT PYTHONPATH PYTHONSTARTUP PYTHONUSERBASE SHELLOPTS VIRTUAL_ENV APP_POSTGRES_DSN PI_POSTGRES_DSN LAB_DATA_POSTGRES_DSN DATABASE_URL PGPASSWORD POSTGRES_PASSWORD
+Environment="MONOMER_DFT_DEPLOYMENT=prod"
+Environment="MONOMER_DFT_PROD_RUNTIME_ROOT=/data/lzq/gith/nexpoly-runtime"
+Environment="MONOMER_DFT_PYTHON=/data/lzq/gith/nexpoly-runtime/worker-venvs/dft-a/venv/bin/python"
+Environment="MONOMER_DFT_WORKER_UDS=/data/lzq/gith/nexpoly-runtime/state/monomer-dft-worker-socket/worker.sock"
+Environment="MONOMER_DFT_JOB_ROOT=/data/lzq/gith/nexpoly-runtime/state/monomer-dft-worker-runs"
+Environment="MONOMER_DFT_DOWNLOAD_SPOOL_ROOT=/data/lzq/gith/nexpoly-runtime/state/monomer-dft-download-spool"
+Environment="MONOMER_DFT_GPU_GUARD_STATE=/data/lzq/gith/nexpoly-runtime/state/gpu2-guard.json"
+Environment="AIMNET_CACHE_DIR=/data/lzq/gith/nexpoly-runtime/worker-venvs/dft-a/aimnet-cache"
+Environment="WARP_CACHE_PATH=/data/lzq/gith/nexpoly-runtime/worker-venvs/dft-a/warp-cache"
+Environment="NEXPOLY_DFT_GPU_DEVICE=2"
+Environment="NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="
+Environment="NEXPOLY_DEV_GPU1_ONLY_SESSION=0"
+Environment="NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY=0"
+Environment="MONOMER_DFT_GPU_BROKER_ENABLED=0"
+Environment="MONOMER_DFT_STANDALONE_GPU_SMOKE=0"
+Environment="MONOMER_DFT_MAX_CONCURRENT_JOBS=1"
+Environment="MONOMER_DFT_MAX_QUEUED_JOBS=8"
+Environment="MONOMER_DFT_GPU_BUDGET_MIB=4096"
+Environment="MONOMER_DFT_GPU_ACTIVE_THREAD_PERCENTAGE=50"
+Environment="MONOMER_DFT_WORKER_INSTANCE=/data/lzq/gith/nexpoly"
+ExecStartPre=/usr/bin/test -x /data/lzq/gith/nexpoly-runtime/worker-venvs/dft-a/venv/bin/python
+ExecStartPre=/usr/bin/test -d /data/lzq/gith/nexpoly-runtime/worker-venvs/dft-a/aimnet-cache
+ExecStartPre=/usr/bin/git -C /data/lzq/gith/nexpoly diff --quiet --ignore-submodules --
+ExecStartPre=/usr/bin/git -C /data/lzq/gith/nexpoly diff --cached --quiet --ignore-submodules --
+ExecStartPre=/usr/bin/python3 -I -B /data/lzq/gith/nexpoly/scripts/preflight_monomer_dft_prod.py
+ExecStartPre=/usr/bin/python3 -I -B /data/lzq/gith/nexpoly/scripts/gpu2_guard.py --require-ready
+ExecStart=/data/lzq/gith/nexpoly/workers/monomer_dft_worker/run_host_worker.sh
+Restart=always
+RestartSec=5
+TimeoutStartSec=180
+TimeoutStopSec=30
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexpoly-monomer-dft-worker
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

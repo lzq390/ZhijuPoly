@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import hashlib
+import json
 import os
 import select
 import socket
@@ -18,7 +20,7 @@ from typing import Any, Callable, Literal, Protocol
 from gpu_resource import transient_scope_command
 
 from .artifacts import atomic_write_json, describe_artifact
-from .config import REPO_ROOT, WorkerSettings
+from .config import GPU_UUID_BY_INDEX, REPO_ROOT, WorkerSettings
 from .engine import ComputationCancelled, EngineExecution, ScientificComputationError
 from .executor_ipc import (
     ExecutorProtocolError,
@@ -82,6 +84,9 @@ class SupervisorRuntimeProbe:
     warp_version: str | None = None
     gpu_uuid: str | None = None
     execution_path: str = "primary"
+    deployment: str = "dev"
+    physical_gpu: str | None = None
+    guard_status: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -171,7 +176,8 @@ class SubprocessExecutor:
         if self.lease.client_environment:
             env.update(dict(self.lease.client_environment))
         else:
-            # Broker-disabled development smoke has no MPS server.
+            # Broker-disabled development smoke and production direct mode
+            # have no MPS server.
             env["CUDA_VISIBLE_DEVICES"] = self.lease.gpu_index
         command = [
             os.fspath(self.settings.python),
@@ -606,9 +612,11 @@ class ExecutorPool:
             handle = self._primary
             lease = self._primary_residency
             admission_uncertain = self.admission_uncertain
+            guard_error, guard_status = self._gpu_guard_error()
             if (
                 self._fatal
                 or admission_uncertain
+                or guard_error is not None
                 or handle is None
                 or lease is None
                 or handle.broken
@@ -618,10 +626,16 @@ class ExecutorPool:
                     model_loaded=False,
                     model_name=self.settings.model_name,
                     error=(
+                        guard_error
+                        if guard_error is not None
+                        else
                         "GPU admission ownership is unresolved; Worker restart required"
                         if admission_uncertain
                         else self._error or "primary executor is unavailable"
                     ),
+                    deployment=self.settings.deployment,
+                    physical_gpu=self.settings.physical_gpu,
+                    guard_status=guard_status,
                 )
             payload = dict(handle.probe_payload)
             allowed = {field.name for field in SupervisorRuntimeProbe.__dataclass_fields__.values()}
@@ -633,9 +647,42 @@ class ExecutorPool:
                     "model_name": self.settings.model_name,
                     "gpu_uuid": lease.gpu_uuid,
                     "execution_path": "primary",
+                    "deployment": self.settings.deployment,
+                    "physical_gpu": self.settings.physical_gpu,
+                    "guard_status": guard_status,
                 }
             )
             return SupervisorRuntimeProbe(**payload)
+
+    def _gpu_guard_error(self) -> tuple[str | None, str | None]:
+        if self.settings.deployment != "prod":
+            return None, None
+        path = self.settings.gpu_guard_state
+        if path is None:
+            return "production GPU2 guard state is not configured", "missing"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return "production GPU2 guard state is unavailable", "missing"
+        status = str(payload.get("status", "invalid"))
+        if payload.get("gpu_uuid") != GPU_UUID_BY_INDEX["2"]:
+            return "production GPU2 guard UUID does not match policy", status
+        try:
+            observed_at = dt.datetime.fromisoformat(
+                str(payload["observed_at"]).removesuffix("Z") + "+00:00"
+            )
+        except (KeyError, TypeError, ValueError):
+            return "production GPU2 guard timestamp is invalid", status
+        if (
+            observed_at.tzinfo is None
+            or dt.datetime.now(dt.timezone.utc) - observed_at
+            > dt.timedelta(seconds=150)
+        ):
+            return "production GPU2 guard state is stale", status
+        unknown = payload.get("unknown_processes")
+        if status != "ready" or not isinstance(unknown, list) or unknown:
+            return "production GPU2 guard has quarantined DFT admission", status
+        return None, status
 
     @property
     def admission_uncertain(self) -> bool:
@@ -1335,21 +1382,26 @@ class ExecutorPool:
                 dev_runtime_root=self.settings.dev_runtime_root,
             )
         else:
-            if not self.settings.standalone_gpu_smoke:
+            if self.settings.deployment == "prod":
+                candidate_devices = (self.settings.physical_gpu,)
+                verify_host_gpu_inventory(candidate_devices)
+                broker = DisabledBrokerClient(blocked_devices=set())
+            elif not self.settings.standalone_gpu_smoke:
                 raise GpuRuntimeUnhealthy(
                     "Broker-disabled execution requires explicit standalone smoke authorization"
                 )
-            candidate_devices = (
-                self.settings.physical_gpu,
-                *self.settings.overflow_gpu_devices,
-            )
-            verify_host_gpu_inventory(candidate_devices)
-            blocked = audit_isolated_gpu_availability(candidate_devices)
-            if self.settings.physical_gpu in blocked:
-                raise GpuRuntimeUnhealthy(
-                    "broker-disabled dev smoke requires an idle primary GPU"
+            else:
+                candidate_devices = (
+                    self.settings.physical_gpu,
+                    *self.settings.overflow_gpu_devices,
                 )
-            broker = DisabledBrokerClient(blocked_devices=blocked)
+                verify_host_gpu_inventory(candidate_devices)
+                blocked = audit_isolated_gpu_availability(candidate_devices)
+                if self.settings.physical_gpu in blocked:
+                    raise GpuRuntimeUnhealthy(
+                        "broker-disabled dev smoke requires an idle primary GPU"
+                    )
+                broker = DisabledBrokerClient(blocked_devices=blocked)
         self.broker = broker
         return broker
 

@@ -132,11 +132,13 @@ class GpuBrokerClient(Protocol):
 
 
 class DisabledBrokerClient:
-    """Process-local leases for an explicitly broker-disabled development smoke.
+    """Process-local leases for an explicitly Broker-disabled direct mode.
 
-    This is not a production capacity authority.  It preserves the same lease
-    and fencing contract so enabling the host Broker does not change Worker
-    execution semantics.
+    This is not a host capacity or security authority. Development uses it
+    only for an audited idle-GPU smoke; production direct mode relies on the
+    separate GPU2 guard and configuration policy. It preserves the same lease
+    and fencing contract so later enabling the host Broker does not change
+    Worker execution semantics.
     """
 
     def __init__(self, *, blocked_devices: set[str] | None = None) -> None:

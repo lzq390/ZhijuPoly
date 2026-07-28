@@ -24,6 +24,8 @@ ENV_NAMES = (
     "MONOMER_DFT_WORKER_UDS",
     "MONOMER_DFT_JOB_ROOT",
     "MONOMER_DFT_DEV_RUNTIME_ROOT",
+    "MONOMER_DFT_PROD_RUNTIME_ROOT",
+    "MONOMER_DFT_GPU_GUARD_STATE",
     "MONOMER_DFT_MAX_CONCURRENT_JOBS",
     "MONOMER_DFT_MAX_QUEUED_JOBS",
     "MONOMER_DFT_SINGLE_POINT_TIMEOUT_SECONDS",
@@ -336,14 +338,69 @@ def test_dev_load_settings_rejects_symlinked_gpu_resource_namespace(
             config.load_settings()
 
 
-def test_load_settings_rejects_production_even_with_broker_enabled(
+def _configure_production_test_roots(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Path:
+    repo_root = tmp_path / "production"
+    runtime_root = Path("/tmp") / f"dftprod-{tmp_path.name[-12:]}"
+    repo_root.mkdir()
+    runtime_root.mkdir(mode=0o700, exist_ok=True)
+    runtime_root.chmod(0o700)
+    monkeypatch.setattr(config, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(config, "RUNTIME_ROOT", repo_root / ".runtime")
+    monkeypatch.setattr(config, "PRODUCTION_REPO_ROOT", repo_root)
+    monkeypatch.setattr(config, "PRODUCTION_RUNTIME_ROOT", runtime_root)
+    monkeypatch.setenv("MONOMER_DFT_DEPLOYMENT", "prod")
+    monkeypatch.setenv("MONOMER_DFT_PROD_RUNTIME_ROOT", str(runtime_root))
+    return runtime_root
+
+
+def test_load_settings_accepts_locked_production_gpu2_direct_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     _clean_environment(monkeypatch)
-    monkeypatch.setenv("MONOMER_DFT_DEPLOYMENT", "prod")
-    monkeypatch.setenv("MONOMER_DFT_GPU_BROKER_ENABLED", "1")
+    runtime_root = _configure_production_test_roots(monkeypatch, tmp_path)
 
-    with pytest.raises(ValueError, match="production is hard-off"):
+    settings = config.load_settings()
+
+    assert settings.deployment == "prod"
+    assert settings.physical_gpu == "2"
+    assert settings.overflow_gpu_devices == ()
+    assert settings.broker_enabled is False
+    assert settings.standalone_gpu_smoke is False
+    assert settings.gpu_guard_state == runtime_root / "state/gpu2-guard.json"
+
+
+def test_load_settings_rejects_production_broker_and_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clean_environment(monkeypatch)
+    _configure_production_test_roots(monkeypatch, tmp_path)
+    monkeypatch.setenv("MONOMER_DFT_GPU_BROKER_ENABLED", "1")
+    with pytest.raises(ValueError, match="direct GPU2 mode"):
+        config.load_settings()
+
+    monkeypatch.setenv("MONOMER_DFT_GPU_BROKER_ENABLED", "0")
+    monkeypatch.setenv("NEXPOLY_DFT_OVERFLOW_GPU_DEVICES", "3")
+    with pytest.raises(ValueError, match="must not configure overflow"):
+        config.load_settings()
+
+
+def test_production_executor_rejects_wrong_uuid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clean_environment(monkeypatch)
+    _configure_production_test_roots(monkeypatch, tmp_path)
+    monkeypatch.setenv("MONOMER_DFT_EXECUTOR_PROCESS", "1")
+    monkeypatch.setenv("NEXPOLY_DFT_EXECUTOR_GPU_DEVICE", "2")
+    monkeypatch.setenv("NEXPOLY_DFT_EXECUTOR_GPU_UUID", config.GPU_UUID_BY_INDEX["1"])
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", config.GPU_UUID_BY_INDEX["1"])
+
+    with pytest.raises(ValueError, match="index-to-UUID"):
         config.load_settings()
 
 
@@ -461,7 +518,7 @@ def test_load_settings_rejects_non_private_runtime_root(
         config.load_settings()
 
 
-def test_direct_worker_settings_reject_prod_gpu2_and_external_paths(
+def test_direct_worker_settings_reject_wrong_deployment_paths_and_dev_gpu2(
     tmp_path: Path,
 ) -> None:
     runtime_root = tmp_path / "direct-runtime"
@@ -480,9 +537,9 @@ def test_direct_worker_settings_reject_prod_gpu2_and_external_paths(
         "worker_version": "test",
         "dev_runtime_root": runtime_root,
     }
-    with pytest.raises(ValueError, match="production is hard-off"):
+    with pytest.raises(ValueError, match="production Worker code root"):
         config.WorkerSettings(**common, deployment="prod")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="GPU 0 and GPU 2 are forbidden"):
+    with pytest.raises(ValueError, match="dev supervisor primary GPU"):
         config.WorkerSettings(**{**common, "physical_gpu": "2"})
     with pytest.raises(ValueError, match="must be located below|production repository"):
         config.WorkerSettings(
