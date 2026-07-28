@@ -7,18 +7,31 @@ expected_development_gpu_root="$REPO_ROOT/.runtime/gpu-resource"
 
 action="${1:-}"
 index="${2:-}"
-break_glass_option="${3:-}"
+mode_option="${3:-}"
+trusted_dev_start=0
 
 if [[ "$action" != "start" && "$action" != "stop" ]]; then
-  echo "usage: gpu_mps_control.sh start|stop 1|2|3 [--break-glass-without-broker]" >&2
+  echo "usage: gpu_mps_control.sh start|stop 1|2|3 [--trusted-dev-start|--break-glass-without-broker]" >&2
   exit 2
 fi
 if [[ "$index" != "1" && "$index" != "2" && "$index" != "3" ]]; then
   echo "GPU0 is excluded; MPS is supported only on GPU1, GPU2, and GPU3" >&2
   exit 2
 fi
-if [[ $# -gt 3 || ( -n "$break_glass_option" && ( "$action" != "stop" || "$break_glass_option" != "--break-glass-without-broker" ) ) ]]; then
-  echo "usage: gpu_mps_control.sh start|stop 1|2|3 [--break-glass-without-broker]" >&2
+if [[ $# -gt 3 ]]; then
+  echo "usage: gpu_mps_control.sh start|stop 1|2|3 [--trusted-dev-start|--break-glass-without-broker]" >&2
+  exit 2
+fi
+if [[ -n "$mode_option" ]]; then
+  if [[ "$action" == "start" && "$mode_option" == "--trusted-dev-start" ]]; then
+    trusted_dev_start=1
+  elif [[ "$action" != "stop" || "$mode_option" != "--break-glass-without-broker" ]]; then
+    echo "usage: gpu_mps_control.sh start|stop 1|2|3 [--trusted-dev-start|--break-glass-without-broker]" >&2
+    exit 2
+  fi
+fi
+if [[ "$trusted_dev_start" == "1" && "$index" != "1" ]]; then
+  echo "--trusted-dev-start is restricted to GPU1" >&2
   exit 2
 fi
 if [[ "$(id -u)" != "1001" || "$(id -g)" != "1001" ]]; then
@@ -53,6 +66,11 @@ if [[ "$require_default_mode" == "1" && "$descriptor_authority" != "1" ]]; then
   echo "Default compute mode may be required only by formal development descriptor authority" >&2
   exit 1
 fi
+if [[ "$trusted_dev_start" == "1" &&
+  ( "$descriptor_authority" != "1" || "$require_default_mode" != "1" ) ]]; then
+  echo "--trusted-dev-start requires formal descriptor authority and Default compute mode" >&2
+  exit 1
+fi
 
 if [[ "$descriptor_authority" == "1" ]]; then
   if [[ "$index" == "2" ]]; then
@@ -75,17 +93,22 @@ if [[ "$descriptor_authority" == "1" ]]; then
     "$mps_slot_directory" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ &&
     "$CUDA_MPS_PIPE_DIRECTORY" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ &&
     "$CUDA_MPS_LOG_DIRECTORY" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ &&
-    "$external_reservations" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ &&
     "$broker_socket" == "$state_root/broker.sock" &&
     "$descriptor_expected_root" == "$expected_development_gpu_root" ]] || {
     echo "MPS descriptor authority paths are invalid" >&2
     exit 1
   }
+  if [[ "$trusted_dev_start" == "0" &&
+    ! "$external_reservations" =~ ^/proc/"$descriptor_authority_pid"/fd/[0-9]+$ ]]; then
+    echo "MPS descriptor authority paths are invalid" >&2
+    exit 1
+  fi
   /usr/bin/python3 - \
     "$descriptor_authority_pid" "$descriptor_authority_start_ticks" \
     "$index" "$descriptor_expected_root" "$state_root" \
     "$mps_slot_directory" "$CUDA_MPS_PIPE_DIRECTORY" \
-    "$CUDA_MPS_LOG_DIRECTORY" "$external_reservations" <<'PY'
+    "$CUDA_MPS_LOG_DIRECTORY" "$external_reservations" \
+    "$trusted_dev_start" <<'PY'
 import os
 import stat
 import sys
@@ -145,21 +168,28 @@ for path, expected_identity in relations:
     metadata = os.stat(path)
     if (metadata.st_dev, metadata.st_ino) != expected_identity:
         raise SystemExit("MPS descriptor authority hierarchy changed")
-reservations = os.stat(sys.argv[9])
-root_reservations = os.stat(os.path.join(root, "external-reservations.json"))
-if (
-    not stat.S_ISREG(reservations.st_mode)
-    or reservations.st_uid != os.geteuid()
-    or reservations.st_gid != os.getegid()
-    or reservations.st_nlink != 1
-    or stat.S_IMODE(reservations.st_mode) != 0o600
-    or (reservations.st_dev, reservations.st_ino)
-    != (root_reservations.st_dev, root_reservations.st_ino)
-):
-    raise SystemExit("MPS reservation descriptor authority escaped its root")
+if sys.argv[10] != "1":
+    reservations = os.stat(sys.argv[9])
+    root_reservations = os.stat(
+        os.path.join(root, "external-reservations.json")
+    )
+    if (
+        not stat.S_ISREG(reservations.st_mode)
+        or reservations.st_uid != os.geteuid()
+        or reservations.st_gid != os.getegid()
+        or reservations.st_nlink != 1
+        or stat.S_IMODE(reservations.st_mode) != 0o600
+        or (reservations.st_dev, reservations.st_ino)
+        != (root_reservations.st_dev, root_reservations.st_ino)
+    ):
+        raise SystemExit(
+            "MPS reservation descriptor authority escaped its root"
+        )
 PY
   state_root="/proc/self/fd/${state_root##*/}"
-  external_reservations="/proc/self/fd/${external_reservations##*/}"
+  if [[ "$trusted_dev_start" == "0" ]]; then
+    external_reservations="/proc/self/fd/${external_reservations##*/}"
+  fi
   mps_slot_directory="/proc/self/fd/${mps_slot_directory##*/}"
   CUDA_MPS_PIPE_DIRECTORY="/proc/self/fd/${CUDA_MPS_PIPE_DIRECTORY##*/}"
   CUDA_MPS_LOG_DIRECTORY="/proc/self/fd/${CUDA_MPS_LOG_DIRECTORY##*/}"
@@ -285,7 +315,8 @@ if [[ "$action" == "start" ]]; then
     echo "GPU$index must already be drained and set to EXCLUSIVE_PROCESS" >&2
     exit 1
   fi
-  /usr/bin/python3 - "$external_reservations" "$expected_uuid" <<'PY'
+  if [[ "$trusted_dev_start" == "0" ]]; then
+    /usr/bin/python3 - "$external_reservations" "$expected_uuid" <<'PY'
 from pathlib import Path
 import sys
 
@@ -308,8 +339,8 @@ for claim in query_systemd_gpu_claims():
     if expected_uuid in claim.gpu_uuids:
         raise SystemExit(f"GPU remains declared by systemd service {claim.unit}")
 PY
-  compute_processes="$(nvidia-smi --query-compute-apps=gpu_uuid,pid --format=csv,noheader,nounits)"
-  /usr/bin/python3 - "$expected_uuid" "$compute_processes" <<'PY'
+    compute_processes="$(nvidia-smi --query-compute-apps=gpu_uuid,pid --format=csv,noheader,nounits)"
+    /usr/bin/python3 - "$expected_uuid" "$compute_processes" <<'PY'
 import sys
 
 expected_uuid = sys.argv[1]
@@ -329,6 +360,7 @@ for raw_line in sys.argv[2].splitlines():
     if uuid == expected_uuid:
         raise SystemExit(f"GPU still has CUDA compute PID {pid}")
 PY
+  fi
   if [[ -e "$CUDA_MPS_PIPE_DIRECTORY/control" || -L "$CUDA_MPS_PIPE_DIRECTORY/control" ]]; then
     if [[ -L "$CUDA_MPS_PIPE_DIRECTORY/control" || ! -p "$CUDA_MPS_PIPE_DIRECTORY/control" && ! -S "$CUDA_MPS_PIPE_DIRECTORY/control" ]]; then
       echo "existing MPS control channel is unsafe" >&2
@@ -381,7 +413,7 @@ if [[ -L "$broker_socket" ]]; then
   exit 1
 fi
 if [[ ! -e "$broker_socket" ]]; then
-  if [[ "$break_glass_option" != "--break-glass-without-broker" ]]; then
+  if [[ "$mode_option" != "--break-glass-without-broker" ]]; then
     echo "GPU Broker socket is missing; refusing MPS quit" >&2
     echo "An audited emergency stop requires --break-glass-without-broker and NEXPOLY_GPU_MPS_BREAK_GLASS_REASON" >&2
     exit 1
@@ -439,7 +471,7 @@ PY
   printf 'SECURITY AUDIT: break-glass MPS stop without Broker; gpu=%s uuid=%s reason=%q\n' \
     "$index" "$expected_uuid" "$break_glass_reason" >&2
 else
-  if [[ -n "$break_glass_option" ]]; then
+  if [[ -n "$mode_option" ]]; then
     echo "Break-glass is permitted only when the GPU Broker socket is absent" >&2
     exit 1
   fi

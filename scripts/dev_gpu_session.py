@@ -2888,10 +2888,18 @@ def dry_run_plan(action: str) -> dict[str, Any]:
 
 
 class SessionController:
-    def __init__(self, run_directory: Path, source_sha: str, source_tree: str) -> None:
+    def __init__(
+        self,
+        run_directory: Path,
+        source_sha: str,
+        source_tree: str,
+        *,
+        direct_start: bool = False,
+    ) -> None:
         self.run_directory = run_directory
         self.source_sha = source_sha
         self.source_tree = source_tree
+        self.direct_start = direct_start
         self.status_file = run_directory / "status.json"
         self.session_id = run_directory.name.rsplit("-", 1)[-1]
         if re.fullmatch(r"[0-9a-f]{32}", self.session_id) is None:
@@ -2934,7 +2942,7 @@ class SessionController:
         self.audit_sequence = 0
         self.fast_audit_sequence = 0
         self.full_audit_generation = 0
-        self.audit_mode = "full"
+        self.audit_mode = "direct" if direct_start else "full"
         self.last_audit_activation_generation = 0
         self.last_audit_stabilization_generation = 0
         self.last_audit_duration = 0.0
@@ -2942,37 +2950,51 @@ class SessionController:
         self.gpu3_guard: dict[str, Any] | None = None
 
     def _state(self, status: str, **extra: Any) -> None:
-        _atomic_json(
-            self.status_file,
-            {
-                "schema_version": 1,
-                "status": status,
-                "controller_pid": os.getpid(),
-                "controller_start_ticks": process_start_ticks(os.getpid()),
-                "source_sha": self.source_sha,
-                "source_tree": self.source_tree,
-                "session_id": self.session_id,
-                "run_directory": str(self.run_directory),
-                "gpu_index": GPU_INDEX,
-                "gpu_uuid": GPU_UUID,
-                "gpu3_untouched": True,
-                "gpu3_guard": self.gpu3_guard,
-                "audit_mode": self.audit_mode,
-                "full_audit_generation": self.full_audit_generation,
-                "fast_audit_sequence": self.fast_audit_sequence,
-                "activation_generation": self.activation_generation,
-                "dft_stabilization_generation": self.dft_stabilization_generation,
-                "last_audit_activation_generation": (
-                    self.last_audit_activation_generation
-                ),
-                "last_audit_stabilization_generation": (
-                    self.last_audit_stabilization_generation
-                ),
-                "dft_stabilized": self.dft_stabilized,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-                **extra,
-            },
-        )
+        payload = {
+            "schema_version": 1,
+            "status": status,
+            "controller_pid": os.getpid(),
+            "controller_start_ticks": process_start_ticks(os.getpid()),
+            "source_sha": self.source_sha,
+            "source_tree": self.source_tree,
+            "session_id": self.session_id,
+            "run_directory": str(self.run_directory),
+            "gpu_index": GPU_INDEX,
+            "gpu_uuid": GPU_UUID,
+            "gpu3_untouched": True,
+            "gpu3_guard": self.gpu3_guard,
+            "audit_mode": self.audit_mode,
+            "full_audit_generation": self.full_audit_generation,
+            "fast_audit_sequence": self.fast_audit_sequence,
+            "activation_generation": self.activation_generation,
+            "dft_stabilization_generation": self.dft_stabilization_generation,
+            "last_audit_activation_generation": (
+                self.last_audit_activation_generation
+            ),
+            "last_audit_stabilization_generation": (
+                self.last_audit_stabilization_generation
+            ),
+            "dft_stabilized": self.dft_stabilized,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            **({"direct_start": True} if self.direct_start else {}),
+            **extra,
+        }
+        _atomic_json(self.status_file, payload)
+        if status in {
+            "audit-failed",
+            "broker-failed",
+            "cleanup-blocked",
+            "contaminated",
+            "gpu3-drift",
+            "isolation-waiting",
+            "startup-failed",
+        }:
+            print(
+                "controller failure state: "
+                + json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                file=sys.stderr,
+                flush=True,
+            )
 
     @staticmethod
     def _open_directory(parent_fd: int, name: str, *, create: bool) -> int:
@@ -3021,7 +3043,6 @@ class SessionController:
                 pass
             else:
                 raise DevGpuSessionError(f"refusing preexisting GPU1 session state: {forbidden}")
-        source = RESERVATIONS_SOURCE.read_bytes()
         try:
             policy = json.loads(POLICY_FILE.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -3054,6 +3075,7 @@ class SessionController:
                 dir_fd=self.root_fd,
             )
         except FileNotFoundError:
+            source = RESERVATIONS_SOURCE.read_bytes()
             descriptor = os.open(
                 "external-reservations.json",
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -3077,9 +3099,14 @@ class SessionController:
             or metadata.st_gid != os.getegid()
             or metadata.st_nlink != 1
             or stat.S_IMODE(metadata.st_mode) != 0o600
-            or os.pread(self.reservations_fd, len(source) + 1, 0) != source
         ):
-            raise DevGpuSessionError("external reservation descriptor differs from exact policy")
+            raise DevGpuSessionError("external reservation descriptor is unsafe")
+        if not self.direct_start:
+            source = RESERVATIONS_SOURCE.read_bytes()
+            if os.pread(self.reservations_fd, len(source) + 1, 0) != source:
+                raise DevGpuSessionError(
+                    "external reservation descriptor differs from exact policy"
+                )
         self.slot_fd = self._open_directory(self.root_fd, "mps-1", create=True)
         self.pipe_fd = self._open_directory(self.slot_fd, "pipe", create=True)
         self.log_fd = self._open_directory(self.slot_fd, "log", create=True)
@@ -3103,31 +3130,52 @@ class SessionController:
 
     def _start_broker(self) -> Any:
         root = self._child_authority_path(self.root_fd)
-        reservations = self._child_authority_path(self.reservations_fd)
         descriptor = os.open(
             self.broker_log_path,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
             0o600,
         )
         self.broker_log = os.fdopen(descriptor, "ab", buffering=0)
-        command = (
-            sys.executable,
-            "-E",
-            "-s",
-            "-B",
-            "-m",
-            "ops.gpu_broker.server",
-            "--socket",
-            str(root / "broker.sock"),
-            "--state",
-            str(self.broker_state),
-            "--policy",
-            str(self._child_authority_path(self.policy_fd)),
-            "--external-reservations",
-            str(reservations),
-            "--mps-state-root",
-            str(root),
-        )
+        if self.direct_start:
+            command = (
+                sys.executable,
+                "-E",
+                "-s",
+                "-B",
+                "-m",
+                "ops.gpu_broker.server",
+                "--socket",
+                str(root / "broker.sock"),
+                "--state",
+                str(self.broker_state),
+                "--policy",
+                str(self._child_authority_path(self.policy_fd)),
+                "--mps-state-root",
+                str(root),
+                "--trusted-dev-gpu-index",
+                str(GPU_INDEX),
+            )
+            pass_fds = (self.root_fd, self.policy_fd)
+        else:
+            command = (
+                sys.executable,
+                "-E",
+                "-s",
+                "-B",
+                "-m",
+                "ops.gpu_broker.server",
+                "--socket",
+                str(root / "broker.sock"),
+                "--state",
+                str(self.broker_state),
+                "--policy",
+                str(self._child_authority_path(self.policy_fd)),
+                "--external-reservations",
+                str(self._child_authority_path(self.reservations_fd)),
+                "--mps-state-root",
+                str(root),
+            )
+            pass_fds = (self.root_fd, self.reservations_fd, self.policy_fd)
         self.broker = subprocess.Popen(
             command,
             cwd=REPO_ROOT,
@@ -3136,7 +3184,7 @@ class SessionController:
             stdout=self.broker_log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
-            pass_fds=(self.root_fd, self.reservations_fd, self.policy_fd),
+            pass_fds=pass_fds,
         )
         from gpu_resource import GpuBrokerClient
 
@@ -3153,40 +3201,55 @@ class SessionController:
                 time.sleep(0.1)
         raise DevGpuSessionError("development GPU Broker failed to start empty")
 
-    def _mps_env(self) -> dict[str, str]:
+    def _mps_env(self, action: str) -> dict[str, str]:
         root = self._authority_path(self.root_fd)
         pipe = self._authority_path(self.pipe_fd)
         log = self._authority_path(self.log_fd)
-        return self._safe_env(
-            CUDA_MPS_LOG_DIRECTORY=str(log),
-            CUDA_MPS_PIPE_DIRECTORY=str(pipe),
-            CUDA_VISIBLE_DEVICES=GPU_UUID,
-            NEXPOLY_GPU_STATE_ROOT=str(root),
-            NEXPOLY_GPU_EXTERNAL_RESERVATIONS=str(
-                self._authority_path(self.reservations_fd)
+        trusted_start = self.direct_start and action == "start"
+        environment = {
+            "CUDA_MPS_LOG_DIRECTORY": str(log),
+            "CUDA_MPS_PIPE_DIRECTORY": str(pipe),
+            "CUDA_VISIBLE_DEVICES": GPU_UUID,
+            "NEXPOLY_GPU_STATE_ROOT": str(root),
+            "NEXPOLY_GPU_BROKER_SOCKET": str(root / "broker.sock"),
+            "NEXPOLY_GPU_MPS_SLOT_DIRECTORY": str(
+                self._authority_path(self.slot_fd)
             ),
-            NEXPOLY_GPU_BROKER_SOCKET=str(root / "broker.sock"),
-            NEXPOLY_GPU_MPS_SLOT_DIRECTORY=str(self._authority_path(self.slot_fd)),
-            NEXPOLY_GPU_MPS_PIPE_DIRECTORY=str(pipe),
-            NEXPOLY_GPU_MPS_LOG_DIRECTORY=str(log),
-            NEXPOLY_GPU_MPS_DESCRIPTOR_AUTHORITY="1",
-            NEXPOLY_GPU_MPS_AUTHORITY_PID=str(os.getpid()),
-            NEXPOLY_GPU_MPS_AUTHORITY_START_TICKS=str(process_start_ticks(os.getpid())),
-            NEXPOLY_GPU_MPS_EXPECTED_ROOT=str(GPU_ROOT),
-            NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE="1",
-        )
+            "NEXPOLY_GPU_MPS_PIPE_DIRECTORY": str(pipe),
+            "NEXPOLY_GPU_MPS_LOG_DIRECTORY": str(log),
+            "NEXPOLY_GPU_MPS_DESCRIPTOR_AUTHORITY": "1",
+            "NEXPOLY_GPU_MPS_AUTHORITY_PID": str(os.getpid()),
+            "NEXPOLY_GPU_MPS_AUTHORITY_START_TICKS": str(
+                process_start_ticks(os.getpid())
+            ),
+            "NEXPOLY_GPU_MPS_EXPECTED_ROOT": str(GPU_ROOT),
+            "NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE": "1",
+        }
+        if not trusted_start:
+            environment["NEXPOLY_GPU_EXTERNAL_RESERVATIONS"] = str(
+                self._authority_path(self.reservations_fd)
+            )
+        return self._safe_env(**environment)
 
     def _mps_command(self, action: str) -> None:
+        command = [str(MPS_CONTROL), action, str(GPU_INDEX)]
+        trusted_start = self.direct_start and action == "start"
+        if trusted_start:
+            command.append("--trusted-dev-start")
         completed = subprocess.run(
-            (str(MPS_CONTROL), action, "1"),
+            tuple(command),
             cwd=REPO_ROOT,
-            env=self._mps_env(),
-            pass_fds=(
-                self.root_fd,
-                self.reservations_fd,
-                self.slot_fd,
-                self.pipe_fd,
-                self.log_fd,
+            env=self._mps_env(action),
+            pass_fds=tuple(
+                descriptor
+                for descriptor in (
+                    self.root_fd,
+                    -1 if trusted_start else self.reservations_fd,
+                    self.slot_fd,
+                    self.pipe_fd,
+                    self.log_fd,
+                )
+                if descriptor >= 0
             ),
             check=False,
             text=True,
@@ -5089,14 +5152,17 @@ class SessionController:
         raise AssertionError("bounded full audit loop did not terminate")
 
     def _recovery_command(self, command: str) -> bool:
+        environment = {
+            **os.environ,
+            "NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY": "1",
+            "NEXPOLY_DEV_GPU_SESSION_ID": self.session_id,
+        }
+        if self.direct_start:
+            environment["NEXPOLY_DEV_GPU_DIRECT_START"] = "1"
         completed = subprocess.run(
             (str(REPO_ROOT / "scripts/dev_server_gpu.sh"), command),
             cwd=REPO_ROOT,
-            env={
-                **os.environ,
-                "NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY": "1",
-                "NEXPOLY_DEV_GPU_SESSION_ID": self.session_id,
-            },
+            env=environment,
             check=False,
             text=True,
             stdout=subprocess.PIPE,
@@ -5113,7 +5179,127 @@ class SessionController:
             return False
         return True
 
+    def _direct_serve_loop(self, client: Any) -> int:
+        """Serve the trusted 9001 session without consulting host GPU inventory."""
+
+        while True:
+            if self.stop_requested:
+                if self.automatic_recovery and not self.owned_components_stopped:
+                    if not self._recovery_command("gpu-session-stop-owned-internal"):
+                        time.sleep(1)
+                        continue
+                    self.owned_components_stopped = True
+                if self.automatic_recovery and not self.cpu_restored:
+                    if not self._recovery_command("gpu-session-restore-cpu-internal"):
+                        time.sleep(1)
+                        continue
+                    self.cpu_restored = True
+                try:
+                    cleaned = self.plane_cleaned or self._cleanup(client)
+                except (DevGpuSessionError, OSError, subprocess.SubprocessError) as exc:
+                    self._state(
+                        "isolation-waiting",
+                        contaminated=self.automatic_recovery,
+                        owned_components_stopped=self.owned_components_stopped,
+                        cpu_restored=self.cpu_restored,
+                        recovery_error=str(exc),
+                    )
+                    time.sleep(1)
+                    continue
+                if not cleaned:
+                    time.sleep(1)
+                    continue
+                self.plane_cleaned = True
+                self._state(
+                    "recovered" if self.automatic_recovery else "stopped",
+                    contaminated=self.automatic_recovery,
+                    owned_components_stopped=self.owned_components_stopped,
+                    cpu_restored=self.cpu_restored,
+                )
+                self._remove_controller_record()
+                return 0
+
+            try:
+                if self.broker is None or self.broker.poll() is not None:
+                    raise DevGpuSessionError(
+                        "trusted development GPU Broker exited"
+                    )
+                broker_status = client.status()
+                if (
+                    not isinstance(broker_status, dict)
+                    or not isinstance(broker_status.get("leases"), list)
+                    or not isinstance(broker_status.get("draining"), bool)
+                ):
+                    raise DevGpuSessionError(
+                        "trusted development GPU Broker status is invalid"
+                    )
+            except Exception as exc:
+                try:
+                    client.set_draining(True)
+                except Exception:
+                    pass
+                self._state(
+                    "broker-failed",
+                    contaminated=False,
+                    broker_draining=True,
+                    recovery_error=str(exc),
+                )
+                self.automatic_recovery = True
+                self.stop_requested = True
+                continue
+
+            previous_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK,
+                {signal.SIGUSR1, signal.SIGUSR2},
+            )
+            try:
+                if (
+                    self.dft_stabilization_generation
+                    > self.last_audit_stabilization_generation
+                ):
+                    self.dft_stabilized = True
+                    self.dft_warmup_open = False
+                    self.last_audit_stabilization_generation = (
+                        self.dft_stabilization_generation
+                    )
+                    self.full_audit_generation += 1
+                if (
+                    self.activation_generation
+                    > self.last_audit_activation_generation
+                ):
+                    if not self.dft_stabilized:
+                        raise DevGpuSessionError(
+                            "direct activation preceded DFT readiness"
+                        )
+                    self.last_audit_activation_generation = (
+                        self.activation_generation
+                    )
+                    self.full_audit_generation += 1
+                phase = (
+                    "ready"
+                    if (
+                        self.dft_stabilized
+                        and self.activation_generation > 0
+                        and self.last_audit_activation_generation
+                        == self.activation_generation
+                    )
+                    else "plane-ready"
+                )
+                self._state(
+                    phase,
+                    contaminated=False,
+                    audit_sequence=0,
+                )
+            finally:
+                signal.pthread_sigmask(
+                    signal.SIG_SETMASK,
+                    previous_mask,
+                )
+            time.sleep(0.1)
+
     def _serve_loop(self, client: Any) -> int:
+        if self.direct_start:
+            return self._direct_serve_loop(client)
         next_audit = time.monotonic()
         while True:
             if self.stop_requested:
@@ -5283,14 +5469,25 @@ class SessionController:
         signal.signal(signal.SIGUSR2, request_dft_stabilization)
         client: Any | None = None
         try:
-            self._state("auditing")
-            self.gpu3_guard = read_gpu3_guard_fingerprint()
-            self._state("auditing", gpu3_guard_captured=True)
-            require_double_free_audit()
+            if self.direct_start:
+                self._state("starting", contaminated=False)
+            else:
+                self._state("auditing")
+                self.gpu3_guard = read_gpu3_guard_fingerprint()
+                self._state("auditing", gpu3_guard_captured=True)
+                require_double_free_audit()
             self._prepare_descriptors()
             client = self._start_broker()
             self._mps_command("start")
             self.mps_started = True
+            if self.direct_start:
+                self.plane_ready_published = True
+                self._state(
+                    "plane-ready",
+                    contaminated=False,
+                    audit_sequence=0,
+                )
+                return self._serve_loop(client)
             _status, _snapshot, reasons = self._audit(client)
             if reasons:
                 client.set_draining(True)
@@ -5403,7 +5600,7 @@ def status() -> dict[str, Any]:
     return state
 
 
-def up_execute() -> dict[str, Any]:
+def up_execute(*, direct_start: bool = False) -> dict[str, Any]:
     _private_directory(RUNTIME_ROOT, create=False)
     _private_directory(SESSION_ROOT, create=True)
     _private_directory(RUNS_ROOT, create=True)
@@ -5418,7 +5615,12 @@ def up_execute() -> dict[str, Any]:
             raise DevGpuSessionError(
                 "GPU session controller startup is already in progress"
             ) from exc
-        return _up_execute_locked()
+        return _up_execute_locked(
+            direct_start=(
+                direct_start
+                or os.environ.get("NEXPOLY_DEV_GPU_DIRECT_START") == "1"
+            )
+        )
     finally:
         try:
             fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
@@ -5426,7 +5628,7 @@ def up_execute() -> dict[str, Any]:
             os.close(lock_descriptor)
 
 
-def _up_execute_locked() -> dict[str, Any]:
+def _up_execute_locked(*, direct_start: bool = False) -> dict[str, Any]:
     if CONTROLLER_RECORD.exists() or CONTROLLER_RECORD.is_symlink():
         raise DevGpuSessionError("GPU session controller record already exists")
     source_sha, source_tree = _git_identity()
@@ -5450,6 +5652,8 @@ def _up_execute_locked() -> dict[str, Any]:
         "--source-tree",
         source_tree,
     )
+    if direct_start:
+        command = (*command, "--direct-start")
     with os.fdopen(log_descriptor, "ab", buffering=0) as log:
         process = subprocess.Popen(
             command,
@@ -5471,8 +5675,15 @@ def _up_execute_locked() -> dict[str, Any]:
         if state.get("status") == "plane-ready":
             return state
         if state.get("status") in {
-            "failed", "startup-failed", "contaminated", "audit-failed",
-            "isolation-waiting", "gpu3-drift",
+            "failed",
+            "startup-failed",
+            "broker-failed",
+            "contaminated",
+            "audit-failed",
+            "cleanup-blocked",
+            "isolation-waiting",
+            "gpu3-drift",
+            "recovered",
         }:
             raise DevGpuSessionError(f"GPU session startup ended as {state['status']}")
         time.sleep(0.1)
@@ -5534,7 +5745,7 @@ def stabilize_execute(session_id: str) -> dict[str, Any]:
     if (
         current.get("dft_stabilized") is True
         and current.get("status") == "plane-ready"
-        and current.get("audit_mode") == "full"
+        and current.get("audit_mode") in {"full", "direct"}
     ):
         return current
     if current.get("status") not in {"plane-ready", "stabilizing"}:
@@ -5561,7 +5772,7 @@ def stabilize_execute(session_id: str) -> dict[str, Any]:
         current = status()
         if (
             current.get("status") == "plane-ready"
-            and current.get("audit_mode") == "full"
+            and current.get("audit_mode") in {"full", "direct"}
             and current.get("dft_stabilized") is True
             and _state_generation(current, "full_audit_generation")
             > baseline_full
@@ -5600,7 +5811,7 @@ def activate_execute(session_id: str) -> dict[str, Any]:
     current = status()
     if (
         current.get("status") != "plane-ready"
-        or current.get("audit_mode") != "full"
+        or current.get("audit_mode") not in {"full", "direct"}
         or current.get("dft_stabilized") is not True
     ):
         raise DevGpuSessionError("controller plane is not awaiting activation")
@@ -5649,7 +5860,7 @@ def activate_execute(session_id: str) -> dict[str, Any]:
         current = status()
         if (
             current.get("status") == "ready"
-            and current.get("audit_mode") == "full"
+            and current.get("audit_mode") in {"full", "direct"}
             and _state_generation(current, "full_audit_generation")
             > baseline_full
             and _state_generation(current, "activation_generation")
@@ -5727,6 +5938,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-sha")
     parser.add_argument("--source-tree")
     parser.add_argument("--session-id")
+    parser.add_argument("--direct-start", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -5740,7 +5952,7 @@ def main(argv: list[str] | None = None) -> int:
         elif not args.execute:
             raise DevGpuSessionError("state-changing session commands require --execute")
         elif args.command == "up":
-            result = up_execute()
+            result = up_execute(direct_start=args.direct_start)
         elif args.command == "down":
             result = down_execute()
         elif args.command == "drain":
@@ -5761,7 +5973,10 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise DevGpuSessionError("serve requires the exact run and Git identity")
             controller = SessionController(
-                args.run_directory, args.source_sha, args.source_tree
+                args.run_directory,
+                args.source_sha,
+                args.source_tree,
+                direct_start=args.direct_start,
             )
             expected = (sys.executable, *sys.argv)
             return controller.run(expected)

@@ -33,6 +33,9 @@ class DevServerGpuScriptTests(unittest.TestCase):
         *,
         controller_source: str,
         session_id: str = "a" * 32,
+        controller_evidence: str | None = None,
+        stop_failures: int = 0,
+        restore_failures: int = 0,
     ) -> tuple[subprocess.CompletedProcess[str], list[str], list[str]]:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -41,6 +44,18 @@ class DevServerGpuScriptTests(unittest.TestCase):
             controller.chmod(0o700)
             controller_log = root / "controller.log"
             fallback_log = root / "fallback.log"
+            if controller_evidence is not None:
+                evidence_directory = (
+                    root
+                    / ".runtime"
+                    / "gpu-session"
+                    / "runs"
+                    / f"20260728T010203Z-{session_id}"
+                )
+                evidence_directory.mkdir(parents=True, mode=0o700)
+                evidence_log = evidence_directory / "controller.log"
+                evidence_log.write_text(controller_evidence, encoding="utf-8")
+                evidence_log.chmod(0o600)
             harness = f"""
 set -u
 GPU_SESSION_PYTHON="$1"
@@ -49,17 +64,27 @@ GPU_SESSION_ROLLBACK_ARMED=true
 NEXPOLY_DEV_GPU_SESSION_ID="$2"
 export FAKE_CONTROLLER_LOG="$3"
 FALLBACK_LOG="$4"
+ROOT_DIR="$5"
+STOP_FAILURES="$6"
+RESTORE_FAILURES="$7"
+STOP_CALLS=0
+RESTORE_CALLS=0
 
 {self._shell_function_source("gpu_session_controller_status_fields")}
 {self._shell_function_source("gpu_session_controller_owns_recovery")}
+{self._shell_function_source("gpu_session_report_controller_failure")}
 {self._shell_function_source("gpu_session_controller_finish_recovery")}
 {self._shell_function_source("gpu_session_up_rollback")}
 
 gpu_session_stop_owned_internal() {{
+  STOP_CALLS=$((STOP_CALLS + 1))
   printf '%s\n' stop-owned >> "$FALLBACK_LOG"
+  (( STOP_CALLS > STOP_FAILURES ))
 }}
 gpu_session_restore_cpu_internal() {{
+  RESTORE_CALLS=$((RESTORE_CALLS + 1))
   printf '%s\n' restore-cpu >> "$FALLBACK_LOG"
+  (( RESTORE_CALLS > RESTORE_FAILURES ))
 }}
 
 set +e
@@ -76,6 +101,9 @@ gpu_session_up_rollback
                     session_id,
                     str(controller_log),
                     str(fallback_log),
+                    str(root),
+                    str(stop_failures),
+                    str(restore_failures),
                 ],
                 text=True,
                 capture_output=True,
@@ -91,6 +119,92 @@ gpu_session_up_rollback
                 else []
             )
         return completed, controller_calls, fallback_calls
+
+    def _run_gpu_session_up(self, *, direct: bool) -> list[str]:
+        with tempfile.TemporaryDirectory() as raw:
+            calls = Path(raw) / "calls.log"
+            harness = f"""
+set -euo pipefail
+NEXPOLY_DEV_GPU_SESSION_EXECUTE=1
+NEXPOLY_DEV_GPU_DIRECT_START="$1"
+NEXPOLY_DEV_GPU_LAUNCHER_ENABLED=true
+GPU_SESSION_PYTHON=fake_controller
+GPU_SESSION_CONTROLLER=ignored-controller
+GPU_SESSION_ROLLBACK_ARMED=false
+DFT_WORKER_SOCKET_DIR=/ignored-dft-socket
+CALLS="$2"
+GPU_COMPOSE=(fake_gpu_compose)
+COMPOSE=(fake_cpu_compose)
+
+{self._shell_function_source("gpu_session_up")}
+
+record() {{ printf '%s\n' "$1" >> "$CALLS"; }}
+validate_asset_release() {{ record validate-assets; }}
+prepare_canary_state_directory() {{ record prepare-canary; }}
+prepare_worker_runtime_directories() {{ record prepare-md; }}
+prepare_dft_runtime_directories() {{ record prepare-dft; }}
+worker_verify_venv() {{ record verify-venv; }}
+validate_worker_transport_runtime() {{ record verify-transport; }}
+validate_dft_session_prerequisites() {{ record verify-dft; }}
+verify_direct_cpu_backend_baseline() {{ record verify-direct-baseline; }}
+build_backend_image() {{ record build-backend; }}
+verify_backend_image_build_identity() {{ record verify-image; }}
+gpu_session_up_rollback() {{ record rollback; }}
+dft_worker_ctl() {{ record "dft-$*"; }}
+dft_worker_session_record() {{ record "dft-record-$1"; }}
+worker_up() {{ record worker-up; }}
+compute_backend_config_hash() {{
+  printf '%064d\n' 0 | tr 0 b
+}}
+compute_gpu_backend_config_hash() {{
+  printf '%064d\n' 0 | tr 0 c
+}}
+wait_backend_configured() {{ record wait-cpu-backend; }}
+verify_backend_drift() {{ record verify-cpu-backend; }}
+wait_gpu_backend_configured() {{ record wait-gpu-backend; }}
+verify_gpu_backend_drift() {{ record "verify-gpu-$1"; }}
+write_gpu_session_activation_manifest() {{ record write-manifest; }}
+gpu_backend_candidate_identity_lost() {{ return 9; }}
+curl() {{ printf '%s\n' '{{"status":"ok"}}'; }}
+fake_controller() {{
+  record "controller-$*"
+  if [[ "$*" == *" up --execute"* ]]; then
+    printf '%s\n' '{{"status":"plane-ready","session_id":"dddddddddddddddddddddddddddddddd"}}'
+  fi
+}}
+fake_gpu_compose() {{
+  if [[ "$*" == "up -d --no-deps --force-recreate backend" ]]; then
+    record gpu-backend-up
+  elif [[ "$*" == "ps -q backend" ]]; then
+    printf '%064d\n' 0 | tr 0 a
+  else
+    return 9
+  fi
+}}
+fake_cpu_compose() {{
+  if [[ "$*" == "up -d --no-deps --force-recreate backend" ]]; then
+    record cpu-backend-up
+  else
+    return 9
+  fi
+}}
+
+gpu_session_up
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    harness,
+                    "gpu-session-up-harness",
+                    "1" if direct else "0",
+                    str(calls),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return calls.read_text(encoding="utf-8").splitlines()
 
     def _asset_verifier_source(self) -> str:
         lines = SCRIPT.read_text(encoding="utf-8").splitlines()
@@ -233,8 +347,30 @@ gpu_session_up_rollback
         self.assertIn("assert_clean_candidate", source[build_start:build_end])
         drift_start = source.index("verify_backend_drift() {")
         drift_end = source.index("\n}\n", drift_start)
-        self.assertIn("assert_clean_candidate", source[drift_start:drift_end])
+        self.assertIn(
+            "assert_clean_candidate_unless_direct_start",
+            source[drift_start:drift_end],
+        )
         self.assertIn("git ls-files --others --exclude-standard", source)
+
+    def test_direct_start_skips_only_runtime_cleanliness_checks(self) -> None:
+        gate = self._shell_function_source(
+            "assert_clean_candidate_unless_direct_start"
+        )
+        build = self._shell_function_source("build_backend_image")
+        cpu_verification = self._shell_function_source("verify_backend_drift")
+        gpu_verification = self._shell_function_source("verify_gpu_backend_drift")
+
+        self.assertIn('NEXPOLY_DEV_GPU_DIRECT_START:-0', gate)
+        self.assertIn("assert_clean_candidate", gate)
+        self.assertIn("assert_clean_candidate", build)
+        self.assertNotIn("assert_clean_candidate_unless_direct_start", build)
+        self.assertIn(
+            "assert_clean_candidate_unless_direct_start", cpu_verification
+        )
+        self.assertIn(
+            "assert_clean_candidate_unless_direct_start", gpu_verification
+        )
 
     def test_backend_tests_use_a_dedicated_locked_image_and_full_discovery(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -371,14 +507,112 @@ gpu_session_up_rollback
             app_shell,
         )
 
-    def test_gpu_session_reuses_an_exact_cpu_backend_baseline(self) -> None:
-        baseline = self._shell_function_source("ensure_cpu_backend_baseline")
+    def test_governed_gpu_session_keeps_main_cpu_replacement_contract(self) -> None:
         up = self._shell_function_source("gpu_session_up")
 
-        self.assertIn("if verify_backend_drift", baseline)
-        self.assertIn("Reusing the verified CPU-only", baseline)
-        self.assertIn('"${COMPOSE[@]}" up -d --no-deps --force-recreate backend', baseline)
-        self.assertIn("ensure_cpu_backend_baseline", up)
+        self.assertIn(
+            '"${COMPOSE[@]}" up -d --no-deps --force-recreate backend',
+            up,
+        )
+        self.assertNotIn("ensure_cpu_backend_baseline", up)
+        self.assertNotIn("gpu_operator_up", up)
+
+    def test_9001_direct_start_reuses_cpu_backend_without_build_or_recreate(
+        self,
+    ) -> None:
+        direct_calls = self._run_gpu_session_up(direct=True)
+        self.assertEqual(direct_calls[0], "verify-direct-baseline")
+        self.assertNotIn("build-backend", direct_calls)
+        self.assertNotIn("verify-image", direct_calls)
+        self.assertNotIn("operator-up", direct_calls)
+        self.assertNotIn("ensure-cpu-baseline", direct_calls)
+        self.assertNotIn("cpu-backend-up", direct_calls)
+        self.assertEqual(direct_calls.count("gpu-backend-up"), 1)
+        self.assertIn(
+            "controller--I ignored-controller up --execute --direct-start",
+            direct_calls,
+        )
+        self.assertIn(
+            "controller--I ignored-controller stabilize --execute "
+            "--session-id dddddddddddddddddddddddddddddddd --direct-start",
+            direct_calls,
+        )
+        self.assertIn(
+            "controller--I ignored-controller activate --execute "
+            "--session-id dddddddddddddddddddddddddddddddd --direct-start",
+            direct_calls,
+        )
+        self.assertNotIn("sleep 35", SCRIPT.read_text(encoding="utf-8"))
+
+    def test_ordinary_gpu_start_keeps_the_governed_backend_preparation(
+        self,
+    ) -> None:
+        ordinary_calls = self._run_gpu_session_up(direct=False)
+        self.assertNotIn("verify-direct-baseline", ordinary_calls)
+        expected = (
+            "build-backend",
+            "verify-image",
+            "cpu-backend-up",
+            "wait-cpu-backend",
+            "verify-cpu-backend",
+        )
+        positions = [ordinary_calls.index(item) for item in expected]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(ordinary_calls.count("gpu-backend-up"), 1)
+        self.assertIn(
+            "controller--I ignored-controller up --execute",
+            ordinary_calls,
+        )
+        self.assertNotIn(
+            "controller--I ignored-controller up --execute --direct-start",
+            ordinary_calls,
+        )
+
+    def test_direct_status_allows_dirty_runtime_verification_during_stop(
+        self,
+    ) -> None:
+        adopt = self._shell_function_source("gpu_session_adopt_direct_start")
+        with tempfile.TemporaryDirectory() as raw:
+            result = Path(raw) / "result"
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f"""
+set -euo pipefail
+{adopt}
+unset NEXPOLY_DEV_GPU_DIRECT_START
+gpu_session_adopt_direct_start '{{"direct_start":true}}'
+printf '%s\n' "$NEXPOLY_DEV_GPU_DIRECT_START" > "$1"
+""",
+                    "direct-status-harness",
+                    str(result),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(result.read_text(encoding="ascii").strip(), "1")
+
+        status = self._shell_function_source("gpu_session_status")
+        down = self._shell_function_source("gpu_session_down")
+        self.assertLess(
+            status.index("gpu_session_adopt_direct_start"),
+            status.index("verify_gpu_backend_drift"),
+        )
+        self.assertLess(
+            down.index("gpu_session_adopt_direct_start"),
+            down.index("verify_backend_drift"),
+        )
+        self.assertIn(
+            "starting|startup-failed|broker-failed|isolation-waiting|"
+            "cleanup-blocked|recovered",
+            down,
+        )
+        self.assertLess(
+            down.index('case "$state" in'),
+            down.index('"$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" drain'),
+        )
 
     def test_cpu_property_prediction_is_independent_of_gpu_session(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -952,6 +1186,7 @@ GPU_COMPOSE=(fake_compose)
 {verify_identity_prefix}
 
 assert_clean_candidate() {{ :; }}
+assert_clean_candidate_unless_direct_start() {{ :; }}
 assert_default_builder() {{ :; }}
 fake_compose() {{
   [[ "$*" == "ps -q backend" ]] || return 9
@@ -1076,6 +1311,34 @@ exit 9
             ],
         )
 
+    def test_gpu_up_rollback_reports_direct_broker_failure_evidence(self) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+if [[ "$*" == *" status" ]]; then
+  printf '%s\\n' '{"status":"broker-failed","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  exit 0
+fi
+if [[ "$*" == *" down --execute" ]]; then
+  exit 0
+fi
+exit 9
+""",
+            controller_evidence="broker exited before plane-ready\n",
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(fallback_calls, [])
+        self.assertIn("GPU controller failure log", completed.stderr)
+        self.assertIn("broker exited before plane-ready", completed.stderr)
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
     def test_gpu_up_rollback_keeps_exact_shell_fallback_if_controller_is_dead(
         self,
     ) -> None:
@@ -1088,6 +1351,34 @@ exit 7
 
         self.assertEqual(completed.returncode, 1, completed.stderr)
         self.assertEqual(fallback_calls, ["stop-owned", "restore-cpu"])
+        self.assertEqual(
+            controller_calls,
+            [
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path drain --execute",
+                "-I ignored-controller-path status",
+                "-I ignored-controller-path down --execute",
+            ],
+        )
+
+    def test_gpu_up_rollback_retries_transient_owned_stop_and_cpu_restore(
+        self,
+    ) -> None:
+        completed, controller_calls, fallback_calls = self._run_gpu_up_rollback(
+            controller_source="""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_CONTROLLER_LOG"
+exit 7
+""",
+            stop_failures=1,
+            restore_failures=1,
+        )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(
+            fallback_calls,
+            ["stop-owned", "stop-owned", "restore-cpu", "restore-cpu"],
+        )
+        self.assertNotIn("after 3 attempts", completed.stderr)
         self.assertEqual(
             controller_calls,
             [

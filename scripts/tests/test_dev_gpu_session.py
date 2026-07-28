@@ -55,6 +55,111 @@ def test_controller_creation_lock_is_nonblocking(
         os.close(descriptor)
 
 
+def test_operator_environment_selects_direct_controller_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected: list[bool] = []
+    monkeypatch.setattr(session, "CONTROLLER_START_LOCK", tmp_path / "start.lock")
+    monkeypatch.setattr(session, "_private_directory", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        session,
+        "_up_execute_locked",
+        lambda *, direct_start: (
+            selected.append(direct_start)
+            or {"schema_version": 1, "status": "plane-ready"}
+        ),
+    )
+    monkeypatch.setenv("NEXPOLY_DEV_GPU_DIRECT_START", "1")
+
+    assert session.up_execute()["status"] == "plane-ready"
+    assert selected == [True]
+
+
+def test_direct_up_propagates_internal_flag_to_serve_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    class ControllerProcess:
+        def poll(self):
+            return None
+
+    def popen(command, **_kwargs):
+        commands.append(command)
+        return ControllerProcess()
+
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    monkeypatch.setattr(session, "RUNS_ROOT", runs)
+    monkeypatch.setattr(session, "CONTROLLER_RECORD", tmp_path / "controller.json")
+    monkeypatch.setattr(session, "_git_identity", lambda: ("a" * 40, "b" * 40))
+    monkeypatch.setattr(session.subprocess, "Popen", popen)
+    statuses = iter(
+        (
+            {
+                "schema_version": 1,
+                "status": "stopped",
+                "gpu_index": 1,
+            },
+            {
+                "schema_version": 1,
+                "status": "plane-ready",
+                "gpu_index": 1,
+                "direct_start": True,
+            },
+        )
+    )
+    monkeypatch.setattr(
+        session,
+        "status",
+        lambda: next(statuses),
+    )
+
+    result = session._up_execute_locked(direct_start=True)
+
+    assert result["status"] == "plane-ready"
+    assert commands
+    assert commands[0][-1] == "--direct-start"
+
+
+def test_direct_up_fails_immediately_when_broker_enters_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ControllerProcess:
+        def poll(self):
+            return None
+
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    monkeypatch.setattr(session, "RUNS_ROOT", runs)
+    monkeypatch.setattr(session, "CONTROLLER_RECORD", tmp_path / "controller.json")
+    monkeypatch.setattr(session, "_git_identity", lambda: ("a" * 40, "b" * 40))
+    monkeypatch.setattr(
+        session.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: ControllerProcess(),
+    )
+    monkeypatch.setattr(
+        session,
+        "status",
+        lambda: {
+            "schema_version": 1,
+            "status": "broker-failed",
+            "gpu_index": 1,
+            "direct_start": True,
+        },
+    )
+
+    with pytest.raises(
+        session.DevGpuSessionError,
+        match="startup ended as broker-failed",
+    ):
+        session._up_execute_locked(direct_start=True)
+
+
 def empty_snapshot() -> session.TargetSnapshot:
     return session.TargetSnapshot((), (), ())
 
@@ -816,18 +921,194 @@ def test_controller_safe_environment_binds_local_user_manager() -> None:
 
 def test_controller_mps_inventory_uses_descriptor_bound_cuda_paths() -> None:
     controller = object.__new__(session.SessionController)
+    controller.direct_start = False
     controller.root_fd = 7
     controller.reservations_fd = 8
     controller.pipe_fd = 9
     controller.log_fd = 10
     controller.slot_fd = 11
 
-    environment = controller._mps_env()
+    environment = controller._mps_env("start")
 
     authority = f"/proc/{os.getpid()}/fd"
     assert environment["CUDA_VISIBLE_DEVICES"] == session.GPU_UUID
     assert environment["CUDA_MPS_PIPE_DIRECTORY"] == f"{authority}/9"
     assert environment["CUDA_MPS_LOG_DIRECTORY"] == f"{authority}/10"
+
+
+def test_direct_controller_uses_trusted_broker_and_mps_arguments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import gpu_resource
+
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(
+        run,
+        "a" * 40,
+        "b" * 40,
+        direct_start=True,
+    )
+    controller.root_fd = 7
+    controller.policy_fd = 8
+    controller.reservations_fd = 9
+    controller.slot_fd = 10
+    controller.pipe_fd = 11
+    controller.log_fd = 12
+    popen_calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+    run_calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    class BrokerProcess:
+        def poll(self):
+            return None
+
+    def popen(command, **kwargs):
+        popen_calls.append((command, kwargs))
+        return BrokerProcess()
+
+    def run_command(command, **kwargs):
+        run_calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    client = SimpleNamespace(
+        status=lambda: {"draining": False, "leases": []},
+    )
+    monkeypatch.setattr(session.subprocess, "Popen", popen)
+    monkeypatch.setattr(session.subprocess, "run", run_command)
+    monkeypatch.setattr(gpu_resource, "GpuBrokerClient", lambda _path: client)
+
+    try:
+        assert controller._start_broker() is client
+        controller._mps_command("start")
+        controller._mps_command("stop")
+    finally:
+        assert controller.broker_log is not None
+        controller.broker_log.close()
+        controller.broker_log = None
+
+    broker_command, broker_options = popen_calls[0]
+    assert broker_command[-2:] == ("--trusted-dev-gpu-index", "1")
+    assert "--external-reservations" not in broker_command
+    assert broker_options["pass_fds"] == (7, 8)
+    start_command, start_options = run_calls[0]
+    assert start_command == (
+        str(session.MPS_CONTROL),
+        "start",
+        "1",
+        "--trusted-dev-start",
+    )
+    assert start_options["pass_fds"] == (7, 10, 11, 12)
+    assert "NEXPOLY_GPU_EXTERNAL_RESERVATIONS" not in start_options["env"]
+    stop_command, stop_options = run_calls[1]
+    assert stop_command == (str(session.MPS_CONTROL), "stop", "1")
+    assert stop_options["pass_fds"] == (7, 9, 10, 11, 12)
+    assert stop_options["env"]["NEXPOLY_GPU_EXTERNAL_RESERVATIONS"].endswith(
+        "/fd/9"
+    )
+
+
+def test_direct_descriptor_setup_does_not_load_stale_external_reservations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gpu_root = tmp_path / "gpu-resource"
+    gpu_root.mkdir(mode=0o700)
+    reservations = gpu_root / "external-reservations.json"
+    reservations.write_text('{"stale":true}\n', encoding="utf-8")
+    reservations.chmod(0o600)
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir(mode=0o700)
+    controller = session.SessionController(
+        run,
+        "a" * 40,
+        "b" * 40,
+        direct_start=True,
+    )
+    monkeypatch.setattr(session, "GPU_ROOT", gpu_root)
+    monkeypatch.setattr(
+        session,
+        "RESERVATIONS_SOURCE",
+        tmp_path / "must-not-be-read.json",
+    )
+
+    try:
+        controller._prepare_descriptors()
+        assert os.pread(controller.reservations_fd, 1024, 0) == (
+            b'{"stale":true}\n'
+        )
+    finally:
+        for descriptor in (
+            controller.log_fd,
+            controller.pipe_fd,
+            controller.slot_fd,
+            controller.reservations_fd,
+            controller.policy_fd,
+            controller.root_fd,
+        ):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
+def test_governed_descriptor_setup_still_rejects_stale_external_reservations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gpu_root = tmp_path / "gpu-resource"
+    gpu_root.mkdir(mode=0o700)
+    reservations = gpu_root / "external-reservations.json"
+    reservations.write_text('{"stale":true}\n', encoding="utf-8")
+    reservations.chmod(0o600)
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir(mode=0o700)
+    controller = session.SessionController(
+        run,
+        "a" * 40,
+        "b" * 40,
+    )
+    monkeypatch.setattr(session, "GPU_ROOT", gpu_root)
+
+    try:
+        with pytest.raises(
+            session.DevGpuSessionError,
+            match="differs from exact policy",
+        ):
+            controller._prepare_descriptors()
+    finally:
+        for descriptor in (
+            controller.reservations_fd,
+            controller.policy_fd,
+            controller.root_fd,
+        ):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
+def test_direct_controller_status_exposes_stable_mode_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(
+        run,
+        "a" * 40,
+        "b" * 40,
+        direct_start=True,
+    )
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(session, "process_start_ticks", lambda _pid: 123)
+    monkeypatch.setattr(
+        session,
+        "_atomic_json",
+        lambda _path, value, **_kwargs: published.append(value),
+    )
+
+    controller._state("starting")
+
+    assert published[0]["status"] == "starting"
+    assert published[0]["direct_start"] is True
+    assert published[0]["audit_mode"] == "direct"
 
 
 def test_inventory_filters_gpu3_and_never_treats_polyprop_as_gpu1(monkeypatch) -> None:
@@ -9716,6 +9997,135 @@ def test_ready_is_published_only_after_explicit_activation(
 
     assert controller._serve_loop(SimpleNamespace()) == 0
     assert states[:2] == ["ready", "stopped"]
+
+
+def test_direct_controller_reaches_ready_without_any_host_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(
+        run,
+        "a" * 40,
+        "b" * 40,
+        direct_start=True,
+    )
+    controller.dft_stabilization_generation = 1
+    controller.activation_generation = 1
+    states: list[str] = []
+    mps_commands: list[str] = []
+    broker_status_calls = 0
+
+    class BrokerProcess:
+        def poll(self):
+            return None
+
+    def fail_audit(*_args, **_kwargs):
+        pytest.fail("direct controller must not call host audit helpers")
+
+    def start_broker():
+        controller.broker = BrokerProcess()
+
+        def status():
+            nonlocal broker_status_calls
+            broker_status_calls += 1
+            return {
+                "draining": False,
+                "leases": [
+                    {
+                        "gpu_uuid": "GPU-external-task-that-must-not-stop-direct",
+                    }
+                ],
+            }
+
+        return SimpleNamespace(status=status)
+
+    def publish(value: str, **_kwargs) -> None:
+        states.append(value)
+        if states.count("ready") == 3:
+            controller.stop_requested = True
+
+    monkeypatch.setattr(session, "_private_directory", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(session, "_atomic_json", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(session.os, "geteuid", lambda: 1001)
+    monkeypatch.setattr(session.os, "getegid", lambda: 1001)
+    monkeypatch.setattr(session, "process_argv", lambda _pid: ("python", "serve"))
+    monkeypatch.setattr(session, "process_start_ticks", lambda _pid: 123)
+    monkeypatch.setattr(session.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(
+        session.signal,
+        "pthread_sigmask",
+        lambda *_args: frozenset(),
+    )
+    monkeypatch.setattr(session.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(session, "require_double_free_audit", fail_audit)
+    monkeypatch.setattr(session, "read_gpu3_guard_fingerprint", fail_audit)
+    monkeypatch.setattr(session, "collect_target_snapshot", fail_audit)
+    monkeypatch.setattr(controller, "_audit", fail_audit)
+    monkeypatch.setattr(controller, "_mps_authority", fail_audit)
+    monkeypatch.setattr(controller, "_prepare_descriptors", lambda: None)
+    monkeypatch.setattr(controller, "_start_broker", start_broker)
+    monkeypatch.setattr(
+        controller,
+        "_mps_command",
+        lambda action: mps_commands.append(action),
+    )
+    monkeypatch.setattr(controller, "_cleanup", lambda _client: True)
+    monkeypatch.setattr(controller, "_remove_controller_record", lambda: None)
+    monkeypatch.setattr(controller, "_close_descriptors", lambda: None)
+    monkeypatch.setattr(controller, "_state", publish)
+
+    assert controller.run(("python", "serve")) == 0
+    assert states == [
+        "starting",
+        "plane-ready",
+        "ready",
+        "ready",
+        "ready",
+        "stopped",
+    ]
+    assert broker_status_calls == 3
+    assert mps_commands == ["start"]
+    assert controller.audit_mode == "direct"
+    assert controller.audit_sequence == 0
+    assert controller.dft_stabilized is True
+
+
+def test_direct_controller_accepts_explicit_broker_drain_before_stop_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(
+        run,
+        "a" * 40,
+        "b" * 40,
+        direct_start=True,
+    )
+    controller.dft_stabilized = True
+    controller.activation_generation = 1
+    controller.last_audit_activation_generation = 1
+    controller.broker = SimpleNamespace(poll=lambda: None)
+    states: list[str] = []
+
+    def status() -> dict[str, object]:
+        controller.stop_requested = True
+        return {"draining": True, "leases": []}
+
+    monkeypatch.setattr(controller, "_cleanup", lambda _client: True)
+    monkeypatch.setattr(controller, "_remove_controller_record", lambda: None)
+    monkeypatch.setattr(
+        controller,
+        "_state",
+        lambda value, **_kwargs: states.append(value),
+    )
+    monkeypatch.setattr(session.time, "sleep", lambda _seconds: None)
+
+    assert controller._direct_serve_loop(SimpleNamespace(status=status)) == 0
+    assert states == ["ready", "stopped"]
+    assert controller.automatic_recovery is False
 
 
 def test_graceful_stop_discards_an_inflight_audit_failure(

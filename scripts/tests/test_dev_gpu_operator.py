@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from scripts.dev_gpu_operator import DevGpuOperator, prepare_runtime
 
@@ -21,6 +22,143 @@ SOURCE_TREE = "b" * 40
 
 
 class DevGpuOperatorTests(unittest.TestCase):
+    def test_candidate_identity_allows_dirty_files_at_the_same_head_and_tree(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repository = Path(raw)
+            subprocess.run(
+                ["git", "init", "--quiet"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+            tracked = repository / "tracked.txt"
+            tracked.write_text("committed\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "tracked.txt"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=GPU operator test",
+                    "-c",
+                    "user.email=gpu-operator-test@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "fixture",
+                ],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+            source_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repository,
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            source_tree = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=repository,
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            prepare_runtime(repository)
+            tracked.write_text("dirty\n", encoding="utf-8")
+            (repository / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+
+            operator = DevGpuOperator(
+                repository=repository,
+                source_sha=source_sha,
+                source_tree=source_tree,
+                python_executable=sys.executable,
+            )
+            operator._validate_candidate()
+
+    def test_recovery_child_uses_the_direct_start_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repository = Path(raw)
+            prepare_runtime(repository)
+            operator = DevGpuOperator(
+                repository=repository,
+                source_sha=SOURCE_SHA,
+                source_tree=SOURCE_TREE,
+                python_executable=sys.executable,
+            )
+            operation = operator._new_operation("starting", "starting")
+            operator._write_operation(operation)
+            statuses = iter(
+                (
+                    {"schema_version": 1, "status": "stopped", "gpu_index": 1},
+                    {"schema_version": 1, "status": "ready", "gpu_index": 1},
+                )
+            )
+            operator._controller_status = lambda: next(statuses)  # type: ignore[method-assign]
+
+            with patch("scripts.dev_gpu_operator.subprocess.Popen") as popen:
+                popen.return_value.wait.return_value = 0
+                operator._run_recovery(
+                    operation["operation_id"], time.monotonic() + 5
+                )
+
+            _args, kwargs = popen.call_args
+            self.assertEqual(
+                kwargs["env"]["NEXPOLY_DEV_GPU_SESSION_EXECUTE"], "1"
+            )
+            self.assertEqual(
+                kwargs["env"]["NEXPOLY_DEV_GPU_DIRECT_START"], "1"
+            )
+            self.assertEqual(
+                popen.call_args.args[0][-1],
+                "gpu-session-up",
+            )
+            assert operator._operation is not None
+            self.assertEqual(operator._operation["phase"], "ready")
+
+    def test_recovery_child_timeout_releases_the_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repository = Path(raw)
+            prepare_runtime(repository)
+            operator = DevGpuOperator(
+                repository=repository,
+                source_sha=SOURCE_SHA,
+                source_tree=SOURCE_TREE,
+                python_executable=sys.executable,
+            )
+            operation = operator._new_operation("starting", "starting")
+            operator._write_operation(operation)
+            operator._controller_status = lambda: {  # type: ignore[method-assign]
+                "schema_version": 1,
+                "status": "stopped",
+                "gpu_index": 1,
+            }
+
+            with patch("scripts.dev_gpu_operator.subprocess.Popen") as popen:
+                child = popen.return_value
+                child.args = ["gpu-session-up"]
+                child.wait.side_effect = (
+                    subprocess.TimeoutExpired(child.args, 1),
+                    0,
+                )
+                operator._run_recovery(
+                    operation["operation_id"],
+                    time.monotonic() + 1,
+                )
+
+            child.terminate.assert_called_once_with()
+            child.kill.assert_not_called()
+            assert operator._operation is not None
+            self.assertEqual(operator._operation["phase"], "failed")
+            self.assertIn("超过 30 分钟", operator._operation["message"])
+
     def test_expired_queue_fails_without_starting_the_gpu_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             repository = Path(raw)
@@ -215,6 +353,10 @@ class DevGpuOperatorTests(unittest.TestCase):
         self.assertNotIn('"down"', source[source.index("def parse_args"):])
         self.assertNotIn('"--porcelain"', source)
         self.assertNotIn("未提交改动", source)
+        self.assertIn(
+            'environment["NEXPOLY_DEV_GPU_DIRECT_START"] = "1"',
+            source,
+        )
 
 
 if __name__ == "__main__":

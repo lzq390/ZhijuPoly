@@ -11,6 +11,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,6 +28,7 @@ from gpu_resource import (
     wait_for_scope_membership,
 )
 from gpu_resource.client import MAX_RESPONSE_BYTES
+from ops.gpu_broker import server as broker_server
 from ops.gpu_broker.broker import (
     BrokerError,
     BrokerPersistenceFatal,
@@ -91,6 +93,241 @@ def test_default_client_timeout_covers_external_admission_budget() -> None:
         client.timeout_seconds
         > DEFAULT_EXTERNAL_ADMISSION_TIMEOUT_SECONDS
     )
+
+
+def test_trusted_dev_gpu_validation_queries_only_gpu1(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def run(command, **kwargs):
+        calls.append(tuple(command))
+        assert kwargs == {
+            "check": True,
+            "capture_output": True,
+            "text": True,
+            "timeout": 10,
+        }
+        return SimpleNamespace(stdout=f"{EXPECTED_GPU_UUIDS[1]}\n")
+
+    monkeypatch.setattr(broker_server.subprocess, "run", run)
+
+    broker_server.validate_trusted_dev_gpu(1)
+
+    assert calls == [
+        (
+            "nvidia-smi",
+            "--query-gpu=uuid",
+            "--format=csv,noheader,nounits",
+            "-i",
+            "1",
+        )
+    ]
+
+
+def test_broker_cli_accepts_exactly_one_admission_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    common = [
+        "gpu-broker",
+        "--socket",
+        "/tmp/broker.sock",
+        "--state",
+        "/tmp/state.json",
+        "--policy",
+        "/tmp/policy.json",
+        "--mps-state-root",
+        "/tmp/mps",
+    ]
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [*common, "--trusted-dev-gpu-index", "1"],
+    )
+    trusted = broker_server.parse_args()
+    assert trusted.trusted_dev_gpu_index == 1
+    assert trusted.external_reservations is None
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [*common, "--external-reservations", "/tmp/reservations.json"],
+    )
+    governed = broker_server.parse_args()
+    assert governed.trusted_dev_gpu_index is None
+    assert governed.external_reservations == Path("/tmp/reservations.json")
+
+
+@pytest.mark.parametrize(
+    "admission",
+    (
+        (),
+        (
+            "--external-reservations",
+            "/tmp/reservations.json",
+            "--trusted-dev-gpu-index",
+            "1",
+        ),
+        ("--trusted-dev-gpu-index", "2"),
+    ),
+)
+def test_broker_cli_rejects_invalid_trusted_admission(
+    admission: tuple[str, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gpu-broker",
+            "--socket",
+            "/tmp/broker.sock",
+            "--state",
+            "/tmp/state.json",
+            "--policy",
+            "/tmp/policy.json",
+            "--mps-state-root",
+            "/tmp/mps",
+            *admission,
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        broker_server.parse_args()
+
+
+def test_trusted_dev_broker_skips_external_and_full_gpu_inventories(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    args = SimpleNamespace(
+        socket=tmp_path / "broker.sock",
+        state=tmp_path / "state.json",
+        policy=tmp_path / "policy.json",
+        external_reservations=tmp_path / "must-not-be-read.json",
+        mps_state_root=tmp_path / "mps",
+        heartbeat_timeout_seconds=30.0,
+        trusted_dev_gpu_index=1,
+    )
+    monkeypatch.setattr(broker_server, "parse_args", lambda: args)
+    monkeypatch.setattr(broker_server.os, "geteuid", lambda: 1001)
+    monkeypatch.setattr(broker_server.os, "getegid", lambda: 1001)
+    stabilized_paths: list[Path] = []
+
+    def stabilize(path: Path) -> Path:
+        stabilized_paths.append(path)
+        return path
+
+    monkeypatch.setattr(
+        broker_server,
+        "process_stable_descriptor_path",
+        stabilize,
+    )
+    monkeypatch.setattr(
+        broker_server,
+        "validate_policy_document",
+        lambda path: None,
+    )
+    validated_indices: list[int] = []
+    monkeypatch.setattr(
+        broker_server,
+        "validate_trusted_dev_gpu",
+        validated_indices.append,
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("trusted development path ran a host inventory")
+
+    for name in (
+        "query_gpu_inventory",
+        "validate_gpu_inventory",
+        "load_external_reservations",
+        "ExternalGpuGuard",
+        "query_compute_processes",
+        "query_docker_gpu_claims",
+        "query_systemd_gpu_claims",
+    ):
+        monkeypatch.setattr(broker_server, name, forbidden)
+
+    mps_calls: list[tuple[int, str]] = []
+
+    class FakeMpsGuard:
+        def __init__(self, root: Path) -> None:
+            assert root == args.mps_state_root
+
+        def __call__(self, index: int, uuid: str) -> bool:
+            mps_calls.append((index, uuid))
+            return True
+
+        def orphan_client_alive(self, *_args) -> bool:
+            return False
+
+        def terminate_lease_clients(self, *_args) -> tuple[int, ...]:
+            return ()
+
+        def lease_client_alive_after_grace(self, *_args) -> bool:
+            return False
+
+        def parented_execution_safe_to_release(self, *_args) -> bool:
+            return True
+
+    class FakeCgroupController:
+        def resolve_and_assign(self, *_args):
+            return None
+
+        def validate_active(self, *_args) -> None:
+            return None
+
+        def freeze(self, *_args) -> str:
+            return ""
+
+        def kill(self, *_args) -> None:
+            return None
+
+        def empty(self, *_args) -> bool:
+            return True
+
+        def cleanup(self, *_args) -> None:
+            return None
+
+    broker_construction: dict[str, object] = {}
+
+    class FakeBroker:
+        def __init__(self, state: Path, **kwargs) -> None:
+            broker_construction["state"] = state
+            broker_construction["kwargs"] = kwargs
+
+    class FakeServer:
+        fatal_persistence_error = None
+
+        def __init__(self, socket_path: Path, broker: object) -> None:
+            assert socket_path == args.socket
+            assert isinstance(broker, FakeBroker)
+
+        def serve_forever(self, *, poll_interval: float) -> None:
+            assert poll_interval == 0.5
+
+        def server_close(self) -> None:
+            return None
+
+    monkeypatch.setattr(broker_server, "MpsRuntimeGuard", FakeMpsGuard)
+    monkeypatch.setattr(
+        broker_server,
+        "JobCgroupController",
+        FakeCgroupController,
+    )
+    monkeypatch.setattr(broker_server, "HostGpuBroker", FakeBroker)
+    monkeypatch.setattr(broker_server, "GpuBrokerUnixServer", FakeServer)
+
+    assert broker_server.main() == 0
+    assert validated_indices == [1]
+    assert args.external_reservations not in stabilized_paths
+    kwargs = broker_construction["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["gpu_externally_busy"] is None
+    runtime_guard = kwargs["gpu_runtime_healthy"]
+    assert callable(runtime_guard)
+    assert runtime_guard(1, EXPECTED_GPU_UUIDS[1]) is True
+    assert runtime_guard(3, EXPECTED_GPU_UUIDS[3]) is False
+    assert mps_calls == [(1, EXPECTED_GPU_UUIDS[1])]
 
 
 def _bind_test_workload(lease) -> None:

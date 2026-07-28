@@ -44,6 +44,7 @@ CONTROLLER_STARTING_STATES = {
 }
 CONTROLLER_RECOVERY_STATES = {
     "audit-failed",
+    "broker-failed",
     "cleanup-blocked",
     "contaminated",
     "gpu3-drift",
@@ -461,6 +462,7 @@ class DevGpuOperator:
                 )
                 environment = os.environ.copy()
                 environment["NEXPOLY_DEV_GPU_SESSION_EXECUTE"] = "1"
+                environment["NEXPOLY_DEV_GPU_DIRECT_START"] = "1"
                 child = subprocess.Popen(
                     [
                         str(self.repository / "scripts" / "dev_server_gpu.sh"),
@@ -475,7 +477,34 @@ class DevGpuOperator:
                 )
                 with self._lock:
                     self._child = child
-                return_code = child.wait()
+                remaining = deadline - time.monotonic()
+                try:
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(
+                            child.args,
+                            QUEUE_TIMEOUT_SECONDS,
+                        )
+                    return_code = child.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    os.write(
+                        log_descriptor,
+                        (
+                            f"[{_utc_now()}] recovery timed out; "
+                            "terminating launcher child\n"
+                        ).encode(),
+                    )
+                    child.terminate()
+                    try:
+                        child.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                        child.wait(timeout=10)
+                    self._finish_operation(
+                        operation_id,
+                        "failed",
+                        "GPU 服务启动超过 30 分钟，已终止启动命令；请查看 recover.log",
+                    )
+                    return
             finally:
                 os.close(log_descriptor)
                 with self._lock:

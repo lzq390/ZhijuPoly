@@ -364,6 +364,46 @@ def query_gpu_inventory() -> dict[int, str]:
     return inventory
 
 
+def validate_trusted_dev_gpu(index: int) -> None:
+    """Validate the one GPU admitted by the trusted development launcher."""
+
+    if index != 1:
+        raise BrokerError(
+            "gpu_uuid_mismatch",
+            "trusted development Broker is restricted to GPU1",
+        )
+    try:
+        completed = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=uuid",
+                "--format=csv,noheader,nounits",
+                "-i",
+                "1",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BrokerError(
+            "gpu_inventory_unavailable",
+            "nvidia-smi GPU1 identity query failed",
+        ) from exc
+    records = completed.stdout.splitlines()
+    actual_uuid = records[0].strip() if len(records) == 1 else ""
+    expected_uuid = EXPECTED_GPU_UUIDS[1]
+    if actual_uuid != expected_uuid:
+        raise BrokerError(
+            "gpu_uuid_mismatch",
+            (
+                "GPU1 UUID mismatch: expected "
+                f"{expected_uuid}, got {actual_uuid or 'missing'}"
+            ),
+        )
+
+
 def _open_external_reservations(path: Path) -> int:
     """Open an ordinary policy or duplicate one exact inherited local FD."""
 
@@ -6188,7 +6228,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
-    parser.add_argument("--external-reservations", type=Path, required=True)
+    admission = parser.add_mutually_exclusive_group(required=True)
+    admission.add_argument("--external-reservations", type=Path)
+    admission.add_argument("--trusted-dev-gpu-index", type=int, choices=(1,))
     parser.add_argument("--mps-state-root", type=Path, required=True)
     parser.add_argument("--heartbeat-timeout-seconds", type=float, default=30.0)
     return parser.parse_args()
@@ -6237,35 +6279,55 @@ def main() -> int:
             "invalid_service_identity",
             "GPU broker must run as the shared 1001:1001 service identity",
         )
+    trusted_dev_gpu_index = args.trusted_dev_gpu_index
     args.socket = process_stable_descriptor_path(args.socket)
-    args.external_reservations = process_stable_descriptor_path(
-        args.external_reservations
-    )
+    if trusted_dev_gpu_index is None:
+        assert args.external_reservations is not None
+        args.external_reservations = process_stable_descriptor_path(
+            args.external_reservations
+        )
     args.mps_state_root = process_stable_descriptor_path(
         args.mps_state_root
     )
     args.policy = process_stable_descriptor_path(args.policy)
     validate_policy_document(args.policy)
-    validate_gpu_inventory(query_gpu_inventory())
+    if trusted_dev_gpu_index is None:
+        validate_gpu_inventory(query_gpu_inventory())
+    else:
+        validate_trusted_dev_gpu(trusted_dev_gpu_index)
     mps_guard = MpsRuntimeGuard(args.mps_state_root)
     cgroup_controller = JobCgroupController()
-    external_policy = load_external_reservations(args.external_reservations)
-    descriptor_mps_authority = mps_guard.descriptor_authority
-    mps_authority_kwargs = (
-        {"mps_authority_query": mps_guard.authority_snapshot}
-        if descriptor_mps_authority
-        else {"authorized_mps_server_pids": mps_guard.authorized_server_pids}
-    )
-    external_guard = ExternalGpuGuard(
-        external_policy,
-        unmanaged_mps_client_query=mps_guard.unmanaged_client_alive,
-        allow_descriptor_mps_authority=descriptor_mps_authority,
-        **mps_authority_kwargs,
-    )
+    external_guard = None
+    gpu_runtime_healthy = mps_guard
+    if trusted_dev_gpu_index is None:
+        external_policy = load_external_reservations(args.external_reservations)
+        descriptor_mps_authority = mps_guard.descriptor_authority
+        mps_authority_kwargs = (
+            {"mps_authority_query": mps_guard.authority_snapshot}
+            if descriptor_mps_authority
+            else {"authorized_mps_server_pids": mps_guard.authorized_server_pids}
+        )
+        external_guard = ExternalGpuGuard(
+            external_policy,
+            unmanaged_mps_client_query=mps_guard.unmanaged_client_alive,
+            allow_descriptor_mps_authority=descriptor_mps_authority,
+            **mps_authority_kwargs,
+        )
+    else:
+        expected_uuid = EXPECTED_GPU_UUIDS[trusted_dev_gpu_index]
+
+        def trusted_gpu_runtime_healthy(index: int, uuid: str) -> bool:
+            return (
+                index == trusted_dev_gpu_index
+                and uuid == expected_uuid
+                and mps_guard(index, uuid)
+            )
+
+        gpu_runtime_healthy = trusted_gpu_runtime_healthy
     broker = HostGpuBroker(
         args.state,
         heartbeat_timeout_seconds=args.heartbeat_timeout_seconds,
-        gpu_runtime_healthy=mps_guard,
+        gpu_runtime_healthy=gpu_runtime_healthy,
         gpu_externally_busy=external_guard,
         orphan_mps_client_alive=mps_guard.orphan_client_alive,
         terminate_mps_clients=mps_guard.terminate_lease_clients,
