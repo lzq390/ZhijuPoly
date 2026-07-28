@@ -48,17 +48,23 @@ REQUIRED_PATHS = (
     "gpu_resource/authority.py",
     "gpu_resource/client.py",
     "ops/gpu_broker/server.py",
+    "ops/systemd/nexpoly-gpu2-guard.service",
+    "ops/systemd/nexpoly-gpu2-guard.timer",
+    "ops/systemd/nexpoly-monomer-dft-worker.service",
     "scripts/ci/validate_workflows.py",
     "scripts/gpu_mps_control.sh",
+    "scripts/gpu2_guard.py",
     "scripts/monomer_dft_gpu_acceptance.py",
     "scripts/monomer_dft_acceptance_env.py",
     "scripts/monomer_dft_runtime_contract.py",
     "scripts/monomer_dft_dev_stack.sh",
     "scripts/monomer_dft_worker_ctl.sh",
+    "scripts/preflight_monomer_dft_prod.py",
     "scripts/preflight_monomer_dft_env.py",
     "scripts/run_monomer_dft_gpu_acceptance.py",
     "scripts/release_controller.py",
     "scripts/setup_monomer_dft_env.sh",
+    "scripts/setup_monomer_dft_prod_runtime.sh",
     "scripts/smoke_monomer_dft_env.py",
     "scripts/validate_monomer_dft_release_contract.py",
     "workers/monomer_dft_worker/aimnet-source.lock.json",
@@ -705,23 +711,17 @@ def validate_development_delivery(root: Path, failures: list[str]) -> None:
             )
 
 
-def validate_production_hard_off(root: Path, failures: list[str]) -> None:
+def validate_production_activation(root: Path, failures: list[str]) -> None:
     compose = _read_text(root, "docker-compose.prod.yml", failures)
     for marker in (
-        'MONOMER_DFT_SUBMIT_ENABLED: "false"',
-        'MONOMER_DFT_WORKER_UDS: ""',
+        'MONOMER_DFT_SUBMIT_ENABLED: "true"',
+        'MONOMER_DFT_WORKER_UDS: "/app/monomer-dft-worker/worker.sock"',
+        "state/monomer-dft-worker-socket",
+        "state/monomer-dft-download-spool",
+        "create_host_path: false",
     ):
         if marker not in compose:
-            failures.append(f"production Compose is missing hard-off marker: {marker}")
-    for forbidden in (
-        "MONOMER_DFT_WORKER_BASE_URL:",
-        "monomer-dft-worker-socket",
-        "/app/monomer-dft-worker",
-    ):
-        if forbidden in compose:
-            failures.append(
-                f"production Compose must not configure DFT transport or mounts: {forbidden}"
-            )
+            failures.append(f"production Compose is missing DFT activation marker: {marker}")
 
     main_text = _read_text(root, "backend/app/main.py", failures)
     for marker in (
@@ -740,6 +740,30 @@ def validate_production_hard_off(root: Path, failures: list[str]) -> None:
         failures.append("DFT Worker client must create transports only for an explicit UDS")
     if "httpx.AsyncClient()" in worker_client:
         failures.append("DFT Worker client contains an implicit network fallback")
+
+    worker_unit = _read_text(
+        root, "ops/systemd/nexpoly-monomer-dft-worker.service", failures
+    )
+    for marker in (
+        "MONOMER_DFT_DEPLOYMENT=prod",
+        "NEXPOLY_DFT_GPU_DEVICE=2",
+        "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=",
+        "MONOMER_DFT_GPU_BROKER_ENABLED=0",
+        "Restart=always",
+        "gpu2_guard.py --require-ready",
+        "preflight_monomer_dft_prod.py",
+    ):
+        if marker not in worker_unit:
+            failures.append(f"production DFT unit is missing policy marker: {marker}")
+
+    guard = _read_text(root, "scripts/gpu2_guard.py", failures)
+    for marker in (
+        'GPU_INDEX = "2"',
+        'GPU_UUID = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"',
+        '"status": "ready" if not unknown else "quarantined"',
+    ):
+        if marker not in guard:
+            failures.append(f"GPU2 guard is missing policy marker: {marker}")
 
 
 def validate_database_schema_state_contract(
@@ -1007,7 +1031,7 @@ def validate(root: Path, *, require_committed: bool = False) -> list[str]:
         failures,
     )
     validate_development_delivery(resolved, failures)
-    validate_production_hard_off(resolved, failures)
+    validate_production_activation(resolved, failures)
     validate_database_schema_state_contract(resolved, failures)
     validate_aimnet_build_contract(resolved, failures)
     validate_ci_contract(resolved, failures)

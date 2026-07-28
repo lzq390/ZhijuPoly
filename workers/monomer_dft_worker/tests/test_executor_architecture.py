@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import json
 import os
 import socket
@@ -53,6 +54,53 @@ from workers.monomer_dft_worker.app.schemas import (
     GpuExecutionProvenanceV2,
     JobSubmitRequest,
 )
+
+
+def test_production_guard_quarantine_and_staleness_fail_admission(
+    tmp_path: Path,
+) -> None:
+    guard_path = tmp_path / "gpu2-guard.json"
+    settings = SimpleNamespace(
+        deployment="prod",
+        gpu_guard_state=guard_path,
+    )
+    pool = ExecutorPool(settings)  # type: ignore[arg-type]
+    current = (
+        dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    guard_path.write_text(
+        json.dumps(
+            {
+                "observed_at": current,
+                "status": "quarantined",
+                "gpu_uuid": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+                "unknown_processes": [{"pid": 99}],
+            }
+        )
+    )
+    error, status = pool._gpu_guard_error()
+    assert status == "quarantined"
+    assert error is not None
+
+    stale = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=3)
+    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    guard_path.write_text(
+        json.dumps(
+            {
+                "observed_at": stale,
+                "status": "ready",
+                "gpu_uuid": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+                "unknown_processes": [],
+            }
+        )
+    )
+    error, status = pool._gpu_guard_error()
+    assert status == "ready"
+    assert error is not None and "stale" in error
 
 
 def _settings(tmp_path: Path) -> WorkerSettings:

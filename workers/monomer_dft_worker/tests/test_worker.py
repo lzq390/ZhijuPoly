@@ -429,7 +429,7 @@ def test_runner_rejects_original_aimnet_pythonpath(tmp_path: Path) -> None:
         (
             "MONOMER_DFT_DEPLOYMENT",
             "prod",
-            "production is hard-off",
+            "production Worker code root",
         ),
         (
             "NEXPOLY_DFT_GPU_DEVICE",

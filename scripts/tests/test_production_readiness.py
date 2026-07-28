@@ -1826,6 +1826,79 @@ class ProductionReadinessTests(unittest.TestCase):
         self.assertFalse(json.loads(completed.stdout)["additionalProperties"])
         self.assertEqual(completed.stderr, "")
 
+    def test_dft_live_readiness_binds_gpu2_models_units_and_images(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="readiness-dft-") as raw:
+            runtime_root = Path(raw)
+            state = runtime_root / "state"
+            state.mkdir()
+            guard = {
+                "schema_version": 1,
+                "observed_at": dt.datetime.now(dt.timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "gpu_index": "2",
+                "gpu_uuid": READINESS.GPU2_UUID,
+                "status": "ready",
+                "unknown_processes": [],
+            }
+            (state / "gpu2-guard.json").write_text(
+                json.dumps(guard),
+                encoding="utf-8",
+            )
+            worker = {
+                "status": "ok",
+                "runtime_ready": True,
+                "accepting_jobs": True,
+                "runtime": {
+                    "deployment": "prod",
+                    "physical_gpu": "2",
+                    "gpu_uuid": READINESS.GPU2_UUID,
+                    "guard_status": "ready",
+                    "models": {
+                        name: {"loaded": True, "warmed_up": True}
+                        for name in READINESS.DFT_MODEL_ALIASES
+                    },
+                },
+            }
+
+            def command(*args: str) -> str:
+                if args[-2:] == ("rev-parse", "HEAD"):
+                    return AUTHORITY_SHA
+                if "status" in args:
+                    return ""
+                if "is-active" in args or "is-enabled" in args:
+                    return "active" if "is-active" in args else "enabled"
+                if args[:2] == ("docker", "ps"):
+                    return "container"
+                if args[:2] == ("docker", "inspect"):
+                    return AUTHORITY_SHA
+                raise AssertionError(args)
+
+            with (
+                mock.patch.object(READINESS, "_run_read_only", side_effect=command),
+                mock.patch.object(READINESS, "_unix_json", return_value=worker),
+                mock.patch.object(
+                    READINESS,
+                    "_http_json",
+                    return_value={
+                        "enabled": True,
+                        "available": True,
+                        "schema_ready": True,
+                        "runtime_ready": True,
+                    },
+                ),
+            ):
+                result = READINESS.dft_live_readiness(
+                    AUTHORITY_SHA,
+                    runtime_root=runtime_root,
+                    repo_root=runtime_root,
+                )
+
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["gpu_index"], "2")
+            self.assertEqual(result["models"], sorted(READINESS.DFT_MODEL_ALIASES))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -211,6 +211,10 @@ def create_app(
         probe = request.app.state.runtime.probe()
         state = request.app.state.manager.health_state()
         runtime_payload = {
+            "deployment": active_settings.deployment,
+            "physical_gpu": active_settings.physical_gpu,
+            "gpu_uuid": getattr(probe, "gpu_uuid", None),
+            "guard_status": getattr(probe, "guard_status", None),
             "model_name": probe.model_name,
             "model_sha256": probe.model_sha256,
             "aimnet_version": getattr(probe, "aimnet_version", None),

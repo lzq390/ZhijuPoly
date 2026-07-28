@@ -5,6 +5,8 @@ umask 077
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -P "$SCRIPT_DIR/../.." && pwd -P)"
 PRODUCTION_REPO_ROOT="/data/lzq/gith/nexpoly"
+PRODUCTION_RUNTIME_ROOT="/data/lzq/gith/nexpoly-runtime"
+PRODUCTION_GPU_UUID="GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
 DEFAULT_RUNTIME_ROOT="$REPO_ROOT/.runtime"
 GPU_AUTHORITY_VALIDATOR="$REPO_ROOT/gpu_resource/authority.py"
 RUNTIME_ROOT=""
@@ -42,19 +44,31 @@ assert_not_production_path() {
 
 configure_runtime_root() {
   local configured=""
-  if [[ "${MONOMER_DFT_DEV_RUNTIME_ROOT+x}" == "x" ]]; then
+  if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
+    configured="${MONOMER_DFT_PROD_RUNTIME_ROOT:-$PRODUCTION_RUNTIME_ROOT}"
+  elif [[ "${MONOMER_DFT_DEV_RUNTIME_ROOT+x}" == "x" ]]; then
     configured="$MONOMER_DFT_DEV_RUNTIME_ROOT"
   else
     configured="$DEFAULT_RUNTIME_ROOT"
     RUNTIME_ROOT_IS_DEFAULT=true
   fi
-  [[ -n "$configured" ]] || fail "MONOMER_DFT_DEV_RUNTIME_ROOT must not be empty"
+  if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
+    [[ -n "$configured" ]] || fail "MONOMER_DFT_PROD_RUNTIME_ROOT must not be empty"
+  else
+    [[ -n "$configured" ]] || fail "MONOMER_DFT_DEV_RUNTIME_ROOT must not be empty"
+  fi
   if [[ "$configured" != /* ]]; then
     configured="$REPO_ROOT/$configured"
   fi
   RUNTIME_ROOT="$(realpath -ms -- "$configured")"
-  assert_not_production_path MONOMER_DFT_DEV_RUNTIME_ROOT "$RUNTIME_ROOT"
-  export MONOMER_DFT_DEV_RUNTIME_ROOT="$RUNTIME_ROOT"
+  if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
+    [[ "$RUNTIME_ROOT" == "$PRODUCTION_RUNTIME_ROOT" ]] || \
+      fail "production runtime root must be $PRODUCTION_RUNTIME_ROOT"
+    export MONOMER_DFT_PROD_RUNTIME_ROOT="$RUNTIME_ROOT"
+  else
+    assert_not_production_path MONOMER_DFT_DEV_RUNTIME_ROOT "$RUNTIME_ROOT"
+    export MONOMER_DFT_DEV_RUNTIME_ROOT="$RUNTIME_ROOT"
+  fi
 }
 
 initialize_runtime_root() {
@@ -71,7 +85,12 @@ initialize_runtime_root() {
   [[ -d "$RUNTIME_ROOT" && ! -L "$RUNTIME_ROOT" ]] || fail "runtime root must be a real directory: $RUNTIME_ROOT"
   REAL_RUNTIME_ROOT="$(realpath -e -- "$RUNTIME_ROOT")"
   [[ "$REAL_RUNTIME_ROOT" == "$RUNTIME_ROOT" ]] || fail "runtime root resolves unexpectedly: $REAL_RUNTIME_ROOT"
-  assert_not_production_path MONOMER_DFT_DEV_RUNTIME_ROOT "$REAL_RUNTIME_ROOT"
+  if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
+    [[ "$REAL_RUNTIME_ROOT" == "$PRODUCTION_RUNTIME_ROOT" ]] || \
+      fail "production runtime root resolves unexpectedly: $REAL_RUNTIME_ROOT"
+  else
+    assert_not_production_path MONOMER_DFT_DEV_RUNTIME_ROOT "$REAL_RUNTIME_ROOT"
+  fi
   local owner mode
   owner="$(stat -Lc '%u' -- "$RUNTIME_ROOT")" || fail "runtime root owner could not be read: $RUNTIME_ROOT"
   mode="$(stat -Lc '%a' -- "$RUNTIME_ROOT")" || fail "runtime root mode could not be read: $RUNTIME_ROOT"
@@ -408,7 +427,15 @@ if [[ -n "${PYTHONPATH:-}" ]]; then
 fi
 unset PYTHONPATH
 
-assert_not_production_path "Worker code root" "$REPO_ROOT"
+MONOMER_DFT_DEPLOYMENT="${MONOMER_DFT_DEPLOYMENT:-dev}"
+[[ "$MONOMER_DFT_DEPLOYMENT" == "dev" || "$MONOMER_DFT_DEPLOYMENT" == "prod" ]] || \
+  fail "MONOMER_DFT_DEPLOYMENT must be dev or prod"
+if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
+  [[ "$REPO_ROOT" == "$PRODUCTION_REPO_ROOT" ]] || \
+    fail "production Worker code root must be $PRODUCTION_REPO_ROOT"
+else
+  assert_not_production_path "Worker code root" "$REPO_ROOT"
+fi
 configure_runtime_root
 
 # The worker is intentionally database-blind.  The controller launches it
@@ -426,14 +453,24 @@ for forbidden_database_variable in \
     fail "$forbidden_database_variable must not be present in the monomer DFT worker environment"
 done
 
-MONOMER_DFT_DEPLOYMENT="${MONOMER_DFT_DEPLOYMENT:-dev}"
-[[ "$MONOMER_DFT_DEPLOYMENT" == "dev" ]] || \
-  fail "MONOMER_DFT_DEPLOYMENT must be dev; production is hard-off"
-[[ "${NEXPOLY_DFT_GPU_DEVICE:-1}" == "1" ]] || \
-  fail "dev primary DFT executor must use physical GPU 1; GPU 0 and GPU 2 are forbidden"
 [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" =~ ^[01]$ ]] || \
   fail "NEXPOLY_DEV_GPU1_ONLY_SESSION must be 0 or 1"
-if [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]]; then
+if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
+  [[ "${NEXPOLY_DFT_GPU_DEVICE:-2}" == "2" ]] || \
+    fail "production DFT executor must use physical GPU 2"
+  [[ -z "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-}" ]] || \
+    fail "production DFT forbids every overflow GPU"
+  [[ "${MONOMER_DFT_GPU_BROKER_ENABLED:-0}" == "0" ]] || \
+    fail "production DFT direct mode requires the GPU Broker to be disabled"
+  [[ "${MONOMER_DFT_STANDALONE_GPU_SMOKE:-0}" == "0" ]] || \
+    fail "production DFT is not a standalone development smoke"
+  observed_gpu_uuid="$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i 2 | tr -d '[:space:]')" || \
+    fail "physical GPU 2 UUID could not be read"
+  [[ "$observed_gpu_uuid" == "$PRODUCTION_GPU_UUID" ]] || \
+    fail "physical GPU 2 UUID differs from the locked production policy"
+elif [[ "${NEXPOLY_DFT_GPU_DEVICE:-1}" != "1" ]]; then
+  fail "dev primary DFT executor must use physical GPU 1; GPU 0 and GPU 2 are forbidden"
+elif [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]]; then
   [[ "${NEXPOLY_DEV_GPU_SESSION_ID:-}" =~ ^[0-9a-f]{32}$ ]] || \
     fail "GPU1-only session identity is missing or invalid"
   [[ -z "${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-}" ]] || \
@@ -466,10 +503,12 @@ else
   MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS="$(absolute_runtime_path "${MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS:-$RUNTIME_ROOT/gpu-resource/external-reservations.json}")"
 fi
 MONOMER_DFT_DOWNLOAD_SPOOL_ROOT="$(absolute_runtime_path "${MONOMER_DFT_DOWNLOAD_SPOOL_ROOT:-$RUNTIME_ROOT/monomer-dft-downloads}")"
+MONOMER_DFT_GPU_GUARD_STATE="$(absolute_runtime_path "${MONOMER_DFT_GPU_GUARD_STATE:-$RUNTIME_ROOT/state/gpu2-guard.json}")"
 export MONOMER_DFT_PYTHON MONOMER_DFT_WORKER_UDS MONOMER_DFT_JOB_ROOT
 export AIMNET_CACHE_DIR WARP_CACHE_PATH
 export MONOMER_DFT_GPU_BROKER_UDS MONOMER_DFT_GPU_MPS_PIPE_ROOT
 export MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS MONOMER_DFT_DOWNLOAD_SPOOL_ROOT
+export MONOMER_DFT_GPU_GUARD_STATE
 export XDG_CACHE_HOME="$RUNTIME_ROOT/xdg-cache"
 export TORCH_HOME="$RUNTIME_ROOT/torch-cache"
 export HF_HOME="$RUNTIME_ROOT/hf-cache"
@@ -488,6 +527,9 @@ if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
   assert_runtime_path MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS "$MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS"
 fi
 assert_runtime_path MONOMER_DFT_DOWNLOAD_SPOOL_ROOT "$MONOMER_DFT_DOWNLOAD_SPOOL_ROOT"
+if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
+  assert_runtime_path MONOMER_DFT_GPU_GUARD_STATE "$MONOMER_DFT_GPU_GUARD_STATE"
+fi
 assert_runtime_path XDG_CACHE_HOME "$XDG_CACHE_HOME"
 assert_runtime_path TORCH_HOME "$TORCH_HOME"
 assert_runtime_path HF_HOME "$HF_HOME"
@@ -501,8 +543,8 @@ validate_supervisor_configuration
 
 export MONOMER_DFT_MAX_CONCURRENT_JOBS=1
 export MONOMER_DFT_DEPLOYMENT
-export NEXPOLY_DFT_GPU_DEVICE="${NEXPOLY_DFT_GPU_DEVICE:-1}"
-if [[ "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]]; then
+export NEXPOLY_DFT_GPU_DEVICE="${NEXPOLY_DFT_GPU_DEVICE:-$([[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]] && printf 2 || printf 1)}"
+if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" || "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]]; then
   export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=""
 else
   export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="${NEXPOLY_DFT_OVERFLOW_GPU_DEVICES:-3}"
@@ -515,7 +557,7 @@ export PYTHONNOUSERSITE=1
 export PYTHONDONTWRITEBYTECODE=1
 MONOMER_DFT_WORKER_INSTANCE="${MONOMER_DFT_WORKER_INSTANCE:-$REPO_ROOT}"
 [[ "$MONOMER_DFT_WORKER_INSTANCE" == "$REPO_ROOT" ]] || \
-  fail "MONOMER_DFT_WORKER_INSTANCE must identify this development worktree"
+  fail "MONOMER_DFT_WORKER_INSTANCE must identify this source checkout"
 export MONOMER_DFT_WORKER_INSTANCE
 
 initialize_runtime_root
