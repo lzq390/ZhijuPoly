@@ -809,6 +809,10 @@ def validate_gpu_session_compose_policy(
     run_lines = step_lines[run_position + 1 : run_end]
     env_controls = (
         (
+            "fixed 9001 development frontend port",
+            '          NEXPOLY_DEV_FRONTEND_PORT: "9001"',
+        ),
+        (
             "fixed development GPU session identity",
             '          NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"',
         ),

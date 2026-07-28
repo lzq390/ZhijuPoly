@@ -106,6 +106,7 @@ jobs:
           LAB_DATA_POSTGRES_DSN: postgresql://nexpoly:ci-only@lab-postgres:5432/nexpoly
           BYTEFF2_ROOT: /tmp/byteff2
           POLYTAO_ENABLED: "true"
+          NEXPOLY_DEV_FRONTEND_PORT: "9001"
           NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"
           NEXPOLY_GPU_STATE_ROOT: /tmp/nexpoly-gpu-state
         run: |
