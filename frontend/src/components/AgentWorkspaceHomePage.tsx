@@ -9,15 +9,23 @@ export function agentWorkspaceUrl() {
 type AgentWorkspaceHomePageProps = {
   iframeRef?: Ref<HTMLIFrameElement>;
   onLoad?: () => void;
+  src?: string;
+  reloadKey?: number;
 };
 
-export function AgentWorkspaceHomePage({ iframeRef, onLoad }: AgentWorkspaceHomePageProps) {
+export function AgentWorkspaceHomePage({
+  iframeRef,
+  onLoad,
+  src = agentWorkspaceUrl(),
+  reloadKey = 0
+}: AgentWorkspaceHomePageProps) {
   return (
     <iframe
+      key={reloadKey}
       ref={iframeRef}
       onLoad={onLoad}
       title="智聚万物智能体工作台"
-      src={agentWorkspaceUrl()}
+      src={src}
       className="block h-full w-full border-0 bg-white"
     />
   );

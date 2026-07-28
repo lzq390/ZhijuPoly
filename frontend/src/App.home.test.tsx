@@ -55,6 +55,14 @@ describe("智聚万物首页", () => {
       },
       "http://127.0.0.1:4454"
     );
+    expect(postMessage).toHaveBeenCalledWith(
+      {
+        namespace: "openscience.zhijupoly",
+        version: 1,
+        type: "general.sessions.request"
+      },
+      "http://127.0.0.1:4454"
+    );
 
     window.dispatchEvent(
       new MessageEvent("message", {
@@ -78,6 +86,7 @@ describe("智聚万物首页", () => {
       })
     );
 
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "展开项目" })));
     const projectButton = await waitFor(() => {
       const button = screen
         .getAllByRole("button")
@@ -126,6 +135,7 @@ describe("智聚万物首页", () => {
       })
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
     const browseButton = await waitFor(() => screen.getByRole("button", { name: "搜索项目" }));
     expect((browseButton as HTMLButtonElement).disabled).toBe(false);
     postMessage.mockClear();
@@ -213,5 +223,141 @@ describe("智聚万物首页", () => {
       },
       "http://127.0.0.1:4454"
     );
+  });
+
+  it("接收通用会话快照并发送新建、打开、重命名和删除命令", async () => {
+    render(<App />);
+
+    const workspace = screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement;
+    const frameWindow = workspace.contentWindow;
+    expect(frameWindow).not.toBeNull();
+    const postMessage = vi.spyOn(frameWindow!, "postMessage").mockImplementation(() => {});
+
+    fireEvent.load(workspace);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frameWindow,
+        origin: "http://127.0.0.1:4454",
+        data: {
+          namespace: "openscience.zhijupoly",
+          version: 1,
+          type: "general.sessions.snapshot",
+          sessions: [
+            { id: "ses_new", title: "新的研究对话", updatedAt: 200 },
+            { id: "ses_old", title: "旧的实验记录", updatedAt: 100 }
+          ],
+          activeSessionID: "ses_new"
+        }
+      })
+    );
+
+    await waitFor(() => screen.getByRole("button", { name: "新的研究对话" }));
+    postMessage.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "新建对话" }));
+    fireEvent.click(screen.getByRole("button", { name: "旧的实验记录" }));
+    fireEvent.doubleClick(screen.getByRole("button", { name: "新的研究对话" }));
+    const renameInput = screen.getByRole("textbox", { name: "重命名会话" });
+    fireEvent.change(renameInput, { target: { value: "更新后的标题" } });
+    fireEvent.keyDown(renameInput, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "删除会话 旧的实验记录" }));
+
+    expect(postMessage.mock.calls).toEqual([
+      [
+        {
+          namespace: "openscience.zhijupoly",
+          version: 1,
+          type: "general.session.new"
+        },
+        "http://127.0.0.1:4454"
+      ],
+      [
+        {
+          namespace: "openscience.zhijupoly",
+          version: 1,
+          type: "general.session.open",
+          sessionID: "ses_old"
+        },
+        "http://127.0.0.1:4454"
+      ],
+      [
+        {
+          namespace: "openscience.zhijupoly",
+          version: 1,
+          type: "general.session.rename",
+          sessionID: "ses_new",
+          title: "更新后的标题"
+        },
+        "http://127.0.0.1:4454"
+      ],
+      [
+        {
+          namespace: "openscience.zhijupoly",
+          version: 1,
+          type: "general.session.delete",
+          sessionID: "ses_old"
+        },
+        "http://127.0.0.1:4454"
+      ]
+    ]);
+  });
+
+  it("打开普通项目后只保留通用对话入口，点击入口重新加载根通用页面", async () => {
+    render(<App />);
+
+    const workspace = screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement;
+    const frameWindow = workspace.contentWindow;
+    expect(frameWindow).not.toBeNull();
+    const postMessage = vi.spyOn(frameWindow!, "postMessage").mockImplementation(() => {});
+
+    fireEvent.load(workspace);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frameWindow,
+        origin: "http://127.0.0.1:4454",
+        data: {
+          namespace: "openscience.zhijupoly",
+          version: 1,
+          type: "projects.snapshot",
+          projects: [
+            {
+              directory: "/home/codexlab/DevTool/Alpha",
+              name: "Alpha",
+              displayPath: "~/DevTool/Alpha",
+              updatedAt: 200,
+              favorite: false
+            }
+          ],
+          activeDirectory: null
+        }
+      })
+    );
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: "展开项目" })));
+    const projectButton = await waitFor(() => {
+      const button = screen
+        .getAllByRole("button")
+        .find((candidate) => candidate.getAttribute("data-project-directory") === "/home/codexlab/DevTool/Alpha");
+      if (!button) {
+        throw new Error("尚未渲染 Alpha 项目按钮");
+      }
+      return button;
+    });
+    fireEvent.click(projectButton);
+
+    expect(screen.queryByRole("button", { name: "新建对话" })).toBeNull();
+    expect(screen.getByRole("button", { name: "对话" })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "对话" }));
+    expect(workspace.src).toBe("http://127.0.0.1:4454/");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "展开项目" }).getAttribute("aria-expanded")).toBe("false");
+    });
+    expect(screen.queryByRole("button", { name: "搜索项目" })).toBeNull();
+    expect(
+      screen
+        .queryAllByRole("button")
+        .find((candidate) => candidate.getAttribute("data-project-directory") === "/home/codexlab/DevTool/Alpha")
+    ).toBeUndefined();
   });
 });

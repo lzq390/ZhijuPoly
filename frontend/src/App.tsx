@@ -38,6 +38,10 @@ import {
   type OpenScienceProjectsSnapshot
 } from "./lib/openScienceProjectBridge";
 import {
+  createOpenScienceGeneralSessionBridge,
+  type OpenScienceGeneralSessionsSnapshot
+} from "./lib/openScienceGeneralSessionBridge";
+import {
   type KnowledgeNavigationRequest,
   type PredictableProperty,
   type StructureWorkspaceContext
@@ -68,6 +72,7 @@ type AppRoute = {
 };
 
 type KnowledgeNavigationInput = string | KnowledgeNavigationRequest;
+type AgentWorkspaceView = "general" | "projects" | "project";
 const POLYTAO_ROUTE = "/polytao-generation";
 const LEGACY_POLYTAO_ROUTE = "/conditional-generation/polytao";
 
@@ -297,13 +302,32 @@ export default function App() {
   const predict = usePredict();
   const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>([]);
   const agentWorkspaceIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [agentWorkspaceFrameUrl, setAgentWorkspaceFrameUrl] = useState(agentWorkspaceUrl);
+  const [agentWorkspaceReloadKey, setAgentWorkspaceReloadKey] = useState(0);
+  const [agentWorkspaceView, setAgentWorkspaceView] = useState<AgentWorkspaceView>("general");
   const [projectSnapshot, setProjectSnapshot] = useState<OpenScienceProjectsSnapshot | null>(null);
+  const [generalSessionSnapshot, setGeneralSessionSnapshot] =
+    useState<OpenScienceGeneralSessionsSnapshot | null>(null);
   const projectBridge = useMemo(
     () =>
       createOpenScienceProjectBridge({
         workspaceUrl: agentWorkspaceUrl(),
         getFrameWindow: () => agentWorkspaceIframeRef.current?.contentWindow ?? null,
-        onSnapshot: setProjectSnapshot
+        onSnapshot: (snapshot) => {
+          setProjectSnapshot(snapshot);
+          if (snapshot.activeDirectory) {
+            setAgentWorkspaceView("project");
+          }
+        }
+      }),
+    []
+  );
+  const generalSessionBridge = useMemo(
+    () =>
+      createOpenScienceGeneralSessionBridge({
+        workspaceUrl: agentWorkspaceUrl(),
+        getFrameWindow: () => agentWorkspaceIframeRef.current?.contentWindow ?? null,
+        onSnapshot: setGeneralSessionSnapshot
       }),
     []
   );
@@ -369,10 +393,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const handleMessage = (event: MessageEvent) => projectBridge.handleMessage(event);
+    const handleMessage = (event: MessageEvent) => {
+      projectBridge.handleMessage(event);
+      generalSessionBridge.handleMessage(event);
+    };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [projectBridge]);
+  }, [generalSessionBridge, projectBridge]);
 
   function applyRoute(route: AppRoute) {
     setActiveModule(route.module);
@@ -571,11 +598,13 @@ export default function App() {
 
   function openAgentProject(directory: string) {
     navigate({ module: "home", datasetKey: null });
+    setAgentWorkspaceView("project");
     projectBridge.openProject(directory);
   }
 
   function browseAgentProjects() {
     navigate({ module: "home", datasetKey: null });
+    setAgentWorkspaceView("projects");
     projectBridge.browseProjects();
   }
 
@@ -589,7 +618,43 @@ export default function App() {
   }
 
   function archiveAgentProject(directory: string) {
+    if (projectSnapshot?.activeDirectory === directory) {
+      setAgentWorkspaceView("general");
+      setGeneralSessionSnapshot(null);
+    }
     projectBridge.archiveProject(directory);
+  }
+
+  function agentWorkspaceRouteUrl(pathname: string) {
+    try {
+      const url = new URL(agentWorkspaceUrl());
+      url.pathname = pathname;
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    } catch {
+      return agentWorkspaceUrl();
+    }
+  }
+
+  function openGeneralWorkspace() {
+    navigate({ module: "home", datasetKey: null });
+    setAgentWorkspaceView("general");
+    setGeneralSessionSnapshot(null);
+    setAgentWorkspaceFrameUrl(agentWorkspaceRouteUrl("/"));
+    setAgentWorkspaceReloadKey((current) => current + 1);
+  }
+
+  function createGeneralSession() {
+    navigate({ module: "home", datasetKey: null });
+    setAgentWorkspaceView("general");
+    generalSessionBridge.newSession();
+  }
+
+  function openGeneralSession(sessionID: string) {
+    navigate({ module: "home", datasetKey: null });
+    setAgentWorkspaceView("general");
+    generalSessionBridge.openSession(sessionID);
   }
 
   const moduleGroups: AppShellModuleGroup[] = [
@@ -750,7 +815,7 @@ export default function App() {
       activeModule={activeModule}
       fullBleed={isFullBleedModule}
       moduleGroups={moduleGroups}
-      onOpenHome={() => navigate({ module: "home", datasetKey: null })}
+      onOpenHome={openGeneralWorkspace}
       projects={projectSnapshot?.projects ?? []}
       activeProjectDirectory={projectSnapshot?.activeDirectory ?? null}
       isProjectBridgeReady={projectSnapshot !== null}
@@ -759,13 +824,28 @@ export default function App() {
       onNewProject={createAgentProject}
       onSetProjectFavorite={setAgentProjectFavorite}
       onArchiveProject={archiveAgentProject}
+      isGeneralWorkspaceActive={agentWorkspaceView === "general"}
+      generalSessions={generalSessionSnapshot?.sessions ?? []}
+      activeGeneralSessionID={generalSessionSnapshot?.activeSessionID ?? null}
+      isGeneralSessionBridgeReady={generalSessionSnapshot !== null}
+      onOpenGeneralWorkspace={openGeneralWorkspace}
+      onNewGeneralSession={createGeneralSession}
+      onOpenGeneralSession={openGeneralSession}
+      onRenameGeneralSession={(sessionID, title) => generalSessionBridge.renameSession(sessionID, title)}
+      onDeleteGeneralSession={(sessionID) => generalSessionBridge.deleteSession(sessionID)}
     >
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
         <AgentWorkspaceHomePage
           iframeRef={agentWorkspaceIframeRef}
+          src={agentWorkspaceFrameUrl}
+          reloadKey={agentWorkspaceReloadKey}
           onLoad={() => {
             setProjectSnapshot(null);
             projectBridge.requestProjects();
+            if (agentWorkspaceView === "general") {
+              setGeneralSessionSnapshot(null);
+              generalSessionBridge.requestSessions();
+            }
           }}
         />
       </div>

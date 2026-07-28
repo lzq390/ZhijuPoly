@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppShell, type AppShellModuleGroup } from "./AppShell";
+import type { OpenScienceGeneralSessionSummary } from "../lib/openScienceGeneralSessionBridge";
 import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge";
 
 afterEach(() => {
@@ -68,6 +69,11 @@ const projects: OpenScienceProjectSummary[] = [
   }
 ];
 
+const generalSessions: OpenScienceGeneralSessionSummary[] = [
+  { id: "ses_new", title: "新的研究对话", updatedAt: 200 },
+  { id: "ses_old", title: "旧的实验记录", updatedAt: 100 }
+];
+
 function renderShell(
   activeModule = "home",
   options?: {
@@ -79,6 +85,15 @@ function renderShell(
     onNewProject?: () => void;
     onSetProjectFavorite?: (directory: string, favorite: boolean) => void;
     onArchiveProject?: (directory: string) => void;
+    isGeneralWorkspaceActive?: boolean;
+    generalSessions?: OpenScienceGeneralSessionSummary[];
+    activeGeneralSessionID?: string | null;
+    isGeneralSessionBridgeReady?: boolean;
+    onOpenGeneralWorkspace?: () => void;
+    onNewGeneralSession?: () => void;
+    onOpenGeneralSession?: (sessionID: string) => void;
+    onRenameGeneralSession?: (sessionID: string, title: string) => void;
+    onDeleteGeneralSession?: (sessionID: string) => void;
   }
 ) {
   return render(
@@ -94,6 +109,15 @@ function renderShell(
       onNewProject={options?.onNewProject ?? vi.fn()}
       onSetProjectFavorite={options?.onSetProjectFavorite ?? vi.fn()}
       onArchiveProject={options?.onArchiveProject ?? vi.fn()}
+      isGeneralWorkspaceActive={options?.isGeneralWorkspaceActive ?? !options?.activeDirectory}
+      generalSessions={options?.generalSessions ?? generalSessions}
+      activeGeneralSessionID={options?.activeGeneralSessionID ?? "ses_new"}
+      isGeneralSessionBridgeReady={options?.isGeneralSessionBridgeReady ?? true}
+      onOpenGeneralWorkspace={options?.onOpenGeneralWorkspace ?? vi.fn()}
+      onNewGeneralSession={options?.onNewGeneralSession ?? vi.fn()}
+      onOpenGeneralSession={options?.onOpenGeneralSession ?? vi.fn()}
+      onRenameGeneralSession={options?.onRenameGeneralSession ?? vi.fn()}
+      onDeleteGeneralSession={options?.onDeleteGeneralSession ?? vi.fn()}
     >
       <div>页面内容</div>
     </AppShell>
@@ -158,6 +182,15 @@ describe("AppShell 侧边栏", () => {
         onNewProject={vi.fn()}
         onSetProjectFavorite={vi.fn()}
         onArchiveProject={vi.fn()}
+        isGeneralWorkspaceActive={false}
+        generalSessions={generalSessions}
+        activeGeneralSessionID={null}
+        isGeneralSessionBridgeReady
+        onOpenGeneralWorkspace={vi.fn()}
+        onNewGeneralSession={vi.fn()}
+        onOpenGeneralSession={vi.fn()}
+        onRenameGeneralSession={vi.fn()}
+        onDeleteGeneralSession={vi.fn()}
       >
         <div>页面内容</div>
       </AppShell>
@@ -168,10 +201,16 @@ describe("AppShell 侧边栏", () => {
     expect(screen.queryByRole("button", { name: "逆向设计" })).toBeNull();
   });
 
-  it("项目区域始终展开并按快照顺序显示项目", () => {
+  it("项目区域默认折叠，展开后按快照顺序显示项目", () => {
     renderShell();
 
     expect(screen.getByRole("heading", { name: "项目" })).not.toBeNull();
+    const toggle = screen.getByRole("button", { name: "展开项目" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Alpha")).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "收起项目" }).getAttribute("aria-expanded")).toBe("true");
     expect(getProjectButton("/home/codexlab/DevTool/Alpha")).not.toBeNull();
     expect(getProjectButton("/home/codexlab/DevTool/Beta")).not.toBeNull();
 
@@ -189,8 +228,9 @@ describe("AppShell 侧边栏", () => {
     const onNewProject = vi.fn();
     renderShell("home", { onBrowseProjects, onNewProject });
 
-    fireEvent.click(screen.getByRole("button", { name: "搜索项目" }));
     fireEvent.click(screen.getByRole("button", { name: "新建项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "搜索项目" }));
 
     expect(onBrowseProjects).toHaveBeenCalledTimes(1);
     expect(onNewProject).toHaveBeenCalledTimes(1);
@@ -205,7 +245,9 @@ describe("AppShell 侧边栏", () => {
 
     const activeProject = getProjectButton("/home/codexlab/DevTool/Beta");
     expect(activeProject.getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByText("Alpha")).toBeNull();
 
+    fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
     fireEvent.click(getProjectButton("/home/codexlab/DevTool/Alpha"));
     expect(onOpenProject).toHaveBeenCalledWith("/home/codexlab/DevTool/Alpha");
   });
@@ -215,6 +257,7 @@ describe("AppShell 侧边栏", () => {
     const onSetProjectFavorite = vi.fn();
     const onArchiveProject = vi.fn();
     renderShell("home", { onOpenProject, onSetProjectFavorite, onArchiveProject });
+    fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
 
     const alphaMenu = screen.getByRole("button", { name: "打开 Alpha 项目菜单" });
     expect(alphaMenu.getAttribute("aria-expanded")).toBe("false");
@@ -240,6 +283,7 @@ describe("AppShell 侧边栏", () => {
 
   it("项目菜单支持 Escape 和点击外部关闭并恢复触发按钮焦点", () => {
     renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
 
     const trigger = screen.getByRole("button", { name: "打开 Alpha 项目菜单" });
     fireEvent.click(trigger);
@@ -257,9 +301,64 @@ describe("AppShell 侧边栏", () => {
   it("桥接尚未就绪时显示低干扰加载状态", () => {
     renderShell("home", { projects: [], isProjectBridgeReady: false });
 
+    fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
     expect(screen.getByText("正在同步项目…")).not.toBeNull();
     expect((screen.getByRole("button", { name: "搜索项目" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "新建项目" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: /打开 .* 项目菜单/ })).toBeNull();
+  });
+
+  it("通用模式显示新建、搜索、会话列表和活动态", () => {
+    const onNewGeneralSession = vi.fn();
+    const onOpenGeneralSession = vi.fn();
+    renderShell("home", { onNewGeneralSession, onOpenGeneralSession });
+
+    expect(screen.getByRole("heading", { name: "对话" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "新建对话" }));
+    expect(onNewGeneralSession).toHaveBeenCalledTimes(1);
+
+    const activeSession = screen.getByRole("button", { name: "新的研究对话" });
+    expect(activeSession.getAttribute("aria-current")).toBe("page");
+    fireEvent.click(screen.getByRole("button", { name: "旧的实验记录" }));
+    expect(onOpenGeneralSession).toHaveBeenCalledWith("ses_old");
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索会话" }), {
+      target: { value: "实验" }
+    });
+    expect(screen.queryByRole("button", { name: "新的研究对话" })).toBeNull();
+    expect(screen.getByRole("button", { name: "旧的实验记录" })).not.toBeNull();
+  });
+
+  it("会话列表支持双击重命名和直接删除", () => {
+    const onRenameGeneralSession = vi.fn();
+    const onDeleteGeneralSession = vi.fn();
+    renderShell("home", { onRenameGeneralSession, onDeleteGeneralSession });
+
+    fireEvent.doubleClick(screen.getByRole("button", { name: "新的研究对话" }));
+    const input = screen.getByRole("textbox", { name: "重命名会话" });
+    fireEvent.change(input, { target: { value: "更新后的标题" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRenameGeneralSession).toHaveBeenCalledWith("ses_new", "更新后的标题");
+
+    fireEvent.click(screen.getByRole("button", { name: "删除会话 旧的实验记录" }));
+    expect(onDeleteGeneralSession).toHaveBeenCalledWith("ses_old");
+  });
+
+  it("普通项目模式只保留对话入口", () => {
+    const onOpenGeneralWorkspace = vi.fn();
+    renderShell("home", {
+      activeDirectory: "/home/codexlab/DevTool/Alpha",
+      isGeneralWorkspaceActive: false,
+      onOpenGeneralWorkspace
+    });
+
+    expect(screen.queryByRole("button", { name: "新建对话" })).toBeNull();
+    expect(screen.queryByRole("searchbox", { name: "搜索会话" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "新的研究对话" })).toBeNull();
+
+    const conversationEntry = screen.getByRole("button", { name: "对话" });
+    expect(conversationEntry.getAttribute("aria-current")).toBeNull();
+    fireEvent.click(conversationEntry);
+    expect(onOpenGeneralWorkspace).toHaveBeenCalledTimes(1);
   });
 });
