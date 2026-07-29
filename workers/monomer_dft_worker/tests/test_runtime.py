@@ -11,12 +11,39 @@ from workers.monomer_dft_worker.app import runtime as runtime_module
 from workers.monomer_dft_worker.app.config import GPU_UUID_BY_INDEX, WorkerSettings
 from workers.monomer_dft_worker.app.runtime import (
     AimnetRuntime,
+    _validate_model_permissions,
     load_model_spec,
     load_model_specs,
 )
 
 
 MODEL_SPEC = load_model_spec("aimnet2")
+
+
+def test_production_model_permissions_require_owner_only_mode_0600(
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "model.pt"
+    model_path.write_bytes(b"checkpoint")
+    model_path.chmod(0o600)
+
+    _validate_model_permissions(model_path, deployment="prod")
+
+    model_path.chmod(0o400)
+    with pytest.raises(RuntimeError, match="owner-only mode 0600"):
+        _validate_model_permissions(model_path, deployment="prod")
+
+
+def test_development_preload_keeps_models_read_only(tmp_path: Path) -> None:
+    model_path = tmp_path / "model.pt"
+    model_path.write_bytes(b"checkpoint")
+    model_path.chmod(0o444)
+
+    _validate_model_permissions(model_path, deployment="dev")
+
+    model_path.chmod(0o600)
+    with pytest.raises(RuntimeError, match="must be read-only"):
+        _validate_model_permissions(model_path, deployment="dev")
 
 
 def _settings(tmp_path: Path) -> WorkerSettings:
