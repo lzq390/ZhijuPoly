@@ -160,6 +160,15 @@ DFT_MODEL_ALIASES = {
     "aimnet2-pd",
     "aimnet2-rxn",
 }
+DFT_RUNTIME_ENV_KEYS = frozenset(
+    {
+        "MONOMER_DFT_RELEASE_SHA",
+        "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
+        "MONOMER_DFT_PYTHON",
+        "AIMNET_CACHE_DIR",
+        "WARP_CACHE_PATH",
+    }
+)
 
 TOP_FIELDS = {
     "schema_version",
@@ -2363,15 +2372,51 @@ def _http_json(url: str) -> dict[str, Any]:
     return payload
 
 
+def _private_regular_file(path: Path, *, mode: int) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ProductionReadinessError("required DFT file is unavailable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != mode
+    ):
+        _fail("required DFT file is unsafe")
+
+
+def _dft_runtime_environment(path: Path) -> dict[str, str]:
+    _private_regular_file(path, mode=0o600)
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if (
+            not separator
+            or key not in DFT_RUNTIME_ENV_KEYS
+            or key in values
+            or not value
+        ):
+            _fail("production DFT runtime environment is invalid")
+        values[key] = value
+    if set(values) != DFT_RUNTIME_ENV_KEYS:
+        _fail("production DFT runtime environment is incomplete")
+    return values
+
+
 def dft_live_readiness(
     authority: str,
     *,
     runtime_root: Path = RUNTIME_ROOT,
     repo_root: Path = PRODUCTION_REPO_ROOT,
     backend_url: str = "http://127.0.0.1:9000/api/v1/monomer-dft/status",
+    installed_unit_path: Path | None = None,
 ) -> dict[str, Any]:
     if _run_read_only("git", "-C", os.fspath(repo_root), "rev-parse", "HEAD") != authority:
-        _fail("production source authority differs from R")
+        _fail("production source authority differs from the formal release")
     if _run_read_only(
         "git",
         "-C",
@@ -2381,6 +2426,34 @@ def dft_live_readiness(
         "--ignored",
     ):
         _fail("production source is not clean or contains ignored paths")
+
+    installed_unit = installed_unit_path or (
+        Path.home() / ".config/systemd/user/nexpoly-monomer-dft-worker.service"
+    )
+    tracked_unit = repo_root / "ops/systemd/nexpoly-monomer-dft-worker.service"
+    _private_regular_file(installed_unit, mode=0o600)
+    if sha256_file(installed_unit) != sha256_file(tracked_unit):
+        _fail("installed DFT Worker unit differs from the release")
+
+    release_runtime = runtime_root / "worker-venvs/dft" / authority
+    _require_private_directory(release_runtime)
+    runtime_manifest = release_runtime / "runtime.json"
+    _private_regular_file(runtime_manifest, mode=0o600)
+    runtime_contract_sha256 = sha256_file(runtime_manifest)
+    runtime_environment = _dft_runtime_environment(
+        runtime_root / "config/monomer-dft-runtime.env"
+    )
+    expected_environment = {
+        "MONOMER_DFT_RELEASE_SHA": authority,
+        "MONOMER_DFT_RUNTIME_CONTRACT_SHA256": runtime_contract_sha256,
+        "MONOMER_DFT_PYTHON": os.fspath(release_runtime / "venv/bin/python"),
+        "AIMNET_CACHE_DIR": os.fspath(release_runtime / "aimnet-cache"),
+        "WARP_CACHE_PATH": os.fspath(release_runtime / "warp-cache"),
+    }
+    if runtime_environment != expected_environment:
+        _fail("production DFT runtime is not bound to the release")
+    if (release_runtime / "runtime-launcher").exists():
+        _fail("production DFT still uses a compatibility launcher")
     for unit in (
         "nexpoly-monomer-dft-worker.service",
         "nexpoly-gpu2-guard.timer",
@@ -2415,6 +2488,8 @@ def dft_live_readiness(
         worker.get("status") != "ok"
         or worker.get("runtime_ready") is not True
         or worker.get("accepting_jobs") is not True
+        or worker.get("release_sha") != authority
+        or worker.get("runtime_contract_sha256") != runtime_contract_sha256
         or runtime.get("deployment") != "prod"
         or runtime.get("physical_gpu") != "2"
         or runtime.get("gpu_uuid") != GPU2_UUID
@@ -2462,8 +2537,21 @@ def dft_live_readiness(
             identifiers[0],
         )
         if revision != authority:
-            _fail(f"production {service} image revision differs from R")
+            _fail(f"production {service} image revision differs from the formal release")
         revisions[service] = revision
+    compose_files = _run_read_only(
+        "docker",
+        "inspect",
+        "--format",
+        '{{index .Config.Labels "com.docker.compose.project.config_files"}}',
+        "nexpoly-backend-1",
+    ).split(",")
+    expected_compose_files = [
+        os.fspath(repo_root / "docker-compose.yml"),
+        os.fspath(repo_root / "docker-compose.prod.yml"),
+    ]
+    if compose_files != expected_compose_files:
+        _fail("production Backend still uses an untracked Compose overlay")
 
     identity = {
         "schema_version": 1,
@@ -2474,6 +2562,9 @@ def dft_live_readiness(
         "gpu_index": "2",
         "gpu_uuid": GPU2_UUID,
         "models": sorted(DFT_MODEL_ALIASES),
+        "runtime_contract_sha256": runtime_contract_sha256,
+        "worker_unit_sha256": sha256_file(installed_unit),
+        "compose_files": compose_files,
         "guard_sha256": sha256_file(guard_path),
         "worker_health_sha256": canonical_json_digest(worker),
         "backend_status_sha256": canonical_json_digest(backend),
