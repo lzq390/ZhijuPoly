@@ -155,6 +155,8 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        VITE_AGENT_WORKSPACE_URL: "${VITE_AGENT_WORKSPACE_URL:-}"
     restart: unless-stopped
     ports:
       - "${NEXPOLY_WEB_PORT:-9000}:80"

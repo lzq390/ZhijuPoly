@@ -212,6 +212,7 @@ services:
     working_dir: /app/frontend
     environment:
       VITE_API_BASE_URL: /api/v1
+      VITE_AGENT_WORKSPACE_URL: "${VITE_AGENT_WORKSPACE_URL:-}"
       DEV_PROXY_TARGET: http://backend:8000
       HOST: 0.0.0.0
     volumes:

@@ -97,6 +97,31 @@ The production Git remote uses a dedicated read-only deploy identity and a
 pinned host key. Personal credential helpers are not permitted. The source
 checkout and its Git metadata must not be group- or world-writable.
 
+### OpenScience workspace reservation
+
+OpenScience is an independently deployed frontend and is not a service in the
+NexPoly production Compose project. Port `9011` is reserved for its future
+browser-facing endpoint.
+
+`VITE_AGENT_WORKSPACE_URL` is a frontend build-time value. When it is empty,
+the immutable Web image renders the "正在同步" placeholder without mounting an
+iframe or sending bridge messages. Changing the URL requires building and
+publishing a new Web image; setting the variable only in a running container or
+production Compose environment cannot change an existing Vite bundle.
+
+`http://127.0.0.1:9011/` is valid only when the browser also runs on the server
+or when both the NexPoly and OpenScience ports are forwarded over SSH. A remote
+browser must use a browser-reachable address. The planned endpoint for the
+current server is `http://114.214.255.154:9011/`, but it is intentionally not
+built into the current placeholder image.
+
+Before a later activation, recheck port ownership, make the OpenScience service
+reachable on `9011`, and review its iframe and exact parent-Origin policy. The
+current NexPoly development entry is `http://114.214.255.154:9001/`; the
+different child port is still a separate Origin. If NexPoly moves to HTTPS, an
+HTTP iframe on `9011` will be blocked as mixed content and OpenScience must gain
+an HTTPS endpoint before activation.
+
 ## Operator workflow
 
 The stable entry point is installed outside the checkout:

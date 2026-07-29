@@ -2831,7 +2831,7 @@ case "${1:-up}" in
     ;;
   tunnel)
     : "${NEXPOLY_DEV_SSH_HOST:?Set NEXPOLY_DEV_SSH_HOST for tunnel output}"
-    echo "ssh -N -L ${NEXPOLY_DEV_FRONTEND_PORT:-15173}:127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-15173} ${NEXPOLY_DEV_SSH_USER:-$USER}@$NEXPOLY_DEV_SSH_HOST"
+    echo "ssh -N -L ${NEXPOLY_DEV_FRONTEND_PORT:-15173}:127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-15173} -L 9011:127.0.0.1:9011 ${NEXPOLY_DEV_SSH_USER:-$USER}@$NEXPOLY_DEV_SSH_HOST"
     ;;
   *)
     echo "usage: $0 {up|stop|down|ps|logs|preflight|refresh-data|contract-migrate|smoke|worker-base-identity|worker-venv|worker-up|worker-stop|worker-status|gpu-session-up|gpu-session-status|gpu-session-down|test-backend|build-frontend|check-frontend|cleanup-legacy-builder|tunnel}" >&2
