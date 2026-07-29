@@ -2723,6 +2723,77 @@ def exact_md_execution_scope_authority(
     return workload_pid, workload_start_ticks, expected_control_group
 
 
+def process_is_exact_md_execution_descendant(
+    pid: int,
+    lease: Lease,
+    *,
+    index: int,
+    uuid: str,
+) -> bool:
+    """Bind one live PID to the exact MD execution root and transient scope.
+
+    Formal MD initialization may temporarily create child processes.  They are
+    safe teardown targets only while the exact Broker-fenced root, credentials,
+    process group, cgroup membership, and ancestry remain stable across two
+    reads.
+    """
+
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    authority = exact_md_execution_scope_authority(
+        lease,
+        index=index,
+        uuid=uuid,
+    )
+    if authority is None:
+        return False
+    workload_pid, workload_start_ticks, expected_control_group = authority
+
+    def root_identity() -> tuple[int, tuple[int, int, int, int], int, str]:
+        return (
+            read_process_start_ticks(workload_pid),
+            _read_process_uids(workload_pid),
+            os.getpgid(workload_pid),
+            _read_unified_process_cgroup(workload_pid),
+        )
+
+    def process_identity() -> tuple[int, tuple[int, int, int, int], int, str]:
+        return (
+            read_process_start_ticks(pid),
+            _read_process_uids(pid),
+            os.getpgid(pid),
+            _read_unified_process_cgroup(pid),
+        )
+
+    expected_root = (
+        workload_start_ticks,
+        (1001, 1001, 1001, 1001),
+        workload_pid,
+        expected_control_group,
+    )
+    try:
+        root_before = root_identity()
+        process_before = process_identity()
+        if (
+            root_before != expected_root
+            or process_before[1] != (1001, 1001, 1001, 1001)
+            or process_before[2] != workload_pid
+            or process_before[3] != expected_control_group
+            or not _pid_is_or_descends_from(pid, workload_pid)
+        ):
+            return False
+        process_after = process_identity()
+        descends_after = _pid_is_or_descends_from(pid, workload_pid)
+        root_after = root_identity()
+    except (BrokerError, OSError, TypeError, ValueError):
+        return False
+    return (
+        process_before == process_after
+        and descends_after
+        and root_before == root_after == expected_root
+    )
+
+
 def _exact_dev_gpu1_host_scope_authority(
     lease: Lease,
     *,
@@ -4535,13 +4606,13 @@ class JobCgroupController:
         exact_root_membership = (
             not workload_identity_missing and pids == {lease.workload_pid}
         )
-        exact_dft_descendant_membership = (
+        exact_managed_descendant_membership = (
             not workload_identity_missing
             and not exact_root_membership
-            and self._is_exact_dft_descendant_membership(lease, pids)
+            and self._is_exact_managed_descendant_membership(lease, pids)
         )
         if workload_identity_missing or not (
-            exact_root_membership or exact_dft_descendant_membership
+            exact_root_membership or exact_managed_descendant_membership
         ):
             self._log_workload_revalidation_failure(
                 lease,
@@ -4565,7 +4636,7 @@ class JobCgroupController:
                 broker_error_code=exc.code,
             )
             raise
-        if exact_dft_descendant_membership:
+        if exact_managed_descendant_membership:
             try:
                 membership_after = self._scope_pids(target)
             except BrokerError as exc:
@@ -4588,7 +4659,7 @@ class JobCgroupController:
         return target
 
     @staticmethod
-    def _is_exact_dft_descendant_membership(
+    def _is_exact_managed_descendant_membership(
         lease: Lease,
         pids: set[int],
     ) -> bool:
@@ -4603,15 +4674,26 @@ class JobCgroupController:
             or lease.gpu_uuid != expected_uuid
         ):
             return False
-        authority = exact_dft_residency_scope_authority(
-            lease,
-            index=lease.gpu_index,
-            uuid=expected_uuid,
-        )
+        if lease.component == "dft":
+            authority = exact_dft_residency_scope_authority(
+                lease,
+                index=lease.gpu_index,
+                uuid=expected_uuid,
+            )
+            validator = process_is_exact_dft_residency_descendant
+        elif lease.component == "md":
+            authority = exact_md_execution_scope_authority(
+                lease,
+                index=lease.gpu_index,
+                uuid=expected_uuid,
+            )
+            validator = process_is_exact_md_execution_descendant
+        else:
+            return False
         if authority is None or authority[0] != workload_pid:
             return False
         return all(
-            process_is_exact_dft_residency_descendant(
+            validator(
                 pid,
                 lease,
                 index=lease.gpu_index,

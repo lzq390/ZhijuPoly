@@ -66,6 +66,7 @@ from ops.gpu_broker.server import (
     exact_dev_gpu1_backend_docker_workload_pids,
     load_external_reservations,
     process_is_exact_dft_residency_descendant,
+    process_is_exact_md_execution_descendant,
     process_stable_descriptor_path,
     query_docker_gpu_claims,
     query_systemd_gpu_claims,
@@ -3399,11 +3400,62 @@ def test_job_cgroup_controller_accepts_stable_exact_dft_descendants_for_teardown
     assert (scope_path / "cgroup.kill").read_text(encoding="ascii") == "1"
 
 
+def test_job_cgroup_controller_accepts_stable_exact_md_descendants_for_teardown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller, lease, scope_path, _systemd, processes = _scope_controller(
+        tmp_path,
+        lease_id="e0" * 16,
+    )
+    root_pid = next(iter(processes))
+    start_ticks, group_id, uids = processes[root_pid]
+    lease.placement = "any"
+    resolved = controller.resolve_and_assign(
+        lease,
+        root_pid,
+        start_ticks,
+        group_id,
+    )
+    lease.workload_pid = root_pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = resolved[3]
+
+    child_pid = root_pid + 1
+    processes[child_pid] = (start_ticks + 1, root_pid, uids)
+    (scope_path / "cgroup.procs").write_text(
+        f"{root_pid}\n{child_pid}\n",
+        encoding="ascii",
+    )
+    validations: list[int] = []
+
+    def validate_descendant(pid, candidate, *, index, uuid):
+        assert candidate is lease
+        assert index == 1
+        assert uuid == EXPECTED_GPU_UUIDS[1]
+        validations.append(pid)
+        return pid in {root_pid, child_pid}
+
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.process_is_exact_md_execution_descendant",
+        validate_descendant,
+    )
+
+    controller.validate_active(lease)
+    assert controller.freeze(lease) == f"{lease.lease_id}:88888"
+    controller.kill(lease)
+
+    assert validations == sorted((root_pid, child_pid)) * 3
+    assert (scope_path / "cgroup.freeze").read_text(encoding="ascii") == "1"
+    assert (scope_path / "cgroup.kill").read_text(encoding="ascii") == "1"
+
+
 @pytest.mark.parametrize(
     "lease_shape",
-    ("md_execution", "dft_execution", "prod_dft_residency"),
+    ("md_wrong_placement", "dft_execution", "prod_dft_residency"),
 )
-def test_job_cgroup_controller_keeps_non_dev_dft_membership_singleton(
+def test_job_cgroup_controller_keeps_non_exact_membership_singleton(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     lease_shape: str,
@@ -7295,6 +7347,107 @@ def test_exact_dft_descendant_revalidates_root_child_and_ancestry(
         uuid=EXPECTED_GPU_UUIDS[1],
     ) is True
     assert ancestry_calls == 2
+
+
+def test_exact_md_descendant_revalidates_root_child_and_ancestry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _strict_md_execution_lease()
+    root_pid = lease.workload_pid
+    assert root_pid is not None
+    root_start_ticks = lease.workload_process_start_ticks
+    assert root_start_ticks is not None
+    child_pid = 8457
+    control_group = str(lease.workload_cgroup)[3:]
+    ancestry_calls = 0
+
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        lambda pid: {root_pid: root_start_ticks, child_pid: 790}[pid],
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda _pid: control_group,
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.os.getpgid",
+        lambda _pid: root_pid,
+    )
+
+    def descends(pid: int, ancestor: int) -> bool:
+        nonlocal ancestry_calls
+        ancestry_calls += 1
+        return pid == child_pid and ancestor == root_pid
+
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        descends,
+    )
+
+    assert process_is_exact_md_execution_descendant(
+        child_pid,
+        lease,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+    ) is True
+    assert ancestry_calls == 2
+
+
+@pytest.mark.parametrize(
+    "invalid_identity",
+    ("child-pgid", "child-cgroup", "not-descendant"),
+)
+def test_exact_md_descendant_rejects_scope_and_ancestry_drift(
+    invalid_identity: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _strict_md_execution_lease()
+    root_pid = lease.workload_pid
+    assert root_pid is not None
+    root_start_ticks = lease.workload_process_start_ticks
+    assert root_start_ticks is not None
+    child_pid = 8457
+    control_group = str(lease.workload_cgroup)[3:]
+
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.read_process_start_ticks",
+        lambda pid: {root_pid: root_start_ticks, child_pid: 790}[pid],
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_unified_process_cgroup",
+        lambda pid: (
+            "/foreign"
+            if invalid_identity == "child-cgroup" and pid == child_pid
+            else control_group
+        ),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server.os.getpgid",
+        lambda pid: (
+            root_pid + 1
+            if invalid_identity == "child-pgid" and pid == child_pid
+            else root_pid
+        ),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        lambda _pid, _ancestor: invalid_identity != "not-descendant",
+    )
+
+    assert process_is_exact_md_execution_descendant(
+        child_pid,
+        lease,
+        index=1,
+        uuid=EXPECTED_GPU_UUIDS[1],
+    ) is False
 
 
 @pytest.mark.parametrize(
