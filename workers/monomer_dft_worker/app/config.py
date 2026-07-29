@@ -614,8 +614,11 @@ def load_settings() -> WorkerSettings:
         executor_uuid = os.getenv("NEXPOLY_DFT_EXECUTOR_GPU_UUID", "").strip()
         if executor_uuid and executor_uuid != expected_uuid:
             raise ValueError("executor GPU index-to-UUID identity is invalid")
-        expected_visible = executor_uuid or executor_gpu
-        if visible_devices is None or visible_devices.strip() != expected_visible:
+        # Direct mode selects the physical index while Broker/MPS mode selects
+        # the immutable UUID. The executor identity always carries both, so
+        # either exact selector is valid after the index-to-UUID check above.
+        allowed_visible = {executor_gpu, expected_uuid}
+        if visible_devices is None or visible_devices.strip() not in allowed_visible:
             raise ValueError(
                 "executor CUDA_VISIBLE_DEVICES must contain exactly its leased GPU index or UUID"
             )
