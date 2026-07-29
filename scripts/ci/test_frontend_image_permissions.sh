@@ -8,6 +8,7 @@ IMAGE_TAG="${FRONTEND_PERMISSION_IMAGE_TAG:-nexpoly-frontend-permission-smoke:lo
 CONTAINER_NAME="${FRONTEND_PERMISSION_CONTAINER_NAME:-nexpoly-frontend-permission-smoke-$$}"
 STAGING="$(mktemp -d)"
 INDEX_FILE="$STAGING/index.html"
+ASSET_FILE="$STAGING/main.js"
 
 cleanup() {
   docker rm --force "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -64,7 +65,13 @@ for hashed_asset in "${HASHED_ASSETS[@]}"; do
     "http://127.0.0.1$hashed_asset"
 done
 docker exec "$CONTAINER_NAME" sh -eu -c \
-  "wget -qO- 'http://127.0.0.1$ASSET_PATH' | grep -a -q 3Dmol"
+  "wget -qO- 'http://127.0.0.1$ASSET_PATH'" >"$ASSET_FILE"
+grep -a -q "3Dmol" "$ASSET_FILE"
+grep -a -q "正在同步" "$ASSET_FILE"
+if grep -a -Eq '127\.0\.0\.1:(4454|9011)|localhost:(4454|9011)' "$ASSET_FILE"; then
+  echo "unconfigured frontend image contains an active loopback OpenScience URL" >&2
+  exit 1
+fi
 docker exec "$CONTAINER_NAME" sh -eu -c '
   worker_count="$(ps -o user,comm | awk '"'"'$1 != "root" && $2 == "nginx" { count += 1 } END { print count + 0 }'"'"')"
   test "$worker_count" -ge 1

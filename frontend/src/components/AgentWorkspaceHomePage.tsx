@@ -1,9 +1,8 @@
 import type { Ref } from "react";
-
-const DEFAULT_AGENT_WORKSPACE_URL = "http://127.0.0.1:4454";
+import { resolveAgentWorkspaceUrl } from "../lib/openScienceProjectBridge";
 
 export function agentWorkspaceUrl() {
-  return import.meta.env.VITE_AGENT_WORKSPACE_URL?.trim() || DEFAULT_AGENT_WORKSPACE_URL;
+  return resolveAgentWorkspaceUrl(import.meta.env.VITE_AGENT_WORKSPACE_URL ?? "") ?? "";
 }
 
 type AgentWorkspaceHomePageProps = {
@@ -19,13 +18,26 @@ export function AgentWorkspaceHomePage({
   src = agentWorkspaceUrl(),
   reloadKey = 0
 }: AgentWorkspaceHomePageProps) {
+  const workspaceUrl = resolveAgentWorkspaceUrl(src);
+  if (!workspaceUrl) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex h-full w-full items-center justify-center bg-white text-sm text-slate-500"
+      >
+        正在同步
+      </div>
+    );
+  }
+
   return (
     <iframe
       key={reloadKey}
       ref={iframeRef}
       onLoad={onLoad}
       title="智聚万物智能体工作台"
-      src={src}
+      src={workspaceUrl}
       className="block h-full w-full border-0 bg-white"
     />
   );

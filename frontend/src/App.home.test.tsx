@@ -4,9 +4,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
+const WORKSPACE_ORIGIN = "http://workspace.example.test:9011";
+const WORKSPACE_URL = `${WORKSPACE_ORIGIN}/`;
+
 beforeEach(() => {
   window.history.replaceState({}, "", "/");
   window.localStorage.clear();
+  vi.stubEnv("VITE_AGENT_WORKSPACE_URL", WORKSPACE_URL);
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
 
@@ -18,14 +22,40 @@ afterEach(() => {
 });
 
 describe("智聚万物首页", () => {
-  it("由修改后的智能体工作台接管旧问答首页", () => {
+  it("未配置工作台时只显示同步占位且不挂载 iframe", () => {
+    vi.unstubAllEnvs();
     render(<App />);
 
     expect(screen.queryByText("今天研究什么聚合物问题？")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("正在同步");
+    expect(screen.queryByTitle("智聚万物智能体工作台")).toBeNull();
 
-    const workspace = screen.queryByTitle("智聚万物智能体工作台");
-    expect(workspace).not.toBeNull();
-    expect(workspace?.getAttribute("src")).toBe("http://127.0.0.1:4454");
+    fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
+    expect((screen.getByRole("button", { name: "搜索项目" }) as HTMLButtonElement).disabled).toBe(
+      true
+    );
+    expect((screen.getByRole("button", { name: "新建项目" }) as HTMLButtonElement).disabled).toBe(
+      true
+    );
+    expect(screen.getByText("正在同步项目…")).not.toBeNull();
+    expect(screen.getByText("正在同步会话…")).not.toBeNull();
+  });
+
+  it.each(["   ", "file:///tmp/workspace", "https://user:secret@workspace.example.test"])(
+    "工作台配置 %s 无效时保持同步占位",
+    (workspaceUrl) => {
+      vi.stubEnv("VITE_AGENT_WORKSPACE_URL", workspaceUrl);
+      render(<App />);
+
+      expect(screen.getByRole("status").textContent).toBe("正在同步");
+      expect(screen.queryByTitle("智聚万物智能体工作台")).toBeNull();
+    }
+  );
+
+  it("使用部署环境配置的 9011 智能体工作台地址", () => {
+    render(<App />);
+
+    expect(screen.getByTitle("智聚万物智能体工作台").getAttribute("src")).toBe(WORKSPACE_URL);
   });
 
   it("使用部署环境配置的智能体工作台地址", () => {
@@ -34,7 +64,7 @@ describe("智聚万物首页", () => {
     render(<App />);
 
     expect(screen.getByTitle("智聚万物智能体工作台").getAttribute("src")).toBe(
-      "https://workspace.example.test"
+      "https://workspace.example.test/"
     );
   });
 
@@ -53,7 +83,7 @@ describe("智聚万物首页", () => {
         version: 1,
         type: "projects.request"
       },
-      "http://127.0.0.1:4454"
+      WORKSPACE_ORIGIN
     );
     expect(postMessage).toHaveBeenCalledWith(
       {
@@ -61,13 +91,13 @@ describe("智聚万物首页", () => {
         version: 1,
         type: "general.sessions.request"
       },
-      "http://127.0.0.1:4454"
+      WORKSPACE_ORIGIN
     );
 
     window.dispatchEvent(
       new MessageEvent("message", {
         source: frameWindow,
-        origin: "http://127.0.0.1:4454",
+        origin: WORKSPACE_ORIGIN,
         data: {
           namespace: "openscience.zhijupoly",
           version: 1,
@@ -108,7 +138,7 @@ describe("智聚万物首页", () => {
         type: "project.open",
         directory: "/home/codexlab/DevTool/Alpha"
       },
-      "http://127.0.0.1:4454"
+      WORKSPACE_ORIGIN
     );
   });
 
@@ -124,7 +154,7 @@ describe("智聚万物首页", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         source: frameWindow,
-        origin: "http://127.0.0.1:4454",
+        origin: WORKSPACE_ORIGIN,
         data: {
           namespace: "openscience.zhijupoly",
           version: 1,
@@ -150,7 +180,7 @@ describe("智聚万物首页", () => {
         version: 1,
         type: "projects.browse"
       },
-      "http://127.0.0.1:4454"
+      WORKSPACE_ORIGIN
     );
     expect(postMessage).toHaveBeenNthCalledWith(
       2,
@@ -159,7 +189,7 @@ describe("智聚万物首页", () => {
         version: 1,
         type: "project.new"
       },
-      "http://127.0.0.1:4454"
+      WORKSPACE_ORIGIN
     );
   });
 
@@ -175,7 +205,7 @@ describe("智聚万物首页", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         source: frameWindow,
-        origin: "http://127.0.0.1:4454",
+        origin: WORKSPACE_ORIGIN,
         data: {
           namespace: "openscience.zhijupoly",
           version: 1,
@@ -211,7 +241,7 @@ describe("智聚万物首页", () => {
         directory: "/home/codexlab/DevTool/Alpha",
         favorite: false
       },
-      "http://127.0.0.1:4454"
+      WORKSPACE_ORIGIN
     );
     expect(postMessage).toHaveBeenNthCalledWith(
       2,
@@ -221,7 +251,7 @@ describe("智聚万物首页", () => {
         type: "project.archive",
         directory: "/home/codexlab/DevTool/Alpha"
       },
-      "http://127.0.0.1:4454"
+      WORKSPACE_ORIGIN
     );
   });
 
@@ -237,7 +267,7 @@ describe("智聚万物首页", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         source: frameWindow,
-        origin: "http://127.0.0.1:4454",
+        origin: WORKSPACE_ORIGIN,
         data: {
           namespace: "openscience.zhijupoly",
           version: 1,
@@ -260,6 +290,7 @@ describe("智聚万物首页", () => {
     const renameInput = screen.getByRole("textbox", { name: "重命名会话" });
     fireEvent.change(renameInput, { target: { value: "更新后的标题" } });
     fireEvent.keyDown(renameInput, { key: "Enter" });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "删除会话 旧的实验记录" }));
 
     expect(postMessage.mock.calls).toEqual([
@@ -269,7 +300,7 @@ describe("智聚万物首页", () => {
           version: 1,
           type: "general.session.new"
         },
-        "http://127.0.0.1:4454"
+        WORKSPACE_ORIGIN
       ],
       [
         {
@@ -278,7 +309,7 @@ describe("智聚万物首页", () => {
           type: "general.session.open",
           sessionID: "ses_old"
         },
-        "http://127.0.0.1:4454"
+        WORKSPACE_ORIGIN
       ],
       [
         {
@@ -288,7 +319,7 @@ describe("智聚万物首页", () => {
           sessionID: "ses_new",
           title: "更新后的标题"
         },
-        "http://127.0.0.1:4454"
+        WORKSPACE_ORIGIN
       ],
       [
         {
@@ -297,7 +328,7 @@ describe("智聚万物首页", () => {
           type: "general.session.delete",
           sessionID: "ses_old"
         },
-        "http://127.0.0.1:4454"
+        WORKSPACE_ORIGIN
       ]
     ]);
   });
@@ -314,7 +345,7 @@ describe("智聚万物首页", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         source: frameWindow,
-        origin: "http://127.0.0.1:4454",
+        origin: WORKSPACE_ORIGIN,
         data: {
           namespace: "openscience.zhijupoly",
           version: 1,
@@ -349,7 +380,7 @@ describe("智聚万物首页", () => {
     expect(screen.getByRole("button", { name: "对话" })).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "对话" }));
-    expect(workspace.src).toBe("http://127.0.0.1:4454/");
+    expect(workspace.src).toBe(WORKSPACE_URL);
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "展开项目" }).getAttribute("aria-expanded")).toBe("false");
     });
@@ -357,7 +388,73 @@ describe("智聚万物首页", () => {
     expect(
       screen
         .queryAllByRole("button")
-        .find((candidate) => candidate.getAttribute("data-project-directory") === "/home/codexlab/DevTool/Alpha")
+      .find((candidate) => candidate.getAttribute("data-project-directory") === "/home/codexlab/DevTool/Alpha")
     ).toBeUndefined();
+  });
+
+  it("离开首页后清除工作台活动态并允许对话入口返回首页", () => {
+    render(<App />);
+
+    const conversationEntry = screen.getByRole("button", { name: "对话" });
+    expect(conversationEntry.getAttribute("aria-current")).toBe("page");
+
+    fireEvent.click(screen.getByRole("button", { name: "数据与知识" }));
+    fireEvent.click(screen.getByRole("button", { name: "知识检索" }));
+
+    expect(conversationEntry.getAttribute("aria-current")).toBeNull();
+    fireEvent.click(conversationEntry);
+    expect(conversationEntry.getAttribute("aria-current")).toBe("page");
+  });
+
+  it("离开首页后不再把 OpenScience 项目标记为当前页面", async () => {
+    render(<App />);
+
+    const workspace = screen.getByTitle("智聚万物智能体工作台") as HTMLIFrameElement;
+    const frameWindow = workspace.contentWindow;
+    expect(frameWindow).not.toBeNull();
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frameWindow,
+        origin: WORKSPACE_ORIGIN,
+        data: {
+          namespace: "openscience.zhijupoly",
+          version: 1,
+          type: "projects.snapshot",
+          projects: [
+            {
+              directory: "/home/codexlab/DevTool/Alpha",
+              name: "Alpha",
+              displayPath: "~/DevTool/Alpha",
+              updatedAt: 200,
+              favorite: true
+            }
+          ],
+          activeDirectory: "/home/codexlab/DevTool/Alpha"
+        }
+      })
+    );
+
+    await waitFor(() => {
+      const activeProject = screen
+        .getAllByRole("button")
+        .find(
+          (candidate) =>
+            candidate.getAttribute("data-project-directory") === "/home/codexlab/DevTool/Alpha"
+        );
+      expect(activeProject?.getAttribute("aria-current")).toBe("page");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "数据与知识" }));
+    fireEvent.click(screen.getByRole("button", { name: "知识检索" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
+
+    const inactiveProject = screen
+      .getAllByRole("button")
+      .find(
+        (candidate) =>
+          candidate.getAttribute("data-project-directory") === "/home/codexlab/DevTool/Alpha"
+      );
+    expect(inactiveProject?.getAttribute("aria-current")).toBeNull();
   });
 });

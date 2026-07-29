@@ -451,6 +451,19 @@ gpu_session_up
         self.assertNotIn("NEXPOLY_DEV_BUILDX", env_example)
         self.assertNotIn("NEXPOLY_DEV_BUILDKIT", env_example)
 
+    def test_tunnel_forwards_nexpoly_and_reserved_openscience_port(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        tunnel_start = source.index("  tunnel)")
+        tunnel_branch = source[tunnel_start:source.index("  *)", tunnel_start)]
+
+        self.assertIn(
+            "-L ${NEXPOLY_DEV_FRONTEND_PORT:-15173}:127.0.0.1:"
+            "${NEXPOLY_DEV_FRONTEND_PORT:-15173}",
+            tunnel_branch,
+        )
+        self.assertIn("-L 9011:127.0.0.1:9011", tunnel_branch)
+        self.assertNotIn("4454", tunnel_branch)
+
     def test_builder_flow_never_prunes_docker_state(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         for destructive_command in (

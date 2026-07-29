@@ -33,19 +33,28 @@ type CreateOpenScienceProjectBridgeOptions = {
   onSnapshot: (snapshot: OpenScienceProjectsSnapshot) => void;
 };
 
-export function resolveAgentWorkspaceOrigin(value: string): string | undefined {
+export function resolveAgentWorkspaceUrl(value: string): string | undefined {
   try {
-    const url = new URL(value);
+    const normalizedValue = value.trim();
+    if (!normalizedValue) {
+      return undefined;
+    }
+    const url = new URL(normalizedValue);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       return undefined;
     }
     if (url.username || url.password) {
       return undefined;
     }
-    return url.origin;
+    return url.toString();
   } catch {
     return undefined;
   }
+}
+
+export function resolveAgentWorkspaceOrigin(value: string): string | undefined {
+  const workspaceUrl = resolveAgentWorkspaceUrl(value);
+  return workspaceUrl ? new URL(workspaceUrl).origin : undefined;
 }
 
 export function parseOpenScienceProjectsSnapshot(value: unknown): OpenScienceProjectsSnapshot | undefined {

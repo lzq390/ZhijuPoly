@@ -43,18 +43,23 @@ describe("createOpenScienceGeneralSessionBridge", () => {
     const frameWindow = { postMessage: vi.fn() };
     const onSnapshot = vi.fn();
     const bridge = createOpenScienceGeneralSessionBridge({
-      workspaceUrl: "http://127.0.0.1:4454",
+      workspaceUrl: "http://workspace.example.test:9011",
       getFrameWindow: () => frameWindow,
       onSnapshot
     });
 
     bridge.handleMessage({ data: snapshot, origin: "http://evil.test", source: frameWindow });
-    bridge.handleMessage({ data: snapshot, origin: "http://127.0.0.1:4454", source: {} });
+    bridge.handleMessage({ data: snapshot, origin: "http://workspace.example.test:9011", source: {} });
+    bridge.handleMessage({
+      data: snapshot,
+      origin: "http://workspace.example.test:9012",
+      source: frameWindow
+    });
     expect(onSnapshot).not.toHaveBeenCalled();
 
     bridge.handleMessage({
       data: snapshot,
-      origin: "http://127.0.0.1:4454",
+      origin: "http://workspace.example.test:9011",
       source: frameWindow
     });
     expect(onSnapshot).toHaveBeenCalledWith(snapshot);
@@ -64,7 +69,7 @@ describe("createOpenScienceGeneralSessionBridge", () => {
     const postMessage = vi.fn();
     const frameWindow = { postMessage };
     const bridge = createOpenScienceGeneralSessionBridge({
-      workspaceUrl: "http://127.0.0.1:4454/session",
+      workspaceUrl: "http://workspace.example.test:9011/session",
       getFrameWindow: () => frameWindow,
       onSnapshot: vi.fn()
     });
@@ -75,7 +80,7 @@ describe("createOpenScienceGeneralSessionBridge", () => {
 
     bridge.handleMessage({
       data: snapshot,
-      origin: "http://127.0.0.1:4454",
+      origin: "http://workspace.example.test:9011",
       source: frameWindow
     });
 
@@ -93,7 +98,7 @@ describe("createOpenScienceGeneralSessionBridge", () => {
           version: 1,
           type: "general.sessions.request"
         },
-        "http://127.0.0.1:4454"
+        "http://workspace.example.test:9011"
       ],
       [
         {
@@ -101,7 +106,7 @@ describe("createOpenScienceGeneralSessionBridge", () => {
           version: 1,
           type: "general.session.new"
         },
-        "http://127.0.0.1:4454"
+        "http://workspace.example.test:9011"
       ],
       [
         {
@@ -110,7 +115,7 @@ describe("createOpenScienceGeneralSessionBridge", () => {
           type: "general.session.open",
           sessionID: "ses_new"
         },
-        "http://127.0.0.1:4454"
+        "http://workspace.example.test:9011"
       ],
       [
         {
@@ -120,7 +125,7 @@ describe("createOpenScienceGeneralSessionBridge", () => {
           sessionID: "ses_new",
           title: "新标题"
         },
-        "http://127.0.0.1:4454"
+        "http://workspace.example.test:9011"
       ],
       [
         {
@@ -129,19 +134,19 @@ describe("createOpenScienceGeneralSessionBridge", () => {
           type: "general.session.delete",
           sessionID: "ses_old"
         },
-        "http://127.0.0.1:4454"
+        "http://workspace.example.test:9011"
       ]
     ]);
   });
 
   it("iframe 未就绪或工作台 URL 无效时保持静默", () => {
     const invalidBridge = createOpenScienceGeneralSessionBridge({
-      workspaceUrl: "file:///tmp/workspace",
+      workspaceUrl: "",
       getFrameWindow: () => ({ postMessage: vi.fn() }),
       onSnapshot: vi.fn()
     });
     const unloadedBridge = createOpenScienceGeneralSessionBridge({
-      workspaceUrl: "http://127.0.0.1:4454",
+      workspaceUrl: "http://workspace.example.test:9011",
       getFrameWindow: () => null,
       onSnapshot: vi.fn()
     });

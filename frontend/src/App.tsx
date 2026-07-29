@@ -817,14 +817,18 @@ export default function App() {
       moduleGroups={moduleGroups}
       onOpenHome={openGeneralWorkspace}
       projects={projectSnapshot?.projects ?? []}
-      activeProjectDirectory={projectSnapshot?.activeDirectory ?? null}
+      activeProjectDirectory={
+        activeModule === "home" ? projectSnapshot?.activeDirectory ?? null : null
+      }
       isProjectBridgeReady={projectSnapshot !== null}
       onOpenProject={openAgentProject}
       onBrowseProjects={browseAgentProjects}
       onNewProject={createAgentProject}
       onSetProjectFavorite={setAgentProjectFavorite}
       onArchiveProject={archiveAgentProject}
-      isGeneralWorkspaceActive={agentWorkspaceView === "general"}
+      isGeneralWorkspaceActive={
+        activeModule === "home" && agentWorkspaceView === "general"
+      }
       generalSessions={generalSessionSnapshot?.sessions ?? []}
       activeGeneralSessionID={generalSessionSnapshot?.activeSessionID ?? null}
       isGeneralSessionBridgeReady={generalSessionSnapshot !== null}
