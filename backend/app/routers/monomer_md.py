@@ -215,6 +215,37 @@ def _worker_unavailable_message(health: dict[str, Any]) -> str | None:
     return None
 
 
+def _formal_queue_broker_transition(
+    health: dict[str, Any],
+    *,
+    run_mode: str,
+) -> bool:
+    active_jobs = _optional_int(health.get("active_jobs"))
+    max_active_jobs = _optional_int(health.get("max_active_jobs"))
+    broker_error = _optional_str(health.get("gpu_broker_error")) or ""
+    return (
+        run_mode == "formal"
+        and str(health.get("status") or "") == "degraded"
+        and str(health.get("mode") or "") == "real"
+        and _optional_bool(health.get("db_configured")) is True
+        and _optional_bool(health.get("byteff2_root_exists")) is True
+        and _optional_bool(health.get("runtime_ready")) is True
+        and _optional_bool(health.get("gpu_broker_enabled")) is True
+        and _optional_bool(health.get("gpu_broker_ready")) is False
+        and _optional_bool(health.get("draining")) is not True
+        and active_jobs is not None
+        and max_active_jobs is not None
+        and 0 < active_jobs < max_active_jobs
+        and broker_error.startswith(
+            (
+                "broker_timeout:",
+                "gpu_broker_unavailable:",
+                "broker_unavailable:",
+            )
+        )
+    )
+
+
 def _status_response_from_health(
     *,
     settings,
@@ -571,12 +602,20 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
     except MonomerMdWorkerError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     unavailable_message = _worker_unavailable_message(health)
+    queued_formal_transition = _formal_queue_broker_transition(
+        health,
+        run_mode=details["run_mode"],
+    )
     capacity_only_rejection = (
         unavailable_message == "monomer MD worker is not accepting jobs"
         and _optional_int(health.get("active_jobs")) is not None
         and _optional_int(health.get("active_jobs")) == _optional_int(health.get("max_active_jobs"))
     )
-    if unavailable_message is not None and not capacity_only_rejection:
+    if (
+        unavailable_message is not None
+        and not capacity_only_rejection
+        and not queued_formal_transition
+    ):
         raise HTTPException(status_code=503, detail=unavailable_message)
     if details["run_mode"] == "formal":
         formal_unavailable_message = _formal_protocol_unavailable_message(health, details["protocol"])

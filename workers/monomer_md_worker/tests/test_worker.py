@@ -136,6 +136,109 @@ def _runtime_snapshot(
     return RuntimeSnapshot(True, ready, error, protocols)
 
 
+def _broker_transition_health(**overrides):
+    values = {
+        "status": "degraded",
+        "mode": "real",
+        "db_configured": True,
+        "byteff2_root_exists": True,
+        "runtime_ready": True,
+        "gpu_broker_enabled": True,
+        "gpu_broker_ready": False,
+        "gpu_broker_error": "gpu_broker_unavailable: GPU broker request failed",
+        "draining": False,
+        "active_jobs": 1,
+        "max_active_jobs": 3,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_formal_queue_waits_for_exact_broker_admission_transition(monkeypatch):
+    request = JobRequest(
+        job_id="queued-formal",
+        smiles="{}",
+        canonical_smiles="{}",
+        steps=1_500_000,
+        protocol="Density",
+        run_mode="formal",
+        config_json={"protocol": "Density"},
+    )
+    transitioning = _broker_transition_health()
+    ready = _broker_transition_health(
+        status="ok",
+        gpu_broker_ready=True,
+        gpu_broker_error=None,
+    )
+    calls = 0
+
+    async def healthy_after_transition():
+        nonlocal calls
+        calls += 1
+        return ready
+
+    monkeypatch.setattr(worker_main, "execution_job_id", "running-formal")
+    monkeypatch.setattr(
+        worker_main,
+        "runner",
+        SimpleNamespace(gpu_admission_uncertain=False),
+    )
+    monkeypatch.setattr(worker_main, "_build_health_response", healthy_after_transition)
+    monkeypatch.setattr(worker_main, "BROKER_QUEUE_TRANSITION_POLL_SECONDS", 0)
+
+    observed = asyncio.run(
+        worker_main._wait_for_formal_queue_broker_transition(
+            transitioning,
+            request,
+        )
+    )
+
+    assert observed is ready
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"gpu_broker_error": "broker_draining: GPU broker is draining"},
+        {"draining": True},
+        {"runtime_ready": False},
+        {"active_jobs": 0},
+    ],
+)
+def test_formal_queue_does_not_wait_outside_exact_broker_transition(
+    monkeypatch,
+    overrides,
+):
+    request = JobRequest(
+        job_id="queued-formal",
+        smiles="{}",
+        canonical_smiles="{}",
+        steps=1_500_000,
+        protocol="Density",
+        run_mode="formal",
+        config_json={"protocol": "Density"},
+    )
+    health = _broker_transition_health(**overrides)
+
+    async def unexpected_health_read():
+        raise AssertionError("non-transition failures must remain fail-closed")
+
+    monkeypatch.setattr(worker_main, "execution_job_id", "running-formal")
+    monkeypatch.setattr(
+        worker_main,
+        "runner",
+        SimpleNamespace(gpu_admission_uncertain=False),
+    )
+    monkeypatch.setattr(worker_main, "_build_health_response", unexpected_health_read)
+
+    observed = asyncio.run(
+        worker_main._wait_for_formal_queue_broker_transition(health, request)
+    )
+
+    assert observed is health
+
+
 def test_health_exposes_source_and_venv_identity(tmp_path: Path, monkeypatch):
     settings = _settings(tmp_path)
     identity = worker_main.RuntimeIdentity(

@@ -43,6 +43,43 @@ def _ready_protocols() -> dict[str, dict[str, object]]:
     }
 
 
+def test_formal_queue_broker_transition_is_narrowly_classified():
+    transition = {
+        "status": "degraded",
+        "mode": "real",
+        "db_configured": True,
+        "byteff2_root_exists": True,
+        "runtime_ready": True,
+        "gpu_broker_enabled": True,
+        "gpu_broker_ready": False,
+        "gpu_broker_error": "gpu_broker_unavailable: GPU broker request failed",
+        "draining": False,
+        "active_jobs": 1,
+        "max_active_jobs": 3,
+    }
+
+    assert monomer_md_routes._formal_queue_broker_transition(
+        transition,
+        run_mode="formal",
+    )
+    assert not monomer_md_routes._formal_queue_broker_transition(
+        transition,
+        run_mode="demo",
+    )
+    assert not monomer_md_routes._formal_queue_broker_transition(
+        {**transition, "gpu_broker_error": "broker_draining: GPU broker is draining"},
+        run_mode="formal",
+    )
+    assert not monomer_md_routes._formal_queue_broker_transition(
+        {**transition, "runtime_ready": False},
+        run_mode="formal",
+    )
+    assert not monomer_md_routes._formal_queue_broker_transition(
+        {**transition, "active_jobs": 0},
+        run_mode="formal",
+    )
+
+
 class FakeWorkerClient:
     def __init__(self, *, mode: str = "dry-run", protocols: dict[str, dict[str, object]] | None = None) -> None:
         self.payloads = []
@@ -692,6 +729,46 @@ def test_monomer_md_formal_capacity_allows_one_running_and_two_queued(postgres_d
     assert "formal ByteFF2" in responses[-1].json()["detail"]
     assert _monomer_md_job_count(postgres_dsn) == 3
     assert len(fake_worker.payloads) == 3
+
+
+def test_monomer_md_formal_queue_allows_exact_broker_admission_transition(
+    postgres_dsn: str,
+):
+    app = _create_app(
+        postgres_dsn,
+        monomer_md_rate_limit_per_ip_per_minute=10,
+        monomer_md_max_active_jobs=10,
+    )
+    fake_worker = FakeWorkerClient(mode="real")
+    fake_worker.get_health = lambda: {
+        "status": "degraded",
+        "mode": "real",
+        "db_configured": True,
+        "byteff2_root_exists": True,
+        "runtime_ready": True,
+        "gpu_broker_enabled": True,
+        "gpu_broker_ready": False,
+        "gpu_broker_error": "gpu_broker_unavailable: GPU broker request failed",
+        "accepting_jobs": False,
+        "draining": False,
+        "active_jobs": 1,
+        "max_active_jobs": 3,
+        "protocols": _ready_protocols(),
+    }
+    app.state.monomer_md_worker_client = fake_worker
+
+    response = TestClient(app).post(
+        "/api/v1/monomer-md/jobs",
+        json={
+            "protocol": "Density",
+            "run_mode": "formal",
+            "config_json": _density_formal_config(),
+        },
+    )
+
+    assert response.status_code == 202
+    assert len(fake_worker.payloads) == 1
+    assert _monomer_md_job_count(postgres_dsn) == 1
 
 
 def test_monomer_md_formal_and_demo_jobs_are_mutually_exclusive(postgres_dsn: str):

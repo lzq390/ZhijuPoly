@@ -309,6 +309,8 @@ runtime_snapshot: RuntimeSnapshot = initial_runtime_snapshot(settings)
 runtime_probe_initialized = False
 BROKER_HEALTH_CLIENT_TIMEOUT_SECONDS = 0.1
 BROKER_HEALTH_WALL_TIMEOUT_SECONDS = 0.2
+BROKER_QUEUE_TRANSITION_WAIT_SECONDS = 12.0
+BROKER_QUEUE_TRANSITION_POLL_SECONDS = 0.2
 
 
 @asynccontextmanager
@@ -403,7 +405,10 @@ async def submit_job(request: JobRequest) -> JobAccepted:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"steps must be <= {settings.max_steps}",
         )
-    health_response = await _build_health_response()
+    health_response = await _wait_for_formal_queue_broker_transition(
+        await _build_health_response(),
+        request,
+    )
     rejection = _job_rejection_message(health_response, request)
     if rejection is not None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=rejection)
@@ -733,6 +738,52 @@ def _health_rejection_message(health_response: HealthResponse) -> str:
             return f"monomer MD worker runtime is not ready: {health_response.runtime_error}"
         return "monomer MD worker runtime is not ready"
     return f"monomer MD worker health is {health_response.status}"
+
+
+def _formal_queue_broker_transition(
+    health_response: HealthResponse,
+    request: JobRequest,
+) -> bool:
+    error = health_response.gpu_broker_error or ""
+    return (
+        request.run_mode == "formal"
+        and execution_job_id is not None
+        and health_response.mode == "real"
+        and health_response.db_configured
+        and health_response.byteff2_root_exists
+        and health_response.runtime_ready
+        and health_response.gpu_broker_enabled
+        and not health_response.gpu_broker_ready
+        and not health_response.draining
+        and not getattr(runner, "gpu_admission_uncertain", False)
+        and 0 < health_response.active_jobs < health_response.max_active_jobs
+        and error.startswith(
+            (
+                "broker_timeout:",
+                "gpu_broker_unavailable:",
+                "broker_unavailable:",
+            )
+        )
+    )
+
+
+async def _wait_for_formal_queue_broker_transition(
+    health_response: HealthResponse,
+    request: JobRequest,
+) -> HealthResponse:
+    if not _formal_queue_broker_transition(health_response, request):
+        return health_response
+    deadline = (
+        asyncio.get_running_loop().time() + BROKER_QUEUE_TRANSITION_WAIT_SECONDS
+    )
+    current = health_response
+    while _formal_queue_broker_transition(current, request):
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(BROKER_QUEUE_TRANSITION_POLL_SECONDS, remaining))
+        current = await _build_health_response()
+    return current
 
 
 def _job_rejection_message(health_response: HealthResponse, request: JobRequest) -> str | None:
