@@ -425,6 +425,26 @@ def test_production_executor_rejects_wrong_uuid(
         config.load_settings()
 
 
+def test_production_direct_executor_accepts_gpu2_index_with_uuid_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clean_environment(monkeypatch)
+    _configure_production_test_roots(monkeypatch, tmp_path)
+    monkeypatch.setenv("MONOMER_DFT_EXECUTOR_PROCESS", "1")
+    monkeypatch.setenv("NEXPOLY_DFT_EXECUTOR_GPU_DEVICE", "2")
+    monkeypatch.setenv(
+        "NEXPOLY_DFT_EXECUTOR_GPU_UUID",
+        config.GPU_UUID_BY_INDEX["2"],
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+
+    settings = config.load_settings()
+
+    assert settings.physical_gpu == "2"
+    assert settings.executor_process is True
+
+
 def test_broker_disabled_requires_explicit_standalone_smoke_authorization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
