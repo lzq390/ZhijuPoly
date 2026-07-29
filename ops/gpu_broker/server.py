@@ -5798,12 +5798,120 @@ class MpsRuntimeGuard:
                 "mps_control_unavailable",
                 "leased GPU MPS control channel is unavailable",
             )
+        if lease.workload_pid is None:
+            return self._unregistered_lease_client_alive(lease)
         return bool(
             self._strict_lease_clients(
                 lease,
                 self._query_clients(lease.gpu_index),
             )
         )
+
+    def _unregistered_lease_client_alive(self, lease: Lease) -> bool:
+        if any(
+            value is not None
+            for value in (
+                lease.workload_process_start_ticks,
+                lease.workload_process_group_id,
+                lease.workload_cgroup,
+            )
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "unregistered lease workload identity is inconsistent",
+            )
+        authority = self.authority_snapshot(
+            lease.gpu_index,
+            lease.gpu_uuid,
+        )
+        identities = {
+            identity.client_pid: identity
+            for identity in authority.client_process_identities
+        }
+        if len(identities) != len(authority.client_process_identities):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS client host identity is ambiguous",
+            )
+        for client in authority.clients:
+            identity = identities.get(client.client_pid)
+            if identity is None:
+                raise BrokerError(
+                    "mps_control_unavailable",
+                    "MPS client host identity is incomplete",
+                )
+            if self._client_is_stable_unregistered_owner_descendant(
+                lease,
+                identity,
+            ):
+                return True
+        return False
+
+    def _client_is_stable_unregistered_owner_descendant(
+        self,
+        lease: Lease,
+        identity: MpsClientProcessIdentity,
+    ) -> bool:
+        expected_uids = (1001, 1001, 1001, 1001)
+
+        def owner_identity() -> tuple[int, tuple[int, int, int, int]]:
+            return (
+                self._read_start_ticks(lease.owner_pid),
+                _read_process_uids(lease.owner_pid),
+            )
+
+        def client_identity() -> tuple[
+            int,
+            tuple[int, int, int, int],
+            str,
+        ]:
+            return (
+                self._read_start_ticks(identity.client_pid),
+                _read_process_uids(identity.client_pid),
+                self._unified_cgroup_path(
+                    self._read_process_cgroup(identity.client_pid)
+                ),
+            )
+
+        expected_owner = (
+            lease.owner_process_start_ticks,
+            expected_uids,
+        )
+        expected_client = (
+            identity.process_start_ticks,
+            expected_uids,
+            identity.process_cgroup,
+        )
+        try:
+            owner_before = owner_identity()
+            client_before = client_identity()
+            descends_before = _pid_is_or_descends_from(
+                identity.client_pid,
+                lease.owner_pid,
+            )
+            client_after = client_identity()
+            descends_after = _pid_is_or_descends_from(
+                identity.client_pid,
+                lease.owner_pid,
+            )
+            owner_after = owner_identity()
+        except (BrokerError, OSError, TypeError, ValueError) as exc:
+            raise BrokerError(
+                "mps_control_unavailable",
+                "unregistered lease MPS client identity is unavailable",
+            ) from exc
+        if (
+            owner_before != owner_after
+            or owner_after != expected_owner
+            or client_before != client_after
+            or client_after != expected_client
+            or descends_before != descends_after
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "unregistered lease MPS client identity changed during audit",
+            )
+        return descends_after
 
     def unmanaged_client_alive(
         self,

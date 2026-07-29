@@ -2148,6 +2148,159 @@ def test_mps_guard_never_treats_unreadable_client_cgroup_as_absent(
     assert error.value.code == "mps_control_unavailable"
 
 
+@pytest.mark.parametrize(
+    ("owner_descendant", "expected_alive"),
+    ((False, False), (True, True)),
+)
+def test_mps_guard_classifies_stable_unregistered_lease_clients(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner_descendant: bool,
+    expected_alive: bool,
+) -> None:
+    guard = MpsRuntimeGuard(tmp_path)
+    lease = _strict_md_execution_lease()
+    lease.workload_pid = None
+    lease.workload_process_start_ticks = None
+    lease.workload_process_group_id = None
+    lease.workload_cgroup = None
+    client_pid = 987_654
+    client_start_ticks = 789
+    client_cgroup = "/user.slice/peer.scope"
+    client = MpsClient(
+        client_pid,
+        1,
+        9002,
+        EXPECTED_GPU_UUIDS[1],
+        1,
+        "peer",
+    )
+    snapshot = MpsAuthoritySnapshot(
+        server_pids=frozenset({9002}),
+        gpu_declarers=frozenset(),
+        clients=frozenset({client}),
+        descriptor_authority=True,
+        client_process_identities=frozenset(
+            {
+                MpsClientProcessIdentity(
+                    client_pid=client_pid,
+                    process_start_ticks=client_start_ticks,
+                    process_cgroup=client_cgroup,
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(MpsRuntimeGuard, "__call__", lambda *_args: True)
+    monkeypatch.setattr(
+        guard,
+        "authority_snapshot",
+        lambda _index, _uuid: snapshot,
+    )
+    monkeypatch.setattr(
+        guard,
+        "_read_start_ticks",
+        lambda pid: (
+            lease.owner_process_start_ticks
+            if pid == lease.owner_pid
+            else client_start_ticks
+        ),
+    )
+    monkeypatch.setattr(
+        guard,
+        "_read_process_cgroup",
+        lambda _pid: f"0::{client_cgroup}",
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        lambda pid, owner: (
+            owner_descendant
+            and pid == client_pid
+            and owner == lease.owner_pid
+        ),
+    )
+
+    assert guard.lease_client_alive(lease) is expected_alive
+
+
+def test_mps_guard_rejects_unregistered_lease_client_identity_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guard = MpsRuntimeGuard(tmp_path)
+    lease = _strict_md_execution_lease()
+    lease.workload_pid = None
+    lease.workload_process_start_ticks = None
+    lease.workload_process_group_id = None
+    lease.workload_cgroup = None
+    client_pid = 987_654
+    client_start_ticks = 789
+    client_cgroup = "/user.slice/peer.scope"
+    snapshot = MpsAuthoritySnapshot(
+        server_pids=frozenset({9002}),
+        gpu_declarers=frozenset(),
+        clients=frozenset(
+            {
+                MpsClient(
+                    client_pid,
+                    1,
+                    9002,
+                    EXPECTED_GPU_UUIDS[1],
+                    1,
+                    "peer",
+                )
+            }
+        ),
+        descriptor_authority=True,
+        client_process_identities=frozenset(
+            {
+                MpsClientProcessIdentity(
+                    client_pid=client_pid,
+                    process_start_ticks=client_start_ticks,
+                    process_cgroup=client_cgroup,
+                )
+            }
+        ),
+    )
+    client_reads = 0
+
+    def start_ticks(pid: int) -> int:
+        nonlocal client_reads
+        if pid == lease.owner_pid:
+            return lease.owner_process_start_ticks
+        client_reads += 1
+        return client_start_ticks + (client_reads > 1)
+
+    monkeypatch.setattr(MpsRuntimeGuard, "__call__", lambda *_args: True)
+    monkeypatch.setattr(
+        guard,
+        "authority_snapshot",
+        lambda _index, _uuid: snapshot,
+    )
+    monkeypatch.setattr(guard, "_read_start_ticks", start_ticks)
+    monkeypatch.setattr(
+        guard,
+        "_read_process_cgroup",
+        lambda _pid: f"0::{client_cgroup}",
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._read_process_uids",
+        lambda _pid: (1001, 1001, 1001, 1001),
+    )
+    monkeypatch.setattr(
+        "ops.gpu_broker.server._pid_is_or_descends_from",
+        lambda _pid, _owner: False,
+    )
+
+    with pytest.raises(BrokerError) as error:
+        guard.lease_client_alive(lease)
+
+    assert error.value.code == "mps_control_unavailable"
+
+
 def test_register_workload_fences_live_descendant_pid_start_group_and_cgroup(
     tmp_path: Path,
 ) -> None:
@@ -3657,6 +3810,31 @@ def test_release_retains_and_quarantines_lease_when_mps_client_survives(
     assert status["quarantined_gpus"][lease.gpu_uuid]["reason"] == (
         "gpu_runtime_corruption"
     )
+
+
+def test_release_active_unregistered_lease_without_owned_mps_client(
+    tmp_path: Path,
+) -> None:
+    observed: list[str] = []
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        mps_clients_alive=lambda lease: (
+            observed.append(lease.lease_id) or False
+        ),
+    )
+    lease = _acquire(
+        broker,
+        component="md",
+        environment="dev",
+        kind="execution",
+    )
+    broker.activate(lease.lease_id, lease.fencing_token, owner=_owner())
+
+    broker.release(lease.lease_id, lease.fencing_token, owner=_owner())
+
+    assert observed == [lease.lease_id]
+    assert broker.status()["leases"] == []
+    assert broker.status()["quarantined_gpus"] == {}
 
 
 def test_reparented_mps_client_is_owned_by_registered_process_group(
