@@ -122,12 +122,15 @@ async def create_fenced_subprocess_exec(
     except BaseException:
         # create_subprocess_exec can return before systemd has moved and exec'd
         # the same PID. Keep the CUDA gate closed until the exact transition
-        # is proven, and collect the unregistered scope on any failure.
-        _close_fd(gate_writer)
+        # is proven. If the transition won the cancellation race, register the
+        # still-gated PID before collecting it so Broker release can use the
+        # exact cgroup instead of an unregistered, whole-card MPS audit.
         await await_safety_cleanup(
-            _cleanup_unregistered_scope_transition(
+            _cleanup_cancelled_scope_transition(
                 process,
                 scope_transition_task,
+                execution_lease,
+                gate_writer,
             )
         )
         raise
@@ -428,14 +431,38 @@ async def _cleanup_failed_fenced_spawn(
         await process.wait()
 
 
-async def _cleanup_unregistered_scope_transition(
+async def _cleanup_cancelled_scope_transition(
     process: asyncio.subprocess.Process,
     transition_task: asyncio.Task[Any],
+    execution_lease: ManagedGpuLease,
+    gate_writer: int,
 ) -> None:
+    transitioned = False
     try:
         await transition_task
+        transitioned = True
     except Exception:
         pass
+    if transitioned:
+        try:
+            # The writer remains open while host registration runs, so the
+            # exec gate cannot disappear or import CUDA before the Broker has
+            # bound this exact process identity and scope.
+            await asyncio.to_thread(execution_lease.register_workload, process.pid)
+        except Exception:
+            _close_fd(gate_writer)
+            await _cleanup_unregistered_process(process)
+            return
+        _close_fd(gate_writer)
+        await _cleanup_registered_fenced_spawn(process, execution_lease)
+        return
+    _close_fd(gate_writer)
+    await _cleanup_unregistered_process(process)
+
+
+async def _cleanup_unregistered_process(
+    process: asyncio.subprocess.Process,
+) -> None:
     try:
         await asyncio.wait_for(process.wait(), timeout=2.0)
     except asyncio.TimeoutError:

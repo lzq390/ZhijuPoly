@@ -227,7 +227,7 @@ def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -
     assert process_control._process_group_alive(lease.workload_pid) is False
 
 
-def test_cancel_during_scope_transition_never_registers_or_opens_exec_gate() -> None:
+def test_cancel_during_scope_transition_registers_before_cleanup_without_opening_gate() -> None:
     transition_started = threading.Event()
     allow_transition = threading.Event()
     transitioned_pid: list[int] = []
@@ -263,7 +263,7 @@ def test_cancel_during_scope_transition_never_registers_or_opens_exec_gate() -> 
             await task
 
     asyncio.run(scenario())
-    assert registrations == []
+    assert registrations == transitioned_pid
     assert len(transitioned_pid) == 1
     assert process_control._process_group_alive(transitioned_pid[0]) is False
 
