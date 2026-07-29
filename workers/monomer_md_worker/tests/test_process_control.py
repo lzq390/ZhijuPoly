@@ -182,7 +182,7 @@ def test_signal_failure_quarantines_gpu_and_keeps_lease_fail_closed(monkeypatch)
     assert lease.failed_closed is True
 
 
-def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -> None:
+def test_cancel_during_host_registration_keeps_gate_until_pid_is_registered() -> None:
     started = threading.Event()
     allow_registration = threading.Event()
 
@@ -218,6 +218,8 @@ def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -
         task.cancel()
         await asyncio.sleep(0)
         task.cancel()
+        assert lease.workload_pid is not None
+        assert process_control._process_group_alive(lease.workload_pid) is True
         allow_registration.set()
         with pytest.raises(asyncio.CancelledError):
             await task

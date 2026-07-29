@@ -165,12 +165,14 @@ async def create_fenced_subprocess_exec(
         # Cancellation cannot cancel the host-side registration thread.  Keep
         # the exec gate closed, collect the authoritative registration result,
         # and prove the dedicated cgroup empty before returning control.
-        _close_fd(gate_writer)
+        cleanup_gate_writer = gate_writer
+        gate_writer = -1
         await await_safety_cleanup(
             _cleanup_failed_fenced_spawn(
                 process,
                 registration_task,
                 execution_lease,
+                cleanup_gate_writer,
             )
         )
         raise
@@ -433,6 +435,7 @@ async def _cleanup_failed_fenced_spawn(
     process: asyncio.subprocess.Process,
     registration_task: asyncio.Task[Any],
     execution_lease: ManagedGpuLease,
+    gate_writer: int,
 ) -> None:
     registered = False
     try:
@@ -443,6 +446,11 @@ async def _cleanup_failed_fenced_spawn(
             "fenced subprocess host registration failed during cleanup",
             exc_info=True,
         )
+    finally:
+        # Do not let the gated PID disappear while the host-side Broker call
+        # is still resolving its exact cgroup identity. EOF makes exec_gate
+        # exit with 126, so the unadmitted target command never runs.
+        _close_fd(gate_writer)
     try:
         await asyncio.wait_for(process.wait(), timeout=2.0)
     except asyncio.TimeoutError:
