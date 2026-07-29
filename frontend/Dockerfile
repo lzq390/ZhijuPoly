@@ -2,6 +2,9 @@ FROM node:22-bookworm-slim@sha256:d9f850096136edbc402debdd8729579a288aac64574ada
 
 WORKDIR /app/frontend
 
+ARG VITE_AGENT_WORKSPACE_URL="http://127.0.0.1:4454"
+ENV VITE_AGENT_WORKSPACE_URL="${VITE_AGENT_WORKSPACE_URL}"
+
 COPY frontend/package*.json ./
 RUN npm ci
 

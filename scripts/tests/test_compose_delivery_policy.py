@@ -15,6 +15,24 @@ DIGEST_B = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
 
 
 class ComposeDeliveryPolicyTests(unittest.TestCase):
+    def test_frontend_image_accepts_browser_reachable_openscience_url(self) -> None:
+        dockerfile = (REPOSITORY_ROOT / "frontend" / "Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+        argument = 'ARG VITE_AGENT_WORKSPACE_URL="http://127.0.0.1:4454"'
+        environment = 'ENV VITE_AGENT_WORKSPACE_URL="${VITE_AGENT_WORKSPACE_URL}"'
+        build = "RUN npm run build"
+
+        self.assertIn(argument, dockerfile)
+        self.assertIn(environment, dockerfile)
+        self.assertLess(dockerfile.index(environment), dockerfile.index(build))
+        self.assertIn(
+            'VITE_AGENT_WORKSPACE_URL: "${VITE_AGENT_WORKSPACE_URL:-http://127.0.0.1:4454}"',
+            compose,
+        )
+
     def test_blank_ci_database_and_production_takeover_use_distinct_migration_modes(self) -> None:
         workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
