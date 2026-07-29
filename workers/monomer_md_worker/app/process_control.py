@@ -168,6 +168,8 @@ async def wait_for_process_group(
     timeout_seconds: float,
     execution_lease: ManagedGpuLease | None,
 ) -> int:
+    loop = asyncio.get_running_loop()
+    process_started_at = loop.time()
     process_wait = asyncio.create_task(process.wait())
     lease_wait: asyncio.Task[None] | None = None
     if execution_lease is not None:
@@ -206,9 +208,13 @@ async def wait_for_process_group(
             execution_lease.assert_healthy()
         return return_code
     except asyncio.CancelledError:
-        await terminate_process_group(
-            process,
-            execution_lease=execution_lease,
+        await await_safety_cleanup(
+            _terminate_cancelled_process_group(
+                process,
+                process_wait=process_wait,
+                process_started_at=process_started_at,
+                execution_lease=execution_lease,
+            )
         )
         raise
     finally:
@@ -223,6 +229,37 @@ async def wait_for_process_group(
 MAX_TERMINATION_GRACE_SECONDS = 10.0
 PROCESS_GROUP_POLL_SECONDS = 0.05
 PROCESS_GROUP_KILL_OBSERVE_SECONDS = 1.0
+MPS_CLIENT_CANCELLATION_STABILIZATION_SECONDS = 30.0
+
+
+async def _terminate_cancelled_process_group(
+    process: asyncio.subprocess.Process,
+    *,
+    process_wait: asyncio.Task[int],
+    process_started_at: float,
+    execution_lease: ManagedGpuLease | None,
+) -> None:
+    """Delay user cancellation until a new MPS client can service teardown."""
+
+    if execution_lease is not None and not process_wait.done():
+        loop = asyncio.get_running_loop()
+        remaining = (
+            process_started_at
+            + MPS_CLIENT_CANCELLATION_STABILIZATION_SECONDS
+            - loop.time()
+        )
+        if remaining > 0:
+            await asyncio.wait({process_wait}, timeout=remaining)
+    process_already_waited = (
+        process_wait.done()
+        and not process_wait.cancelled()
+        and process_wait.exception() is None
+    )
+    await _terminate_process_group(
+        process,
+        process_already_waited=process_already_waited,
+        execution_lease=execution_lease,
+    )
 
 
 async def _wait_for_process_group_exit(

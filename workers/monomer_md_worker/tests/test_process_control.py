@@ -478,6 +478,71 @@ def test_repeated_cancel_waits_for_mps_and_process_cleanup(monkeypatch) -> None:
     assert lease.failed_closed is False
 
 
+def test_job_cancel_waits_for_new_mps_client_before_safe_termination(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        process_control,
+        "MPS_CLIENT_CANCELLATION_STABILIZATION_SECONDS",
+        0.03,
+    )
+    termination_calls: list[tuple[float, bool]] = []
+
+    class BlockingProcess:
+        pid = 43_211
+        returncode = None
+
+        def __init__(self) -> None:
+            self.finished = asyncio.Event()
+
+        async def wait(self) -> int:
+            await self.finished.wait()
+            return -signal.SIGTERM
+
+    async def fake_terminate(
+        process,
+        *,
+        process_already_waited,
+        execution_lease,
+    ) -> None:
+        assert execution_lease is not None
+        termination_calls.append(
+            (time.monotonic(), process_already_waited)
+        )
+        process.returncode = -signal.SIGTERM
+        process.finished.set()
+
+    monkeypatch.setattr(
+        process_control,
+        "_terminate_process_group",
+        fake_terminate,
+    )
+
+    async def scenario() -> float:
+        process = BlockingProcess()
+        task = asyncio.create_task(
+            process_control.wait_for_process_group(
+                process,  # type: ignore[arg-type]
+                timeout_seconds=10,
+                execution_lease=_Lease([]),  # type: ignore[arg-type]
+            )
+        )
+        await asyncio.sleep(0)
+        cancelled_at = time.monotonic()
+        task.cancel()
+        await asyncio.sleep(0.005)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return time.monotonic() - cancelled_at
+
+    elapsed = asyncio.run(scenario())
+
+    assert 0.025 <= elapsed < 0.25
+    assert len(termination_calls) == 1
+    assert termination_calls[0][1] is False
+
+
 def test_process_group_deadline_constants_bound_real_cleanup(
     monkeypatch,
 ) -> None:
