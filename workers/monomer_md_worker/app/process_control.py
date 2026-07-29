@@ -439,7 +439,10 @@ async def _cleanup_failed_fenced_spawn(
         await registration_task
         registered = True
     except Exception:
-        pass
+        logger.warning(
+            "fenced subprocess host registration failed during cleanup",
+            exc_info=True,
+        )
     try:
         await asyncio.wait_for(process.wait(), timeout=2.0)
     except asyncio.TimeoutError:
