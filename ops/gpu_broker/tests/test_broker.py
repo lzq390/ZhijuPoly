@@ -1911,6 +1911,79 @@ def test_mps_guard_uses_host_ps_pid_and_waits_for_cuda_success(tmp_path: Path) -
     assert commands == ["ps", f"terminate_client 6472 {os.getpid()}"]
 
 
+@pytest.mark.parametrize("transition_tail", ("", " 4026531836"))
+def test_mps_guard_retries_exact_termination_transition_until_absent(
+    tmp_path: Path,
+    transition_tail: str,
+) -> None:
+    pipe_directory = tmp_path / "mps-1" / "pipe"
+    pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
+    os.mkfifo(pipe_directory / "control", 0o600)
+    client_pid = os.getpid()
+    partial_uuid = "GPU-0e19c809-f81d"
+    ps_outputs = iter(
+        (
+            "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+            f"{client_pid} 0 6472 {partial_uuid} 4026531836 ./client\n",
+            "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+            f"{client_pid} 0 6472 {partial_uuid}{transition_tail}\n",
+            "",
+        )
+    )
+
+    def run(command, **kwargs):
+        control_command = kwargs["input"].strip()
+        stdout = next(ps_outputs) if control_command == "ps" else "0\n"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    guard = MpsRuntimeGuard(tmp_path, run=run)
+    broker = HostGpuBroker(tmp_path / "state.json")
+    lease = _acquire(broker, component="md", environment="dev", kind="execution")
+    _bind_test_workload(lease)
+
+    assert guard.terminate_lease_clients(lease) == (client_pid,)
+    assert guard.lease_client_alive_after_grace(lease, timeout_seconds=0.5) is False
+
+
+def test_mps_guard_persistent_exact_termination_transition_remains_alive(
+    tmp_path: Path,
+) -> None:
+    pipe_directory = tmp_path / "mps-1" / "pipe"
+    pipe_directory.mkdir(parents=True)
+    pipe_directory.chmod(0o700)
+    os.mkfifo(pipe_directory / "control", 0o600)
+    client_pid = os.getpid()
+    partial_uuid = "GPU-0e19c809-f81d"
+    canonical = (
+        "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+        f"{client_pid} 0 6472 {partial_uuid} 4026531836 ./client\n"
+    )
+    transition = (
+        "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+        f"{client_pid} 0 6472 {partial_uuid}\n"
+    )
+    ps_calls = 0
+
+    def run(command, **kwargs):
+        nonlocal ps_calls
+        control_command = kwargs["input"].strip()
+        if control_command == "ps":
+            ps_calls += 1
+            stdout = canonical if ps_calls == 1 else transition
+        else:
+            stdout = "0\n"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    guard = MpsRuntimeGuard(tmp_path, run=run)
+    broker = HostGpuBroker(tmp_path / "state.json")
+    lease = _acquire(broker, component="md", environment="dev", kind="execution")
+    _bind_test_workload(lease)
+
+    assert guard.terminate_lease_clients(lease) == (client_pid,)
+    assert guard.lease_client_alive_after_grace(lease, timeout_seconds=0) is True
+
+
 def test_mps_guard_never_terminates_client_outside_exact_owned_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2009,6 +2082,14 @@ def test_mps_guard_accepts_only_exact_observed_idle_responses(
         "Server not found\n\n",
         " server not found\n",
         "PID ID SERVER DEVICE NAMESPACE COMMAND\n",
+        (
+            "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+            "987654 0 6472 GPU-0e19c809-f81d\n"
+        ),
+        (
+            "PID ID SERVER DEVICE NAMESPACE COMMAND\n"
+            "987654 0 6472 GPU-0e19c809-f81d 4026531836\n"
+        ),
     ),
 )
 def test_mps_guard_rejects_noncanonical_idle_responses(
@@ -3043,6 +3124,61 @@ def test_job_cgroup_controller_registers_freezes_kills_and_collects_exact_scope(
     controller.cleanup(lease)
     assert scope_path.exists() is False
     assert systemd.active is False
+
+
+def test_job_cgroup_controller_accepts_scope_collected_by_mps_termination(
+    tmp_path: Path,
+) -> None:
+    controller, lease, scope_path, systemd, processes = _scope_controller(
+        tmp_path
+    )
+    pid = next(iter(processes))
+    start_ticks, group_id, _uids = processes[pid]
+    resolved = controller.resolve_and_assign(
+        lease,
+        pid,
+        start_ticks,
+        group_id,
+    )
+    lease.workload_pid = pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = resolved[3]
+
+    processes.clear()
+    systemd.active = False
+    shutil.rmtree(scope_path)
+
+    assert controller.freeze(lease) == f"{lease.lease_id}:collected:88888"
+    controller.kill(lease)
+    assert controller.empty(lease) is True
+
+
+def test_job_cgroup_controller_rejects_missing_scope_with_live_original_process(
+    tmp_path: Path,
+) -> None:
+    controller, lease, scope_path, systemd, processes = _scope_controller(
+        tmp_path
+    )
+    pid = next(iter(processes))
+    start_ticks, group_id, _uids = processes[pid]
+    resolved = controller.resolve_and_assign(
+        lease,
+        pid,
+        start_ticks,
+        group_id,
+    )
+    lease.workload_pid = pid
+    lease.workload_process_start_ticks = start_ticks
+    lease.workload_process_group_id = group_id
+    lease.workload_cgroup = resolved[3]
+
+    systemd.active = False
+    shutil.rmtree(scope_path)
+
+    with pytest.raises(BrokerError) as error:
+        controller.freeze(lease)
+    assert error.value.code == "workload_control_unavailable"
 
 
 @pytest.mark.parametrize(

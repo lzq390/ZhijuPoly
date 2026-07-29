@@ -4279,10 +4279,19 @@ class JobCgroupController:
         self._active_scope_path(lease)
 
     def freeze(self, lease: Lease) -> str:
-        target = self._active_scope_path(lease)
+        try:
+            target = self._active_scope_path(lease)
+        except BrokerError:
+            collected_token = self._collected_scope_token(lease)
+            if collected_token is not None:
+                return collected_token
+            raise
         try:
             (target / "cgroup.freeze").write_text("1", encoding="ascii")
         except OSError as exc:
+            collected_token = self._collected_scope_token(lease)
+            if collected_token is not None:
+                return collected_token
             raise BrokerError(
                 "workload_control_unavailable", "cannot freeze workload cgroup"
             ) from exc
@@ -4291,6 +4300,9 @@ class JobCgroupController:
             try:
                 events = (target / "cgroup.events").read_text(encoding="ascii")
             except OSError as exc:
+                collected_token = self._collected_scope_token(lease)
+                if collected_token is not None:
+                    return collected_token
                 raise BrokerError(
                     "workload_control_unavailable",
                     "cannot verify workload cgroup freeze",
@@ -4306,10 +4318,18 @@ class JobCgroupController:
 
     def kill(self, lease: Lease) -> None:
         try:
-            (self._active_scope_path(lease) / "cgroup.kill").write_text(
+            target = self._active_scope_path(lease)
+        except BrokerError:
+            if self._collected_scope_token(lease) is not None:
+                return
+            raise
+        try:
+            (target / "cgroup.kill").write_text(
                 "1", encoding="ascii"
             )
         except OSError as exc:
+            if self._collected_scope_token(lease) is not None:
+                return
             raise BrokerError(
                 "workload_control_unavailable", "cannot kill workload cgroup"
             ) from exc
@@ -4718,6 +4738,14 @@ class JobCgroupController:
         except (OSError, ValueError):
             return False
 
+    def _collected_scope_token(self, lease: Lease) -> str | None:
+        """Prove MPS teardown already made the exact workload scope inert."""
+
+        self._require_bound_scope(lease)
+        if not self._scope_disappeared_safely(lease):
+            return None
+        return f"{lease.lease_id}:collected:{self._now_ns()}"
+
     @staticmethod
     def _read_process_uids(pid: int) -> tuple[int, int, int, int]:
         try:
@@ -4862,6 +4890,11 @@ class MpsRuntimeGuard:
         self._read_process_environment = read_process_environment
         self._read_process_cgroup = read_process_cgroup
         self._read_start_ticks = read_start_ticks
+        self._termination_clients_lock = threading.Lock()
+        self._termination_clients: dict[
+            tuple[str, int],
+            frozenset[tuple[int, int, int, str, int]],
+        ] = {}
 
     @property
     def descriptor_authority(self) -> bool:
@@ -5730,7 +5763,47 @@ class MpsRuntimeGuard:
     ) -> bool:
         deadline = time.monotonic() + timeout_seconds
         while True:
-            if not self.lease_client_alive(lease):
+            with self._termination_clients_lock:
+                terminating_clients = self._termination_clients.get(
+                    (lease.lease_id, lease.fencing_token),
+                    frozenset(),
+                )
+            if terminating_clients:
+                clients, transitions = self._query_clients_for_termination(
+                    lease.gpu_index,
+                    terminating_clients,
+                )
+                exact_clients_alive = any(
+                    (
+                        client.client_pid,
+                        client.client_id,
+                        client.server_pid,
+                        client.device_uuid,
+                        client.namespace_id,
+                    )
+                    in terminating_clients
+                    for client in clients
+                )
+                other_clients = tuple(
+                    client
+                    for client in clients
+                    if (
+                        client.client_pid,
+                        client.client_id,
+                        client.server_pid,
+                        client.device_uuid,
+                        client.namespace_id,
+                    )
+                    not in terminating_clients
+                )
+                clients_alive = bool(
+                    transitions
+                    or exact_clients_alive
+                    or self._strict_lease_clients(lease, other_clients)
+                )
+            else:
+                clients_alive = self.lease_client_alive(lease)
+            if not clients_alive:
                 return False
             if time.monotonic() >= deadline:
                 return True
@@ -5802,6 +5875,9 @@ class MpsRuntimeGuard:
                 "workload_identity_unavailable",
                 "execution workload was not registered before MPS termination",
             )
+        lease_key = (lease.lease_id, lease.fencing_token)
+        with self._termination_clients_lock:
+            self._termination_clients.pop(lease_key, None)
         clients = {
             (client.server_pid, client.client_pid): client
             for client in self._strict_lease_clients(
@@ -5823,6 +5899,17 @@ class MpsRuntimeGuard:
                     f"MPS terminate_client did not return CUDA_SUCCESS for PID {client_pid}",
                 )
             terminated.append(client_pid)
+        with self._termination_clients_lock:
+            self._termination_clients[lease_key] = frozenset(
+                (
+                    client.client_pid,
+                    client.client_id,
+                    client.server_pid,
+                    client.device_uuid,
+                    client.namespace_id,
+                )
+                for client in clients.values()
+            )
         return tuple(terminated)
 
     def _strict_lease_clients(
@@ -5888,13 +5975,43 @@ class MpsRuntimeGuard:
         deadline: float | None = None,
     ) -> tuple["MpsClient", ...]:
         output = self._run_control(index, "ps", deadline=deadline)
+        clients, transitions = self._parse_clients_output(output)
+        if transitions:
+            raise AssertionError("normal MPS query accepted a termination transition")
+        return clients
+
+    def _query_clients_for_termination(
+        self,
+        index: int,
+        terminating_clients: frozenset[tuple[int, int, int, str, int]],
+    ) -> tuple[
+        tuple["MpsClient", ...],
+        frozenset[tuple[int, int, int, str, int]],
+    ]:
+        output = self._run_control(index, "ps")
+        return self._parse_clients_output(
+            output,
+            terminating_clients=terminating_clients,
+        )
+
+    @staticmethod
+    def _parse_clients_output(
+        output: str,
+        *,
+        terminating_clients: frozenset[
+            tuple[int, int, int, str, int]
+        ] = frozenset(),
+    ) -> tuple[
+        tuple["MpsClient", ...],
+        frozenset[tuple[int, int, int, str, int]],
+    ]:
         # NVIDIA MPS has two observed, exact no-client responses: an empty
         # stdout while a server is alive with zero clients, and a single
         # ``Server not found`` line when no server has been created yet.
         # Do not normalize arbitrary whitespace or extra lines into either
         # trusted state.
         if output == "" or output in {"Server not found", "Server not found\n"}:
-            return ()
+            return (), frozenset()
         lines = output.splitlines()
         if not lines or any(not line.strip() for line in lines):
             raise BrokerError("mps_control_unavailable", "MPS ps response is invalid")
@@ -5907,8 +6024,64 @@ class MpsRuntimeGuard:
                 "MPS ps header-only response is not a canonical idle state",
             )
         clients: list[MpsClient] = []
+        transitions: set[tuple[int, int, int, str, int]] = set()
         for line in lines[1:]:
             fields = line.split(maxsplit=5)
+            if len(fields) in {4, 5}:
+                try:
+                    partial_transition = (
+                        int(fields[0]),
+                        int(fields[1]),
+                        int(fields[2]),
+                        fields[3],
+                    )
+                except ValueError as exc:
+                    raise BrokerError(
+                        "mps_control_unavailable",
+                        "MPS ps PID is invalid",
+                    ) from exc
+                matching_clients = tuple(
+                    client
+                    for client in terminating_clients
+                    if client[:4] == partial_transition
+                )
+                if (
+                    partial_transition[0] <= 0
+                    or partial_transition[1] < 0
+                    or partial_transition[2] <= 0
+                    or not partial_transition[3].startswith("GPU-")
+                    or len(matching_clients) != 1
+                ):
+                    raise BrokerError(
+                        "mps_control_unavailable",
+                        "MPS ps termination transition is invalid",
+                    )
+                transition = matching_clients[0]
+                if len(fields) == 5:
+                    try:
+                        namespace_id = int(fields[4])
+                    except ValueError as exc:
+                        raise BrokerError(
+                            "mps_control_unavailable",
+                            "MPS ps namespace is invalid",
+                        ) from exc
+                    if namespace_id <= 0 or namespace_id != transition[4]:
+                        raise BrokerError(
+                            "mps_control_unavailable",
+                            "MPS ps termination transition is invalid",
+                        )
+                if transition in transitions:
+                    raise BrokerError(
+                        "mps_control_unavailable",
+                        "MPS ps termination transition is duplicated",
+                    )
+                # NVIDIA may briefly omit COMMAND, or both NAMESPACE and
+                # COMMAND, after a successful terminate_client response.
+                # Accept only the exact client identity proven immediately
+                # before termination and keep reporting it as alive until it
+                # disappears.
+                transitions.add(transition)
+                continue
             if len(fields) != 6 or not fields[5]:
                 raise BrokerError("mps_control_unavailable", "MPS ps row is invalid")
             try:
@@ -5938,7 +6111,22 @@ class MpsRuntimeGuard:
                 "mps_control_unavailable",
                 "MPS ps response contains a duplicate client identity",
             )
-        return tuple(clients)
+        if any(
+            (
+                client.client_pid,
+                client.client_id,
+                client.server_pid,
+                client.device_uuid,
+                client.namespace_id,
+            )
+            in transitions
+            for client in clients
+        ):
+            raise BrokerError(
+                "mps_control_unavailable",
+                "MPS ps response contains a duplicate client identity",
+            )
+        return tuple(clients), frozenset(transitions)
 
     @staticmethod
     def _device_matches(reported_uuid: str, expected_uuid: str) -> bool:
