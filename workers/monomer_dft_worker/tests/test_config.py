@@ -25,6 +25,8 @@ ENV_NAMES = (
     "MONOMER_DFT_JOB_ROOT",
     "MONOMER_DFT_DEV_RUNTIME_ROOT",
     "MONOMER_DFT_PROD_RUNTIME_ROOT",
+    "MONOMER_DFT_RELEASE_SHA",
+    "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
     "MONOMER_DFT_GPU_GUARD_STATE",
     "MONOMER_DFT_MAX_CONCURRENT_JOBS",
     "MONOMER_DFT_MAX_QUEUED_JOBS",
@@ -353,6 +355,11 @@ def _configure_production_test_roots(
     monkeypatch.setattr(config, "PRODUCTION_RUNTIME_ROOT", runtime_root)
     monkeypatch.setenv("MONOMER_DFT_DEPLOYMENT", "prod")
     monkeypatch.setenv("MONOMER_DFT_PROD_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("MONOMER_DFT_RELEASE_SHA", "a" * 40)
+    monkeypatch.setenv(
+        "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
+        "sha256:" + "b" * 64,
+    )
     return runtime_root
 
 
@@ -371,6 +378,20 @@ def test_load_settings_accepts_locked_production_gpu2_direct_mode(
     assert settings.broker_enabled is False
     assert settings.standalone_gpu_smoke is False
     assert settings.gpu_guard_state == runtime_root / "state/gpu2-guard.json"
+    assert settings.release_sha == "a" * 40
+    assert settings.runtime_contract_sha256 == "sha256:" + "b" * 64
+
+
+def test_load_settings_rejects_missing_production_release_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clean_environment(monkeypatch)
+    _configure_production_test_roots(monkeypatch, tmp_path)
+    monkeypatch.delenv("MONOMER_DFT_RELEASE_SHA")
+
+    with pytest.raises(ValueError, match="exact lowercase production commit"):
+        config.load_settings()
 
 
 def test_load_settings_rejects_production_broker_and_overflow(

@@ -212,6 +212,8 @@ def test_lifespan_preloads_model_and_exposes_worker_protocol(tmp_path: Path) -> 
         assert payload["runtime"]["model_name"] == "aimnet2"
         assert payload["runtime"]["logical_device"] == "cuda:0"
         assert payload["runtime"]["visible_gpu_count"] == 1
+        assert payload["release_sha"] is None
+        assert payload["runtime_contract_sha256"] is None
         assert payload["max_concurrent_jobs"] == 1
         invalid = client.post("/jobs", json={})
         assert invalid.status_code == 422

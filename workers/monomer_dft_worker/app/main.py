@@ -241,6 +241,8 @@ def create_app(
             queued_jobs=state["queued_jobs"],
             worker_instance_id=state["worker_instance_id"],
             worker_version=active_settings.worker_version,
+            release_sha=active_settings.release_sha,
+            runtime_contract_sha256=active_settings.runtime_contract_sha256,
             runtime=runtime_payload,
         )
 

@@ -40,10 +40,7 @@ x-production-environment: &production-environment
 x-production-volumes: &production-volumes
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
-  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/ocsr:/app/model/ocsr:ro
-  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
-  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
-  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
+  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model:/app/model:ro
   - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
   - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-canaries:/app/monomer-md-canaries:rw
   - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-dft-worker-socket:/app/monomer-dft-worker:ro
@@ -60,10 +57,7 @@ services:
     volumes: !override
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/ocsr:/app/model/ocsr:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model:/app/model:ro
     command: ["python", "-m", "app.postgres_migrations", "--mode", "expand"]
 
   backend:
@@ -76,10 +70,7 @@ services:
     volumes: !override
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/ocsr:/app/model/ocsr:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model:/app/model:ro
       - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
       - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-canaries:/app/monomer-md-canaries:rw
       - type: bind

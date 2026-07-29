@@ -413,6 +413,41 @@ def test_executor_entrypoint_rejects_unfenced_uuid_selector(
         child.close()
 
 
+def test_executor_entrypoint_admits_production_gpu2_after_parent_fencing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent, child = socket.socketpair()
+    served: list[tuple[str, str, str]] = []
+
+    def fake_serve(_stream, *, mode: str, model: str, gpu_index: str) -> int:
+        served.append((mode, model, gpu_index))
+        return 0
+
+    gpu_uuid = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+    monkeypatch.setenv("NEXPOLY_DFT_EXECUTOR_GPU_DEVICE", "2")
+    monkeypatch.setenv("NEXPOLY_DFT_EXECUTOR_GPU_UUID", gpu_uuid)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", gpu_uuid)
+    monkeypatch.setenv("MONOMER_DFT_EXECUTOR_PROCESS", "1")
+    monkeypatch.setattr(executor_process, "_serve", fake_serve)
+    try:
+        assert executor_process.main(
+            [
+                "--fd",
+                str(child.detach()),
+                "--mode",
+                "primary",
+                "--model",
+                "aimnet2",
+                "--gpu-index",
+                "2",
+            ]
+        ) == 0
+    finally:
+        parent.close()
+
+    assert served == [("primary", "aimnet2", "2")]
+
+
 @pytest.mark.parametrize("shared_mps", (False, True))
 def test_real_subprocess_start_handshake_proves_selector_and_cuda_uuid(
     tmp_path: Path,

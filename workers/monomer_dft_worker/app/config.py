@@ -249,6 +249,33 @@ def _positive_float(name: str, default: float) -> float:
     return value
 
 
+def _production_release_identity(
+    deployment: Literal["dev", "prod"],
+) -> tuple[str | None, str | None]:
+    release = os.getenv("MONOMER_DFT_RELEASE_SHA", "").strip()
+    contract = os.getenv("MONOMER_DFT_RUNTIME_CONTRACT_SHA256", "").strip()
+    if deployment == "dev":
+        return release or None, contract or None
+    if len(release) != 40 or any(
+        character not in "0123456789abcdef" for character in release
+    ):
+        raise ValueError(
+            "MONOMER_DFT_RELEASE_SHA must be the exact lowercase production commit SHA"
+        )
+    if (
+        len(contract) != 71
+        or not contract.startswith("sha256:")
+        or any(
+            character not in "0123456789abcdef"
+            for character in contract.removeprefix("sha256:")
+        )
+    ):
+        raise ValueError(
+            "MONOMER_DFT_RUNTIME_CONTRACT_SHA256 must be an exact sha256 digest"
+        )
+    return release, contract
+
+
 def _gpu_index(name: str, default: str, *, deployment: Literal["dev", "prod"]) -> str:
     value = os.getenv(name, default).strip()
     expected = "2" if deployment == "prod" else "1"
@@ -330,6 +357,8 @@ class WorkerSettings:
     executor_process: bool = False
     gpu1_only_session: bool = False
     gpu_guard_state: Path | None = None
+    release_sha: str | None = None
+    runtime_contract_sha256: str | None = None
 
     def __post_init__(self) -> None:
         code_root = REPO_ROOT.resolve(strict=False)
@@ -538,6 +567,7 @@ def load_settings() -> WorkerSettings:
             }
         )
     runtime_root = _configured_runtime_root(deployment)
+    release_sha, runtime_contract_sha256 = _production_release_identity(deployment)
     physical_gpu = _gpu_index(
         "NEXPOLY_DFT_GPU_DEVICE",
         "2" if deployment == "prod" else "1",
@@ -721,4 +751,6 @@ def load_settings() -> WorkerSettings:
             if deployment == "prod"
             else None
         ),
+        release_sha=release_sha,
+        runtime_contract_sha256=runtime_contract_sha256,
     )
