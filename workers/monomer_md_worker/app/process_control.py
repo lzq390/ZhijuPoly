@@ -98,13 +98,33 @@ async def create_fenced_subprocess_exec(
                 execution_lease.lease.lease_id,
                 gated_command,
             )
-            process = await asyncio.create_subprocess_exec(
-                *scoped_command,
-                env=env,
-                pass_fds=(gate_reader,),
-                start_new_session=True,
-                **kwargs,
+            spawn_task = asyncio.create_task(
+                asyncio.create_subprocess_exec(
+                    *scoped_command,
+                    env=env,
+                    pass_fds=(gate_reader,),
+                    start_new_session=True,
+                    **kwargs,
+                )
             )
+            try:
+                process = await asyncio.shield(spawn_task)
+            except BaseException:
+                # asyncio can deliver cancellation after the OS child exists
+                # but before create_subprocess_exec publishes its Process
+                # object. Collect that result and fence the still-gated child;
+                # otherwise an exact systemd scope and GPU lease are orphaned.
+                cleanup_gate_writer = gate_writer
+                gate_writer = -1
+                await await_safety_cleanup(
+                    _cleanup_cancelled_spawn(
+                        spawn_task,
+                        execution_lease,
+                        cleanup_gate_writer,
+                        scope_membership_waiter,
+                    )
+                )
+                raise
         except BaseException:
             _close_fd(gate_writer)
             raise
@@ -458,6 +478,32 @@ async def _cleanup_cancelled_scope_transition(
         return
     _close_fd(gate_writer)
     await _cleanup_unregistered_process(process)
+
+
+async def _cleanup_cancelled_spawn(
+    spawn_task: asyncio.Task[asyncio.subprocess.Process],
+    execution_lease: ManagedGpuLease,
+    gate_writer: int,
+    scope_membership_waiter,
+) -> None:
+    try:
+        process = await spawn_task
+    except BaseException:
+        _close_fd(gate_writer)
+        return
+    transition_task = asyncio.create_task(
+        asyncio.to_thread(
+            scope_membership_waiter,
+            process.pid,
+            execution_lease.lease.lease_id,
+        )
+    )
+    await _cleanup_cancelled_scope_transition(
+        process,
+        transition_task,
+        execution_lease,
+        gate_writer,
+    )
 
 
 async def _cleanup_unregistered_process(

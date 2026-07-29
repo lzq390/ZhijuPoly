@@ -268,6 +268,57 @@ def test_cancel_during_scope_transition_registers_before_cleanup_without_opening
     assert process_control._process_group_alive(transitioned_pid[0]) is False
 
 
+def test_cancel_during_subprocess_creation_collects_and_registers_gated_child(
+    monkeypatch,
+) -> None:
+    real_create_subprocess_exec = asyncio.create_subprocess_exec
+    spawn_created = threading.Event()
+    allow_spawn_result = asyncio.Event()
+    spawned_pid: list[int] = []
+    registrations: list[int] = []
+
+    class Lease:
+        lease = SimpleNamespace(lease_id="a" * 32)
+
+        def register_workload(self, workload_pid: int) -> None:
+            registrations.append(workload_pid)
+
+    async def delayed_create_subprocess_exec(*args, **kwargs):
+        process = await real_create_subprocess_exec(*args, **kwargs)
+        spawned_pid.append(process.pid)
+        spawn_created.set()
+        await allow_spawn_result.wait()
+        return process
+
+    monkeypatch.setattr(
+        process_control.asyncio,
+        "create_subprocess_exec",
+        delayed_create_subprocess_exec,
+    )
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            process_control.create_fenced_subprocess_exec(
+                [sys.executable, "-c", "raise AssertionError('gate opened')"],
+                execution_lease=Lease(),  # type: ignore[arg-type]
+                scope_command_builder=_identity_scope_command,
+                scope_membership_waiter=_identity_scope_membership,
+            )
+        )
+        assert await asyncio.to_thread(spawn_created.wait, 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        allow_spawn_result.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert registrations == spawned_pid
+    assert len(spawned_pid) == 1
+    assert process_control._process_group_alive(spawned_pid[0]) is False
+
+
 def test_fenced_spawn_does_not_run_sitecustomize_before_registration(
     tmp_path: Path,
 ) -> None:
