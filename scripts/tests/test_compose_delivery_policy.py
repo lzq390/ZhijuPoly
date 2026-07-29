@@ -15,6 +15,39 @@ DIGEST_B = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
 
 
 class ComposeDeliveryPolicyTests(unittest.TestCase):
+    def test_frontend_image_defaults_to_dormant_openscience_workspace(self) -> None:
+        dockerfile = (REPOSITORY_ROOT / "frontend" / "Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        dev_compose = (REPOSITORY_ROOT / "docker-compose.dev.yml").read_text(
+            encoding="utf-8"
+        )
+        frontend_env = (REPOSITORY_ROOT / "frontend" / ".env.example").read_text(
+            encoding="utf-8"
+        )
+        dev_env = (REPOSITORY_ROOT / ".env.dev.example").read_text(encoding="utf-8")
+
+        argument = 'ARG VITE_AGENT_WORKSPACE_URL=""'
+        environment = 'ENV VITE_AGENT_WORKSPACE_URL="${VITE_AGENT_WORKSPACE_URL}"'
+        build = "RUN npm run build"
+
+        self.assertIn(argument, dockerfile)
+        self.assertIn(environment, dockerfile)
+        self.assertLess(dockerfile.index(environment), dockerfile.index(build))
+        self.assertIn(
+            'VITE_AGENT_WORKSPACE_URL: "${VITE_AGENT_WORKSPACE_URL:-}"',
+            compose,
+        )
+        self.assertIn(
+            'VITE_AGENT_WORKSPACE_URL: "${VITE_AGENT_WORKSPACE_URL:-}"',
+            dev_compose,
+        )
+        self.assertIn("VITE_AGENT_WORKSPACE_URL=", frontend_env)
+        self.assertIn("VITE_AGENT_WORKSPACE_URL=", dev_env)
+        self.assertIn("http://127.0.0.1:9011/", frontend_env + dev_env)
+        self.assertNotIn("4454", dockerfile + compose + dev_compose + frontend_env + dev_env)
+
     def test_blank_ci_database_and_production_takeover_use_distinct_migration_modes(self) -> None:
         workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"

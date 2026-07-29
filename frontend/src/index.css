@@ -55,6 +55,65 @@
 }
 
 @layer utilities {
+  .project-list-scrollbar {
+    scrollbar-color: rgba(148, 163, 184, 0.28) transparent;
+    scrollbar-width: thin;
+  }
+
+  .project-list-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .project-list-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .project-list-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.28);
+    background-clip: padding-box;
+    border: 1px solid transparent;
+    border-radius: 999px;
+  }
+
+  .project-list-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.42);
+  }
+
+  .project-actions-trigger {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .general-session-actions-trigger {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .project-list-item:hover .project-actions-trigger,
+  .project-list-item:focus-within .project-actions-trigger,
+  .project-actions-trigger[data-open="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .general-session-list-item:hover .general-session-actions-trigger,
+  .general-session-list-item:focus-within .general-session-actions-trigger {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  @media (hover: none) {
+    .project-actions-trigger {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .general-session-actions-trigger {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
   .text-balance {
     text-wrap: balance;
   }
