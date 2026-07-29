@@ -82,7 +82,8 @@ def migration_contract() -> tuple[list[dict[str, object]], list[dict[str, str]]]
         authority_manifest_sha256=AUTHORITY_MANIFEST,
         authority_records=[
             *target_records,
-            READINESS.bridge_deploy_core.FINAL_MIGRATION_RECORD,
+            READINESS.bridge_deploy_core.DFT_MIGRATION_RECORD,
+            READINESS.bridge_deploy_core.QUEUE_MIGRATION_RECORD,
         ],
     )
     return target_records, registry
@@ -475,12 +476,40 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
             }
             for record in [
                 *target_records,
-                READINESS.bridge_deploy_core.FINAL_MIGRATION_RECORD,
+                READINESS.bridge_deploy_core.DFT_MIGRATION_RECORD,
+            ]
+        ],
+        "post-0014": [
+            {
+                "version": str(record["version"]),
+                "checksum": str(record["checksum"]),
+            }
+            for record in [
+                *target_records,
+                READINESS.bridge_deploy_core.DFT_MIGRATION_RECORD,
+                READINESS.bridge_deploy_core.QUEUE_MIGRATION_RECORD,
             ]
         ],
     }
-    migration_row = next(
-        record for record in registry if record["name"] == migration_state
+    migration_row = (
+        {
+            "name": "post-0014",
+            "manifest_sha256": AUTHORITY_MANIFEST,
+            "terminal_version": (
+                READINESS.bridge_deploy_core.QUEUE_MIGRATION["version"]
+            ),
+            "ledger_sha256": (
+                READINESS.bridge_deploy_core.migration_ledger_digest(
+                    ledger_by_state["post-0014"]
+                )
+            ),
+        }
+        if migration_state == "post-0014"
+        else next(
+            record
+            for record in registry
+            if record["name"] == migration_state
+        )
     )
     policy_sha = READINESS.canonical_json_digest(bridge_policy)
     prefetch_identity = digest("9")
@@ -750,7 +779,8 @@ def fixture(*, migration_state: str = "post-0012") -> dict[str, object]:
                 "manifest_sha256": migration_row["manifest_sha256"],
                 "registry_name": migration_state,
                 "0012_applied": migration_state != "pre-0012",
-                "0013_applied": migration_state == "post-0013",
+                "0013_applied": migration_state in {"post-0013", "post-0014"},
+                "0014_applied": migration_state == "post-0014",
             }
         ),
         "mutable_data": seal(
@@ -969,7 +999,7 @@ class ProductionReadinessTests(unittest.TestCase):
         self.assertNotIn("operation-0001", encoded)
 
     def test_all_frozen_migration_states_are_accepted(self) -> None:
-        for state in ("pre-0012", "post-0012", "post-0013"):
+        for state in ("pre-0012", "post-0012", "post-0013", "post-0014"):
             with self.subTest(state=state):
                 validated = self.validate(fixture(migration_state=state))
                 self.assertEqual(validated["migration"]["name"], state)

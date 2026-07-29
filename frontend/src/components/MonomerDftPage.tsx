@@ -32,6 +32,7 @@ import type {
   MonomerDftCalculationType,
   MonomerDftJobCreateRequest,
   MonomerDftJobStatus,
+  MonomerDftModelCapability,
   MonomerDftModelName,
   MonomerDftPostOptimizationProperty,
   MonomerDftProperty,
@@ -50,6 +51,12 @@ type MonomerDftPageProps = {
   onEditStructure: () => void;
   onBackHome: () => void;
 };
+
+export function selectableMonomerDftModels(
+  models: MonomerDftModelCapability[]
+): MonomerDftModelCapability[] {
+  return models.filter((model) => model.deprecated !== true);
+}
 
 const STATUS_LABELS: Record<MonomerDftJobStatus, string> = {
   pending: "等待入队",
@@ -122,6 +129,10 @@ export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditS
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const defaultsInitializedRef = useRef(false);
+  const selectableModels = useMemo(
+    () => selectableMonomerDftModels(dft.capabilities?.models ?? []),
+    [dft.capabilities]
+  );
 
   useEffect(() => {
     if (!dft.capabilities || dft.capabilities.schema_ready !== true) {
@@ -136,9 +147,11 @@ export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditS
       setFormError(null);
       return;
     }
-    setModelId((current) => current && dft.capabilities?.models.some((model) => model.id === current)
+    setModelId((current) => current && selectableModels.some((model) => model.id === current)
       ? current
-      : dft.capabilities?.default_model ?? dft.capabilities?.models.find((model) => model.available)?.id ?? "");
+      : selectableModels.find((model) => model.id === dft.capabilities?.default_model)?.id
+        ?? selectableModels.find((model) => model.available)?.id
+        ?? "");
     if (!defaultsInitializedRef.current) {
       const defaults = dft.capabilities.defaults;
       setSeed(defaults.conformer.seed);
@@ -149,7 +162,7 @@ export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditS
       setPostOptimizationProperties(defaults.optimization.post_optimization_properties);
       defaultsInitializedRef.current = true;
     }
-  }, [dft.capabilities]);
+  }, [dft.capabilities, selectableModels]);
 
   useEffect(() => {
     if (!structure.smiles.includes("*")) {
@@ -157,7 +170,7 @@ export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditS
     }
   }, [structure.smiles]);
 
-  const selectedModel = dft.capabilities?.models.find((model) => model.id === modelId) ?? null;
+  const selectedModel = selectableModels.find((model) => model.id === modelId) ?? null;
   const netCharge = netChargeText.trim() === "" ? null : Number(netChargeText);
   const validationIssues = useMemo(() => validateMonomerDftRequest({
     smiles: structure.smiles,
@@ -215,7 +228,7 @@ export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditS
       setFormError(issues[0].message);
       return;
     }
-    const submitModel = dft.capabilities?.models.find((model) => model.id === modelId);
+    const submitModel = selectableModels.find((model) => model.id === modelId);
     if (!submitModel) {
       setFormError("请选择能力目录中的模型。");
       return;
@@ -266,7 +279,7 @@ export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditS
           </div>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <label className="block"><span className="mb-1.5 block text-xs font-medium text-slate-600">共享 SMILES</span><Input value={structure.smiles} onChange={(event) => structure.setSmiles(event.target.value)} disabled={Boolean(activeJob)} className="h-10 rounded-lg border-slate-200 bg-white font-mono text-xs" placeholder="从结构工作台同步或直接输入" /></label>
-            <label className="block"><span className="mb-1.5 block text-xs font-medium text-slate-600">AIMNet 模型</span><Select value={modelId} onChange={(event) => setModelId(event.target.value as MonomerDftModelName | "")} disabled={Boolean(activeJob) || !dft.capabilities} className="h-10 rounded-lg border-slate-200 bg-white"><option value="">等待能力目录</option>{dft.capabilities?.models.map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.label}{model.deprecated ? "（已弃用）" : ""}{!model.available ? "（不可用）" : ""}</option>)}</Select></label>
+            <label className="block"><span className="mb-1.5 block text-xs font-medium text-slate-600">AIMNet 模型</span><Select value={modelId} onChange={(event) => setModelId(event.target.value as MonomerDftModelName | "")} disabled={Boolean(activeJob) || !dft.capabilities} className="h-10 rounded-lg border-slate-200 bg-white"><option value="">等待能力目录</option>{selectableModels.map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.label}{!model.available ? "（不可用）" : ""}</option>)}</Select></label>
           </div>
           {selectedModel ? <div className={cn("mt-3 rounded-lg border px-3 py-2 text-xs leading-5", selectedModel.deprecated ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-100 bg-slate-50 text-slate-600")}><span className="font-semibold">{selectedModel.label}</span>：{selectedModel.description ?? "由后端能力目录提供的 AIMNet 模型。"}{selectedModel.deprecation_message ? ` ${selectedModel.deprecation_message}` : ""}<div className="mt-1 text-[11px]">支持元素：{selectedModel.supported_elements.join("、") || "由服务端校验"} · {selectedModel.supports_spin ? "支持开放壳层" : "仅闭壳层"}</div></div> : null}
           <div className="mt-4 grid gap-4 sm:grid-cols-3">

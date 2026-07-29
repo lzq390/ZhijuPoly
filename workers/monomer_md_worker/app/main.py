@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass
 import hashlib
 import json
@@ -19,7 +20,14 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, status
 
 from .config import WorkerSettings, load_settings
-from .models import ArtifactDeletionResponse, DrainResponse, HealthResponse, JobAccepted, JobRequest
+from .models import (
+    ArtifactDeletionResponse,
+    DrainResponse,
+    HealthResponse,
+    JobAccepted,
+    JobCancellationResponse,
+    JobRequest,
+)
 from .repository import JobUpdateResult, PostgresJobRepository
 from .runner import MonomerMdRunner
 from .runtime_health import (
@@ -286,6 +294,10 @@ runner = MonomerMdRunner(settings)
 semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
 active_jobs: dict[str, asyncio.Task[None]] = {}
 active_formal_jobs: set[str] = set()
+formal_job_queue: deque[str] = deque()
+job_start_events: dict[str, asyncio.Event] = {}
+cancel_requested_jobs: set[str] = set()
+execution_job_id: str | None = None
 active_jobs_lock = asyncio.Lock()
 worker_instance_id = uuid4().hex
 recovery_ready = not settings.db_configured
@@ -384,6 +396,7 @@ async def resume_worker() -> DrainResponse:
 
 @app.post("/jobs", response_model=JobAccepted, status_code=status.HTTP_202_ACCEPTED)
 async def submit_job(request: JobRequest) -> JobAccepted:
+    global execution_job_id
     steps = request.steps or settings.default_steps
     if request.run_mode == "demo" and steps > settings.max_steps:
         raise HTTPException(
@@ -416,30 +429,53 @@ async def submit_job(request: JobRequest) -> JobAccepted:
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="monomer MD worker active job capacity is full",
             )
-        if request.run_mode == "formal" and active_formal_jobs:
+        if request.run_mode == "formal" and len(active_jobs) != len(active_formal_jobs):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="formal ByteFF2 jobs cannot run while DensityDemo is active",
+            )
+        if request.run_mode == "formal" and len(active_formal_jobs) >= 3:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="formal ByteFF2 monomer MD capacity is full",
             )
+        if request.run_mode == "demo" and active_jobs:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="DensityDemo cannot run while another monomer MD job is active",
+            )
 
-        initial_update_result = await _safe_update_status(
-            request.job_id,
-            "submitted",
-            progress_percent=0,
-            progress_stage="submitted",
-            progress_message="Submitted to the monomer MD worker.",
-        )
+        queued = execution_job_id is not None
+        try:
+            initial_update_result = await asyncio.to_thread(
+                repository.accept_job,
+                request.job_id,
+                worker_instance_id,
+                queued=queued,
+            )
+        except Exception:
+            logger.exception("failed to accept monomer MD job row: %s", request.job_id)
+            initial_update_result = None
         if settings.db_configured and initial_update_result is not JobUpdateResult.UPDATED:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="monomer MD job row is not available for status updates",
             )
 
+        start_event = asyncio.Event()
+        job_start_events[request.job_id] = start_event
+        if queued:
+            formal_job_queue.append(request.job_id)
+        else:
+            execution_job_id = request.job_id
+            start_event.set()
         task = asyncio.create_task(_run_job(request, steps))
         active_jobs[request.job_id] = task
         if request.run_mode == "formal":
             active_formal_jobs.add(request.job_id)
-        task.add_done_callback(lambda _: _remove_active_job(request.job_id))
+        task.add_done_callback(
+            lambda _, job_id=request.job_id: asyncio.create_task(_remove_active_job(job_id))
+        )
     return JobAccepted(
         job_id=request.job_id,
         status="submitted",
@@ -451,9 +487,69 @@ async def submit_job(request: JobRequest) -> JobAccepted:
     )
 
 
-def _remove_active_job(job_id: str) -> None:
-    active_jobs.pop(job_id, None)
-    active_formal_jobs.discard(job_id)
+async def _remove_active_job(job_id: str) -> None:
+    global execution_job_id
+    promote_job_id: str | None = None
+    async with active_jobs_lock:
+        active_jobs.pop(job_id, None)
+        active_formal_jobs.discard(job_id)
+        cancel_requested_jobs.discard(job_id)
+        job_start_events.pop(job_id, None)
+        try:
+            formal_job_queue.remove(job_id)
+        except ValueError:
+            pass
+        if execution_job_id == job_id:
+            execution_job_id = None
+            while formal_job_queue:
+                candidate = formal_job_queue.popleft()
+                if candidate in active_jobs:
+                    execution_job_id = candidate
+                    promote_job_id = candidate
+                    break
+    if promote_job_id is None:
+        return
+    try:
+        promoted = await asyncio.to_thread(repository.promote_queued_job, promote_job_id)
+    except Exception:
+        logger.exception("failed to promote queued monomer MD job: %s", promote_job_id)
+        promoted = None
+    if settings.db_configured and promoted is not JobUpdateResult.UPDATED:
+        task = active_jobs.get(promote_job_id)
+        if task is not None:
+            task.cancel()
+        return
+    event = job_start_events.get(promote_job_id)
+    if event is not None:
+        event.set()
+
+
+@app.post("/jobs/{job_id}/cancel", response_model=JobCancellationResponse)
+async def cancel_job(job_id: str) -> JobCancellationResponse:
+    async with active_jobs_lock:
+        task = active_jobs.get(job_id)
+        if task is not None:
+            cancel_requested_jobs.add(job_id)
+            task.cancel()
+            return JobCancellationResponse(
+                job_id=job_id,
+                status="cancel_requested",
+                message="Cancellation is being processed by the monomer MD worker.",
+            )
+
+    update_result = await _safe_update_status(
+        job_id,
+        "cancelled",
+        progress_stage="cancelled",
+        progress_message="Monomer MD cancellation completed.",
+    )
+    if update_result is JobUpdateResult.MISSING:
+        raise HTTPException(status_code=404, detail="monomer MD job is not active on this worker")
+    return JobCancellationResponse(
+        job_id=job_id,
+        status="cancelled",
+        message="Monomer MD cancellation has completed.",
+    )
 
 
 @app.delete("/jobs/{job_id}/artifacts", response_model=ArtifactDeletionResponse)
@@ -667,6 +763,24 @@ def _job_rejection_message(health_response: HealthResponse, request: JobRequest)
 
 
 async def _run_job(request: JobRequest, steps: int) -> None:
+    start_event = job_start_events[request.job_id]
+    try:
+        await start_event.wait()
+    except asyncio.CancelledError:
+        user_cancelled = request.job_id in cancel_requested_jobs
+        await _persist_terminal_status(
+            request.job_id,
+            "cancelled" if user_cancelled else "failed",
+            error=None if user_cancelled else "Monomer MD worker shut down before this queued job started.",
+            error_category=None if user_cancelled else "worker_shutdown",
+            progress_stage="cancelled" if user_cancelled else "failed",
+            progress_message=(
+                "Queued monomer MD job was cancelled."
+                if user_cancelled
+                else "Monomer MD worker shut down before this queued job started."
+            ),
+        )
+        raise
     async with semaphore:
         execution_lease: ManagedGpuLease | None = None
         try:
@@ -705,26 +819,63 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             await runner.release_execution_lease(execution_lease)
             execution_lease = None
         except asyncio.CancelledError:
-            await _release_execution_lease_safely(execution_lease, request.job_id)
+            cleanup_safe = await _release_execution_lease_safely(
+                execution_lease,
+                request.job_id,
+            )
+            user_cancelled = request.job_id in cancel_requested_jobs
+            cancellation_completed = user_cancelled and cleanup_safe
+            cleanup_error = (
+                "Monomer MD cancellation could not prove safe GPU resource cleanup; "
+                "capacity remains fail-closed."
+            )
             await _persist_terminal_status(
                 request.job_id,
-                "failed",
-                error="Monomer MD worker shut down before this job finished.",
-                error_category="worker_shutdown",
-                progress_stage="failed",
-                progress_message="Monomer MD worker shut down before this job finished.",
+                "cancelled" if cancellation_completed else "failed",
+                error=(
+                    None
+                    if cancellation_completed
+                    else cleanup_error
+                    if user_cancelled
+                    else "Monomer MD worker shut down before this job finished."
+                ),
+                error_category=(
+                    None
+                    if cancellation_completed
+                    else "cancel_cleanup_unconfirmed"
+                    if user_cancelled
+                    else "worker_shutdown"
+                ),
+                progress_stage="cancelled" if cancellation_completed else "failed",
+                progress_message=(
+                    "Monomer MD job was cancelled and its execution resources were released."
+                    if cancellation_completed
+                    else cleanup_error
+                    if user_cancelled
+                    else "Monomer MD worker shut down before this job finished."
+                ),
+                allow_cancel_requested_failure=user_cancelled and not cleanup_safe,
             )
             raise
         except Exception as exc:
-            await _release_execution_lease_safely(execution_lease, request.job_id)
+            cleanup_safe = await _release_execution_lease_safely(
+                execution_lease,
+                request.job_id,
+            )
+            user_cancelled = request.job_id in cancel_requested_jobs
             logger.exception("monomer MD job failed: %s", request.job_id)
             await _persist_terminal_status(
                 request.job_id,
                 "failed",
                 error=str(exc),
-                error_category=_classify_error(exc),
+                error_category=(
+                    "cancel_cleanup_failed"
+                    if user_cancelled
+                    else _classify_error(exc)
+                ),
                 progress_stage="failed",
                 progress_message=str(exc)[:500],
+                allow_cancel_requested_failure=user_cancelled or not cleanup_safe,
             )
             return
 
@@ -736,42 +887,60 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             artifacts.update(result.result["artifacts"])
         artifact_manifest = result.result.get("artifact_manifest") if isinstance(result.result.get("artifact_manifest"), dict) else None
         result_summary = result.result.get("summary") if isinstance(result.result.get("summary"), dict) else None
-        await _persist_terminal_status(
-            request.job_id,
-            "completed",
-            result=result.result,
-            output_dir=str(result.output_dir),
-            artifacts=artifacts,
-            completed_steps=result.completed_steps,
-            progress_percent=100,
-            progress_stage="completed",
-            progress_message=(
-                f"ByteFF2 {request.protocol} formal protocol completed."
-                if request.run_mode == "formal"
-                else "Density demo completed."
-            ),
-            artifact_manifest=artifact_manifest,
-            result_summary=result_summary,
-            byteff2_git_sha=result.result.get("byteff2_git_sha") if isinstance(result.result.get("byteff2_git_sha"), str) else None,
-            gpu_device=result.result.get("gpu_device") if isinstance(result.result.get("gpu_device"), str) else None,
-        )
+        try:
+            await _persist_terminal_status(
+                request.job_id,
+                "completed",
+                result=result.result,
+                output_dir=str(result.output_dir),
+                artifacts=artifacts,
+                completed_steps=result.completed_steps,
+                progress_percent=100,
+                progress_stage="completed",
+                progress_message=(
+                    f"ByteFF2 {request.protocol} formal protocol completed."
+                    if request.run_mode == "formal"
+                    else "Density demo completed."
+                ),
+                artifact_manifest=artifact_manifest,
+                result_summary=result_summary,
+                byteff2_git_sha=result.result.get("byteff2_git_sha") if isinstance(result.result.get("byteff2_git_sha"), str) else None,
+                gpu_device=result.result.get("gpu_device") if isinstance(result.result.get("gpu_device"), str) else None,
+            )
+        except asyncio.CancelledError:
+            user_cancelled = request.job_id in cancel_requested_jobs
+            await _persist_terminal_status(
+                request.job_id,
+                "cancelled" if user_cancelled else "failed",
+                error=None if user_cancelled else "Monomer MD worker shut down before completion was persisted.",
+                error_category=None if user_cancelled else "worker_shutdown",
+                progress_stage="cancelled" if user_cancelled else "failed",
+                progress_message=(
+                    "Monomer MD cancellation completed after execution resources were released."
+                    if user_cancelled
+                    else "Monomer MD worker shut down before completion was persisted."
+                ),
+            )
+            raise
 
 
 async def _release_execution_lease_safely(
     execution_lease: ManagedGpuLease | None,
     job_id: str,
-) -> None:
+) -> bool:
     if execution_lease is None:
-        return
+        return not getattr(runner, "gpu_admission_uncertain", False)
     if getattr(execution_lease, "termination_unsafe", False):
         execution_lease.abandon()
-        return
+        return False
     try:
         await runner.release_execution_lease(execution_lease)
     except Exception:
         # The reservation remains fail-closed in the Broker.  Logging retains
         # evidence and a Worker restart will eventually clear the exact owner.
         logger.exception("failed to release GPU execution lease for job %s", job_id)
+        return False
+    return not getattr(execution_lease, "termination_unsafe", False)
 
 
 async def _safe_update_status(
@@ -791,6 +960,7 @@ async def _safe_update_status(
     byteff2_git_sha: str | None = None,
     gpu_device: str | None = None,
     error_category: str | None = None,
+    allow_cancel_requested_failure: bool = False,
 ) -> JobUpdateResult | None:
     if not settings.db_configured:
         return JobUpdateResult.UPDATED
@@ -813,6 +983,7 @@ async def _safe_update_status(
             gpu_device=gpu_device,
             error_category=error_category,
             worker_instance_id=worker_instance_id,
+            allow_cancel_requested_failure=allow_cancel_requested_failure,
         )
     except Exception:
         logger.exception("failed to update monomer MD job status: %s", job_id)
@@ -833,6 +1004,17 @@ async def _persist_terminal_status(job_id: str, status_value: str, **kwargs: Any
             JobUpdateResult.MISSING,
         }:
             return True
+        if update_result is JobUpdateResult.CANCEL_REQUESTED:
+            cancelled = await _safe_update_status(
+                job_id,
+                "cancelled",
+                progress_stage="cancelled",
+                progress_message="Monomer MD cancellation completed after safe resource cleanup.",
+            )
+            return cancelled in {
+                JobUpdateResult.UPDATED,
+                JobUpdateResult.ALREADY_TERMINAL,
+            }
         if shutting_down:
             return False
         await asyncio.sleep(5)
@@ -844,6 +1026,9 @@ async def _attempt_recovery() -> bool:
         recovery_ready = True
         return True
     try:
+        cancelled = await asyncio.to_thread(
+            repository.reconcile_cancel_requested_jobs,
+        )
         recovered = await asyncio.to_thread(
             repository.reconcile_orphaned_jobs,
             worker_instance_id,
@@ -853,6 +1038,8 @@ async def _attempt_recovery() -> bool:
         logger.exception("failed to reconcile orphaned monomer MD jobs")
         return False
     recovery_ready = True
+    if cancelled:
+        logger.warning("marked %s orphaned cancellation request(s) cancelled", cancelled)
     if recovered:
         logger.warning("marked %s orphaned monomer MD job(s) failed", recovered)
     return True

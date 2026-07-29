@@ -44,7 +44,7 @@ class FakeCanaryWorker:
             "db_configured": True,
             "runtime_ready": True,
             "active_jobs": len(self.active_jobs),
-            "max_active_jobs": 1,
+            "max_active_jobs": 3,
             "default_steps": 300,
             "max_steps": 300,
             "job_root": self.job_root,
@@ -103,7 +103,7 @@ def _submit(
         operation_id=OPERATION_ID,
         source_sha=SOURCE_SHA,
         expected_byteff2_commit=BYTEFF2_COMMIT,
-        max_active_jobs=1,
+        max_active_jobs=3,
         worker_client=worker,
         capability=capability,
     )
@@ -656,7 +656,7 @@ def test_pending_active_terminal_and_unowned_rows_fail_closed_or_clean_exactly(
             operation_id=unowned_operation,
             source_sha=SOURCE_SHA,
             expected_byteff2_commit=BYTEFF2_COMMIT,
-            max_active_jobs=1,
+            max_active_jobs=3,
             worker_client=unowned_worker,
         )
     unowned_marker = canary.read_canary_marker(

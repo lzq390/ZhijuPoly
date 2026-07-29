@@ -82,9 +82,9 @@ STRICT_REQUIRED_MIGRATIONS = tuple(
     )
 )
 STARTUP_REQUIRED_MIGRATIONS = tuple(
-    version
-    for version in STRICT_REQUIRED_MIGRATIONS
-    if version != MONOMER_DFT_MIGRATION_VERSION
+    migration.version
+    for migration in _MIGRATION_POLICY
+    if migration.version in STRICT_REQUIRED_MIGRATIONS and migration.epoch == 1
 )
 KNOWN_CONTRACT_MIGRATIONS = tuple(
     migration.version for migration in _MIGRATION_POLICY if migration.kind == "contract"

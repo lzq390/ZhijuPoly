@@ -831,7 +831,13 @@ class SiteHelperContractTests(unittest.TestCase):
             CONTRACTS.DATA_SEQUENCE_OWNERSHIP,
             strict=True,
         ):
-            present = schema != "monomer_dft"
+            present = (
+                schema != "monomer_dft"
+                and not (
+                    schema == "md"
+                    and sequence == "monomer_md_queue_sequence_seq"
+                )
+            )
             sequences.append(
                 {
                     "schema": schema,
@@ -1109,7 +1115,9 @@ class SiteHelperContractTests(unittest.TestCase):
         post_0013 = json.loads(json.dumps(document))
         post_0013["migration_ledger"] = [
             {"version": version, "checksum": checksum}
-            for version, checksum in CONTRACTS.CANONICAL_MIGRATION_LEDGER
+            for version, checksum in CONTRACTS.CANONICAL_MIGRATION_LEDGER[
+                :13
+            ]
         ]
         post_0013["migration_exception"] = table_record(
             CONTRACTS.CONTRACT_0012_EXCEPTION_TABLE,

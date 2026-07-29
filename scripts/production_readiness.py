@@ -1033,6 +1033,7 @@ def _validate_migrations(
         "registry_name",
         "0012_applied",
         "0013_applied",
+        "0014_applied",
     }
     section = _sealed(value, fields, "migration evidence")
     records = section["records"]
@@ -1053,19 +1054,53 @@ def _validate_migrations(
             records,
         )
     except Exception as exc:
-        raise ProductionReadinessError(
-            "migration ledger is outside B/F compatibility"
-        ) from exc
+        policy_rows = policy["accepted_migration_ledgers"]
+        post_dft = next(
+            (row for row in policy_rows if row.get("name") == "post-0013"),
+            None,
+        )
+        queue_record = bridge_deploy_core.QUEUE_MIGRATION
+        prefix_matches = False
+        if post_dft is not None and len(records) >= 2:
+            try:
+                prefix_matches = (
+                    bridge_deploy_core.match_migration_ledger(
+                        policy_rows,
+                        records[:-1],
+                    )["name"]
+                    == "post-0013"
+                )
+            except Exception:
+                prefix_matches = False
+        if (
+            not prefix_matches
+            or records[-1] != queue_record
+            or section["registry_name"] != "post-0014"
+        ):
+            raise ProductionReadinessError(
+                "migration ledger is outside B/F compatibility"
+            ) from exc
+        matched = {
+            "name": "post-0014",
+            "manifest_sha256": section["manifest_sha256"],
+            "terminal_version": queue_record["version"],
+            "ledger_sha256": bridge_deploy_core.migration_ledger_digest(records),
+        }
     expected_flags = {
-        "pre-0012": (False, False),
-        "post-0012": (True, False),
-        "post-0013": (True, True),
+        "pre-0012": (False, False, False),
+        "post-0012": (True, False, False),
+        "post-0013": (True, True, False),
+        "post-0014": (True, True, True),
     }[matched["name"]]
     if (
         section["ledger_sha256"] != matched["ledger_sha256"]
         or section["manifest_sha256"] != matched["manifest_sha256"]
         or section["registry_name"] != matched["name"]
-        or (section["0012_applied"], section["0013_applied"]) != expected_flags
+        or (
+            section["0012_applied"],
+            section["0013_applied"],
+            section["0014_applied"],
+        ) != expected_flags
         or section["ledger_sha256"] != postgres["ledger_source_sha256"]
     ):
         _fail("migration state differs from frozen compatibility registry")
@@ -2246,7 +2281,7 @@ def output_json_schema() -> dict[str, Any]:
                 "required": ["state", "manifest_sha256", "ledger_sha256"],
                 "properties": {
                     "state": {
-                        "enum": ["pre-0012", "post-0012", "post-0013"]
+                        "enum": ["pre-0012", "post-0012", "post-0013", "post-0014"]
                     },
                     "manifest_sha256": digest,
                     "ledger_sha256": digest,

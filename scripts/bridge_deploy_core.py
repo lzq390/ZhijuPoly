@@ -69,14 +69,28 @@ CONTRACT_MIGRATION = {
         "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
     ),
 }
-FINAL_MIGRATION = {
+DFT_MIGRATION = {
     "version": "0013_monomer_dft_jobs",
     "checksum": (
         "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc"
     ),
 }
-FINAL_MIGRATION_RECORD = {
-    **FINAL_MIGRATION,
+FINAL_MIGRATION = dict(DFT_MIGRATION)
+QUEUE_MIGRATION = {
+    "version": "0014_monomer_md_task_queue_cancel",
+    "checksum": (
+        "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6"
+    ),
+}
+DFT_MIGRATION_RECORD = {
+    **DFT_MIGRATION,
+    "kind": "expand",
+    "epoch": 2,
+    "requires_contracts": [dict(CONTRACT_MIGRATION)],
+}
+FINAL_MIGRATION_RECORD = dict(DFT_MIGRATION_RECORD)
+QUEUE_MIGRATION_RECORD = {
+    **QUEUE_MIGRATION,
     "kind": "expand",
     "epoch": 2,
     "requires_contracts": [dict(CONTRACT_MIGRATION)],
@@ -223,7 +237,7 @@ def expected_migration_registry(
     authority_manifest_sha256: object,
     authority_records: object,
 ) -> list[dict[str, str]]:
-    """Derive the only three ledgers accepted by the frozen B/F pair."""
+    """Derive the exact ledgers accepted through the current authority."""
 
     target_digest = _require_digest(
         target_manifest_sha256, "bridge target migration manifest"
@@ -244,9 +258,38 @@ def expected_migration_registry(
         raise BridgeDeployError(
             "bridge target manifest lacks the exact trailing 0012 contract"
         )
-    if authority != [*target, FINAL_MIGRATION_RECORD]:
+    policy_authority = [*target, DFT_MIGRATION_RECORD]
+    if authority not in (
+        policy_authority,
+        [*policy_authority, QUEUE_MIGRATION_RECORD],
+    ):
         raise BridgeDeployError(
-            "bridge authority manifest is not the unique B plus 0013 extension"
+            "bridge authority manifest is not the unique B plus 0013/0014 extension"
+        )
+    policy_authority_digest = authority_digest
+    if authority != policy_authority:
+        serialized_policy_authority = [
+            {
+                "version": record["version"],
+                "kind": record["kind"],
+                "epoch": record["epoch"],
+                "checksum": record["checksum"],
+                "requires_contracts": record["requires_contracts"],
+            }
+            for record in policy_authority
+        ]
+        policy_authority_payload = (
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "migrations": serialized_policy_authority,
+                },
+                indent=2,
+            )
+            + "\n"
+        ).encode("utf-8")
+        policy_authority_digest = (
+            "sha256:" + hashlib.sha256(policy_authority_payload).hexdigest()
         )
     before_contract = target[:-1]
     return [
@@ -264,9 +307,9 @@ def expected_migration_registry(
         },
         {
             "name": "post-0013",
-            "manifest_sha256": authority_digest,
-            "terminal_version": FINAL_MIGRATION["version"],
-            "ledger_sha256": migration_ledger_digest(authority),
+            "manifest_sha256": policy_authority_digest,
+            "terminal_version": DFT_MIGRATION["version"],
+            "ledger_sha256": migration_ledger_digest(policy_authority),
         },
     ]
 
@@ -315,7 +358,7 @@ def match_migration_ledger(
         raise BridgeDeployError(
             "observed migration ledger is outside the frozen B/F registry"
         )
-    if matches[0]["name"] == "post-0013" and rows[-1] != FINAL_MIGRATION:
+    if matches[0]["name"] == "post-0013" and rows[-1] != DFT_MIGRATION:
         raise BridgeDeployError("observed 0013 ledger checksum differs")
     return dict(matches[0])
 

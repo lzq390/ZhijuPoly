@@ -4171,7 +4171,7 @@ class ReleaseController:
         expected_worker_values = {
             "MONOMER_MD_DEFAULT_STEPS": "300",
             "MONOMER_MD_MAX_STEPS": "300",
-            "MONOMER_MD_MAX_ACTIVE_JOBS": "1",
+            "MONOMER_MD_MAX_ACTIVE_JOBS": "3",
             "MONOMER_MD_MAX_CONCURRENT_JOBS": "1",
             "BYTEFF2_ROOT": str(self.ops / "current-assets" / "byteff2"),
             "BYTEFF2_PYTHON": "/home/devuser/miniconda3/envs/byteff2-repro/bin/python",

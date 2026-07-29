@@ -138,6 +138,11 @@ sequences = (
         None,
     ),
     (
+        "md",
+        "monomer_md_queue_sequence_seq",
+        "md_queue_sequence_present",
+    ),
+    (
         "monomer_dft",
         "jobs_enqueue_sequence_seq",
         "dft_jobs_enqueue_sequence_present",
@@ -534,6 +539,10 @@ for variable, relation in (
     ("dft_job_attempts_present", "monomer_dft.job_attempts"),
     ("dft_artifacts_present", "monomer_dft.artifacts"),
     (
+        "md_queue_sequence_present",
+        "md.monomer_md_queue_sequence_seq",
+    ),
+    (
         "dft_jobs_enqueue_sequence_present",
         "monomer_dft.jobs_enqueue_sequence_seq",
     ),
@@ -622,7 +631,8 @@ for name, query in (
 commands.append("\\endif")
 commands.append(
     "\\copy (SELECT (to_jsonb(value) - "
-    "ARRAY['worker_instance_id','heartbeat_at','lease_expires_at']::text[])::text "
+    "ARRAY['worker_instance_id','heartbeat_at','lease_expires_at',"
+    "'cancel_requested_at','queue_sequence']::text[])::text "
     "FROM md.monomer_md_jobs AS value ORDER BY job_id) "
     f"TO '{literal(root / 'md__monomer_md_jobs.pre-0009-row-json-v1.rows')}'"
 )
@@ -787,6 +797,10 @@ sequence_specs = (
     (
         "model_registry",
         "assets_asset_id_seq",
+    ),
+    (
+        "md",
+        "monomer_md_queue_sequence_seq",
     ),
     (
         "monomer_dft",

@@ -337,6 +337,11 @@ DATA_SEQUENCES = (
         "model_registry.assets.asset_id",
     ),
     (
+        "md",
+        "monomer_md_queue_sequence_seq",
+        "md.monomer_md_jobs.queue_sequence",
+    ),
+    (
         "monomer_dft",
         "jobs_enqueue_sequence_seq",
         "monomer_dft.jobs.enqueue_sequence",
@@ -352,6 +357,7 @@ DATA_SEQUENCE_OWNERSHIP = (
     ("experimental", "process_records", "record_id", 1, "a"),
     ("experimental", "property_records", "record_id", 1, "a"),
     ("model_registry", "assets", "asset_id", 1, "a"),
+    ("md", "monomer_md_jobs", "queue_sequence", 37, "a"),
     ("monomer_dft", "jobs", "enqueue_sequence", 2, "i"),
 )
 MONOMER_DFT_TABLE_SCHEMA_SHA256 = {
@@ -423,6 +429,10 @@ CANONICAL_MIGRATION_LEDGER = (
     (
         "0013_monomer_dft_jobs",
         "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc",
+    ),
+    (
+        "0014_monomer_md_task_queue_cancel",
+        "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6",
     ),
 )
 
@@ -5121,7 +5131,7 @@ def _validate_polytao_archive_evidence(
 
 
 def _validate_mutable_ledger(records: object) -> list[dict[str, str]]:
-    if not isinstance(records, list) or len(records) not in {8, 11, 12, 13}:
+    if not isinstance(records, list) or len(records) not in {8, 11, 12, 13, 14}:
         raise SiteHelperContractError(
             "mutable-data audit migration ledger is not a governed B/F state"
         )
@@ -5140,6 +5150,7 @@ def _validate_sequence_inventory(
     records: object,
     *,
     dft_ready: bool,
+    md_queue_ready: bool,
 ) -> list[dict[str, Any]]:
     if not isinstance(records, list) or len(records) != len(DATA_SEQUENCES):
         raise SiteHelperContractError("mutable-data sequence inventory differs")
@@ -5166,7 +5177,22 @@ def _validate_sequence_inventory(
         strict=True,
     ):
         optional_dft = expected[0] == "monomer_dft"
-        expected_state = "present" if dft_ready or not optional_dft else "absent"
+        optional_md_queue = (
+            expected[0] == "md"
+            and expected[1] == "monomer_md_queue_sequence_seq"
+        )
+        expected_state = (
+            "present"
+            if (
+                not optional_dft
+                and not optional_md_queue
+                or optional_dft
+                and dft_ready
+                or optional_md_queue
+                and md_queue_ready
+            )
+            else "absent"
+        )
         if (
             not isinstance(record, dict)
             or set(record) != fields
@@ -5230,7 +5256,7 @@ def _validate_sequence_inventory(
             raise SiteHelperContractError(
                 "mutable-data sequence state is invalid"
             )
-        if optional_dft and {
+        if (optional_dft or optional_md_queue) and {
             name: record[name]
             for name in (
                 "data_type",
@@ -5251,7 +5277,7 @@ def _validate_sequence_inventory(
             "cycle": False,
         }:
             raise SiteHelperContractError(
-                "monomer DFT identity sequence parameters differ"
+                "governed task identity sequence parameters differ"
             )
         normalized.append(dict(record))
     return normalized
@@ -5678,6 +5704,7 @@ def _validate_mutable_data_audit(
     controls_ready = "0010_deployment_control" in versions
     leases_ready = "0009_monomer_md_job_leases" in versions
     dft_ready = "0013_monomer_dft_jobs" in versions
+    md_queue_ready = "0014_monomer_md_task_queue_cancel" in versions
     contract_applied = "0012_drop_polytao_jobs" in versions
     business_relations = (
         BUSINESS_MUTABLE_TABLES + POST_0013_BUSINESS_MUTABLE_TABLES
@@ -5734,6 +5761,7 @@ def _validate_mutable_data_audit(
     sequences = _validate_sequence_inventory(
         document.get("sequences"),
         dft_ready=dft_ready,
+        md_queue_ready=md_queue_ready,
     )
     bridge_projection = _validate_bridge_projection(
         document.get("bridge_projection"),

@@ -1063,7 +1063,7 @@ class ReleaseControllerTests(unittest.TestCase):
             "APP_POSTGRES_DSN=postgresql://polyprop:random-production-value@127.0.0.1:55432/nexpoly\n"
             "MONOMER_MD_DEFAULT_STEPS=300\n"
             "MONOMER_MD_MAX_STEPS=300\n"
-            "MONOMER_MD_MAX_ACTIVE_JOBS=1\n"
+            "MONOMER_MD_MAX_ACTIVE_JOBS=3\n"
             "MONOMER_MD_MAX_CONCURRENT_JOBS=1\n"
             f"BYTEFF2_ROOT={controller.ops / 'current-assets' / 'byteff2'}\n"
             "BYTEFF2_PYTHON=/home/devuser/miniconda3/envs/byteff2-repro/bin/python\n"
@@ -1291,7 +1291,7 @@ class ReleaseControllerTests(unittest.TestCase):
         os.chmod(worker_env_path, 0o600)
 
         worker_env_path.write_text(
-            worker_env.replace("MONOMER_MD_MAX_ACTIVE_JOBS=1", "MONOMER_MD_MAX_ACTIVE_JOBS=2"),
+            worker_env.replace("MONOMER_MD_MAX_ACTIVE_JOBS=3", "MONOMER_MD_MAX_ACTIVE_JOBS=2"),
             encoding="utf-8",
         )
         os.chmod(worker_env_path, 0o600)

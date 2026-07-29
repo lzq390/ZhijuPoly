@@ -10,14 +10,21 @@ from app.routers.monomer_md import router as monomer_md_router
 from app.services.monomer_md_repository import (
     count_active_monomer_md_jobs_postgres,
     create_monomer_md_job_postgres,
+    list_monomer_md_jobs_postgres,
     mark_monomer_md_job_completed_postgres,
     mark_monomer_md_job_failed_postgres,
     mark_monomer_md_job_submitted_postgres,
+    request_monomer_md_job_cancel_postgres,
 )
 from app.services.monomer_md_worker_client import (
     MonomerMdWorkerClient,
     MonomerMdWorkerError,
     MonomerMdWorkerSubmitPayload,
+)
+from workers.monomer_md_worker.app.config import load_settings as load_worker_settings
+from workers.monomer_md_worker.app.repository import (
+    JobUpdateResult,
+    PostgresJobRepository,
 )
 
 FORMAL_PROTOCOLS = ("Density", "HVap", "Compressibility", "Dielectric", "Transport")
@@ -40,6 +47,7 @@ class FakeWorkerClient:
     def __init__(self, *, mode: str = "dry-run", protocols: dict[str, dict[str, object]] | None = None) -> None:
         self.payloads = []
         self.deleted_jobs = []
+        self.cancelled_jobs = []
         self.mode = mode
         self.protocols = protocols if protocols is not None else _ready_protocols()
 
@@ -75,6 +83,14 @@ class FakeWorkerClient:
             "deleted": True,
             "artifact_root": f"/runs/{job_id}",
             "message": "artifacts deleted",
+        }
+
+    def cancel_job(self, job_id: str):
+        self.cancelled_jobs.append(job_id)
+        return {
+            "job_id": job_id,
+            "status": "cancel_requested",
+            "message": "cancellation accepted",
         }
 
 
@@ -654,7 +670,7 @@ def test_monomer_md_formal_job_rejects_invalid_dielectric_step_config(postgres_d
     assert _monomer_md_job_count(postgres_dsn) == 0
 
 
-def test_monomer_md_formal_job_capacity_is_always_one(postgres_dsn: str):
+def test_monomer_md_formal_capacity_allows_one_running_and_two_queued(postgres_dsn: str):
     app = _create_app(
         postgres_dsn,
         monomer_md_rate_limit_per_ip_per_minute=10,
@@ -664,20 +680,212 @@ def test_monomer_md_formal_job_capacity_is_always_one(postgres_dsn: str):
     app.state.monomer_md_worker_client = fake_worker
     client = TestClient(app)
 
-    first_response = client.post(
-        "/api/v1/monomer-md/jobs",
-        json={"protocol": "Density", "run_mode": "formal", "config_json": _density_formal_config()},
-    )
-    second_response = client.post(
-        "/api/v1/monomer-md/jobs",
-        json={"protocol": "Density", "run_mode": "formal", "config_json": _density_formal_config()},
-    )
+    responses = [
+        client.post(
+            "/api/v1/monomer-md/jobs",
+            json={"protocol": "Density", "run_mode": "formal", "config_json": _density_formal_config()},
+        )
+        for _ in range(4)
+    ]
 
-    assert first_response.status_code == 202
-    assert second_response.status_code == 429
-    assert "formal ByteFF2" in second_response.json()["detail"]
-    assert _monomer_md_job_count(postgres_dsn) == 1
-    assert len(fake_worker.payloads) == 1
+    assert [response.status_code for response in responses] == [202, 202, 202, 429]
+    assert "formal ByteFF2" in responses[-1].json()["detail"]
+    assert _monomer_md_job_count(postgres_dsn) == 3
+    assert len(fake_worker.payloads) == 3
+
+
+def test_monomer_md_formal_and_demo_jobs_are_mutually_exclusive(postgres_dsn: str):
+    app = _create_app(
+        postgres_dsn,
+        monomer_md_rate_limit_per_ip_per_minute=10,
+        monomer_md_max_active_jobs=10,
+    )
+    app.state.monomer_md_worker_client = FakeWorkerClient(mode="real")
+    client = TestClient(app)
+
+    formal = client.post(
+        "/api/v1/monomer-md/jobs",
+        json={"protocol": "Density", "run_mode": "formal", "config_json": _density_formal_config()},
+    )
+    demo = client.post("/api/v1/monomer-md/jobs", json={"smiles": "CCO"})
+
+    assert formal.status_code == 202
+    assert demo.status_code == 429
+
+
+def test_monomer_md_list_and_cancel_formal_jobs(postgres_dsn: str):
+    app = _create_app(
+        postgres_dsn,
+        monomer_md_rate_limit_per_ip_per_minute=10,
+        monomer_md_max_active_jobs=10,
+    )
+    fake_worker = FakeWorkerClient(mode="real")
+    app.state.monomer_md_worker_client = fake_worker
+    client = TestClient(app)
+
+    job_ids = []
+    for _ in range(3):
+        response = client.post(
+            "/api/v1/monomer-md/jobs",
+            json={"protocol": "Density", "run_mode": "formal", "config_json": _density_formal_config()},
+        )
+        assert response.status_code == 202
+        job_ids.append(response.json()["job_id"])
+    with postgres_connection(postgres_dsn) as connection:
+        for job_id in job_ids[1:]:
+            connection.execute(
+                """
+                UPDATE md.monomer_md_jobs
+                SET queue_sequence = nextval('md.monomer_md_queue_sequence_seq'),
+                    progress_stage = 'queued'
+                WHERE job_id = %s
+                """,
+                (job_id,),
+            )
+
+    active = client.get(
+        "/api/v1/monomer-md/jobs",
+        params={"run_mode": "formal", "active_only": "true", "page_size": 3},
+    )
+    assert active.status_code == 200
+    active_payload = active.json()
+    assert active_payload["total"] == 3
+    assert [item["queue_position"] for item in active_payload["items"]] == [None, 1, 2]
+
+    cancel = client.post(f"/api/v1/monomer-md/jobs/{job_ids[1]}/cancel")
+    assert cancel.status_code == 202
+    assert cancel.json()["status"] == "cancel_requested"
+    assert fake_worker.cancelled_jobs == [job_ids[1]]
+
+    repeated = client.post(f"/api/v1/monomer-md/jobs/{job_ids[1]}/cancel")
+    assert repeated.status_code == 202
+    assert fake_worker.cancelled_jobs == [job_ids[1], job_ids[1]]
+
+    filtered = client.get(
+        "/api/v1/monomer-md/jobs",
+        params={"run_mode": "formal", "status": "cancel_requested"},
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 1
+    assert filtered.json()["items"][0]["job_id"] == job_ids[1]
+
+
+def test_monomer_md_cancel_handles_pending_terminal_and_unknown_jobs(
+    postgres_dsn: str,
+):
+    app = _create_app(postgres_dsn)
+    fake_worker = FakeWorkerClient()
+    app.state.monomer_md_worker_client = fake_worker
+    with postgres_connection(postgres_dsn) as connection:
+        create_monomer_md_job_postgres(
+            connection,
+            job_id="pending-cancel-job",
+            input_smiles="CCO",
+            canonical_smiles="CCO",
+            requested_steps=300,
+        )
+        create_monomer_md_job_postgres(
+            connection,
+            job_id="terminal-cancel-job",
+            input_smiles="CCO",
+            canonical_smiles="CCO",
+            requested_steps=300,
+        )
+        mark_monomer_md_job_failed_postgres(
+            connection,
+            "terminal-cancel-job",
+            "already failed",
+        )
+
+    client = TestClient(app)
+    pending = client.post("/api/v1/monomer-md/jobs/pending-cancel-job/cancel")
+    terminal = client.post("/api/v1/monomer-md/jobs/terminal-cancel-job/cancel")
+    missing = client.post("/api/v1/monomer-md/jobs/missing-cancel-job/cancel")
+
+    assert pending.status_code == 409
+    assert terminal.status_code == 200
+    assert terminal.json()["status"] == "failed"
+    assert missing.status_code == 404
+    assert fake_worker.cancelled_jobs == []
+
+
+def test_monomer_md_worker_repository_persists_fifo_and_cancel_cleanup(
+    postgres_dsn: str,
+    monkeypatch,
+):
+    monkeypatch.setenv("APP_POSTGRES_DSN", postgres_dsn)
+    worker_repository = PostgresJobRepository(load_worker_settings())
+    with postgres_connection(postgres_dsn) as connection:
+        for job_id in ("fifo-running", "fifo-queued-1", "fifo-queued-2"):
+            create_monomer_md_job_postgres(
+                connection,
+                job_id=job_id,
+                input_smiles="{}",
+                canonical_smiles="{}",
+                requested_steps=1_500_000,
+                protocol="Density",
+                run_mode="formal",
+                config_json={"protocol": "Density"},
+            )
+
+    assert worker_repository.accept_job(
+        "fifo-running",
+        "worker-instance",
+        queued=False,
+    ) is JobUpdateResult.UPDATED
+    assert worker_repository.accept_job(
+        "fifo-queued-1",
+        "worker-instance",
+        queued=True,
+    ) is JobUpdateResult.UPDATED
+    assert worker_repository.accept_job(
+        "fifo-queued-2",
+        "worker-instance",
+        queued=True,
+    ) is JobUpdateResult.UPDATED
+
+    with postgres_connection(postgres_dsn) as connection:
+        items, _ = list_monomer_md_jobs_postgres(
+            connection,
+            run_mode="formal",
+            active_only=True,
+            page_size=3,
+        )
+    assert [item["job_id"] for item in items] == [
+        "fifo-running",
+        "fifo-queued-1",
+        "fifo-queued-2",
+    ]
+    assert [item["queue_position"] for item in items] == [None, 1, 2]
+
+    assert worker_repository.promote_queued_job(
+        "fifo-queued-1"
+    ) is JobUpdateResult.UPDATED
+    with postgres_connection(postgres_dsn) as connection:
+        cancelled_job, changed = request_monomer_md_job_cancel_postgres(
+            connection,
+            job_id="fifo-queued-2",
+        )
+    assert changed is True
+    assert cancelled_job is not None
+    assert worker_repository.update_status(
+        "fifo-queued-2",
+        "cancelled",
+    ) is JobUpdateResult.UPDATED
+
+    with postgres_connection(postgres_dsn) as connection:
+        _, changed = request_monomer_md_job_cancel_postgres(
+            connection,
+            job_id="fifo-queued-1",
+        )
+    assert changed is True
+    assert worker_repository.update_status(
+        "fifo-queued-1",
+        "failed",
+        error="cleanup could not be confirmed",
+        error_category="cancel_cleanup_unconfirmed",
+        allow_cancel_requested_failure=True,
+    ) is JobUpdateResult.UPDATED
 
 
 def test_monomer_md_formal_job_rejects_unready_protocol_without_creating_row(postgres_dsn: str):

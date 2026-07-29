@@ -7,9 +7,11 @@ import type {
 import { useMonomerMdSimulation } from "./useMonomerMdSimulation";
 
 const api = vi.hoisted(() => ({
+  cancelMonomerMdJob: vi.fn(),
   createMonomerMdJob: vi.fn(),
   deleteMonomerMdArtifacts: vi.fn(),
   fetchMonomerMdJob: vi.fn(),
+  fetchMonomerMdJobs: vi.fn(),
   fetchMonomerMdProtocols: vi.fn(),
   fetchMonomerMdStatus: vi.fn()
 }));
@@ -88,6 +90,12 @@ beforeEach(() => {
   nextTimerId = 1;
   timers.clear();
   api.fetchMonomerMdProtocols.mockResolvedValue(protocolCatalog);
+  api.fetchMonomerMdJobs.mockResolvedValue({
+    items: [],
+    total: 0,
+    page: 1,
+    page_size: 20
+  });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true;
   vi.stubGlobal("window", {
@@ -189,5 +197,66 @@ describe("Monomer MD service status polling", () => {
 
     await advanceTime(10_000);
     expect(api.fetchMonomerMdStatus).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Monomer MD task response isolation", () => {
+  it("does not reselect a cancelled task after the user switches tasks", async () => {
+    let resolveCancellation:
+      | ((job: {
+          job_id: string;
+          status: "cancel_requested";
+          run_mode: "formal";
+        }) => void)
+      | null = null;
+    api.fetchMonomerMdStatus.mockResolvedValue(readyStatus);
+    api.fetchMonomerMdJob.mockImplementation((jobId: string) =>
+      Promise.resolve(
+        jobId === "formal-a"
+          ? { job_id: jobId, status: "submitted", run_mode: "formal" }
+          : { job_id: jobId, status: "completed", run_mode: "formal" }
+      )
+    );
+    api.cancelMonomerMdJob.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCancellation = resolve;
+        })
+    );
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => {
+      await currentHook().loadJob("formal-a");
+    });
+    expect(currentHook().job?.job_id).toBe("formal-a");
+
+    let cancellation: Promise<void>;
+    await act(async () => {
+      cancellation = currentHook().cancelJob(currentHook().job!);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await currentHook().loadJob("formal-b");
+    });
+    expect(currentHook().job?.job_id).toBe("formal-b");
+
+    await act(async () => {
+      resolveCancellation?.({
+        job_id: "formal-a",
+        status: "cancel_requested",
+        run_mode: "formal"
+      });
+      await cancellation!;
+    });
+
+    expect(currentHook().job?.job_id).toBe("formal-b");
+    expect(api.fetchMonomerMdJob).not.toHaveBeenLastCalledWith(
+      "formal-a",
+      expect.anything()
+    );
+    act(() => renderer!.unmount());
   });
 });

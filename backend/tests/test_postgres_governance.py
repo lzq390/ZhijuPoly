@@ -51,6 +51,7 @@ from app.services.postgres_database_browser import get_database_analytics_postgr
 _CONTRACT_OPERATION_ID = "contract-0012-pg-guard"
 _CONTRACT_RELEASE_SHA = "a" * 40
 _DFT_MIGRATION_VERSION = "0013_monomer_dft_jobs"
+_MD_QUEUE_MIGRATION_VERSION = "0014_monomer_md_task_queue_cancel"
 
 
 def _canonical_json(value: object) -> str:
@@ -59,6 +60,32 @@ def _canonical_json(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
+    )
+
+
+def _revert_md_queue_migration(connection) -> None:
+    connection.execute("DROP INDEX IF EXISTS md.idx_monomer_md_jobs_formal_active_queue")
+    connection.execute("DROP INDEX IF EXISTS md.idx_monomer_md_jobs_formal_history")
+    connection.execute("DROP INDEX IF EXISTS md.uq_monomer_md_jobs_queue_sequence")
+    connection.execute("DROP SEQUENCE IF EXISTS md.monomer_md_queue_sequence_seq")
+    connection.execute(
+        "ALTER TABLE md.monomer_md_jobs "
+        "DROP CONSTRAINT IF EXISTS monomer_md_jobs_status_check"
+    )
+    connection.execute(
+        "ALTER TABLE md.monomer_md_jobs "
+        "DROP COLUMN IF EXISTS cancel_requested_at, "
+        "DROP COLUMN IF EXISTS queue_sequence"
+    )
+    connection.execute(
+        """
+        ALTER TABLE md.monomer_md_jobs
+        ADD CONSTRAINT monomer_md_jobs_status_check
+        CHECK (status IN (
+          'pending', 'submitted', 'running',
+          'completed', 'failed', 'cancelled'
+        ))
+        """
     )
 
 
@@ -142,13 +169,14 @@ def _prepare_polytao_contract_state(
 ) -> tuple[str, str]:
     version = postgres_migrations.POLYTAO_CONTRACT_VERSION
     with postgres_connection(postgres_dsn) as connection:
+        _revert_md_queue_migration(connection)
         connection.execute("DROP SCHEMA IF EXISTS monomer_dft CASCADE")
         connection.execute(
             """
             DELETE FROM governance.schema_migrations
             WHERE version = ANY(%s)
             """,
-            ([version, _DFT_MIGRATION_VERSION],),
+            ([version, _DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
         )
         connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
         connection.execute(
@@ -196,12 +224,13 @@ def _prepare_polytao_contract_state(
 def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
     version = postgres_migrations.POLYTAO_CONTRACT_VERSION
     with postgres_connection(postgres_dsn) as connection:
+        _revert_md_queue_migration(connection)
         connection.execute(
             """
             DELETE FROM governance.schema_migrations
             WHERE version = ANY(%s)
             """,
-            ([version, _DFT_MIGRATION_VERSION],),
+            ([version, _DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
         )
         connection.execute("DROP SCHEMA IF EXISTS monomer_dft CASCADE")
         connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
@@ -260,7 +289,7 @@ def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
                 FROM governance.schema_migrations
                 WHERE version = ANY(%s)
                 """,
-                ([version, _DFT_MIGRATION_VERSION],),
+                ([version, _DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
             ).fetchall()
         }
         schema = connection.execute(
@@ -282,9 +311,12 @@ def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
             _DFT_MIGRATION_VERSION: migration_checksum(
                 MIGRATIONS_DIR / f"{_DFT_MIGRATION_VERSION}.sql"
             ),
+            _MD_QUEUE_MIGRATION_VERSION: migration_checksum(
+                MIGRATIONS_DIR / f"{_MD_QUEUE_MIGRATION_VERSION}.sql"
+            ),
         }:
             raise AssertionError(
-                "test fixture did not restore exact 0012/0013 migration records"
+                "test fixture did not restore exact 0012/0013/0014 migration records"
             )
         if (
             schema is None
@@ -1275,12 +1307,14 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
     )
 
     with postgres_connection(postgres_dsn) as connection:
+        _revert_md_queue_migration(connection)
         connection.execute("DROP SCHEMA monomer_dft CASCADE")
         connection.execute(
             """
             DELETE FROM governance.schema_migrations
-            WHERE version = '0013_monomer_dft_jobs'
-            """
+            WHERE version = ANY(%s)
+            """,
+            ([_DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
         )
 
     try:
@@ -1314,7 +1348,10 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
 
         assert final["status"] == "failed"
         assert final["strict_ok"] is False
-        assert final["migrations"]["missing"] == ["0013_monomer_dft_jobs"]
+        assert final["migrations"]["missing"] == [
+            _DFT_MIGRATION_VERSION,
+            _MD_QUEUE_MIGRATION_VERSION,
+        ]
         assert any(
             "checksum-exact 0013" in error for error in final["strict_errors"]
         )
@@ -1343,8 +1380,9 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
             connection.execute(
                 """
                 DELETE FROM governance.schema_migrations
-                WHERE version = '0013_monomer_dft_jobs'
-                """
+                WHERE version = ANY(%s)
+                """,
+                ([_DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
             )
         apply_postgres_migrations(
             postgres_dsn,
@@ -1435,6 +1473,7 @@ def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
     settings = _governance_settings(tmp_path, postgres_dsn)
     version = "0012_drop_polytao_jobs"
     dft_version = _DFT_MIGRATION_VERSION
+    queue_version = _MD_QUEUE_MIGRATION_VERSION
     monkeypatch.setattr(
         postgres_preflight,
         "_analytics_snapshot_report",
@@ -1464,6 +1503,7 @@ def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
     )
 
     with postgres_connection(postgres_dsn) as connection:
+        _revert_md_queue_migration(connection)
         connection.execute(
             """
             DELETE FROM governance.schema_migrations
@@ -1473,9 +1513,10 @@ def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
                 "0009_monomer_md_job_leases",
                 "0010_deployment_control",
                 "0011_monomer_md_demo_steps",
-                version,
-                dft_version,
-            ],),
+                    version,
+                    dft_version,
+                    queue_version,
+                ],),
         )
         connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
         connection.execute("DROP SCHEMA IF EXISTS monomer_dft CASCADE")

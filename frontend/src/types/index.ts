@@ -224,7 +224,7 @@ export type MdDemoRunResponse = {
   fixture_metadata: MdDemoFixtureMetadata;
 };
 
-export type MonomerMdJobStatus = "pending" | "submitted" | "running" | "completed" | "failed" | "cancelled";
+export type MonomerMdJobStatus = "pending" | "submitted" | "running" | "cancel_requested" | "completed" | "failed" | "cancelled";
 export type MonomerMdProtocol = "DensityDemo" | "Density" | "Transport" | "HVap" | "Dielectric" | "Compressibility";
 export type MonomerMdRunMode = "demo" | "formal";
 
@@ -244,6 +244,11 @@ export type MonomerMdServiceStatusResponse = {
   draining?: boolean;
   busy?: boolean;
   can_submit?: boolean;
+  formal_running_jobs?: number;
+  formal_queued_jobs?: number;
+  formal_max_running_jobs?: number;
+  formal_max_queued_jobs?: number;
+  formal_can_submit?: boolean;
   message?: string | null;
   queue_depth?: number | null;
   running_jobs?: number | null;
@@ -312,6 +317,8 @@ export type MonomerMdJobResponse = {
   progress_percent?: number | null;
   progress_stage?: string | null;
   progress_message?: string | null;
+  queue_position?: number | null;
+  cancel_requested_at?: string | null;
   error_message?: string | null;
   worker_id?: string | null;
   worker_job_id?: string | null;
@@ -340,6 +347,22 @@ export type MonomerMdJobResponse = {
   trajectory_preview?: MonomerMdTrajectoryPreview | null;
   summary?: Record<string, string | number | boolean | null>;
   artifacts?: MonomerMdArtifact[] | Record<string, MonomerMdArtifact | string | number | boolean | null>;
+};
+
+export type MonomerMdJobPageResponse = {
+  items: MonomerMdJobResponse[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type MonomerMdJobListQuery = {
+  run_mode?: MonomerMdRunMode;
+  active_only?: boolean;
+  protocol?: MonomerMdProtocol | "";
+  status?: MonomerMdJobStatus | "";
+  page?: number;
+  page_size?: number;
 };
 
 export type MonomerDftCalculationType = "single_point" | "optimization";

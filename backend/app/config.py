@@ -349,7 +349,7 @@ class Settings:
             if monomer_md_max_active_jobs is not None
             else os.getenv(
                 "MONOMER_MD_MAX_ACTIVE_JOBS",
-                str(env_values.get("MONOMER_MD_MAX_ACTIVE_JOBS", "1")),
+                str(env_values.get("MONOMER_MD_MAX_ACTIVE_JOBS", "3")),
             )
         )
         raw_monomer_dft_worker_base_url = monomer_dft_worker_base_url

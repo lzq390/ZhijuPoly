@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import os
 import shutil
@@ -597,8 +598,9 @@ def test_submit_rejects_when_formal_capacity_is_full(tmp_path: Path, monkeypatch
     settings = _settings(tmp_path, mode="real", app_postgres_dsn="postgresql://db/app", max_active_jobs=10)
     settings.byteff2_root.mkdir()
     monkeypatch.setattr(worker_main, "settings", settings)
-    monkeypatch.setattr(worker_main, "active_jobs", {"formal-busy": object()})
-    monkeypatch.setattr(worker_main, "active_formal_jobs", {"formal-busy"})
+    formal_jobs = {f"formal-busy-{index}": object() for index in range(3)}
+    monkeypatch.setattr(worker_main, "active_jobs", formal_jobs)
+    monkeypatch.setattr(worker_main, "active_formal_jobs", set(formal_jobs))
     monkeypatch.setattr(worker_main, "runtime_snapshot", _runtime_snapshot())
 
     client = TestClient(worker_main.app)
@@ -617,7 +619,88 @@ def test_submit_rejects_when_formal_capacity_is_full(tmp_path: Path, monkeypatch
 
     assert response.status_code == 429
     assert "formal ByteFF2" in response.json()["detail"]
-    assert worker_main.active_formal_jobs == {"formal-busy"}
+    assert worker_main.active_formal_jobs == set(formal_jobs)
+
+
+def test_formal_jobs_use_fifo_queue_and_queued_job_can_be_cancelled(
+    tmp_path: Path,
+    monkeypatch,
+):
+    settings = _settings(
+        tmp_path,
+        mode="real",
+        app_postgres_dsn="postgresql://db/app",
+        max_active_jobs=3,
+    )
+    settings.byteff2_root.mkdir()
+
+    class QueueRepository:
+        def __init__(self):
+            self.accepted = []
+            self.promoted = []
+
+        def accept_job(self, job_id, _instance_id, *, queued):
+            self.accepted.append((job_id, queued))
+            return JobUpdateResult.UPDATED
+
+        def promote_queued_job(self, job_id):
+            self.promoted.append(job_id)
+            return JobUpdateResult.UPDATED
+
+    fake_repository = QueueRepository()
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "repository", fake_repository)
+    monkeypatch.setattr(worker_main, "runtime_snapshot", _runtime_snapshot())
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    monkeypatch.setattr(worker_main, "active_formal_jobs", set())
+    monkeypatch.setattr(worker_main, "formal_job_queue", deque())
+    monkeypatch.setattr(worker_main, "job_start_events", {})
+    monkeypatch.setattr(worker_main, "cancel_requested_jobs", set())
+    monkeypatch.setattr(worker_main, "execution_job_id", None)
+    monkeypatch.setattr(worker_main, "recovery_ready", True)
+    monkeypatch.setattr(worker_main, "draining", False)
+
+    async def hold_job(*_args, **_kwargs):
+        await asyncio.Future()
+
+    monkeypatch.setattr(worker_main, "_run_job", hold_job)
+
+    def request(job_id: str) -> JobRequest:
+        return JobRequest(
+            job_id=job_id,
+            smiles="{}",
+            canonical_smiles="{}",
+            steps=1_500_000,
+            protocol="Density",
+            run_mode="formal",
+            config_json={"protocol": "Density"},
+        )
+
+    async def scenario() -> None:
+        await worker_main.submit_job(request("formal-1"))
+        await worker_main.submit_job(request("formal-2"))
+        await worker_main.submit_job(request("formal-3"))
+        assert fake_repository.accepted == [
+            ("formal-1", False),
+            ("formal-2", True),
+            ("formal-3", True),
+        ]
+        assert list(worker_main.formal_job_queue) == ["formal-2", "formal-3"]
+        assert worker_main.job_start_events["formal-1"].is_set()
+        assert not worker_main.job_start_events["formal-2"].is_set()
+
+        response = await worker_main.cancel_job("formal-2")
+        assert response.status == "cancel_requested"
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert list(worker_main.formal_job_queue) == ["formal-3"]
+
+        for task in list(worker_main.active_jobs.values()):
+            task.cancel()
+        await asyncio.gather(*list(worker_main.active_jobs.values()), return_exceptions=True)
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
 
 
 def test_submit_rejects_real_degraded_worker(tmp_path: Path, monkeypatch):
@@ -881,9 +964,10 @@ def test_repository_update_query_guards_terminal_statuses():
 
     assert any(
         isinstance(value, str)
-        and "NOT IN ('completed', 'failed', 'cancelled')" in value
+        and "UPDATE {} SET {} WHERE {} = %s AND {} = ANY(%s)" in value
         for value in source_names
     )
+    assert "cancel_requested" in repr(source_names)
 
 
 def test_drain_is_idempotent_and_rejects_new_jobs(tmp_path: Path, monkeypatch):
@@ -1000,6 +1084,9 @@ def test_recovery_reconciles_previous_worker_instance(tmp_path: Path, monkeypatc
         def reconcile_orphaned_jobs(self, instance_id):
             self.instances.append(instance_id)
             return 1
+
+        def reconcile_cancel_requested_jobs(self):
+            return 0
 
     fake_repository = RecoveringRepository()
     monkeypatch.setattr(worker_main, "settings", settings)
