@@ -664,12 +664,17 @@ class ControlScriptSafetyTests(unittest.TestCase):
             GITIGNORE.read_text(encoding="utf-8").splitlines(),
         )
 
-    def test_production_delivery_keeps_dft_submission_and_socket_disabled(self) -> None:
+    def test_production_delivery_enables_only_the_governed_dft_socket(self) -> None:
         compose = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
 
-        self.assertIn('MONOMER_DFT_SUBMIT_ENABLED: "false"', compose)
-        self.assertIn('MONOMER_DFT_WORKER_UDS: ""', compose)
-        self.assertNotIn("monomer-dft-worker-socket:/app/monomer-dft-worker", compose)
+        self.assertIn('MONOMER_DFT_SUBMIT_ENABLED: "true"', compose)
+        self.assertIn(
+            'MONOMER_DFT_WORKER_UDS: "/app/monomer-dft-worker/worker.sock"',
+            compose,
+        )
+        self.assertIn("state/monomer-dft-worker-socket", compose)
+        self.assertIn("state/monomer-dft-download-spool", compose)
+        self.assertIn("create_host_path: false", compose)
 
     def test_nginx_dft_proxy_never_buffers_verified_downloads(self) -> None:
         nginx = NGINX_CONFIG.read_text(encoding="utf-8")

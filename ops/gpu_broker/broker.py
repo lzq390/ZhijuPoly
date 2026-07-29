@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import deque
 import json
+import logging
 import os
 import re
 import threading
@@ -10,6 +12,9 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 from uuid import uuid4
+
+
+logger = logging.getLogger("nexpoly_gpu_broker")
 
 
 GPU_TOTAL_BUDGET_MIB = 20_736
@@ -31,7 +36,7 @@ EXPECTED_GPU_UUIDS = {
 
 # Candidate order is a host policy, not client input.  GPU0 is intentionally
 # absent and can never be selected by this broker.
-DEVICE_POLICY = {
+BASE_DEVICE_POLICY = {
     ("prod", "backend"): (2,),
     ("prod", "dft"): (2, 3, 1),
     ("prod", "md"): (2, 3, 1),
@@ -39,6 +44,17 @@ DEVICE_POLICY = {
     ("dev", "dft"): (1, 3),
     ("dev", "md"): (1, 3),
 }
+DEVICE_POLICY = dict(BASE_DEVICE_POLICY)
+if os.environ.get("NEXPOLY_GPU1_ONLY_SESSION") == "1":
+    # Process-local restriction used only by the opt-in development
+    # controller.  The repository policy and production candidates remain
+    # untouched, while this Broker process cannot place any dev lease on GPU3.
+    DEVICE_POLICY = {
+        **DEVICE_POLICY,
+        ("dev", "backend"): (1,),
+        ("dev", "dft"): (1,),
+        ("dev", "md"): (1,),
+    }
 
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -50,12 +66,20 @@ QUARANTINE_REASONS = frozenset(
         "gpu_runtime_corruption",
     }
 )
+# Keep the worst-case status response comfortably below the wire client's
+# 256-KiB fail-closed cap while retaining far more than the controller's
+# bounded 30-second replay window at observed DFT admission rates.
+PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT = 128
 
 
 class BrokerError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class BrokerPersistenceFatal(RuntimeError):
+    """The durable Broker authority is indeterminate and must be restarted."""
 
 
 @dataclass(frozen=True)
@@ -98,6 +122,30 @@ class Lease:
 
     def public_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class _ParentedDftExecutionLifecycleEvent:
+    sequence: int
+    action: str
+    root_lease_id: str
+    root_fencing_token: int
+    next_fencing_token_after: int
+    lease_authority_sequence_after: int
+    child: Lease
+
+    def public_dict(self) -> dict[str, object]:
+        return {
+            "sequence": self.sequence,
+            "action": self.action,
+            "root_lease_id": self.root_lease_id,
+            "root_fencing_token": self.root_fencing_token,
+            "next_fencing_token_after": self.next_fencing_token_after,
+            "lease_authority_sequence_after": (
+                self.lease_authority_sequence_after
+            ),
+            "child": self.child.public_dict(),
+        }
 
 
 @dataclass(frozen=True)
@@ -266,7 +314,30 @@ class HostGpuBroker:
         self._cleanup_workload = cleanup_workload
         self.instance_id = uuid4().hex
         self._condition = threading.Condition(threading.RLock())
+        self._fatal_persistence_error: str | None = None
         self._leases: dict[str, Lease] = {}
+        # This process-local tombstone is intentionally limited to the latest
+        # explicit, guarded release.  It lets an inventory client prove that
+        # one exact transient scope which disappeared during an audit belonged
+        # to the single Broker generation transition it observed.  Reconciled
+        # or failed releases never populate it, and a Broker restart changes
+        # instance_id so stale tombstones are never trusted.
+        self._last_released_lease: Lease | None = None
+        # This journal is deliberately process-local and bound to instance_id.
+        # It is evidence about explicit child operations completed by this
+        # Broker process, not durable authority reconstructed after restart.
+        self._parented_dft_execution_lifecycle_sequence = 0
+        self._parented_dft_execution_lifecycle_events: deque[
+            _ParentedDftExecutionLifecycleEvent
+        ] = deque(maxlen=PARENTED_DFT_EXECUTION_LIFECYCLE_JOURNAL_LIMIT)
+        # A process-local sequence fences every successfully persisted lease,
+        # fencing-token, quarantine, or draining authority mutation.  Journal
+        # consumers require each increment inside their read window to be
+        # explained by one exact normal DFT-child event, so a transient
+        # suspect/recover ABA or another component's lease cannot be hidden
+        # between identical endpoint snapshots.
+        self._lease_authority_sequence = 0
+        self._committed_lease_authority_fingerprint: str | None = None
         self._quarantined_gpus: dict[str, dict[str, object]] = {}
         self._waiters: dict[str, _Waiter] = {}
         self._next_wait_sequence = 1
@@ -280,6 +351,82 @@ class HostGpuBroker:
     @property
     def boot_id(self) -> str:
         return self._boot_id
+
+    def _publish_parented_dft_execution_lifecycle_locked(
+        self,
+        action: str,
+        *,
+        root: Lease,
+        child: Lease,
+    ) -> None:
+        """Publish one persisted, canonical child transition under the lock."""
+
+        expected_status = {
+            "issue": "reserved",
+            "activate": "active",
+            "release": "active",
+        }.get(action)
+        same_root_authority = (
+            root.kind == "residency"
+            and root.placement == "preferred"
+            and root.component == "dft"
+            and root.environment == "dev"
+            and root.gpu_index == 1
+            and root.gpu_uuid == EXPECTED_GPU_UUIDS[1]
+            and root.memory_mib == COMPONENT_BUDGETS_MIB["dft"]
+            and root.thread_percent == COMPONENT_THREAD_PERCENT["dft"]
+            and root.status == "active"
+            and root.mps_termination_status == "none"
+            and root.parent_lease_id is None
+            and child.kind == "execution"
+            and child.placement == "preferred"
+            and child.component == "dft"
+            and child.parent_lease_id == root.lease_id
+            and root.broker_instance_id == self.instance_id
+            and child.broker_instance_id == self.instance_id
+            and child.environment == root.environment
+            and child.client_id == root.client_id
+            and child.gpu_index == root.gpu_index
+            and child.gpu_uuid == root.gpu_uuid
+            and child.memory_mib == root.memory_mib
+            and child.thread_percent == root.thread_percent
+            and child.owner_pid == root.owner_pid
+            and child.owner_process_start_ticks
+            == root.owner_process_start_ticks
+            and child.owner_boot_id == root.owner_boot_id
+            and child.preferred == root.preferred is True
+        )
+        if expected_status is None or child.status != expected_status or not same_root_authority:
+            return
+        if action in {"activate", "release"} and (
+            child.workload_pid,
+            child.workload_process_start_ticks,
+            child.workload_process_group_id,
+            child.workload_cgroup,
+        ) != (
+            root.workload_pid,
+            root.workload_process_start_ticks,
+            root.workload_process_group_id,
+            root.workload_cgroup,
+        ):
+            return
+
+        # ``public_dict`` uses dataclasses.asdict and therefore deep-copies the
+        # PID list.  No caller retaining the mutable Lease returned by acquire
+        # can rewrite already-published evidence.
+        child_snapshot = Lease(**child.public_dict())
+        sequence = self._parented_dft_execution_lifecycle_sequence + 1
+        event = _ParentedDftExecutionLifecycleEvent(
+            sequence=sequence,
+            action=action,
+            root_lease_id=root.lease_id,
+            root_fencing_token=root.fencing_token,
+            next_fencing_token_after=self._next_fencing_token,
+            lease_authority_sequence_after=self._lease_authority_sequence,
+            child=child_snapshot,
+        )
+        self._parented_dft_execution_lifecycle_events.append(event)
+        self._parented_dft_execution_lifecycle_sequence = sequence
 
     def acquire(
         self,
@@ -319,6 +466,7 @@ class HostGpuBroker:
         timeout = max(0.0, float(wait_timeout_seconds))
         deadline = time.monotonic() + timeout
         with self._condition:
+            self._require_healthy_locked()
             self._expire_waiters_locked()
             if any(
                 lease.request_id == stable_request_id
@@ -379,6 +527,7 @@ class HostGpuBroker:
                 self._persist_locked()
             try:
                 while True:
+                    self._require_healthy_locked()
                     self._reconcile_locked()
                     if self._waiters.get(stable_request_id) != waiter:
                         recovered = next(
@@ -402,6 +551,7 @@ class HostGpuBroker:
                     if self._draining:
                         raise BrokerError("broker_draining", "GPU broker is draining")
                     if self._queue_head_locked() == waiter:
+                        lease_ids_before_allocation = frozenset(self._leases)
                         lease = self._try_allocate_locked(
                             request_id=stable_request_id,
                             kind=kind,
@@ -415,8 +565,19 @@ class HostGpuBroker:
                             parent_lease_id=parent_lease_id,
                         )
                         if lease is not None:
+                            newly_issued = (
+                                lease.lease_id not in lease_ids_before_allocation
+                            )
                             self._waiters.pop(stable_request_id, None)
                             self._persist_locked()
+                            if newly_issued and lease.parent_lease_id is not None:
+                                root = self._leases.get(lease.parent_lease_id)
+                                if root is not None:
+                                    self._publish_parented_dft_execution_lifecycle_locked(
+                                        "issue",
+                                        root=root,
+                                        child=lease,
+                                    )
                             self._condition.notify_all()
                             return lease
                     remaining = deadline - time.monotonic()
@@ -427,7 +588,10 @@ class HostGpuBroker:
                         )
                     self._condition.wait(timeout=min(remaining, 1.0))
             finally:
-                if self._waiters.get(stable_request_id) == waiter:
+                if (
+                    self._fatal_persistence_error is None
+                    and self._waiters.get(stable_request_id) == waiter
+                ):
                     self._waiters.pop(stable_request_id, None)
                     self._persist_locked()
                     self._condition.notify_all()
@@ -436,6 +600,7 @@ class HostGpuBroker:
         if _REQUEST_ID_RE.fullmatch(request_id) is None:
             raise BrokerError("invalid_request", "request_id is invalid")
         with self._condition:
+            self._require_healthy_locked()
             waiter = self._waiters.get(request_id)
             if waiter is not None:
                 if (
@@ -465,7 +630,9 @@ class HostGpuBroker:
         self, lease_id: str, fencing_token: int, *, owner: OwnerIdentity
     ) -> Lease:
         with self._condition:
+            self._require_healthy_locked()
             lease = self._owned_lease_locked(lease_id, fencing_token, owner)
+            previous_status = lease.status
             if lease.mps_termination_status != "none":
                 raise BrokerError(
                     "invalid_lease_state",
@@ -496,6 +663,7 @@ class HostGpuBroker:
                         "workload_identity_unavailable",
                         "cannot register residency workload identity",
                     ) from exc
+            parent: Lease | None = None
             if lease.parent_lease_id is not None:
                 parent = self._leases.get(lease.parent_lease_id)
                 if (
@@ -517,6 +685,12 @@ class HostGpuBroker:
                 lease.workload_process_group_id = parent.workload_process_group_id
                 lease.workload_cgroup = parent.workload_cgroup
             self._persist_locked()
+            if previous_status == "reserved" and parent is not None:
+                self._publish_parented_dft_execution_lifecycle_locked(
+                    "activate",
+                    root=parent,
+                    child=lease,
+                )
             return lease
 
     def register_workload(
@@ -544,6 +718,7 @@ class HostGpuBroker:
         ) <= 0:
             raise BrokerError("invalid_request", "workload process identity is invalid")
         with self._condition:
+            self._require_healthy_locked()
             lease = self._owned_lease_locked(lease_id, fencing_token, owner)
             is_deferred_dft_residency = (
                 lease.kind == "residency" and lease.component == "dft"
@@ -603,6 +778,7 @@ class HostGpuBroker:
         self, lease_id: str, fencing_token: int, *, owner: OwnerIdentity
     ) -> Lease:
         with self._condition:
+            self._require_healthy_locked()
             lease = self._owned_lease_locked(lease_id, fencing_token, owner)
             lease.heartbeat_at = self._now()
             if lease.status == "suspect" and lease.mps_termination_status == "none":
@@ -612,6 +788,7 @@ class HostGpuBroker:
 
     def release(self, lease_id: str, fencing_token: int, *, owner: OwnerIdentity) -> None:
         with self._condition:
+            self._require_healthy_locked()
             lease = self._owned_lease_locked(lease_id, fencing_token, owner)
             children = [
                 lease
@@ -712,8 +889,20 @@ class HostGpuBroker:
                         "gpu_runtime_unhealthy",
                         "isolated workload cgroup cleanup failed; lease retained",
                     ) from exc
+            # Snapshot rather than retain the object returned by acquire();
+            # in-process callers must not be able to mutate tombstone proof.
+            released_snapshot = Lease(**lease.public_dict())
             del self._leases[lease_id]
             self._persist_locked()
+            # A failed state commit is not an explicit successful release and
+            # therefore must never create authority for an audit retry.
+            self._last_released_lease = released_snapshot
+            if parent is not None:
+                self._publish_parented_dft_execution_lifecycle_locked(
+                    "release",
+                    root=parent,
+                    child=released_snapshot,
+                )
             self._condition.notify_all()
 
     def _fail_release_closed_locked(self, lease: Lease) -> None:
@@ -743,6 +932,7 @@ class HostGpuBroker:
                 "quarantine reason must be one of: " + ", ".join(sorted(QUARANTINE_REASONS)),
             )
         with self._condition:
+            self._require_healthy_locked()
             lease = self._owned_lease_locked(lease_id, fencing_token, owner)
             self._quarantined_gpus[lease.gpu_uuid] = {
                 "gpu_index": lease.gpu_index,
@@ -766,6 +956,7 @@ class HostGpuBroker:
         """Safely terminate all MPS contexts before a client receives a signal."""
 
         with self._condition:
+            self._require_healthy_locked()
             lease = self._owned_lease_locked(lease_id, fencing_token, owner)
             if not (
                 (lease.kind == "execution" and lease.parent_lease_id is None)
@@ -780,6 +971,7 @@ class HostGpuBroker:
                     "workload_identity_unavailable",
                     "execution workload must be registered before termination",
                 )
+            failure_stage = "control_availability"
             try:
                 if (
                     self._validate_workload is None
@@ -804,10 +996,15 @@ class HostGpuBroker:
                 # NVIDIA's terminate_client request must run while the client
                 # can still service the MPS protocol.  First re-bind the exact
                 # lease scope, then terminate all currently reported contexts.
-                # Holding the Broker lock prevents a new lease, while the
-                # later freeze and second MPS query close the in-process
-                # reconnect race.
+                # Holding the Broker lock prevents a new lease.  The first
+                # MPS audit includes its host grace period and must complete
+                # while the workload can still service MPS teardown.  Only
+                # after the exact lease clients disappear may the dedicated
+                # scope be frozen; a second audit then closes the reconnect
+                # race before the exact owned scope is killed.
+                failure_stage = "workload_revalidation"
                 self._validate_workload(lease)
+                failure_stage = "mps_client_termination"
                 client_pids = self._terminate_mps_clients(lease)
                 if (
                     not isinstance(client_pids, tuple)
@@ -821,24 +1018,45 @@ class HostGpuBroker:
                         "mps_termination_failed",
                         "MPS termination evidence is invalid",
                     )
+                failure_stage = "pre_freeze_mps_drain"
+                if self._mps_clients_alive(lease):
+                    raise BrokerError(
+                        "mps_termination_failed",
+                        "an exact MPS client survived the pre-freeze grace period",
+                    )
+                failure_stage = "workload_freeze"
                 freeze_token = self._freeze_workload(lease)
                 if not isinstance(freeze_token, str) or not freeze_token:
                     raise BrokerError(
                         "workload_control_unavailable",
                         "dedicated cgroup freeze evidence is invalid",
                     )
+                failure_stage = "post_freeze_mps_audit"
                 if self._mps_clients_alive(lease):
                     raise BrokerError(
                         "mps_termination_failed",
                         "an MPS client appeared or survived after workload freeze",
                     )
+                failure_stage = "workload_kill"
                 self._kill_workload(lease)
+                failure_stage = "workload_empty"
                 if not self._workload_empty(lease):
                     raise BrokerError(
                         "workload_termination_failed",
                         "dedicated workload cgroup did not become empty",
                     )
             except Exception as exc:
+                broker_error_code = (
+                    exc.code if isinstance(exc, BrokerError) else "unexpected_exception"
+                )
+                logger.error(
+                    "gpu_process_termination_proof_failed lease_id=%s "
+                    "fencing_token=%d stage=%s broker_error_code=%s",
+                    lease.lease_id,
+                    lease.fencing_token,
+                    failure_stage,
+                    broker_error_code,
+                )
                 lease.mps_termination_status = "failed"
                 lease.status = "suspect"
                 self._quarantined_gpus[lease.gpu_uuid] = {
@@ -870,6 +1088,7 @@ class HostGpuBroker:
 
     def set_draining(self, draining: bool) -> dict[str, object]:
         with self._condition:
+            self._require_healthy_locked()
             self._draining = bool(draining)
             self._persist_locked()
             self._condition.notify_all()
@@ -877,6 +1096,7 @@ class HostGpuBroker:
 
     def status(self) -> dict[str, object]:
         with self._condition:
+            self._require_healthy_locked()
             self._reconcile_locked()
             usage = {
                 str(index): sum(
@@ -886,9 +1106,35 @@ class HostGpuBroker:
                 )
                 for index in EXPECTED_GPU_UUIDS
             }
+            lifecycle_first_sequence = (
+                self._parented_dft_execution_lifecycle_events[0].sequence
+                if self._parented_dft_execution_lifecycle_events
+                else self._parented_dft_execution_lifecycle_sequence + 1
+            )
             return {
                 "schema_version": 1,
                 "broker_instance_id": self.instance_id,
+                # Monotonic within the persisted Broker authority.  Including
+                # the next token lets inventory clients detect an acquire +
+                # release ABA even when the visible lease list is identical
+                # before and after their host snapshot.
+                "next_fencing_token": self._next_fencing_token,
+                "last_released_lease": (
+                    None
+                    if self._last_released_lease is None
+                    else self._last_released_lease.public_dict()
+                ),
+                "parented_dft_execution_lifecycle_sequence": (
+                    self._parented_dft_execution_lifecycle_sequence
+                ),
+                "parented_dft_execution_lifecycle_first_sequence": (
+                    lifecycle_first_sequence
+                ),
+                "parented_dft_execution_lifecycle_events": [
+                    event.public_dict()
+                    for event in self._parented_dft_execution_lifecycle_events
+                ],
+                "lease_authority_sequence": self._lease_authority_sequence,
                 "boot_id": self._boot_id,
                 "draining": self._draining,
                 "gpu_total_budget_mib": GPU_TOTAL_BUDGET_MIB,
@@ -1082,6 +1328,14 @@ class HostGpuBroker:
                 or parent.owner_process_start_ticks != owner.process_start_ticks
             ):
                 raise BrokerError("invalid_parent_lease", "parent residency lease does not match")
+            if any(
+                lease.parent_lease_id == parent.lease_id
+                for lease in self._leases.values()
+            ):
+                # The resident DFT worker serializes executions through one
+                # long-lived executor.  Enforcing the same contract here keeps
+                # zero-accounting child leases and the status response bounded.
+                return None
             candidate_indices: Iterable[int] = (parent.gpu_index,)
             reserved_memory = 0
         else:
@@ -1483,49 +1737,100 @@ class HostGpuBroker:
         )
         self._draining = payload.get("draining") is True
 
+    def _require_healthy_locked(self) -> None:
+        if self._fatal_persistence_error is not None:
+            raise BrokerPersistenceFatal(
+                "GPU Broker persistence is indeterminate; restart required"
+            )
+
     def _persist_locked(self) -> None:
-        parent = self.state_path.parent
-        if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
-            raise BrokerError("unsafe_state", "broker state directory is unsafe")
-        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(parent, 0o700)
-        payload = {
-            "schema_version": 1,
-            "draining": self._draining,
-            "next_fencing_token": self._next_fencing_token,
-            "next_wait_sequence": self._next_wait_sequence,
-            "quarantined_gpus": self._quarantined_gpus,
-            "leases": [
-                asdict(lease)
-                for lease in sorted(
-                    self._leases.values(), key=lambda item: item.fencing_token
-                )
-            ],
-            "waiters": [
-                asdict(waiter)
-                for waiter in sorted(
-                    self._waiters.values(), key=lambda item: item.sequence
-                )
-            ],
-        }
-        temporary = parent / f".{self.state_path.name}.{os.getpid()}.tmp"
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        descriptor = os.open(temporary, flags, 0o600)
+        self._require_healthy_locked()
         try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.state_path)
-            os.chmod(self.state_path, 0o600)
-            directory_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            parent = self.state_path.parent
+            if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
+                raise BrokerError("unsafe_state", "broker state directory is unsafe")
+            parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(parent, 0o700)
+            payload = {
+                "schema_version": 1,
+                "draining": self._draining,
+                "next_fencing_token": self._next_fencing_token,
+                "next_wait_sequence": self._next_wait_sequence,
+                "quarantined_gpus": self._quarantined_gpus,
+                "leases": [
+                    asdict(lease)
+                    for lease in sorted(
+                        self._leases.values(), key=lambda item: item.fencing_token
+                    )
+                ],
+                "waiters": [
+                    asdict(waiter)
+                    for waiter in sorted(
+                        self._waiters.values(), key=lambda item: item.sequence
+                    )
+                ],
+            }
+            lease_authority_fingerprint = json.dumps(
+                {
+                    "draining": payload["draining"],
+                    "next_fencing_token": payload["next_fencing_token"],
+                    "quarantined_gpus": payload["quarantined_gpus"],
+                    "leases": [
+                        {
+                            key: value
+                            for key, value in record.items()
+                            if key != "heartbeat_at"
+                        }
+                        for record in payload["leases"]
+                    ],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            temporary = parent / f".{self.state_path.name}.{os.getpid()}.tmp"
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            descriptor = os.open(temporary, flags, 0o600)
             try:
-                os.fsync(directory_fd)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, self.state_path)
+                os.chmod(self.state_path, 0o600)
+                directory_fd = os.open(
+                    parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                )
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+                if self._committed_lease_authority_fingerprint is None:
+                    self._committed_lease_authority_fingerprint = (
+                        lease_authority_fingerprint
+                    )
+                elif (
+                    lease_authority_fingerprint
+                    != self._committed_lease_authority_fingerprint
+                ):
+                    self._lease_authority_sequence += 1
+                    self._committed_lease_authority_fingerprint = (
+                        lease_authority_fingerprint
+                    )
             finally:
-                os.close(directory_fd)
-        finally:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
+        except Exception as exc:
+            if self._fatal_persistence_error is None:
+                self._fatal_persistence_error = type(exc).__name__
+                logger.critical(
+                    "GPU Broker persistence failed; refusing further authority "
+                    "operations until restart",
+                    exc_info=True,
+                )
+                self._condition.notify_all()
+            raise BrokerPersistenceFatal(
+                "GPU Broker persistence is indeterminate; restart required"
+            ) from exc

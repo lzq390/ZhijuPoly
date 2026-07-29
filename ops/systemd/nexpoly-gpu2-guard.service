@@ -1,0 +1,13 @@
+[Unit]
+Description=NexPoly production GPU2 ownership guard
+After=default.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/data/lzq/gith/nexpoly
+ExecStart=/usr/bin/python3 -I -B /data/lzq/gith/nexpoly/scripts/gpu2_guard.py
+UMask=0077
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexpoly-gpu2-guard

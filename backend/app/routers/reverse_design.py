@@ -4,6 +4,7 @@ from time import perf_counter
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from app.models import (
     ReverseDesignTgCandidate,
@@ -154,7 +155,7 @@ async def search_by_tg(
     request_body: ReverseDesignTgRequest,
     request: Request,
 ) -> ReverseDesignTgResponse:
-    return _search_by_tg_response(request_body, request.app)
+    return await run_in_threadpool(_search_by_tg_response, request_body, request.app)
 
 
 @router.post("/tg/jobs", response_model=ReverseDesignTgJobCreateResponse, status_code=202)

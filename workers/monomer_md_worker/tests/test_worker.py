@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +23,7 @@ from workers.monomer_md_worker.app.runtime_health import (
     ProtocolRuntimeSnapshot,
     RuntimeSnapshot,
 )
+from scripts import release_controller
 
 
 RELEASE_SHA = "a" * 40
@@ -389,6 +393,52 @@ def test_production_runtime_identity_rejects_inactive_venv(
         assert "active A/B venv" in str(exc)
     else:
         raise AssertionError("inactive production Worker venv was accepted")
+
+
+def test_development_runtime_identity_keeps_base_and_venv_executables_distinct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    venv = source / ".venv-monomer-md-worker"
+    (venv / "bin").mkdir(parents=True)
+    venv_python = venv / "bin/python"
+    shutil.copy2(Path(sys.executable).resolve(), venv_python)
+    os.chmod(venv_python, 0o755)
+    lock = source / "workers/monomer_md_worker/requirements.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("fixture==1\n", encoding="utf-8")
+    lock_digest = "sha256:" + __import__("hashlib").sha256(lock.read_bytes()).hexdigest()
+    lock_record = {
+        "schema_version": 1,
+        "path": "workers/monomer_md_worker/requirements.lock",
+        "sha256": lock_digest,
+    }
+    base_record = release_controller.inspect_worker_base_python(sys.executable, None)
+    for path, payload in (
+        (venv / ".nexpoly-worker-lock-digest.json", lock_record),
+        (venv / ".nexpoly-base-python-identity.json", base_record),
+    ):
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        os.chmod(path, 0o600)
+    monkeypatch.setattr(
+        worker_main,
+        "_development_git_identity",
+        lambda _root: (RELEASE_SHA, RELEASE_TREE),
+    )
+
+    identity = worker_main._development_runtime_identity(
+        source.resolve(),
+        venv.resolve(),
+        venv_python.resolve(),
+    )
+
+    assert identity == (
+        RELEASE_SHA,
+        RELEASE_TREE,
+        lock_digest,
+        base_record["identity_sha256"],
+    )
+    assert Path(base_record["resolved_path"]) != venv_python.resolve()
 
 
 def test_real_health_reports_runtime_probe_failure(tmp_path: Path, monkeypatch):

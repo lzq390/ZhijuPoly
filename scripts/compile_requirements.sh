@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 PIP_TOOLS_VERSION="7.5.0"
-PYTORCH_INDEX_URL="https://download.pytorch.org/whl/cu118"
+PYTORCH_INDEX_URL="https://download.pytorch.org/whl/cu128"
 
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || {
   echo "Python is required: $PYTHON_BIN" >&2
@@ -52,17 +52,21 @@ system_packages=(
   torch
   torchvision
   triton
-  nvidia-cublas-cu11
-  nvidia-cuda-cupti-cu11
-  nvidia-cuda-nvrtc-cu11
-  nvidia-cuda-runtime-cu11
-  nvidia-cudnn-cu11
-  nvidia-cufft-cu11
-  nvidia-curand-cu11
-  nvidia-cusolver-cu11
-  nvidia-cusparse-cu11
-  nvidia-nccl-cu11
-  nvidia-nvtx-cu11
+  nvidia-cublas-cu12
+  nvidia-cuda-cupti-cu12
+  nvidia-cuda-nvrtc-cu12
+  nvidia-cuda-runtime-cu12
+  nvidia-cudnn-cu12
+  nvidia-cufft-cu12
+  nvidia-cufile-cu12
+  nvidia-curand-cu12
+  nvidia-cusolver-cu12
+  nvidia-cusparse-cu12
+  nvidia-cusparselt-cu12
+  nvidia-nccl-cu12
+  nvidia-nvjitlink-cu12
+  nvidia-nvshmem-cu12
+  nvidia-nvtx-cu12
 )
 backend_args=(
   "${common[@]}"

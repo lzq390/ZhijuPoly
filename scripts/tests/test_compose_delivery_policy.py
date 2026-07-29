@@ -119,6 +119,12 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
             backend_volumes = {
                 volume["target"]: volume for volume in backend["volumes"]
             }
+            model_volume = backend_volumes["/app/model"]
+            self.assertEqual(
+                model_volume["source"],
+                str(temporary / "assets" / "model"),
+            )
+            self.assertTrue(model_volume["read_only"])
             canary_volume = backend_volumes["/app/monomer-md-canaries"]
             self.assertEqual(
                 canary_volume["source"],

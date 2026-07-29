@@ -33,20 +33,18 @@ x-production-environment: &production-environment
   MONOMER_MD_WORKER_BASE_URL: "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock"
   MONOMER_MD_WORKER_TIMEOUT_SECONDS: "30"
   MONOMER_MD_CANARY_STATE_DIR: "/app/monomer-md-canaries"
-  # Code delivery does not authorize production DFT execution. History and
-  # results remain readable, while no DFT Worker socket is mounted or dialed.
-  MONOMER_DFT_SUBMIT_ENABLED: "false"
-  MONOMER_DFT_WORKER_UDS: ""
+  MONOMER_DFT_SUBMIT_ENABLED: "true"
+  MONOMER_DFT_WORKER_UDS: "/app/monomer-dft-worker/worker.sock"
+  MONOMER_DFT_DOWNLOAD_SPOOL_ROOT: "/app/.runtime/monomer-dft-download-spool"
 
 x-production-volumes: &production-volumes
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
-  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/ocsr:/app/model/ocsr:ro
-  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
-  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
-  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
+  - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model:/app/model:ro
   - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
   - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-canaries:/app/monomer-md-canaries:rw
+  - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-dft-worker-socket:/app/monomer-dft-worker:ro
+  - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-dft-download-spool:/app/.runtime/monomer-dft-download-spool:rw
 
 services:
   postgres-init:
@@ -59,10 +57,7 @@ services:
     volumes: !override
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/ocsr:/app/model/ocsr:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model:/app/model:ro
     command: ["python", "-m", "app.postgres_migrations", "--mode", "expand"]
 
   backend:
@@ -75,12 +70,21 @@ services:
     volumes: !override
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/ocsr:/app/model/ocsr:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/conditional_generation:/app/model/conditional_generation:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/reactiont5-retrosynthesis:/app/model/reactiont5-retrosynthesis:ro
-      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model/polytao:/app/model/polytao:ro
+      - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model:/app/model:ro
       - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-worker-socket:/app/monomer-md-worker:ro
       - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-md-canaries:/app/monomer-md-canaries:rw
+      - type: bind
+        source: ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-dft-worker-socket
+        target: /app/monomer-dft-worker
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-dft-download-spool
+        target: /app/.runtime/monomer-dft-download-spool
+        read_only: false
+        bind:
+          create_host_path: false
     depends_on: !override
       lab-postgres:
         condition: service_healthy

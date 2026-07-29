@@ -11,6 +11,7 @@ import type {
   ReverseDesignTgRequest,
   ReverseDesignTgResponse
 } from "../types";
+import { isAbortError, pollJobWithBackoff } from "./jobPolling";
 
 type ReverseDesignState = {
   isLoading: boolean;
@@ -55,39 +56,51 @@ export function useReverseDesign() {
     job: null
   });
   const pollTokenRef = useRef(0);
+  const pollAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     return () => {
       pollTokenRef.current += 1;
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
     };
   }, []);
 
-  async function pollJob(jobId: string, token: number) {
-    while (pollTokenRef.current === token) {
-      const job = await fetchReverseDesignTgJob(jobId);
-      if (pollTokenRef.current !== token) {
-        return;
+  async function pollJob(jobId: string, token: number, controller: AbortController) {
+    await pollJobWithBackoff({
+      signal: controller.signal,
+      fetchJob: (signal) => fetchReverseDesignTgJob(jobId, signal),
+      isTerminal: (job) => TERMINAL_STATUSES.has(job.status),
+      intervalMs: POLL_INTERVAL_MS,
+      onExpired: () => {
+        if (pollTokenRef.current === token && !controller.signal.aborted) {
+          setState((current) => ({
+            ...current,
+            isLoading: false,
+            error: formatReverseDesignError("Job not found")
+          }));
+        }
+      },
+      onJob: (job) => {
+        if (pollTokenRef.current !== token || controller.signal.aborted) {
+          return;
+        }
+        const isTerminal = TERMINAL_STATUSES.has(job.status);
+        setState((current) => ({
+          ...current,
+          isLoading: !isTerminal,
+          error: job.status === "failed" ? formatReverseDesignError(job.error ?? "Tg 逆向设计搜索失败。") : null,
+          data: job.result ?? current.data,
+          job
+        }));
       }
-
-      const isTerminal = TERMINAL_STATUSES.has(job.status);
-      setState((current) => ({
-        ...current,
-        isLoading: !isTerminal,
-        error: job.status === "failed" ? formatReverseDesignError(job.error ?? "Tg 逆向设计搜索失败。") : null,
-        data: job.result ?? current.data,
-        job
-      }));
-
-      if (isTerminal) {
-        return;
-      }
-
-      await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
-    }
+    });
   }
 
   function reportError(message: string) {
     pollTokenRef.current += 1;
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
     setState((current) => ({
       ...current,
       isLoading: false,
@@ -128,8 +141,11 @@ export function useReverseDesign() {
     };
     setRequest(requestForSearch);
 
+    pollAbortRef.current?.abort();
     const token = pollTokenRef.current + 1;
     pollTokenRef.current = token;
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
     setState((current) => ({
       ...current,
       isLoading: true,
@@ -139,7 +155,10 @@ export function useReverseDesign() {
     }));
 
     try {
-      const createdJob = await createReverseDesignTgJob(requestForSearch);
+      const createdJob = await createReverseDesignTgJob(requestForSearch, controller.signal);
+      if (pollTokenRef.current !== token || controller.signal.aborted) {
+        return;
+      }
       setState((current) => ({
         ...current,
         job: {
@@ -160,9 +179,9 @@ export function useReverseDesign() {
           result: null
         }
       }));
-      await pollJob(createdJob.job_id, token);
+      await pollJob(createdJob.job_id, token, controller);
     } catch (error) {
-      if (pollTokenRef.current !== token) {
+      if (pollTokenRef.current !== token || controller.signal.aborted || isAbortError(error)) {
         return;
       }
       setState((current) => ({
@@ -171,6 +190,10 @@ export function useReverseDesign() {
         error: formatReverseDesignError(error instanceof Error ? error.message : "未知错误"),
         data: null
       }));
+    } finally {
+      if (pollAbortRef.current === controller) {
+        pollAbortRef.current = null;
+      }
     }
   }
 

@@ -595,6 +595,8 @@ class HealthResponse(StrictModel):
     max_queued_jobs: Literal[8] = 8
     worker_instance_id: str
     worker_version: str
+    release_sha: str | None = None
+    runtime_contract_sha256: str | None = None
     runtime: dict[str, Any]
 
 

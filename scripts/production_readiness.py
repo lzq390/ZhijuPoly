@@ -22,9 +22,12 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import stat
+import subprocess
 import sys
 from typing import Any, Mapping
+import urllib.request
 
 
 sys.dont_write_bytecode = True
@@ -144,6 +147,28 @@ MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9_]+$")
 WHEEL_RE = re.compile(r"^[A-Za-z0-9_.+-]+\.whl$")
 PYTHON_VERSION_RE = re.compile(r"^3\.12(?:\.[0-9]+)?$")
 UV_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+PRODUCTION_REPO_ROOT = Path("/data/lzq/gith/nexpoly")
+PRODUCTION_DFT_SOCKET = (
+    RUNTIME_ROOT / "state/monomer-dft-worker-socket/worker.sock"
+)
+GPU2_UUID = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+DFT_MODEL_ALIASES = {
+    "aimnet2",
+    "aimnet2-b973c",
+    "aimnet2-2025",
+    "aimnet2-nse",
+    "aimnet2-pd",
+    "aimnet2-rxn",
+}
+DFT_RUNTIME_ENV_KEYS = frozenset(
+    {
+        "MONOMER_DFT_RELEASE_SHA",
+        "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
+        "MONOMER_DFT_PYTHON",
+        "AIMNET_CACHE_DIR",
+        "WARP_CACHE_PATH",
+    }
+)
 
 TOP_FIELDS = {
     "schema_version",
@@ -2289,6 +2314,268 @@ def _error_output(code: str, exc: BaseException) -> dict[str, Any]:
     }
 
 
+def _run_read_only(*command: str) -> str:
+    try:
+        return subprocess.run(
+            command,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ProductionReadinessError(
+            f"read-only command failed: {command[0]}"
+        ) from exc
+
+
+def _unix_json(socket_path: Path, request_path: str) -> dict[str, Any]:
+    request = (
+        f"GET {request_path} HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii")
+    chunks: list[bytes] = []
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(10)
+            connection.connect(os.fspath(socket_path))
+            connection.sendall(request)
+            while True:
+                chunk = connection.recv(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+    except OSError as exc:
+        raise ProductionReadinessError("DFT Worker Unix socket is unavailable") from exc
+    raw = b"".join(chunks)
+    headers, separator, body = raw.partition(b"\r\n\r\n")
+    if not separator or not headers.startswith(b"HTTP/1.1 200"):
+        raise ProductionReadinessError("DFT Worker health request failed")
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ProductionReadinessError("DFT Worker health is invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ProductionReadinessError("DFT Worker health must be an object")
+    return payload
+
+
+def _http_json(url: str) -> dict[str, Any]:
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            payload = json.load(response)
+    except (OSError, ValueError) as exc:
+        raise ProductionReadinessError("production Backend DFT status is unavailable") from exc
+    if not isinstance(payload, dict):
+        raise ProductionReadinessError("production Backend DFT status must be an object")
+    return payload
+
+
+def _private_regular_file(path: Path, *, mode: int) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ProductionReadinessError("required DFT file is unavailable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != mode
+    ):
+        _fail("required DFT file is unsafe")
+
+
+def _dft_runtime_environment(path: Path) -> dict[str, str]:
+    _private_regular_file(path, mode=0o600)
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if (
+            not separator
+            or key not in DFT_RUNTIME_ENV_KEYS
+            or key in values
+            or not value
+        ):
+            _fail("production DFT runtime environment is invalid")
+        values[key] = value
+    if set(values) != DFT_RUNTIME_ENV_KEYS:
+        _fail("production DFT runtime environment is incomplete")
+    return values
+
+
+def dft_live_readiness(
+    authority: str,
+    *,
+    runtime_root: Path = RUNTIME_ROOT,
+    repo_root: Path = PRODUCTION_REPO_ROOT,
+    backend_url: str = "http://127.0.0.1:9000/api/v1/monomer-dft/status",
+    installed_unit_path: Path | None = None,
+) -> dict[str, Any]:
+    if _run_read_only("git", "-C", os.fspath(repo_root), "rev-parse", "HEAD") != authority:
+        _fail("production source authority differs from the formal release")
+    if _run_read_only(
+        "git",
+        "-C",
+        os.fspath(repo_root),
+        "status",
+        "--porcelain=v1",
+        "--ignored",
+    ):
+        _fail("production source is not clean or contains ignored paths")
+
+    installed_unit = installed_unit_path or (
+        Path.home() / ".config/systemd/user/nexpoly-monomer-dft-worker.service"
+    )
+    tracked_unit = repo_root / "ops/systemd/nexpoly-monomer-dft-worker.service"
+    _private_regular_file(installed_unit, mode=0o600)
+    if sha256_file(installed_unit) != sha256_file(tracked_unit):
+        _fail("installed DFT Worker unit differs from the release")
+
+    release_runtime = runtime_root / "worker-venvs/dft" / authority
+    _require_private_directory(release_runtime)
+    runtime_manifest = release_runtime / "runtime.json"
+    _private_regular_file(runtime_manifest, mode=0o600)
+    runtime_contract_sha256 = sha256_file(runtime_manifest)
+    runtime_environment = _dft_runtime_environment(
+        runtime_root / "config/monomer-dft-runtime.env"
+    )
+    expected_environment = {
+        "MONOMER_DFT_RELEASE_SHA": authority,
+        "MONOMER_DFT_RUNTIME_CONTRACT_SHA256": runtime_contract_sha256,
+        "MONOMER_DFT_PYTHON": os.fspath(release_runtime / "venv/bin/python"),
+        "AIMNET_CACHE_DIR": os.fspath(release_runtime / "aimnet-cache"),
+        "WARP_CACHE_PATH": os.fspath(release_runtime / "warp-cache"),
+    }
+    if runtime_environment != expected_environment:
+        _fail("production DFT runtime is not bound to the release")
+    if (release_runtime / "runtime-launcher").exists():
+        _fail("production DFT still uses a compatibility launcher")
+    for unit in (
+        "nexpoly-monomer-dft-worker.service",
+        "nexpoly-gpu2-guard.timer",
+    ):
+        if _run_read_only("systemctl", "--user", "is-active", unit) != "active":
+            _fail(f"{unit} is not active")
+        if _run_read_only("systemctl", "--user", "is-enabled", unit) != "enabled":
+            _fail(f"{unit} is not enabled")
+
+    guard_path = runtime_root / "state/gpu2-guard.json"
+    guard = json.loads(guard_path.read_text(encoding="utf-8"))
+    if (
+        guard.get("status") != "ready"
+        or guard.get("gpu_index") != "2"
+        or guard.get("gpu_uuid") != GPU2_UUID
+        or guard.get("unknown_processes") != []
+    ):
+        _fail("GPU2 guard is not ready")
+    observed = _utc_timestamp(guard.get("observed_at"), "GPU2 guard observed_at")
+    if dt.datetime.now(dt.timezone.utc) - observed > dt.timedelta(minutes=2):
+        _fail("GPU2 guard evidence is stale")
+
+    worker = _unix_json(
+        runtime_root / "state/monomer-dft-worker-socket/worker.sock",
+        "/health",
+    )
+    runtime = worker.get("runtime")
+    if not isinstance(runtime, dict):
+        _fail("DFT Worker runtime evidence is missing")
+    models = runtime.get("models")
+    if (
+        worker.get("status") != "ok"
+        or worker.get("runtime_ready") is not True
+        or worker.get("accepting_jobs") is not True
+        or worker.get("release_sha") != authority
+        or worker.get("runtime_contract_sha256") != runtime_contract_sha256
+        or runtime.get("deployment") != "prod"
+        or runtime.get("physical_gpu") != "2"
+        or runtime.get("gpu_uuid") != GPU2_UUID
+        or runtime.get("guard_status") != "ready"
+        or not isinstance(models, dict)
+        or set(models) != DFT_MODEL_ALIASES
+        or any(
+            details.get("loaded") is not True
+            or details.get("warmed_up") is not True
+            for details in models.values()
+            if isinstance(details, dict)
+        )
+        or any(not isinstance(details, dict) for details in models.values())
+    ):
+        _fail("DFT Worker is not fully loaded and warmed")
+
+    backend = _http_json(backend_url)
+    if (
+        backend.get("enabled") is not True
+        or backend.get("available") is not True
+        or backend.get("schema_ready") is not True
+        or backend.get("runtime_ready") is not True
+    ):
+        _fail("production Backend has not enabled ready DFT submission")
+
+    revisions: dict[str, str] = {}
+    for service in ("backend", "nginx"):
+        identifiers = _run_read_only(
+            "docker",
+            "ps",
+            "--filter",
+            "label=com.docker.compose.project=nexpoly",
+            "--filter",
+            f"label=com.docker.compose.service={service}",
+            "--format",
+            "{{.ID}}",
+        ).split()
+        if len(identifiers) != 1:
+            _fail(f"production {service} container cardinality is invalid")
+        revision = _run_read_only(
+            "docker",
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"org.opencontainers.image.revision\"}}",
+            identifiers[0],
+        )
+        if revision != authority:
+            _fail(f"production {service} image revision differs from the formal release")
+        revisions[service] = revision
+    compose_files = _run_read_only(
+        "docker",
+        "inspect",
+        "--format",
+        '{{index .Config.Labels "com.docker.compose.project.config_files"}}',
+        "nexpoly-backend-1",
+    ).split(",")
+    expected_compose_files = [
+        os.fspath(repo_root / "docker-compose.yml"),
+        os.fspath(repo_root / "docker-compose.prod.yml"),
+    ]
+    if compose_files != expected_compose_files:
+        _fail("production Backend still uses an untracked Compose overlay")
+
+    identity = {
+        "schema_version": 1,
+        "status": "ready",
+        "ready": True,
+        "authority": authority,
+        "deployment": "prod",
+        "gpu_index": "2",
+        "gpu_uuid": GPU2_UUID,
+        "models": sorted(DFT_MODEL_ALIASES),
+        "runtime_contract_sha256": runtime_contract_sha256,
+        "worker_unit_sha256": sha256_file(installed_unit),
+        "compose_files": compose_files,
+        "guard_sha256": sha256_file(guard_path),
+        "worker_health_sha256": canonical_json_digest(worker),
+        "backend_status_sha256": canonical_json_digest(backend),
+        "image_revisions": revisions,
+    }
+    return {
+        **identity,
+        "readiness_sha256": canonical_json_digest(identity),
+    }
+
+
 class _JSONArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise ProductionReadinessError(f"invalid command line: {message}")
@@ -2322,6 +2609,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the strict sanitized output JSON Schema and exit",
     )
+    parser.add_argument(
+        "--dft-live-only",
+        action="store_true",
+        help="validate the live production DFT/GPU2 activation boundary",
+    )
+    parser.add_argument(
+        "--backend-url",
+        default="http://127.0.0.1:9000/api/v1/monomer-dft/status",
+        help=argparse.SUPPRESS,
+    )
     return parser
 
 
@@ -2333,6 +2630,23 @@ def main(arguments: list[str] | None = None) -> int:
             print(json.dumps(output_json_schema(), sort_keys=True))
             return 0
         authority = _sha(options.authority, "authority F")
+        if options.dft_live_only:
+            if (
+                options.runtime_root != RUNTIME_ROOT
+                and os.environ.get("NEXPOLY_ALLOW_TEST_ROOT") != "1"
+            ):
+                _fail("runtime root override is test-only")
+            print(
+                json.dumps(
+                    dft_live_readiness(
+                        authority,
+                        runtime_root=options.runtime_root,
+                        backend_url=options.backend_url,
+                    ),
+                    sort_keys=True,
+                )
+            )
+            return 0
         bridge = _sha(options.bridge, "bridge B")
         offline = options.offline_fixture is not None
         if (

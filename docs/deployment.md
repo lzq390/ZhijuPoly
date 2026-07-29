@@ -36,8 +36,8 @@ Runtime state is never stored in that checkout:
 └── worker-venvs/
     ├── md-a/
     ├── md-b/
-    ├── dft-a/
-    └── dft-b/
+    └── dft/
+        └── <release-sha>/
 ```
 
 The runtime root, configuration, state, audit data, backups, cached wheels and
@@ -706,7 +706,18 @@ development worktree, DFT worktree or AIMNet source tree.
 
 GPU Broker and MPS units read code from the stopped-and-verified production
 checkout and keep all writable state under
-`/data/lzq/gith/nexpoly-runtime/state/gpu-resource`. They are installed as
-disabled capabilities. Enabling MPS/Broker, enabling a production DFT Worker,
-and opening DFT admission are distinct reviewed maintenance changes; a normal
-pull deployment does not enable them.
+`/data/lzq/gith/nexpoly-runtime/state/gpu-resource`. They remain disabled in
+production.
+
+Production DFT runs directly on physical GPU2 with no Broker, MPS or overflow.
+Each release has one immutable Python runtime below
+`worker-venvs/dft/<release-sha>`. The runtime builder writes the exact active
+paths, release SHA and runtime-manifest digest to the owner-private
+`config/monomer-dft-runtime.env`; the tracked systemd unit consumes that file.
+The active runtime must contain the six locked AIMNet models at mode `0600` and
+must not contain or reference a compatibility launcher.
+
+`production_readiness.py --dft-live-only` verifies the installed unit against
+the tracked unit, the release-bound runtime environment, six-model warmup,
+GPU2 UUID and guard state, immutable Backend/Web revisions, and that the
+Backend was rendered only from the two tracked production Compose files.

@@ -97,6 +97,10 @@ class Settings:
         monomer_dft_download_max_concurrent: int | None = None,
         monomer_dft_download_spool_root: str | None = None,
         allowed_origins: str | None = None,
+        dev_gpu_operator_enabled: bool | None = None,
+        dev_gpu_operator_frontend_port: int | None = None,
+        dev_gpu_operator_socket_path: str | None = None,
+        dev_gpu_operator_timeout_seconds: float | None = None,
         model_enabled: bool | None = None,
         model_dir: str | None = None,
         online_knowledge_api_key: str | None = None,
@@ -430,6 +434,40 @@ class Settings:
         raw_allowed_origins = allowed_origins or os.getenv(
             "ALLOWED_ORIGINS",
             env_values.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"),
+        )
+        raw_dev_gpu_operator_enabled = dev_gpu_operator_enabled
+        if raw_dev_gpu_operator_enabled is None:
+            raw_dev_gpu_operator_enabled = os.getenv(
+                "DEV_GPU_OPERATOR_ENABLED",
+                str(env_values.get("DEV_GPU_OPERATOR_ENABLED", "false")),
+            ).strip().lower() in {"1", "true", "yes", "on"}
+        raw_dev_gpu_operator_frontend_port = (
+            str(dev_gpu_operator_frontend_port)
+            if dev_gpu_operator_frontend_port is not None
+            else os.getenv(
+                "DEV_GPU_OPERATOR_FRONTEND_PORT",
+                str(env_values.get("DEV_GPU_OPERATOR_FRONTEND_PORT", "0")),
+            )
+        )
+        raw_dev_gpu_operator_socket_path = (
+            dev_gpu_operator_socket_path
+            or os.getenv(
+                "DEV_GPU_OPERATOR_SOCKET_PATH",
+                str(
+                    env_values.get(
+                        "DEV_GPU_OPERATOR_SOCKET_PATH",
+                        "/app/gpu-operator/operator.sock",
+                    )
+                ),
+            )
+        )
+        raw_dev_gpu_operator_timeout_seconds = (
+            str(dev_gpu_operator_timeout_seconds)
+            if dev_gpu_operator_timeout_seconds is not None
+            else os.getenv(
+                "DEV_GPU_OPERATOR_TIMEOUT_SECONDS",
+                str(env_values.get("DEV_GPU_OPERATOR_TIMEOUT_SECONDS", "3")),
+            )
         )
         raw_model_dir = model_dir or os.getenv(
             "MODEL_DIR",
@@ -819,6 +857,25 @@ class Settings:
                 "MONOMER_DFT_SUBMIT_ENABLED is true"
             )
         self.allowed_origins = raw_allowed_origins
+        self.dev_gpu_operator_enabled = bool(raw_dev_gpu_operator_enabled)
+        self.dev_gpu_operator_frontend_port = int(
+            raw_dev_gpu_operator_frontend_port
+        )
+        if (
+            self.dev_gpu_operator_enabled
+            and self.dev_gpu_operator_frontend_port != 9001
+        ):
+            raise ValueError(
+                "DEV_GPU_OPERATOR_FRONTEND_PORT must be exactly 9001 when "
+                "the development GPU operator is enabled"
+            )
+        self.dev_gpu_operator_socket_path = _absolute_from_root(
+            raw_dev_gpu_operator_socket_path.strip()
+        )
+        self.dev_gpu_operator_timeout_seconds = min(
+            5.0,
+            max(0.1, float(raw_dev_gpu_operator_timeout_seconds)),
+        )
         self.model_dir = _resolve_from_root(raw_model_dir)
         self.model_enabled = bool(raw_model_enabled)
         self.online_knowledge_api_key = raw_online_knowledge_api_key.strip()

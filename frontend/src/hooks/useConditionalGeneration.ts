@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createConditionalGenerationTgJob,
-  fetchConditionalGenerationTgJob,
-  isApiRequestError
+  fetchConditionalGenerationTgJob
 } from "../services/api";
 import type {
   ConditionalGenerationJobStatus,
@@ -10,6 +9,7 @@ import type {
   ConditionalGenerationTgRequest,
   ConditionalGenerationTgResponse
 } from "../types";
+import { isAbortError, pollJobWithBackoff } from "./jobPolling";
 
 type ConditionalGenerationState = {
   isLoading: boolean;
@@ -39,57 +39,54 @@ export function useConditionalGeneration() {
     job: null
   });
   const pollTokenRef = useRef(0);
+  const pollAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     return () => {
       pollTokenRef.current += 1;
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
     };
   }, []);
 
-  async function pollJob(jobId: string, token: number) {
-    while (pollTokenRef.current === token) {
-      let job: ConditionalGenerationJobStatusResponse;
-      try {
-        job = await fetchConditionalGenerationTgJob(jobId);
-      } catch (error) {
-        if (pollTokenRef.current !== token) {
-          return;
-        }
-        if (isApiRequestError(error, 410)) {
+  async function pollJob(jobId: string, token: number, controller: AbortController) {
+    await pollJobWithBackoff({
+      signal: controller.signal,
+      fetchJob: (signal) => fetchConditionalGenerationTgJob(jobId, signal),
+      isTerminal: (job) => TERMINAL_STATUSES.has(job.status),
+      intervalMs: POLL_INTERVAL_MS,
+      onExpired: () => {
+        if (pollTokenRef.current === token && !controller.signal.aborted) {
           setState((current) => ({
             ...current,
             isLoading: false,
             error: EXPIRED_JOB_MESSAGE
           }));
+        }
+      },
+      onJob: (job) => {
+        if (pollTokenRef.current !== token || controller.signal.aborted) {
           return;
         }
-        throw error;
+        const isTerminal = TERMINAL_STATUSES.has(job.status);
+        setState((current) => ({
+          ...current,
+          isLoading: !isTerminal,
+          error: job.status === "failed" ? job.error ?? "Conditional generation failed." : null,
+          data: job.result ?? current.data,
+          job
+        }));
       }
-      if (pollTokenRef.current !== token) {
-        return;
-      }
-
-      const isTerminal = TERMINAL_STATUSES.has(job.status);
-      setState((current) => ({
-        ...current,
-        isLoading: !isTerminal,
-        error: job.status === "failed" ? job.error ?? "Conditional generation failed." : null,
-        data: job.result ?? current.data,
-        job
-      }));
-
-      if (isTerminal) {
-        return;
-      }
-
-      await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
-    }
+    });
   }
 
   async function submit(nextRequest?: ConditionalGenerationTgRequest) {
     const activeRequest = nextRequest ?? request;
+    pollAbortRef.current?.abort();
     const token = pollTokenRef.current + 1;
     pollTokenRef.current = token;
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
     setState({
       isLoading: true,
       error: null,
@@ -98,7 +95,10 @@ export function useConditionalGeneration() {
     });
 
     try {
-      const createdJob = await createConditionalGenerationTgJob(activeRequest);
+      const createdJob = await createConditionalGenerationTgJob(activeRequest, controller.signal);
+      if (pollTokenRef.current !== token || controller.signal.aborted) {
+        return;
+      }
       setState((current) => ({
         ...current,
         job: {
@@ -116,9 +116,9 @@ export function useConditionalGeneration() {
           result: null
         }
       }));
-      await pollJob(createdJob.job_id, token);
+      await pollJob(createdJob.job_id, token, controller);
     } catch (error) {
-      if (pollTokenRef.current !== token) {
+      if (pollTokenRef.current !== token || controller.signal.aborted || isAbortError(error)) {
         return;
       }
       setState({
@@ -127,6 +127,10 @@ export function useConditionalGeneration() {
         data: null,
         job: null
       });
+    } finally {
+      if (pollAbortRef.current === controller) {
+        pollAbortRef.current = null;
+      }
     }
   }
 

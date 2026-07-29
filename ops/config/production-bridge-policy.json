@@ -38,7 +38,7 @@
     "version": "0013_monomer_dft_jobs"
   },
   "mode": "first-governed-takeover",
-  "policy_id": "sha256:8c40db452b5805452b750011df43ec1af5782a0c73c0cf6fe2c264b998429f22",
+  "policy_id": "sha256:35fa22778f85ccf054c032a1412b1df945b571d5addcc46d0a9d5ffcc6c05db3",
   "required_ci_jobs": [
     "Publish and smoke immutable main images",
     "bridge-validation",
@@ -47,8 +47,8 @@
   ],
   "schema_version": 2,
   "target_images": {
-    "backend": "ghcr.io/lzq390/nexpoly-backend@sha256:ec850b6873cca0340a63faf47ab19b3c4a65f1a656c5866e73487890a6f057f4",
-    "web": "ghcr.io/lzq390/nexpoly-web@sha256:6b7e51ba07861e9894d484e7f0133128697c47fe02c230ab179a38c3d053d008"
+    "backend": "ghcr.io/lzq390/nexpoly-backend@sha256:ecd522706ce34b6aa444b30f1dee49e34e9c5ab1e4bca78b6037848facacd8c7",
+    "web": "ghcr.io/lzq390/nexpoly-web@sha256:bc4a472c7eab5fc4b2f1e278567d9fc2551ac70e720ff06053c297c6829c18e0"
   },
   "target_ref": "refs/nexpoly/bridge-target/82a69ddb42bcd5c4666b5bf038d02414bccc6dde",
   "target_sha": "82a69ddb42bcd5c4666b5bf038d02414bccc6dde",

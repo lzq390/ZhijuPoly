@@ -211,6 +211,10 @@ def create_app(
         probe = request.app.state.runtime.probe()
         state = request.app.state.manager.health_state()
         runtime_payload = {
+            "deployment": active_settings.deployment,
+            "physical_gpu": active_settings.physical_gpu,
+            "gpu_uuid": getattr(probe, "gpu_uuid", None),
+            "guard_status": getattr(probe, "guard_status", None),
             "model_name": probe.model_name,
             "model_sha256": probe.model_sha256,
             "aimnet_version": getattr(probe, "aimnet_version", None),
@@ -237,6 +241,8 @@ def create_app(
             queued_jobs=state["queued_jobs"],
             worker_instance_id=state["worker_instance_id"],
             worker_version=active_settings.worker_version,
+            release_sha=active_settings.release_sha,
+            runtime_contract_sha256=active_settings.runtime_contract_sha256,
             runtime=runtime_payload,
         )
 

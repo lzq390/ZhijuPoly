@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import hashlib
+import json
 import os
 import select
-import signal
 import socket
 import subprocess
 import threading
@@ -19,7 +20,7 @@ from typing import Any, Callable, Literal, Protocol
 from gpu_resource import transient_scope_command
 
 from .artifacts import atomic_write_json, describe_artifact
-from .config import REPO_ROOT, WorkerSettings
+from .config import GPU_UUID_BY_INDEX, REPO_ROOT, WorkerSettings
 from .engine import ComputationCancelled, EngineExecution, ScientificComputationError
 from .executor_ipc import (
     ExecutorProtocolError,
@@ -47,6 +48,9 @@ from .schemas import ArtifactDescriptor, JobSubmitRequest
 
 
 EXECUTOR_START_TIMEOUT_SECONDS = 60.0
+EXECUTOR_SHUTDOWN_ACK_TIMEOUT_SECONDS = 2.0
+EXECUTOR_SHUTDOWN_EXIT_TIMEOUT_SECONDS = 5.0
+EXECUTOR_BROKER_TERMINATION_EXIT_TIMEOUT_SECONDS = 2.0
 LEASE_HEARTBEAT_SECONDS = 1.0
 PRIMARY_REBUILD_ATTEMPTS = 3
 PRIMARY_REBUILD_BACKOFF_SECONDS = 0.1
@@ -80,6 +84,9 @@ class SupervisorRuntimeProbe:
     warp_version: str | None = None
     gpu_uuid: str | None = None
     execution_path: str = "primary"
+    deployment: str = "dev"
+    physical_gpu: str | None = None
+    guard_status: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -169,7 +176,8 @@ class SubprocessExecutor:
         if self.lease.client_environment:
             env.update(dict(self.lease.client_environment))
         else:
-            # Broker-disabled development smoke has no MPS server.
+            # Broker-disabled development smoke and production direct mode
+            # have no MPS server.
             env["CUDA_VISIBLE_DEVICES"] = self.lease.gpu_index
         command = [
             os.fspath(self.settings.python),
@@ -426,53 +434,63 @@ class SubprocessExecutor:
                     stream.close()
                     self.stream = None
                 return
-            if not force and process.poll() is None and stream is not None:
-                with contextlib.suppress(Exception):
+            process_was_live = process.poll() is None
+            graceful_attempted = process_was_live and not force
+            graceful_confirmed = False
+            graceful_error: Exception | None = None
+            if graceful_attempted and stream is not None:
+                previous_timeout: float | None = None
+                restore_timeout = False
+                try:
+                    previous_timeout = stream.gettimeout()
+                    restore_timeout = True
+                    stream.settimeout(EXECUTOR_SHUTDOWN_ACK_TIMEOUT_SECONDS)
                     send_frame(stream, protocol_message("shutdown"))
-                    ready, _, _ = select.select([stream], [], [], 2.0)
-                    if ready:
-                        validate_message(receive_frame(stream), "stopped")
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=3.0)
+                    stopped = receive_frame(stream)
+                    validate_message(stopped, "stopped")
+                    graceful_confirmed = True
+                except Exception as exc:
+                    graceful_error = exc
+                finally:
+                    if restore_timeout:
+                        with contextlib.suppress(Exception):
+                            stream.settimeout(previous_timeout)
+                if graceful_confirmed:
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        process.wait(timeout=EXECUTOR_SHUTDOWN_EXIT_TIMEOUT_SECONDS)
+            elif graceful_attempted:
+                graceful_error = ExecutorProtocolError(
+                    "executor voluntary shutdown IPC is unavailable"
+                )
+
+            if process.poll() is not None and graceful_attempted and not graceful_confirmed:
+                # An EOF/exit without the exact stopped frame is ambiguous: do
+                # not convert that race into release authority. The pool will
+                # abandon and quarantine the lease instead.
+                raise GpuTerminationUnsafe(
+                    "executor exited before voluntary shutdown was proven"
+                ) from graceful_error
+
             if process.poll() is None:
                 if prepare_termination is None:
                     raise GpuTerminationUnsafe(
-                        "executor is still live and MPS termination was not prepared"
-                    )
-                # The Broker must terminate/confirm every MPS client before the
-                # Worker sends even the first signal to this process group.
+                        "executor is still live and Broker-prepared termination "
+                        "is unavailable"
+                    ) from graceful_error
+                # A forced/broken child, or an idle child that did not finish
+                # the exact voluntary handshake, falls back to the Broker's
+                # MPS proof and exact owned cgroup kill. No Worker-side signal
+                # is ever sent.
                 prepare_termination()
-                # prepare_process_termination is authoritative and normally
-                # freezes and cgroup-kills the workload itself. Reap first; a
-                # missing process group after that proof is expected success,
-                # not evidence of an unsafe cleanup.
                 with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=0.2)
-                if process.poll() is None:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(process.pid, signal.SIGTERM)
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=3.0)
-                if process.poll() is None:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(process.pid, signal.SIGKILL)
-                    with contextlib.suppress(subprocess.TimeoutExpired):
-                        process.wait(timeout=2.0)
+                    process.wait(
+                        timeout=EXECUTOR_BROKER_TERMINATION_EXIT_TIMEOUT_SECONDS
+                    )
                 if process.poll() is None:
                     raise GpuTerminationUnsafe(
-                        "executor process did not exit after prepared termination"
+                        "executor process remained live after Broker-prepared "
+                        "termination"
                     )
-                deadline = time.monotonic() + 2.0
-                while True:
-                    try:
-                        os.killpg(process.pid, 0)
-                    except ProcessLookupError:
-                        break
-                    if time.monotonic() >= deadline:
-                        raise GpuTerminationUnsafe(
-                            "executor process group still exists after termination"
-                        )
-                    time.sleep(0.02)
             else:
                 with contextlib.suppress(Exception):
                     process.wait(timeout=0)
@@ -594,9 +612,11 @@ class ExecutorPool:
             handle = self._primary
             lease = self._primary_residency
             admission_uncertain = self.admission_uncertain
+            guard_error, guard_status = self._gpu_guard_error()
             if (
                 self._fatal
                 or admission_uncertain
+                or guard_error is not None
                 or handle is None
                 or lease is None
                 or handle.broken
@@ -606,10 +626,16 @@ class ExecutorPool:
                     model_loaded=False,
                     model_name=self.settings.model_name,
                     error=(
+                        guard_error
+                        if guard_error is not None
+                        else
                         "GPU admission ownership is unresolved; Worker restart required"
                         if admission_uncertain
                         else self._error or "primary executor is unavailable"
                     ),
+                    deployment=self.settings.deployment,
+                    physical_gpu=self.settings.physical_gpu,
+                    guard_status=guard_status,
                 )
             payload = dict(handle.probe_payload)
             allowed = {field.name for field in SupervisorRuntimeProbe.__dataclass_fields__.values()}
@@ -621,9 +647,42 @@ class ExecutorPool:
                     "model_name": self.settings.model_name,
                     "gpu_uuid": lease.gpu_uuid,
                     "execution_path": "primary",
+                    "deployment": self.settings.deployment,
+                    "physical_gpu": self.settings.physical_gpu,
+                    "guard_status": guard_status,
                 }
             )
             return SupervisorRuntimeProbe(**payload)
+
+    def _gpu_guard_error(self) -> tuple[str | None, str | None]:
+        if self.settings.deployment != "prod":
+            return None, None
+        path = self.settings.gpu_guard_state
+        if path is None:
+            return "production GPU2 guard state is not configured", "missing"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return "production GPU2 guard state is unavailable", "missing"
+        status = str(payload.get("status", "invalid"))
+        if payload.get("gpu_uuid") != GPU_UUID_BY_INDEX["2"]:
+            return "production GPU2 guard UUID does not match policy", status
+        try:
+            observed_at = dt.datetime.fromisoformat(
+                str(payload["observed_at"]).removesuffix("Z") + "+00:00"
+            )
+        except (KeyError, TypeError, ValueError):
+            return "production GPU2 guard timestamp is invalid", status
+        if (
+            observed_at.tzinfo is None
+            or dt.datetime.now(dt.timezone.utc) - observed_at
+            > dt.timedelta(seconds=150)
+        ):
+            return "production GPU2 guard state is stale", status
+        unknown = payload.get("unknown_processes")
+        if status != "ready" or not isinstance(unknown, list) or unknown:
+            return "production GPU2 guard has quarantined DFT admission", status
+        return None, status
 
     @property
     def admission_uncertain(self) -> bool:
@@ -1323,21 +1382,26 @@ class ExecutorPool:
                 dev_runtime_root=self.settings.dev_runtime_root,
             )
         else:
-            if not self.settings.standalone_gpu_smoke:
+            if self.settings.deployment == "prod":
+                candidate_devices = (self.settings.physical_gpu,)
+                verify_host_gpu_inventory(candidate_devices)
+                broker = DisabledBrokerClient(blocked_devices=set())
+            elif not self.settings.standalone_gpu_smoke:
                 raise GpuRuntimeUnhealthy(
                     "Broker-disabled execution requires explicit standalone smoke authorization"
                 )
-            candidate_devices = (
-                self.settings.physical_gpu,
-                *self.settings.overflow_gpu_devices,
-            )
-            verify_host_gpu_inventory(candidate_devices)
-            blocked = audit_isolated_gpu_availability(candidate_devices)
-            if self.settings.physical_gpu in blocked:
-                raise GpuRuntimeUnhealthy(
-                    "broker-disabled dev smoke requires an idle primary GPU"
+            else:
+                candidate_devices = (
+                    self.settings.physical_gpu,
+                    *self.settings.overflow_gpu_devices,
                 )
-            broker = DisabledBrokerClient(blocked_devices=blocked)
+                verify_host_gpu_inventory(candidate_devices)
+                blocked = audit_isolated_gpu_availability(candidate_devices)
+                if self.settings.physical_gpu in blocked:
+                    raise GpuRuntimeUnhealthy(
+                        "broker-disabled dev smoke requires an idle primary GPU"
+                    )
+                broker = DisabledBrokerClient(blocked_devices=blocked)
         self.broker = broker
         return broker
 

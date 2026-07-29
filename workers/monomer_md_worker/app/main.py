@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import hashlib
+import json
 import logging
 import os
+import re
 import shutil
 import stat
+import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,8 +39,19 @@ from scripts.worker_slot_runtime import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("monomer_md_worker")
 
+# The Worker also hardens its own process.  A service manager or developer
+# shell is not a sufficient authority for files created later by background
+# tasks.
+os.umask(0o077)
+
 
 _WORKER_MODULE_PATH = Path("workers/monomer_md_worker/app/main.py")
+_DEV_VENV_NAME = ".venv-monomer-md-worker"
+_DEV_LOCK_PATH = Path("workers/monomer_md_worker/requirements.lock")
+_DEV_LOCK_RECORD = ".nexpoly-worker-lock-digest.json"
+_DEV_BASE_RECORD = ".nexpoly-base-python-identity.json"
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -50,6 +65,136 @@ class RuntimeIdentity:
     slot_record_sha256: str | None
     base_python_identity_sha256: str | None
     python_executable: str
+
+
+def _owner_private_json(path: Path) -> dict[str, Any]:
+    try:
+        metadata = path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_size > 64 * 1024
+        ):
+            raise RuntimeError("development Worker identity record is unsafe")
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("development Worker identity record is unavailable") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("development Worker identity record is invalid")
+    return value
+
+
+def _development_git_identity(source_root: Path) -> tuple[str, str]:
+    environment = {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "LC_ALL": "C",
+    }
+
+    def run(*arguments: str) -> str:
+        try:
+            result = subprocess.run(
+                ["git", "--no-optional-locks", "-C", str(source_root), *arguments],
+                env=environment,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise RuntimeError("development Worker Git identity is unavailable") from exc
+        return result.stdout.strip()
+
+    top_level = run("rev-parse", "--show-toplevel")
+    source_sha = run("rev-parse", "--verify", "HEAD")
+    source_tree = run("rev-parse", "--verify", "HEAD^{tree}")
+    if (
+        Path(top_level).resolve(strict=True) != source_root
+        or _SHA_RE.fullmatch(source_sha) is None
+        or _SHA_RE.fullmatch(source_tree) is None
+    ):
+        raise RuntimeError("development Worker Git identity is invalid")
+    return source_sha, source_tree
+
+
+def _development_runtime_identity(
+    source_root: Path,
+    resolved_prefix: Path,
+    resolved_executable: Path,
+) -> tuple[str, str, str, str]:
+    expected_prefix = source_root / _DEV_VENV_NAME
+    try:
+        expected_prefix = expected_prefix.resolve(strict=True)
+        expected_executable = (expected_prefix / "bin/python").resolve(strict=True)
+        lock = (source_root / _DEV_LOCK_PATH).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("development Worker venv or lock is unavailable") from exc
+    if resolved_prefix != expected_prefix or resolved_executable != expected_executable:
+        raise RuntimeError("development Worker is not running from its isolated venv")
+    if lock != source_root / _DEV_LOCK_PATH or lock.is_symlink() or not lock.is_file():
+        raise RuntimeError("development Worker requirements lock is unsafe")
+
+    lock_digest = "sha256:" + hashlib.sha256(lock.read_bytes()).hexdigest()
+    lock_record = _owner_private_json(expected_prefix / _DEV_LOCK_RECORD)
+    if lock_record != {
+        "schema_version": 1,
+        "path": _DEV_LOCK_PATH.as_posix(),
+        "sha256": lock_digest,
+    }:
+        raise RuntimeError("development Worker lock identity has drifted")
+    base_record = _owner_private_json(expected_prefix / _DEV_BASE_RECORD)
+    base_identity = base_record.get("identity_sha256")
+    if not isinstance(base_identity, str) or _DIGEST_RE.fullmatch(base_identity) is None:
+        raise RuntimeError("development Worker base Python identity is invalid")
+    material = {key: value for key, value in base_record.items() if key != "identity_sha256"}
+    canonical_identity = "sha256:" + hashlib.sha256(
+        json.dumps(
+            material,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if canonical_identity != base_identity:
+        raise RuntimeError("development Worker base Python identity has drifted")
+    configured_executable = base_record.get("configured_path")
+    recorded_executable = base_record.get("resolved_path")
+    recorded_digest = base_record.get("executable_sha256")
+    recorded_size = base_record.get("executable_size")
+    if (
+        not isinstance(configured_executable, str)
+        or not isinstance(recorded_executable, str)
+        or not isinstance(recorded_digest, str)
+        or _DIGEST_RE.fullmatch(recorded_digest) is None
+        or isinstance(recorded_size, bool)
+        or not isinstance(recorded_size, int)
+        or recorded_size <= 0
+    ):
+        raise RuntimeError("development Worker base Python executable is invalid")
+    try:
+        configured_path = Path(configured_executable)
+        if not configured_path.is_absolute() or ".." in configured_path.parts:
+            raise RuntimeError("development Worker base Python executable is invalid")
+        frozen_executable = configured_path.resolve(strict=True)
+        if frozen_executable != Path(recorded_executable):
+            raise RuntimeError("development Worker base Python executable has drifted")
+        metadata = frozen_executable.stat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_mode & 0o022
+            or metadata.st_size != recorded_size
+            or "sha256:" + hashlib.sha256(frozen_executable.read_bytes()).hexdigest()
+            != recorded_digest
+        ):
+            raise RuntimeError("development Worker base Python executable has drifted")
+    except OSError as exc:
+        raise RuntimeError("development Worker base Python executable is unavailable") from exc
+    source_sha, source_tree = _development_git_identity(source_root)
+    return source_sha, source_tree, lock_digest, base_identity
 
 
 def _load_runtime_identity(
@@ -109,6 +254,17 @@ def _load_runtime_identity(
         worker_lock_sha256 = selection.active.worker_lock_sha256
         slot_record_sha256 = selection.active.slot_record_sha256
         base_python_identity_sha256 = selection.slot.base_python_identity_sha256
+    else:
+        (
+            source_sha,
+            source_tree,
+            worker_lock_sha256,
+            base_python_identity_sha256,
+        ) = _development_runtime_identity(
+            source_root,
+            resolved_prefix,
+            resolved_executable,
+        )
 
     return RuntimeIdentity(
         source_sha=source_sha,

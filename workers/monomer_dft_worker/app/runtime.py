@@ -87,6 +87,19 @@ def load_model_specs(lock_path: Path = SOURCE_LOCK_PATH) -> tuple[ModelSpec, ...
     return tuple(load_model_spec(str(alias), lock_path) for alias in aliases)
 
 
+def _validate_model_permissions(model_path: Path, *, deployment: str) -> None:
+    metadata = model_path.stat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    if deployment == "prod":
+        if metadata.st_uid != os.geteuid() or mode != 0o600:
+            raise RuntimeError(
+                "production AIMNet2 model cache file must be owner-only mode "
+                f"0600: {model_path}"
+            )
+    elif metadata.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+        raise RuntimeError(f"AIMNet2 model cache file must be read-only: {model_path}")
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeProbe:
     ready: bool
@@ -191,10 +204,11 @@ class AimnetRuntime:
                     "AIMNet2 model must be an isolated regular file, not a symlink: "
                     f"{model_path}"
                 )
-            if self.settings.preload_all_models and model_path.stat().st_mode & (
-                stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
-            ):
-                raise RuntimeError(f"AIMNet2 model cache file must be read-only: {model_path}")
+            if self.settings.preload_all_models:
+                _validate_model_permissions(
+                    model_path,
+                    deployment=self.settings.deployment,
+                )
             model_sha256 = self._sha256(model_path)
             if model_sha256 != model_spec.sha256:
                 raise RuntimeError(

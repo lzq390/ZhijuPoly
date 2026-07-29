@@ -16,12 +16,14 @@ from gpu_resource.authority import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOT = REPO_ROOT / ".runtime"
 PRODUCTION_REPO_ROOT = Path("/data/lzq/gith/nexpoly")
+PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 FORBIDDEN_SOURCE_ROOTS = (
     Path("/data/cgy").resolve(),
     Path("/data/lzq/gith/aimnetcentral").resolve(),
 )
 GPU_UUID_BY_INDEX = {
     "1": "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771",
+    "2": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
     "3": "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5",
 }
 
@@ -144,12 +146,32 @@ def validate_dev_runtime_path(
     return candidate
 
 
-def _configured_runtime_root() -> Path:
-    configured = os.getenv("MONOMER_DFT_DEV_RUNTIME_ROOT")
-    value = (configured if configured is not None else str(RUNTIME_ROOT)).strip()
+def _deployment() -> Literal["dev", "prod"]:
+    deployment = os.getenv("MONOMER_DFT_DEPLOYMENT", "dev").strip().lower()
+    if deployment not in {"dev", "prod"}:
+        raise ValueError("MONOMER_DFT_DEPLOYMENT must be dev or prod")
+    return deployment
+
+
+def _configured_runtime_root(deployment: Literal["dev", "prod"]) -> Path:
+    name = (
+        "MONOMER_DFT_PROD_RUNTIME_ROOT"
+        if deployment == "prod"
+        else "MONOMER_DFT_DEV_RUNTIME_ROOT"
+    )
+    default = PRODUCTION_RUNTIME_ROOT if deployment == "prod" else RUNTIME_ROOT
+    configured = os.getenv(name)
+    value = (configured if configured is not None else str(default)).strip()
     if not value:
-        raise ValueError("MONOMER_DFT_DEV_RUNTIME_ROOT must not be empty")
+        raise ValueError(f"{name} must not be empty")
     root = _absolute_path(value)
+    if deployment == "prod":
+        if root.resolve(strict=False) != PRODUCTION_RUNTIME_ROOT:
+            raise ValueError(
+                "MONOMER_DFT_PROD_RUNTIME_ROOT must be "
+                f"{PRODUCTION_RUNTIME_ROOT}"
+            )
+        return validate_private_dev_runtime_root(root)
     if configured is None and not root.exists() and not root.is_symlink():
         try:
             root.mkdir(mode=0o700)
@@ -227,14 +249,50 @@ def _positive_float(name: str, default: float) -> float:
     return value
 
 
-def _gpu_index(name: str, default: str) -> str:
+def _production_release_identity(
+    deployment: Literal["dev", "prod"],
+) -> tuple[str | None, str | None]:
+    release = os.getenv("MONOMER_DFT_RELEASE_SHA", "").strip()
+    contract = os.getenv("MONOMER_DFT_RUNTIME_CONTRACT_SHA256", "").strip()
+    if deployment == "dev":
+        return release or None, contract or None
+    if len(release) != 40 or any(
+        character not in "0123456789abcdef" for character in release
+    ):
+        raise ValueError(
+            "MONOMER_DFT_RELEASE_SHA must be the exact lowercase production commit SHA"
+        )
+    if (
+        len(contract) != 71
+        or not contract.startswith("sha256:")
+        or any(
+            character not in "0123456789abcdef"
+            for character in contract.removeprefix("sha256:")
+        )
+    ):
+        raise ValueError(
+            "MONOMER_DFT_RUNTIME_CONTRACT_SHA256 must be an exact sha256 digest"
+        )
+    return release, contract
+
+
+def _gpu_index(name: str, default: str, *, deployment: Literal["dev", "prod"]) -> str:
     value = os.getenv(name, default).strip()
-    if value != "1":
+    expected = "2" if deployment == "prod" else "1"
+    if value != expected:
+        if deployment == "prod":
+            raise ValueError(f"{name} must be physical GPU 2 in production")
         raise ValueError(f"{name} must be physical GPU 1 in the dev-only release")
     return value
 
 
-def _gpu_list(name: str, default: str, *, primary: str) -> tuple[str, ...]:
+def _gpu_list(
+    name: str,
+    default: str,
+    *,
+    primary: str,
+    deployment: Literal["dev", "prod"],
+) -> tuple[str, ...]:
     raw = os.getenv(name, default)
     values = tuple(item.strip() for item in raw.split(",") if item.strip())
     if not values:
@@ -243,6 +301,8 @@ def _gpu_list(name: str, default: str, *, primary: str) -> tuple[str, ...]:
         raise ValueError(f"{name} must not contain duplicate devices")
     if primary in values:
         raise ValueError(f"{name} must not contain the primary GPU")
+    if deployment == "prod":
+        raise ValueError("production DFT must not configure overflow GPUs")
     if any(value != "3" for value in values):
         raise ValueError("dev overflow GPUs must be exactly 3")
     return values
@@ -282,7 +342,7 @@ class WorkerSettings:
     warmup_models: bool = False
     single_point_timeout_seconds: float = 600.0
     optimization_timeout_seconds: float = 1800.0
-    deployment: Literal["dev"] = "dev"
+    deployment: Literal["dev", "prod"] = "dev"
     overflow_gpu_devices: tuple[str, ...] = ("3",)
     broker_enabled: bool = False
     standalone_gpu_smoke: bool = False
@@ -295,27 +355,69 @@ class WorkerSettings:
     gpu_external_reservations: Path | None = None
     download_spool_root: Path | None = None
     executor_process: bool = False
+    gpu1_only_session: bool = False
+    gpu_guard_state: Path | None = None
+    release_sha: str | None = None
+    runtime_contract_sha256: str | None = None
 
     def __post_init__(self) -> None:
         code_root = REPO_ROOT.resolve(strict=False)
-        _reject_production_path("Worker code root", code_root)
+        if self.deployment == "prod":
+            if code_root != PRODUCTION_REPO_ROOT:
+                raise ValueError(
+                    f"production Worker code root must be {PRODUCTION_REPO_ROOT}"
+                )
+        else:
+            _reject_production_path("Worker code root", code_root)
         runtime_root = validate_private_dev_runtime_root(self.dev_runtime_root)
-        formal_gpu_authority = load_formal_gpu_authority(
-            expected_reservations_file=(
-                REPO_ROOT / "ops/config/gpu-external-reservations.json"
-            ),
-            expected_root=REPO_ROOT / ".runtime/gpu-resource",
+        formal_gpu_authority = (
+            load_formal_gpu_authority(
+                expected_reservations_file=(
+                    REPO_ROOT / "ops/config/gpu-external-reservations.json"
+                ),
+                expected_root=REPO_ROOT / ".runtime/gpu-resource",
+            )
+            if self.deployment == "dev"
+            else None
         )
         object.__setattr__(self, "dev_runtime_root", runtime_root)
 
-        if self.deployment != "dev":
-            raise ValueError("MONOMER_DFT_DEPLOYMENT must be dev; production is hard-off")
-        if self.physical_gpu not in GPU_UUID_BY_INDEX:
-            raise ValueError("physical GPU must be 1 or 3; GPU 0 and GPU 2 are forbidden")
-        if not self.executor_process and self.physical_gpu != "1":
+        if self.deployment == "prod" and self.physical_gpu != "2":
+            raise ValueError(
+                "production physical GPU must be 2"
+            )
+        if (
+            self.deployment == "dev"
+            and (
+                self.physical_gpu not in {"1", "3"}
+                or not self.executor_process
+                and self.physical_gpu != "1"
+            )
+        ):
             raise ValueError("dev supervisor primary GPU must be physical GPU 1")
-        if self.overflow_gpu_devices != ("3",):
-            raise ValueError("dev overflow GPUs must be exactly physical GPU 3")
+        expected_overflow = (
+            ()
+            if self.deployment == "prod" or self.gpu1_only_session
+            else ("3",)
+        )
+        if self.overflow_gpu_devices != expected_overflow:
+            raise ValueError(
+                "production DFT must not configure overflow GPUs"
+                if self.deployment == "prod"
+                else
+                "GPU1-only sessions must not configure an overflow GPU"
+                if self.gpu1_only_session
+                else "dev overflow GPUs must be exactly physical GPU 3"
+            )
+        if self.deployment == "prod":
+            if self.broker_enabled or self.standalone_gpu_smoke:
+                raise ValueError(
+                    "production DFT must use direct GPU2 mode without Broker or standalone smoke"
+                )
+            if runtime_root != PRODUCTION_RUNTIME_ROOT:
+                raise ValueError(
+                    f"production runtime root must be {PRODUCTION_RUNTIME_ROOT}"
+                )
         if self.logical_device != "cuda:0":
             raise ValueError("executor logical device must remain cuda:0")
 
@@ -417,19 +519,39 @@ class WorkerSettings:
                 leaf_kind="directory",
             ),
         )
+        if self.deployment == "prod":
+            guard_state = self.gpu_guard_state or runtime_root / "state/gpu2-guard.json"
+            object.__setattr__(
+                self,
+                "gpu_guard_state",
+                validate_dev_runtime_path(
+                    "MONOMER_DFT_GPU_GUARD_STATE",
+                    guard_state,
+                    runtime_root=runtime_root,
+                    leaf_kind="file",
+                ),
+            )
 
 
 def load_settings() -> WorkerSettings:
     _validate_pythonpath()
 
+    deployment = _deployment()
     code_root = REPO_ROOT.resolve(strict=False)
-    _reject_production_path("Worker code root", code_root)
-    formal_gpu_authority = materialize_formal_gpu_authority(
-        expected_reservations_file=(
-            REPO_ROOT / "ops/config/gpu-external-reservations.json"
-        ),
-        expected_root=REPO_ROOT / ".runtime/gpu-resource",
-    )
+    if deployment == "prod":
+        if code_root != PRODUCTION_REPO_ROOT:
+            raise ValueError(
+                f"production Worker code root must be {PRODUCTION_REPO_ROOT}"
+            )
+        formal_gpu_authority = None
+    else:
+        _reject_production_path("Worker code root", code_root)
+        formal_gpu_authority = materialize_formal_gpu_authority(
+            expected_reservations_file=(
+                REPO_ROOT / "ops/config/gpu-external-reservations.json"
+            ),
+            expected_root=REPO_ROOT / ".runtime/gpu-resource",
+        )
     if formal_gpu_authority is not None:
         os.environ.update(
             {
@@ -444,19 +566,36 @@ def load_settings() -> WorkerSettings:
                 ),
             }
         )
-    runtime_root = _configured_runtime_root()
-    deployment = os.getenv("MONOMER_DFT_DEPLOYMENT", "dev").strip().lower()
-    if deployment != "dev":
-        raise ValueError("MONOMER_DFT_DEPLOYMENT must be dev; production is hard-off")
-    physical_gpu = _gpu_index("NEXPOLY_DFT_GPU_DEVICE", "1")
+    runtime_root = _configured_runtime_root(deployment)
+    release_sha, runtime_contract_sha256 = _production_release_identity(deployment)
+    physical_gpu = _gpu_index(
+        "NEXPOLY_DFT_GPU_DEVICE",
+        "2" if deployment == "prod" else "1",
+        deployment=deployment,
+    )
     overflow_gpu_devices = _gpu_list(
         "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES",
-        "3",
+        (
+            ""
+            if deployment == "prod"
+            or os.getenv("NEXPOLY_DEV_GPU1_ONLY_SESSION", "0").strip() == "1"
+            else "3"
+        ),
         primary=physical_gpu,
+        deployment=deployment,
     )
-    expected_overflow = ("3",)
+    gpu1_only_session = os.getenv("NEXPOLY_DEV_GPU1_ONLY_SESSION", "0").strip()
+    if gpu1_only_session not in {"0", "1"}:
+        raise ValueError("NEXPOLY_DEV_GPU1_ONLY_SESSION must be 0 or 1")
+    expected_overflow = (
+        () if deployment == "prod" or gpu1_only_session == "1" else ("3",)
+    )
     if overflow_gpu_devices != expected_overflow:
-        raise ValueError("dev overflow GPUs must be exactly 3")
+        raise ValueError(
+            "dev overflow GPUs must be empty in a GPU1-only session"
+            if gpu1_only_session == "1"
+            else "dev overflow GPUs must be exactly 3"
+        )
 
     # The HTTP supervisor is deliberately CUDA-blind. Only the executor child
     # receives CUDA_VISIBLE_DEVICES, before importing Torch/Warp/AIMNet.
@@ -464,16 +603,22 @@ def load_settings() -> WorkerSettings:
     executor_process = os.getenv("MONOMER_DFT_EXECUTOR_PROCESS") == "1"
     if executor_process:
         executor_gpu = os.getenv("NEXPOLY_DFT_EXECUTOR_GPU_DEVICE", "").strip()
-        if executor_gpu not in GPU_UUID_BY_INDEX:
+        allowed_executor_gpus = {"2"} if deployment == "prod" else {"1", "3"}
+        if executor_gpu not in allowed_executor_gpus:
             raise ValueError(
-                "executor GPU must be physical GPU 1 or 3; GPU 0 and GPU 2 are forbidden"
+                "production executor GPU must be physical GPU 2"
+                if deployment == "prod"
+                else "executor GPU must be physical GPU 1 or 3; GPU 0 and GPU 2 are forbidden"
             )
         expected_uuid = GPU_UUID_BY_INDEX[executor_gpu]
         executor_uuid = os.getenv("NEXPOLY_DFT_EXECUTOR_GPU_UUID", "").strip()
         if executor_uuid and executor_uuid != expected_uuid:
             raise ValueError("executor GPU index-to-UUID identity is invalid")
-        expected_visible = executor_uuid or executor_gpu
-        if visible_devices is None or visible_devices.strip() != expected_visible:
+        # Direct mode selects the physical index while Broker/MPS mode selects
+        # the immutable UUID. The executor identity always carries both, so
+        # either exact selector is valid after the index-to-UUID check above.
+        allowed_visible = {executor_gpu, expected_uuid}
+        if visible_devices is None or visible_devices.strip() not in allowed_visible:
             raise ValueError(
                 "executor CUDA_VISIBLE_DEVICES must contain exactly its leased GPU index or UUID"
             )
@@ -496,7 +641,10 @@ def load_settings() -> WorkerSettings:
     if len(os.fsencode(uds)) > 107:
         raise ValueError("MONOMER_DFT_WORKER_UDS exceeds the Linux Unix-socket path limit")
 
-    broker_raw = os.getenv("MONOMER_DFT_GPU_BROKER_ENABLED", "1").strip()
+    broker_raw = os.getenv(
+        "MONOMER_DFT_GPU_BROKER_ENABLED",
+        "0" if deployment == "prod" else "1",
+    ).strip()
     if broker_raw not in {"0", "1"}:
         raise ValueError("MONOMER_DFT_GPU_BROKER_ENABLED must be 0 or 1")
     broker_enabled = broker_raw == "1"
@@ -504,7 +652,11 @@ def load_settings() -> WorkerSettings:
     if standalone_raw not in {"0", "1"}:
         raise ValueError("MONOMER_DFT_STANDALONE_GPU_SMOKE must be 0 or 1")
     standalone_gpu_smoke = standalone_raw == "1"
-    if not broker_enabled and not standalone_gpu_smoke:
+    if deployment == "prod" and (broker_enabled or standalone_gpu_smoke):
+        raise ValueError(
+            "production DFT must use direct GPU2 mode without Broker or standalone smoke"
+        )
+    if deployment == "dev" and not broker_enabled and not standalone_gpu_smoke:
         raise ValueError(
             "Broker-disabled execution is allowed only for an explicitly audited standalone GPU smoke"
         )
@@ -575,7 +727,7 @@ def load_settings() -> WorkerSettings:
         optimization_timeout_seconds=_positive_float(
             "MONOMER_DFT_OPTIMIZATION_TIMEOUT_SECONDS", 1800.0
         ),
-        deployment="dev",
+        deployment=deployment,
         overflow_gpu_devices=overflow_gpu_devices,
         broker_enabled=broker_enabled,
         standalone_gpu_smoke=standalone_gpu_smoke,
@@ -592,4 +744,16 @@ def load_settings() -> WorkerSettings:
         gpu_external_reservations=external_reservations,
         download_spool_root=download_spool_root,
         executor_process=executor_process,
+        gpu1_only_session=gpu1_only_session == "1",
+        gpu_guard_state=(
+            _runtime_path(
+                "MONOMER_DFT_GPU_GUARD_STATE",
+                str(runtime_root / "state/gpu2-guard.json"),
+                runtime_root=runtime_root,
+            )
+            if deployment == "prod"
+            else None
+        ),
+        release_sha=release_sha,
+        runtime_contract_sha256=runtime_contract_sha256,
     )

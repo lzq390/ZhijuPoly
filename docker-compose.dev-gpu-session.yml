@@ -1,0 +1,64 @@
+# Explicit GPU1 session overlay. The ordinary development stack is CPU-only;
+# render this file last only while the descriptor-authority session is live.
+services:
+  backend:
+    user: "1001:1001"
+    # The host MPS server and its container client exchange CUDA IPC state
+    # through host shared memory in addition to the private pipe directory.
+    ipc: host
+    # The Broker residency lease is bound to the exact Uvicorn process.
+    # Dev hot reload replaces that process and invalidates descriptor authority,
+    # so governed GPU sessions must keep one stable Backend process identity.
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        cd /app/backend/app;
+        exec python -X faulthandler -m uvicorn app.main:app --app-dir /app/backend
+        --host 0.0.0.0 --port 8000
+        --workers 1 --timeout-graceful-shutdown 40
+    environment:
+      OCSR_ENABLED: "true"
+      OCSR_DEVICE: "cuda"
+      GEN_MODEL_ENABLED: "true"
+      GEN_DEVICE: "cuda"
+      RETRO_MODEL_ENABLED: "true"
+      RETRO_DEVICE: "cuda"
+      POLYTAO_ENABLED: "${POLYTAO_ENABLED:-true}"
+      POLYTAO_DEVICE: "cuda"
+      NVIDIA_VISIBLE_DEVICES: "1"
+      MONOMER_MD_SUBMIT_ENABLED: "${MONOMER_MD_SUBMIT_ENABLED:-true}"
+      MONOMER_DFT_SUBMIT_ENABLED: "${MONOMER_DFT_SUBMIT_ENABLED:-true}"
+      GPU_BROKER_ENABLED: "true"
+      GPU_BROKER_SOCKET_PATH: "/app/.runtime/gpu-resource/broker.sock"
+      GPU_MPS_PIPE_ROOT: "/app/.runtime/gpu-resource"
+      GPU_BROKER_ENVIRONMENT: "dev"
+    healthcheck: !override
+      test:
+        - CMD-SHELL
+        - >-
+          python -m app.postgres_preflight --strict >/tmp/nexpoly-postgres-preflight.json &&
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()" &&
+          python -m app.gpu_preflight --mode configured >/tmp/nexpoly-gpu-preflight.json
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+    labels:
+      com.nexpoly.gpu.registration: backend-dev
+      com.nexpoly.gpu.component: backend
+      com.nexpoly.gpu.environment: dev
+      com.nexpoly.gpu.session-id: "${NEXPOLY_DEV_GPU_SESSION_ID:?set exact controller session identity}"
+    volumes:
+      - type: bind
+        source: ${NEXPOLY_GPU_STATE_ROOT:?set NEXPOLY_GPU_STATE_ROOT to the worktree-private GPU session root}
+        target: /app/.runtime/gpu-resource
+        read_only: true
+        bind:
+          create_host_path: false
+    gpus: !override
+      - driver: nvidia
+        device_ids:
+          - "1"
+        capabilities:
+          - gpu

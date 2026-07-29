@@ -1826,6 +1826,137 @@ class ProductionReadinessTests(unittest.TestCase):
         self.assertFalse(json.loads(completed.stdout)["additionalProperties"])
         self.assertEqual(completed.stderr, "")
 
+    def test_dft_live_readiness_binds_gpu2_models_units_and_images(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="readiness-dft-") as raw:
+            runtime_root = Path(raw)
+            state = runtime_root / "state"
+            state.mkdir()
+            tracked_unit = (
+                runtime_root
+                / "ops/systemd/nexpoly-monomer-dft-worker.service"
+            )
+            tracked_unit.parent.mkdir(parents=True)
+            tracked_unit.write_text("[Service]\nExecStart=/worker\n", encoding="utf-8")
+            installed_unit = runtime_root / "installed-dft-worker.service"
+            installed_unit.write_bytes(tracked_unit.read_bytes())
+            installed_unit.chmod(0o600)
+            release_runtime = (
+                runtime_root / "worker-venvs/dft" / AUTHORITY_SHA
+            )
+            release_runtime.mkdir(parents=True, mode=0o700)
+            release_runtime.chmod(0o700)
+            runtime_manifest = release_runtime / "runtime.json"
+            runtime_manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "release": AUTHORITY_SHA,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runtime_manifest.chmod(0o600)
+            runtime_contract = READINESS.sha256_file(runtime_manifest)
+            config = runtime_root / "config"
+            config.mkdir(mode=0o700)
+            runtime_environment = config / "monomer-dft-runtime.env"
+            runtime_environment.write_text(
+                "\n".join(
+                    (
+                        f"MONOMER_DFT_RELEASE_SHA={AUTHORITY_SHA}",
+                        (
+                            "MONOMER_DFT_RUNTIME_CONTRACT_SHA256="
+                            f"{runtime_contract}"
+                        ),
+                        (
+                            "MONOMER_DFT_PYTHON="
+                            f"{release_runtime}/venv/bin/python"
+                        ),
+                        f"AIMNET_CACHE_DIR={release_runtime}/aimnet-cache",
+                        f"WARP_CACHE_PATH={release_runtime}/warp-cache",
+                        "",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            runtime_environment.chmod(0o600)
+            guard = {
+                "schema_version": 1,
+                "observed_at": dt.datetime.now(dt.timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "gpu_index": "2",
+                "gpu_uuid": READINESS.GPU2_UUID,
+                "status": "ready",
+                "unknown_processes": [],
+            }
+            (state / "gpu2-guard.json").write_text(
+                json.dumps(guard),
+                encoding="utf-8",
+            )
+            worker = {
+                "status": "ok",
+                "runtime_ready": True,
+                "accepting_jobs": True,
+                "release_sha": AUTHORITY_SHA,
+                "runtime_contract_sha256": runtime_contract,
+                "runtime": {
+                    "deployment": "prod",
+                    "physical_gpu": "2",
+                    "gpu_uuid": READINESS.GPU2_UUID,
+                    "guard_status": "ready",
+                    "models": {
+                        name: {"loaded": True, "warmed_up": True}
+                        for name in READINESS.DFT_MODEL_ALIASES
+                    },
+                },
+            }
+
+            def command(*args: str) -> str:
+                if args[-2:] == ("rev-parse", "HEAD"):
+                    return AUTHORITY_SHA
+                if "status" in args:
+                    return ""
+                if "is-active" in args or "is-enabled" in args:
+                    return "active" if "is-active" in args else "enabled"
+                if args[:2] == ("docker", "ps"):
+                    return "container"
+                if args[:2] == ("docker", "inspect"):
+                    if "com.docker.compose.project.config_files" in args[-2]:
+                        return (
+                            f"{runtime_root}/docker-compose.yml,"
+                            f"{runtime_root}/docker-compose.prod.yml"
+                        )
+                    return AUTHORITY_SHA
+                raise AssertionError(args)
+
+            with (
+                mock.patch.object(READINESS, "_run_read_only", side_effect=command),
+                mock.patch.object(READINESS, "_unix_json", return_value=worker),
+                mock.patch.object(
+                    READINESS,
+                    "_http_json",
+                    return_value={
+                        "enabled": True,
+                        "available": True,
+                        "schema_ready": True,
+                        "runtime_ready": True,
+                    },
+                ),
+            ):
+                result = READINESS.dft_live_readiness(
+                    AUTHORITY_SHA,
+                    runtime_root=runtime_root,
+                    repo_root=runtime_root,
+                    installed_unit_path=installed_unit,
+                )
+
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["gpu_index"], "2")
+            self.assertEqual(result["models"], sorted(READINESS.DFT_MODEL_ALIASES))
+            self.assertEqual(result["runtime_contract_sha256"], runtime_contract)
+
 
 if __name__ == "__main__":
     unittest.main()

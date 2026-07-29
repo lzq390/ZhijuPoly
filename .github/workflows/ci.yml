@@ -106,10 +106,15 @@ jobs:
           LAB_DATA_POSTGRES_DSN: postgresql://nexpoly:ci-only@lab-postgres:5432/nexpoly
           BYTEFF2_ROOT: /tmp/byteff2
           POLYTAO_ENABLED: "true"
+          NEXPOLY_DEV_FRONTEND_PORT: "9001"
+          NEXPOLY_DEV_GPU_SESSION_ID: "dddddddddddddddddddddddddddddddd"
+          NEXPOLY_GPU_STATE_ROOT: /tmp/nexpoly-gpu-state
         run: |
           install -m 600 /dev/null "$NEXPOLY_APP_ENV_FILE"
           docker compose -f docker-compose.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.dev-gpu-launcher.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.dev-gpu-session.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
           GPU_BROKER_ENVIRONMENT=dev docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.gpu-governed.yml config --quiet
           GPU_BROKER_ENVIRONMENT=prod docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.gpu-governed.yml config --quiet
@@ -137,6 +142,8 @@ jobs:
           bash -n scripts/deploy_server.sh
           mapfile -t unittest_files < <(
             find scripts/tests -maxdepth 1 -type f -name 'test_*.py' \
+              ! -name 'test_dev_gpu_session.py' \
+              ! -name 'test_dev_worker_process.py' \
               ! -name 'test_monomer_md_worker_launcher.py' \
               ! -name 'test_worker_slot_runtime.py' -print | sort
           )
@@ -323,8 +330,6 @@ jobs:
           cache-dependency-path: |
             workers/monomer_md_worker/requirements-ci.lock
             workers/monomer_md_worker/requirements.lock
-      - name: Install locked Worker dependencies
-        run: python -m pip install --require-hashes -r workers/monomer_md_worker/requirements-ci.lock
       - name: Rebuild the production Worker runtime lock from empty
         run: |
           set -euo pipefail
@@ -335,13 +340,43 @@ jobs:
               --require-hashes --only-binary=:all: \
               -r workers/monomer_md_worker/requirements.lock
           "$runtime_venv/bin/python" -m pip check
+      - name: Prepare the exact development Worker test runtime
+        run: |
+          set -euo pipefail
+          base_python="$(command -v python)"
+          resolved_base_python="$(readlink -f -- "$base_python")"
+          [[ "$resolved_base_python" == /* ]]
+          sudo chmod go-w -- "$resolved_base_python"
+          base_identity="$(
+            python scripts/prepare_dev_worker_venv.py identity \
+              --base-python "$base_python" |
+              python -c 'import json,sys; print(json.load(sys.stdin)["identity_sha256"])'
+          )"
+          python scripts/prepare_dev_worker_venv.py prepare \
+            --target "$GITHUB_WORKSPACE/.venv-monomer-md-worker" \
+            --lock "$GITHUB_WORKSPACE/workers/monomer_md_worker/requirements.lock" \
+            --pid-file "$RUNNER_TEMP/monomer-md-worker.pid" \
+            --socket "$RUNNER_TEMP/monomer-md-worker.sock" \
+            --base-python "$base_python" \
+            --expected-base-identity "$base_identity"
+          worker_python="$GITHUB_WORKSPACE/.venv-monomer-md-worker/bin/python"
+          "$worker_python" -m pip install --require-hashes \
+            -r workers/monomer_md_worker/requirements-ci.lock
+          python scripts/prepare_dev_worker_venv.py verify \
+            --target "$GITHUB_WORKSPACE/.venv-monomer-md-worker" \
+            --lock "$GITHUB_WORKSPACE/workers/monomer_md_worker/requirements.lock" \
+            --base-python "$base_python" \
+            --expected-base-identity "$base_identity"
       - name: Run Worker tests
         run: |
-          python -m pytest workers/monomer_md_worker/tests
-          python -m pytest ops/gpu_broker/tests
-          python -m pytest \
+          worker_python="$GITHUB_WORKSPACE/.venv-monomer-md-worker/bin/python"
+          "$worker_python" -m pytest -p no:cacheprovider \
+            workers/monomer_md_worker/tests \
+            ops/gpu_broker/tests \
             scripts/tests/test_monomer_md_worker_launcher.py \
-            scripts/tests/test_worker_slot_runtime.py
+            scripts/tests/test_worker_slot_runtime.py \
+            scripts/tests/test_dev_gpu_session.py \
+            scripts/tests/test_dev_worker_process.py
 
   dft-worker-tests:
     name: Monomer-DFT Worker tests
@@ -398,19 +433,71 @@ jobs:
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - id: backend-identity
+        name: Resolve Backend image identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.resolve-sha.outputs.candidate_sha }}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          dependency_lock_sha256="sha256:$(
+            sha256sum \
+              backend/requirements.lock \
+              backend/requirements-system.lock \
+              backend/requirements-legacy.lock \
+              backend/requirements-ci.lock |
+              sha256sum | awk '{print $1}'
+          )"
+          build_config_sha256="sha256:$(
+            sha256sum \
+              Dockerfile \
+              docker-compose.yml \
+              docker-compose.dev.yml \
+              docker-compose.dev-gpu-launcher.yml \
+              docker-compose.gpu-governed.yml \
+              docker-compose.dev-gpu-session.yml |
+              sha256sum | awk '{print $1}'
+          )"
+          {
+            echo "source_tree=${source_tree}"
+            echo "dependency_lock_sha256=${dependency_lock_sha256}"
+            echo "build_config_sha256=${build_config_sha256}"
+          } >>"$GITHUB_OUTPUT"
       - name: Build image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
+          github-token: ${{ github.token }}
           file: ${{ matrix.file }}
           platforms: linux/amd64
           push: false
+          load: true
+          tags: nexpoly-ci-${{ matrix.cache_scope }}:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
           build-args: |
             SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
+            SOURCE_TREE=${{ steps.backend-identity.outputs.source_tree }}
+            DEPENDENCY_LOCK_SHA256=${{ steps.backend-identity.outputs.dependency_lock_sha256 }}
+            BUILD_CONFIG_SHA256=${{ steps.backend-identity.outputs.build_config_sha256 }}
             SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
             VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
           cache-from: type=gha,scope=ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}
           cache-to: type=gha,mode=max,scope=ci-${{ matrix.cache_scope }}-${{ hashFiles(matrix.lock_pattern) }}
+      - name: Verify Backend image identity
+        if: matrix.name == 'backend'
+        env:
+          BACKEND_IMAGE: nexpoly-ci-backend:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          EXPECTED_REVISION: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          EXPECTED_TREE: ${{ steps.backend-identity.outputs.source_tree }}
+          EXPECTED_DEPENDENCY_LOCK: ${{ steps.backend-identity.outputs.dependency_lock_sha256 }}
+          EXPECTED_BUILD_CONFIG: ${{ steps.backend-identity.outputs.build_config_sha256 }}
+        run: |
+          scripts/ci/assert_backend_image_identity.sh \
+            "$BACKEND_IMAGE" \
+            "$EXPECTED_REVISION" \
+            "$EXPECTED_TREE" \
+            "$EXPECTED_DEPENDENCY_LOCK" \
+            "$EXPECTED_BUILD_CONFIG"
 
   bridge-validation:
     name: bridge-validation
@@ -553,11 +640,43 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      - id: backend-identity
+        name: Resolve Backend image identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.resolve-sha.outputs.candidate_sha }}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          dependency_lock_sha256="sha256:$(
+            sha256sum \
+              backend/requirements.lock \
+              backend/requirements-system.lock \
+              backend/requirements-legacy.lock \
+              backend/requirements-ci.lock |
+              sha256sum | awk '{print $1}'
+          )"
+          build_config_sha256="sha256:$(
+            sha256sum \
+              Dockerfile \
+              docker-compose.yml \
+              docker-compose.dev.yml \
+              docker-compose.dev-gpu-launcher.yml \
+              docker-compose.gpu-governed.yml \
+              docker-compose.dev-gpu-session.yml |
+              sha256sum | awk '{print $1}'
+          )"
+          {
+            echo "source_tree=${source_tree}"
+            echo "dependency_lock_sha256=${dependency_lock_sha256}"
+            echo "build_config_sha256=${build_config_sha256}"
+          } >>"$GITHUB_OUTPUT"
       - id: backend
         name: Build and push Backend once
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
+          github-token: ${{ github.token }}
           file: Dockerfile
           platforms: linux/amd64
           push: true
@@ -568,16 +687,35 @@ jobs:
             org.opencontainers.image.version=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
           build-args: |
             SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
+            SOURCE_TREE=${{ steps.backend-identity.outputs.source_tree }}
+            DEPENDENCY_LOCK_SHA256=${{ steps.backend-identity.outputs.dependency_lock_sha256 }}
+            BUILD_CONFIG_SHA256=${{ steps.backend-identity.outputs.build_config_sha256 }}
             SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
             VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
           cache-from: type=gha,scope=release-backend-${{ hashFiles('backend/requirements*.lock') }}
           cache-to: type=gha,mode=max,scope=release-backend-${{ hashFiles('backend/requirements*.lock') }}
           provenance: false
+      - name: Verify published Backend image identity
+        env:
+          BACKEND_IMAGE: ghcr.io/lzq390/nexpoly-backend@${{ steps.backend.outputs.digest }}
+          EXPECTED_REVISION: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          EXPECTED_TREE: ${{ steps.backend-identity.outputs.source_tree }}
+          EXPECTED_DEPENDENCY_LOCK: ${{ steps.backend-identity.outputs.dependency_lock_sha256 }}
+          EXPECTED_BUILD_CONFIG: ${{ steps.backend-identity.outputs.build_config_sha256 }}
+        run: |
+          docker pull "$BACKEND_IMAGE"
+          scripts/ci/assert_backend_image_identity.sh \
+            "$BACKEND_IMAGE" \
+            "$EXPECTED_REVISION" \
+            "$EXPECTED_TREE" \
+            "$EXPECTED_DEPENDENCY_LOCK" \
+            "$EXPECTED_BUILD_CONFIG"
       - id: web
         name: Build and push Web once
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
+          github-token: ${{ github.token }}
           file: frontend/Dockerfile
           platforms: linux/amd64
           push: true
@@ -655,3 +793,29 @@ jobs:
           asset_path="$(grep -Eo '(src|href)="/assets/[^"?]+' "$web_html" | head -n1 | cut -d'"' -f2)"
           [[ "$asset_path" == /assets/* ]]
           curl --fail --silent --show-error "http://127.0.0.1:18080${asset_path}" >/dev/null
+      - name: Seal published SHA tags to reviewed digests
+        env:
+          RELEASE_COMMIT: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          EXPECTED_BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+          EXPECTED_WEB_DIGEST: ${{ steps.web.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_BACKEND_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          resolve_remote_digest() {
+            local reference="$1"
+            local hash
+            hash="$(
+              docker buildx imagetools inspect --raw "$reference" |
+                sha256sum | awk '{print $1}'
+            )"
+            [[ "$hash" =~ ^[0-9a-f]{64}$ ]]
+            printf 'sha256:%s\n' "$hash"
+          }
+          backend_tag="ghcr.io/lzq390/nexpoly-backend:sha-${RELEASE_COMMIT}"
+          web_tag="ghcr.io/lzq390/nexpoly-web:sha-${RELEASE_COMMIT}"
+          test "$(resolve_remote_digest "$backend_tag")" = \
+            "$EXPECTED_BACKEND_DIGEST"
+          test "$(resolve_remote_digest "$web_tag")" = \
+            "$EXPECTED_WEB_DIGEST"

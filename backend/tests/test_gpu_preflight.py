@@ -45,18 +45,94 @@ def _configured_settings(tmp_path: Path) -> SimpleNamespace:
     )
 
 
-def _install_fake_torch(monkeypatch, *, capability: tuple[int, int] = (8, 9)) -> None:
+def _install_fake_torch(
+    monkeypatch,
+    *,
+    capability: tuple[int, int] = (8, 9),
+    torch_version: str = "2.9.1+cu128",
+    cuda_runtime: str = "12.8",
+) -> None:
     cuda = SimpleNamespace(
         is_available=lambda: True,
         get_device_capability=lambda _index: capability,
         get_device_name=lambda _index: "NVIDIA GeForce RTX 4090",
     )
     torch = SimpleNamespace(
-        __version__="2.6.0+cu118",
-        version=SimpleNamespace(cuda="11.8"),
+        __version__=torch_version,
+        version=SimpleNamespace(cuda=cuda_runtime),
         cuda=cuda,
     )
     monkeypatch.setitem(sys.modules, "torch", torch)
+
+
+def _disabled_settings(tmp_path: Path) -> SimpleNamespace:
+    settings = _configured_settings(tmp_path)
+    # Property prediction is backed by RDKit/sklearn and remains enabled in
+    # the CPU-only development runtime.
+    settings.model_enabled = True
+    settings.ocsr_enabled = False
+    settings.gen_model_enabled = False
+    settings.retro_model_enabled = False
+    settings.polytao_enabled = False
+    settings.gpu_broker_enabled = False
+    settings.gpu_preload_mode = "lazy"
+    return settings
+
+
+def test_disabled_preflight_validates_cpu_policy_without_importing_cuda(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    settings = _disabled_settings(tmp_path)
+    monkeypatch.setattr(
+        gpu_preflight,
+        "_distribution_version",
+        lambda name: gpu_preflight.EXPECTED_VERSIONS[name],
+    )
+    monkeypatch.setattr(gpu_preflight, "_import_runtime_dependency", lambda _name: object())
+
+    report = gpu_preflight.inspect_disabled_runtime(settings)
+
+    assert report["status"] == "disabled"
+    assert report["errors"] == []
+    assert report["cuda"] == {
+        "available": False,
+        "runtime": None,
+        "device": None,
+        "managed_by_broker": False,
+        "inspection": "disabled_by_policy",
+    }
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "message"),
+    [
+        ("gen_model_enabled", True, "conditional_generation"),
+        ("ocsr_enabled", True, "ocsr"),
+        ("gpu_broker_enabled", True, "GPU Broker disabled"),
+        ("gpu_preload_mode", "required", "GPU_PRELOAD_MODE=lazy"),
+    ],
+)
+def test_disabled_preflight_rejects_gpu_configuration_drift(
+    tmp_path,
+    monkeypatch,
+    attribute,
+    value,
+    message,
+) -> None:
+    settings = _disabled_settings(tmp_path)
+    setattr(settings, attribute, value)
+    monkeypatch.setattr(
+        gpu_preflight,
+        "_distribution_version",
+        lambda name: gpu_preflight.EXPECTED_VERSIONS[name],
+    )
+    monkeypatch.setattr(gpu_preflight, "_import_runtime_dependency", lambda _name: object())
+
+    report = gpu_preflight.inspect_disabled_runtime(settings)
+
+    assert report["status"] == "not_disabled"
+    assert any(message in error for error in report["errors"])
 
 
 def test_configured_preflight_checks_exact_runtime_and_assets(tmp_path, monkeypatch) -> None:
@@ -82,6 +158,27 @@ def test_configured_preflight_checks_exact_runtime_and_assets(tmp_path, monkeypa
         "async_queue_timeout_seconds": 600.0,
     }
     assert all(state["enabled"] for state in report["models"].values())
+
+
+def test_configured_preflight_rejects_legacy_cuda_runtime(tmp_path, monkeypatch) -> None:
+    settings = _configured_settings(tmp_path)
+    _install_fake_torch(
+        monkeypatch,
+        torch_version="2.6.0+cu118",
+        cuda_runtime="11.8",
+    )
+    monkeypatch.setattr(
+        gpu_preflight,
+        "_distribution_version",
+        lambda name: gpu_preflight.EXPECTED_VERSIONS[name],
+    )
+    monkeypatch.setattr(gpu_preflight, "_import_runtime_dependency", lambda _name: object())
+
+    report = gpu_preflight.inspect_configured_runtime(settings)
+
+    assert report["status"] == "not_configured"
+    assert any("imported torch must be 2.9.1+cu128" in error for error in report["errors"])
+    assert any("CUDA runtime must be 12.8" in error for error in report["errors"])
 
 
 def test_broker_managed_configured_preflight_never_imports_cuda_runtime(

@@ -9,6 +9,7 @@ import type {
   DftMoleculeDetail,
   DftMoleculeBrowseResponse,
   DftPcaSampleResponse,
+  DevGpuSessionStatusResponse,
   ExperimentalProcessBrowseResponse,
   ExperimentalPropertyBrowseResponse,
   FormulationBrowseResponse,
@@ -103,11 +104,12 @@ async function errorMessageFromResponse(response: Response): Promise<string> {
   return `Request failed with status ${response.status}`;
 }
 
-async function postJSON<T>(path: string, body: unknown): Promise<T> {
+async function postJSON<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
 
   if (!response.ok) {
@@ -143,6 +145,14 @@ async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function querySmiles(payload: SmilesQueryRequest): Promise<SmilesQueryResponse> {
   return postJSON("/query/smiles", payload);
+}
+
+export function fetchDevGpuSessionStatus(signal?: AbortSignal): Promise<DevGpuSessionStatusResponse> {
+  return getJSON("/dev-gpu-session/status", { cache: "no-store", signal });
+}
+
+export function recoverDevGpuSession(signal?: AbortSignal): Promise<DevGpuSessionStatusResponse> {
+  return postJSON("/dev-gpu-session/recover", {}, signal);
 }
 
 export function lookupSmilesInDatabase(payload: SmilesLookupRequest): Promise<SmilesLookupResponse> {
@@ -437,12 +447,15 @@ export function fetchMonomerMdProtocols(signal?: AbortSignal): Promise<MonomerMd
   return getJSON("/monomer-md/protocols", { signal });
 }
 
-export function createMonomerMdJob(payload: MonomerMdJobCreateRequest): Promise<MonomerMdJobCreateResponse> {
-  return postJSON("/monomer-md/jobs", payload);
+export function createMonomerMdJob(
+  payload: MonomerMdJobCreateRequest,
+  signal?: AbortSignal
+): Promise<MonomerMdJobCreateResponse> {
+  return postJSON("/monomer-md/jobs", payload, signal);
 }
 
-export async function fetchMonomerMdJob(jobId: string): Promise<MonomerMdJobResponse> {
-  const job = await getJSON<MonomerMdJobResponse>(`/monomer-md/jobs/${encodeURIComponent(jobId)}`);
+export async function fetchMonomerMdJob(jobId: string, signal?: AbortSignal): Promise<MonomerMdJobResponse> {
+  const job = await getJSON<MonomerMdJobResponse>(`/monomer-md/jobs/${encodeURIComponent(jobId)}`, { signal });
   return normalizeMonomerMdJob(job);
 }
 
@@ -469,17 +482,18 @@ export function searchOnlineKnowledge(
 }
 
 export function createOnlineKnowledgeJob(
-  payload: OnlineKnowledgeSearchRequest
+  payload: OnlineKnowledgeSearchRequest,
+  signal?: AbortSignal
 ): Promise<OnlineKnowledgeJobCreateResponse> {
-  return postJSON("/online-knowledge/jobs", payload);
+  return postJSON("/online-knowledge/jobs", payload, signal);
 }
 
 export function fetchOnlineKnowledgeDefaultConfig(): Promise<OnlineKnowledgeDefaultConfigResponse> {
   return getJSON("/online-knowledge/default-config");
 }
 
-export function fetchOnlineKnowledgeJob(jobId: string): Promise<OnlineKnowledgeJobResponse> {
-  return getJSON(`/online-knowledge/jobs/${encodeURIComponent(jobId)}`);
+export function fetchOnlineKnowledgeJob(jobId: string, signal?: AbortSignal): Promise<OnlineKnowledgeJobResponse> {
+  return getJSON(`/online-knowledge/jobs/${encodeURIComponent(jobId)}`, { signal });
 }
 
 export function fetchOnlineKnowledgeHistory(): Promise<OnlineKnowledgeHistoryResponse> {
@@ -514,29 +528,32 @@ export function searchReverseDesignByTg(payload: ReverseDesignTgRequest): Promis
 }
 
 export function createReverseDesignTgJob(
-  payload: ReverseDesignTgRequest
+  payload: ReverseDesignTgRequest,
+  signal?: AbortSignal
 ): Promise<ReverseDesignTgJobCreateResponse> {
-  return postJSON("/reverse-design/tg/jobs", payload);
+  return postJSON("/reverse-design/tg/jobs", payload, signal);
 }
 
-export function fetchReverseDesignTgJob(jobId: string): Promise<ReverseDesignTgJobStatusResponse> {
-  return getJSON(`/reverse-design/tg/jobs/${encodeURIComponent(jobId)}`);
+export function fetchReverseDesignTgJob(jobId: string, signal?: AbortSignal): Promise<ReverseDesignTgJobStatusResponse> {
+  return getJSON(`/reverse-design/tg/jobs/${encodeURIComponent(jobId)}`, { signal });
 }
 
 export function createConditionalGenerationTgJob(
-  payload: ConditionalGenerationTgRequest
+  payload: ConditionalGenerationTgRequest,
+  signal?: AbortSignal
 ): Promise<ConditionalGenerationJobCreateResponse> {
-  return postJSON("/conditional-generation/tg/jobs", payload);
+  return postJSON("/conditional-generation/tg/jobs", payload, signal);
 }
 
 export function fetchConditionalGenerationTgJob(
-  jobId: string
+  jobId: string,
+  signal?: AbortSignal
 ): Promise<ConditionalGenerationJobStatusResponse> {
-  return getJSON(`/conditional-generation/tg/jobs/${encodeURIComponent(jobId)}`);
+  return getJSON(`/conditional-generation/tg/jobs/${encodeURIComponent(jobId)}`, { signal });
 }
 
-export function fetchConditionalGenerationTgStatus(): Promise<ConditionalGenerationTgStatusResponse> {
-  return getJSON("/conditional-generation/tg/status");
+export function fetchConditionalGenerationTgStatus(signal?: AbortSignal): Promise<ConditionalGenerationTgStatusResponse> {
+  return getJSON("/conditional-generation/tg/status", { signal });
 }
 
 export async function fetchPolytaoStatus(): Promise<PolytaoStatusResponse> {

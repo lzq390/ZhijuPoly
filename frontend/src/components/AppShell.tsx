@@ -4,6 +4,15 @@ import { createPortal } from "react-dom";
 import { Archive, ChevronDown, Ellipsis, Folder, Menu, MessageSquare, Plus, Search, Star, Trash2, X } from "lucide-react";
 import type { OpenScienceGeneralSessionSummary } from "../lib/openScienceGeneralSessionBridge";
 import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge";
+import {
+  GpuSessionButton,
+  useDevGpuSessionControl,
+  type DevGpuSessionControl
+} from "./GpuSessionButton";
+
+const DEV_GPU_SESSION_CONTROL_ENABLED =
+  import.meta.env.DEV &&
+  import.meta.env.VITE_DEV_GPU_SESSION_CONTROL === "true";
 
 export type AppShellModuleItem = {
   id: string;
@@ -70,6 +79,7 @@ export function AppShell({
   children
 }: AppShellProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const gpuSessionControl = useDevGpuSessionControl(DEV_GPU_SESSION_CONTROL_ENABLED);
   const isHome = activeModule === "home";
   const isResearchWorkbench = activeModule === "explorer" || activeModule === "databaseQuery";
   const activeGroupTitle =
@@ -113,6 +123,8 @@ export function AppShell({
           onOpenGeneralSession={(sessionID) => handleNavigate(() => onOpenGeneralSession(sessionID))}
           onRenameGeneralSession={onRenameGeneralSession}
           onDeleteGeneralSession={onDeleteGeneralSession}
+          gpuSessionControl={DEV_GPU_SESSION_CONTROL_ENABLED ? gpuSessionControl : null}
+          gpuStatusId="gpu-session-status-desktop"
         />
       </aside>
 
@@ -150,6 +162,8 @@ export function AppShell({
               onOpenGeneralSession={(sessionID) => handleNavigate(() => onOpenGeneralSession(sessionID))}
               onRenameGeneralSession={onRenameGeneralSession}
               onDeleteGeneralSession={onDeleteGeneralSession}
+              gpuSessionControl={DEV_GPU_SESSION_CONTROL_ENABLED ? gpuSessionControl : null}
+              gpuStatusId="gpu-session-status-mobile"
               trailing={
                 <button
                   type="button"
@@ -215,6 +229,8 @@ type SidebarContentProps = {
   onOpenGeneralSession: (sessionID: string) => void;
   onRenameGeneralSession: (sessionID: string, title: string) => void;
   onDeleteGeneralSession: (sessionID: string) => void;
+  gpuSessionControl: DevGpuSessionControl | null;
+  gpuStatusId: string;
   trailing?: ReactNode;
 };
 
@@ -241,6 +257,8 @@ function SidebarContent({
   onOpenGeneralSession,
   onRenameGeneralSession,
   onDeleteGeneralSession,
+  gpuSessionControl,
+  gpuStatusId,
   trailing
 }: SidebarContentProps) {
   const [isProjectExpanded, setIsProjectExpanded] = useState(false);
@@ -270,7 +288,14 @@ function SidebarContent({
           </span>
           <span className="block min-w-0 truncate text-sm font-semibold text-slate-950">智聚万物</span>
         </button>
-        {trailing}
+        {gpuSessionControl || trailing ? (
+          <div className="flex items-center gap-1">
+            {gpuSessionControl ? (
+              <GpuSessionButton control={gpuSessionControl} statusId={gpuStatusId} />
+            ) : null}
+            {trailing}
+          </div>
+        ) : null}
       </div>
 
       <nav className="max-h-[36%] shrink-0 overflow-y-auto pr-0.5" aria-label="业务模块">

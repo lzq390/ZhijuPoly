@@ -43,6 +43,11 @@ const DEFAULT_TARGET_CLASSES: MonomerPolymerizationTargetClass[] = [
   "all"
 ];
 
+export const SMIPOLY_POLYIMIDE_FIXTURE = {
+  monomerA: "Nc1ccc(N)cc1",
+  monomerB: "O=C1OC(=O)c2cc3c(cc21)C(=O)OC3=O"
+} as const;
+
 const DEFAULT_TARGET_REQUIREMENTS: Record<
   MonomerPolymerizationTargetClass,
   { min_monomers: number; max_monomers: number; monomer_b_required: boolean; note: string }
@@ -258,7 +263,11 @@ export function MonomerPolymerizationPage({
     isMonomerBRequired && monomerA.trim().length > 0 && monomerB.trim().length === 0;
   const monomerBHintId = "monomer-b-requirement-note";
   const monomerBMissingId = "monomer-b-required-missing";
-  const canSubmit = !isLoading && !serviceUnavailable && monomerA.trim().length > 0;
+  const canSubmit =
+    !isLoading &&
+    !serviceUnavailable &&
+    monomerA.trim().length > 0 &&
+    !isMissingRequiredMonomerB;
 
   async function syncSharedStructure() {
     setSyncError(null);
@@ -387,7 +396,7 @@ export function MonomerPolymerizationPage({
                   setError(null);
                   setData(null);
                 }}
-                placeholder="示例：Nc1ccc(N)cc1"
+                placeholder={`示例：${SMIPOLY_POLYIMIDE_FIXTURE.monomerA}`}
                 spellCheck={false}
                 className="min-h-[98px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200"
                 disabled={isLoading}
@@ -440,7 +449,7 @@ export function MonomerPolymerizationPage({
                   isMissingRequiredMonomerB ? `${monomerBHintId} ${monomerBMissingId}` : monomerBHintId
                 }
                 aria-invalid={isMissingRequiredMonomerB ? true : undefined}
-                placeholder="示例：O=C1OC(=O)c2ccccc21"
+                placeholder={`示例：${SMIPOLY_POLYIMIDE_FIXTURE.monomerB}`}
                 spellCheck={false}
                 className="min-h-[92px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200"
                 disabled={isLoading}

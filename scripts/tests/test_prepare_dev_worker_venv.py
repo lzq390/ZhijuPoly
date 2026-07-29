@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -16,10 +17,45 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 import prepare_dev_worker_venv  # noqa: E402
+import dev_worker_process  # noqa: E402
 import release_controller  # noqa: E402
 
 
 class PrepareDevWorkerVenvTests(unittest.TestCase):
+    def _write_managed_record(
+        self,
+        root: Path,
+        *,
+        pid: int,
+        python: Path,
+        socket: Path,
+    ) -> Path:
+        process = root / "proc" / str(pid)
+        process.mkdir(parents=True)
+        argv = [str(python), "-m", "uvicorn", "app.main:app", "--uds", str(socket)]
+        fields = ["S", *(["0"] * 18), "987654", "0"]
+        (process / "stat").write_text(
+            f"{pid} (uvicorn worker) " + " ".join(fields) + "\n",
+            encoding="ascii",
+        )
+        (process / "cmdline").write_bytes(
+            b"\0".join(item.encode() for item in argv) + b"\0"
+        )
+        record = root / "worker.pid"
+        dev_worker_process.create_record(
+            record,
+            pid=pid,
+            python=python,
+            socket=socket,
+            source_sha="a" * 40,
+            source_tree="b" * 40,
+            worker_lock_sha256="sha256:" + "c" * 64,
+            session_id="d" * 32,
+            expected_argv=argv,
+            proc_root=root / "proc",
+        )
+        return record
+
     def _write_wheel(self, wheelhouse: Path) -> tuple[Path, str]:
         wheelhouse.mkdir(parents=True)
         wheel = wheelhouse / "fixture_pkg-1.0-py3-none-any.whl"
@@ -119,23 +155,11 @@ class PrepareDevWorkerVenvTests(unittest.TestCase):
             root = Path(raw)
             target = root / prepare_dev_worker_venv.VENV_NAME
             socket = root / "worker.sock"
-            pid_file = root / "worker.pid"
-            pid_file.write_text("42\n", encoding="ascii")
-            command = root / "proc" / "42" / "cmdline"
-            command.parent.mkdir(parents=True)
-            command.write_bytes(
-                b"\0".join(
-                    item.encode()
-                    for item in (
-                        str(target / "bin/python"),
-                        "-m",
-                        "uvicorn",
-                        "app.main:app",
-                        "--uds",
-                        str(socket),
-                    )
-                )
-                + b"\0"
+            pid_file = self._write_managed_record(
+                root,
+                pid=42,
+                python=target / "bin/python",
+                socket=socket,
             )
             with self.assertRaisesRegex(
                 prepare_dev_worker_venv.DevWorkerVenvError,
@@ -153,14 +177,11 @@ class PrepareDevWorkerVenvTests(unittest.TestCase):
             root = Path(raw)
             target = root / prepare_dev_worker_venv.VENV_NAME
             socket = root / "worker.sock"
-            pid_file = root / "worker.pid"
-            pid_file.write_text("43\n", encoding="ascii")
-            command = root / "proc" / "43" / "cmdline"
-            command.parent.mkdir(parents=True)
-            command.write_bytes(
-                b"/frozen/base/bin/python\0-m\0uvicorn\0app.main:app\0--uds\0"
-                + str(socket).encode()
-                + b"\0"
+            pid_file = self._write_managed_record(
+                root,
+                pid=43,
+                python=Path("/frozen/base/bin/python"),
+                socket=socket,
             )
             prepare_dev_worker_venv.assert_target_not_running(
                 pid_file,
