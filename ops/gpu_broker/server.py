@@ -5992,7 +5992,22 @@ class MpsRuntimeGuard:
                     or self._strict_lease_clients(lease, other_clients)
                 )
             else:
-                clients_alive = self.lease_client_alive(lease)
+                try:
+                    clients_alive = self.lease_client_alive(lease)
+                except BrokerError:
+                    # An execution lease can be cancelled before its fenced
+                    # child is registered. Give that audit the same bounded
+                    # grace as a disappearing MPS client: co-resident
+                    # Backend/DFT membership may change between adjacent
+                    # snapshots without belonging to this MD owner.
+                    # Persistent uncertainty remains fail-closed.
+                    if (
+                        lease.workload_pid is not None
+                        or time.monotonic() >= deadline
+                    ):
+                        raise
+                    time.sleep(0.1)
+                    continue
             if not clients_alive:
                 return False
             if time.monotonic() >= deadline:

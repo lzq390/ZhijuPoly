@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import sys
@@ -17,6 +18,7 @@ from gpu_resource import (
 
 
 _CleanupResult = TypeVar("_CleanupResult")
+logger = logging.getLogger("monomer_md_worker.process_control")
 
 
 async def await_safety_cleanup(
@@ -462,7 +464,10 @@ async def _cleanup_cancelled_scope_transition(
         await transition_task
         transitioned = True
     except Exception:
-        pass
+        logger.warning(
+            "cancelled fenced subprocess did not complete scope transition",
+            exc_info=True,
+        )
     if transitioned:
         try:
             # The writer remains open while host registration runs, so the
@@ -470,6 +475,10 @@ async def _cleanup_cancelled_scope_transition(
             # bound this exact process identity and scope.
             await asyncio.to_thread(execution_lease.register_workload, process.pid)
         except Exception:
+            logger.warning(
+                "cancelled fenced subprocess could not register its exact scope",
+                exc_info=True,
+            )
             _close_fd(gate_writer)
             await _cleanup_unregistered_process(process)
             return
@@ -490,6 +499,10 @@ async def _cleanup_cancelled_spawn(
         process = await spawn_task
     except BaseException:
         _close_fd(gate_writer)
+        logger.warning(
+            "cancelled fenced subprocess creation did not publish a process",
+            exc_info=True,
+        )
         return
     transition_task = asyncio.create_task(
         asyncio.to_thread(

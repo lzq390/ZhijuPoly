@@ -5523,6 +5523,44 @@ def test_mps_server_authority_rejects_multiple_servers(tmp_path: Path) -> None:
     assert error.value.code == "mps_control_unavailable"
 
 
+def test_mps_guard_retries_transient_unregistered_lease_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guard = MpsRuntimeGuard(tmp_path)
+    lease = _strict_md_execution_lease()
+    lease.workload_pid = None
+    lease.workload_process_start_ticks = None
+    lease.workload_process_group_id = None
+    lease.workload_cgroup = None
+    outcomes = iter(
+        (
+            BrokerError(
+                "mps_control_unavailable",
+                "co-resident MPS client membership changed",
+            ),
+            False,
+        )
+    )
+    observed: list[str] = []
+
+    def audit(current_lease: Lease) -> bool:
+        observed.append(current_lease.lease_id)
+        outcome = next(outcomes)
+        if isinstance(outcome, BrokerError):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(guard, "lease_client_alive", audit)
+    monkeypatch.setattr("ops.gpu_broker.server.time.sleep", lambda _seconds: None)
+
+    assert guard.lease_client_alive_after_grace(
+        lease,
+        timeout_seconds=0.5,
+    ) is False
+    assert observed == [lease.lease_id, lease.lease_id]
+
+
 @pytest.mark.parametrize(
     "fault",
     (
