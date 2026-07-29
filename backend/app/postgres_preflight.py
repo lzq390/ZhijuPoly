@@ -537,7 +537,11 @@ def main() -> None:
         "--schema-target",
         choices=sorted(SCHEMA_TARGETS),
         default=SCHEMA_TARGET_FINAL,
-        help="Validate startup compatibility through 0012 or final readiness through 0013.",
+        help=(
+            "Validate startup compatibility through 0012 or strict readiness "
+            "through the current canonical manifest (currently 0014). The "
+            "final-0013 choice is retained as a compatibility identifier."
+        ),
     )
     args = parser.parse_args()
     report = run_preflight(
