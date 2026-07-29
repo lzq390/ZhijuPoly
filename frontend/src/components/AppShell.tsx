@@ -1,7 +1,19 @@
 import type { KeyboardEvent, ReactNode } from "react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ChevronDown, Ellipsis, Folder, Menu, MessageSquare, Plus, Search, Star, Trash2, X } from "lucide-react";
+import {
+  Archive,
+  ChevronDown,
+  Ellipsis,
+  Folder,
+  Menu,
+  MessageSquare,
+  Plus,
+  Search,
+  Star,
+  Trash2,
+  X
+} from "lucide-react";
 import type { OpenScienceGeneralSessionSummary } from "../lib/openScienceGeneralSessionBridge";
 import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge";
 import {
@@ -670,7 +682,11 @@ function GeneralSessionListItem({
           aria-label={`删除会话 ${title}`}
           title="删除会话"
           className="general-session-actions-trigger my-1 mr-1 inline-flex w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
-          onClick={onDelete}
+          onClick={() => {
+            if (window.confirm(`确定删除会话“${title}”吗？此操作不可恢复。`)) {
+              onDelete();
+            }
+          }}
         >
           <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
         </button>

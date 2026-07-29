@@ -8,6 +8,7 @@ import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge"
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 function createModuleGroups(activeId?: string): AppShellModuleGroup[] {
@@ -299,12 +300,21 @@ describe("AppShell 侧边栏", () => {
   });
 
   it("桥接尚未就绪时显示低干扰加载状态", () => {
-    renderShell("home", { projects: [], isProjectBridgeReady: false });
+    renderShell("home", {
+      projects: [],
+      isProjectBridgeReady: false,
+      generalSessions: [],
+      isGeneralSessionBridgeReady: false
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
     expect(screen.getByText("正在同步项目…")).not.toBeNull();
     expect((screen.getByRole("button", { name: "搜索项目" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "新建项目" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("正在同步会话…")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "新建对话" }) as HTMLButtonElement).disabled).toBe(
+      true
+    );
     expect(screen.queryByRole("button", { name: /打开 .* 项目菜单/ })).toBeNull();
   });
 
@@ -329,9 +339,13 @@ describe("AppShell 侧边栏", () => {
     expect(screen.getByRole("button", { name: "旧的实验记录" })).not.toBeNull();
   });
 
-  it("会话列表支持双击重命名和直接删除", () => {
+  it("会话列表支持双击重命名并在确认后删除", () => {
     const onRenameGeneralSession = vi.fn();
     const onDeleteGeneralSession = vi.fn();
+    const confirm = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
     renderShell("home", { onRenameGeneralSession, onDeleteGeneralSession });
 
     fireEvent.doubleClick(screen.getByRole("button", { name: "新的研究对话" }));
@@ -340,8 +354,15 @@ describe("AppShell 侧边栏", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onRenameGeneralSession).toHaveBeenCalledWith("ses_new", "更新后的标题");
 
-    fireEvent.click(screen.getByRole("button", { name: "删除会话 旧的实验记录" }));
+    const deleteButton = screen.getByRole("button", { name: "删除会话 旧的实验记录" });
+    fireEvent.click(deleteButton);
+    expect(onDeleteGeneralSession).not.toHaveBeenCalled();
+
+    fireEvent.click(deleteButton);
     expect(onDeleteGeneralSession).toHaveBeenCalledWith("ses_old");
+    expect(onDeleteGeneralSession).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(confirm).toHaveBeenLastCalledWith("确定删除会话“旧的实验记录”吗？此操作不可恢复。");
   });
 
   it("普通项目模式只保留对话入口", () => {
