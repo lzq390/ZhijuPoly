@@ -11,6 +11,16 @@ import type { DevGpuSessionPhase, DevGpuSessionStatusResponse } from "../types";
 const ACTIVE_POLL_MS = 1_500;
 const IDLE_POLL_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 8_000;
+const STATUS_RECONNECT_GRACE_MS = 30_000;
+const ACTIVE_PHASES: readonly DevGpuSessionPhase[] = ["recovering", "queued", "starting"];
+
+function isActivePhase(phase: DevGpuSessionPhase | undefined): boolean {
+  return phase !== undefined && ACTIVE_PHASES.includes(phase);
+}
+
+function isRetryableStatusError(error: unknown): boolean {
+  return !(error instanceof ApiRequestError) || error.status >= 500;
+}
 
 const unavailableStatus = (message: string): DevGpuSessionStatusResponse => ({
   schema_version: 1,
@@ -53,47 +63,108 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
   const [serviceStatus, setServiceStatus] = useState<DevGpuSessionStatusResponse | null>(null);
   const [isActionPending, setIsActionPending] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
+  const serviceStatusRef = useRef<DevGpuSessionStatusResponse | null>(null);
   const actionInFlight = useRef(false);
   const actionController = useRef<AbortController | null>(null);
+  const pollController = useRef<AbortController | null>(null);
+  const pollEpoch = useRef(0);
+  const requestPoll = useRef<((delay?: number) => void) | null>(null);
+  const transientStatusFailureSince = useRef<number | null>(null);
+
+  const updateServiceStatus = useCallback((status: DevGpuSessionStatusResponse | null) => {
+    serviceStatusRef.current = status;
+    setServiceStatus(status);
+  }, []);
 
   useEffect(() => {
     if (!enabled) {
-      setServiceStatus(null);
+      transientStatusFailureSince.current = null;
+      updateServiceStatus(null);
       return;
     }
     let disposed = false;
     let timer: number | undefined;
-    let controller: AbortController | null = null;
+
+    const schedulePoll = (delay: number) => {
+      if (disposed) {
+        return;
+      }
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+      timer = window.setTimeout(poll, delay);
+    };
 
     const poll = async () => {
-      controller?.abort();
-      controller = new AbortController();
+      if (actionInFlight.current) {
+        schedulePoll(ACTIVE_POLL_MS);
+        return;
+      }
+      const controller = new AbortController();
+      pollController.current?.abort();
+      pollController.current = controller;
+      const epoch = pollEpoch.current;
       let nextStatus: DevGpuSessionStatusResponse;
+      let requestSucceeded = false;
       try {
         nextStatus = await fetchStatusWithTimeout(controller.signal);
+        requestSucceeded = true;
       } catch (error) {
         if (controller.signal.aborted || disposed) {
           return;
         }
-        nextStatus = unavailableStatus(errorMessage(error));
+        const currentStatus = serviceStatusRef.current;
+        const retryableDuringStartup =
+          currentStatus !== null &&
+          isActivePhase(currentStatus.phase) &&
+          isRetryableStatusError(error);
+        if (retryableDuringStartup) {
+          const now = Date.now();
+          const failureSince = transientStatusFailureSince.current ?? now;
+          transientStatusFailureSince.current = failureSince;
+          nextStatus =
+            now - failureSince < STATUS_RECONNECT_GRACE_MS
+              ? {
+                  ...currentStatus,
+                  can_recover: false,
+                  message: "Backend 正在切换，正在重新连接 GPU 控制服务"
+                }
+              : unavailableStatus(errorMessage(error));
+        } else {
+          transientStatusFailureSince.current = null;
+          nextStatus = unavailableStatus(errorMessage(error));
+        }
       }
-      if (disposed) {
+      if (
+        disposed ||
+        controller.signal.aborted ||
+        actionInFlight.current ||
+        epoch !== pollEpoch.current
+      ) {
         return;
       }
-      setServiceStatus(nextStatus);
-      const active = ["recovering", "queued", "starting"].includes(nextStatus.phase);
-      timer = window.setTimeout(poll, active ? ACTIVE_POLL_MS : IDLE_POLL_MS);
+      if (requestSucceeded) {
+        transientStatusFailureSince.current = null;
+      }
+      updateServiceStatus(nextStatus);
+      schedulePoll(isActivePhase(nextStatus.phase) ? ACTIVE_POLL_MS : IDLE_POLL_MS);
     };
 
+    const wakePoll = (delay = 0) => schedulePoll(delay);
+    requestPoll.current = wakePoll;
     void poll();
     return () => {
       disposed = true;
-      controller?.abort();
+      pollController.current?.abort();
+      pollController.current = null;
+      if (requestPoll.current === wakePoll) {
+        requestPoll.current = null;
+      }
       if (timer !== undefined) {
         window.clearTimeout(timer);
       }
     };
-  }, [enabled]);
+  }, [enabled, updateServiceStatus]);
 
   useEffect(() => {
     if (
@@ -120,6 +191,9 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
       return;
     }
     actionInFlight.current = true;
+    pollEpoch.current += 1;
+    transientStatusFailureSince.current = null;
+    pollController.current?.abort();
     setIsActionPending(true);
     setShowFeedback(true);
     const controller = new AbortController();
@@ -129,7 +203,7 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
     let currentStatus: DevGpuSessionStatusResponse | null = null;
     try {
       currentStatus = await fetchStatusWithTimeout(controller.signal);
-      setServiceStatus(currentStatus);
+      updateServiceStatus(currentStatus);
       if (currentStatus.phase === "ready" || !currentStatus.can_recover) {
         return;
       }
@@ -137,7 +211,7 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
         currentStatus.phase === "stopped" || currentStatus.phase === "failed"
           ? "starting"
           : "queued";
-      setServiceStatus({
+      updateServiceStatus({
         ...currentStatus,
         phase: optimisticPhase,
         can_recover: false,
@@ -149,7 +223,7 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
       recoverRequested = true;
       const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
-        setServiceStatus(await recoverDevGpuSession(controller.signal));
+        updateServiceStatus(await recoverDevGpuSession(controller.signal));
       } finally {
         window.clearTimeout(timeout);
       }
@@ -159,7 +233,7 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
       }
       if (recoverRequested && !(error instanceof ApiRequestError)) {
         const queued = currentStatus?.phase !== "stopped";
-        setServiceStatus({
+        updateServiceStatus({
           ...(currentStatus ?? unavailableStatus("正在重新连接 Backend")),
           operator_available: true,
           phase: queued ? "queued" : "starting",
@@ -169,7 +243,7 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
             : "恢复请求已发送，正在等待 Backend 重新连接"
         });
       } else {
-        setServiceStatus({
+        updateServiceStatus({
           ...(currentStatus ?? unavailableStatus(errorMessage(error))),
           operator_available: true,
           phase: "failed",
@@ -183,8 +257,9 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
       }
       actionInFlight.current = false;
       setIsActionPending(false);
+      requestPoll.current?.();
     }
-  }, [enabled]);
+  }, [enabled, updateServiceStatus]);
 
   return {
     status: serviceStatus,

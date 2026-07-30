@@ -367,10 +367,11 @@ function SidebarContent({
                         <button
                           key={item.id}
                           type="button"
+                          aria-current={item.isActive ? "page" : undefined}
                           className={[
                             "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
                             item.isActive
-                              ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200"
+                              ? "bg-teal-50/80 text-teal-950"
                               : "text-slate-600 hover:bg-white/78 hover:text-slate-950"
                           ].join(" ")}
                           onClick={() => onNavigate(item.onClick)}
