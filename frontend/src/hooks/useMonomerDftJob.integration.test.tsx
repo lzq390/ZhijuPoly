@@ -12,6 +12,7 @@ const apiMocks = vi.hoisted(() => ({
   cancelJob: vi.fn(),
   createJob: vi.fn(),
   deleteArtifactsAndReload: vi.fn(),
+  deleteJob: vi.fn(),
   fetchCapabilities: vi.fn(),
   fetchJob: vi.fn(),
   fetchJobs: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("../services/api", async () => {
     cancelMonomerDftJob: apiMocks.cancelJob,
     createMonomerDftJob: apiMocks.createJob,
     deleteMonomerDftArtifactsAndReloadJob: apiMocks.deleteArtifactsAndReload,
+    deleteMonomerDftJob: apiMocks.deleteJob,
     fetchMonomerDftCapabilities: apiMocks.fetchCapabilities,
     fetchMonomerDftJob: apiMocks.fetchJob,
     fetchMonomerDftJobs: apiMocks.fetchJobs,
@@ -255,6 +257,36 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     expect(result.current.pollState).toBe("terminal");
     await advance(60_000);
     expect(apiMocks.fetchJob).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it("does not let deletion of A clear a later selection B", async () => {
+    const deletion = deferred<void>();
+    apiMocks.deleteJob.mockReturnValue(deletion.promise);
+    apiMocks.fetchJob.mockImplementation((jobId: string) =>
+      Promise.resolve(makeJob(jobId, "completed"))
+    );
+    const onJobIdChange = vi.fn();
+    const { result, unmount } = renderHook(() => useMonomerDftJob({
+      initialJobId: JOB_A,
+      onJobIdChange
+    }));
+    await flush();
+    const jobA = result.current.job;
+    expect(jobA?.job_id).toBe(JOB_A);
+
+    act(() => {
+      void result.current.deleteJobRecord(jobA!);
+      result.current.loadJob(JOB_B);
+    });
+    await flush();
+    expect(result.current.job?.job_id).toBe(JOB_B);
+
+    deletion.resolve();
+    await flush();
+    expect(result.current.job?.job_id).toBe(JOB_B);
+    expect(result.current.deletingJobIds).not.toContain(JOB_A);
+    expect(onJobIdChange).toHaveBeenLastCalledWith(JOB_B);
     unmount();
   });
 

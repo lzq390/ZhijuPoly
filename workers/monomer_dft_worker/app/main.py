@@ -22,6 +22,8 @@ from .schemas import (
     DrainResponse,
     HealthResponse,
     JobListResponse,
+    JobPurgeRequest,
+    JobPurgeResponse,
     JobSubmitRequest,
     PublicJobSnapshot,
 )
@@ -361,6 +363,21 @@ def create_app(
     ) -> ArtifactDeletionResponse:
         return await asyncio.to_thread(
             request.app.state.manager.delete_artifacts, job_id
+        )
+
+    @app.post(
+        "/jobs/{job_id}/purge",
+        response_model=JobPurgeResponse,
+    )
+    async def purge_job(
+        request: Request,
+        job_id: str,
+        payload: JobPurgeRequest,
+    ) -> JobPurgeResponse:
+        return await asyncio.to_thread(
+            request.app.state.manager.purge_job,
+            job_id,
+            payload,
         )
 
     return app

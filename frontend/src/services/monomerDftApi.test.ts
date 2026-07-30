@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMonomerDftJob,
   deleteMonomerDftArtifactsAndReloadJob,
+  deleteMonomerDftJob,
   fetchMonomerDftCapabilities,
   fetchMonomerDftJobs,
   getMonomerDftArtifactUrl,
@@ -106,6 +107,14 @@ describe("monomer DFT API client", () => {
     expect(String(fetchMock.mock.calls[1][0])).toContain(`/monomer-dft/jobs/${canonicalJob.job_id}`);
     expect((fetchMock.mock.calls[1][1] as RequestInit | undefined)?.method).toBeUndefined();
     expect(reloadedJob).toEqual(canonicalJob);
+  });
+
+  it("accepts an empty 204 response for permanent deletion", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteMonomerDftJob("188817d4-bdd2-4e25-9336-bfcbccc16a61")).resolves.toBeUndefined();
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("DELETE");
   });
 
   it("exposes artifact-id and bundle URLs without host filesystem paths", () => {

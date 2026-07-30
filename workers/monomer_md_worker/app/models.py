@@ -105,6 +105,7 @@ class DrainResponse(BaseModel):
 class ArtifactDeletionResponse(BaseModel):
     job_id: str
     deleted: bool
+    storage_state: Literal["absent"]
     artifact_root: str
     message: str
 

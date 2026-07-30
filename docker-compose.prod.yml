@@ -36,6 +36,8 @@ x-production-environment: &production-environment
   MONOMER_DFT_SUBMIT_ENABLED: "true"
   MONOMER_DFT_WORKER_UDS: "/app/monomer-dft-worker/worker.sock"
   MONOMER_DFT_DOWNLOAD_SPOOL_ROOT: "/app/.runtime/monomer-dft-download-spool"
+  MONOMER_DFT_JOB_RETENTION_ENABLED: "${MONOMER_DFT_JOB_RETENTION_ENABLED:-false}"
+  MONOMER_DFT_JOB_RETENTION_DAYS: "${MONOMER_DFT_JOB_RETENTION_DAYS:-30}"
 
 x-production-volumes: &production-volumes
   - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro

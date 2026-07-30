@@ -3,6 +3,7 @@ import {
   cancelMonomerDftJob,
   createMonomerDftJob,
   deleteMonomerDftArtifactsAndReloadJob,
+  deleteMonomerDftJob,
   fetchMonomerDftCapabilities,
   fetchMonomerDftJob,
   fetchMonomerDftJobs,
@@ -238,6 +239,8 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
   const [pollState, setPollState] = useState<MonomerDftPollState>("idle");
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [deletingArtifactsJobId, setDeletingArtifactsJobId] = useState<string | null>(null);
+  const [deletingJobIds, setDeletingJobIds] = useState<string[]>([]);
+  const [deleteJobErrors, setDeleteJobErrors] = useState<Record<string, string>>({});
   const [serviceError, setServiceError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
@@ -258,6 +261,9 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
   const deletingArtifactsJobIdRef = useRef<string | null>(null);
   const pendingSubmissionRef = useRef<{ payload: string; idempotencyKey: string } | null>(null);
   const schemaReadyRef = useRef(false);
+  const knownJobIdsRef = useRef(new Set<string>());
+  const purgeControllersRef = useRef(new Map<string, AbortController>());
+  const purgeRevisionsRef = useRef(new Map<string, number>());
 
   useEffect(() => {
     onJobIdChangeRef.current = onJobIdChange;
@@ -288,6 +294,10 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     cancellingJobIdRef.current = null;
     deletingArtifactsJobIdRef.current = null;
     pendingSubmissionRef.current = null;
+    for (const controller of purgeControllersRef.current.values()) controller.abort();
+    purgeControllersRef.current.clear();
+    purgeRevisionsRef.current.clear();
+    knownJobIdsRef.current.clear();
     setCapabilities(null);
     setHistory(null);
     setJob(null);
@@ -297,6 +307,8 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     setIsSubmitting(false);
     setCancellingJobId(null);
     setDeletingArtifactsJobId(null);
+    setDeletingJobIds([]);
+    setDeleteJobErrors({});
     setPollState("idle");
     onJobIdChangeRef.current?.(null);
   }, []);
@@ -370,8 +382,17 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     historyAbortRef.current = controller;
     setIsHistoryLoading(true);
     try {
-      const nextHistory = await fetchMonomerDftJobs(query, controller.signal);
+      let nextHistory = await fetchMonomerDftJobs(query, controller.signal);
       if (historyTokenRef.current !== token || controller.signal.aborted) return;
+      const lastPage = Math.max(1, Math.ceil(nextHistory.total / query.page_size));
+      if (query.page > lastPage) {
+        const correctedQuery = { ...query, page: lastPage };
+        historyQueryRef.current = correctedQuery;
+        setHistoryQuery(correctedQuery);
+        nextHistory = await fetchMonomerDftJobs(correctedQuery, controller.signal);
+        if (historyTokenRef.current !== token || controller.signal.aborted) return;
+      }
+      for (const item of nextHistory.items) knownJobIdsRef.current.add(item.job_id);
       setHistory(nextHistory);
       setHistoryError(null);
     } catch (error) {
@@ -426,6 +447,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       try {
         const nextJob = await fetchMonomerDftJob(jobId, session.controller.signal);
         if (!isCurrent()) return;
+        knownJobIdsRef.current.add(jobId);
         if (
           requestOperationRevision !== operationRevisionRef.current ||
           cancellingJobIdRef.current === jobId ||
@@ -448,6 +470,21 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
         schedule(MONOMER_DFT_JOB_POLL_MS);
       } catch (error) {
         if (!isCurrent() || isAbortError(error)) return;
+        if (
+          error instanceof MonomerDftApiError &&
+          error.status === 404 &&
+          knownJobIdsRef.current.has(jobId)
+        ) {
+          jobPollSessionRef.current = null;
+          activeJobIdRef.current = null;
+          selectionEpochRef.current += 1;
+          setJob(null);
+          setPollState("stopped");
+          setJobError("该任务已被删除或已按保留策略到期清理。");
+          onJobIdChangeRef.current?.(null);
+          void refreshHistory();
+          return;
+        }
         if (!isRetryableMonomerDftPollError(error)) {
           jobPollSessionRef.current = null;
           setPollState("stopped");
@@ -554,6 +591,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     cancelAbortRef.current?.abort();
     deleteAbortRef.current?.abort();
     submitAbortRef.current?.abort();
+    for (const controller of purgeControllersRef.current.values()) controller.abort();
   }, [stopJobPoll]);
 
   async function submit(request: MonomerDftJobCreateRequest): Promise<string | null> {
@@ -576,6 +614,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       const created = await createMonomerDftJob(request, idempotencyKey, controller.signal);
       if (controller.signal.aborted || operationRevisionRef.current !== operationRevision) return null;
       pendingSubmissionRef.current = null;
+      knownJobIdsRef.current.add(created.job_id);
       const selectionEpoch = beginSelection(created.job_id);
       setJob(created);
       onJobIdChangeRef.current?.(created.job_id);
@@ -684,6 +723,59 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     }
   }
 
+  async function deleteJobRecord(target: MonomerDftJobResponse): Promise<void> {
+    if (!schemaReadyRef.current || !isMonomerDftTerminal(target.status)) return;
+    const targetJobId = target.job_id;
+    const revision = (purgeRevisionsRef.current.get(targetJobId) ?? 0) + 1;
+    purgeRevisionsRef.current.set(targetJobId, revision);
+    purgeControllersRef.current.get(targetJobId)?.abort();
+    const controller = new AbortController();
+    purgeControllersRef.current.set(targetJobId, controller);
+    if (activeJobIdRef.current === targetJobId) operationRevisionRef.current += 1;
+    setDeletingJobIds((current) => current.includes(targetJobId) ? current : [...current, targetJobId]);
+    setDeleteJobErrors((current) => {
+      const next = { ...current };
+      delete next[targetJobId];
+      return next;
+    });
+    try {
+      await deleteMonomerDftJob(targetJobId, controller.signal);
+      if (
+        controller.signal.aborted ||
+        purgeRevisionsRef.current.get(targetJobId) !== revision
+      ) return;
+      knownJobIdsRef.current.delete(targetJobId);
+      setHistory((current) => current ? {
+        ...current,
+        total: Math.max(0, current.total - 1),
+        items: current.items.filter((item) => item.job_id !== targetJobId)
+      } : current);
+      if (activeJobIdRef.current === targetJobId) {
+        stopJobPoll("idle");
+        selectionEpochRef.current += 1;
+        activeJobIdRef.current = null;
+        setJob(null);
+        setJobError(null);
+        onJobIdChangeRef.current?.(null);
+      }
+      await Promise.allSettled([refreshHistory(), refreshStatus()]);
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        isAbortError(error) ||
+        purgeRevisionsRef.current.get(targetJobId) !== revision
+      ) return;
+      const message = errorMessage(error, "删除单体 DFT 任务失败。");
+      setDeleteJobErrors((current) => ({ ...current, [targetJobId]: message }));
+      if (activeJobIdRef.current === targetJobId) setJobError(message);
+    } finally {
+      if (purgeRevisionsRef.current.get(targetJobId) === revision) {
+        purgeControllersRef.current.delete(targetJobId);
+        setDeletingJobIds((current) => current.filter((id) => id !== targetJobId));
+      }
+    }
+  }
+
   function changeHistoryQuery(update: Partial<MonomerDftJobListQuery>): void {
     const next = { ...historyQueryRef.current, ...update };
     historyQueryRef.current = next;
@@ -721,6 +813,8 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     isCancelling,
     cancellingJobId,
     isDeletingArtifacts,
+    deletingJobIds,
+    deleteJobErrors,
     serviceError,
     historyError,
     jobError,
@@ -732,6 +826,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     cancel,
     rerun,
     deleteArtifacts,
+    deleteJobRecord,
     clearJob
   };
 }

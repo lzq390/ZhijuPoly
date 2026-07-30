@@ -43,6 +43,7 @@ from workers.monomer_dft_worker.app.schemas import (
     MAX_ARTIFACT_SIZE_BYTES,
     ArtifactDescriptor,
     JobJournalV2,
+    JobPurgeRequest,
     JobSubmitRequest,
 )
 
@@ -416,6 +417,77 @@ def test_fifo_capacity_one_running_plus_eight_queued_and_idempotency(
         assert provenance["aimnet_wheel_sha256"] == "e" * 64
         assert provenance["model_family"] == "wb97m-d3"
         assert provenance["gpu_physical_device"] == "3"
+        await manager.stop()
+
+    asyncio.run(scenario())
+
+
+def test_terminal_job_purge_requires_identity_and_removes_durable_storage(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        engine = ControlledEngine(blocked=False)
+        manager = _manager(tmp_path, engine)
+        await manager.start()
+        request = _request(0)
+        manager.submit(request)
+        await _wait_until(lambda: manager.get(request.job_id).status == "completed")
+        with pytest.raises(JobConflict):
+            manager.purge_job(
+                request.job_id,
+                JobPurgeRequest(
+                    attempt_token="f" * 32,
+                    request_sha256=request.request_sha256,
+                    enqueue_sequence=request.enqueue_sequence,
+                ),
+            )
+        response = manager.purge_job(
+            request.job_id,
+            JobPurgeRequest(
+                attempt_token=request.attempt_token,
+                request_sha256=request.request_sha256,
+                enqueue_sequence=request.enqueue_sequence,
+            ),
+        )
+        assert response.storage_state == "absent"
+        assert response.deleted is True
+        assert not (manager.job_root / request.job_id).exists()
+        with pytest.raises(JobNotFound):
+            manager.get(request.job_id)
+        repeated = manager.purge_job(
+            request.job_id,
+            JobPurgeRequest(
+                attempt_token=request.attempt_token,
+                request_sha256=request.request_sha256,
+                enqueue_sequence=request.enqueue_sequence,
+            ),
+        )
+        assert repeated.storage_state == "absent"
+        assert repeated.deleted is False
+        await manager.stop()
+
+    asyncio.run(scenario())
+
+
+def test_active_job_cannot_be_purged(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        engine = ControlledEngine()
+        manager = _manager(tmp_path, engine)
+        await manager.start()
+        request = _request(0)
+        manager.submit(request)
+        await _wait_until(lambda: manager.get(request.job_id).status == "running")
+        with pytest.raises(JobConflict):
+            manager.purge_job(
+                request.job_id,
+                JobPurgeRequest(
+                    attempt_token=request.attempt_token,
+                    request_sha256=request.request_sha256,
+                    enqueue_sequence=request.enqueue_sequence,
+                ),
+            )
+        engine.release.set()
+        await _wait_until(lambda: manager.get(request.job_id).status == "completed")
         await manager.stop()
 
     asyncio.run(scenario())

@@ -615,3 +615,18 @@ class ArtifactDeletionResponse(StrictModel):
     artifact_state: Literal["none", "deleted"]
     deleted_artifacts: int = Field(ge=0)
     message: str
+
+
+class JobPurgeRequest(StrictModel):
+    attempt_token: str = Field(pattern=r"^[0-9a-f]{32,64}$")
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    enqueue_sequence: int = Field(ge=1, le=MAX_ENQUEUE_SEQUENCE)
+
+
+class JobPurgeResponse(StrictModel):
+    job_id: str = Field(
+        min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+    storage_state: Literal["absent"]
+    deleted: bool
+    message: str

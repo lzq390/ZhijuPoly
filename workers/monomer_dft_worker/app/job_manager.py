@@ -5,6 +5,7 @@ import contextlib
 import errno
 import json
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -44,6 +45,8 @@ from .schemas import (
     EnqueueSequenceSource,
     JobJournalV2,
     JobListResponse,
+    JobPurgeRequest,
+    JobPurgeResponse,
     JobSnapshot,
     JobSubmitRequest,
     PublicJobSnapshot,
@@ -56,6 +59,8 @@ from .schemas import (
 SINGLE_POINT_TIMEOUT_SECONDS = 600.0
 OPTIMIZATION_TIMEOUT_SECONDS = 1800.0
 _UNSET = object()
+_SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_PURGE_TOMBSTONE_PREFIX = ".purge-"
 
 
 class JobManagerError(RuntimeError):
@@ -162,6 +167,7 @@ class JobManager:
         self.optimization_timeout_seconds = float(optimization_timeout_seconds)
         self._records: dict[str, _JobRecord] = {}
         self._sequence_to_job: dict[int, str] = {}
+        self._purging_job_ids: set[str] = set()
         self._queue: deque[str] = deque()
         self._running_job_id: str | None = None
         self._draining = False
@@ -233,7 +239,9 @@ class JobManager:
         # be retried safely on the same manager instance after remediation.
         self._records.clear()
         self._sequence_to_job.clear()
+        self._purging_job_ids.clear()
         self._queue.clear()
+        self._recover_purge_tombstones()
         candidates: list[_JobRecord] = []
         for child in sorted(self.job_root.iterdir(), key=lambda path: path.name):
             if child.name.startswith("."):
@@ -372,6 +380,8 @@ class JobManager:
         self,
         request: JobSubmitRequest,
     ) -> PublicJobSnapshot | None:
+        if request.job_id in self._purging_job_ids:
+            raise JobConflict("job deletion is in progress")
         existing = self._records.get(request.job_id)
         if existing is None:
             return None
@@ -484,6 +494,8 @@ class JobManager:
         job still returns 404 and cannot create durable state.
         """
         with self._state_lock:
+            if job_id in self._purging_job_ids:
+                raise JobConflict("job deletion is in progress")
             record = self._records.get(job_id)
             if request is not None:
                 if request.job_id != job_id:
@@ -585,6 +597,10 @@ class JobManager:
             record = self._record(job_id)
         with record.artifact_io_lock:
             with self._state_lock:
+                if self._records.get(job_id) is not record:
+                    raise JobNotFound("unknown job_id")
+                if job_id in self._purging_job_ids:
+                    raise JobConflict("job deletion is in progress")
                 if record.artifact_state != "available":
                     raise ArtifactNotFound("job artifacts are not available")
                 descriptor = next(
@@ -616,6 +632,10 @@ class JobManager:
             record = self._record(job_id)
         with record.artifact_io_lock:
             with self._state_lock:
+                if self._records.get(job_id) is not record:
+                    raise JobNotFound("unknown job_id")
+                if job_id in self._purging_job_ids:
+                    raise JobConflict("job deletion is in progress")
                 if record.snapshot.status not in TERMINAL_STATUSES:
                     raise JobConflict(
                         "artifact bundle is available only for terminal jobs"
@@ -670,6 +690,10 @@ class JobManager:
             record = self._record(job_id)
         with record.artifact_io_lock:
             with self._state_lock:
+                if self._records.get(job_id) is not record:
+                    raise JobNotFound("unknown job_id")
+                if job_id in self._purging_job_ids:
+                    raise JobConflict("job deletion is in progress")
                 if record.snapshot.status not in TERMINAL_STATUSES:
                     raise JobConflict("artifacts can be deleted only for terminal jobs")
                 if record.artifact_state in {"none", "deleted"}:
@@ -712,6 +736,111 @@ class JobManager:
                 deleted_artifacts=deleted,
                 message="job artifacts were deleted; the durable journal was retained",
             )
+
+    def purge_job(
+        self,
+        job_id: str,
+        request: JobPurgeRequest,
+    ) -> JobPurgeResponse:
+        if _SAFE_JOB_ID.fullmatch(job_id) is None:
+            raise JobNotFound("unknown job_id")
+        job_directory = self.job_root / job_id
+        tombstone_directory = self.job_root / f"{_PURGE_TOMBSTONE_PREFIX}{job_id}"
+
+        with self._state_lock:
+            record = self._records.get(job_id)
+            if record is not None:
+                self._validate_purge_identity(record, request)
+                if record.snapshot.status not in TERMINAL_STATUSES:
+                    raise JobConflict("only terminal jobs can be deleted")
+                self._purging_job_ids.add(job_id)
+
+        if record is None:
+            deleted = self._resume_or_confirm_purge(
+                job_id=job_id,
+                job_directory=job_directory,
+                tombstone_directory=tombstone_directory,
+            )
+            return JobPurgeResponse(
+                job_id=job_id,
+                storage_state="absent",
+                deleted=deleted,
+                message=(
+                    "job storage deleted"
+                    if deleted
+                    else "job storage was already absent"
+                ),
+            )
+
+        try:
+            with record.artifact_io_lock:
+                with self._state_lock:
+                    if self._records.get(job_id) is not record:
+                        raise JobConflict("job identity changed during deletion")
+                    self._validate_purge_identity(record, request)
+                    if record.snapshot.status not in TERMINAL_STATUSES:
+                        raise JobConflict("only terminal jobs can be deleted")
+                self._detach_job_directory(
+                    job_directory=job_directory,
+                    tombstone_directory=tombstone_directory,
+                )
+                with self._state_lock:
+                    self._records.pop(job_id, None)
+                    if self._sequence_to_job.get(record.enqueue_sequence) == job_id:
+                        self._sequence_to_job.pop(record.enqueue_sequence, None)
+                    with contextlib.suppress(ValueError):
+                        self._queue.remove(job_id)
+                self._remove_purge_tombstone(tombstone_directory)
+        except BaseException:
+            # A canonical directory means the detach did not commit and normal
+            # operations may safely resume.  Once detached, the durable hidden
+            # tombstone and missing in-memory record remain the deletion fence.
+            if os.path.lexists(job_directory):
+                with self._state_lock:
+                    self._purging_job_ids.discard(job_id)
+            raise
+        with self._state_lock:
+            self._purging_job_ids.discard(job_id)
+        return JobPurgeResponse(
+            job_id=job_id,
+            storage_state="absent",
+            deleted=True,
+            message="job storage deleted",
+        )
+
+    @staticmethod
+    def _validate_purge_identity(
+        record: _JobRecord,
+        request: JobPurgeRequest,
+    ) -> None:
+        if (
+            record.snapshot.attempt_token != request.attempt_token
+            or record.snapshot.request_sha256 != request.request_sha256
+            or record.enqueue_sequence != request.enqueue_sequence
+        ):
+            raise JobConflict(
+                "job deletion identity differs from the durable journal"
+            )
+
+    def _resume_or_confirm_purge(
+        self,
+        *,
+        job_id: str,
+        job_directory: Path,
+        tombstone_directory: Path,
+    ) -> bool:
+        if os.path.lexists(job_directory):
+            raise JobConflict(
+                "job storage exists without a loaded durable identity"
+            )
+        deleted = os.path.lexists(tombstone_directory)
+        if deleted:
+            self._remove_purge_tombstone(tombstone_directory)
+        else:
+            self._fsync_directory(self.job_root)
+        with self._state_lock:
+            self._purging_job_ids.discard(job_id)
+        return deleted
 
     async def _dispatch_loop(self) -> None:
         try:
@@ -1139,6 +1268,8 @@ class JobManager:
         )
 
     def _record(self, job_id: str) -> _JobRecord:
+        if job_id in self._purging_job_ids:
+            raise JobConflict("job deletion is in progress")
         record = self._records.get(job_id)
         if record is None:
             raise JobNotFound("unknown job_id")
@@ -1298,6 +1429,61 @@ class JobManager:
             if loop is not None and loop.is_running():
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(self._wake.set)
+
+    def _recover_purge_tombstones(self) -> None:
+        changed = False
+        for child in sorted(self.job_root.iterdir(), key=lambda path: path.name):
+            if not child.name.startswith(_PURGE_TOMBSTONE_PREFIX):
+                continue
+            job_id = child.name[len(_PURGE_TOMBSTONE_PREFIX) :]
+            if _SAFE_JOB_ID.fullmatch(job_id) is None:
+                raise RuntimeError("unsafe DFT purge tombstone name")
+            canonical = self.job_root / job_id
+            if os.path.lexists(canonical):
+                raise RuntimeError(
+                    "DFT job directory and purge tombstone coexist"
+                )
+            if child.is_symlink() or not child.is_dir():
+                raise RuntimeError("unsafe DFT purge tombstone")
+            shutil.rmtree(child)
+            changed = True
+        if changed:
+            self._fsync_directory(self.job_root)
+
+    def _detach_job_directory(
+        self,
+        *,
+        job_directory: Path,
+        tombstone_directory: Path,
+    ) -> None:
+        for path in (job_directory, tombstone_directory):
+            if path.is_symlink():
+                raise RuntimeError("unsafe DFT job deletion path")
+        job_exists = os.path.lexists(job_directory)
+        tombstone_exists = os.path.lexists(tombstone_directory)
+        if job_exists and tombstone_exists:
+            raise RuntimeError(
+                "DFT job directory and purge tombstone coexist"
+            )
+        if tombstone_exists:
+            if not tombstone_directory.is_dir():
+                raise RuntimeError("unsafe DFT purge tombstone")
+            return
+        if not job_exists or not job_directory.is_dir():
+            raise RuntimeError(
+                "loaded DFT job lacks its durable job directory"
+            )
+        os.rename(job_directory, tombstone_directory)
+        self._fsync_directory(self.job_root)
+
+    def _remove_purge_tombstone(self, tombstone_directory: Path) -> None:
+        if not os.path.lexists(tombstone_directory):
+            self._fsync_directory(self.job_root)
+            return
+        if tombstone_directory.is_symlink() or not tombstone_directory.is_dir():
+            raise RuntimeError("unsafe DFT purge tombstone")
+        shutil.rmtree(tombstone_directory)
+        self._fsync_directory(self.job_root)
 
     def _job_directory(self, job_id: str) -> Path:
         path = self.job_root / job_id

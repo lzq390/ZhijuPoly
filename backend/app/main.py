@@ -65,6 +65,14 @@ from app.services.monomer_dft_reconciler import (
 )
 from app.services.monomer_dft_repository import MonomerDftRepository
 from app.services.monomer_dft_worker_client import MonomerDftWorkerClient
+from app.services.monomer_job_retention import (
+    MonomerDftJobDeletionService,
+    MonomerJobRetentionReaper,
+    MonomerMdJobDeletionService,
+    list_monomer_md_retention_candidates,
+    monomer_md_retention_leader,
+)
+from app.services.monomer_md_worker_client import MonomerMdWorkerClient
 from app.services.monomer_retrosynthesis import (
     load_retrosynthesis_runtime,
     warmup_retrosynthesis_runtime,
@@ -149,8 +157,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 residency_lease.assert_healthy()
             if api_app.state.monomer_dft_readiness_controller is not None:
                 api_app.state.monomer_dft_readiness_controller.start()
+            api_app.state.monomer_md_retention_reaper.start()
+            api_app.state.monomer_dft_retention_reaper.start()
             yield
         finally:
+            await api_app.state.monomer_md_retention_reaper.stop()
+            await api_app.state.monomer_dft_retention_reaper.stop()
             if api_app.state.monomer_dft_readiness_controller is not None:
                 await api_app.state.monomer_dft_readiness_controller.stop()
             elif api_app.state.monomer_dft_reconciler is not None:
@@ -279,16 +291,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app_settings.monomer_dft_submit_enabled
         and app_settings.monomer_dft_worker_uds
     )
-    app.state.monomer_dft_worker_client = None
-    app.state.monomer_dft_reconciler = None
-    app.state.monomer_dft_readiness_controller = None
-    if app.state.monomer_dft_runtime_enabled:
-        app.state.monomer_dft_worker_client = MonomerDftWorkerClient(
+    app.state.monomer_md_worker_client = (
+        MonomerMdWorkerClient(
+            base_url=app_settings.monomer_md_worker_base_url,
+            timeout_seconds=app_settings.monomer_md_worker_timeout_seconds,
+        )
+        if app_settings.monomer_md_worker_base_url
+        else None
+    )
+    app.state.monomer_dft_worker_client = (
+        MonomerDftWorkerClient(
             base_url=app_settings.monomer_dft_worker_base_url,
             uds_path=app_settings.monomer_dft_worker_uds,
             timeout_seconds=app_settings.monomer_dft_worker_timeout_seconds,
             validation_limiter=app.state.monomer_dft_validation_limiter,
         )
+        if app_settings.monomer_dft_worker_uds
+        else None
+    )
+    app.state.monomer_dft_reconciler = None
+    app.state.monomer_dft_readiness_controller = None
+    if app.state.monomer_dft_runtime_enabled:
         app.state.monomer_dft_reconciler = MonomerDftReconciler(
             repository=app.state.monomer_dft_repository,
             worker=app.state.monomer_dft_worker_client,
@@ -300,6 +323,65 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             reconciler=app.state.monomer_dft_reconciler,
             interval_seconds=app_settings.monomer_dft_reconcile_interval_seconds,
         )
+    app.state.monomer_md_job_deletion_service = MonomerMdJobDeletionService(
+        dsn=app_settings.app_postgres_dsn,
+        worker=app.state.monomer_md_worker_client,
+    )
+    app.state.monomer_dft_job_deletion_service = MonomerDftJobDeletionService(
+        repository=app.state.monomer_dft_repository,
+        worker=app.state.monomer_dft_worker_client,
+    )
+    app.state.monomer_md_retention_reaper = MonomerJobRetentionReaper(
+        name="monomer-md",
+        enabled=app_settings.monomer_md_job_retention_enabled,
+        retention_days=app_settings.monomer_md_job_retention_days,
+        leader_guard=lambda: monomer_md_retention_leader(
+            app_settings.app_postgres_dsn
+        ),
+        list_candidates=lambda cursor_at, cursor_id, limit: (
+            list_monomer_md_retention_candidates(
+                app_settings.app_postgres_dsn,
+                app_settings.monomer_md_job_retention_days,
+                cursor_at,
+                cursor_id,
+                limit,
+            )
+        ),
+        delete_candidate=lambda candidate: (
+            app.state.monomer_md_job_deletion_service.delete(
+                candidate["job_id"], expected=candidate
+            )
+        ),
+        configuration_error=(
+            None
+            if app.state.monomer_md_worker_client is not None
+            else "monomer MD Worker is not configured for retention cleanup"
+        ),
+    )
+    app.state.monomer_dft_retention_reaper = MonomerJobRetentionReaper(
+        name="monomer-dft",
+        enabled=app_settings.monomer_dft_job_retention_enabled,
+        retention_days=app_settings.monomer_dft_job_retention_days,
+        leader_guard=app.state.monomer_dft_repository.retention_leader,
+        list_candidates=lambda cursor_at, cursor_id, limit: (
+            app.state.monomer_dft_repository.list_expired_jobs(
+                retention_days=app_settings.monomer_dft_job_retention_days,
+                limit=limit,
+                after_terminal_at=cursor_at,
+                after_job_id=cursor_id,
+            )
+        ),
+        delete_candidate=lambda candidate: (
+            app.state.monomer_dft_job_deletion_service.delete(
+                candidate["job_id"], expected=candidate
+            )
+        ),
+        configuration_error=(
+            None
+            if app.state.monomer_dft_worker_client is not None
+            else "monomer DFT Worker is not configured for retention cleanup"
+        ),
+    )
 
     app.add_middleware(
         CORSMiddleware,

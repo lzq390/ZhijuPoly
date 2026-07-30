@@ -249,6 +249,10 @@ export type MonomerMdServiceStatusResponse = {
   formal_max_running_jobs?: number;
   formal_max_queued_jobs?: number;
   formal_can_submit?: boolean;
+  job_retention_enabled?: boolean;
+  job_retention_days?: number;
+  job_retention_status?: "disabled" | "standby" | "ready" | "degraded";
+  job_retention_last_sweep_at?: string | null;
   message?: string | null;
   queue_depth?: number | null;
   running_jobs?: number | null;
@@ -498,6 +502,10 @@ export type MonomerDftServiceStatusResponse = {
   draining: boolean | null;
   active_jobs: number;
   max_active_jobs: number;
+  job_retention_enabled?: boolean;
+  job_retention_days?: number;
+  job_retention_status?: "disabled" | "standby" | "ready" | "degraded";
+  job_retention_last_sweep_at?: string | null;
   message: string;
 };
 

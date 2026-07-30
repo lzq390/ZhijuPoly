@@ -5,6 +5,12 @@ from datetime import datetime
 from typing import Any
 
 
+MONOMER_MD_ACTIVE_STATUSES = frozenset(
+    {"pending", "submitted", "running", "cancel_requested"}
+)
+MONOMER_MD_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
 def _jsonb(value: dict[str, Any] | None) -> str:
     return json.dumps(value if value is not None else {}, ensure_ascii=False)
 
@@ -280,6 +286,79 @@ def get_monomer_md_job_postgres(connection: Any, job_id: str) -> dict[str, Any] 
     if row is None:
         return None
     return _monomer_md_job_from_row(row)
+
+
+def list_expired_monomer_md_jobs_postgres(
+    connection: Any,
+    *,
+    retention_days: int,
+    limit: int,
+    after_terminal_at: datetime | None = None,
+    after_job_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return terminal retention candidates in a stable keyset order."""
+    cursor_sql = ""
+    params: list[Any] = [retention_days, retention_days]
+    if after_terminal_at is not None and after_job_id is not None:
+        cursor_sql = """
+          AND (COALESCE(finished_at, updated_at), job_id) > (%s, %s)
+        """
+        params.extend((after_terminal_at, after_job_id))
+    params.append(limit)
+    rows = connection.execute(
+        f"""
+        SELECT job_id, status, finished_at, updated_at,
+               COALESCE(finished_at, updated_at) AS terminal_at
+        FROM md.monomer_md_jobs
+        WHERE status IN ('completed', 'failed', 'cancelled')
+          AND created_at <= now() - (%s * interval '1 day')
+          AND COALESCE(finished_at, updated_at) <=
+              now() - (%s * interval '1 day')
+          {cursor_sql}
+        ORDER BY COALESCE(finished_at, updated_at), job_id
+        LIMIT %s
+        """,
+        tuple(params),
+    ).fetchall()
+    return [
+        {
+            "job_id": str(row["job_id"]),
+            "status": str(row["status"]),
+            "finished_at": row["finished_at"],
+            "updated_at": row["updated_at"],
+            "terminal_at": row["terminal_at"],
+        }
+        for row in rows
+    ]
+
+
+def delete_monomer_md_job_cas_postgres(
+    connection: Any,
+    *,
+    job_id: str,
+    expected_status: str,
+    expected_finished_at: Any,
+    expected_updated_at: Any,
+) -> bool:
+    """Delete only the exact terminal record that was cleared by the Worker."""
+    row = connection.execute(
+        """
+        DELETE FROM md.monomer_md_jobs
+        WHERE job_id = %s
+          AND status = %s
+          AND status IN ('completed', 'failed', 'cancelled')
+          AND finished_at IS NOT DISTINCT FROM %s
+          AND updated_at IS NOT DISTINCT FROM %s
+        RETURNING job_id
+        """,
+        (
+            job_id,
+            expected_status,
+            expected_finished_at,
+            expected_updated_at,
+        ),
+    ).fetchone()
+    return row is not None
 
 
 def list_monomer_md_jobs_postgres(

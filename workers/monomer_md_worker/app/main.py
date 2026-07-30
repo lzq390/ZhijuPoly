@@ -60,6 +60,8 @@ _DEV_LOCK_RECORD = ".nexpoly-worker-lock-digest.json"
 _DEV_BASE_RECORD = ".nexpoly-base-python-identity.json"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_MD_JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_STORAGE_TOMBSTONE_PREFIX = ".purge-"
 
 
 @dataclass(frozen=True)
@@ -299,6 +301,7 @@ job_start_events: dict[str, asyncio.Event] = {}
 cancel_requested_jobs: set[str] = set()
 execution_job_id: str | None = None
 active_jobs_lock = asyncio.Lock()
+storage_cleanup_lock = asyncio.Lock()
 worker_instance_id = uuid4().hex
 recovery_ready = not settings.db_configured
 draining = False
@@ -318,6 +321,7 @@ async def lifespan(_: FastAPI):
     global heartbeat_task, recovery_task, shutting_down, draining
     shutting_down = False
     draining = False
+    await asyncio.to_thread(_recover_storage_tombstones)
     await asyncio.gather(
         _initialize_runtime_snapshot(),
         _attempt_recovery(),
@@ -559,27 +563,50 @@ async def cancel_job(job_id: str) -> JobCancellationResponse:
 
 @app.delete("/jobs/{job_id}/artifacts", response_model=ArtifactDeletionResponse)
 async def delete_job_artifacts(job_id: str) -> ArtifactDeletionResponse:
-    async with active_jobs_lock:
-        if job_id in active_jobs:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="cannot delete artifacts for an active monomer MD job",
-            )
-        artifact_root = runner.output_dir_for_job(job_id)
-        deleted = await asyncio.to_thread(
-            _durably_remove_artifact_entry,
-            artifact_root,
+    if _MD_JOB_ID_RE.fullmatch(job_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="monomer MD job storage was not found",
         )
+    artifact_root = runner.output_dir_for_job(job_id)
+    tombstone = artifact_root.parent / f"{_STORAGE_TOMBSTONE_PREFIX}{job_id}"
+    try:
+        async with storage_cleanup_lock:
+            async with active_jobs_lock:
+                if job_id in active_jobs or job_id in cancel_requested_jobs:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="cannot delete artifacts for an active monomer MD job",
+                    )
+                detached = await asyncio.to_thread(
+                    _detach_artifact_entry,
+                    artifact_root,
+                    tombstone,
+                )
+            removed = await asyncio.to_thread(
+                _durably_remove_artifact_entry,
+                tombstone,
+            )
+    except HTTPException:
+        raise
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="monomer MD storage cleanup could not prove absence",
+        ) from exc
+    deleted = detached or removed
     if deleted:
         return ArtifactDeletionResponse(
             job_id=job_id,
             deleted=True,
+            storage_state="absent",
             artifact_root=str(artifact_root),
             message="artifacts deleted",
         )
     return ArtifactDeletionResponse(
         job_id=job_id,
         deleted=False,
+        storage_state="absent",
         artifact_root=str(artifact_root),
         message="artifacts were already absent",
     )
@@ -608,6 +635,56 @@ def _durably_remove_artifact_entry(path: Path) -> bool:
         path.unlink()
     _fsync_directory(path.parent)
     return True
+
+
+def _detach_artifact_entry(path: Path, tombstone: Path) -> bool:
+    for candidate in (path, tombstone):
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            raise RuntimeError("unsafe monomer MD storage deletion path")
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise RuntimeError("monomer MD storage path is not a directory")
+    path_exists = os.path.lexists(path)
+    tombstone_exists = os.path.lexists(tombstone)
+    if path_exists and tombstone_exists:
+        raise RuntimeError(
+            "monomer MD storage and deletion tombstone coexist"
+        )
+    if not path_exists:
+        _fsync_directory(path.parent)
+        return False
+    os.rename(path, tombstone)
+    _fsync_directory(path.parent)
+    return True
+
+
+def _recover_storage_tombstones() -> None:
+    root = settings.job_root
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeError("monomer MD job root is unsafe")
+    changed = False
+    for child in sorted(root.iterdir(), key=lambda item: item.name):
+        if not child.name.startswith(_STORAGE_TOMBSTONE_PREFIX):
+            continue
+        job_id = child.name[len(_STORAGE_TOMBSTONE_PREFIX) :]
+        if _MD_JOB_ID_RE.fullmatch(job_id) is None:
+            raise RuntimeError("unsafe monomer MD purge tombstone name")
+        canonical = root / job_id
+        if os.path.lexists(canonical):
+            raise RuntimeError(
+                "monomer MD storage and deletion tombstone coexist"
+            )
+        metadata = child.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise RuntimeError("unsafe monomer MD purge tombstone")
+        shutil.rmtree(child)
+        changed = True
+    if changed:
+        _fsync_directory(root)
 
 
 async def _build_health_response() -> HealthResponse:

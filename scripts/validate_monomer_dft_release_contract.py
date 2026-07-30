@@ -331,7 +331,7 @@ def validate_development_delivery(root: Path, failures: list[str]) -> None:
         "compgen -e",
         "coproc FORMAL_ENV_COPROC",
         'wait "$parser_pid"',
-        "FORMAL_ENV_KEY_COUNT=44",
+        "FORMAL_ENV_KEY_COUNT=46",
         "FORMAL_ENV_KEYSET_SHA256=",
         "configure_formal_gpu_authority",
         '--expected-root "$GPU_RUNTIME_ROOT"',
@@ -354,7 +354,7 @@ def validate_development_delivery(root: Path, failures: list[str]) -> None:
         "fresh acceptance environment contains forbidden",
         "coproc FORMAL_ENV_COPROC",
         'wait "$parser_pid"',
-        "FORMAL_ENV_KEY_COUNT=44",
+        "FORMAL_ENV_KEY_COUNT=46",
         "FORMAL_ENV_KEYSET_SHA256=",
         "COMPOSE_ENV_FILE=/dev/null",
         '--env-file "$COMPOSE_ENV_FILE"',
@@ -726,7 +726,7 @@ def validate_production_activation(root: Path, failures: list[str]) -> None:
     main_text = _read_text(root, "backend/app/main.py", failures)
     for marker in (
         "app.state.monomer_dft_runtime_enabled = bool(",
-        "app.state.monomer_dft_worker_client = None",
+        "if app_settings.monomer_dft_worker_uds",
         "app.state.monomer_dft_reconciler = None",
         "if app.state.monomer_dft_runtime_enabled:",
     ):

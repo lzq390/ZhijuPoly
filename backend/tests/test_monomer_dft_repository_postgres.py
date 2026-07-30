@@ -48,6 +48,67 @@ def _prepared(smiles: str = "CCO"):
     )
 
 
+def test_terminal_job_cas_delete_cascades_and_releases_idempotency_key(
+    postgres_dsn: str,
+) -> None:
+    repository = MonomerDftRepository(postgres_dsn)
+    prepared = _prepared()
+    created = repository.create_job(
+        prepared,
+        idempotency_key="dft-retention-cascade",
+        max_active_jobs=9,
+    ).job
+    with postgres_connection(postgres_dsn) as connection:
+        connection.execute(
+            """
+            UPDATE monomer_dft.jobs
+            SET status = 'completed', stage = 'artifacts',
+                progress_percent = 100,
+                created_at = now() - interval '31 days',
+                finished_at = now() - interval '30 days',
+                updated_at = now() - interval '30 days'
+            WHERE job_id = %s::uuid
+            """,
+            (created["job_id"],),
+        )
+        connection.execute(
+            """
+            INSERT INTO monomer_dft.artifacts (
+              job_id, artifact_id, name, relative_location,
+              media_type, size_bytes, sha256
+            ) VALUES (%s::uuid, 'retained', 'retained.json',
+                      'artifacts/retained.json', 'application/json', 2, %s)
+            """,
+            (created["job_id"], "a" * 64),
+        )
+    candidates = repository.list_expired_jobs(retention_days=30, limit=100)
+    assert [job["job_id"] for job in candidates] == [created["job_id"]]
+    terminal = repository.get_job(created["job_id"])
+    assert terminal is not None
+    assert repository.delete_job_cas(terminal)
+    with postgres_connection(postgres_dsn) as connection:
+        counts = connection.execute(
+            """
+            SELECT
+              (SELECT count(*) FROM monomer_dft.jobs WHERE job_id = %s::uuid)
+                AS jobs,
+              (SELECT count(*) FROM monomer_dft.job_attempts WHERE job_id = %s::uuid)
+                AS attempts,
+              (SELECT count(*) FROM monomer_dft.artifacts WHERE job_id = %s::uuid)
+                AS artifacts
+            """,
+            (created["job_id"], created["job_id"], created["job_id"]),
+        ).fetchone()
+    assert counts == {"jobs": 0, "attempts": 0, "artifacts": 0}
+    recreated = repository.create_job(
+        prepared,
+        idempotency_key="dft-retention-cascade",
+        max_active_jobs=9,
+    )
+    assert recreated.created is True
+    assert recreated.job["job_id"] != created["job_id"]
+
+
 def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(postgres_dsn: str) -> None:
     repository = MonomerDftRepository(postgres_dsn)
     prepared = _prepared()
