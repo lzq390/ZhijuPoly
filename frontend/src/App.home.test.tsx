@@ -27,7 +27,7 @@ describe("智聚万物首页", () => {
     render(<App />);
 
     expect(screen.queryByText("今天研究什么聚合物问题？")).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe("正在同步");
+    expect(screen.getByText("正在同步", { selector: '[role="status"]' })).not.toBeNull();
     expect(screen.queryByTitle("智聚万物智能体工作台")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
@@ -47,7 +47,7 @@ describe("智聚万物首页", () => {
       vi.stubEnv("VITE_AGENT_WORKSPACE_URL", workspaceUrl);
       render(<App />);
 
-      expect(screen.getByRole("status").textContent).toBe("正在同步");
+      expect(screen.getByText("正在同步", { selector: '[role="status"]' })).not.toBeNull();
       expect(screen.queryByTitle("智聚万物智能体工作台")).toBeNull();
     }
   );
