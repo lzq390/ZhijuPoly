@@ -14,6 +14,20 @@ afterEach(() => {
 function createModuleGroups(activeId?: string): AppShellModuleGroup[] {
   return [
     {
+      title: "结构",
+      items: [
+        {
+          id: "structureWorkbench",
+          label: "结构工作台",
+          description: "编辑共享结构",
+          route: "/structure-workbench",
+          icon: <span aria-hidden="true">S</span>,
+          isActive: activeId === "structureWorkbench",
+          onClick: vi.fn()
+        }
+      ]
+    },
+    {
       title: "数据与知识",
       items: [
         {
@@ -211,6 +225,22 @@ describe("AppShell 侧边栏", () => {
     expect(screen.getByRole("button", { name: "设计与生成" }).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "知识检索" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "逆向设计" })).not.toBeNull();
+  });
+
+  it("业务模块选中态使用与普通条目一致的扁平布局", () => {
+    renderShell("structureWorkbench");
+    fireEvent.click(screen.getByRole("button", { name: "数据与知识" }));
+
+    const activeItem = screen.getByRole("button", { name: "结构工作台" });
+    const inactiveItem = screen.getByRole("button", { name: "数据库查询" });
+
+    expect(activeItem.getAttribute("aria-current")).toBe("page");
+    expect(activeItem.classList.contains("bg-teal-50/80")).toBe(true);
+    expect(activeItem.classList.contains("shadow-sm")).toBe(false);
+    expect(activeItem.classList.contains("ring-1")).toBe(false);
+    expect(inactiveItem.getAttribute("aria-current")).toBeNull();
+    expect(activeItem.classList.contains("rounded-lg")).toBe(true);
+    expect(inactiveItem.classList.contains("rounded-lg")).toBe(true);
   });
 
   it("业务模块、项目和对话按内容高度顺序平铺并共用侧栏滚动", () => {
